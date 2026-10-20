@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# commit-msg hook: checks the title against docs/writing.md. Installed by
+# ./scripts/setup. Git passes the message file as $1.
+set -euo pipefail
+
+title=$(head -n1 "$1")
+
+# Titles git writes itself.
+case "$title" in Merge\ *|Revert\ *|fixup!\ *|squash!\ *|amend!\ *) exit 0 ;; esac
+
+types='feat|fix|refactor|perf|test|docs|build|ci|chore'
+scopes='base|browser|interface|app|c'
+if ! printf '%s' "$title" | grep -qE "^($types)(\(($scopes)\))?!?: [a-z0-9]"; then
+  printf 'commit title must be "<type>(<scope>): <lowercase summary>" — see docs/writing.md\n  got: %s\n' "$title" >&2
+  exit 1
+fi
+if [ ${#title} -gt 72 ]; then
+  printf 'commit title is %d characters (limit 72)\n' "${#title}" >&2
+  exit 1
+fi

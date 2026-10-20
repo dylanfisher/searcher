@@ -1,0 +1,21 @@
+# Secrets
+.env
+.env.*
+*.pem
+*.key
+
+# SwiftPM
+.build/
+.swiftpm/
+
+# Bundled app output (scripts/bundle, when it exists)
+dist/
+
+# Editors / OS
+.DS_Store
+xcuserdata/
+.vscode/*
+!.vscode/extensions.json
+
+# Agent local overrides — the shared config is committed
+.claude/settings.local.json

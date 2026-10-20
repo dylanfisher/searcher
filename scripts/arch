@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Tier rules the compiler can't see. Dependency direction is enforced by the
+# build itself (see docs/map.md); this covers which system frameworks each
+# tier may import.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+# Base and Browser stay UI-free so they can be tested without a window.
+bad=$(grep -rnE '^\s*(@[A-Za-z_]+\s+)*import\s+(AppKit|SwiftUI|Cocoa)\b' Sources/Base Sources/Browser || true)
+if [ -n "$bad" ]; then
+  printf 'UI framework imported below the interface tier:\n%s\n' "$bad" >&2
+  exit 1
+fi
+echo "no UI imports in Base or Browser"

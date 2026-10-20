@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Run the test suite. Passes through any extra args to the test runner,
+# so `./scripts/test path/to/file` works for a focused run.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+# Command Line Tools ship the Swift Testing macro plugin in a subdirectory the
+# default build system misses on a cold build ("plugin for module
+# 'TestingMacros' not found"). Point at it explicitly when it exists.
+plugins="$(dirname "$(xcrun --find swift)")/../lib/swift/host/plugins/testing"
+flags=()
+[ -d "$plugins" ] && flags=(-Xswiftc -plugin-path -Xswiftc "$plugins")
+
+exec swift test "${flags[@]}" "$@"
