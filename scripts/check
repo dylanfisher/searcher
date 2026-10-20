@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# The gate. Everything must pass before work is considered done.
+# Keep this the ONLY command anyone — human or agent — needs to remember.
+#
+# Every step runs even if an earlier one fails, so one invocation reports every
+# problem. Fixing four failures should cost one run, not four.
+set -uo pipefail
+cd "$(dirname "$0")/.."
+
+failures=()
+
+# run <name> <command...> — print a header, run it, record the failure, continue.
+run() {
+  local name="$1"; shift
+  printf '\n\033[1m▸ %s\033[0m\n' "$name"
+  if ! "$@"; then failures+=("$name"); fi
+}
+
+# AGENTS.md is the highest-leverage file in the repo and the easiest to let rot.
+# These are the only rules about it a tool can check; the rest is judgment.
+run agents.md bash -c '
+  lines=$(wc -l < AGENTS.md | tr -d " ")
+  if [ "$lines" -gt 55 ]; then
+    echo "AGENTS.md is $lines lines (limit ~50). Move a section to docs/ and link it." >&2; exit 1
+  fi
+  if grep -q "{{" AGENTS.md; then echo "AGENTS.md has unfilled {{PLACEHOLDER}}s." >&2; exit 1; fi
+  if grep -q "NOT YET INITIALIZED" AGENTS.md; then echo "AGENTS.md still has the TEMPLATE block." >&2; exit 1; fi
+  echo "$lines lines, no placeholders"
+'
+
+# The code map claims where things live. Verify the claim — a rename that misses
+# docs/map.md turns it into confident misdirection, which is worse than no map.
+run map bash -c '
+  if grep -q "{{" docs/map.md; then
+    echo "docs/map.md has unfilled {{PLACEHOLDER}}s." >&2; exit 1
+  fi
+  paths=$(grep "^<!-- paths:" docs/map.md | sed "s/^<!-- paths: //; s/ -->//")
+  if [ -z "$paths" ]; then
+    echo "docs/map.md is missing its <!-- paths: ... --> line." >&2; exit 1
+  fi
+  missing=""
+  for p in $paths; do [ -e "$p" ] || missing="$missing $p"; done
+  if [ -n "$missing" ]; then
+    echo "docs/map.md names paths that do not exist:$missing" >&2; exit 1
+  fi
+  echo "tiers exist: $paths"
+'
+
+# AGENTS.md stays small by linking instead of restating, so a dead link is not a
+# cosmetic problem — it is the pointer to the real instruction going missing.
+# `find` rather than `git ls-files` — an uncommitted clone would make the latter
+# return nothing and pass silently, which is the failure this whole file exists
+# to prevent. Prune dependency trees so the cost stays flat as the project grows.
+run links bash -c '
+  files=$(find . -name "*.md" -not -path "./.git/*" \
+    -not -path "*/node_modules/*" -not -path "*/vendor/*" -not -path "*/.venv/*" \
+    -not -path "*/dist/*" -not -path "*/build/*" -not -path "*/target/*")
+  if [ -z "$files" ]; then echo "no markdown found — this check is not looking where it should." >&2; exit 1; fi
+  bad=""
+  for f in $files; do
+    for link in $(grep -oE "\]\([^)]+\)" "$f" | sed "s/^](//; s/)$//"); do
+      case "$link" in http*|mailto:*|\#*) continue ;; esac
+      target="${link%%#*}"
+      [ -z "$target" ] && continue
+      [ -e "$(dirname "$f")/$target" ] || bad="$bad
+    $f → $link"
+    done
+  done
+  if [ -n "$bad" ]; then echo "markdown links point at nothing:$bad" >&2; exit 1; fi
+  echo "all relative links resolve"
+'
+
+# Scaffolding is meant to be torn out, and a half-torn teardown reads as though
+# the project were still a template. Dormant until docs/scaffold.md is gone, so
+# it never fires on a fresh clone — which also means restoring that file switches
+# the step back off. Keep it afterwards anyway: it costs one grep, and it catches
+# scaffolding text reintroduced by a copied file or a reverted deletion.
+# This file is excluded from the word search — it mentions the term by design —
+# so its own leftover is caught by looking for the todo() helper instead.
+run residue bash -c '
+  if [ -e docs/scaffold.md ]; then echo "not scaffolded yet — skipped"; exit 0; fi
+  bad=""
+  for f in README.md CLAUDE.md AGENTS.md scripts/setup scripts/dev scripts/test docs/map.md docs/principles.md; do
+    [ -e "$f" ] || continue
+    grep -qi "scaffold" "$f" && bad="$bad $f"
+  done
+  # The workflow placeholder says "scaffold" nowhere, and leaving it in keeps CI
+  # red forever with no local symptom — so match its text directly.
+  if [ -e .github/workflows/check.yml ] && grep -q "no language setup step configured" .github/workflows/check.yml; then
+    bad="$bad .github/workflows/check.yml(setup placeholder)"
+  fi
+  [ -e .claude/commands/scaffold.md ] && bad="$bad .claude/commands/scaffold.md"
+  grep -q "^todo()" scripts/check && bad="$bad scripts/check(todo helper)"
+  if [ -n "$bad" ]; then
+    echo "scaffolding leftovers — see step 9 of the checklist:$bad" >&2; exit 1
+  fi
+  echo "no leftovers"
+'
+
+# swift-format's lint covers both layout and its style rules, so one step.
+run format    swift format lint --strict --recursive --parallel Package.swift Sources Tests
+# The build is the typecheck: Swift 6 mode, warnings as errors. Importing a
+# target that isn't a declared dependency fails here too.
+run typecheck swift build --explicit-target-dependency-import-check error
+run arch      ./scripts/arch
+run test      ./scripts/test
+
+if [ ${#failures[@]} -gt 0 ]; then
+  printf '\n\033[31m✗ failed: %s\033[0m\n' "${failures[*]}" >&2
+  exit 1
+fi
+
+printf '\n\033[32m✓ all checks passed\033[0m\n'

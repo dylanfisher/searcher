@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Get a clean checkout to a runnable state. Must be idempotent.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+chmod +x scripts/*
+
+swift package resolve
+
+# Commit titles are checked locally; see docs/writing.md.
+ln -sf ../../scripts/commit-msg .git/hooks/commit-msg
+
+echo "✓ setup complete"

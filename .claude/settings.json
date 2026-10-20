@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./scripts/check)",
+      "Bash(./scripts/dev:*)",
+      "Bash(./scripts/setup)",
+      "Bash(./scripts/test:*)",
+      "Bash(./scripts/format)",
+      "Bash(swift build:*)",
+      "Bash(swift test:*)"
+    ],
+    "deny": [
+      "Bash(op read:*)",
+      "Read(.env)",
+      "Read(.env.local)",
+      "Read(.env.*.local)",
+      "Read(.env.development)",
+      "Read(.env.staging)",
+      "Read(.env.production)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)",
+      "Edit(.env)",
+      "Edit(.env.local)",
+      "Edit(.env.*.local)"
+    ]
+  }
+}
