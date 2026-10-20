@@ -19,3 +19,6 @@ xcuserdata/
 
 # Agent local overrides — the shared config is committed
 .claude/settings.local.json
+
+# Local scratch — plans, notes, benchmark output
+tmp/
