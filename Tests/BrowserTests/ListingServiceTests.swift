@@ -59,13 +59,6 @@ private func load(
     service.load(Location(path: path), priority: priority) { log.append($0) }
 }
 
-/// Returns once the main queue has run every block queued on it before this call.
-private func drainMainQueue() async {
-    await withCheckedContinuation { continuation in
-        DispatchQueue.main.async { continuation.resume() }
-    }
-}
-
 /// The paths `waitUntilLoadFinishes` holds in the other slots and queues behind them.
 private let holdPaths = ["/hold-1", "/hold-2", "/hold-3"]
 private let sentinelPath = "/sentinel"
