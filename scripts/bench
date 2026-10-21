@@ -10,6 +10,10 @@
 #                         the folders must not have been opened before
 #   --check-idle          sample the machine for 1 s; exit non-zero naming any
 #                         busy process
+#   compare <previous> <current>
+#                         report cases whose median is over 10% slower than in <previous>
+#                         (a missing file is stated); exit non-zero when <current> has a
+#                         case over budget
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

@@ -38,3 +38,18 @@ A new per-workload budget in performance.md needs a matching `Bn.Wm` entry in `B
 A case may set its own run count; the default stays 20. The two idle cases (CPU over 5 s with and
 without the watchdog) run 5 times each, because 20 runs of both took 200 s and the full bench
 passed 10 minutes. Their p95 over 5 runs is the slowest run, so they are reported, never budgeted.
+
+## Amendment: comparing runs in CI (M0.16a)
+
+`Bench compare <previous> <current>` reads two saved `bench.json` files, matches cases by name and
+reports each case whose median is more than 10% above the previous median. The median is used, not
+the p95: the p95 of 20 runs is the second slowest and, for the 5-run idle cases, the slowest, so a
+single noisy run on a shared runner would trip it. The budget check keeps using the p95. A case
+that is new, missing from this run or measured in a different unit is stated and not compared. A
+missing or unreadable previous report is stated and the comparison is skipped. The comparison never
+fails on a slowdown; the only failure is a case over its own budget, which `./scripts/bench`
+already fails on.
+
+CI keeps `.build/bench.json` as the `bench-report` artifact on every push, including a run that
+failed on budget. The next run downloads the newest one from its own branch, else from `main`, with
+the preinstalled `gh` CLI, so no third-party action is needed.

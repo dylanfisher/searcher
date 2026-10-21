@@ -33,6 +33,26 @@ func runColdChildren(folder: String) throws -> Bool {
     return try finish(BenchReport(machine: machine, cases: [result]))
 }
 
+/// Prints what changed between two saved reports. A previous report that is missing or can't be
+/// read is stated and the comparison is skipped; an unreadable current report is an error.
+/// Returns whether the current report has no case over budget.
+func runCompare(previous: String, current: String) throws -> Bool {
+    let now = try BenchReport.read(from: current)
+    var before: BenchReport?
+    if FileManager.default.fileExists(atPath: previous) {
+        do {
+            before = try BenchReport.read(from: previous)
+        } catch {
+            printError("previous report \(previous) is unreadable: \(error)")
+        }
+    } else {
+        printError("previous report \(previous) does not exist")
+    }
+    let regression = RegressionReport(previous: before, current: now)
+    print(regression.text)
+    return regression.passed
+}
+
 func line(for result: BenchReport.Case) -> String {
     let unit = result.unit.rawValue
     var line =
@@ -106,6 +126,8 @@ Task.detached {
             exit(0)
         case .coldChildren(let folder):
             exit(try runColdChildren(folder: folder) ? 0 : 1)
+        case .compare(let previous, let current):
+            exit(try runCompare(previous: previous, current: current) ? 0 : 1)
         case .run(let folder):
             exit(try await runCases(folder: folder) ? 0 : 1)
         }
