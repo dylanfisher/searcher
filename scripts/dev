@@ -10,6 +10,10 @@ cd "$(dirname "$0")/.."
 # Searcher instead of a child of Terminal.
 app=$(./scripts/bundle "$@")
 
+# The stall watchdog's threshold is B10, read from Budget, the only copy of the
+# budget numbers in code.
+stall_ms=$(./scripts/bench --print-budget B10)
+
 # `open` brings a running copy to the front instead of starting the new build,
 # so quit it first and wait until it has gone. The quit doesn't wait for a reply,
 # so a hung copy hits the 5 s limit below rather than AppleScript's 2 minutes.
@@ -24,4 +28,7 @@ if running; then
   fi
 fi
 
-open "$app"
+# `open` passes everything after --args to the app, and hides its output, so
+# the app logs through os_log instead.
+open "$app" --args --stall-threshold-ms "$stall_ms"
+echo "stall threshold $stall_ms ms; to see stalls: log stream --predicate 'subsystem == \"$id\"'" >&2

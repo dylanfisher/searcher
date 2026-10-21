@@ -3,11 +3,17 @@ import Foundation
 
 /// One pane of the window: a folder, what is known of its entries, the sort and the selection.
 /// It reads folders only through `ListingService`, opens files only through `SystemActions`, and
-/// stops its folder monitor when it leaves a folder; it makes no file-system call of its own.
+/// applies its folder monitor's changes until it leaves the folder; it makes no file-system call of
+/// its own.
 @MainActor
 public final class Pane {
     public private(set) var location: Location
-    public private(set) var state = ListingState.loading
+    public private(set) var state = ListingState.loading {
+        didSet { stateVersion += 1 }
+    }
+    /// Goes up each time `state` is set, so a view can tell new rows from a selection change
+    /// without comparing listings.
+    public private(set) var stateVersion = 0
     public private(set) var sortColumn: SortColumn
     public private(set) var sortAscending: Bool
     /// The selected entries' names. Names the listing doesn't have are dropped when a load
@@ -24,6 +30,11 @@ public final class Pane {
     private var load: ListingLoad?
     private var loadIsRunning = false
     private var isFocused: Bool
+    /// Folder change patches not yet applied, in the order they arrived.
+    private var waitingPatches: [FolderChange.Patch] = []
+    private var patchIsRunning = false
+    /// A change arrived while a load was running; list the folder again when it ends.
+    private var relistAfterLoad = false
     /// Listings re-sorted on the main actor because they arrived in another sort than the pane's.
     /// Zero while every load is asked for the pane's sort.
     private(set) var mainActorSortCount = 0
@@ -51,6 +62,8 @@ public final class Pane {
         load?.cancel()
         monitor?.stop()
         monitor = nil
+        waitingPatches = []
+        relistAfterLoad = false
         self.location = location
         state = .loading
         selection = name.map { [ExactName($0)] } ?? []
@@ -100,6 +113,83 @@ public final class Pane {
         isFocused = false
     }
 
+    // MARK: - Folder changes
+
+    /// Applies a change its monitor reported for `location`. Patches are applied to a copy of the
+    /// listing off the main actor, since `Listing.update` must run there; `relist` lists the
+    /// folder again. A change for a folder the pane has left is ignored, since a monitor can
+    /// report once more after it is stopped.
+    public func apply(_ change: FolderChange, at location: Location) {
+        guard location == self.location else { return }
+        switch change {
+        case .relist:
+            relist()
+        case .patches(let patches):
+            waitingPatches += patches
+            startPatch()
+        }
+    }
+
+    /// Patches the listing with every waiting patch, unless a patch is already running; it starts
+    /// the next one when it lands.
+    private func startPatch() {
+        guard !patchIsRunning, !waitingPatches.isEmpty else { return }
+        guard case .loaded(let listing) = state else {
+            // No rows to patch: the first load is still running, or the folder failed to list.
+            // Listing it again, after a running load, reads the change.
+            waitingPatches = []
+            relist()
+            return
+        }
+        // A reload running over these rows may have read past the changed entry, and its
+        // listing would undo the patch, so the folder is listed again once it ends. The patch
+        // still shows the change until then.
+        if loadIsRunning {
+            relistAfterLoad = true
+        }
+        let patches = waitingPatches
+        waitingPatches = []
+        patchIsRunning = true
+        let version = stateVersion
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var listing = listing
+            for patch in patches {
+                switch patch {
+                case .update(let entry): listing.update(entry)
+                case .remove(let name): listing.remove(named: name)
+                }
+            }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self?.finishPatch(listing, from: version) }
+            }
+        }
+    }
+
+    /// Lists the folder for a change: now, or once the running load ends, since that load may
+    /// have read past the changed entry before the change happened.
+    private func relist() {
+        if loadIsRunning {
+            relistAfterLoad = true
+        } else {
+            startLoad()
+        }
+    }
+
+    private func finishPatch(_ listing: Listing, from version: Int) {
+        patchIsRunning = false
+        guard version == stateVersion else {
+            // A load, a sort change or a navigation replaced the rows the patch started from, so
+            // its result is out of date. Listing the folder again reads the change.
+            waitingPatches = []
+            relist()
+            return
+        }
+        selection = selection.filter { listing.row(named: $0.name) != nil }
+        state = .loaded(listing)
+        onChange?()
+        startPatch()
+    }
+
     /// Sorts the rows now, and the loads that follow arrive in this order.
     public func setSort(_ column: SortColumn, ascending: Bool) {
         sortColumn = column
@@ -136,6 +226,10 @@ public final class Pane {
         case .failed(let error):
             loadIsRunning = false
             state = error.reason == .permissionDenied ? .denied(error) : .failed(error)
+        }
+        if !loadIsRunning, relistAfterLoad {
+            relistAfterLoad = false
+            startLoad()
         }
         onChange?()
     }

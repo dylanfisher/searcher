@@ -20,7 +20,7 @@ public enum FolderChange: Equatable, Sendable {
 /// Watches one folder and reports its changes. A folder on a local volume uses FSEvents and
 /// reports the entries that changed; a folder on a network volume uses a vnode watch and reports
 /// only that it changed. See docs/decisions/0005-change-watching.md.
-public final class FolderMonitor: @unchecked Sendable {
+public final class FolderMonitor: FolderMonitoring, @unchecked Sendable {
     public enum Watcher: Equatable, Sendable {
         case fileEvents
         case vnode

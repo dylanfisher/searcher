@@ -36,14 +36,21 @@ public struct KeyChord: Hashable, Sendable, CustomStringConvertible {
         if case .character(let character) = key {
             precondition(!character.isUppercase, "write \(character) as lowercase plus .shift")
             precondition(
-                !character.isWhitespace
-                    && !character.unicodeScalars.contains {
-                        $0.properties.generalCategory == .control
-                    },
+                !Self.isWhitespaceOrControl(character),
                 "use a named key for \(character.unicodeScalars.map { $0.escaped(asASCII: true) })")
         }
         self.key = key
         self.modifiers = modifiers
+    }
+
+    /// Whether `init` takes `character` as a `.character` key.
+    public static func accepts(_ character: Character) -> Bool {
+        !character.isUppercase && !isWhitespaceOrControl(character)
+    }
+
+    private static func isWhitespaceOrControl(_ character: Character) -> Bool {
+        character.isWhitespace
+            || character.unicodeScalars.contains { $0.properties.generalCategory == .control }
     }
 
     /// The spelling the key tables in the docs use, such as "Cmd-Shift-G" or "Ctrl-Opt-Cmd-1".
