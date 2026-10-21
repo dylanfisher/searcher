@@ -11,6 +11,8 @@ enum BenchArguments: Equatable {
     /// Open `folder` once and print the footprint it added in MB. The B9 case runs this in a fresh
     /// process for each sample.
     case footprintOfOpening(folder: String)
+    /// Time listing 20 different subfolders of `folder`, once each (B3 cold).
+    case coldChildren(folder: String)
 
     /// Checks that a `--path` folder exists, so call it off the main thread.
     static func parse(_ arguments: [String]) throws -> BenchArguments {
@@ -30,20 +32,25 @@ enum BenchArguments: Equatable {
                     throw Invalid("\(BenchCase.footprintArgument) needs a folder")
                 }
                 return .footprintOfOpening(folder: path)
+            case "--cold-children":
+                return .coldChildren(
+                    folder: try existingFolder(remaining.popFirst(), for: argument))
             case "--path":
-                guard let path = remaining.popFirst() else {
-                    throw Invalid("--path needs a folder")
-                }
-                var isDirectory: ObjCBool = false
-                guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
-                    isDirectory.boolValue
-                else { throw Invalid("--path is not an existing folder: \(path)") }
-                folder = path
+                folder = try existingFolder(remaining.popFirst(), for: argument)
             default:
                 throw Invalid("unknown argument \(argument)")
             }
         }
         return .run(folder: folder)
+    }
+
+    private static func existingFolder(_ path: String?, for argument: String) throws -> String {
+        guard let path else { throw Invalid("\(argument) needs a folder") }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
+            isDirectory.boolValue
+        else { throw Invalid("\(argument) is not an existing folder: \(path)") }
+        return path
     }
 
     struct Invalid: Error, CustomStringConvertible {

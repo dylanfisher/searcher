@@ -7,7 +7,7 @@ struct BenchCase: Sendable {
     static let runs = 20
 
     /// Every case the runner measures, in run order.
-    static let registered: [BenchCase] = openFolder
+    static let registered: [BenchCase] = openFolder + list + idle
 
     let name: String
     /// The budget the p95 is checked against; nil for a case that is only reported.
@@ -19,9 +19,11 @@ struct BenchCase: Sendable {
     /// `folder` is the `--path` folder when one was given, else nil and the case uses its own
     /// workload.
     let run: @Sendable (_ folder: String?) async throws -> Double
+    /// How many times `measure` runs the case.
+    let runs: Int
 
     init(
-        name: String, budget: Budget?, unit: Budget.Unit,
+        name: String, budget: Budget?, unit: Budget.Unit, runs: Int = BenchCase.runs,
         run: @escaping @Sendable (_ folder: String?) async throws -> Double
     ) {
         if let budget {
@@ -33,12 +35,13 @@ struct BenchCase: Sendable {
         self.budget = budget
         self.unit = unit
         self.run = run
+        self.runs = runs
     }
 
-    /// Runs the case `runs` times.
+    /// Runs the case `runs` times (`BenchCase.runs` unless the case sets fewer).
     func measure(folder: String?) async throws -> Samples {
         var samples: [Double] = []
-        for _ in 0..<Self.runs {
+        for _ in 0..<runs {
             samples.append(try await run(folder))
         }
         return Samples(samples)

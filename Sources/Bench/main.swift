@@ -14,15 +14,36 @@ func runCases(folder: String?) async throws -> Bool {
         let result = BenchReport.Case(
             name: benchCase.name, budget: benchCase.budget, unit: benchCase.unit,
             samples: try await benchCase.measure(folder: folder))
-        let unit = result.unit.rawValue
-        var line =
-            "\(result.name)  median \(format(result.median)) \(unit)  p95 \(format(result.p95)) \(unit)"
-        if let budget = result.budget { line += "  budget \(describe(budget))" }
-        if result.overBudget { line += "  OVER BUDGET" }
-        print(line)
+        print(line(for: result))
         results.append(result)
     }
-    let report = BenchReport(machine: machine, cases: results)
+    return try finish(BenchReport(machine: machine, cases: results))
+}
+
+/// Times 20 different subfolders of `folder` once each and reports them against B3. The report
+/// name says the runs were cold, as docs/performance.md asks.
+func runColdChildren(folder: String) throws -> Bool {
+    let machine = try MachineLoad.sample()
+    if let warning = machine.warning { printError(warning) }
+    let samples = try ColdChildren.time(in: folder, lister: DirectoryLister())
+    let result = BenchReport.Case(
+        name: "cold children of \(folder): list each once", budget: try Budget.named("B3"),
+        unit: .milliseconds, samples: samples)
+    print(line(for: result))
+    return try finish(BenchReport(machine: machine, cases: [result]))
+}
+
+func line(for result: BenchReport.Case) -> String {
+    let unit = result.unit.rawValue
+    var line =
+        "\(result.name)  median \(format(result.median)) \(unit)  p95 \(format(result.p95)) \(unit)"
+    if let budget = result.budget { line += "  budget \(describe(budget))" }
+    if result.overBudget { line += "  OVER BUDGET" }
+    return line
+}
+
+/// Writes the report, names each miss, and returns whether every budgeted p95 is within budget.
+func finish(_ report: BenchReport) throws -> Bool {
     try report.write(to: BenchReport.path)
     print("wrote \(BenchReport.path)")
     for miss in report.overBudget {
@@ -83,6 +104,8 @@ Task.detached {
         case .footprintOfOpening(let folder):
             print(try await BenchCase.footprintOfOpening(folder))
             exit(0)
+        case .coldChildren(let folder):
+            exit(try runColdChildren(folder: folder) ? 0 : 1)
         case .run(let folder):
             exit(try await runCases(folder: folder) ? 0 : 1)
         }
