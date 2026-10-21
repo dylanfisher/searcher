@@ -1,0 +1,58 @@
+import Base
+import Foundation
+
+/// Times every registered case, prints median and p95 for each, writes the report, and returns
+/// whether every budgeted p95 is within its budget.
+func runCases(folder: String?) async throws -> Bool {
+    if BenchCase.registered.isEmpty { print("no cases registered") }
+    var results: [BenchReport.Case] = []
+    for benchCase in BenchCase.registered {
+        let result = BenchReport.Case(
+            name: benchCase.name, budget: benchCase.budget,
+            samples: try await benchCase.measure(folder: folder))
+        var line =
+            "\(result.name)  median \(format(result.median)) ms  p95 \(format(result.p95)) ms"
+        if let budget = result.budget { line += "  budget \(describe(budget))" }
+        if result.overBudget { line += "  OVER BUDGET" }
+        print(line)
+        results.append(result)
+    }
+    let report = BenchReport(cases: results)
+    try report.write(to: BenchReport.path)
+    print("wrote \(BenchReport.path)")
+    for miss in report.overBudget {
+        // Only budgeted cases can be over budget, so `budget` is never nil here.
+        let budget = miss.budget.map(describe) ?? "none"
+        printError("over budget: \(miss.name) p95 \(format(miss.p95)) ms, budget \(budget)")
+    }
+    return report.passed
+}
+
+func describe(_ budget: Budget) -> String {
+    "\(budget.id) \(budget.limit) \(budget.unit.rawValue)"
+}
+
+func format(_ milliseconds: Double) -> String {
+    String(format: "%.2f", milliseconds)
+}
+
+func printError(_ message: String) {
+    FileHandle.standardError.write(Data("bench: \(message)\n".utf8))
+}
+
+// Cases list and stat folders, so the runner stays off the main thread.
+Task.detached {
+    do {
+        switch try BenchArguments.parse(Array(CommandLine.arguments.dropFirst())) {
+        case .printBudget(let budget):
+            print(budget.formattedLimit)
+            exit(0)
+        case .run(let folder):
+            exit(try await runCases(folder: folder) ? 0 : 1)
+        }
+    } catch {
+        printError("\(error)")
+        exit(1)
+    }
+}
+dispatchMain()

@@ -2,7 +2,7 @@
 
 Budgets every change is measured against, the workloads they run on, and how they're checked.
 `Sources/Bench/Budget.swift` holds the same numbers for the harness, and a test fails if the two
-differ. Until the harness exists, this file is the only copy.
+differ. A budget with one number per workload has one ID per workload there, such as `B2.W1`.
 
 ## Reference workloads
 
