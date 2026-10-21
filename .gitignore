@@ -8,9 +8,6 @@
 .build/
 .swiftpm/
 
-# Bundled app output (scripts/bundle, when it exists)
-dist/
-
 # Editors / OS
 .DS_Store
 xcuserdata/

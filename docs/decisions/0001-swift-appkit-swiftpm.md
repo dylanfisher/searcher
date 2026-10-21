@@ -30,8 +30,8 @@ for hot paths once a benchmark shows the win. The project is a SwiftPM package w
 
 ## Consequences
 
-- The `.app` bundle has to be assembled by a script (`scripts/bundle`, not yet written), along
-  with signing and notarization.
+- The `.app` bundle has to be assembled by a script. `scripts/bundle` builds and signs it;
+  notarization is not set up yet.
 - Under Command Line Tools, a cold `swift test` can't find the Swift Testing macro plugin.
   `scripts/test` passes `-plugin-path` explicitly when the plugin directory exists. Remove that
   once a toolchain release fixes it.
