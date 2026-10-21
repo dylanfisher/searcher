@@ -1,9 +1,13 @@
 import Base
 import Foundation
 
-/// Times every registered case, prints median and p95 for each, writes the report, and returns
-/// whether every budgeted p95 is within its budget.
+/// Builds any missing fixture, samples the machine, times every registered case, prints median and
+/// p95 for each, writes the report, and returns whether every budgeted p95 is within its budget.
+/// A busy machine is warned about and recorded, not a failure.
 func runCases(folder: String?) async throws -> Bool {
+    try prepareFixtures()
+    let machine = try MachineLoad.sample()
+    if let warning = machine.warning { printError(warning) }
     if BenchCase.registered.isEmpty { print("no cases registered") }
     var results: [BenchReport.Case] = []
     for benchCase in BenchCase.registered {
@@ -17,7 +21,7 @@ func runCases(folder: String?) async throws -> Bool {
         print(line)
         results.append(result)
     }
-    let report = BenchReport(cases: results)
+    let report = BenchReport(machine: machine, cases: results)
     try report.write(to: BenchReport.path)
     print("wrote \(BenchReport.path)")
     for miss in report.overBudget {
@@ -26,6 +30,30 @@ func runCases(folder: String?) async throws -> Bool {
         printError("over budget: \(miss.name) p95 \(format(miss.p95)) ms, budget \(budget)")
     }
     return report.passed
+}
+
+func prepareFixtures() throws {
+    let clock = ContinuousClock()
+    for workload in Fixture.Workload.allCases {
+        let fixture = Fixture(workload)
+        var built = false
+        let elapsed = try clock.measure { built = try fixture.prepare() }
+        print(built ? "built \(fixture.path.path) in \(elapsed)" : "reusing \(fixture.path.path)")
+    }
+}
+
+/// Prints the top processes and returns false, naming each busy one, when the machine is busy.
+func checkIdle() throws -> Bool {
+    let machine = try MachineLoad.sample()
+    for process in machine.topProcesses {
+        print("\(process.pid)  \(process.cpu)%  \(process.command)")
+    }
+    guard let warning = machine.warning else {
+        print("idle")
+        return true
+    }
+    printError(warning)
+    return false
 }
 
 func describe(_ budget: Budget) -> String {
@@ -47,6 +75,8 @@ Task.detached {
         case .printBudget(let budget):
             print(budget.formattedLimit)
             exit(0)
+        case .checkIdle:
+            exit(try checkIdle() ? 0 : 1)
         case .run(let folder):
             exit(try await runCases(folder: folder) ? 0 : 1)
         }

@@ -27,6 +27,10 @@ import Testing
         try BenchArguments.parse(["--print-budget", "B10"]) == .printBudget(Budget.named("B10")))
 }
 
+@Test func checkIdleSamplesTheMachine() throws {
+    #expect(try BenchArguments.parse(["--check-idle"]) == .checkIdle)
+}
+
 @Test func unknownArgumentFailsNamingIt() {
     #expect {
         try BenchArguments.parse(["--frobnicate"])
