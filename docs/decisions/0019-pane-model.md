@@ -15,7 +15,8 @@ on. [0017](0017-list-view-columns.md) asks the pane to own the sort and the sele
 `Pane` holds the location, a `ListingState`, the sort and the selection. It lists through
 `ListingService`, passes its own sort to each load so listings arrive sorted off the main thread,
 and opens files through `SystemActions`. It stops its `FolderMonitoring` object when it navigates;
-whoever starts the monitor assigns it to `Pane.monitor`.
+whoever starts the monitor assigns it to `Pane.monitor` and passes its changes to `Pane.apply`
+([0021](0021-one-pane-window.md)).
 
 The selection is a set of `ExactName`s, so two canonically equivalent names stay distinct. Names
 the listing lacks are dropped when a load finishes (`full`), not on a partial listing. Go to parent

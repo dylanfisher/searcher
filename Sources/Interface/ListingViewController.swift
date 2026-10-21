@@ -1,37 +1,50 @@
 import AppKit
 import Browser
 
-/// A folder's entries in a view-based table: name with its type's icon, size, date modified and
-/// kind. A header click sorts by that column and a second click reverses it; the user can resize
-/// and reorder the columns.
+/// A pane's entries in a view-based table: name with its type's icon, size, date modified and
+/// kind. A header click sorts the pane by that column and a second click reverses it; the user can
+/// resize and reorder the columns. The pane owns the sort and the selection; the table shows them
+/// and reports the user's changes back (0017-list-view-columns.md).
 ///
-/// Everything it shows comes from the `Listing` and the icon cache, so it makes no file-system
-/// call (0004-listing-view.md).
+/// Everything it shows comes from the pane's `Listing` and the icon cache, so it makes no
+/// file-system call (0004-listing-view.md).
 @MainActor
 public final class ListingViewController: NSViewController, NSTableViewDataSource,
     NSTableViewDelegate
 {
-    let tableView: NSTableView
+    let tableView: ListingTableView
+    public let pane: Pane
 
-    /// The rows on screen, in the table's sort order; nil until the first listing arrives.
+    /// The rows on screen: the pane's listing when `paneDidChange` last ran; nil while it has none.
     public private(set) var listing: Listing?
 
     private let iconCache: TypeIconCache
     private let formatter: EntryCellFormatter
+    /// The pane's `stateVersion` that `listing` came from.
+    private var shownVersion: Int?
+    /// Set while the table is changed to match the pane, so the delegate calls that causes don't
+    /// report the change back.
+    private var isShowingPane = false
 
     public convenience init(
-        iconCache: TypeIconCache = .shared, formatter: EntryCellFormatter = .init()
+        pane: Pane, iconCache: TypeIconCache = .shared, formatter: EntryCellFormatter = .init()
     ) {
-        self.init(iconCache: iconCache, formatter: formatter, tableView: NSTableView())
+        self.init(
+            pane: pane, iconCache: iconCache, formatter: formatter, tableView: ListingTableView())
     }
 
     /// `tableView` is the table to fill, for tests that watch how the rows change.
-    init(iconCache: TypeIconCache, formatter: EntryCellFormatter, tableView: NSTableView) {
+    init(
+        pane: Pane, iconCache: TypeIconCache, formatter: EntryCellFormatter,
+        tableView: ListingTableView
+    ) {
+        self.pane = pane
         self.tableView = tableView
         self.iconCache = iconCache
         self.formatter = formatter
         super.init(nibName: nil, bundle: nil)
         configureTable()
+        paneDidChange()
     }
 
     @available(*, unavailable)
@@ -48,15 +61,28 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         view = scrollView
     }
 
-    /// Replaces the rows with `listing` in one reload, sorted by the table's sort column, and
-    /// keeps selected the entries that are still there, found by name.
-    public func show(_ listing: Listing) {
-        var listing = listing
-        let (column, ascending) = tableSort
-        if listing.column != column || listing.ascending != ascending {
-            listing.sort(by: column, ascending: ascending)
+    /// Shows the pane's sort, rows and selection. Reloads the rows, in one reload, only when the
+    /// pane's state has changed since the last call, so moving the selection costs no reload.
+    public func paneDidChange() {
+        isShowingPane = true
+        defer { isShowingPane = false }
+        if tableSort != (pane.sortColumn, pane.sortAscending) {
+            tableView.sortDescriptors = [
+                Self.sortDescriptor(pane.sortColumn, ascending: pane.sortAscending)
+            ]
         }
-        replaceRows(with: listing)
+        if shownVersion != pane.stateVersion {
+            shownVersion = pane.stateVersion
+            listing = pane.state.listing
+            tableView.reloadData()
+        }
+        let rows = IndexSet(pane.selection.compactMap { listing?.row(named: $0.name) })
+        if rows != tableView.selectedRowIndexes {
+            tableView.selectRowIndexes(rows, byExtendingSelection: false)
+            if rows.count == 1, let row = rows.first {
+                tableView.scrollRowToVisible(row)
+            }
+        }
     }
 
     // MARK: Columns
@@ -71,9 +97,13 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         tableView.usesAlternatingRowBackgroundColors = true
         tableView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         // Set before the delegate, so the first sort doesn't reach `sortDescriptorsDidChange`.
-        tableView.sortDescriptors = [Self.sortDescriptor(.name, ascending: true)]
+        tableView.sortDescriptors = [
+            Self.sortDescriptor(pane.sortColumn, ascending: pane.sortAscending)
+        ]
         tableView.dataSource = self
         tableView.delegate = self
+        tableView.target = self
+        tableView.doubleAction = #selector(openClickedRow(_:))
     }
 
     private static func tableColumn(for column: SortColumn) -> NSTableColumn {
@@ -106,26 +136,34 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
 
     // MARK: Rows
 
-    private func replaceRows(with listing: Listing) {
-        let selected = tableView.selectedRowIndexes.map { self.listing?[$0].name }
-        self.listing = listing
-        tableView.reloadData()
-        let rows = selected.compactMap { $0.flatMap(listing.row(named:)) }
-        tableView.selectRowIndexes(IndexSet(rows), byExtendingSelection: false)
-    }
-
     public func numberOfRows(in tableView: NSTableView) -> Int {
         listing?.count ?? 0
     }
 
-    /// Re-sorts after a header click, which sets the clicked column's descriptor first.
+    /// Sorts the pane after a header click, which sets the clicked column's descriptor first.
     public func tableView(
         _ tableView: NSTableView, sortDescriptorsDidChange oldDescriptors: [NSSortDescriptor]
     ) {
-        guard var listing else { return }
+        guard !isShowingPane else { return }
         let (column, ascending) = tableSort
-        listing.sort(by: column, ascending: ascending)
-        replaceRows(with: listing)
+        pane.setSort(column, ascending: ascending)
+    }
+
+    public func tableViewSelectionDidChange(_ notification: Notification) {
+        guard !isShowingPane, let listing else { return }
+        pane.select(Set(tableView.selectedRowIndexes.map { ExactName(listing[$0].name) }))
+    }
+
+    /// Runs Open on a double-click, as Cmd-↓ does. A row outside the selection is selected first;
+    /// a double-click below the last row or on the header does nothing.
+    @objc private func openClickedRow(_ sender: Any?) {
+        let row = tableView.clickedRow
+        guard let listing, row >= 0, row < listing.count else { return }
+        let name = ExactName(listing[row].name)
+        if !pane.selection.contains(name) {
+            pane.select([name])
+        }
+        tableView.runCommand(NavigationCommands.open.id)
     }
 
     public func tableView(

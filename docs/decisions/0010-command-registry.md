@@ -39,6 +39,8 @@ named keys `.space`, `.tab`, `.return`, `.escape` and `.delete`.
 Interface's `NSEvent` conversion must produce the unshifted character:
 `charactersIgnoringModifiers` still applies Shift, so Shift-G arrives as `"G"`, and it must map
 space, tab, return, escape and delete to their named keys rather than pass them through as
-characters, or `KeyChord.init` traps. Keys other than
+characters, or `KeyChord.init` traps. `KeyChord(event:)` lowercases letters, which covers Shift
+and Caps Lock, but a shifted punctuation key still arrives shifted (Shift-. as `">"`); the step
+that binds one reads `characters(byApplyingModifiers:)` instead. Keys other than
 characters, arrows, Tab, Return, Delete, Space and Esc (Page Up/Down, F-keys, Fn) are added to
 `KeyChord.Key` when a step binds them.

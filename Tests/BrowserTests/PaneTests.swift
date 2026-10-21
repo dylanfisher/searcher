@@ -6,16 +6,6 @@ import Testing
 
 @testable import Browser
 
-func file(_ name: String, size: Int64 = 1) -> DirectoryEntry {
-    DirectoryEntry(
-        name: name, type: .regular, size: size, modified: Date(timeIntervalSince1970: 0))
-}
-
-func folder(_ name: String) -> DirectoryEntry {
-    DirectoryEntry(
-        name: name, type: .directory, size: nil, modified: Date(timeIntervalSince1970: 0))
-}
-
 @MainActor
 final class StubSystemActions: SystemActions {
     private(set) var openedFiles: [URL] = []
@@ -79,21 +69,6 @@ extension ListingState {
     var names: [String] {
         guard let listing else { return [] }
         return (0..<listing.count).map { listing[$0].name }
-    }
-}
-
-/// Services the main queue until `condition` holds; fails the test after 5 seconds.
-@MainActor
-func settle(
-    sourceLocation: SourceLocation = #_sourceLocation, until condition: @MainActor () -> Bool
-) async {
-    let deadline = Date(timeIntervalSinceNow: 5)
-    while !condition() {
-        if Date() > deadline {
-            Issue.record("timed out waiting", sourceLocation: sourceLocation)
-            return
-        }
-        try? await Task.sleep(for: .milliseconds(2))
     }
 }
 
@@ -387,4 +362,169 @@ func drainMainQueue() async {
 
     #expect(lister.waitForCall("/pane"))
     #expect(!lister.calls.map(\.path).contains("/normal"))
+}
+
+// MARK: - Folder changes
+
+@MainActor @Test func patchesUpdateTheListingAndDropRemovedNamesFromTheSelection() async {
+    let fixture = await PaneFixture.loaded()
+    fixture.select("a.txt", "b.txt")
+    let here = fixture.pane.location
+
+    fixture.pane.apply(.patches([.update(file("c.txt")), .remove(name: "a.txt")]), at: here)
+    await settle { fixture.pane.state.names == ["b.txt", "c.txt", "docs"] }
+
+    #expect(fixture.pane.state.isLoaded)
+    #expect(fixture.selectedNames == ["b.txt"])
+    #expect(fixture.lister.calls.count == 1)
+}
+
+@MainActor @Test func patchesThatArriveTogetherAreAllApplied() async {
+    let fixture = await PaneFixture.loaded()
+    let here = fixture.pane.location
+
+    for name in ["c", "d", "e", "f"] {
+        fixture.pane.apply(.patches([.update(file(name))]), at: here)
+    }
+    await settle { fixture.pane.state.names.count == 7 }
+
+    #expect(fixture.pane.state.names == ["a.txt", "b.txt", "c", "d", "docs", "e", "f"])
+}
+
+@MainActor @Test func aRelistChangeListsTheFolderAgain() async {
+    let fixture = await PaneFixture.loaded()
+
+    fixture.pane.apply(.relist, at: fixture.pane.location)
+
+    #expect(fixture.lister.waitForCalls(2))
+}
+
+@MainActor @Test func aChangeForAFolderThePaneLeftIsIgnored() async {
+    let fixture = await PaneFixture.loaded()
+    let old = fixture.pane.location
+    fixture.pane.navigate(to: old.child(named: "docs"))
+    await settle { fixture.pane.state.isLoaded }
+    let version = fixture.pane.stateVersion
+
+    fixture.pane.apply(.patches([.update(file("stray"))]), at: old)
+    fixture.pane.apply(.relist, at: old)
+    await drainMainQueue()
+
+    #expect(fixture.pane.stateVersion == version)
+    #expect(fixture.pane.state.names == ["inside.txt"])
+    #expect(fixture.lister.calls.count == 2)
+}
+
+/// Reads `lister`'s entries, then, from call `heldFrom` on, holds the call at `gate` before handing
+/// them over, so a test can change the folder after a load has read it but before the load ends.
+private final class HeldLister: Lister, @unchecked Sendable {
+    let lister: StubLister
+    let gate: GatedLister
+    private let heldFrom: Int
+    private let lock = NSLock()
+    private var count = 0
+
+    init(_ lister: StubLister, _ gate: GatedLister, heldFrom: Int = 1) {
+        self.lister = lister
+        self.gate = gate
+        self.heldFrom = heldFrom
+    }
+
+    /// Calls so far, held or not.
+    var calls: Int { lock.withLock { count } }
+
+    func list(_ path: String, onBatch: ([DirectoryEntry]) throws -> Void) throws {
+        let call = lock.withLock {
+            count += 1
+            return count
+        }
+        var entries: [DirectoryEntry] = []
+        try lister.list(path) { entries += $0 }
+        if call >= heldFrom {
+            try gate.list(path) { _ in }
+        }
+        try onBatch(entries)
+    }
+}
+
+@MainActor @Test func aPatchDuringAReloadOverLoadedRowsListsTheFolderAgainOnceItEnds() async {
+    let lister = StubLister(["/root": [file("a")]])
+    let gate = GatedLister(["/root": .batches([])])
+    let held = HeldLister(lister, gate, heldFrom: 2)
+    let pane = Pane(
+        location: Location(path: "/root"), service: ListingService(lister: held),
+        systemActions: StubSystemActions())
+    await settle { pane.state.names == ["a"] }
+    pane.reload()
+    #expect(gate.waitForCalls(1))
+
+    // The reload has read the folder; the file appears, and its patch shows at once.
+    lister.set("/root", to: [file("a"), file("new")])
+    pane.apply(.patches([.update(file("new"))]), at: pane.location)
+    await settle { pane.state.names == ["a", "new"] }
+    gate.releaseAll()
+
+    // The reload's listing, read before the change, lands, and a third load reads it again.
+    await settle { held.calls == 3 }
+    await settle { pane.state.names == ["a", "new"] && pane.state.isLoaded }
+    #expect(pane.state.names == ["a", "new"])
+    #expect(held.calls == 3)
+}
+
+@MainActor @Test func aPatchDuringALoadListsTheFolderAgainOnceItEnds() async {
+    let lister = StubLister(["/root": [file("a")]])
+    let gate = GatedLister(["/root": .batches([])])
+    let pane = Pane(
+        location: Location(path: "/root"),
+        service: ListingService(lister: HeldLister(lister, gate)),
+        systemActions: StubSystemActions())
+    #expect(gate.waitForCalls(1))
+
+    // The file appears after the lister has read the folder, but before the load ends.
+    lister.set("/root", to: [file("a"), file("new")])
+    pane.apply(.patches([.update(file("new"))]), at: pane.location)
+    gate.releaseAll()
+
+    await settle { pane.state.names == ["a", "new"] }
+    #expect(gate.calls.count == 2)
+}
+
+@MainActor @Test func aRelistDuringALoadListsTheFolderAgainOnceItEnds() async {
+    let fixture = PaneFixture(at: "/root", folders: ["/root": [file("a")]], held: true)
+    #expect(fixture.lister.waitForCalls(1))
+
+    fixture.pane.apply(.relist, at: fixture.pane.location)
+    fixture.lister.releaseAll()
+
+    await settle { fixture.lister.calls.count == 2 }
+    await settle { fixture.pane.state.isLoaded }
+    #expect(fixture.lister.calls.count == 2)
+}
+
+@MainActor @Test func aPatchOvertakenByASortChangeLeavesTheNewSortWithTheChange() async {
+    let lister = StubLister(["/root": [file("a", size: 1), file("b", size: 2)]])
+    let pane = Pane(
+        location: Location(path: "/root"), service: ListingService(lister: lister),
+        systemActions: StubSystemActions())
+    await settle { pane.state.isLoaded }
+    lister.set("/root", to: [file("a", size: 1), file("b", size: 2), file("c", size: 3)])
+
+    pane.apply(.patches([.update(file("c", size: 3))]), at: pane.location)
+    pane.setSort(.size, ascending: false)
+
+    await settle { pane.state.names.contains("c") }
+    await drainMainQueue()
+    #expect(pane.state.listing?.column == .size)
+    #expect(pane.state.names == ["c", "b", "a"])
+}
+
+@MainActor @Test func stateVersionChangesWithTheStateButNotTheSelection() async {
+    let fixture = await PaneFixture.loaded()
+    let loaded = fixture.pane.stateVersion
+
+    fixture.select("a.txt")
+    #expect(fixture.pane.stateVersion == loaded)
+
+    fixture.pane.setSort(.size, ascending: false)
+    #expect(fixture.pane.stateVersion > loaded)
 }

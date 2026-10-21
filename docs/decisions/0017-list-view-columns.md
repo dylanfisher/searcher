@@ -15,10 +15,11 @@ or whether the table or the listing decides the sort when a new listing arrives.
 - **First click.** Name and Kind sort ascending on the first click; Size and Date Modified sort
   descending, largest and newest first, as in Finder. Each column's `sortDescriptorPrototype`
   holds that direction, and AppKit reverses the first descriptor on a second click.
-- **The table owns the sort.** `ListingViewController.show(_:)` re-sorts a listing that arrives
-  in another order to the header's column and direction, then reloads once and reselects the
-  previously selected entries by name. A header click sorts the shown listing on the main
-  thread: 4–5 ms at 100k entries (0015), well inside B8.
+- **The pane owns the sort.** A header click calls `Pane.setSort`, which sorts the listing on the
+  main thread: 4–5 ms at 100k entries (0015), well inside B8. Loads arrive in the pane's sort
+  ([0019](0019-pane-model.md)). `ListingViewController.paneDidChange()` sets the header from the
+  pane's sort, reloads once when the pane's `stateVersion` has changed, and selects the pane's
+  selection by name.
 - **Sizes** use `ByteCountFormatter` with the file count style and every unit allowed, which reads
   "Zero bytes", "500 bytes" and "4.2 MB" with "KB" as Finder writes it. Anything without a size
   reads "--".
@@ -43,8 +44,7 @@ or whether the table or the listing decides the sort when a new listing arrives.
 
 ## Consequences
 
-When the pane model (M0.12) holds the sort column, the controller should take the sort from it
-and report header clicks to it rather than keeping its own. Size text follows the system locale:
+Size text follows the system locale:
 the region sets the decimal separator ("4,2 MB" in de_DE and fr_FR) and the language sets the
 unit words. The tests use sizes without a decimal part, so the region doesn't change them, but
 "Zero bytes" and "500 bytes" fail on a machine whose language isn't English.

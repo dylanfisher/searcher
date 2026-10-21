@@ -2,45 +2,41 @@ import AppKit
 import Base
 import Browser
 import Foundation
+import TestSupport
 import Testing
 
 @testable import Interface
 
-private let modified = Date(timeIntervalSince1970: 1_600_000_000)
-
-private func file(_ name: String, size: Int64) -> DirectoryEntry {
-    DirectoryEntry(name: name, type: .regular, size: size, modified: modified)
-}
-
-private func folder(_ name: String) -> DirectoryEntry {
-    DirectoryEntry(name: name, type: .directory, size: nil, modified: modified)
-}
-
 private func link(_ name: String) -> DirectoryEntry {
-    DirectoryEntry(name: name, type: .symbolicLink, size: nil, modified: modified)
-}
-
-/// Builds the listing off the main thread, where `Listing` must be built.
-private func listing(_ entries: [DirectoryEntry]) async -> Listing {
-    await Task.detached { Listing(entries) }.value
+    DirectoryEntry(name: name, type: .symbolicLink, size: nil, modified: testDate)
 }
 
 private func kindText(_ type: DirectoryEntry.FileType, _ pathExtension: Substring) async -> String {
     await Task.detached { EntryKind(type, pathExtension: pathExtension).text }.value
 }
 
+/// A controller showing a pane at `/folder` whose lister holds `entries`, once the pane has loaded
+/// them. The pane's changes reach the controller as `PaneViewController` passes them on.
+///
 /// Dates in UTC and English, so the expected text doesn't depend on the machine. Sizes follow the
 /// system locale, which `ByteCountFormatter` gives no way to change: the tests use sizes without a
 /// decimal part, so the region doesn't change them, but the unit words assume an English language.
 @MainActor
 private func controller(
-    iconCache: TypeIconCache = TypeIconCache(), tableView: NSTableView = NSTableView()
-) -> ListingViewController {
+    showing entries: [DirectoryEntry], lister: StubLister = StubLister([:]),
+    iconCache: TypeIconCache = TypeIconCache(), tableView: ListingTableView = ListingTableView()
+) async -> ListingViewController {
+    lister.set("/folder", to: entries)
+    let pane = Pane(
+        location: Location(path: "/folder"), service: ListingService(lister: lister),
+        systemActions: StubSystemActions())
     let formatter = EntryCellFormatter(
         locale: Locale(identifier: "en_US"), timeZone: TimeZone(identifier: "UTC")!)
     let controller = ListingViewController(
-        iconCache: iconCache, formatter: formatter, tableView: tableView)
+        pane: pane, iconCache: iconCache, formatter: formatter, tableView: tableView)
+    pane.onChange = { [weak controller] in controller?.paneDidChange() }
     controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 400)
+    await settle { pane.state.isLoaded }
     return controller
 }
 
@@ -89,12 +85,10 @@ private func clickHeader(_ controller: ListingViewController, titled title: Stri
 }
 
 @MainActor @Test func fixedListingShowsEachColumnsText() async throws {
-    let controller = controller()
-    controller.show(
-        await listing([
-            file("song.mp3", size: 4_000_000), folder("Documents"), file("empty", size: 0),
-            link("shortcut"), file("notes.txt", size: 500),
-        ]))
+    let controller = await controller(showing: [
+        file("song.mp3", size: 4_000_000), folder("Documents"), file("empty", size: 0),
+        link("shortcut"), file("notes.txt", size: 500),
+    ])
 
     let date = "Sep 13, 2020 at 12:26\u{202F}PM"
     let folderKind = await kindText(.directory, "")
@@ -126,25 +120,26 @@ private func clickHeader(_ controller: ListingViewController, titled title: Stri
     #expect(formatter.date(noon.addingTimeInterval(-86_400)) == "Yesterday at 12:00\u{202F}PM")
 }
 
-@MainActor @Test func sizeHeaderClickSortsBySizeAndASecondClickReverses() async throws {
-    let controller = controller()
-    controller.show(
-        await listing([
-            file("big", size: 3_000), folder("b folder"), file("small", size: 10),
-            folder("a folder"), file("mid", size: 200),
-        ]))
+@MainActor @Test func sizeHeaderClickSortsThePaneBySizeAndASecondClickReverses() async throws {
+    let controller = await controller(showing: [
+        file("big", size: 3_000), folder("b folder"), file("small", size: 10),
+        folder("a folder"), file("mid", size: 200),
+    ])
     #expect(try names(controller) == ["a folder", "b folder", "big", "mid", "small"])
 
     // The first click puts the largest first, as in Finder. Ties stay in ascending name order.
     try clickHeader(controller, titled: "Size")
+    #expect(controller.pane.sortColumn == .size)
+    #expect(controller.pane.sortAscending == false)
     #expect(try names(controller) == ["big", "mid", "small", "a folder", "b folder"])
 
     try clickHeader(controller, titled: "Size")
+    #expect(controller.pane.sortAscending == true)
     #expect(try names(controller) == ["a folder", "b folder", "small", "mid", "big"])
 }
 
-@MainActor @Test func columnsResizeAndReorder() {
-    let controller = controller()
+@MainActor @Test func columnsResizeAndReorder() async {
+    let controller = await controller(showing: [])
     let table = controller.tableView
     #expect(table.allowsColumnReordering)
     #expect(table.allowsColumnResizing)
@@ -155,7 +150,7 @@ private func clickHeader(_ controller: ListingViewController, titled title: Stri
 }
 
 /// Counts the calls that change a table's rows.
-private final class RowChangeCountingTableView: NSTableView {
+private final class RowChangeCountingTableView: ListingTableView {
     var reloads = 0
     var rowChanges = 0
 
@@ -185,39 +180,54 @@ private final class RowChangeCountingTableView: NSTableView {
     }
 }
 
-@MainActor @Test func newBatchReplacesRowsInOneSwapAndKeepsTheSelectionByName() async throws {
+@MainActor @Test func newListingReplacesRowsInOneSwapAndKeepsTheSelectionByName() async throws {
     let table = RowChangeCountingTableView()
-    let controller = controller(tableView: table)
-    controller.show(
-        await listing([file("a", size: 1), file("b", size: 3), file("c", size: 2)]))
+    let lister = StubLister([:])
+    let controller = await controller(
+        showing: [file("a", size: 1), file("b", size: 3), file("c", size: 2)], lister: lister,
+        tableView: table)
     try clickHeader(controller, titled: "Size")
-    controller.tableView.selectRowIndexes([0], byExtendingSelection: false)
+    table.selectRowIndexes([0], byExtendingSelection: false)
     #expect(try names(controller)[0] == "b")
+    #expect(controller.pane.selection == [ExactName("b")])
 
-    // Built in name order; the table keeps its size order.
-    let batch = await listing([
-        file("d", size: 4), file("b", size: 3), file("0", size: 0), file("c", size: 2),
-        file("e", size: 1),
-    ])
+    lister.set(
+        "/folder",
+        to: [
+            file("d", size: 4), file("b", size: 3), file("0", size: 0), file("c", size: 2),
+            file("e", size: 1),
+        ])
     table.reloads = 0
     table.rowChanges = 0
-    controller.show(batch)
+    controller.pane.reload()
+    await settle { controller.tableView.numberOfRows == 5 }
 
     #expect(table.reloads == 1)
     #expect(table.rowChanges == 0)
-    #expect(controller.tableView.numberOfRows == 5)
     #expect(try names(controller) == ["d", "b", "c", "e", "0"])
     #expect(controller.tableView.selectedRowIndexes == [1])
 }
 
+@MainActor @Test func selectionChangesMoveTheTableSelectionWithoutReloading() async throws {
+    let table = RowChangeCountingTableView()
+    let controller = await controller(
+        showing: [file("a", size: 1), file("b", size: 1)], tableView: table)
+    table.reloads = 0
+
+    controller.pane.moveSelection(by: 1)
+    controller.pane.moveSelection(by: 1)
+
+    #expect(table.selectedRowIndexes == [1])
+    #expect(table.reloads == 0)
+}
+
 @MainActor @Test func twoMp3FilesShareOneIconAndNoIconIsMadePerFile() async throws {
     let maker = IconMaker()
-    let controller = controller(iconCache: TypeIconCache(makeIcon: maker.icon(for:)))
-    controller.show(
-        await listing([
-            file("a.mp3", size: 1), file("b.mp3", size: 2), file("c.MP3", size: 3),
-            folder("d"),
-        ]))
+    let controller = await controller(
+        showing: [
+            file("a.mp3", size: 1), file("b.mp3", size: 2), file("c.MP3", size: 3), folder("d"),
+        ],
+        iconCache: TypeIconCache(makeIcon: maker.icon(for:)))
 
     let icons = try (0..<4).map {
         try #require(cell(controller, row: $0, column: 0).imageView?.image)
@@ -229,8 +239,7 @@ private final class RowChangeCountingTableView: NSTableView {
 }
 
 @MainActor @Test func rowsAndCellsAreReachableByAccessibility() async throws {
-    let controller = controller()
-    controller.show(await listing([file("song.mp3", size: 1)]))
+    let controller = await controller(showing: [file("song.mp3", size: 1)])
 
     let name = try cell(controller, row: 0, column: 0)
     #expect(controller.tableView.isAccessibilityElement())
