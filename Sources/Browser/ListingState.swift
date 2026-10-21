@@ -7,8 +7,9 @@ public enum ListingState: Sendable {
     /// The first entries of a large folder, while the rest is still being read.
     case partial(Listing)
     case loaded(Listing)
-    /// The system refused to list the folder: a privacy-protected folder the app has no access to,
-    /// or a permissions mismatch.
+    /// Privacy protection keeps the app out of the folder until the user grants it Full Disk
+    /// Access. A folder whose Unix permissions keep the user out is `failed`: granting the app
+    /// access wouldn't help.
     case denied(ListingError)
     case failed(ListingError)
 

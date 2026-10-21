@@ -2,8 +2,9 @@ import AppKit
 import Browser
 import os
 
-/// One pane: its list, with a spinner over it while the folder loads, or a line saying why the
-/// folder couldn't be listed. Keys and double-clicks in the list run the app's commands on this
+/// One pane: its list, with a spinner over it while the folder loads, an explanation with a way to
+/// grant access when the system refused to list the folder, or a line saying why another folder
+/// couldn't be listed. Keys and double-clicks in the list run the app's commands on this
 /// pane, and a folder monitor keeps the rows in step with the folder.
 ///
 /// The list stays in place in every state, so the table keeps keyboard focus while a folder
@@ -14,6 +15,7 @@ public final class PaneViewController: NSViewController {
     let listingViewController: ListingViewController
     let spinner = NSProgressIndicator()
     let messageLabel = NSTextField(wrappingLabelWithString: "")
+    let accessDeniedView: AccessDeniedView
 
     /// Runs after the pane shows a new location, for the window title.
     public var onLocationChange: (@MainActor (Location) -> Void)?
@@ -52,6 +54,7 @@ public final class PaneViewController: NSViewController {
     ) {
         self.pane = pane
         self.monitorsFolders = monitorsFolders
+        accessDeniedView = AccessDeniedView(systemActions: pane.systemActions)
         listingViewController = ListingViewController(
             pane: pane, iconCache: iconCache, formatter: formatter, tableView: tableView)
         super.init(nibName: nil, bundle: nil)
@@ -74,10 +77,13 @@ public final class PaneViewController: NSViewController {
         list.autoresizingMask = [.width, .height]
         container.addSubview(list)
         addChild(listingViewController)
-        for overlay in [spinner, messageLabel] {
+        for overlay in [spinner, messageLabel, accessDeniedView] {
             overlay.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(overlay)
         }
+        // As wide as this in a wide pane; the explanation wraps to fit a narrower one.
+        let deniedWidth = accessDeniedView.widthAnchor.constraint(equalToConstant: 420)
+        deniedWidth.priority = .defaultHigh
         NSLayoutConstraint.activate([
             spinner.centerXAnchor.constraint(equalTo: container.centerXAnchor),
             spinner.centerYAnchor.constraint(equalTo: container.centerYAnchor),
@@ -85,6 +91,11 @@ public final class PaneViewController: NSViewController {
             messageLabel.centerYAnchor.constraint(equalTo: container.centerYAnchor),
             messageLabel.widthAnchor.constraint(
                 lessThanOrEqualTo: container.widthAnchor, constant: -40),
+            accessDeniedView.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            accessDeniedView.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            accessDeniedView.widthAnchor.constraint(
+                lessThanOrEqualTo: container.widthAnchor, constant: -40),
+            deniedWidth,
         ])
         view = container
     }
@@ -111,24 +122,28 @@ public final class PaneViewController: NSViewController {
             monitoredLocation = pane.location
             listingViewController.tableView.setAccessibilityLabel(pane.location.name)
             spinner.setAccessibilityLabel("Loading \(pane.location.name)")
+            accessDeniedView.folderName = pane.location.name
             startMonitor()
             onLocationChange?(pane.location)
         }
     }
 
     private func showState() {
-        switch pane.state {
-        case .loading:
+        if case .loading = pane.state {
             spinner.isHidden = false
             spinner.startAnimation(nil)
-            messageLabel.isHidden = true
-        case .partial, .loaded:
+        } else {
             spinner.stopAnimation(nil)
             spinner.isHidden = true
-            messageLabel.isHidden = true
-        case .denied(let error), .failed(let error):
-            spinner.stopAnimation(nil)
-            spinner.isHidden = true
+        }
+        accessDeniedView.isHidden = true
+        messageLabel.isHidden = true
+        switch pane.state {
+        case .loading, .partial, .loaded:
+            break
+        case .denied:
+            accessDeniedView.isHidden = false
+        case .failed(let error):
             messageLabel.stringValue = error.description
             messageLabel.isHidden = false
         }
