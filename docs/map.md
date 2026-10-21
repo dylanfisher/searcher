@@ -40,8 +40,10 @@ the dependency direction.
 | **browser** | `Sources/Browser` | The file-manager model: listings, selection, the pane/tiling layout tree, commands, `Settings`. No AppKit — testable without a window. | base, c |
 | **interface** | `Sources/Interface` | AppKit windows, split panes, table views, keybindings. | browser, base |
 | **app** | `Sources/Searcher` | The executable: app delegate, menus, wiring. Kept thin. | everything |
+| **tools** | `Sources/Bench` | The release-mode benchmark runner, its cases, and `Budget`, the only copy of the budget numbers in code. Nothing imports it. | browser, base |
 
-**Dependency direction is one-way: app → interface → browser → base → c.** Never upward.
+**Dependency direction is one-way: app → interface → browser → base → c.** Never upward. Tools
+sit beside the app: they import browser and base, and nothing imports them.
 
 Each tier is a SwiftPM target, so `Package.swift` is the dependency map. The build rejects an
 import of any target that isn't a declared dependency, and because the tiers form a chain, an
@@ -67,6 +69,6 @@ Things move up a tier deliberately, never by accident:
 
 A promotion is its own commit, separate from whatever work revealed it (principle 4).
 
-<!-- paths: Sources/Base Sources/Browser Sources/Interface Sources/Searcher -->
+<!-- paths: Sources/Base Sources/Browser Sources/Interface Sources/Searcher Sources/Bench -->
 <!-- ↑ scripts/check verifies every path above exists. Keep it in sync with the Tiers table;
      a rename that misses this line fails the gate, which is the point. -->

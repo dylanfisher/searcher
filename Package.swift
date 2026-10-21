@@ -15,8 +15,10 @@ let package = Package(
         .target(name: "Interface", dependencies: ["Browser", "Base"], swiftSettings: strict),
         .executableTarget(
             name: "Searcher", dependencies: ["Interface", "Browser", "Base"], swiftSettings: strict),
+        .executableTarget(name: "Bench", dependencies: ["Browser", "Base"], swiftSettings: strict),
         .testTarget(name: "BaseTests", dependencies: ["Base"], swiftSettings: strict),
         .testTarget(name: "BrowserTests", dependencies: ["Browser"], swiftSettings: strict),
+        .testTarget(name: "BenchTests", dependencies: ["Bench", "Base"], swiftSettings: strict),
     ],
     swiftLanguageModes: [.v6]
 )

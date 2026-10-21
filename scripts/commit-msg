@@ -9,7 +9,7 @@ title=$(head -n1 "$1")
 case "$title" in Merge\ *|Revert\ *|fixup!\ *|squash!\ *|amend!\ *) exit 0 ;; esac
 
 types='feat|fix|refactor|perf|test|docs|build|ci|chore'
-scopes='base|browser|interface|app|c'
+scopes='base|browser|interface|app|c|bench'
 if ! printf '%s' "$title" | grep -qE "^($types)(\(($scopes)\))?!?: [a-z0-9]"; then
   printf 'commit title must be "<type>(<scope>): <lowercase summary>" — see docs/writing.md\n  got: %s\n' "$title" >&2
   exit 1
