@@ -35,6 +35,10 @@ Choices the plan left open:
   rows selected they do nothing.
 - Regaining focus re-lists unless a load is already running. The old rows stay until the new
   listing arrives, so the table doesn't flash.
+- A load that fails with EPERM, which privacy protection (TCC) returns, puts the pane in the
+  `denied` state; every other error, EACCES from Unix permissions included, is `failed`. Full
+  Disk Access lets the app into the first and not the second, so only `denied` offers it. The
+  errno is read once, in `ListingError.reason` (`privacyProtected` against `permissionDenied`).
 - A listing that arrives in a sort other than the pane's (the sort changed during the load) is
   re-sorted on the main actor, the same cost as a header click.
 

@@ -3,6 +3,9 @@ import Darwin
 /// A directory that couldn't be listed: the path and the errno the system call returned.
 public struct ListingError: Error, Equatable, Sendable, CustomStringConvertible {
     public enum Reason: Sendable {
+        /// Privacy protection (TCC) keeps the app out, until the user grants it access.
+        case privacyProtected
+        /// The folder's Unix permissions keep the user out.
         case permissionDenied
         case notFound
         case notADirectory
@@ -20,7 +23,8 @@ public struct ListingError: Error, Equatable, Sendable, CustomStringConvertible 
     public var reason: Reason {
         switch code {
         // EPERM is what privacy protection (TCC) returns for a folder the app has no access to.
-        case EACCES, EPERM: .permissionDenied
+        case EPERM: .privacyProtected
+        case EACCES: .permissionDenied
         case ENOENT: .notFound
         case ENOTDIR: .notADirectory
         default: .other

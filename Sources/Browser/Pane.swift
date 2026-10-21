@@ -26,7 +26,8 @@ public final class Pane {
     public var onChange: (@MainActor () -> Void)?
 
     private let service: ListingService
-    private let systemActions: any SystemActions
+    /// How the pane and its views reach the system outside the app's windows.
+    public let systemActions: any SystemActions
     private var load: ListingLoad?
     private var loadIsRunning = false
     private var isFocused: Bool
@@ -225,7 +226,7 @@ public final class Pane {
             state = .loaded(listing)
         case .failed(let error):
             loadIsRunning = false
-            state = error.reason == .permissionDenied ? .denied(error) : .failed(error)
+            state = error.reason == .privacyProtected ? .denied(error) : .failed(error)
         }
         if !loadIsRunning, relistAfterLoad {
             relistAfterLoad = false

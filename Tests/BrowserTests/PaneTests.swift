@@ -113,7 +113,7 @@ func drainMainQueue() async {
     #expect(pane.state.names.count == 400)
 }
 
-@MainActor @Test func permissionDeniedPutsThePaneInTheDeniedState() async {
+@MainActor @Test func privacyProtectionPutsThePaneInTheDeniedState() async {
     let lister = GatedLister(
         ["/secret": .failure(ListingError(path: "/secret", code: EPERM))])
     lister.releaseAll()
@@ -124,6 +124,19 @@ func drainMainQueue() async {
     await settle { pane.state.isDenied }
 
     #expect(pane.location == Location(path: "/secret"))
+}
+
+@MainActor @Test func unixPermissionsPutThePaneInTheFailedState() async {
+    let lister = GatedLister(
+        ["/var/root": .failure(ListingError(path: "/var/root", code: EACCES))])
+    lister.releaseAll()
+    let pane = Pane(
+        location: Location(path: "/var/root"), service: ListingService(lister: lister),
+        systemActions: StubSystemActions())
+
+    await settle { pane.state.isFailed || pane.state.isDenied }
+
+    #expect(pane.state.isFailed)
 }
 
 @MainActor @Test func otherErrorsPutThePaneInTheFailedState() async {

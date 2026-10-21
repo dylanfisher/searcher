@@ -35,6 +35,15 @@ patches to the listing, what the pane shows while it loads, or when the watchdog
 - **Loading.** A spinner, and for a folder that failed to list a line with the error, sit over
   the table. The table is never hidden: hiding the first responder moves focus to the next key
   view, and keys would stop reaching the pane after every navigation.
+- **Denied folders.** A folder in the `denied` state (privacy protection, not Unix permissions;
+  see [0019](0019-pane-model.md)) shows `AccessDeniedView` over the table in place of the error
+  line: the folder's name, why, and a button that opens the Full Disk Access list through
+  `SystemActions.openURL`. A folder Unix permissions keep the user out of gets the error line.
+  The view reaches the system through `Pane.systemActions`, so a pane has one route to it. The
+  table stays first responder, so Cmd-↑ goes back from a denied folder. The button takes focus
+  only by Tab under Full Keyboard Access, as any button does; from there the pane's keys don't
+  reach the registry until focus returns to the table. The view's strings are declared once, in
+  `AccessDeniedView`.
 - **Watchdog.** `--stall-threshold-ms <ms>` starts the watchdog on the main run loop in any build,
   so the UI bench can pass it to a release build. Without it, a debug build logs that the
   watchdog is off. Stalls and that line go to os_log under the bundle ID, since `open` hides the
