@@ -7,17 +7,18 @@ import os
 /// `--stall-threshold-ms <ms>`, and logs each stall with the stack captured inside it
 /// (0011-stall-watchdog.md). `scripts/dev` passes B10 as the threshold.
 public enum StallLogging {
-    public static let thresholdArgument = "--stall-threshold-ms"
-
-    /// The threshold that follows `thresholdArgument` in `arguments`, or nil when it isn't there.
-    /// Traps when the value isn't a positive whole number of milliseconds.
+    /// The threshold that follows `StallWatchdog.thresholdArgument` in `arguments`, or nil when it
+    /// isn't there. Traps when the value isn't a positive whole number of milliseconds.
     public static func threshold(in arguments: [String]) -> Duration? {
-        guard let index = arguments.firstIndex(of: thresholdArgument) else { return nil }
+        guard let index = arguments.firstIndex(of: StallWatchdog.thresholdArgument) else {
+            return nil
+        }
         let valueIndex = arguments.index(after: index)
         guard valueIndex < arguments.endIndex, let milliseconds = Int(arguments[valueIndex]),
             milliseconds > 0
         else {
-            preconditionFailure("\(thresholdArgument) needs a positive number of milliseconds")
+            preconditionFailure(
+                "\(StallWatchdog.thresholdArgument) needs a positive number of milliseconds")
         }
         return .milliseconds(milliseconds)
     }
@@ -39,7 +40,7 @@ public enum StallLogging {
         guard let threshold = threshold(in: arguments) else {
             #if DEBUG
                 logger.notice(
-                    "stall watchdog is off: launched without \(thresholdArgument, privacy: .public)"
+                    "stall watchdog is off: launched without \(StallWatchdog.thresholdArgument, privacy: .public)"
                 )
             #endif
             return nil
