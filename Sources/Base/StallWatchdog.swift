@@ -9,6 +9,11 @@ import Foundation
 /// at the threshold and captures the stack, because the stalled thread cannot report on itself
 /// until the stall is over.
 public final class StallWatchdog: @unchecked Sendable {
+    /// The app's launch argument that starts a watchdog on the main run loop, followed by the
+    /// threshold in whole milliseconds. Here, below the app and the bench runner, so both read
+    /// one spelling.
+    public static let thresholdArgument = "--stall-threshold-ms"
+
     private let runLoop: CFRunLoop
     private let stack: ThreadStack
     private let threshold: Duration
