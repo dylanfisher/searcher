@@ -1,4 +1,4 @@
-# NNNN. Layout view dividers: drag area, cursors and accessibility
+# 0014. Layout view dividers: drag area, cursors and accessibility
 
 - **Date:** 2026-10-20
 - **Status:** accepted

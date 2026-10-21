@@ -1,4 +1,4 @@
-# NNNN. Build the name sort key from root collation order, not from folded UTF-8
+# 0013. Build the name sort key from root collation order, not from folded UTF-8
 
 - **Date:** 2026-10-20
 - **Status:** accepted

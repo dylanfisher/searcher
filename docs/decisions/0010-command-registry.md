@@ -1,4 +1,4 @@
-# NNNN. Commands are data; a chord has one spelling
+# 0010. Commands are data; a chord has one spelling
 
 - **Date:** 2026-10-20
 - **Status:** accepted
