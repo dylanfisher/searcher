@@ -49,7 +49,7 @@ Warm cache unless noted. The budget is the p95 of the runs.
 | Gate | Runs bench | Fails on |
 |---|---|---|
 | `./scripts/check` | no | — |
-| CI | yes | harness p95 over budget; UI bench p95 over budget once its p95s stay within 10% across three consecutive runs (reported until then); >10% slower than the last run on the same branch, else `main`, is reported, not failed |
+| CI | yes | harness p95 over budget; UI bench p95 over budget once its p95s stay within 10% across three consecutive runs (reported until then); a harness case >10% slower than the last run on the same branch, else `main`, is reported, not failed |
 | Milestone | manual W4, W6, W7 | any budget miss |
 
 ## Measurement

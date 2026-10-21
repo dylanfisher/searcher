@@ -53,6 +53,47 @@ func runCompare(previous: String, current: String) throws -> Bool {
     return regression.passed
 }
 
+/// Judges the UI bench record at `current` against the history at `previous`, writes the next
+/// history to `RegressionReport.UIHistory.path`, and prints the result. A previous history that is
+/// missing or can't be read is stated and discarded. A record that is missing or doesn't hold one
+/// run's launches is printed, no history is written, and the run fails. Returns whether no enforced
+/// case is over budget.
+func runCompareUI(previous: String, current: String, branch: String) throws -> Bool {
+    guard FileManager.default.fileExists(atPath: current) else {
+        print(
+            "the UI bench did not finish: \(current) does not exist; its error is in the bench's output"
+        )
+        return false
+    }
+    let record = try UIBenchRecord.decode(Data(contentsOf: URL(filePath: current)))
+    var before: RegressionReport.UIHistory?
+    var unreadable: String?
+    if FileManager.default.fileExists(atPath: previous) {
+        do {
+            before = try RegressionReport.UIHistory.read(from: previous)
+        } catch {
+            unreadable = "\(previous): \(error)"
+        }
+    } else {
+        printError("previous UI history \(previous) does not exist")
+    }
+    // On standard output, which CI puts in the step summary.
+    let report: RegressionReport.UI
+    do {
+        report = try RegressionReport.UI(
+            previous: before, unreadablePrevious: unreadable, current: record, branch: branch)
+    } catch let error as RegressionReport.UI.Incomplete {
+        print(error.description)
+        return false
+    } catch let error as RegressionReport.UI.TooManyLaunches {
+        print(error.description)
+        return false
+    }
+    try report.history.write(to: RegressionReport.UIHistory.path)
+    print(report.text)
+    return report.passed
+}
+
 /// Launches the app bundle at `app` in its UI bench mode `UIBenchReport.launches` times, each a
 /// new process, so every launch is a cold launch (B1) with a warm file-system cache. The first
 /// launch also presses ↓ `UIBenchReport.keyPresses` times. Each launch writes its samples to
@@ -216,6 +257,8 @@ Task.detached {
             exit(try runCompare(previous: previous, current: current) ? 0 : 1)
         case .run(let folder):
             exit(try await runCases(folder: folder) ? 0 : 1)
+        case .compareUI(let previous, let current, let branch):
+            exit(try runCompareUI(previous: previous, current: current, branch: branch) ? 0 : 1)
         case .ui(let app, let folder):
             exit(try runUI(app: app, folder: folder) ? 0 : 1)
         }
