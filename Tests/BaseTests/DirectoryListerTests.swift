@@ -37,6 +37,24 @@ import Testing
     #expect(listed == (try fileManagerListing(folder.url)))
 }
 
+@Test func singleEntryMatchesTheListing() throws {
+    let folder = try TemporaryFolder("DirectoryListerTests")
+    try Data(count: 12).write(to: folder.url.appending(path: "file.bin"))
+    try FileManager.default.createDirectory(
+        at: folder.url.appending(path: "folder"), withIntermediateDirectories: false)
+    try FileManager.default.createSymbolicLink(
+        atPath: folder.url.path + "/link", withDestinationPath: "missing")
+    let lister = DirectoryLister()
+    var listed: [DirectoryEntry] = []
+    try lister.list(folder.url.path) { listed += $0 }
+
+    for entry in listed {
+        #expect(try lister.entry(named: entry.name, inDirectory: folder.url.path) == entry)
+    }
+    #expect(listed.count == 3)
+    #expect(try lister.entry(named: "gone", inDirectory: folder.url.path) == nil)
+}
+
 @Test func firstBatchArrivesBeforeListingEnds() throws {
     let folder = try TemporaryFolder("DirectoryListerTests")
     for index in 0..<5000 {

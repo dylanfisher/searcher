@@ -53,6 +53,17 @@ public struct DirectoryLister: Lister {
         }
     }
 
+    /// The entry named `name` in the directory at `path`, described as a listing describes it, or
+    /// nil if there is none. Change watching uses it to patch one entry without a listing.
+    public func entry(named name: String, inDirectory path: String) throws -> DirectoryEntry? {
+        var info = Darwin.stat()
+        if lstat(path + "/" + name, &info) != 0 {
+            if errno == ENOENT { return nil }
+            throw ListingError(path: path + "/" + name, code: errno)
+        }
+        return entry(named: name, info: info)
+    }
+
     /// Reads one `getattrlistbulk` record. Attributes are packed in bitmap order and only those
     /// marked returned are present, so each field is read only if its bit is set. Returns nil for
     /// an entry deleted while the directory was being listed.
@@ -116,6 +127,10 @@ public struct DirectoryLister: Lister {
             if errno == ENOENT { return nil }
             throw ListingError(path: path + "/" + name, code: errno)
         }
+        return entry(named: name, info: info)
+    }
+
+    private func entry(named name: String, info: Darwin.stat) -> DirectoryEntry {
         let type: DirectoryEntry.FileType =
             switch info.st_mode & S_IFMT {
             case S_IFREG: .regular
