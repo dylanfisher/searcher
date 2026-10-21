@@ -1,4 +1,4 @@
-# NNNN. Layout sizes, pane IDs and zoom
+# 0012. Layout sizes, pane IDs and zoom
 
 - **Date:** 2026-10-20
 - **Status:** accepted

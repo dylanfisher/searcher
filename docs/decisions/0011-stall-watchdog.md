@@ -1,4 +1,4 @@
-# NNNN. Time stalls with run loop observers, capture stacks from a watchdog thread
+# 0011. Time stalls with run loop observers, capture stacks from a watchdog thread
 
 - **Date:** 2026-10-20
 - **Status:** accepted

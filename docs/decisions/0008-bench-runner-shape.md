@@ -1,4 +1,4 @@
-# NNNN. Nearest-rank statistics and per-workload budget IDs in the bench runner
+# 0008. Nearest-rank statistics and per-workload budget IDs in the bench runner
 
 - **Date:** 2026-10-20
 - **Status:** accepted

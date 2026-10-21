@@ -1,4 +1,4 @@
-# NNNN. Find firmlinks by their SF_FIRMLINK flag
+# 0009. Find firmlinks by their SF_FIRMLINK flag
 
 - **Date:** 2026-10-20
 - **Status:** accepted
