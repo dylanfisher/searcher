@@ -93,4 +93,4 @@ and does not take focus. An ad hoc signed rebuild makes the first launch slower 
 signature; it is one of 20 samples. The spans run from Swift tasks on the main actor, so objects
 autoreleased during a span are released when that task's job ends, in the same pass, as an event
 handler's would be. Synthetic events skip the event queue, so time a real key waits there is not
-measured. CI does not run `--ui` until M0.16b.
+measured. CI runs `--ui` from M0.16b; how it judges the runs is decision [0023](0023-ui-bench-in-ci.md).

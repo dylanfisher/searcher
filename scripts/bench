@@ -16,6 +16,13 @@
 #                         report cases whose median is over 10% slower than in <previous>
 #                         (a missing file is stated); exit non-zero when <current> has a
 #                         case over budget
+#   compare-ui <previous history> <bench-ui.json> <branch>
+#                         judge a UI bench record against the history the last CI run
+#                         kept (a missing file is stated) and write the next one to
+#                         .build/bench-ui-history.json; a UI case is report-only until
+#                         its p95 stays within 10% across 3 runs on one branch; exit
+#                         non-zero when an enforced case is over budget or the record
+#                         is missing or doesn't hold one run's 20 launches
 #   --ui                  build the release Searcher.app and time its UI in 20 new
 #                         processes (B1, B2, B6, B8, B10) instead of the harness cases;
 #                         writes .build/bench-ui.json. With --path, the folder is opened

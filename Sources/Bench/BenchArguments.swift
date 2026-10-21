@@ -22,6 +22,10 @@ enum BenchArguments: Equatable {
     case ui(app: String, folder: String?)
     /// Print `stallArguments()` on one line, for scripts that launch the app.
     case printStallArguments
+    /// Judge the UI bench record `current` against the history file `previous` kept by the last
+    /// CI run on `branch` (else `main`), write the next history, and fail only when an enforced
+    /// case is over budget. A missing `previous` file is stated, not an error.
+    case compareUI(previous: String, current: String, branch: String)
 
     /// The app's launch arguments that start its stall watchdog at B10.
     static func stallArguments() throws -> [String] {
@@ -57,6 +61,14 @@ enum BenchArguments: Equatable {
                     throw Invalid("compare needs a previous report and a current report")
                 }
                 return .compare(previous: previous, current: current)
+            case "compare-ui":
+                guard let previous = remaining.popFirst(), let current = remaining.popFirst(),
+                    let branch = remaining.popFirst()
+                else {
+                    throw Invalid(
+                        "compare-ui needs a previous history, a UI bench record and a branch")
+                }
+                return .compareUI(previous: previous, current: current, branch: branch)
             case "--path":
                 folder = try existingFolder(remaining.popFirst(), for: argument)
             case "--ui":
