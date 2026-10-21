@@ -1,3 +1,4 @@
+import Base
 import Foundation
 
 /// What one invocation of the runner does, parsed from its command line.
@@ -16,10 +17,21 @@ enum BenchArguments: Equatable {
     /// Compare two saved reports and fail only when `current` has a case over budget. A missing
     /// `previous` file is stated, not an error.
     case compare(previous: String, current: String)
+    /// Launch the app bundle at `app` in its UI bench mode, opening `folder` as both workloads
+    /// when given.
+    case ui(app: String, folder: String?)
+    /// Print `stallArguments()` on one line, for scripts that launch the app.
+    case printStallArguments
+
+    /// The app's launch arguments that start its stall watchdog at B10.
+    static func stallArguments() throws -> [String] {
+        [StallWatchdog.thresholdArgument, try Budget.named("B10").formattedLimit]
+    }
 
     /// Checks that a `--path` folder exists, so call it off the main thread.
     static func parse(_ arguments: [String]) throws -> BenchArguments {
         var folder: String?
+        var app: String?
         var remaining = arguments[...]
         while let argument = remaining.popFirst() {
             switch argument {
@@ -30,6 +42,8 @@ enum BenchArguments: Equatable {
                 return .printBudget(try Budget.named(id))
             case "--check-idle":
                 return .checkIdle
+            case "--print-stall-arguments":
+                return .printStallArguments
             case BenchCase.footprintArgument:
                 guard let path = remaining.popFirst() else {
                     throw Invalid("\(BenchCase.footprintArgument) needs a folder")
@@ -45,10 +59,16 @@ enum BenchArguments: Equatable {
                 return .compare(previous: previous, current: current)
             case "--path":
                 folder = try existingFolder(remaining.popFirst(), for: argument)
+            case "--ui":
+                guard let path = remaining.popFirst() else {
+                    throw Invalid("--ui needs the app bundle's path")
+                }
+                app = path
             default:
                 throw Invalid("unknown argument \(argument)")
             }
         }
+        if let app { return .ui(app: app, folder: folder) }
         return .run(folder: folder)
     }
 

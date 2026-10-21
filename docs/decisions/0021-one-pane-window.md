@@ -47,7 +47,8 @@ patches to the listing, what the pane shows while it loads, or when the watchdog
 - **Watchdog.** `--stall-threshold-ms <ms>` starts the watchdog on the main run loop in any build,
   so the UI bench can pass it to a release build. Without it, a debug build logs that the
   watchdog is off. Stalls and that line go to os_log under the bundle ID, since `open` hides the
-  app's output. `scripts/dev` reads B10 with `scripts/bench --print-budget B10`.
+  app's output. `scripts/dev` gets the argument and B10 from
+  `scripts/bench --print-stall-arguments`.
 
 ## Alternatives considered
 

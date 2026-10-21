@@ -1,0 +1,28 @@
+import Base
+import Foundation
+import TestSupport
+import Testing
+
+@Test func writeReplacesTheFile() throws {
+    let folder = try TemporaryFolder("AtomicWriteTests")
+    let file = folder.url.appending(path: "report.json")
+    try AtomicWrite.write(Data("old".utf8), to: file)
+    try AtomicWrite.write(Data("new".utf8), to: file)
+
+    #expect(try String(contentsOf: file, encoding: .utf8) == "new")
+    #expect(try FileManager.default.contentsOfDirectory(atPath: folder.url.path) == ["report.json"])
+}
+
+@Test func writeInterruptedBeforeTheRenameLeavesThePreviousFile() throws {
+    let folder = try TemporaryFolder("AtomicWriteTests")
+    let file = folder.url.appending(path: "report.json")
+    try AtomicWrite.write(Data("old".utf8), to: file)
+
+    struct Interrupted: Error {}
+    #expect(throws: Interrupted.self) {
+        try AtomicWrite.write(Data("new".utf8), to: file) { throw Interrupted() }
+    }
+
+    #expect(try String(contentsOf: file, encoding: .utf8) == "old")
+    #expect(try FileManager.default.contentsOfDirectory(atPath: folder.url.path) == ["report.json"])
+}

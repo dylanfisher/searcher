@@ -6,6 +6,8 @@
 # miss. Arguments pass through to the runner:
 #   --path <dir>          point the cases at a real folder
 #   --print-budget <id>   print one budget's number, for other scripts
+#   --print-stall-arguments
+#                         print the app arguments that start its stall watchdog at B10
 #   --cold-children <dir> time 20 different subfolders of <dir>, once each, against B3;
 #                         the folders must not have been opened before
 #   --check-idle          sample the machine for 1 s; exit non-zero naming any
@@ -14,9 +16,28 @@
 #                         report cases whose median is over 10% slower than in <previous>
 #                         (a missing file is stated); exit non-zero when <current> has a
 #                         case over budget
+#   --ui                  build the release Searcher.app and time its UI in 20 new
+#                         processes (B1, B2, B6, B8, B10) instead of the harness cases;
+#                         writes .build/bench-ui.json. With --path, the folder is opened
+#                         as both W1 and W2. The window opens in the background on the
+#                         second display if there is one and never takes focus; a run
+#                         whose window is covered fails saying so. The bundle is built
+#                         at .build/bench/Searcher.app.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+args=()
+ui=false
+for argument in "$@"; do
+  if [ "$argument" = --ui ]; then ui=true; else args+=("$argument"); fi
+done
+if $ui; then
+  # Its own path, so the dev bundle at .build/Searcher.app, which may be running
+  # and holds its Full Disk Access grant, is left alone.
+  app=$(./scripts/bundle -c release -o .build/bench/Searcher.app)
+  args=(--ui "$PWD/$app" ${args[@]+"${args[@]}"})
+fi
+
 # Build output goes to stderr so `--print-budget` leaves only the number on stdout.
 swift build -c release --product Bench >&2
-exec "$(swift build -c release --show-bin-path)/Bench" "$@"
+exec "$(swift build -c release --show-bin-path)/Bench" ${args[@]+"${args[@]}"}

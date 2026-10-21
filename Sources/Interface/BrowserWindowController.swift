@@ -5,7 +5,7 @@ import Browser
 /// layout holding one pane in list view, titled after the pane's folder.
 @MainActor
 public final class BrowserWindowController: NSWindowController {
-    private let paneViewController: PaneViewController
+    public let paneViewController: PaneViewController
 
     public init(location: Location, service: ListingService, systemActions: any SystemActions) {
         let window = NSWindow(

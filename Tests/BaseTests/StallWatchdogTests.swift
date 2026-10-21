@@ -4,10 +4,15 @@ import Testing
 
 @Suite(.serialized) struct StallWatchdogTests {
     @Test func busyBlockIsReportedOnceWithItsStack() {
+        let before = ContinuousClock.now
         let stalls = watch { loop in loop.perform { blockRunLoop(for: .milliseconds(80)) } }
+        let after = ContinuousClock.now
         #expect(stalls.count == 1)
         guard let stall = stalls.first else { return }
         #expect(stall.duration >= .milliseconds(80))
+        // The pass's own instants, so a caller can tell what was running during it.
+        #expect(stall.end - stall.start == stall.duration)
+        #expect(before <= stall.start && stall.end <= after)
         #expect(stall.duration < .milliseconds(400))
         #expect(stall.symbols.contains { $0.contains("blockRunLoop") }, "\(stall.symbols)")
     }

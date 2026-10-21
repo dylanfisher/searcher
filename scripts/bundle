@@ -4,23 +4,27 @@
 # to Terminal. Prints the bundle's path on stdout, the only line there, for
 # other scripts to use:
 #   -c debug|release   build configuration (default debug)
+#   -o <path>           where to put the bundle (default .build/Searcher.app);
+#                       replaced if it exists
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 config=debug
+app=.build/Searcher.app
 while [ $# -gt 0 ]; do
   case "$1" in
     -c) config="${2:?-c needs debug or release}"; shift 2 ;;
+    -o) app="${2:?-o needs a path ending in .app}"; shift 2 ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 1 ;;
   esac
 done
 case "$config" in debug|release) ;; *) printf -- '-c must be debug or release, got %s\n' "$config" >&2; exit 1 ;; esac
+case "$app" in *.app) ;; *) printf -- '-o must end in .app, got %s\n' "$app" >&2; exit 1 ;; esac
 
 # Build output goes to stderr so stdout carries only the bundle path.
 swift build -c "$config" --product Searcher >&2
 bin="$(swift build -c "$config" --show-bin-path)"
 
-app=.build/Searcher.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS"
 # The plist is copied as is: it is the only place the bundle ID is written.

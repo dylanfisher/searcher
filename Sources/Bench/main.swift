@@ -53,6 +53,89 @@ func runCompare(previous: String, current: String) throws -> Bool {
     return regression.passed
 }
 
+/// Launches the app bundle at `app` in its UI bench mode `UIBenchReport.launches` times, each a
+/// new process, so every launch is a cold launch (B1) with a warm file-system cache. The first
+/// launch also presses ↓ `UIBenchReport.keyPresses` times. Each launch writes its samples to
+/// `UIBenchReport.path`; the runner reads them after it exits and writes all of them back there.
+/// Returns whether every span is within budget; stalls are reported only.
+func runUI(app: String, folder: String?) throws -> Bool {
+    try prepareFixtures()
+    let machine = try MachineLoad.sample()
+    if let warning = machine.warning { printError(warning) }
+    guard let executable = Bundle(path: app)?.executableURL else {
+        throw UILaunchFailed(description: "\(app) is not an app bundle")
+    }
+    let output = URL(filePath: FileManager.default.currentDirectoryPath)
+        .appending(path: UIBenchReport.path)
+    let stallArguments = try BenchArguments.stallArguments()
+    // One prefix per run, so a launch that had to be stopped can be cleaned up after.
+    let tempPrefix = "searcher-bench-ui-\(ProcessInfo.processInfo.processIdentifier)"
+    var record = UIBenchRecord()
+    for launch in 0..<UIBenchReport.launches {
+        let options = UIBenchOptions(
+            output: output.path, w1: folder ?? Fixture(.w1).path.path,
+            w2: folder ?? Fixture(.w2).path.path,
+            keyPresses: launch == 0 ? UIBenchReport.keyPresses : 0, tempPrefix: tempPrefix)
+        // A launch that fails before writing must not leave the last one's samples to be read.
+        if FileManager.default.fileExists(atPath: output.path) {
+            try FileManager.default.removeItem(at: output)
+        }
+        do {
+            try launchOnce(
+                executable, arguments: options.arguments + stallArguments, number: launch + 1)
+        } catch {
+            // A launch cleans up after itself, even on SIGTERM; one killed harder can't.
+            try TempRoot.removeAll(prefix: tempPrefix)
+            throw error
+        }
+        record.append(try UIBenchRecord.decode(Data(contentsOf: output)))
+    }
+    try AtomicWrite.write(try record.encoded(), to: output)
+    print("wrote \(UIBenchReport.path)")
+    let report = try UIBenchReport(record: record)
+    print(report.text)
+    for miss in report.overBudget {
+        let budget = miss.budget.map(describe) ?? "none"
+        printError(
+            "over budget: \(miss.name) p95 \(format(miss.p95)) \(miss.unit.rawValue), budget \(budget)"
+        )
+    }
+    return report.passed
+}
+
+/// Runs the app's executable directly rather than through `open`, so a copy of the app that is
+/// already running, which has the same bundle ID, is left alone and not brought to the front,
+/// and the app's exit status and error output reach the runner.
+private func launchOnce(_ executable: URL, arguments: [String], number: Int) throws {
+    let process = Process()
+    process.executableURL = executable
+    process.arguments = arguments
+    let exited = DispatchSemaphore(value: 0)
+    process.terminationHandler = { _ in exited.signal() }
+    try process.run()
+    if exited.wait(timeout: .now() + .seconds(UIBenchReport.launchTimeout)) == .timedOut {
+        // SIGTERM lets the app remove its temporary folder; one that doesn't exit is killed.
+        process.terminate()
+        if exited.wait(timeout: .now() + .seconds(5)) == .timedOut {
+            kill(process.processIdentifier, SIGKILL)
+            exited.wait()
+        }
+        throw UILaunchFailed(
+            description:
+                "UI bench launch \(number) did not finish within \(UIBenchReport.launchTimeout) s")
+    }
+    guard process.terminationReason == .exit, process.terminationStatus == 0 else {
+        throw UILaunchFailed(
+            description:
+                "UI bench launch \(number) ended with status \(process.terminationStatus); its message is above"
+        )
+    }
+}
+
+struct UILaunchFailed: Error, CustomStringConvertible {
+    let description: String
+}
+
 func line(for result: BenchReport.Case) -> String {
     let unit = result.unit.rawValue
     var line =
@@ -116,6 +199,9 @@ func printError(_ message: String) {
 Task.detached {
     do {
         switch try BenchArguments.parse(Array(CommandLine.arguments.dropFirst())) {
+        case .printStallArguments:
+            print(try BenchArguments.stallArguments().joined(separator: " "))
+            exit(0)
         case .printBudget(let budget):
             print(budget.formattedLimit)
             exit(0)
@@ -130,6 +216,8 @@ Task.detached {
             exit(try runCompare(previous: previous, current: current) ? 0 : 1)
         case .run(let folder):
             exit(try await runCases(folder: folder) ? 0 : 1)
+        case .ui(let app, let folder):
+            exit(try runUI(app: app, folder: folder) ? 0 : 1)
         }
     } catch {
         printError("\(error)")
