@@ -56,3 +56,12 @@ A fixture is reused for as long as `$TMPDIR` keeps it and its entry list is unch
 case that changes a fixture (a watching or file-operation case) must build its own copy, or later
 runs time a different folder. A tool that copies a fixture without keeping holes (a backup, `cp`
 to another volume) writes the full apparent size. `top` cuts command names to 16 characters.
+
+## Amendment: W5 and cold children (M0.18)
+
+W5 is `/` itself, so the list cases take it as a path and build no fixture; the lister has no
+hidden-file filter, so every entry counts. `--cold-children <dir>` lists the first 20 subfolders of
+`<dir>` in name order, once each, with the real lister and reports them against B3. It writes
+`.build/bench.json` like a full run, so a run on the NAS replaces the last full report.
+Whether a folder is cold is up to the caller: the command can't tell, so the report names the
+parent folder and the caller picks one the Mac hasn't opened.

@@ -32,3 +32,9 @@ with `@testable` instead of splitting it into a library and a thin executable.
 A new per-workload budget in performance.md needs a matching `Bn.Wm` entry in `Budget.swift`;
 `BudgetTests` names the mismatch. If the runner ever needs to run on Linux CI, check that
 `@testable import` of an executable still works there.
+
+## Amendment: runs per case (M0.18)
+
+A case may set its own run count; the default stays 20. The two idle cases (CPU over 5 s with and
+without the watchdog) run 5 times each, because 20 runs of both took 200 s and the full bench
+passed 10 minutes. Their p95 over 5 runs is the slowest run, so they are reported, never budgeted.

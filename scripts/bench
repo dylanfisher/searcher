@@ -6,6 +6,8 @@
 # miss. Arguments pass through to the runner:
 #   --path <dir>          point the cases at a real folder
 #   --print-budget <id>   print one budget's number, for other scripts
+#   --cold-children <dir> time 20 different subfolders of <dir>, once each, against B3;
+#                         the folders must not have been opened before
 #   --check-idle          sample the machine for 1 s; exit non-zero naming any
 #                         busy process
 set -euo pipefail
