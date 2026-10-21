@@ -55,6 +55,8 @@ compiler can't see: no AppKit, SwiftUI or Cocoa import in Base or Browser.
 - One thing per file; the filename is the thing's name.
 - File names singular, after the type they hold: `Location.swift`, not `Locations.swift`.
 - Tests mirror the tree: `Sources/Browser/Location.swift` → `Tests/BrowserTests/LocationTests.swift`.
+  Interface is no exception: `Tests/InterfaceTests` mirrors `Sources/Interface`, and its tests run
+  on the main actor without showing a window.
 - C targets are named `C<Purpose>` (`CDirScan`), expose one header in `include/`, and get a Swift
   wrapper in Base — nothing above Base calls C directly.
 - AppKit subclasses keep their AppKit suffix: `…WindowController`, `…ViewController`, `…View`.
