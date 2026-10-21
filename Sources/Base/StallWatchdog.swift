@@ -105,9 +105,8 @@ public final class StallWatchdog: @unchecked Sendable {
         let end = ContinuousClock.now
         condition.withLock {
             guard let start = passStart else { return }
-            let duration = end - start
-            if duration > threshold {
-                pending.append(Stall(duration: duration, frames: capturedFrames ?? []))
+            if end - start > threshold {
+                pending.append(Stall(start: start, end: end, frames: capturedFrames ?? []))
                 condition.signal()
             }
             passStart = nil

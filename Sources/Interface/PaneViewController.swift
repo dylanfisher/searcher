@@ -19,6 +19,9 @@ public final class PaneViewController: NSViewController {
 
     /// Runs after the pane shows a new location, for the window title.
     public var onLocationChange: (@MainActor (Location) -> Void)?
+    /// Runs each time the views have been updated for a change of the pane, in the same run loop
+    /// pass, so the UI bench can time the frame that shows it.
+    public var onShow: (@MainActor () -> Void)?
 
     /// The table that takes the pane's keys, for the window's first responder.
     public var keyView: NSView { listingViewController.tableView }
@@ -126,6 +129,7 @@ public final class PaneViewController: NSViewController {
             startMonitor()
             onLocationChange?(pane.location)
         }
+        onShow?()
     }
 
     private func showState() {

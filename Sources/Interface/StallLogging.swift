@@ -23,19 +23,26 @@ public enum StallLogging {
         return .milliseconds(milliseconds)
     }
 
-    /// A watchdog, not yet started, that logs each stall of `runLoop` to `logger` as an error.
+    /// A watchdog, not yet started, that logs each stall of `runLoop` to `logger` as an error and
+    /// then hands it to `onStall`.
     public static func watchdog(
-        runLoop: CFRunLoop, thread: ThreadStack, threshold: Duration, logger: Logger
+        runLoop: CFRunLoop, thread: ThreadStack, threshold: Duration, logger: Logger,
+        onStall: @escaping @Sendable (Stall) -> Void = { _ in }
     ) -> StallWatchdog {
         StallWatchdog(runLoop: runLoop, thread: thread, threshold: threshold) { stall in
             logger.error("\(message(for: stall), privacy: .public)")
+            onStall(stall)
         }
     }
 
     /// Starts watching the main run loop when `arguments` give a threshold, and returns the
-    /// watchdog, which runs until the process exits. Without one, a debug build logs that the
-    /// watchdog is off, so a launch that forgot the argument doesn't look stall-free.
-    public static func start(arguments: [String], logger: Logger) -> StallWatchdog? {
+    /// watchdog, which runs until the process exits or the UI bench stops it. Each stall is
+    /// logged, then handed to `onStall` on the watchdog's thread. Without a threshold, a debug
+    /// build logs that the watchdog is off, so a launch that forgot the argument doesn't look
+    /// stall-free.
+    public static func start(
+        arguments: [String], logger: Logger, onStall: @escaping @Sendable (Stall) -> Void = { _ in }
+    ) -> StallWatchdog? {
         dispatchPrecondition(condition: .onQueue(.main))
         guard let threshold = threshold(in: arguments) else {
             #if DEBUG
@@ -47,7 +54,7 @@ public enum StallLogging {
         }
         let watchdog = watchdog(
             runLoop: CFRunLoopGetMain(), thread: ThreadStack.current(), threshold: threshold,
-            logger: logger)
+            logger: logger, onStall: onStall)
         watchdog.start()
         logger.notice(
             "stall watchdog is on: threshold \(String(describing: threshold), privacy: .public)")

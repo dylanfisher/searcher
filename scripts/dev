@@ -10,9 +10,9 @@ cd "$(dirname "$0")/.."
 # Searcher instead of a child of Terminal.
 app=$(./scripts/bundle "$@")
 
-# The stall watchdog's threshold is B10, read from Budget, the only copy of the
-# budget numbers in code.
-stall_ms=$(./scripts/bench --print-budget B10)
+# The arguments that start the stall watchdog at B10, from the bench runner:
+# it holds the argument's spelling and Budget, the only copy of the numbers.
+stall_args=$(./scripts/bench --print-stall-arguments)
 
 # `open` brings a running copy to the front instead of starting the new build,
 # so quit it first and wait until it has gone. The quit doesn't wait for a reply,
@@ -30,5 +30,6 @@ fi
 
 # `open` passes everything after --args to the app, and hides its output, so
 # the app logs through os_log instead.
-open "$app" --args --stall-threshold-ms "$stall_ms"
-echo "stall threshold $stall_ms ms; to see stalls: log stream --predicate 'subsystem == \"$id\"'" >&2
+# shellcheck disable=SC2086 # split into the flag and its value on purpose
+open "$app" --args $stall_args
+echo "launched with $stall_args; to see stalls: log stream --predicate 'subsystem == \"$id\"'" >&2

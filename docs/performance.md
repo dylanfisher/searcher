@@ -62,4 +62,5 @@ Warm cache unless noted. The budget is the p95 of the runs.
 
 The stall watchdog also runs in debug builds, so hangs show up in daily use. OSSignposter marks
 sit on the same intervals, so Instruments shows them if Xcode is installed later. Rationale:
-[0002-performance-measurement](decisions/0002-performance-measurement.md).
+[0002-performance-measurement](decisions/0002-performance-measurement.md); how the UI bench
+launches the app and where its spans end: [0022-ui-bench-mode](decisions/0022-ui-bench-mode.md).

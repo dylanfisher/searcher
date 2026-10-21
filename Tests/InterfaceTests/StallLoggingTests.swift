@@ -6,11 +6,13 @@ import Testing
 @testable import Interface
 
 @Suite(.serialized) struct StallLoggingTests {
-    @Test func stallInATestRunLoopIsLoggedWithItsStack() throws {
+    @Test func stallInATestRunLoopIsLoggedWithItsStackThenHandedOn() throws {
         let (logger, category) = testLogger()
         let loop = RunLoopThread()
+        let handedOn = OSAllocatedUnfairLock(initialState: [Duration]())
         let watchdog = StallLogging.watchdog(
-            runLoop: loop.runLoop, thread: loop.stack, threshold: .milliseconds(50), logger: logger)
+            runLoop: loop.runLoop, thread: loop.stack, threshold: .milliseconds(50), logger: logger
+        ) { stall in handedOn.withLock { $0.append(stall.duration) } }
         watchdog.start()
         loop.perform { blockTestRunLoop(for: .milliseconds(80)) }
         // One more pass, so the watchdog's end observer has run for the stalled one.
@@ -24,6 +26,8 @@ import Testing
         let message = try #require(messages.first)
         #expect(message.hasPrefix("run loop stalled for "), "\(message)")
         #expect(message.contains("blockTestRunLoop"), "\(message)")
+        #expect(handedOn.withLock { $0.count } == 1)
+        #expect(handedOn.withLock { $0.allSatisfy { $0 >= .milliseconds(80) } })
     }
 
     @Test func thresholdComesFromTheLaunchArgument() {
