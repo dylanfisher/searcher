@@ -13,6 +13,9 @@ enum BenchArguments: Equatable {
     case footprintOfOpening(folder: String)
     /// Time listing 20 different subfolders of `folder`, once each (B3 cold).
     case coldChildren(folder: String)
+    /// Compare two saved reports and fail only when `current` has a case over budget. A missing
+    /// `previous` file is stated, not an error.
+    case compare(previous: String, current: String)
 
     /// Checks that a `--path` folder exists, so call it off the main thread.
     static func parse(_ arguments: [String]) throws -> BenchArguments {
@@ -35,6 +38,11 @@ enum BenchArguments: Equatable {
             case "--cold-children":
                 return .coldChildren(
                     folder: try existingFolder(remaining.popFirst(), for: argument))
+            case "compare":
+                guard let previous = remaining.popFirst(), let current = remaining.popFirst() else {
+                    throw Invalid("compare needs a previous report and a current report")
+                }
+                return .compare(previous: previous, current: current)
             case "--path":
                 folder = try existingFolder(remaining.popFirst(), for: argument)
             default:

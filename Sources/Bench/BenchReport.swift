@@ -2,11 +2,11 @@ import Base
 import Foundation
 
 /// The results of one bench run, written as JSON so CI can keep it and compare runs.
-struct BenchReport: Sendable, Encodable {
+struct BenchReport: Sendable, Codable {
     /// Relative to the repository root, where `scripts/bench` runs the binary.
     static let path = ".build/bench.json"
 
-    struct Case: Sendable, Encodable {
+    struct Case: Sendable, Codable {
         let name: String
         /// Nil for a case that is only reported.
         let budget: Budget?

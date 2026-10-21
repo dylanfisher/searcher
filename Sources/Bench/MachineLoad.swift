@@ -2,8 +2,8 @@ import Foundation
 
 /// The processes using the most CPU while the runner starts, recorded with every run so a slow
 /// number can be traced to a busy machine. This type holds the only copy of the busy rule.
-struct MachineLoad: Sendable, Encodable {
-    struct TopProcess: Sendable, Encodable, Equatable {
+struct MachineLoad: Sendable, Codable {
+    struct TopProcess: Sendable, Codable, Equatable {
         let pid: Int32
         /// As `top` prints it, cut to 16 characters.
         let command: String
@@ -77,6 +77,12 @@ struct MachineLoad: Sendable, Encodable {
 
     private enum CodingKeys: String, CodingKey {
         case topProcesses, busy
+    }
+
+    /// `busy` is derived from `topProcesses`, so it is written for readers and not read back.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        topProcesses = try container.decode([TopProcess].self, forKey: .topProcesses)
     }
 
     func encode(to encoder: Encoder) throws {
