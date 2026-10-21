@@ -23,7 +23,12 @@ public final class TemporaryFolder {
         do {
             try FileManager.default.removeItem(at: url)
         } catch {
-            Issue.record(error, "removing \(url.path)")
+            // An explicit location: the default argument is a macro, and a non-test target can't
+            // reliably load the Testing macro plugin.
+            Issue.record(
+                error, "removing \(url.path)",
+                sourceLocation: SourceLocation(
+                    fileID: #fileID, filePath: #filePath, line: #line, column: #column))
         }
     }
 }
