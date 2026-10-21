@@ -1,4 +1,5 @@
 import Foundation
+import TestSupport
 import Testing
 
 @testable import Bench
@@ -16,7 +17,7 @@ func sameSeedGivesIdenticalEntries(workload: Fixture.Workload) {
 }
 
 @Test func builtFixtureHoldsItsEntries() throws {
-    let folder = try TemporaryFolder()
+    let folder = try TemporaryFolder("FixtureTests")
     let fixture = Fixture(.w1, seed: 7, root: folder.url)
     #expect(try fixture.prepare())
 
@@ -38,8 +39,8 @@ func sameSeedGivesIdenticalEntries(workload: Fixture.Workload) {
 }
 
 @Test func w1BuildsTheSameNamesTwice() throws {
-    let first = try TemporaryFolder()
-    let second = try TemporaryFolder()
+    let first = try TemporaryFolder("FixtureTests")
+    let second = try TemporaryFolder("FixtureTests")
     let a = Fixture(.w1, root: first.url)
     let b = Fixture(.w1, root: second.url)
     try a.prepare()
@@ -76,7 +77,7 @@ func sameSeedGivesIdenticalEntries(workload: Fixture.Workload) {
 }
 
 @Test func builtFixtureIsReused() throws {
-    let folder = try TemporaryFolder()
+    let folder = try TemporaryFolder("FixtureTests")
     let fixture = Fixture(.w1, root: folder.url)
     #expect(try fixture.prepare())
     #expect(try !fixture.prepare())
@@ -88,7 +89,7 @@ func sameSeedGivesIdenticalEntries(workload: Fixture.Workload) {
 
 @Test func interruptedBuildLeavesNoFixture() throws {
     struct Interrupted: Error {}
-    let folder = try TemporaryFolder()
+    let folder = try TemporaryFolder("FixtureTests")
     let fixture = Fixture(.w1, root: folder.url)
     #expect(throws: Interrupted.self) {
         try fixture.prepare(beforeRename: {
@@ -111,7 +112,7 @@ func sameSeedGivesIdenticalEntries(workload: Fixture.Workload) {
 }
 
 @Test func partialFolderFromACrashIsRemoved() throws {
-    let folder = try TemporaryFolder()
+    let folder = try TemporaryFolder("FixtureTests")
     let fixture = Fixture(.w1, root: folder.url)
     let leftover = folder.url.appending(path: ".W1-\(Fixture.seed)-0000.partial-crashed")
     try FileManager.default.createDirectory(at: leftover, withIntermediateDirectories: false)
@@ -142,7 +143,7 @@ func sameSeedGivesIdenticalEntries(workload: Fixture.Workload) {
 }
 
 @Test func changedEntriesBuildANewFolderAndRemoveTheOld() throws {
-    let folder = try TemporaryFolder()
+    let folder = try TemporaryFolder("FixtureTests")
     let old = Fixture(.w1, root: folder.url)
     try old.prepare()
     let changed = Fixture(
@@ -164,23 +165,4 @@ func sameSeedGivesIdenticalEntries(workload: Fixture.Workload) {
 private func relativePaths(in folder: URL) throws -> [String] {
     let enumerator = try #require(FileManager.default.enumerator(atPath: folder.path))
     return enumerator.compactMap { $0 as? String }.sorted()
-}
-
-/// A folder under the temporary directory, removed when the test releases it.
-private final class TemporaryFolder {
-    let url: URL
-
-    init() throws {
-        url = FileManager.default.temporaryDirectory
-            .appending(path: "FixtureTests-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
-    }
-
-    deinit {
-        do {
-            try FileManager.default.removeItem(at: url)
-        } catch {
-            Issue.record(error, "removing \(url.path)")
-        }
-    }
 }
