@@ -12,10 +12,11 @@ func runCases(folder: String?) async throws -> Bool {
     var results: [BenchReport.Case] = []
     for benchCase in BenchCase.registered {
         let result = BenchReport.Case(
-            name: benchCase.name, budget: benchCase.budget,
+            name: benchCase.name, budget: benchCase.budget, unit: benchCase.unit,
             samples: try await benchCase.measure(folder: folder))
+        let unit = result.unit.rawValue
         var line =
-            "\(result.name)  median \(format(result.median)) ms  p95 \(format(result.p95)) ms"
+            "\(result.name)  median \(format(result.median)) \(unit)  p95 \(format(result.p95)) \(unit)"
         if let budget = result.budget { line += "  budget \(describe(budget))" }
         if result.overBudget { line += "  OVER BUDGET" }
         print(line)
@@ -27,7 +28,9 @@ func runCases(folder: String?) async throws -> Bool {
     for miss in report.overBudget {
         // Only budgeted cases can be over budget, so `budget` is never nil here.
         let budget = miss.budget.map(describe) ?? "none"
-        printError("over budget: \(miss.name) p95 \(format(miss.p95)) ms, budget \(budget)")
+        printError(
+            "over budget: \(miss.name) p95 \(format(miss.p95)) \(miss.unit.rawValue), budget \(budget)"
+        )
     }
     return report.passed
 }
@@ -60,8 +63,8 @@ func describe(_ budget: Budget) -> String {
     "\(budget.id) \(budget.limit) \(budget.unit.rawValue)"
 }
 
-func format(_ milliseconds: Double) -> String {
-    String(format: "%.2f", milliseconds)
+func format(_ value: Double) -> String {
+    String(format: "%.2f", value)
 }
 
 func printError(_ message: String) {
@@ -77,6 +80,9 @@ Task.detached {
             exit(0)
         case .checkIdle:
             exit(try checkIdle() ? 0 : 1)
+        case .footprintOfOpening(let folder):
+            print(try await BenchCase.footprintOfOpening(folder))
+            exit(0)
         case .run(let folder):
             exit(try await runCases(folder: folder) ? 0 : 1)
         }
@@ -85,4 +91,7 @@ Task.detached {
         exit(1)
     }
 }
-dispatchMain()
+// ListingService hands updates to the main actor on the main queue. `dispatchMain` would park the
+// main thread and run that queue on another thread, where the main actor's isolation check traps;
+// the run loop runs it on the main thread, as the app's does.
+CFRunLoopRun()
