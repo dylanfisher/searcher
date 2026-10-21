@@ -6,6 +6,8 @@ enum BenchArguments: Equatable {
     case printBudget(Budget)
     /// Time every registered case, against `folder` when given.
     case run(folder: String?)
+    /// Sample the machine once and fail naming any busy process, so a caller can wait for idle.
+    case checkIdle
 
     /// Checks that a `--path` folder exists, so call it off the main thread.
     static func parse(_ arguments: [String]) throws -> BenchArguments {
@@ -18,6 +20,8 @@ enum BenchArguments: Equatable {
                     throw Invalid("--print-budget needs an ID")
                 }
                 return .printBudget(try Budget.named(id))
+            case "--check-idle":
+                return .checkIdle
             case "--path":
                 guard let path = remaining.popFirst() else {
                     throw Invalid("--path needs a folder")

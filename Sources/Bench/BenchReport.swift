@@ -26,6 +26,7 @@ struct BenchReport: Sendable, Encodable {
         }
     }
 
+    let machine: MachineLoad
     let cases: [Case]
 
     var overBudget: [Case] { cases.filter(\.overBudget) }
