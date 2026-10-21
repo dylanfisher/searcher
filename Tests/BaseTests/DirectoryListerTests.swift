@@ -1,10 +1,11 @@
 import Base
 import Darwin
 import Foundation
+import TestSupport
 import Testing
 
 @Test func listingMatchesFileManager() throws {
-    let folder = try TemporaryFolder()
+    let folder = try TemporaryFolder("DirectoryListerTests")
     let path = folder.url.path
     try Data(count: 1234).write(to: folder.url.appending(path: "file.bin"))
     try Data().write(to: folder.url.appending(path: "empty.txt"))
@@ -37,7 +38,7 @@ import Testing
 }
 
 @Test func firstBatchArrivesBeforeListingEnds() throws {
-    let folder = try TemporaryFolder()
+    let folder = try TemporaryFolder("DirectoryListerTests")
     for index in 0..<5000 {
         try Data().write(to: folder.url.appending(path: "file-\(index)"))
     }
@@ -64,7 +65,7 @@ import Testing
 }
 
 @Test func unreadableFolderThrowsPermissionDenied() throws {
-    let folder = try TemporaryFolder()
+    let folder = try TemporaryFolder("DirectoryListerTests")
     let locked = folder.url.appending(path: "locked")
     try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: false)
     #expect(chmod(locked.path, 0o000) == 0)
@@ -77,7 +78,7 @@ import Testing
 }
 
 @Test func missingFolderThrowsNotFound() throws {
-    let folder = try TemporaryFolder()
+    let folder = try TemporaryFolder("DirectoryListerTests")
     let missing = folder.url.appending(path: "missing").path
 
     #expect(throws: ListingError(path: missing, code: ENOENT)) {
@@ -87,7 +88,7 @@ import Testing
 }
 
 @Test func fileThrowsNotADirectory() throws {
-    let folder = try TemporaryFolder()
+    let folder = try TemporaryFolder("DirectoryListerTests")
     let file = folder.url.appending(path: "file")
     try Data().write(to: file)
 
@@ -105,7 +106,7 @@ import Testing
 
 @Test func errorFromABatchStopsTheListing() throws {
     struct Stop: Error {}
-    let folder = try TemporaryFolder()
+    let folder = try TemporaryFolder("DirectoryListerTests")
     for index in 0..<100 {
         try Data().write(to: folder.url.appending(path: "file-\(index)"))
     }
@@ -144,23 +145,4 @@ private func fileManagerListing(_ folder: URL) throws -> [DirectoryEntry] {
             modified: try #require(values.contentModificationDate))
     }
     .sorted { $0.name < $1.name }
-}
-
-/// A folder under the temporary directory, removed when the test releases it.
-private final class TemporaryFolder {
-    let url: URL
-
-    init() throws {
-        url = FileManager.default.temporaryDirectory
-            .appending(path: "DirectoryListerTests-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
-    }
-
-    deinit {
-        do {
-            try FileManager.default.removeItem(at: url)
-        } catch {
-            Issue.record(error, "removing \(url.path)")
-        }
-    }
 }
