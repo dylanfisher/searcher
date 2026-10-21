@@ -8,8 +8,9 @@ import os
 /// launch times, each to the Core Animation commit of the frame that shows it: process start →
 /// first window (B1), open W1 and W2 → first rows (B2), the ↓ presses the runner asks for on W2
 /// (B6), and a sort column change on W2 (B8). The stall watchdog's stalls (B10) are collected
-/// for the whole launch. It writes the samples to the runner's output file and exits; any
-/// failure is printed to standard error and exits 1.
+/// for the whole launch. It starts the launch warm-up where a normal launch does and waits for it
+/// to end before the first span after launch. It writes the samples to the runner's output file
+/// and exits; any failure is printed to standard error and exits 1.
 ///
 /// The window is never activated, so it never takes focus: it is ordered in front on the second
 /// display when there is one, and a window that isn't visible fails the run, since a covered
@@ -104,8 +105,11 @@ final class UIBench {
         // the window key.
         window.orderFrontRegardless()
         window.makeFirstResponder(controller.paneViewController.keyView)
+        // Where a normal launch starts it: once the first window is on its way to the screen.
+        LaunchWarmup.shared.start(after: window)
         record.launch.append(try await frame(from: processStart, "launch", launchInterval))
         try await waitUntilVisible(window)
+        await LaunchWarmup.shared.finished()
 
         record.openW1.append(try await open(options.w1, "open W1"))
         try await waitUntilLoaded()

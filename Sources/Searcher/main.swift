@@ -27,6 +27,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         windows.append(controller)
         controller.showWindow(nil)
         NSApp.activate()
+        guard let window = controller.window else {
+            preconditionFailure("the first browser window has no window")
+        }
+        LaunchWarmup.shared.start(after: window)
     }
 }
 
