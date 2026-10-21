@@ -8,6 +8,9 @@ enum BenchArguments: Equatable {
     case run(folder: String?)
     /// Sample the machine once and fail naming any busy process, so a caller can wait for idle.
     case checkIdle
+    /// Open `folder` once and print the footprint it added in MB. The B9 case runs this in a fresh
+    /// process for each sample.
+    case footprintOfOpening(folder: String)
 
     /// Checks that a `--path` folder exists, so call it off the main thread.
     static func parse(_ arguments: [String]) throws -> BenchArguments {
@@ -22,6 +25,11 @@ enum BenchArguments: Equatable {
                 return .printBudget(try Budget.named(id))
             case "--check-idle":
                 return .checkIdle
+            case BenchCase.footprintArgument:
+                guard let path = remaining.popFirst() else {
+                    throw Invalid("\(BenchCase.footprintArgument) needs a folder")
+                }
+                return .footprintOfOpening(folder: path)
             case "--path":
                 guard let path = remaining.popFirst() else {
                     throw Invalid("--path needs a folder")

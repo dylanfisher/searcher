@@ -20,6 +20,7 @@ against a codebase you haven't searched.
 | a building block | `ls Sources/Base/ Sources/C*/` |
 | a model type or command | `ls Sources/Browser/` |
 | a view or controller | `ls Sources/Interface/` |
+| a test stub or helper | `ls Sources/TestSupport/` |
 | a free function | `rg '^\s*(public )?func ' Sources/Base/` |
 | a preference | `rg '<key>' Sources/Browser/Settings.swift` — preferences are read in one type only |
 | a type | `rg '(struct\|class\|enum\|protocol\|actor) <Name>\b'` |
@@ -41,9 +42,11 @@ the dependency direction.
 | **interface** | `Sources/Interface` | AppKit windows, split panes, table views, keybindings. | browser, base |
 | **app** | `Sources/Searcher` | The executable: app delegate, menus, wiring. Kept thin. | everything |
 | **tools** | `Sources/Bench` | The release-mode benchmark runner, its cases, and `Budget`, the only copy of the budget numbers in code. Nothing imports it. | browser, base |
+| **test support** | `Sources/TestSupport` | Stubs and helpers that more than one test target uses, such as a lister that holds calls until a test releases them. Every test target depends on it; no shipping target does. | base |
 
 **Dependency direction is one-way: app → interface → browser → base → c.** Never upward. Tools
-sit beside the app: they import browser and base, and nothing imports them.
+sit beside the app: they import browser and base, and nothing imports them. Test support sits
+beside them too: it imports base, and only test targets import it.
 
 Each tier is a SwiftPM target, so `Package.swift` is the dependency map. The build rejects an
 import of any target that isn't a declared dependency, and because the tiers form a chain, an
@@ -71,6 +74,6 @@ Things move up a tier deliberately, never by accident:
 
 A promotion is its own commit, separate from whatever work revealed it (principle 4).
 
-<!-- paths: Sources/Base Sources/Browser Sources/Interface Sources/Searcher Sources/Bench -->
+<!-- paths: Sources/Base Sources/Browser Sources/Interface Sources/Searcher Sources/Bench Sources/TestSupport -->
 <!-- ↑ scripts/check verifies every path above exists. Keep it in sync with the Tiers table;
      a rename that misses this line fails the gate, which is the point. -->

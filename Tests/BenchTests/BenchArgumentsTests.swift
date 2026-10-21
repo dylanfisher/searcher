@@ -38,3 +38,9 @@ import Testing
         String(describing: error).contains("--frobnicate")
     }
 }
+
+@Test func footprintOfOpeningNamesTheFolder() throws {
+    #expect(
+        try BenchArguments.parse([BenchCase.footprintArgument, "/w2"])
+            == .footprintOfOpening(folder: "/w2"))
+}

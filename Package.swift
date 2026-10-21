@@ -18,11 +18,19 @@ let package = Package(
             exclude: ["Info.plist"],
             swiftSettings: strict),
         .executableTarget(name: "Bench", dependencies: ["Browser", "Base"], swiftSettings: strict),
-        .testTarget(name: "BaseTests", dependencies: ["Base"], swiftSettings: strict),
-        .testTarget(name: "BrowserTests", dependencies: ["Browser"], swiftSettings: strict),
+        // Stubs that tests share. Only test targets depend on it.
+        .target(name: "TestSupport", dependencies: ["Base"], swiftSettings: strict),
         .testTarget(
-            name: "InterfaceTests", dependencies: ["Interface", "Browser"], swiftSettings: strict),
-        .testTarget(name: "BenchTests", dependencies: ["Bench", "Base"], swiftSettings: strict),
+            name: "BaseTests", dependencies: ["Base", "TestSupport"], swiftSettings: strict),
+        .testTarget(
+            name: "BrowserTests", dependencies: ["Browser", "Base", "TestSupport"],
+            swiftSettings: strict),
+        .testTarget(
+            name: "InterfaceTests", dependencies: ["Interface", "Browser", "TestSupport"],
+            swiftSettings: strict),
+        .testTarget(
+            name: "BenchTests", dependencies: ["Bench", "Base", "TestSupport"],
+            swiftSettings: strict),
     ],
     swiftLanguageModes: [.v6]
 )

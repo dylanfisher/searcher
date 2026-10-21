@@ -8,7 +8,8 @@ import Testing
         machine: MachineLoad(topProcesses: []),
         cases: [
             BenchReport.Case(
-                name: "slow", budget: try Budget.named("B10"), samples: Samples([10, 20, 60]))
+                name: "slow", budget: try Budget.named("B10"), unit: .milliseconds,
+                samples: Samples([10, 20, 60]))
         ])
     #expect(!report.passed)
     #expect(report.overBudget.map(\.name) == ["slow"])
@@ -19,8 +20,10 @@ import Testing
         machine: MachineLoad(topProcesses: []),
         cases: [
             BenchReport.Case(
-                name: "fast", budget: try Budget.named("B10"), samples: Samples([10, 20, 49])),
-            BenchReport.Case(name: "unbudgeted", budget: nil, samples: Samples([900])),
+                name: "fast", budget: try Budget.named("B10"), unit: .milliseconds,
+                samples: Samples([10, 20, 49])),
+            BenchReport.Case(
+                name: "unbudgeted", budget: nil, unit: .milliseconds, samples: Samples([900])),
         ])
     #expect(report.passed)
 }
