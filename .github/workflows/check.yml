@@ -13,3 +13,61 @@ jobs:
       - run: swift --version
       - run: ./scripts/setup
       - run: ./scripts/check
+
+  # Times the harness cases on the runner. The bench exits non-zero when a
+  # budgeted p95 is over budget, which fails the job. Cases more than 10%
+  # slower than the previous run are reported and never fail it.
+  bench:
+    needs: check
+    runs-on: macos-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+      - run: ./scripts/setup
+
+      # The newest earlier run on this branch that kept a report, else the
+      # newest on main. No report found is not an error: the compare step
+      # says so.
+      - name: Download the previous report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          mkdir -p .build/previous
+          for branch in "$BRANCH" main; do
+            # A failing list (auth, permissions) fails the step. A failing
+            # download is skipped: an older run may have no report.
+            ids=$(gh run list --workflow check.yml --branch "$branch" --limit 20 \
+              --json databaseId --jq '.[].databaseId')
+            for id in $ids; do
+              [ "$id" = "$GITHUB_RUN_ID" ] && continue
+              if gh run download "$id" --name bench-report --dir .build/previous 2>/dev/null; then
+                echo "previous report: run $id on $branch"
+                exit 0
+              fi
+            done
+          done
+          echo "no earlier run has a bench report"
+
+      - run: ./scripts/bench
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-report
+          path: .build/bench.json
+          if-no-files-found: error
+
+      - name: Compare with the previous report
+        if: always()
+        run: |
+          status=0
+          ./scripts/bench compare .build/previous/bench.json .build/bench.json \
+            > .build/compare.txt || status=$?
+          cat .build/compare.txt
+          sed 's/^/- /' .build/compare.txt >> "$GITHUB_STEP_SUMMARY"
+          exit $status
