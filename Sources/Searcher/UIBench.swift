@@ -12,11 +12,16 @@ import os
 /// half the rows, a patch landing after Shift-↓ changed that selection while it ran, a reload
 /// landing after Cmd-A on its first batch, and type-to-select keys (B6), and on W2 a sort column
 /// change, Cmd-Shift-. showing and hiding hidden files, Folders First on and off, and two sort
-/// keys (B8), then the keys of a filter query and the Esc that clears it (B7). The stall
+/// keys (B8), then the keys of a filter query and the Esc that clears it (B7), then W2 in column
+/// view: ↓ through folder rows, each opening a column, and → and ← (B6). The stall
 /// watchdog's stalls (B10) are collected for the whole launch. It starts the
 /// launch warm-up where a normal launch does and waits for it to end before the first span after
 /// launch. It writes the samples to the runner's output file and exits; any failure is printed to
 /// standard error and exits 1.
+///
+/// A launch for a scenario (`UIBenchOptions.Scenario`) times only that scenario's spans after
+/// the launch: column view on W2, or on a share's folder the runner names, opening subfolders
+/// cold (B3), opening them again to their cached rows (B4), or walking it in column view (B10).
 ///
 /// The window is never activated, so it never takes focus: it is ordered in front on the second
 /// display when there is one, and a window that isn't visible fails the run, since a covered
@@ -38,7 +43,14 @@ final class UIBench {
     static let typeSelectLength = 12
     /// Characters typed into the filter field per launch.
     static let filterQueryLength = 5
+    /// ↓ presses at most in each column the `column-walk` scenario walks.
+    static let columnWalkPresses = 100
 
+    /// The app's listing service in a bench launch.
+    let service: ListingService
+    /// Holds listings in memory for the `revisit` scenario, so a folder opened again shows its
+    /// cached rows; nil otherwise, so no other span shows any.
+    private let cache: ListingCache?
     private let options: UIBenchOptions
     /// When the process started, on `FrameCommitTimer`'s clock.
     private let processStart = UIBench.processStartTime()
@@ -74,7 +86,10 @@ final class UIBench {
     /// Starts the launch span, so create it before anything else runs.
     init(options: UIBenchOptions) {
         self.options = options
-        launchInterval = signposter.beginInterval("launch")
+        launchInterval = signposter.beginInterval(UIBenchRecord.launchSpan)
+        // No store: the bench never reads or writes the user's caches.
+        cache = options.scenario == .revisit ? ListingCache(store: nil) : nil
+        service = ListingService(cache: cache)
         // The launch span starts at the process start, moved onto the watchdog's clock.
         spanStart = .now - .seconds(FrameCommitTimer.now - processStart)
         activity = ProcessInfo.processInfo.beginActivity(
@@ -91,7 +106,7 @@ final class UIBench {
     }
 
     /// Runs the bench, then exits the process.
-    func start(service: ListingService, systemActions: any SystemActions) {
+    func start(systemActions: any SystemActions) {
         signal(SIGTERM, SIG_IGN)
         let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
         source.setEventHandler { [weak self] in
@@ -105,7 +120,7 @@ final class UIBench {
         terminationSource = source
         Task {
             do {
-                try await run(service: service, systemActions: systemActions)
+                try await run(systemActions: systemActions)
                 if try await finish() { exit(0) }
             } catch {
                 await fail(error)
@@ -113,7 +128,7 @@ final class UIBench {
         }
     }
 
-    private func run(service: ListingService, systemActions: any SystemActions) async throws {
+    private func run(systemActions: any SystemActions) async throws {
         guard watchdog != nil else {
             throw Failure("the UI bench needs \(StallWatchdog.thresholdArgument) to count stalls")
         }
@@ -134,10 +149,37 @@ final class UIBench {
         window.makeFirstResponder(controller.paneViewController.keyView)
         // Where a normal launch starts it: once the first window is on its way to the screen.
         LaunchWarmup.shared.start(after: window)
-        record.launch.append(try await frame(from: processStart, "launch", launchInterval))
+        record.launch.append(
+            try await frame(from: processStart, UIBenchRecord.launchSpan, launchInterval))
+        // The rest of the launch, up to the first span after it: its stalls aren't the spans'.
+        let warmUpStart = ContinuousClock.now
         try await waitUntilVisible(window)
         await LaunchWarmup.shared.finished()
+        spans.append(
+            TimedSpan(name: UIBenchRecord.warmUpSpan, start: warmUpStart, end: .now))
 
+        switch options.scenario {
+        case nil:
+            try await runCI()
+        case .columnKeys:
+            _ = try await open(options.w2, "open W2")
+            try await waitUntilLoaded()
+            try await pressColumnKeys(options.keyPresses)
+        case .cold:
+            guard !options.folders.isEmpty else { throw Failure("cold was given no folders") }
+            for folder in options.folders {
+                record.coldOpen.append(try await open(folder, "cold open"))
+                try await waitUntilLoaded()
+            }
+        case .revisit:
+            try await revisit(options.folders, from: options.w1)
+        case .columnWalk:
+            try await walkColumns(options.w1)
+        }
+    }
+
+    /// Every span the CI run times after the launch.
+    private func runCI() async throws {
         record.openW1.append(try await open(options.w1, "open W1"))
         try await waitUntilLoaded()
         record.openW2.append(try await open(options.w2, "open W2"))
@@ -161,12 +203,17 @@ final class UIBench {
         record.sortChange.append(try await changeSort())
         try await changeViewSettings()
         record.filterKey += try await typeFilter()
+        // Last: it leaves the pane in column view with Folders First on.
+        try await pressColumnKeys(options.keyPresses)
     }
 
     // MARK: Spans
 
-    /// Navigates the pane to `path` and times it to the frame with the first rows.
-    private func open(_ path: String, _ name: StaticString) async throws -> Double {
+    /// Navigates the pane to `path` and times it to the frame with the first rows: its cached
+    /// rows when `cached`, which fails when the folder's own rows come first.
+    private func open(_ path: String, _ name: StaticString, cached: Bool = false) async throws
+        -> Double
+    {
         try requireVisible()
         let pane = try requirePane()
         let window = try requireWindow()
@@ -174,23 +221,37 @@ final class UIBench {
         let interval = begin(name)
         let shown: Result<Double, Failure> = await withCheckedContinuation { continuation in
             whenShown = { [self] pane in
+                let listing: Listing
                 switch pane.state {
                 case .loading, .slow:
                     return false
-                case .partial(let listing), .loaded(let listing):
-                    guard listing.count > 0 else {
+                case .partial(let rows), .loaded(let rows):
+                    guard !cached else {
                         continuation.resume(
-                            returning: .failure(Failure("\(path) is empty, so no rows were timed")))
+                            returning: .failure(
+                                Failure(
+                                    "\(path) showed its own rows before cached ones: it isn't on a "
+                                        + "network volume, or the cache didn't keep it")))
                         return true
                     }
-                case .cachedRefreshing:
-                    preconditionFailure("the bench's listing service has no cache")
+                    listing = rows
+                case .cachedRefreshing(let rows, _):
+                    guard cached else {
+                        preconditionFailure(
+                            "only the revisit scenario's listing service has a cache")
+                    }
+                    listing = rows
                 case .offline:
                     continuation.resume(returning: .failure(Failure("\(path) went offline")))
                     return true
                 case .denied(let error), .failed(let error):
                     continuation.resume(
                         returning: .failure(Failure("\(path) could not be listed: \(error)")))
+                    return true
+                }
+                guard listing.count > 0 else {
+                    continuation.resume(
+                        returning: .failure(Failure("\(path) is empty, so no rows were timed")))
                     return true
                 }
                 timeFrame(from: start, in: window, name, interval) {
@@ -568,6 +629,134 @@ final class UIBench {
         return samples
     }
 
+    /// Times W2 in column view: `count` ↓ presses in its first column, sorted with Folders First
+    /// so each ↓ moves onto a folder and opens that folder's column, then → and ← alternating
+    /// `rowCommandPresses` times between the first column and the last folder's. W2's folders
+    /// are empty, so → moves the keys into an empty column. Checks the cursor, the columns and
+    /// the focus.
+    private func pressColumnKeys(_ count: Int) async throws {
+        guard count > 0 else { return }
+        let pane = try requirePane()
+        let window = try requireWindow()
+        // Read by the first column's own load, which lists W2 again.
+        pane.settings.foldersFirst = true
+        pane.setViewMode(.column)
+        guard let trail = pane.columnTrail else { throw Failure("column view has no columns") }
+        let first = trail.columns[0].pane
+        try await waitUntilLoaded(first)
+        guard let listing = first.state.listing, listing.count > count,
+            (0...count).allSatisfy({ listing[$0].type == .directory })
+        else {
+            throw Failure(
+                "\(first.location.path) has fewer than \(count + 1) folders, too few for \(count) "
+                    + "↓ presses through folders; pass a folder with at least \(count + 1)")
+        }
+        guard window.firstResponder === controller?.paneViewController.keyView else {
+            throw Failure("the first column's table doesn't have the keys")
+        }
+        // The list's cursor carries into the column; start from the first folder instead.
+        first.selectFirstRow()
+        try await waitUntilSettled(first)
+        record.columnDown = try await press(
+            Array(repeating: Key.down, count: count), "column key down")
+        try expectCursor(atRow: count, in: first, after: "\(count) ↓ presses in column view")
+        guard trail.columns.count == 2,
+            trail.columns[1].pane.location == first.location.child(named: listing[count].name)
+        else {
+            throw Failure(
+                "↓ onto \(listing[count].name) should open its column alone, but the columns are "
+                    + "\(trail.columns.map(\.pane.location.path))")
+        }
+        for _ in 0..<(Self.rowCommandPresses / 2) {
+            record.columnRight += try await press([.right], "column key right")
+            guard trail.focusedIndex == 1 else {
+                throw Failure("→ left the focus on column \(trail.focusedIndex), not 1")
+            }
+            record.columnLeft += try await press([.left], "column key left")
+            guard trail.focusedIndex == 0 else {
+                throw Failure("← left the focus on column \(trail.focusedIndex), not 0")
+            }
+        }
+    }
+
+    /// Opens each of `folders` from `parent` once, untimed, so the cache keeps its listing, then
+    /// each again from `parent`, timed to the frame with its cached rows (B4). The service starts
+    /// a folder's insert just after it hands the listing over; the parent's load comes between
+    /// the last folder and the flush, which waits for every insert started.
+    private func revisit(_ folders: [String], from parent: String) async throws {
+        guard let cache else {
+            preconditionFailure("the revisit scenario's listing service has no cache")
+        }
+        guard !folders.isEmpty else { throw Failure("revisit was given no folders") }
+        let pane = try requirePane()
+        for folder in folders + [parent] {
+            pane.navigate(to: Location(path: folder))
+            try await waitUntilLoaded()
+        }
+        await cache.flush()
+        for folder in folders {
+            record.revisit.append(try await open(folder, "revisit", cached: true))
+            try await waitUntilLoaded()
+            pane.navigate(to: Location(path: parent))
+            try await waitUntilLoaded()
+        }
+    }
+
+    /// Opens `folder` in column view, sorted with Folders First, and walks it as a held key
+    /// does: from its first row, ↓ to the last folder among its first `columnWalkPresses` rows,
+    /// each folder row opening a column whose folder lists while the next key comes; then → into
+    /// that folder once its rows land, ↓ through up to `columnWalkPresses` of them, and ← back.
+    /// Each key is timed to its frame (B6); the stalls of the walk are what it is for (B10).
+    private func walkColumns(_ folder: String) async throws {
+        _ = try await open(folder, "open share")
+        try await waitUntilLoaded()
+        let pane = try requirePane()
+        let window = try requireWindow()
+        // Read by the first column's own load, so folders come before files such as a cover
+        // image.
+        pane.settings.foldersFirst = true
+        pane.setViewMode(.column)
+        guard let trail = pane.columnTrail else { throw Failure("column view has no columns") }
+        let first = trail.columns[0].pane
+        try await waitUntilLoaded(first)
+        guard let listing = first.state.listing,
+            let lastFolder = (0..<min(Self.columnWalkPresses, listing.count)).last(where: {
+                listing[$0].type == .directory
+            })
+        else {
+            throw Failure(
+                "none of the first \(Self.columnWalkPresses) rows of \(folder) is a folder, so "
+                    + "there is nothing to walk into")
+        }
+        guard window.firstResponder === controller?.paneViewController.keyView else {
+            throw Failure("the walked column's table doesn't have the keys")
+        }
+        first.selectFirstRow()
+        try await waitUntilSettled(first)
+        record.columnWalkKey += try await press(
+            Array(repeating: Key.down, count: lastFolder), "column walk key")
+        try expectCursor(atRow: lastFolder, in: first, after: "\(lastFolder) ↓ presses in the walk")
+        guard trail.columns.count == 2 else {
+            throw Failure(
+                "↓ onto \(listing[lastFolder].name) should open its column alone, but the columns "
+                    + "are \(trail.columns.map(\.pane.location.path))")
+        }
+        record.columnWalkKey += try await press([.right], "column walk key")
+        guard trail.focusedIndex == 1 else {
+            throw Failure("→ left the focus on column \(trail.focusedIndex), not 1")
+        }
+        let inner = trail.focused.pane
+        try await waitUntilLoaded(inner)
+        let innerRows = inner.state.listing?.count ?? 0
+        record.columnWalkKey += try await press(
+            Array(repeating: Key.down, count: min(Self.columnWalkPresses, innerRows)),
+            "column walk key")
+        record.columnWalkKey += try await press([.left], "column walk key")
+        guard trail.focusedIndex == 0 else {
+            throw Failure("← left the focus on column \(trail.focusedIndex), not 0")
+        }
+    }
+
     /// A synthetic key press: what the event types, its key code and the flags a real press of
     /// it carries.
     private struct Key {
@@ -591,6 +780,12 @@ final class UIBench {
         static let shiftDown = Key(
             characters: function(NSDownArrowFunctionKey), keyCode: 125,
             flags: [.numericPad, .function, .shift])
+        static let right = Key(
+            characters: function(NSRightArrowFunctionKey), keyCode: 124,
+            flags: [.numericPad, .function])
+        static let left = Key(
+            characters: function(NSLeftArrowFunctionKey), keyCode: 123,
+            flags: [.numericPad, .function])
         /// Fn-↓ types Page Down.
         static let pageDown = Key(
             characters: function(NSPageDownFunctionKey), keyCode: 121, flags: .function)
@@ -663,7 +858,11 @@ final class UIBench {
 
     /// Throws unless `row` alone is selected, with the cursor on it.
     private func expectCursor(atRow row: Int, after presses: String) throws {
-        let pane = try requirePane()
+        try expectCursor(atRow: row, in: try requirePane(), after: presses)
+    }
+
+    /// Throws unless `row` alone is selected in `pane`, with the cursor on it.
+    private func expectCursor(atRow row: Int, in pane: Pane, after presses: String) throws {
         guard let listing = pane.state.listing, row < listing.count,
             pane.selection
                 == Selection([ExactName(listing[row].name)], cursor: ExactName(listing[row].name))
@@ -860,8 +1059,9 @@ final class UIBench {
         if check(pane) { whenShown = nil }
     }
 
-    private func waitUntilLoaded() async throws {
-        let pane = try requirePane()
+    /// Waits for `target`, else the window's pane, to hold its complete listing.
+    private func waitUntilLoaded(_ target: Pane? = nil) async throws {
+        let pane = try target ?? requirePane()
         let deadline = ContinuousClock.now + .seconds(30)
         while true {
             switch pane.state {
@@ -879,9 +1079,10 @@ final class UIBench {
         }
     }
 
-    /// Waits for the pane to finish naming or resolving a selection off the main thread.
-    private func waitUntilSettled() async throws {
-        let pane = try requirePane()
+    /// Waits for `target`, else the window's pane, to finish naming or resolving a selection off
+    /// the main thread.
+    private func waitUntilSettled(_ target: Pane? = nil) async throws {
+        let pane = try target ?? requirePane()
         let deadline = ContinuousClock.now + .seconds(30)
         while !pane.selection.isSettled {
             guard ContinuousClock.now < deadline else {
