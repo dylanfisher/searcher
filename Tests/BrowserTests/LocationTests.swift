@@ -19,6 +19,18 @@ import Testing
     #expect(Location(path: "/").child(named: "b") == Location(path: "/b"))
 }
 
+@Test func ancestorsRunFromRootToTheLocation() {
+    #expect(
+        Location(path: "/Users/dylan/Projects").ancestors == [
+            Location(path: "/"), Location(path: "/Users"), Location(path: "/Users/dylan"),
+            Location(path: "/Users/dylan/Projects"),
+        ])
+}
+
+@Test func rootIsItsOnlyAncestor() {
+    #expect(Location(path: "/").ancestors == [Location(path: "/")])
+}
+
 @Test func childRejectsAnEmptyName() async {
     await #expect(processExitsWith: .failure) { _ = Location(path: "/a").child(named: "") }
 }

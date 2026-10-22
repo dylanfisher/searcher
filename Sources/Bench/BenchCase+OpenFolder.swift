@@ -108,13 +108,13 @@ extension BenchCase {
                 switch update {
                 case .firstBatch:
                     firstRows.milliseconds = firstRows.milliseconds ?? elapsed
-                case .full(let listing):
+                case .full(let listing, _):
                     // A folder read in one batch gets no first batch; its rows appear in full.
                     continuation.resume(
                         returning: Opened(
                             firstRows: firstRows.milliseconds ?? elapsed, full: elapsed,
                             listing: listing))
-                case .failed(let error):
+                case .failed(let error, _):
                     continuation.resume(throwing: error)
                 }
             }

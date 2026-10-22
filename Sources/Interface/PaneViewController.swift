@@ -4,8 +4,8 @@ import os
 
 /// One pane: its list, with a spinner over it while the folder loads, an explanation with a way to
 /// grant access when the system refused to list the folder, or a line saying why another folder
-/// couldn't be listed. Keys and double-clicks in the list run the app's commands on this
-/// pane, and a folder monitor keeps the rows in step with the folder.
+/// couldn't be listed, and a path bar under it. Keys and double-clicks in the list run the app's
+/// commands on this pane, and a folder monitor keeps the rows in step with the folder.
 ///
 /// The list stays in place in every state, so the table keeps keyboard focus while a folder
 /// loads: hiding a first responder would hand focus to the next key view.
@@ -16,6 +16,7 @@ public final class PaneViewController: NSViewController {
     let spinner = NSProgressIndicator()
     let messageLabel = NSTextField(wrappingLabelWithString: "")
     let accessDeniedView: AccessDeniedView
+    let pathBar = PathBarView()
 
     /// Runs after the pane shows a new location, for the window title.
     public var onLocationChange: (@MainActor (Location) -> Void)?
@@ -64,6 +65,9 @@ public final class PaneViewController: NSViewController {
         tableView.registry = Self.registry
         tableView.runCommand = { [weak self] id in self?.run(id) }
         pane.onChange = { [weak self] in self?.paneDidChange() }
+        pathBar.onSelect = { [weak pane] location, child in
+            pane?.navigate(to: location, selecting: child)
+        }
         configureOverlays()
         paneDidChange()
     }
@@ -76,9 +80,12 @@ public final class PaneViewController: NSViewController {
     public override func loadView() {
         let container = NSView()
         let list = listingViewController.view
-        list.frame = container.bounds
-        list.autoresizingMask = [.width, .height]
-        container.addSubview(list)
+        // Constraints rather than autoresizing: the container starts at zero size, where a list
+        // frame 24 points shorter than it can't be set, and autoresizing would keep the error.
+        for view in [list, pathBar] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(view)
+        }
         addChild(listingViewController)
         for overlay in [spinner, messageLabel, accessDeniedView] {
             overlay.translatesAutoresizingMaskIntoConstraints = false
@@ -88,14 +95,22 @@ public final class PaneViewController: NSViewController {
         let deniedWidth = accessDeniedView.widthAnchor.constraint(equalToConstant: 420)
         deniedWidth.priority = .defaultHigh
         NSLayoutConstraint.activate([
-            spinner.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-            spinner.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-            messageLabel.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-            messageLabel.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            list.topAnchor.constraint(equalTo: container.topAnchor),
+            list.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            list.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            list.bottomAnchor.constraint(equalTo: pathBar.topAnchor),
+            pathBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            pathBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            pathBar.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            pathBar.heightAnchor.constraint(equalToConstant: PathBarView.height),
+            spinner.centerXAnchor.constraint(equalTo: list.centerXAnchor),
+            spinner.centerYAnchor.constraint(equalTo: list.centerYAnchor),
+            messageLabel.centerXAnchor.constraint(equalTo: list.centerXAnchor),
+            messageLabel.centerYAnchor.constraint(equalTo: list.centerYAnchor),
             messageLabel.widthAnchor.constraint(
                 lessThanOrEqualTo: container.widthAnchor, constant: -40),
-            accessDeniedView.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-            accessDeniedView.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            accessDeniedView.centerXAnchor.constraint(equalTo: list.centerXAnchor),
+            accessDeniedView.centerYAnchor.constraint(equalTo: list.centerYAnchor),
             accessDeniedView.widthAnchor.constraint(
                 lessThanOrEqualTo: container.widthAnchor, constant: -40),
             deniedWidth,
@@ -121,6 +136,7 @@ public final class PaneViewController: NSViewController {
     private func paneDidChange() {
         listingViewController.paneDidChange()
         showState()
+        showPath()
         if pane.location != monitoredLocation {
             monitoredLocation = pane.location
             listingViewController.tableView.setAccessibilityLabel(pane.location.name)
@@ -151,6 +167,17 @@ public final class PaneViewController: NSViewController {
             messageLabel.stringValue = error.description
             messageLabel.isHidden = false
         }
+    }
+
+    /// Moves the path bar to the pane's location once something of it is on screen: its first
+    /// rows, or why it couldn't be listed. While the folder loads the bar keeps showing the
+    /// folder the pane left, so it never names a folder whose rows haven't arrived.
+    private func showPath() {
+        if case .loading = pane.state { return }
+        guard let rootVolumeName = pane.rootVolumeName else {
+            preconditionFailure("the pane has a listing update but no volume name")
+        }
+        pathBar.show(pane.location, rootVolumeName: rootVolumeName)
     }
 
     // MARK: Folder monitor
