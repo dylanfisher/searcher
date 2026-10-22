@@ -30,3 +30,12 @@ import Testing
     #expect(
         registry.command(for: KeyChord("\\", modifiers: .command)) == TilingCommands.splitRight)
 }
+
+@Test func dualPaneCommandsRegisterBesideTheAppsAndTilingsWithoutAClashingIDOrChord() throws {
+    var registry = try AppCommands.registry()
+    for binding in TilingCommands.bindings + DualPaneCommands.bindings {
+        try registry.register(binding.command)
+    }
+
+    #expect(registry.command(for: KeyChord(.tab)) == DualPaneCommands.focusOtherPane)
+}

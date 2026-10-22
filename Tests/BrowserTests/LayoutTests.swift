@@ -158,6 +158,43 @@ private func isClose(_ a: Double, _ b: Double) -> Bool {
     #expect(built.layout.history == [built[3], built[1], built[2], built[0]])
 }
 
+// MARK: Other pane
+
+@Test func otherPaneIsTheMostRecentlyFocusedOtherLeafNotTheNearest() {
+    // p0 | p1 | p2: p1 is p2's neighbor, but p0 was focused after it.
+    var built = Built(layout: Layout(), panes: [])
+    built.panes.append(built.layout.focused)
+    split(&built, .horizontal)
+    split(&built, .horizontal)
+    built.layout.focus(built[1])
+    built.layout.focus(built[0])
+    built.layout.focus(built[2])
+
+    #expect(built.layout.otherPane == built[0])
+}
+
+@Test func otherPaneFollowsFocusMovesAndCloses() {
+    var built = grid()
+    built.layout.focus(built[0])
+    built.layout.focus(built[1])
+    built.layout.focus(built[2])
+    #expect(built.layout.otherPane == built[1])
+
+    built.layout.move(.right)
+    #expect(built.layout.otherPane == built[1])
+
+    built.layout.focus(built[1])
+    #expect(built.layout.otherPane == built[2])
+
+    built.layout.close()
+    #expect(built.layout.focused == built[2])
+    #expect(built.layout.otherPane == built[0])
+}
+
+@Test func oneLeafHasNoOtherPane() {
+    #expect(Layout().otherPane == nil)
+}
+
 @Test func moveSwapsWithNeighborAndKeepsFocus() {
     var built = grid()
     built.layout.focus(built[0])

@@ -38,6 +38,11 @@ public struct Layout: Codable, Equatable, Sendable {
 
     public var panes: [PaneID] { root.panes }
 
+    /// The most recently focused pane other than `focused`, which Tab focuses and the dual-pane
+    /// commands act on. Focus history alone decides it, never where the panes are. `nil` with one
+    /// pane.
+    public var otherPane: PaneID? { history.count > 1 ? history[1] : nil }
+
     // MARK: Editing
 
     /// Splits the focused pane in half along `axis`. The new pane goes right of or below it and

@@ -514,6 +514,30 @@ private func linkTree() async throws -> (Pane, StubSystemActions, TemporaryFolde
     #expect(pane.selection.cursor == ExactName("folder link"))
 }
 
+@MainActor @Test func openInAnotherPaneTakesALinkToAFolderThereAndAFileLinkToTheSystem()
+    async throws
+{
+    let (pane, actions, root) = try await linkTree()
+    let other = Pane(
+        location: Location(path: root.url.path), service: ListingService(), systemActions: actions,
+        settings: untouchedSettings())
+    await settle { other.state.isLoaded }
+
+    pane.select(Selection([ExactName("file link")], cursor: ExactName("file link")))
+    pane.openSelection(in: other)
+    await settle { actions.openedFiles.count == 1 }
+    #expect(actions.openedFiles.last?.lastPathComponent == "file link")
+    #expect(other.location == Location(path: root.url.path))
+
+    pane.select(Selection([ExactName("folder link")], cursor: ExactName("folder link")))
+    pane.openSelection(in: other)
+    await settle { other.location.name == "folder link" && other.state.isLoaded }
+
+    #expect(other.state.names == ["inside.txt"])
+    #expect(pane.location == Location(path: root.url.path))
+    #expect(actions.openedFiles.count == 1)
+}
+
 @MainActor @Test func openOnALinkWhoseLoadGoesSlowLeavesThePaneWhereItWas() async {
     let link = DirectoryEntry(
         name: "link", type: .symbolicLink, size: nil, modified: testDate, isHidden: false,
