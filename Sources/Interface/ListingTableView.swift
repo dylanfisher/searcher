@@ -54,7 +54,8 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
     /// on Space; a query with no match beeps, and a command ends the query
     /// (0034-type-to-select.md). Other unbound plain and Shift-only keys still go to `super`; the
     /// ones `NSTableView` would move or extend its selection with (↑, ↓, Shift-↑, Shift-↓) are
-    /// bound.
+    /// bound. A Tab key, with any modifiers, goes to `super`, which moves the key view, when no
+    /// command takes it or its command is off, as Focus Other Pane is with one pane.
     override func keyDown(with event: NSEvent) {
         let chords = KeyChord.candidates(for: event)
         if let chord = chords.first {
@@ -62,7 +63,12 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
                 select(typing: " ")
                 return
             }
-            if let command = chords.lazy.compactMap(registry.command(for:)).first {
+            let command = chords.lazy.compactMap(registry.command(for:)).first
+            if chord.key == .tab, command.map({ !canRunCommand($0.id) }) ?? true {
+                super.keyDown(with: event)
+                return
+            }
+            if let command {
                 run(command.id)
                 return
             }

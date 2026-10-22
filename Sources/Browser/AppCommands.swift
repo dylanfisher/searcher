@@ -7,6 +7,9 @@ public enum AppCommands {
         ColumnCommands.self,
         SystemCommands.self,
         SizeCommands.self,
+        TilingCommands.self,
+        DualPaneCommands.self,
+        WindowCommands.self,
     ]
 
     /// Every command in every set, with what it does.

@@ -62,8 +62,9 @@ private func buildMenu(_ registry: CommandRegistry) throws -> NSMenu {
     for item in commandItems {
         let id = try #require(item.representedObject as? CommandID)
         let command = try #require(registry.command(for: id))
-        guard let chord = command.chords.first else {
-            // A command with no chord, such as Folders First, has no key equivalent.
+        // A command with no chord, such as Folders First, has no key equivalent, and neither
+        // has Focus Other Pane, whose Tab would take the key from text fields.
+        guard let chord = command.chords.first, id != DualPaneCommands.focusOtherPane.id else {
             #expect(item.keyEquivalent.isEmpty, "\(id)")
             continue
         }
@@ -94,7 +95,7 @@ private func buildMenu(_ registry: CommandRegistry) throws -> NSMenu {
     let error = #expect(throws: MainMenuBuilder.BuildError.self) {
         try buildMenu(CommandRegistry())
     }
-    #expect(error?.description.contains(SystemCommands.revealInFinder.id.rawValue) == true)
+    #expect(error?.description.contains(WindowCommands.newTab.id.rawValue) == true)
 }
 
 @MainActor @Test func aCommandOnAnAppOrWindowChordFailsNamingBoth() throws {
@@ -120,7 +121,6 @@ private func buildMenu(_ registry: CommandRegistry) throws -> NSMenu {
             KeyChord("h", modifiers: [.option, .command]),
             #selector(NSApplication.hideOtherApplications(_:))
         ),
-        (KeyChord("w", modifiers: .command), #selector(NSWindow.performClose(_:))),
         (KeyChord("m", modifiers: .command), #selector(NSWindow.performMiniaturize(_:))),
     ]
     for (chord, action) in expected {
@@ -324,7 +324,10 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
 @MainActor @Test func copyPathRevealAndOpenTerminalHaveItemsWithTheirChords() throws {
     let menu = try buildMenu(try AppCommands.registry())
     let file = try #require(menu.items.first { $0.title == "File" }?.submenu)
-    #expect(file.items.map(\.title) == ["Reveal in Finder", "Open Terminal Here", "", "Filter"])
+    #expect(
+        file.items.map(\.title) == [
+            "New Tab", "Close Tab", "", "Reveal in Finder", "Open Terminal Here", "", "Filter",
+        ])
     let edit = try #require(menu.items.first { $0.title == "Edit" }?.submenu)
     #expect(edit.items.map(\.title).contains("Copy Path"))
     let table = ListingTableView()
@@ -355,4 +358,35 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(table.tryToPerform(try #require(item.action), with: item))
 
     #expect(log.ids == [ViewCommands.filter.id])
+}
+
+@MainActor @Test func windowMenuHasTheTabAndPaneItemsAndCmdWClosesThePane() throws {
+    let menu = try buildMenu(try AppCommands.registry())
+    let window = try #require(menu.items.first { $0.title == "Window" }?.submenu)
+    #expect(
+        window.items.map(\.title) == [
+            "Minimize", "Zoom", "", "Show Previous Tab", "Show Next Tab", "", "Focus Other Pane",
+            "", "Close Pane",
+        ])
+    #expect(!allItems(menu).contains { $0.action == #selector(NSWindow.performClose(_:)) })
+    let focusOtherPane = try #require(window.items.first { $0.title == "Focus Other Pane" })
+    #expect(focusOtherPane.keyEquivalent.isEmpty)
+    let table = ListingTableView()
+    let log = CommandLog()
+    table.runCommand = { log.ids.append($0) }
+
+    let presses = [
+        try keyEvent("w", modifiers: .command),
+        try keyEvent("w", characters: "W", modifiers: [.command, .shift]),
+        try keyEvent("t", modifiers: .command),
+    ]
+    for press in presses {
+        let item = try item(for: press, in: menu)
+        #expect(table.tryToPerform(try #require(item.action), with: item))
+    }
+
+    #expect(
+        log.ids == [
+            TilingCommands.closePane.id, WindowCommands.closeTab.id, WindowCommands.newTab.id,
+        ])
 }

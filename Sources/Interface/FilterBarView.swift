@@ -32,6 +32,9 @@ final class FilterBarView: NSView, NSSearchFieldDelegate {
     var onChange: (@MainActor (String) -> Void)?
     /// Runs with ↑ or ↓ pressed in the field.
     var onArrow: (@MainActor (KeyChord) -> Void)?
+    /// Runs on Tab in the field, and returns whether a command took it; if none did, the field
+    /// moves the key view as usual.
+    var onTab: @MainActor () -> Bool = { false }
     /// Runs on Esc in the field.
     var onCancel: (@MainActor () -> Void)?
     /// Whether a chord runs Filter, so pressing it again in the field selects the field's text.
@@ -93,7 +96,7 @@ final class FilterBarView: NSView, NSSearchFieldDelegate {
         onChange?(field.stringValue)
     }
 
-    /// ↑, ↓ and Esc in the field; every other key edits the text.
+    /// ↑, ↓, Tab and Esc in the field; every other key edits the text.
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector)
         -> Bool
     {
@@ -104,6 +107,8 @@ final class FilterBarView: NSView, NSSearchFieldDelegate {
         case #selector(NSResponder.moveDown(_:)):
             onArrow?(KeyChord(.down))
             return true
+        case #selector(NSResponder.insertTab(_:)):
+            return onTab()
         case #selector(NSResponder.cancelOperation(_:)):
             onCancel?()
             return true

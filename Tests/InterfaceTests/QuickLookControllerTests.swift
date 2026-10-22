@@ -16,10 +16,14 @@ private final class RecordingPanel: PreviewPanel {
     func reloadData() { reloads += 1 }
 }
 
-/// A pane at `/ql` in a view controller that is never shown, wired as the app wires it, with a
-/// Quick Look controller whose panel opening, closing and beeps are only counted.
+/// A pane at `/ql` in a view controller in a window that is never shown, its table first
+/// responder, wired as the app wires it, with a Quick Look controller whose panel opening,
+/// closing and beeps are only counted.
 @MainActor
 private final class Fixture {
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 800, height: 400), styleMask: [.titled],
+        backing: .buffered, defer: true)
     let pane: Pane
     let actions = StubSystemActions()
     let controller: PaneViewController
@@ -44,6 +48,9 @@ private final class Fixture {
             pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
             tableView: ListingTableView(), monitorsFolders: false)
         controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 400)
+        window.isReleasedWhenClosed = false
+        window.contentView?.addSubview(controller.view)
+        window.makeFirstResponder(table)
         quickLook.isPanelOpen = { [unowned self] in panelIsOpen }
         quickLook.openPanel = { [unowned self] in
             opens += 1
@@ -289,4 +296,19 @@ private let downArrow = functionKey(NSDownArrowFunctionKey)
     #expect(fixture.quickLook.handle(try keyEvent(downArrow, modifiers: arrowFlags)))
 
     #expect(!fixture.table.typeSelect.isTyping)
+}
+
+/// After the window moves its keys elsewhere, such as to another pane, a key the panel hands back
+/// runs nothing: the table's pane may no longer be the focused one.
+@MainActor @Test func aKeyFromThePanelIsDroppedOnceTheTableLostTheKeys() async throws {
+    let fixture = await Fixture([file("a.png"), file("b.pdf"), file("c.mp3")])
+    fixture.select("a.png", cursor: "a.png")
+    fixture.quickLook.begin(fixture.panel)
+    let other = NSTextField(string: "")
+    fixture.window.contentView?.addSubview(other)
+    #expect(fixture.window.makeFirstResponder(other))
+
+    #expect(fixture.quickLook.handle(try keyEvent(downArrow, modifiers: arrowFlags)))
+
+    #expect(fixture.pane.selection == Selection([ExactName("a.png")], cursor: ExactName("a.png")))
 }

@@ -2,9 +2,9 @@ import AppKit
 import Browser
 
 /// Builds the menu bar, the only place main menus are built. An item either runs a registered
-/// command, with the command's first chord as its key equivalent, or sends one of AppKit's own
-/// actions (Quit, Copy, Minimize) to the first responder that implements it. Every key
-/// equivalent is spelled as a `KeyChord`.
+/// command, with the command's first chord as its key equivalent unless a text field needs that
+/// key, or sends one of AppKit's own actions (Quit, Copy, Minimize) to the first responder that
+/// implements it. Every key equivalent is spelled as a `KeyChord`.
 @MainActor
 public enum MainMenuBuilder {
     /// An action AppKit implements, sent up the responder chain with no target.
@@ -19,6 +19,9 @@ public enum MainMenuBuilder {
 
     enum Item {
         case command(CommandID)
+        /// A command's item with no key equivalent, for a key a text field must still get: the
+        /// menu would take it before the field did. The key reaches the command from the table.
+        case commandWithoutKey(CommandID)
         case standard(StandardAction)
         case separator
     }
@@ -60,10 +63,14 @@ public enum MainMenuBuilder {
                 StandardAction(
                     title: "Zoom", action: #selector(NSWindow.performZoom(_:)), chord: nil)),
             .separator,
-            .standard(
-                StandardAction(
-                    title: "Close Window", action: #selector(NSWindow.performClose(_:)),
-                    chord: KeyChord("w", modifiers: .command))),
+            .command(WindowCommands.previousTab.id), .command(WindowCommands.nextTab.id),
+            .separator,
+            // Tab is its key.
+            .commandWithoutKey(DualPaneCommands.focusOtherPane.id),
+            .separator,
+            // Cmd-W closes the pane, then the tab with its last pane, then the window with its
+            // last tab.
+            .command(TilingCommands.closePane.id),
         ])
 
     /// The menus after the app menu, in menu bar order. A menu with no items is left out of the
@@ -72,6 +79,8 @@ public enum MainMenuBuilder {
         Menu(
             title: "File",
             items: [
+                .command(WindowCommands.newTab.id), .command(WindowCommands.closeTab.id),
+                .separator,
                 .command(SystemCommands.revealInFinder.id),
                 .command(SystemCommands.openTerminal.id),
                 .separator,
@@ -226,7 +235,7 @@ public enum MainMenuBuilder {
         switch item {
         case .separator:
             return .separator()
-        case .command(let id):
+        case .command(let id), .commandWithoutKey(let id):
             guard let command = registry.command(for: id) else {
                 throw .unregistered(id, menu: menu.title)
             }
@@ -235,7 +244,9 @@ public enum MainMenuBuilder {
                 title: command.title, action: #selector(ListingTableView.runMenuCommand(_:)),
                 keyEquivalent: "")
             menuItem.representedObject = id
-            command.chords.first.map { set($0, on: menuItem) }
+            if case .command = item {
+                command.chords.first.map { set($0, on: menuItem) }
+            }
             return menuItem
         case .standard(let standard):
             let menuItem = NSMenuItem(

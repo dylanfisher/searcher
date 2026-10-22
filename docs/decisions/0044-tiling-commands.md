@@ -36,7 +36,8 @@ the menu build ([0027](0027-key-dispatch.md)).
   innermost split holding the pane in its first child, then in its second, and the tree's shape
   no longer decides. A split nested inside the moved one keeps its ratio, so its divider shifts
   in proportion, as it does on a divider drag. `DividerAccessibilityElement` uses the same step.
-- **Not in the app yet.** `TilingCommands` is not in `AppCommands.sets`. Every tiling command
+- **Not in the app yet** (superseded: see [0054](0054-tabs-in-window.md)). `TilingCommands` is
+  not in `AppCommands.sets`. Every tiling command
   needs the workspace, which the pane's view doesn't pass, so any tiling key would trap in the
   current app, and Cmd-W would stop it at launch. The commands carry their chords from the key
   table, and `AppCommandsTests` registers them beside the app's commands, so a clash fails now.
