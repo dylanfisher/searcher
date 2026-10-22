@@ -93,10 +93,15 @@ public struct Layout: Codable, Equatable, Sendable {
         isZoomed = false
     }
 
-    /// Moves the divider of the innermost split on `direction`'s axis that holds the focused pane
-    /// `points` toward `direction`, stopping where a pane would go under the minimum size.
+    /// Moves a divider on the focused pane's edge `points` toward `direction`, stopping where a
+    /// pane would go under the minimum size. The divider is the one on the pane's right edge, or
+    /// bottom edge for ↑ and ↓, and the one on its left or top edge only when it has none there,
+    /// so the tree's shape never changes which divider moves.
     public mutating func resize(_ direction: Direction, by points: Double, in bounds: Rect) {
-        guard let path = Self.path(toInnermostSplitOn: direction.axis, holding: focused, in: root)
+        let axis = direction.axis
+        guard
+            let path = Self.path(toSplitOn: axis, holding: focused, in: .first, of: root)
+                ?? Self.path(toSplitOn: axis, holding: focused, in: .second, of: root)
         else { return }
         let signed = direction == .left || direction == .up ? -points : points
         changeRatio(at: path, in: bounds) { ratio, space in ratio + signed / space }
@@ -333,16 +338,18 @@ public struct Layout: Codable, Equatable, Sendable {
         return frames
     }
 
+    /// The path to the innermost split on `axis` that holds `pane` in its `side` child: with
+    /// `.first`, the split whose divider is on the pane's right or bottom edge.
     private static func path(
-        toInnermostSplitOn axis: Axis, holding pane: PaneID, in node: LayoutNode
+        toSplitOn axis: Axis, holding pane: PaneID, in side: LayoutNode.Child, of node: LayoutNode
     ) -> [LayoutNode.Child]? {
         guard case .split(let splitAxis, _, let first, let second) = node else { return nil }
         let (child, subtree): (LayoutNode.Child, LayoutNode) =
             first.panes.contains(pane) ? (.first, first) : (.second, second)
-        if let inner = path(toInnermostSplitOn: axis, holding: pane, in: subtree) {
+        if let inner = path(toSplitOn: axis, holding: pane, in: side, of: subtree) {
             return [child] + inner
         }
-        return splitAxis == axis && node.panes.contains(pane) ? [] : nil
+        return splitAxis == axis && child == side && subtree.panes.contains(pane) ? [] : nil
     }
 
     private static func replacing(

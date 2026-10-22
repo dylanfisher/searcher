@@ -20,3 +20,13 @@ import Testing
 
     #expect(registry.command(for: KeyChord(.down, modifiers: .command))?.title == "Open")
 }
+
+@Test func tilingCommandsRegisterBesideTheAppsWithoutAClashingIDOrChord() throws {
+    var registry = try AppCommands.registry()
+    for binding in TilingCommands.bindings {
+        try registry.register(binding.command)
+    }
+
+    #expect(
+        registry.command(for: KeyChord("\\", modifiers: .command)) == TilingCommands.splitRight)
+}

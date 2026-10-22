@@ -8,9 +8,6 @@ import Browser
 /// Not main-actor isolated, since AppKit declares `NSAccessibilityElement`'s methods nonisolated.
 /// AppKit calls them on the main thread, so only the call back into the view asserts it.
 final class DividerAccessibilityElement: NSAccessibilityElement {
-    /// How far one increment or decrement moves the divider, in points.
-    private static let step = 40.0
-
     private var divider: Layout.Divider
     private let setRatio: @MainActor (Double) -> Void
 
@@ -68,12 +65,12 @@ final class DividerAccessibilityElement: NSAccessibilityElement {
     }
 
     override func accessibilityPerformIncrement() -> Bool {
-        move(by: Self.step)
+        move(by: TilingCommands.resizeStep)
         return true
     }
 
     override func accessibilityPerformDecrement() -> Bool {
-        move(by: -Self.step)
+        move(by: -TilingCommands.resizeStep)
         return true
     }
 
