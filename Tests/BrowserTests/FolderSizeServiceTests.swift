@@ -198,13 +198,12 @@ private func makeFolder(_ path: String) throws {
     #expect(!walks.waitForStarts(5, timeout: 0.2))
     #expect(walks.starts.count == FolderSizeService.mostRunningWalks)
 
-    // Four walks hold every walk slot; a listing still loads at once.
+    // Four walks hold every walk slot and stay blocked; a listing still loads. Finishing while
+    // they are blocked shows it wasn't queued behind them, without a wall-clock bound.
     let listings = ListingService()
     let listed = EventLog<ListingUpdate>()
-    let start = ContinuousClock.now
     listings.load(Location(path: folder.url.path)) { listed.append($0) }
-    #expect(listed.wait(timeout: 1) { $0.contains { if case .full = $0 { true } else { false } } })
-    #expect(ContinuousClock.now - start < .milliseconds(500))
+    #expect(listed.wait(timeout: 10) { $0.contains { if case .full = $0 { true } else { false } } })
     #expect(walks.starts.count == 4)
 
     walks.releaseAll()
