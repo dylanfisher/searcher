@@ -38,7 +38,7 @@ private func store(_ folder: TemporaryFolder, log: EventLog<String> = EventLog()
         }, save: { _, _ in }, flush: {})
 
     let lookup = Task { await cache.folder(at: path, on: share("a")) }
-    #expect(reads.wait { $0.count == 1 })
+    #expect(await reads.wait { $0.count == 1 })
     await cache.insert(listing, at: path, on: share("a"))
     release.continuation.finish()
 

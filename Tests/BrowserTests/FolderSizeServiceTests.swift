@@ -95,24 +95,24 @@ private final class FakeWalks: @unchecked Sendable {
     var cancelled: [String] { condition.withLock { cancelledPaths } }
     func buffers(_ path: String) -> Int { condition.withLock { buffersRead[path, default: 0] } }
 
-    func waitForStarts(_ count: Int, timeout: TimeInterval = 5) -> Bool {
-        waitLocked(timeout: timeout) { startedWalks.count >= count }
+    func waitForStarts(_ count: Int, timeout: TimeInterval = 5) async -> Bool {
+        await waitLocked(timeout: timeout) { startedWalks.count >= count }
     }
 
-    func waitForCancelled(_ path: String, timeout: TimeInterval = 5) -> Bool {
-        waitLocked(timeout: timeout) { cancelledPaths.contains(path) }
+    func waitForCancelled(_ path: String, timeout: TimeInterval = 5) async -> Bool {
+        await waitLocked(timeout: timeout) { cancelledPaths.contains(path) }
     }
 
-    func waitForBuffers(_ path: String, _ count: Int, timeout: TimeInterval = 5) -> Bool {
-        waitLocked(timeout: timeout) { buffersRead[path, default: 0] >= count }
+    func waitForBuffers(_ path: String, _ count: Int, timeout: TimeInterval = 5) async -> Bool {
+        await waitLocked(timeout: timeout) { buffersRead[path, default: 0] >= count }
     }
 
-    private func waitLocked(timeout: TimeInterval, until done: () -> Bool) -> Bool {
+    /// Polls, since a blocking wait would hold a cooperative pool thread (see `EventLog.wait`).
+    private func waitLocked(timeout: TimeInterval, until done: () -> Bool) async -> Bool {
         let deadline = Date(timeIntervalSinceNow: timeout)
-        condition.lock()
-        defer { condition.unlock() }
-        while !done() {
-            if !condition.wait(until: deadline) { return done() }
+        while !condition.withLock(done) {
+            if Date() >= deadline { return false }
+            try? await Task.sleep(for: .milliseconds(2))
         }
         return true
     }
@@ -176,7 +176,7 @@ private func makeFolder(_ path: String) throws {
 
     request(service, root, into: log)
 
-    #expect(log.wait { $0.count == 1 })
+    #expect(await log.wait { $0.count == 1 })
     let size = try #require(try log.all.first?.1.get())
     #expect(size.bytes == 2_010)
     #expect(!size.isPartial)
@@ -193,9 +193,9 @@ private func makeFolder(_ path: String) throws {
     let log = EventLog<(String, SizeResult)>()
     for path in paths { request(sizes, path, into: log) }
 
-    #expect(walks.waitForStarts(4))
+    #expect(await walks.waitForStarts(4))
     // A fifth walk would start within this wait if the service didn't hold it back.
-    #expect(!walks.waitForStarts(5, timeout: 0.2))
+    #expect(await !walks.waitForStarts(5, timeout: 0.2))
     #expect(walks.starts.count == FolderSizeService.mostRunningWalks)
 
     // Four walks hold every walk slot and stay blocked; a listing still loads. Finishing while
@@ -203,11 +203,14 @@ private func makeFolder(_ path: String) throws {
     let listings = ListingService()
     let listed = EventLog<ListingUpdate>()
     listings.load(Location(path: folder.url.path)) { listed.append($0) }
-    #expect(listed.wait(timeout: 10) { $0.contains { if case .full = $0 { true } else { false } } })
+    #expect(
+        await listed.wait(timeout: 10) {
+            $0.contains { if case .full = $0 { true } else { false } }
+        })
     #expect(walks.starts.count == 4)
 
     walks.releaseAll()
-    #expect(log.wait { $0.count == paths.count })
+    #expect(await log.wait { $0.count == paths.count })
     #expect(walks.mostAtOnce == 4)
     #expect(Set(walks.starts.map(\.path)) == Set(paths))
 }
@@ -221,7 +224,7 @@ private func makeFolder(_ path: String) throws {
 
     request(sizes, folder.url.path, into: log)
 
-    #expect(log.wait { $0.count == 1 })
+    #expect(await log.wait { $0.count == 1 })
     #expect(
         walks.starts
             == [FakeWalks.Start(path: folder.url.path, qos: .utility, onBlockingCallThread: true)])
@@ -241,8 +244,8 @@ private func makeFolder(_ path: String) throws {
     request(sizes, second, into: log)
     request(sizes, elsewhere, into: log)
 
-    #expect(walks.waitForStarts(2))
-    #expect(!walks.waitForStarts(3, timeout: 0.2))
+    #expect(await walks.waitForStarts(2))
+    #expect(await !walks.waitForStarts(3, timeout: 0.2))
     // Either walk on the share may go first: each starts once its volume read returns.
     let started = Set(walks.starts.map(\.path))
     #expect(started.contains(elsewhere))
@@ -250,7 +253,7 @@ private func makeFolder(_ path: String) throws {
     #expect([first, second].contains(onShare))
 
     walks.release(onShare)
-    #expect(walks.waitForStarts(3))
+    #expect(await walks.waitForStarts(3))
     #expect(walks.starts.last?.path == (onShare == first ? second : first))
 }
 
@@ -269,29 +272,29 @@ private func makeFolder(_ path: String) throws {
     request(sizes, paths[1], pane: leaving, into: log)
     request(sizes, paths[2], pane: staying, into: log)
     request(sizes, paths[3], pane: staying, into: log)
-    #expect(walks.waitForStarts(4))
+    #expect(await walks.waitForStarts(4))
     request(sizes, paths[4], pane: leaving, into: log)
-    #expect(walks.waitForBuffers(paths[0], 3))
-    #expect(walks.waitForBuffers(paths[1], 3))
+    #expect(await walks.waitForBuffers(paths[0], 3))
+    #expect(await walks.waitForBuffers(paths[1], 3))
 
     sizes.cancelWalks(for: leaving)
     let buffersAtCancel = [walks.buffers(paths[0]), walks.buffers(paths[1])]
 
-    #expect(walks.waitForCancelled(paths[0]))
-    #expect(walks.waitForCancelled(paths[1]))
+    #expect(await walks.waitForCancelled(paths[0]))
+    #expect(await walks.waitForCancelled(paths[1]))
     #expect(walks.buffers(paths[0]) - buffersAtCancel[0] <= 1)
     #expect(walks.buffers(paths[1]) - buffersAtCancel[1] <= 1)
 
     // The freed slots go to the next walk asked for, not the leaving pane's waiting one.
     request(sizes, paths[5], pane: staying, into: log)
-    #expect(walks.waitForStarts(5))
-    #expect(!walks.waitForStarts(6, timeout: 0.2))
+    #expect(await walks.waitForStarts(5))
+    #expect(await !walks.waitForStarts(6, timeout: 0.2))
     #expect(walks.starts.last?.path == paths[5])
 
     walks.releaseAll()
-    #expect(log.wait { $0.count == 3 })
+    #expect(await log.wait { $0.count == 3 })
     // Give a cancelled walk's result time to arrive, if one wrongly would.
-    #expect(!log.wait(timeout: 0.2) { $0.count > 3 })
+    #expect(await !log.wait(timeout: 0.2) { $0.count > 3 })
     #expect(Set(log.all.map(\.0)) == [paths[2], paths[3], paths[5]])
 }
 
@@ -305,7 +308,7 @@ private func makeFolder(_ path: String) throws {
 
     request(sizes, path, into: log)
 
-    #expect(log.wait { $0.count == 1 })
+    #expect(await log.wait { $0.count == 1 })
     #expect(throws: error) { try log.all.first?.1.get() }
 }
 
@@ -328,11 +331,11 @@ private func makeFolder(_ path: String) throws {
     let log = EventLog<(String, SizeResult)>()
 
     request(sizes, sub, into: log)
-    #expect(log.wait { $0.count == 1 })
+    #expect(await log.wait { $0.count == 1 })
     #expect(try log.all[0].1.get().bytes == 300)
     // Asked again, the size comes from the cache.
     request(sizes, sub, into: log)
-    #expect(log.wait { $0.count == 2 })
+    #expect(await log.wait { $0.count == 2 })
     #expect(walkCount.all.count == 1)
     #expect(await cache.size(of: sub, modified: firstModified, on: volume) != nil)
 
@@ -346,7 +349,7 @@ private func makeFolder(_ path: String) throws {
     }
     #expect(await cache.size(of: sub, modified: firstModified, on: volume) == nil)
     request(sizes, sub, into: log)
-    #expect(log.wait { $0.count == 3 })
+    #expect(await log.wait { $0.count == 3 })
     #expect(try log.all[2].1.get().bytes == 350)
     #expect(walkCount.all.count == 2)
 }
@@ -361,22 +364,22 @@ private func makeFolder(_ path: String) throws {
     let log = EventLog<(String, SizeResult)>()
 
     request(sizes, path, into: log)
-    #expect(log.wait { $0.count == 1 })
+    #expect(await log.wait { $0.count == 1 })
     request(sizes, path, into: log)
-    #expect(log.wait { $0.count == 2 })
+    #expect(await log.wait { $0.count == 2 })
     #expect(walks.starts.count == 1)
     await writer.flush()
 
     // A relaunch reads the size from the volume's file.
     let relaunched = service(walks, cache: FolderSizeCache(store: store(folder))) { _ in share }
     request(relaunched, path, into: log)
-    #expect(log.wait { $0.count == 3 })
+    #expect(await log.wait { $0.count == 3 })
     #expect(walks.starts.count == 1)
     #expect(try log.all[2].1.get().bytes == 4_000)
 
     // The folder's own date changed: walked again.
     request(relaunched, path, modified: laterModified, into: log)
-    #expect(log.wait { $0.count == 4 })
+    #expect(await log.wait { $0.count == 4 })
     #expect(walks.starts.count == 2)
 
     // A size walked long ago is still kept.
@@ -387,7 +390,7 @@ private func makeFolder(_ path: String) throws {
         [path: FolderSizeCache.Record(size: ancient, folderModified: firstModified)], for: share)
     let fromOld = service(walks, cache: FolderSizeCache(store: old)) { _ in share }
     request(fromOld, path, into: log)
-    #expect(log.wait { $0.count == 5 })
+    #expect(await log.wait { $0.count == 5 })
     #expect(try log.all[4].1.get() == ancient)
     #expect(walks.starts.count == 2)
 }
@@ -403,14 +406,14 @@ private func makeFolder(_ path: String) throws {
     let sizes = service(walks, cache: FolderSizeCache(store: writer)) { _ in share }
     let log = EventLog<(String, SizeResult)>()
     for path in [parent, inside, outside] { request(sizes, path, into: log) }
-    #expect(log.wait { $0.count == 3 })
+    #expect(await log.wait { $0.count == 3 })
 
     #expect(await sizes.recalculateSizes(under: parent))
     await writer.flush()
 
     #expect(Set(await store(folder).loadSizes(share).keys) == [outside])
     for path in [parent, inside, outside] { request(sizes, path, into: log) }
-    #expect(log.wait { $0.count == 6 })
+    #expect(await log.wait { $0.count == 6 })
     #expect(walks.starts.map(\.path).filter { $0 == outside }.count == 1)
     #expect(walks.starts.count == 5)
 }
@@ -447,7 +450,7 @@ private func makeFolder(_ path: String) throws {
 
     for (index, child) in children.enumerated() {
         request(sizes, child, into: log)
-        #expect(log.wait { $0.count == index + 1 })
+        #expect(await log.wait { $0.count == index + 1 })
     }
 
     let deadline = Date(timeIntervalSinceNow: 5)
@@ -483,7 +486,7 @@ private func makeFolder(_ path: String) throws {
             log.append((folders[index].path, result))
         }
 
-        #expect(log.wait(timeout: 30) { $0.count == folders.count }, "\(volume.kind)")
+        #expect(await log.wait(timeout: 30) { $0.count == folders.count }, "\(volume.kind)")
         #expect(reads.all == [parent], "\(volume.kind)")
         #expect(walks.mostAtOnce <= most, "\(volume.kind)")
     }
@@ -524,15 +527,15 @@ private func makeFolder(_ path: String) throws {
     let asked = sizes.requestSizes(of: folders, in: parent, for: PaneID()) { index, result in
         log.append((folders[index].path, result))
     }
-    #expect(walks.waitForStarts(2))
+    #expect(await walks.waitForStarts(2))
 
     // The share's walk is routed as the share's: its volume, so its limit and its cancel.
     #expect(asked[0].volume == ListingService.listerVolume)
     #expect(asked[1].volume == music)
     sizes.cancelWalks(under: music.mountPoint)
-    #expect(walks.waitForCancelled(music.mountPoint))
+    #expect(await walks.waitForCancelled(music.mountPoint))
     walks.release(parent + "/local")
-    #expect(log.wait { $0.count == 1 })
+    #expect(await log.wait { $0.count == 1 })
     #expect(log.all.map(\.0) == [parent + "/local"])
     #expect(reads.all == [parent])
 }

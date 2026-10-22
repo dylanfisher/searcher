@@ -50,7 +50,7 @@ import Testing
 
         try await image.detach(force: true)
 
-        #expect(revoked.wait { !$0.isEmpty })
+        #expect(await revoked.wait { !$0.isEmpty })
         #expect(descriptorIsClosed(descriptor, wasAt: image.mountPoint))
         #expect(changed.all.isEmpty)
     }

@@ -273,7 +273,7 @@ func goToAMissingFolderReportsItAndLeavesThePaneWhereItWas(path: String, code: I
     let result = GoResult()
 
     pane.goToFolder(Location(path: "/root/docs"), then: result.record)
-    #expect(lister.waitForCall("/root/docs"))
+    #expect(await lister.waitForCall("/root/docs"))
     await drainMainQueue()
     #expect(pane.location == Location(path: "/root"))
     #expect(pane.state.isLoaded)
@@ -307,10 +307,10 @@ func goToAMissingFolderReportsItAndLeavesThePaneWhereItWas(path: String, code: I
     let result = GoResult()
 
     pane.goToFolder(Location(path: "/root/docs"), then: result.record)
-    #expect(lister.waitForCall("/root/docs"))
+    #expect(await lister.waitForCall("/root/docs"))
     pane.cancelGoToFolder()
     lister.release("/root/docs")
-    #expect(lister.waitForFinished(2))
+    #expect(await lister.waitForFinished(2))
     await drainMainQueue()
 
     #expect(!result.finished)
@@ -322,12 +322,12 @@ func goToAMissingFolderReportsItAndLeavesThePaneWhereItWas(path: String, code: I
     let (pane, lister) = await goToFixture()
     let result = GoResult()
     pane.goToFolder(Location(path: "/root/docs"), then: result.record)
-    #expect(lister.waitForCall("/root/docs"))
+    #expect(await lister.waitForCall("/root/docs"))
 
     pane.navigate(to: Location(path: "/other"))
     await settle { pane.state.isLoaded }
     lister.release("/root/docs")
-    #expect(lister.waitForFinished(3))
+    #expect(await lister.waitForFinished(3))
     await drainMainQueue()
 
     #expect(!result.finished)
@@ -341,12 +341,12 @@ func goToAMissingFolderReportsItAndLeavesThePaneWhereItWas(path: String, code: I
     await settle { pane.state.isLoaded }
     let result = GoResult()
     pane.goToFolder(Location(path: "/root/docs"), then: result.record)
-    #expect(lister.waitForCall("/root/docs"))
+    #expect(await lister.waitForCall("/root/docs"))
 
     pane.goBack()
     await settle { pane.state.isLoaded }
     lister.release("/root/docs")
-    #expect(lister.waitForFinished(4))
+    #expect(await lister.waitForFinished(4))
     await drainMainQueue()
 
     #expect(!result.finished)
@@ -362,7 +362,7 @@ func goToAMissingFolderReportsItAndLeavesThePaneWhereItWas(path: String, code: I
 
     pane.goToFolder(Location(path: "/root"), then: result.record)
     await settle { result.finished }
-    #expect(lister.waitForFinished(2))
+    #expect(await lister.waitForFinished(2))
     await settle { pane.state.isLoaded }
 
     #expect(result.error == nil)
@@ -385,7 +385,7 @@ func goToAMissingFolderReportsItAndLeavesThePaneWhereItWas(path: String, code: I
     let result = GoResult()
 
     pane.goToFolder(Location(path: "/root/slow"), then: result.record)
-    #expect(lister.waitForCall("/root/slow"))
+    #expect(await lister.waitForCall("/root/slow"))
     clock.advance(by: LoadTimeouts.slow)
     // The slow update reaches the main queue from the load's timer task, with nothing to wait on.
     try? await Task.sleep(for: .milliseconds(200))

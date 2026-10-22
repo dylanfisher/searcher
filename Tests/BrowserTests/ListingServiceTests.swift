@@ -76,7 +76,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     }
     _ = load(service, sentinelPath, into: ignored)
     lister.release(sentinelPath)
-    #expect(lister.waitForCall(sentinelPath))
+    #expect(await lister.waitForCall(sentinelPath))
     await drainMainQueue()
 }
 
@@ -91,9 +91,9 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
         _ = load(service, path, into: log)
     }
 
-    #expect(lister.waitForCalls(4))
+    #expect(await lister.waitForCalls(4))
     // A fifth load would start within this wait if the service didn't hold it back.
-    #expect(!lister.waitForCalls(5, timeout: 0.2))
+    #expect(await !lister.waitForCalls(5, timeout: 0.2))
     #expect(lister.calls.count == ListingService.mostRunningLoads)
 
     for path in paths {
@@ -117,7 +117,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     for path in running {
         _ = load(service, path, into: log)
     }
-    #expect(lister.waitForCalls(4))
+    #expect(await lister.waitForCalls(4))
     let queued =
         waiting.map { load(service, $0, into: log) }
         + [load(service, focused, priority: .focused, into: log)]
@@ -125,7 +125,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     await settle { queued.allSatisfy { $0.volume != nil } }
 
     lister.release(running[0])
-    #expect(lister.waitForCalls(5))
+    #expect(await lister.waitForCalls(5))
     #expect(lister.calls.map(\.path).dropFirst(4).first == focused)
 }
 
@@ -140,14 +140,14 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     for path in running {
         _ = load(service, path, into: log)
     }
-    #expect(lister.waitForCalls(4))
+    #expect(await lister.waitForCalls(4))
     let loads = paths.map { load(service, $0, into: log) }
     await settle { loads.allSatisfy { $0.volume != nil } }
 
     loads[6].priority = .focused
     lister.release(running[0])
 
-    #expect(lister.waitForCalls(5))
+    #expect(await lister.waitForCalls(5))
     #expect(lister.calls.map(\.path).dropFirst(4).first == paths[6])
 }
 
@@ -164,7 +164,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     for path in running {
         _ = load(service, path, into: log)
     }
-    #expect(lister.waitForCalls(4))
+    #expect(await lister.waitForCalls(4))
     // Asked first, so the order asked alone would start them first.
     let queued =
         hidden.map { load(service, $0, priority: .hidden, into: log) }
@@ -174,7 +174,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     // One slot frees at a time, so each start is the queue's next pick.
     for (index, path) in running.enumerated() {
         lister.release(path)
-        #expect(lister.waitForCalls(5 + index))
+        #expect(await lister.waitForCalls(5 + index))
     }
 
     #expect(Array(lister.calls.map(\.path).dropFirst(4)) == visible + hidden)
@@ -262,7 +262,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     let service = ListingService(lister: lister)
     let log = UpdateLog()
     let cancelled = load(service, "/big", into: log)
-    #expect(lister.waitForCalls(1))
+    #expect(await lister.waitForCalls(1))
 
     cancelled.cancel()
     lister.release("/big")
@@ -279,11 +279,11 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     let service = ListingService(lister: lister)
     let log = UpdateLog()
     let cancelled = load(service, "/big", into: log)
-    #expect(lister.waitForCalls(1))
+    #expect(await lister.waitForCalls(1))
 
     cancelled.cancel()
     lister.release("/big")
-    #expect(lister.waitForFinished(1))
+    #expect(await lister.waitForFinished(1))
     // The first batch after the cancel stops the listing; the other two are never read.
     #expect(lister.batchesDelivered == 1)
 }
@@ -298,15 +298,15 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     for path in running {
         _ = load(service, path, into: log)
     }
-    #expect(lister.waitForCalls(4))
+    #expect(await lister.waitForCalls(4))
     load(service, "/later", into: log).cancel()
 
     for path in running {
         lister.release(path)
     }
     #expect(await log.wait(for: 4))
-    #expect(lister.waitForFinished(4))
-    #expect(!lister.waitForCalls(5, timeout: 0.2))
+    #expect(await lister.waitForFinished(4))
+    #expect(await !lister.waitForCalls(5, timeout: 0.2))
 }
 
 @Test @MainActor func cancellingOnTheFirstBatchDropsTheFullListing() async {
@@ -513,7 +513,7 @@ private func isFull(_ update: ListingUpdate) -> Bool {
     let log = UpdateLog()
 
     _ = load(service, "/a/stuck", into: log)
-    #expect(lister.waitForCall("/a/stuck"))
+    #expect(await lister.waitForCall("/a/stuck"))
     _ = load(service, "/b/first", into: log)
     #expect(await log.wait(for: 1))
 
@@ -538,7 +538,7 @@ private func isFull(_ update: ListingUpdate) -> Bool {
     let service = service(lister, clock: clock)
     let log = UpdateLog()
     _ = load(service, "/a/stuck", into: log)
-    #expect(lister.waitForCall("/a/stuck"))
+    #expect(await lister.waitForCall("/a/stuck"))
 
     clock.advance(by: LoadTimeouts.slow - .milliseconds(1))
     #expect(await !log.wait(for: 1, timeout: 0.2))
@@ -549,7 +549,7 @@ private func isFull(_ update: ListingUpdate) -> Bool {
     // The slow read is still in flight, so a second load on its share waits behind it.
     let second = UpdateLog()
     _ = load(service, "/a/second", into: second)
-    #expect(!lister.waitForCall("/a/second", timeout: 0.3))
+    #expect(await !lister.waitForCall("/a/second", timeout: 0.3))
     #expect(await second.updates.isEmpty)
 }
 
@@ -568,7 +568,7 @@ private func waitForSleeps(_ count: Int, on clock: ManualClock) async -> Bool {
     let clock = ManualClock()
     let service = service(lister, clock: clock)
     _ = load(service, "/a/stuck", into: UpdateLog())
-    #expect(lister.waitForCall("/a/stuck"))
+    #expect(await lister.waitForCall("/a/stuck"))
     // The stuck load's slow and give-up waits, and its read's slot timer.
     #expect(await waitForSleeps(3, on: clock))
     let second = UpdateLog()
@@ -596,7 +596,7 @@ private func waitForSleeps(_ count: Int, on clock: ManualClock) async -> Bool {
         }, volumeOf: volume(of:))
     let log = UpdateLog()
     _ = load(service, "/a/stuck", into: log)
-    #expect(lister.waitForCall("/a/stuck"))
+    #expect(await lister.waitForCall("/a/stuck"))
 
     clock.advance(by: LoadTimeouts.slow)
     #expect(await log.wait(for: 1))
@@ -633,7 +633,7 @@ private func volumeName(_ update: ListingUpdate) -> String? {
     let localLog = UpdateLog()
     _ = load(service, "/net/nas/music/album", into: shareLog)
     _ = load(service, "/local/stuck", into: localLog)
-    #expect(lister.waitForCalls(2))
+    #expect(await lister.waitForCalls(2))
 
     clock.advance(by: LoadTimeouts.giveUp)
     #expect(await shareLog.wait(for: 2))
@@ -661,7 +661,7 @@ private func volumeName(_ update: ListingUpdate) -> String? {
     let homeLog = UpdateLog()
     _ = load(service, "/Volumes/Backup/photos", into: backupLog)
     _ = load(service, "/Users/dylan", into: homeLog)
-    #expect(lister.waitForCalls(2))
+    #expect(await lister.waitForCalls(2))
 
     clock.advance(by: LoadTimeouts.slow)
     #expect(await backupLog.wait(for: 1))
@@ -753,11 +753,11 @@ private let musicShare = VolumeIdentity(
     for path in stuck {
         _ = load(service, path, into: ignored)
     }
-    #expect(lister.waitForCalls(stuck.count))
+    #expect(await lister.waitForCalls(stuck.count))
     let log = UpdateLog()
     _ = load(service, "/local", into: log)
     // Every slot is held by a read on a share that stopped answering.
-    #expect(!lister.waitForCall("/local", timeout: 0.2))
+    #expect(await !lister.waitForCall("/local", timeout: 0.2))
 
     clock.advance(by: LoadTimeouts.slow)
     // The local load waited 3 s too, so a slow update can come before its listing.
@@ -782,8 +782,8 @@ private let musicShare = VolumeIdentity(
         _ = load(service, path, into: log)
     }
 
-    #expect(lister.waitForCalls(4))
-    #expect(!lister.waitForCalls(5, timeout: 0.2))
+    #expect(await lister.waitForCalls(4))
+    #expect(await !lister.waitForCalls(5, timeout: 0.2))
     lister.releaseAll()
     #expect(await log.wait(for: paths.count))
     #expect(lister.mostAtOnce == 4)

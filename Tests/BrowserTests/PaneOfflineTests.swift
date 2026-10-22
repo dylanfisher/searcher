@@ -188,7 +188,7 @@ private func letTimersLand() async {
     #expect(pane.state.listedAt == keptAt)
     pane.select(Selection([ExactName("b")], cursor: ExactName("b")))
 
-    #expect(lister.waitForCall(music))
+    #expect(await lister.waitForCall(music))
     fixture.clock.advance(by: LoadTimeouts.slow)
     await settle { pane.state.isSlow }
     #expect(pane.state.names == ["a", "b"])
@@ -219,7 +219,7 @@ func aShareThatStopsAnsweringGoesOfflineWithTheCachedRows(code: Int32) async {
     let fixture = await OfflineFixture(at: music, lister: lister, cached: [music: [file("a")]])
     let pane = fixture.pane
     await settle { pane.state.isCachedRefreshing }
-    #expect(lister.waitForCall(music))
+    #expect(await lister.waitForCall(music))
 
     fixture.clock.advance(by: LoadTimeouts.giveUp - .milliseconds(1))
     await letTimersLand()
@@ -240,7 +240,7 @@ func aShareThatStopsAnsweringGoesOfflineWithTheCachedRows(code: Int32) async {
     let pane = fixture.pane
 
     #expect(pane.state.isLoading)
-    #expect(lister.waitForCall(music))
+    #expect(await lister.waitForCall(music))
     fixture.clock.advance(by: LoadTimeouts.slow)
     await settle { pane.state.isSlow }
     #expect(pane.state.listing == nil)
@@ -326,7 +326,7 @@ func aShareThatStopsAnsweringGoesOfflineWithTheCachedRows(code: Int32) async {
 
     pane.didLoseFocus()
     pane.didGainFocus()
-    #expect(dead.waitForCall(music))
+    #expect(await dead.waitForCall(music))
     fixture.clock.advance(by: LoadTimeouts.slow)
     await settle { pane.state.isSlow }
     #expect(pane.state.names == ["a", "b"])
@@ -342,7 +342,7 @@ func aShareThatStopsAnsweringGoesOfflineWithTheCachedRows(code: Int32) async {
     dead.releaseAll()
     let fixture = await OfflineFixture(at: music, lister: dead, mounted: [share])
     let pane = fixture.pane
-    #expect(dead.waitForCall(music))
+    #expect(await dead.waitForCall(music))
 
     fixture.clock.advance(by: LoadTimeouts.slow)
     await settle { pane.state.isSlow }
@@ -379,7 +379,7 @@ func aShareThatStopsAnsweringGoesOfflineWithTheCachedRows(code: Int32) async {
     var finished: [ListingError?] = []
 
     pane.goToFolder(Location(path: music)) { finished.append($0) }
-    #expect(lister.waitForCall(music))
+    #expect(await lister.waitForCall(music))
     await letTimersLand()
     #expect(pane.location.path == "/local")
     #expect(pane.state.names == ["l"])
@@ -530,7 +530,7 @@ func aShareThatStopsAnsweringGoesOfflineWithTheCachedRows(code: Int32) async {
 
     pane.didLoseFocus()
     pane.didGainFocus()
-    #expect(dead.waitForCall(music))
+    #expect(await dead.waitForCall(music))
     fixture.clock.advance(by: LoadTimeouts.slow)
     await settle { pane.state.isSlow }
     #expect(pane.state.names == ["a", "b", "c"])
@@ -645,7 +645,7 @@ func aShareThatStopsAnsweringGoesOfflineWithTheCachedRows(code: Int32) async {
         let lister = GatedLister([music: .blockForever])
         lister.releaseAll()
         let pane = stubPane(at: music, lister: lister)
-        #expect(lister.waitForCall(music))
+        #expect(await lister.waitForCall(music))
         let load = pane.load
 
         VolumeEvents.willUnmount(at: mountPoint)
@@ -677,7 +677,7 @@ func aShareThatStopsAnsweringGoesOfflineWithTheCachedRows(code: Int32) async {
         let lister = GatedLister([mountPoint + "/music": .blockForever])
         lister.releaseAll()
         let pane = stubPane(at: mountPoint + "/music", lister: lister)
-        #expect(lister.waitForCall(mountPoint + "/music"))
+        #expect(await lister.waitForCall(mountPoint + "/music"))
 
         VolumeEvents.didUnmount(at: mountPoint)
 

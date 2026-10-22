@@ -163,7 +163,7 @@ private struct QueuedTabs {
         for path in holdPaths {
             service.load(Location(path: path)) { _ in }
         }
-        #expect(lister.waitForCalls(4))
+        #expect(await lister.waitForCalls(4))
         func tab(at path: String) -> Tab {
             Tab(
                 pane: Pane(
@@ -199,10 +199,10 @@ private struct QueuedTabs {
 
     /// The folders listed after the holds, in the order they started. One slot frees at a time,
     /// so each start is the queue's next pick.
-    func startOrder() -> [String] {
+    func startOrder() async -> [String] {
         for (index, path) in holdPaths.enumerated() {
             lister.release(path)
-            #expect(lister.waitForCalls(5 + index))
+            #expect(await lister.waitForCalls(5 + index))
         }
         return Array(lister.calls.map(\.path).dropFirst(holdPaths.count))
     }
@@ -217,7 +217,7 @@ private struct QueuedTabs {
     defer { tabs.lister.releaseAll() }
 
     #expect(tabs.priorities(tabs.hidden) == [.hidden, .hidden])
-    #expect(tabs.startOrder() == ["/v", "/v", "/v", "/h"])
+    #expect(await tabs.startOrder() == ["/v", "/v", "/v", "/h"])
 }
 
 @MainActor @Test func selectingATabRaisesItsQueuedLoads() async throws {
@@ -230,7 +230,7 @@ private struct QueuedTabs {
     // Its second pane was focused by the split that made it.
     #expect(tabs.priorities(tabs.hidden) == [.visible, .focused])
     #expect(tabs.priorities(tabs.shown).allSatisfy { $0 == .hidden })
-    #expect(tabs.startOrder() == ["/h", "/h", "/v", "/v"])
+    #expect(await tabs.startOrder() == ["/h", "/h", "/v", "/v"])
 }
 
 @MainActor @Test func closingTheFocusedPaneFocusesTheNextOnesLoad() async throws {
@@ -262,7 +262,7 @@ private struct QueuedTabs {
 
     await settle { load.volume != nil }
     // Hidden, it starts after the two loads of the tab now shown and two of the other.
-    #expect(tabs.startOrder() == ["/h", "/h", "/v", "/v"])
+    #expect(await tabs.startOrder() == ["/h", "/h", "/v", "/v"])
 }
 
 /// A tree for column panes: `/r` holds a folder `docs`, which holds a folder `sub`.

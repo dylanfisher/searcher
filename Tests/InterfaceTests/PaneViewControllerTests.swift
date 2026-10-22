@@ -220,7 +220,7 @@ private struct Fixture {
 
     trail.columns[0].pane.select(Selection([ExactName("docs")], cursor: ExactName("docs")))
     await settle { trail.columns.count == 2 }
-    #expect(lister.waitForCall("/root/docs"))
+    #expect(await lister.waitForCall("/root/docs"))
     clock.advance(by: LoadTimeouts.slow)
     await settle {
         if case .slow = trail.columns[1].pane.state { true } else { false }
@@ -273,7 +273,7 @@ private final class MainThreadRecord: @unchecked Sendable {
     let note = controller.status.note
 
     // The read has started, so the volume and mount table reads before it are done.
-    #expect(lister.waitForCall("/Volumes/nas"))
+    #expect(await lister.waitForCall("/Volumes/nas"))
     let spinner = controller.status.spinner
     clock.advance(by: LoadTimeouts.spinnerDelay)
     await settle { !spinner.isHidden }
@@ -295,7 +295,7 @@ private final class MainThreadRecord: @unchecked Sendable {
     let lister = GatedLister([mountPoint: .blockForever])
     lister.releaseAll()
     let fixture = Fixture(lister: lister, at: mountPoint)
-    #expect(lister.waitForCall(mountPoint))
+    #expect(await lister.waitForCall(mountPoint))
 
     VolumeEvents.didUnmount(at: mountPoint)
 
