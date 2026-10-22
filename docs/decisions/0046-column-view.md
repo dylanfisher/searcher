@@ -42,8 +42,8 @@ stacked single-column tables over `NSBrowser`.
   keys, so its end-of-editing action can't send the old text to the pane now in front.
 - **Overlays are the list's only.** The spinner (superseded: it moved to the path bar row and
   shows the focused column's state, see [0052](0052-pane-status.md)), the access explanation and
-  the error line stay hidden in column view; the pane holds no rows there. Each column's own
-  spinner state is M2.8's.
+  the error line stay hidden in column view; the pane holds no rows there. Each column also
+  shows its own spinner, see [0053](0053-column-accessibility.md).
 - **View menu.** as List (Cmd-1) and as Columns (Cmd-3) head the View menu, with a check mark on
   the pane's mode. The check comes from `CommandBinding.isCurrent`, which reads the pane through
   the command context, since view mode is per pane while `isChecked` reads app-wide `Settings`.
@@ -64,10 +64,10 @@ stacked single-column tables over `NSBrowser`.
 ## Consequences
 
 Columns are a fixed 240 points wide and can't be resized. A folder row shows no disclosure
-chevron. A column whose folder can't be listed shows an empty table with no message until M2.8
-adds per-column state. A column's table carries the list's `ListingViewController`, so changes to
-the list's rows reach columns too; a change meant for the list only has to check
-`showsNamesOnly`.
+chevron. A column whose folder can't be listed shows an empty table with no message; only the
+spinner is per column ([0053](0053-column-accessibility.md)). A column's table carries the list's
+`ListingViewController`, so changes to the list's rows reach columns too; a change meant for the
+list only has to check `showsNamesOnly`.
 
 Holding ↓ through a column of folders costs more per row than in the list: each folder row
 makes a new column controller and table, starts that column's folder monitor at once, and

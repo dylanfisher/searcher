@@ -166,3 +166,95 @@ private final class CurrentDate {
 
     await settle { view.note.stringValue == "music is offline. Listed 2 minutes ago." }
 }
+
+/// One accessibility notification the status view would have posted.
+private struct Post {
+    let notification: NSAccessibility.Notification
+    let userInfo: [NSAccessibility.NotificationUserInfoKey: Any]?
+}
+
+/// A status view whose posts are recorded rather than posted.
+@MainActor
+private final class RecordingStatus {
+    let view = statusView(clock: ManualClock())
+    private(set) var posts: [Post] = []
+
+    init() {
+        view.postAccessibility = { [unowned self] _, notification, userInfo in
+            posts.append(Post(notification: notification, userInfo: userInfo))
+        }
+    }
+
+    var announcements: [String] {
+        posts.filter { $0.notification == .announcementRequested }
+            .compactMap { $0.userInfo?[.announcement] as? String }
+    }
+}
+
+@MainActor @Test func goingOfflineAnnouncesTheNoteOnceAtHighPriority() async throws {
+    let status = RecordingStatus()
+    let rows = await kept(listedAt: fiveMinutesAgo)
+    status.view.show(.loading, location: album, volumeName: nil)
+    #expect(status.posts.isEmpty)
+
+    status.view.show(.offline(rows), location: album, volumeName: "music")
+
+    #expect(status.announcements == ["music is offline. Listed 5 minutes ago."])
+    let priority = status.posts.last?.userInfo?[.priority] as? Int
+    #expect(priority == NSAccessibilityPriorityLevel.high.rawValue)
+
+    status.view.show(.offline(rows), location: album, volumeName: "music")
+
+    #expect(status.announcements.count == 1)
+}
+
+@MainActor @Test func goingSlowThenOfflineAnnouncesEach() async throws {
+    let status = RecordingStatus()
+
+    status.view.show(.slow(nil), location: album, volumeName: "music")
+    status.view.show(.slow(nil), location: album, volumeName: "music")
+    status.view.show(.offline(nil), location: album, volumeName: "music")
+
+    #expect(status.announcements == ["music is slow to answer.", "music is offline."])
+}
+
+@MainActor @Test func anotherVolumeGoingOfflineIsAnnounced() async throws {
+    let status = RecordingStatus()
+
+    status.view.show(.offline(nil), location: album, volumeName: "music")
+    status.view.show(.offline(nil), location: album, volumeName: "photos")
+
+    #expect(status.announcements == ["music is offline.", "photos is offline."])
+}
+
+/// The note is written again as the rows turn a minute older; it isn't read again.
+@MainActor @Test func theNotesAgeChangingIsNotAnnounced() async throws {
+    let clock = ManualClock()
+    let date = CurrentDate()
+    let view = statusView(clock: clock, currentDate: { date.value })
+    var announcements: [String] = []
+    view.postAccessibility = { _, notification, userInfo in
+        guard notification == .announcementRequested else { return }
+        announcements.append(userInfo?[.announcement] as? String ?? "")
+    }
+    view.show(
+        .offline(await kept(listedAt: now.addingTimeInterval(-90))), location: album,
+        volumeName: "music")
+
+    date.value = now.addingTimeInterval(30)
+    clock.advance(by: .seconds(30))
+    await settle { view.note.stringValue == "music is offline. Listed 2 minutes ago." }
+
+    #expect(announcements == ["music is offline. Listed 1 minute ago."])
+}
+
+@MainActor @Test func goingOfflineAgainAfterLoadingIsAnnouncedAgain() async throws {
+    let status = RecordingStatus()
+    let rows = await someRows()
+
+    status.view.show(.offline(nil), location: album, volumeName: "music")
+    status.view.show(.loaded(rows), location: album, volumeName: nil)
+    status.view.show(.offline(nil), location: album, volumeName: "music")
+
+    #expect(status.announcements == ["music is offline.", "music is offline."])
+}
