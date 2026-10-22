@@ -54,7 +54,7 @@ private final class UpdateLog {
 }
 
 private func load(
-    _ service: ListingService, _ path: String, priority: ListingLoad.Priority = .normal,
+    _ service: ListingService, _ path: String, priority: ListingLoad.Priority = .visible,
     into log: UpdateLog
 ) -> ListingLoad {
     service.load(Location(path: path), priority: priority) { log.append($0) }
@@ -127,6 +127,57 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     lister.release(running[0])
     #expect(lister.waitForCalls(5))
     #expect(lister.calls.map(\.path).dropFirst(4).first == focused)
+}
+
+@Test func focusingAQueuedLoadMakesItNext() async {
+    let running = (0..<4).map { "/running-\($0)" }
+    let paths = (0..<10).map { "/folder-\($0)" }
+    let lister = GatedLister(
+        Dictionary(uniqueKeysWithValues: (running + paths).map { ($0, .batches([])) }))
+    defer { lister.releaseAll() }
+    let service = ListingService(lister: lister)
+    let log = UpdateLog()
+    for path in running {
+        _ = load(service, path, into: log)
+    }
+    #expect(lister.waitForCalls(4))
+    let loads = paths.map { load(service, $0, into: log) }
+    await settle { loads.allSatisfy { $0.volume != nil } }
+
+    loads[6].priority = .focused
+    lister.release(running[0])
+
+    #expect(lister.waitForCalls(5))
+    #expect(lister.calls.map(\.path).dropFirst(4).first == paths[6])
+}
+
+@Test func hiddenLoadsStartAfterEveryVisibleOne() async {
+    let running = (0..<4).map { "/running-\($0)" }
+    let hidden = (0..<2).map { "/hidden-\($0)" }
+    let visible = (0..<2).map { "/visible-\($0)" }
+    let lister = GatedLister(
+        Dictionary(
+            uniqueKeysWithValues: (running + hidden + visible).map { ($0, .batches([])) }))
+    defer { lister.releaseAll() }
+    let service = ListingService(lister: lister)
+    let log = UpdateLog()
+    for path in running {
+        _ = load(service, path, into: log)
+    }
+    #expect(lister.waitForCalls(4))
+    // Asked first, so the order asked alone would start them first.
+    let queued =
+        hidden.map { load(service, $0, priority: .hidden, into: log) }
+        + visible.map { load(service, $0, into: log) }
+    await settle { queued.allSatisfy { $0.volume != nil } }
+
+    // One slot frees at a time, so each start is the queue's next pick.
+    for (index, path) in running.enumerated() {
+        lister.release(path)
+        #expect(lister.waitForCalls(5 + index))
+    }
+
+    #expect(Array(lister.calls.map(\.path).dropFirst(4)) == visible + hidden)
 }
 
 @MainActor @Test func prepareRunsOnTheLoadsWorkerAndNotTheMainThread() async {

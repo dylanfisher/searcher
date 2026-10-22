@@ -1,19 +1,32 @@
 /// A window's tabs, in strip order, and the selected one. A workspace always has a tab: closing
 /// the last one reports the workspace closed and leaves it in place, closed, and the caller drops
 /// the workspace. Its closed tab traps on use, as `Tab` describes.
+///
+/// It sets the order panes' loads start in: the selected tab's focused pane first, then the
+/// selected tab's other panes, then every other tab's. A change of tab or of focused pane moves
+/// loads that are still waiting (docs/decisions/0048-pane-load-priority.md).
 @MainActor
 public final class Workspace {
     public private(set) var tabs: [Tab]
-    public private(set) var selectedTab: Tab
+    public private(set) var selectedTab: Tab {
+        didSet {
+            if selectedTab !== oldValue { updatePanes() }
+        }
+    }
+    /// The pane last told it gained the focus, until it is told it lost it.
+    private weak var focusedPane: Pane?
 
     public init(tab: Tab) {
         tabs = [tab]
         selectedTab = tab
+        watchFocus(of: tab)
+        updatePanes()
     }
 
     /// Puts `tab` right after the selected tab and selects it.
     public func add(_ tab: Tab) {
         tabs.insert(tab, at: index(of: selectedTab.id) + 1)
+        watchFocus(of: tab)
         selectedTab = tab
     }
 
@@ -53,6 +66,26 @@ public final class Workspace {
             selectedTab = tabs[min(index, tabs.count - 1)]
         }
         return .tab
+    }
+
+    private func watchFocus(of tab: Tab) {
+        tab.onFocusChange = { [weak self] in self?.updatePanes() }
+    }
+
+    /// Shows the selected tab's panes and hides every other tab's, then tells the selected tab's
+    /// focused pane it has the focus, and the pane that had it that it lost it. Gaining the focus
+    /// lists a pane's folder again unless its load is still running (`Pane.didGainFocus`).
+    private func updatePanes() {
+        for tab in tabs {
+            for pane in tab.panes.values {
+                pane.isVisible = tab === selectedTab
+            }
+        }
+        let pane = selectedTab.focusedPane
+        guard pane !== focusedPane else { return }
+        focusedPane?.didLoseFocus()
+        focusedPane = pane
+        pane.didGainFocus()
     }
 
     private func index(of id: TabID) -> Int {

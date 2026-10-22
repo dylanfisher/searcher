@@ -40,7 +40,8 @@ the load through `ListingService`, the off-main sort and filter ([0025](0025-sor
   `ListingService` for `.focused` priority, so a parent column added by ← starts ahead of a
   child column queued before it, once both volumes are read; a load whose volume isn't known
   yet can't start, whatever its priority. A column that gains focus later keeps its place in
-  the queue. A slow update leaves a column as it leaves a list pane: still loading, with the
+  the queue (superseded: its waiting load now moves to the front, see
+  [0048](0048-pane-load-priority.md)). A slow update leaves a column as it leaves a list pane: still loading, with the
   trail unchanged.
 - **Watches.** A column's watch is its pane's `monitor`. The view starts it, as
   `PaneViewController` starts the list pane's. A truncated column, and every column when the pane

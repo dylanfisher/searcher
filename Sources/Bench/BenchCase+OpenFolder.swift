@@ -5,8 +5,8 @@ import Foundation
 extension BenchCase {
     /// Opening a folder through `ListingService`, timed from the request to each update reaching
     /// the main actor: first rows (B2) and the full sorted listing (B5). Also the memory a loaded
-    /// W2 listing holds (B9), and ten W2 loads at once, which is reported only and compared at
-    /// M3.4 when the focused pane's load is requested last.
+    /// W2 listing holds (B9), and ten W2 loads at once, which is reported only. With the focused
+    /// pane's load asked last of the ten, its first rows are held to B2.
     static let openFolder: [BenchCase] = [
         BenchCase(name: "open W1: first rows", budget: budget("B2.W1"), unit: .milliseconds) {
             try await open($0 ?? w1Path).firstRows
@@ -29,6 +29,12 @@ extension BenchCase {
             name: "open W2 ×10 at once: all fully listed", budget: nil, unit: .milliseconds
         ) {
             try await openTen($0 ?? w2Path).reduce(0) { max($0, $1.full) }
+        },
+        BenchCase(
+            name: "open W2 ×10, focused asked last: focused first rows", budget: budget("B2.W2"),
+            unit: .milliseconds
+        ) {
+            try await openTenFocusedLast($0 ?? w2Path).firstRows
         },
     ]
 
@@ -96,34 +102,71 @@ extension BenchCase {
         }
     }
 
+    /// Ten loads of `path` on one service, nine visible panes' and then the focused pane's, each
+    /// timed from the same start. Returns the focused one's times.
+    private static func openTenFocusedLast(_ path: String) async throws -> Opened {
+        let service = ListingService()
+        let start = ContinuousClock.now
+        // Asked one after another, so the focused load is the last in the queue.
+        let loads = (0..<10).map { index in
+            request(path, with: service, priority: index == 9 ? .focused : .visible, from: start)
+        }
+        var opened: [Opened] = []
+        for load in loads {
+            opened.append(try await listed(load))
+        }
+        guard let focused = opened.last else { preconditionFailure("no loads were asked") }
+        return focused
+    }
+
     /// Loads `path` and returns once its full listing reaches the main actor.
     private static func open(
         _ path: String, with service: ListingService = ListingService(),
         from start: ContinuousClock.Instant = .now
     ) async throws -> Opened {
+        try await listed(request(path, with: service, priority: .visible, from: start))
+    }
+
+    /// Asks `service` for a load of `path` and returns at once. The stream gives the load's
+    /// times once its full listing reaches the main actor, or throws its error.
+    private static func request(
+        _ path: String, with service: ListingService, priority: ListingLoad.Priority,
+        from start: ContinuousClock.Instant
+    ) -> AsyncThrowingStream<Opened, any Error> {
+        let (stream, continuation) = AsyncThrowingStream<Opened, any Error>.makeStream()
         let firstRows = FirstRows()
-        return try await withCheckedThrowingContinuation { continuation in
-            service.load(Location(path: path)) { update in
-                let elapsed = milliseconds(.now - start)
-                switch update {
-                case .firstBatch:
-                    firstRows.milliseconds = firstRows.milliseconds ?? elapsed
-                case .slow, .gaveUp:
-                    // The full listing or the failure still follows.
-                    break
-                case .full(let listing, _):
-                    // A folder read in one batch gets no first batch; its rows appear in full.
-                    continuation.resume(
-                        returning: Opened(
-                            firstRows: firstRows.milliseconds ?? elapsed, full: elapsed,
-                            listing: listing))
-                case .cached:
-                    preconditionFailure("the bench's listing service has no cache")
-                case .failed(let error, _), .volumeGone(let error, _):
-                    continuation.resume(throwing: error)
-                }
+        service.load(Location(path: path), priority: priority) { update in
+            let elapsed = milliseconds(.now - start)
+            switch update {
+            case .firstBatch:
+                firstRows.milliseconds = firstRows.milliseconds ?? elapsed
+            case .slow, .gaveUp:
+                // The full listing or the failure still follows.
+                break
+            case .full(let listing, _):
+                // A folder read in one batch gets no first batch; its rows appear in full.
+                continuation.yield(
+                    Opened(
+                        firstRows: firstRows.milliseconds ?? elapsed, full: elapsed,
+                        listing: listing))
+                continuation.finish()
+            case .cached:
+                preconditionFailure("the bench's listing service has no cache")
+            case .failed(let error, _), .volumeGone(let error, _):
+                continuation.finish(throwing: error)
             }
         }
+        return stream
+    }
+
+    /// Waits for the times `request` gives.
+    private static func listed(_ load: AsyncThrowingStream<Opened, any Error>) async throws
+        -> Opened
+    {
+        for try await opened in load {
+            return opened
+        }
+        preconditionFailure("a load's stream finished without its times")
     }
 
     /// One load's times in milliseconds from the request, and its listing.

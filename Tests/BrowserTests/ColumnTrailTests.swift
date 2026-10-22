@@ -230,14 +230,14 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
     try press(KeyChord(.left), on: pane)
 
     #expect(paths(pane) == ["/r", "/r/docs", "/r/docs/sub"])
-    #expect(trail(pane).columns[2].pane.load?.priority == .normal)
+    #expect(trail(pane).columns[2].pane.load?.priority == .visible)
     #expect(trail(pane).columns[0].pane.load?.priority == .focused)
 }
 
 @MainActor @Test func anUnfocusedPanesColumnsLoadAtNormalPriority() async {
     let fixture = await columnPane()
 
-    #expect(trail(fixture.pane).focused.pane.load?.priority == .normal)
+    #expect(trail(fixture.pane).focused.pane.load?.priority == .visible)
 }
 
 @MainActor @Test func switchingBackToListKeepsTheSelectedEntry() async throws {
@@ -528,7 +528,7 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
     pane.didGainFocus()
     select("docs", in: trail(pane).columns[0])
     await settle { trail(pane).columns[1].pane.state.isLoaded }
-    #expect(trail(pane).columns[1].pane.load?.priority == .normal)
+    #expect(trail(pane).columns[1].pane.load?.priority == .visible)
     try press(KeyChord(.right), on: pane)
     try press(KeyChord(.left), on: pane)
     try press(KeyChord(.right), on: pane)
@@ -538,7 +538,7 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
     trail(pane).columns[0].pane.reload()
 
     #expect(trail(pane).columns[1].pane.load?.priority == .focused)
-    #expect(trail(pane).columns[0].pane.load?.priority == .normal)
+    #expect(trail(pane).columns[0].pane.load?.priority == .visible)
 }
 
 @MainActor @Test func aColumnGoesCachedRefreshingThenOfflineLikeAListPane() async {
