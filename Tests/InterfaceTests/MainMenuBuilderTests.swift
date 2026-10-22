@@ -323,7 +323,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
 @MainActor @Test func copyPathRevealAndOpenTerminalHaveItemsWithTheirChords() throws {
     let menu = try buildMenu(try AppCommands.registry())
     let file = try #require(menu.items.first { $0.title == "File" }?.submenu)
-    #expect(file.items.map(\.title) == ["Reveal in Finder", "Open Terminal Here"])
+    #expect(file.items.map(\.title) == ["Reveal in Finder", "Open Terminal Here", "", "Filter"])
     let edit = try #require(menu.items.first { $0.title == "Edit" }?.submenu)
     #expect(edit.items.map(\.title).contains("Copy Path"))
     let table = ListingTableView()
@@ -340,4 +340,18 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
             SystemCommands.copyPath.id, SystemCommands.revealInFinder.id,
             SystemCommands.openTerminal.id,
         ])
+}
+
+@MainActor @Test func fileMenuRunsFilterWithCmdF() throws {
+    let menu = try buildMenu(try AppCommands.registry())
+    let item = try item(for: try keyEvent("f", modifiers: .command), in: menu)
+    #expect(item.title == "Filter")
+    #expect(menu.items.first { $0.title == "File" }?.submenu?.items.contains(item) == true)
+    let table = ListingTableView()
+    let log = CommandLog()
+    table.runCommand = { log.ids.append($0) }
+
+    #expect(table.tryToPerform(try #require(item.action), with: item))
+
+    #expect(log.ids == [ViewCommands.filter.id])
 }

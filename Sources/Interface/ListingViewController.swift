@@ -37,10 +37,10 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// moves: Cmd-A leaves the view where the user scrolled it.
     private var shownCursor: ExactName?
     /// The folder and row order shown. A reload scrolls to the cursor only when it shows a new
-    /// folder or a new sort; a folder change patch leaves the view where the user scrolled it.
+    /// folder, sort or filter; a folder change patch leaves the view where the user scrolled it.
     private var shownLocation: Location?
-    private var shownOrder: (column: SortColumn, ascending: Bool)?
-    /// A new folder or sort is showing and the cursor's row hasn't been scrolled to yet.
+    private var shownOrder: (column: SortColumn, ascending: Bool, filter: NameFilter)?
+    /// A new folder, sort or filter is showing and the cursor's row hasn't been scrolled to yet.
     private var scrollsToCursorAfterReload = false
     /// The modifier keys held in the event being handled, read when a click changes the
     /// selection. Tests replace it.
@@ -122,9 +122,9 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             scrollsToCursorAfterReload = true
         }
         if reloaded, let listing,
-            shownOrder.map({ $0 != (listing.column, listing.ascending) }) ?? true
+            shownOrder.map({ $0 != (listing.column, listing.ascending, listing.filter) }) ?? true
         {
-            shownOrder = (listing.column, listing.ascending)
+            shownOrder = (listing.column, listing.ascending, listing.filter)
             scrollsToCursorAfterReload = true
         }
         let cursorMoved = pane.selection.cursor != shownCursor

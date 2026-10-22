@@ -12,7 +12,8 @@ import os
 /// half the rows, a patch landing after Shift-↓ changed that selection while it ran, a reload
 /// landing after Cmd-A on its first batch, and type-to-select keys (B6), and on W2 a sort column
 /// change, Cmd-Shift-. showing and hiding hidden files, Folders First on and off, and two sort
-/// keys (B8). The stall watchdog's stalls (B10) are collected for the whole launch. It starts the
+/// keys (B8), then the keys of a filter query and the Esc that clears it (B7). The stall
+/// watchdog's stalls (B10) are collected for the whole launch. It starts the
 /// launch warm-up where a normal launch does and waits for it to end before the first span after
 /// launch. It writes the samples to the runner's output file and exits; any failure is printed to
 /// standard error and exits 1.
@@ -35,6 +36,8 @@ final class UIBench {
     static let typeSelectQueries = 2
     /// Keys typed per type-to-select query.
     static let typeSelectLength = 12
+    /// Characters typed into the filter field per launch.
+    static let filterQueryLength = 5
 
     private let options: UIBenchOptions
     /// When the process started, on `FrameCommitTimer`'s clock.
@@ -157,6 +160,7 @@ final class UIBench {
         }
         record.sortChange.append(try await changeSort())
         try await changeViewSettings()
+        record.filterKey += try await typeFilter()
     }
 
     // MARK: Spans
@@ -587,6 +591,8 @@ final class UIBench {
             characters: "6", keyCode: 22, flags: [.control, .option, .command])
         static let sortByName = Key(
             characters: "1", keyCode: 18, flags: [.control, .option, .command])
+        static let commandF = Key(characters: "f", keyCode: 3, flags: .command)
+        static let escape = Key(characters: "\u{1B}", keyCode: 53, flags: [])
 
         /// The character AppKit types for a function key such as `NSDownArrowFunctionKey`.
         private static func function(_ code: Int) -> String {
@@ -727,6 +733,50 @@ final class UIBench {
                     "sort key", from: event.timestamp, check: { $0.sortColumn == column }
                 ) { window.sendEvent(event) })
         }
+    }
+
+    /// Opens the filter field with Cmd-F, types the first `filterQueryLength` characters of the
+    /// middle row's name on W2, then presses Esc, each key timed from its timestamp to the frame
+    /// with the rows filtered by the field's new text, which the pane filters off the main
+    /// thread. Checks that Cmd-F focused the field and Esc gave the focus back to the list.
+    private func typeFilter() async throws -> [Double] {
+        try requireVisible()
+        let pane = try requirePane()
+        let window = try requireWindow()
+        guard let keyView = controller?.paneViewController.keyView,
+            let listing = pane.state.listing, listing.count > 0
+        else { throw Failure("\(pane.location.path) has no rows to filter") }
+        let query = String(listing[listing.count / 2].name.prefix(Self.filterQueryLength))
+        window.sendEvent(try keyEvent(.commandF, in: window))
+        guard (window.firstResponder as? NSTextView)?.isFieldEditor == true else {
+            throw Failure(
+                "Cmd-F left the focus on \(String(describing: window.firstResponder)), not the "
+                    + "filter field")
+        }
+        var samples: [Double] = []
+        for length in 1...query.count {
+            let typed = String(query.prefix(length))
+            let character = typed.suffix(1)
+            let event = try keyEvent(
+                Key(
+                    characters: String(character), keyCode: 0,
+                    flags: character.first?.isUppercase == true ? .shift : []), in: window)
+            samples.append(
+                try await timeViewChange(
+                    "filter key", from: event.timestamp, check: { $0.filter.text == typed }
+                ) { window.sendEvent(event) })
+        }
+        let escape = try keyEvent(.escape, in: window)
+        samples.append(
+            try await timeViewChange(
+                "filter key", from: escape.timestamp, check: { $0.filter.isEmpty }
+            ) { window.sendEvent(escape) })
+        guard window.firstResponder === keyView else {
+            throw Failure(
+                "Esc in the filter field left the focus on "
+                    + "\(String(describing: window.firstResponder)), not the list")
+        }
+        return samples
     }
 
     /// Runs `change` and times it from `start` to the frame that shows the pane's rows in its

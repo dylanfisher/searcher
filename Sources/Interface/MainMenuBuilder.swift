@@ -74,6 +74,9 @@ public enum MainMenuBuilder {
             items: [
                 .command(SystemCommands.revealInFinder.id),
                 .command(SystemCommands.openTerminal.id),
+                .separator,
+                // Where Finder puts Find.
+                .command(ViewCommands.filter.id),
             ]),
         Menu(
             title: "Edit",

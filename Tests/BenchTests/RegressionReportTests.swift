@@ -126,7 +126,8 @@ private func uiRun(keyDown: Double, launches: Int = UIBenchReport.launches) -> U
         sortChange: Array(repeating: 90, count: launches),
         hiddenToggle: Array(repeating: 40, count: 2 * launches),
         foldersFirstToggle: Array(repeating: 40, count: 2 * launches),
-        sortKey: Array(repeating: 60, count: 2 * launches))
+        sortKey: Array(repeating: 60, count: 2 * launches),
+        filterKey: Array(repeating: 20, count: 6 * launches))
 }
 
 /// Judges one CI run per ↓ p95 in order, each against the history the one before it kept, and

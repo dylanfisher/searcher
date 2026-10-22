@@ -9,7 +9,8 @@ import Foundation
 ///
 /// With `foldersFirst`, folders come before every other entry, each group in the column's order.
 /// Without `showsHidden`, hidden entries (`isHidden(_:)`) are kept but have no row, so showing
-/// them again is a sort, not a new listing.
+/// them again is a sort, not a new listing. Entries a non-empty `filter` doesn't match are kept
+/// the same way.
 public struct Listing: Sendable {
     /// The entries in the order they were added, hidden ones included. Rows are indexes into this
     /// array.
@@ -18,6 +19,8 @@ public struct Listing: Sendable {
     public private(set) var ascending = true
     public private(set) var foldersFirst = false
     public private(set) var showsHidden = true
+    /// Names that don't match it have no row.
+    public private(set) var filter = NameFilter()
 
     // Parallel to `entries`.
     private var keys: [NameSortKey]
@@ -46,7 +49,7 @@ public struct Listing: Sendable {
     /// - Precondition: no two entries have the same name.
     public init(
         _ entries: [DirectoryEntry], column: SortColumn = .name, ascending: Bool = true,
-        foldersFirst: Bool = false, showsHidden: Bool = true
+        foldersFirst: Bool = false, showsHidden: Bool = true, filter: NameFilter = NameFilter()
     ) {
         dispatchPrecondition(condition: .notOnQueue(.main))
         precondition(entries.count < Int32.max, "\(entries.count) entries don't fit Int32 indexes")
@@ -58,7 +61,9 @@ public struct Listing: Sendable {
         rows = []
         indexKinds()
         orderNames()
-        sort(by: column, ascending: ascending, foldersFirst: foldersFirst, showsHidden: showsHidden)
+        sort(
+            by: column, ascending: ascending, foldersFirst: foldersFirst, showsHidden: showsHidden,
+            filter: filter)
     }
 
     public var count: Int { rows.count }
@@ -77,7 +82,7 @@ public struct Listing: Sendable {
         foldedNames[Int(rows[row])]
     }
 
-    /// The row of the entry named `name`, or nil if there is none or it is hidden.
+    /// The row of the entry named `name`, or nil if there is none or it has no row.
     public func row(named name: String) -> Int? {
         guard let index = index(named: name, key: NameSortKey(name)).found, isShown(index) else {
             return nil
@@ -139,19 +144,22 @@ public struct Listing: Sendable {
         return added
     }
 
-    /// Puts the shown entries in rows in `column` order, with folders first if `foldersFirst`.
-    /// Sorting by name reuses the name order the listing keeps. Call it off the main thread.
+    /// Puts the shown entries in rows in `column` order, with folders first if `foldersFirst`: the
+    /// hidden ones only if `showsHidden`, and only those whose names `filter` matches. Sorting by
+    /// name reuses the name order the listing keeps. Call it off the main thread.
     public mutating func sort(
-        by column: SortColumn, ascending: Bool, foldersFirst: Bool, showsHidden: Bool
+        by column: SortColumn, ascending: Bool, foldersFirst: Bool, showsHidden: Bool,
+        filter: NameFilter = NameFilter()
     ) {
         dispatchPrecondition(condition: .notOnQueue(.main))
         self.column = column
         self.ascending = ascending
         self.foldersFirst = foldersFirst
         self.showsHidden = showsHidden
+        self.filter = filter
         if column == .name {
             let ordered = ascending ? nameOrder : nameOrder.reversed()
-            guard foldersFirst || !showsHidden else {
+            guard foldersFirst || !showsHidden || !filter.isEmpty else {
                 rows = ordered
                 return
             }
@@ -349,7 +357,8 @@ public struct Listing: Sendable {
 
     /// Whether the entry at `index` has a row.
     private func isShown(_ index: Int) -> Bool {
-        showsHidden || !Self.isHidden(entries[index])
+        (showsHidden || !Self.isHidden(entries[index]))
+            && filter.matches(foldedName: foldedNames[index])
     }
 
     /// The entry at `index`'s group in row order: 0 for a folder when folders come first, else 1.

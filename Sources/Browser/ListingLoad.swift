@@ -14,6 +14,7 @@ public final class ListingLoad: @unchecked Sendable {
     public let ascending: Bool
     public let foldersFirst: Bool
     public let showsHidden: Bool
+    public let filter: NameFilter
     public let priority: Priority
     /// Runs on the load's worker thread for each update, and returns what to run on the main actor
     /// for it.
@@ -24,7 +25,7 @@ public final class ListingLoad: @unchecked Sendable {
 
     init(
         location: Location, column: SortColumn, ascending: Bool, foldersFirst: Bool,
-        showsHidden: Bool, priority: Priority,
+        showsHidden: Bool, filter: NameFilter, priority: Priority,
         handOff: @escaping @Sendable (ListingUpdate) -> @MainActor @Sendable () -> Void
     ) {
         self.location = location
@@ -32,6 +33,7 @@ public final class ListingLoad: @unchecked Sendable {
         self.ascending = ascending
         self.foldersFirst = foldersFirst
         self.showsHidden = showsHidden
+        self.filter = filter
         self.priority = priority
         self.handOff = handOff
     }

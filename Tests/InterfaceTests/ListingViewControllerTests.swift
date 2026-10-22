@@ -552,3 +552,18 @@ private func shownBadge(_ cell: NSTableCellView) -> NSImageView? {
     #expect(shownBadge(name) == nil)
     #expect(name.bounds.width - text.frame.maxX == 2)
 }
+
+@MainActor @Test func aFilterScrollsToTheCursor() async throws {
+    let entries = (0..<2_000).map { file(String(format: "e%04d", $0)) }
+    let controller = await controller(showing: entries)
+    let table = controller.tableView
+    table.scrollRowToVisible(1_900)
+    #expect(!table.visibleRect.intersects(table.rect(ofRow: 0)))
+
+    // Nothing was selected, so the filter selects its first row, "e1000".
+    controller.pane.setFilter("e1")
+    await settle {
+        controller.listing?.count == 1_000 && table.selectedRowIndexes == [0]
+            && table.visibleRect.intersects(table.rect(ofRow: 0))
+    }
+}

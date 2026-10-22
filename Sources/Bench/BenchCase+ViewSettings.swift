@@ -106,7 +106,7 @@ extension BenchCase {
 
     /// Returns once `condition` holds for `pane`, checking after each of its changes.
     @MainActor
-    private static func waitUntil(_ pane: Pane, _ condition: @escaping @MainActor (Pane) -> Bool)
+    static func waitUntil(_ pane: Pane, _ condition: @escaping @MainActor (Pane) -> Bool)
         async
     {
         guard !condition(pane) else { return }
@@ -125,7 +125,7 @@ extension BenchCase {
 
     /// The bench opens nothing.
     @MainActor
-    private final class NoSystemActions: SystemActions {
+    final class NoSystemActions: SystemActions {
         func openFile(_ url: URL) {
             preconditionFailure("the bench asked to open \(url.path)")
         }

@@ -41,6 +41,7 @@ struct UIBenchReport {
             ("W2 Cmd-Shift-. key → frame", "B8", record.hiddenToggle),
             ("W2 folders first → frame", "B8", record.foldersFirstToggle),
             ("W2 sort key → frame", "B8", record.sortKey),
+            ("W2 filter key → frame", "B7", record.filterKey),
         ]
         cases = try spans.map { span in
             guard !span.samples.isEmpty else { throw NoSamples(span: span.name) }

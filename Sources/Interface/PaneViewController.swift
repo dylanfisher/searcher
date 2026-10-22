@@ -4,8 +4,9 @@ import os
 
 /// One pane: its list, with a spinner over it while the folder loads, an explanation with a way to
 /// grant access when the system refused to list the folder, or a line saying why another folder
-/// couldn't be listed, and a path bar under it. Keys and double-clicks in the list run the app's
-/// commands on this pane, and a folder monitor keeps the rows in step with the folder.
+/// couldn't be listed, a path bar under it, and a filter field over it after Cmd-F. Keys and
+/// double-clicks in the list run the app's commands on this pane, and a folder monitor keeps the
+/// rows in step with the folder.
 ///
 /// The list stays in place in every state, so the table keeps keyboard focus while a folder
 /// loads: hiding a first responder would hand focus to the next key view.
@@ -17,6 +18,9 @@ public final class PaneViewController: NSViewController {
     let messageLabel = NSTextField(wrappingLabelWithString: "")
     let accessDeniedView: AccessDeniedView
     let pathBar = PathBarView()
+    let filterBar = FilterBarView()
+    /// The filter bar's height: `FilterBarView.height` while it shows, else 0.
+    private var filterBarHeight: NSLayoutConstraint?
 
     /// Runs after the pane shows a new location, for the window title.
     public var onLocationChange: (@MainActor (Location) -> Void)?
@@ -72,6 +76,18 @@ public final class PaneViewController: NSViewController {
         pathBar.onSelect = { [weak pane] location, child in
             pane?.navigate(to: location, selecting: child)
         }
+        filterBar.isHidden = true
+        filterBar.onChange = { [weak pane] text in pane?.setFilter(text) }
+        filterBar.onArrow = { [weak tableView] chord in
+            guard let tableView, let command = tableView.registry.command(for: chord) else {
+                preconditionFailure("no command is bound to \(chord) for the filter field")
+            }
+            tableView.run(command.id)
+        }
+        filterBar.onCancel = { [weak self] in self?.closeFilter() }
+        filterBar.isFilterChord = { [weak tableView] chord in
+            tableView?.registry.command(for: chord)?.id == ViewCommands.filter.id
+        }
         configureOverlays()
         paneDidChange()
     }
@@ -86,7 +102,7 @@ public final class PaneViewController: NSViewController {
         let list = listingViewController.view
         // Constraints rather than autoresizing: the container starts at zero size, where a list
         // frame 24 points shorter than it can't be set, and autoresizing would keep the error.
-        for view in [list, pathBar] {
+        for view in [filterBar, list, pathBar] {
             view.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(view)
         }
@@ -98,8 +114,14 @@ public final class PaneViewController: NSViewController {
         // As wide as this in a wide pane; the explanation wraps to fit a narrower one.
         let deniedWidth = accessDeniedView.widthAnchor.constraint(equalToConstant: 420)
         deniedWidth.priority = .defaultHigh
+        let filterBarHeight = filterBar.heightAnchor.constraint(equalToConstant: 0)
+        self.filterBarHeight = filterBarHeight
         NSLayoutConstraint.activate([
-            list.topAnchor.constraint(equalTo: container.topAnchor),
+            filterBar.topAnchor.constraint(equalTo: container.topAnchor),
+            filterBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            filterBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            filterBarHeight,
+            list.topAnchor.constraint(equalTo: filterBar.bottomAnchor),
             list.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             list.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             list.bottomAnchor.constraint(equalTo: pathBar.topAnchor),
@@ -151,7 +173,34 @@ public final class PaneViewController: NSViewController {
             toggleQuickLook: { [listingViewController] in
                 listingViewController.quickLook.toggle()
             },
-            askForFolder: { [weak self] in self?.askForFolder() })
+            askForFolder: { [weak self] in self?.askForFolder() },
+            showFilter: { [weak self] in self?.showFilter() })
+    }
+
+    /// Shows the filter field and focuses it, its text selected. Typing then narrows the rows.
+    private func showFilter() {
+        _ = view
+        filterBar.isHidden = false
+        filterBarHeight?.constant = FilterBarView.height
+        // Taking focus selects the field's text, so Cmd-F again starts a new query.
+        view.window?.makeFirstResponder(filterBar.field)
+    }
+
+    /// Esc in the field: clears the filter and hands the focus back to the list.
+    private func closeFilter() {
+        hideFilter()
+        pane.setFilter("")
+    }
+
+    /// Hides the filter field, empty, moving the focus to the list first if the field has it:
+    /// hiding a first responder would hand focus to the next key view.
+    private func hideFilter() {
+        if filterBar.field.currentEditor() != nil {
+            view.window?.makeFirstResponder(listingViewController.tableView)
+        }
+        filterBar.field.stringValue = ""
+        filterBar.isHidden = true
+        filterBarHeight?.constant = 0
     }
 
     /// Shows the Go to folder sheet over the pane's window, unless it is already up.
@@ -177,8 +226,10 @@ public final class PaneViewController: NSViewController {
         if pane.location != monitoredLocation {
             monitoredLocation = pane.location
             listingViewController.tableView.setAccessibilityLabel(pane.location.name)
-            // A query typed in the folder left doesn't carry into this one.
+            // A query typed in the folder left doesn't carry into this one, and the pane cleared
+            // its filter.
             listingViewController.tableView.typeSelect.reset()
+            hideFilter()
             spinner.setAccessibilityLabel("Loading \(pane.location.name)")
             accessDeniedView.folderName = pane.location.name
             startMonitor()
@@ -198,6 +249,12 @@ public final class PaneViewController: NSViewController {
         accessDeniedView.isHidden = true
         messageLabel.isHidden = true
         switch pane.state {
+        case .loaded(let listing) where listing.count == 0 && !listing.filter.isEmpty:
+            // The pane's text as typed: "Port" after "port" folds the same and filters nothing
+            // again, but the message follows the field.
+            let query = listing.filter == pane.filter ? pane.filter.text : listing.filter.text
+            messageLabel.stringValue = "No items match “\(query)”."
+            messageLabel.isHidden = false
         case .loading, .partial, .loaded:
             break
         case .denied:
