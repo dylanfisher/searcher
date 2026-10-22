@@ -687,3 +687,162 @@ private final class HeldLister: Lister, @unchecked Sendable {
     fixture.pane.setSort(.size, ascending: false)
     await settle { fixture.pane.stateVersion > loaded }
 }
+
+#if DEBUG
+    /// A pane at `/wide` over a `StubLister` with files "w0000" up to `count`, loaded.
+    @MainActor
+    private func widePane(_ count: Int) async -> (Pane, StubLister) {
+        let lister = StubLister(["/wide": wideEntries(count)])
+        let pane = Pane(
+            location: Location(path: "/wide"), service: ListingService(lister: lister),
+            systemActions: StubSystemActions())
+        await settle { pane.state.isLoaded }
+        return (pane, lister)
+    }
+
+    private func wideEntries(_ count: Int) -> [DirectoryEntry] {
+        (0..<count).map { file(String(format: "w%04d", $0)) }
+    }
+
+    private func wide(_ row: Int) -> ExactName {
+        ExactName(String(format: "w%04d", row))
+    }
+
+    /// The positive control for the tests below: selecting half the rows by name finds them on the
+    /// main thread, by a walk of every row, and the count shows it.
+    @MainActor @Test func mainSelectionWorkCountsWorkDoneOnTheMainThread() async {
+        let (pane, _) = await widePane(4_000)
+        let work = pane.mainSelectionWork
+
+        pane.select(Selection(Set((0..<2_000).map(wide)), cursor: wide(1_999)))
+
+        #expect(pane.mainSelectionWork - work >= 4_000)
+    }
+
+    enum Worker: Sendable, CaseIterable {
+        case load, patch, sort
+    }
+
+    /// The worker resolves the selection it started with; Shift-↓ replaces it before the result
+    /// lands, and the pane resolves the new one off the main thread too.
+    @MainActor @Test(arguments: Worker.allCases)
+    func aSelectionChangedWhileAWorkerRunsLandsWithNoPerEntryWorkOnTheMainThread(
+        worker: Worker
+    ) async throws {
+        let (pane, lister) = await widePane(4_000)
+        pane.select(Selection(Set((0..<2_000).map(wide)), cursor: wide(1_999)))
+        let work = pane.mainSelectionWork
+        let version = pane.stateVersion
+        let expected: IndexSet
+        switch worker {
+        case .load:
+            // "a-new" sorts first and moves every row down one.
+            lister.set("/wide", to: wideEntries(4_000) + [file("a-new")])
+            pane.reload()
+            expected = IndexSet(1...2_001)
+        case .patch:
+            pane.apply(.patches([.update(file("a-new"))]), at: pane.location)
+            expected = IndexSet(1...2_001)
+        case .sort:
+            // Reversed, "w2000" is row 1999 and "w0000" the last.
+            pane.setSort(.name, ascending: false)
+            expected = IndexSet(1_999..<4_000)
+        }
+
+        // The worker hands its result over on the main queue, so this runs before it lands.
+        pane.moveSelection(by: 1, extending: true)
+        await settle { pane.stateVersion != version }
+        #expect(pane.mainSelectionWork - work < 100)
+
+        let listing = try #require(pane.state.listing)
+        await settle { pane.selection.rows(in: listing) == expected }
+        #expect(pane.selection.contains(wide(2_000)))
+        #expect(pane.mainSelectionWork - work < 100)
+    }
+
+    /// Cmd-A on the first batch selects only the entries it shows; the full listing, which the
+    /// load's worker resolved against the selection from before Cmd-A, lands with no comparison
+    /// of the two listings on the main thread.
+    @MainActor @Test func commandAOnAFirstBatchThenTheFullListingLandsWithNoPerEntryWorkOnMain()
+        async throws
+    {
+        let entries = wideEntries(4_000)
+        let lister = GatedLister([
+            "/wide": .batches([Array(entries[0..<300]), Array(entries[300...])])
+        ])
+        lister.releaseAll()
+        let pane = Pane(
+            location: Location(path: "/wide"), service: ListingService(lister: lister),
+            systemActions: StubSystemActions())
+        var work: Int?
+        pane.onChange = {
+            guard case .partial = pane.state, work == nil else { return }
+            work = pane.mainSelectionWork
+            pane.selectAll()
+        }
+
+        await settle { pane.state.isLoaded }
+        let before = try #require(work)
+        #expect(pane.mainSelectionWork - before < 100)
+
+        // The first batch is the first 200 entries read.
+        let listing = try #require(pane.state.listing)
+        await settle { pane.selection.rows(in: listing) == IndexSet(0..<200) }
+        #expect(!pane.selection.contains(wide(200)))
+        #expect(pane.mainSelectionWork - before < 100)
+    }
+#endif
+
+/// Files "n000" to "n099" in a pane at `/n`, loaded, whose selections settle on a queue the test
+/// holds suspended until it resumes it.
+@MainActor
+private func heldSettlePane() async -> (Pane, StubSystemActions, DispatchQueue) {
+    let actions = StubSystemActions()
+    let pane = Pane(
+        location: Location(path: "/n"),
+        service: ListingService(
+            lister: StubLister(["/n": (0..<100).map { file(String(format: "n%03d", $0)) }])),
+        systemActions: actions)
+    await settle { pane.state.isLoaded }
+    let held = DispatchQueue(label: "held settles")
+    held.suspend()
+    pane.settleQueue = held
+    return (pane, actions, held)
+}
+
+/// A click's settle that started before a patch shifted the rows lands after it. The patch
+/// resolved the selection itself, so the settle, made against the old rows, must not replace it.
+@MainActor @Test func aSettleThatLandsAfterAPatchIsDropped() async throws {
+    let (pane, _, held) = await heldSettlePane()
+    pane.select(rows: IndexSet(0..<50), cursor: ExactName("n049"), anchor: ExactName("n049"))
+    let version = pane.stateVersion
+
+    // "a-new" sorts first and moves every row down one.
+    pane.apply(.patches([.update(file("a-new"))]), at: pane.location)
+    await settle { pane.stateVersion != version }
+    held.resume()
+    // The settle has run and queued its result on the main queue, which then runs it.
+    held.sync {}
+    await drainMainQueue()
+
+    #expect(pane.selection.isSettled)
+    #expect(pane.selection.rows(in: try #require(pane.state.listing)) == IndexSet(1...50))
+    #expect(!pane.selection.contains(ExactName("a-new")))
+}
+
+/// Cmd-A while a patch runs leaves a provisional selection that knows only the rows near the
+/// cursor; Open still hands over every selected file.
+@MainActor @Test func openOnAProvisionalSelectionOpensEverySelectedFile() async throws {
+    let (pane, actions, held) = await heldSettlePane()
+    let version = pane.stateVersion
+
+    pane.apply(.patches([.update(file("a-new"))]), at: pane.location)
+    pane.selectAll()
+    await settle { pane.stateVersion != version }
+    #expect(pane.selection.isProvisional)
+    pane.openSelection()
+    held.resume()
+
+    #expect(actions.openedFiles.count == 100)
+    #expect(!actions.openedFiles.contains { $0.lastPathComponent == "a-new" })
+}

@@ -32,6 +32,10 @@ struct UIBenchReport {
             ("W2 Cmd-A key → frame", "B6", record.selectAll),
             ("W2 patch, all selected → frame", "B6", record.patchAllSelected),
             ("W2 reload landing, all selected → frame", "B6", record.reloadAllSelected),
+            ("W2 patch adding a row, all selected → frame", "B6", record.patchAddingAllSelected),
+            ("W2 click selecting half → frame", "B6", record.clickHalf),
+            ("W2 patch landing after Shift-↓ → frame", "B6", record.patchAfterShiftDown),
+            ("W2 load landing after Cmd-A on first batch → frame", "B6", record.loadAfterSelectAll),
             ("W2 sort change → frame", "B8", record.sortChange),
         ]
         cases = try spans.map { span in

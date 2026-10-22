@@ -30,6 +30,17 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
     /// A reload's complete listing landing with every row selected: start of the main thread's
     /// pass that takes it in → frame with its rows, on W2 (B6).
     public var reloadAllSelected: [Double]
+    /// A patch that adds an entry above most rows landing with every row selected → frame with
+    /// the shifted rows, on W2 (B6).
+    public var patchAddingAllSelected: [Double]
+    /// The selection change of a click selecting half the rows → frame, on W2 (B6).
+    public var clickHalf: [Double]
+    /// A patch landing after Shift-↓ changed a half-row selection while it ran: start of the main
+    /// thread's pass that takes it in → frame, on W2 (B6).
+    public var patchAfterShiftDown: [Double]
+    /// A reload's complete listing landing after Cmd-A on its first batch: start of the main
+    /// thread's pass that takes it in → frame, on W2 (B6).
+    public var loadAfterSelectAll: [Double]
     /// Sort column change → frame with the re-sorted rows, on W2 (B8).
     public var sortChange: [Double]
     /// Every run loop pass over the stall threshold (B10), all launches together.
@@ -55,6 +66,8 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         keyDown: [Double] = [], optionArrows: [Double] = [], controlShiftDown: [Double] = [],
         pageDown: [Double] = [], shiftDown: [Double] = [], selectAll: [Double] = [],
         patchAllSelected: [Double] = [], reloadAllSelected: [Double] = [],
+        patchAddingAllSelected: [Double] = [], clickHalf: [Double] = [],
+        patchAfterShiftDown: [Double] = [], loadAfterSelectAll: [Double] = [],
         sortChange: [Double] = [],
         stalls: [Stall] = []
     ) {
@@ -69,6 +82,10 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         self.selectAll = selectAll
         self.patchAllSelected = patchAllSelected
         self.reloadAllSelected = reloadAllSelected
+        self.patchAddingAllSelected = patchAddingAllSelected
+        self.clickHalf = clickHalf
+        self.patchAfterShiftDown = patchAfterShiftDown
+        self.loadAfterSelectAll = loadAfterSelectAll
         self.sortChange = sortChange
         self.stalls = stalls
     }
@@ -86,6 +103,10 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         selectAll += other.selectAll
         patchAllSelected += other.patchAllSelected
         reloadAllSelected += other.reloadAllSelected
+        patchAddingAllSelected += other.patchAddingAllSelected
+        clickHalf += other.clickHalf
+        patchAfterShiftDown += other.patchAfterShiftDown
+        loadAfterSelectAll += other.loadAfterSelectAll
         sortChange += other.sortChange
         stalls += other.stalls
     }

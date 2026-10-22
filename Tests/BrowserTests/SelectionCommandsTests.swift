@@ -199,39 +199,42 @@ private func wide(_ row: Int) -> ExactName {
     ExactName(String(format: "w%04d", row))
 }
 
-@MainActor @Test func aReloadAfterCommandALandsWithNoSelectionWorkOnTheMainThread() async throws {
-    let (pane, lister) = await widePane(4_000)
-    pane.selectAll()
-    // "a-new" sorts first.
-    lister.set("/wide", to: wideEntries(4_000) + [file("a-new")])
-    let work = pane.mainSelectionWork
+#if DEBUG
+    @MainActor @Test func aReloadAfterCommandALandsWithNoSelectionWorkOnTheMainThread() async throws
+    {
+        let (pane, lister) = await widePane(4_000)
+        pane.selectAll()
+        // "a-new" sorts first.
+        lister.set("/wide", to: wideEntries(4_000) + [file("a-new")])
+        let work = pane.mainSelectionWork
 
-    pane.reload()
-    await settle { pane.state.isLoaded && pane.state.listing?.count == 4_001 }
+        pane.reload()
+        await settle { pane.state.isLoaded && pane.state.listing?.count == 4_001 }
 
-    #expect(pane.mainSelectionWork == work)
-    #expect(!pane.selection.contains(ExactName("a-new")))
-    #expect(pane.selection.members == .allExcept([ExactName("a-new")]))
-    #expect(pane.selection.rows(in: try #require(pane.state.listing)) == IndexSet(1...4_000))
-}
+        #expect(pane.mainSelectionWork == work)
+        #expect(!pane.selection.contains(ExactName("a-new")))
+        #expect(pane.selection.members == .allExcept([ExactName("a-new")]))
+        #expect(pane.selection.rows(in: try #require(pane.state.listing)) == IndexSet(1...4_000))
+    }
 
-@MainActor @Test func aPatchWithHalfTheRowsSelectedByNameLandsWithNoSelectionWorkOnTheMainThread()
-    async throws
-{
-    let (pane, _) = await widePane(4_000)
-    pane.select(
-        Selection(Set((0..<2_000).map(wide)), cursor: wide(1_999)), atRows: IndexSet(0..<2_000))
-    let work = pane.mainSelectionWork
-    let version = pane.stateVersion
+    @MainActor @Test
+    func aPatchWithHalfTheRowsSelectedByNameLandsWithNoSelectionWorkOnTheMainThread()
+        async throws
+    {
+        let (pane, _) = await widePane(4_000)
+        pane.select(rows: IndexSet(0..<2_000), cursor: wide(1_999), anchor: wide(1_999))
+        let work = pane.mainSelectionWork
+        let version = pane.stateVersion
 
-    // "a-new" sorts first and moves every row down one.
-    pane.apply(
-        .patches([.update(file("w0001", size: 9)), .update(file("a-new"))]), at: pane.location)
-    await settle { pane.stateVersion != version }
+        // "a-new" sorts first and moves every row down one.
+        pane.apply(
+            .patches([.update(file("w0001", size: 9)), .update(file("a-new"))]), at: pane.location)
+        await settle { pane.stateVersion != version }
 
-    #expect(pane.mainSelectionWork == work)
-    #expect(pane.selection.rows(in: try #require(pane.state.listing)) == IndexSet(1...2_000))
-}
+        #expect(pane.mainSelectionWork == work)
+        #expect(pane.selection.rows(in: try #require(pane.state.listing)) == IndexSet(1...2_000))
+    }
+#endif
 
 /// The load resolved the selection it started with; the user's ↓ during the load replaced it,
 /// so the pane resolves the new one when the load lands.
@@ -244,7 +247,9 @@ private func wide(_ row: Int) -> ExactName {
     pane.reload()
     // The load hands its listing over on the main queue, so this runs before it lands.
     pane.moveSelection(by: 1)
-    await settle { pane.state.isLoaded && pane.state.listing?.count == 26 }
+    await settle {
+        pane.state.isLoaded && pane.state.listing?.count == 26 && pane.selection.isSettled
+    }
 
     #expect(pane.selection == Selection([wide(5)], cursor: wide(5)))
     #expect(pane.selection.rows(in: try #require(pane.state.listing)) == [6])

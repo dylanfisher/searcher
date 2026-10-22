@@ -171,47 +171,41 @@ private func clickHeader(_ controller: ListingViewController, titled title: Stri
     }
 }
 
-/// Counts the calls that change a table's rows.
-private final class RowChangeCountingTableView: ListingTableView {
+/// Counts the calls to `reloadData`.
+private final class ReloadCountingTableView: ListingTableView {
     var reloads = 0
-    var rowChanges = 0
 
     override func reloadData() {
         reloads += 1
         super.reloadData()
     }
+}
 
-    override func reloadData(forRowIndexes rows: IndexSet, columnIndexes columns: IndexSet) {
-        rowChanges += 1
-        super.reloadData(forRowIndexes: rows, columnIndexes: columns)
-    }
-
-    override func insertRows(at indexes: IndexSet, withAnimation options: AnimationOptions) {
-        rowChanges += 1
-        super.insertRows(at: indexes, withAnimation: options)
-    }
-
-    override func removeRows(at indexes: IndexSet, withAnimation options: AnimationOptions) {
-        rowChanges += 1
-        super.removeRows(at: indexes, withAnimation: options)
-    }
-
-    override func moveRow(at oldIndex: Int, to newIndex: Int) {
-        rowChanges += 1
-        super.moveRow(at: oldIndex, to: newIndex)
+/// The name column's text in the row views the table has made.
+@MainActor
+private func shownNames(_ controller: ListingViewController) -> [String] {
+    let table = controller.tableView
+    return (0..<table.numberOfRows).compactMap { row in
+        let view = table.view(atColumn: 0, row: row, makeIfNecessary: false)
+        return (view as? NSTableCellView)?.textField?.stringValue
     }
 }
 
-@MainActor @Test func newListingReplacesRowsInOneSwapAndKeepsTheSelectionByName() async throws {
-    let table = RowChangeCountingTableView()
+/// `reloadData` would drop the row views and lay out new ones, most of a 23 ms pass on W2.
+@MainActor @Test func aNewListingOfTheFolderRefreshesTheRowsOnScreenAndKeepsTheSelectionByName()
+    async throws
+{
+    let table = ReloadCountingTableView()
     let lister = StubLister([:])
     let controller = await controller(
         showing: [file("a", size: 1), file("b", size: 3), file("c", size: 2)], lister: lister,
         tableView: table)
     try clickHeader(controller, titled: "Size")
     await settle { controller.listing?.column == .size }
+    controller.view.layoutSubtreeIfNeeded()
+    #expect(shownNames(controller) == ["b", "c", "a"])
     table.selectRowIndexes([0], byExtendingSelection: false)
-    #expect(try names(controller)[0] == "b")
+    await settle { controller.pane.selection.isSettled }
     #expect(controller.pane.selection.members == .only([ExactName("b")]))
 
     lister.set(
@@ -221,18 +215,32 @@ private final class RowChangeCountingTableView: ListingTableView {
             file("e", size: 1),
         ])
     table.reloads = 0
-    table.rowChanges = 0
     controller.pane.reload()
     await settle { controller.tableView.numberOfRows == 5 }
+    controller.view.layoutSubtreeIfNeeded()
 
-    #expect(table.reloads == 1)
-    #expect(table.rowChanges == 0)
-    #expect(try names(controller) == ["d", "b", "c", "e", "0"])
+    #expect(table.reloads == 0)
+    #expect(shownNames(controller) == ["d", "b", "c", "e", "0"])
     #expect(controller.tableView.selectedRowIndexes == [1])
 }
 
+/// A new folder's rows have nothing in common with the last one's.
+@MainActor @Test func aNewFolderReloadsTheRows() async throws {
+    let table = ReloadCountingTableView()
+    let lister = StubLister(["/other": [file("x")]])
+    let controller = await controller(showing: [file("a")], lister: lister, tableView: table)
+    table.reloads = 0
+
+    controller.pane.navigate(to: Location(path: "/other"))
+    await settle { controller.pane.state.isLoaded }
+
+    // Once for the loading state, with no rows, and once for the folder's.
+    #expect(table.reloads == 2)
+    #expect(try names(controller) == ["x"])
+}
+
 @MainActor @Test func selectionChangesMoveTheTableSelectionWithoutReloading() async throws {
-    let table = RowChangeCountingTableView()
+    let table = ReloadCountingTableView()
     let controller = await controller(
         showing: [file("a", size: 1), file("b", size: 1)], tableView: table)
     table.reloads = 0
@@ -320,6 +328,7 @@ private final class RowChangeCountingTableView: ListingTableView {
     // A click selects through the table, as `selectRowIndexes` does; the table's last selected
     // row is the cursor.
     table.selectRowIndexes([1, 2], byExtendingSelection: false)
+    await settle { controller.pane.selection.isSettled }
 
     #expect(
         controller.pane.selection
@@ -328,19 +337,40 @@ private final class RowChangeCountingTableView: ListingTableView {
     #expect(table.selectedRowIndexes == [3])
 }
 
-/// The table already has the rows, so the pane takes them without looking any name up.
-@MainActor @Test func aClickSelectingHalfTheRowsLooksNothingUp() async throws {
-    let entries = (0..<4_000).map { file(String(format: "e%04d", $0)) }
-    let controller = await controller(showing: entries)
-    let pane = controller.pane
-    let work = pane.mainSelectionWork
+#if DEBUG
+    /// The table already has the rows, so the pane takes them as they are and names them off the
+    /// main thread.
+    @MainActor @Test func aClickSelectingHalfTheRowsNamesThemOffTheMainThread() async throws {
+        let entries = (0..<4_000).map { file(String(format: "e%04d", $0)) }
+        let controller = await controller(showing: entries)
+        let pane = controller.pane
+        let naming = DispatchQueue(label: "naming")
+        naming.suspend()
+        pane.settleQueue = naming
+        let work = pane.mainSelectionWork
 
-    controller.tableView.selectRowIndexes(IndexSet(0..<2_000), byExtendingSelection: false)
+        controller.tableView.selectRowIndexes(IndexSet(0..<2_000), byExtendingSelection: false)
 
-    #expect(pane.mainSelectionWork == work)
-    #expect(pane.selection.rows(in: try #require(pane.state.listing)) == IndexSet(0..<2_000))
-    #expect(pane.selection.contains(ExactName("e1999")))
-    #expect(!pane.selection.contains(ExactName("e2000")))
+        #expect(pane.mainSelectionWork == work)
+        #expect(!pane.selection.isSettled)
+        #expect(pane.selection.rows(in: try #require(pane.state.listing)) == IndexSet(0..<2_000))
+        #expect(pane.selection.contains(ExactName("e1999")))
+        #expect(!pane.selection.contains(ExactName("e2000")))
+        naming.resume()
+        await settle { pane.selection.isSettled }
+        #expect(
+            pane.selection.members
+                == .only(Set((0..<2_000).map { ExactName(String(format: "e%04d", $0)) })))
+        #expect(pane.mainSelectionWork == work)
+    }
+#endif
+
+/// The inset style's rounded selection updates each changed row's neighbors, 13–16 ms on the
+/// main thread to select 100k rows; the full-width style draws the same selection in 0.2 ms.
+@MainActor @Test func selectedRowsAreHighlightedFullWidth() async {
+    let controller = await controller(showing: [])
+
+    #expect(controller.tableView.style == .fullWidth)
 }
 
 @MainActor @Test func aClickThatSelectsMostRowsNamesTheRowsLeftOut() async throws {
@@ -349,6 +379,7 @@ private final class RowChangeCountingTableView: ListingTableView {
     let table = controller.tableView
 
     table.selectRowIndexes([0, 1, 2, 4], byExtendingSelection: false)
+    await settle { controller.pane.selection.isSettled }
 
     #expect(controller.pane.selection.members == .allExcept([ExactName("d")]))
     #expect(controller.pane.selection.cursor == ExactName("e"))
@@ -365,6 +396,7 @@ private final class RowChangeCountingTableView: ListingTableView {
     // selected, "c", is the cursor.
     controller.currentModifierFlags = { .shift }
     table.selectRowIndexes([1, 2], byExtendingSelection: false)
+    await settle { controller.pane.selection.isSettled }
     #expect(
         controller.pane.selection
             == Selection(
@@ -376,6 +408,7 @@ private final class RowChangeCountingTableView: ListingTableView {
 
     controller.currentModifierFlags = { [] }
     table.selectRowIndexes([4], byExtendingSelection: false)
+    await settle { controller.pane.selection.isSettled }
     #expect(controller.pane.selection == Selection([ExactName("e")], cursor: ExactName("e")))
 }
 

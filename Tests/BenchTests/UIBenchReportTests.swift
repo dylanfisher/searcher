@@ -12,7 +12,11 @@ private func underBudget() -> UIBenchRecord {
         pageDown: Array(repeating: 6, count: 200),
         shiftDown: Array(repeating: 5, count: 200), selectAll: Array(repeating: 6, count: 100),
         patchAllSelected: Array(repeating: 7, count: 100),
-        reloadAllSelected: Array(repeating: 8, count: 20), sortChange: [90, 100], stalls: [])
+        reloadAllSelected: Array(repeating: 8, count: 20),
+        patchAddingAllSelected: Array(repeating: 7, count: 100),
+        clickHalf: Array(repeating: 9, count: 100),
+        patchAfterShiftDown: Array(repeating: 9, count: 100),
+        loadAfterSelectAll: Array(repeating: 9, count: 20), sortChange: [90, 100], stalls: [])
 }
 
 @Test func keyDownUnderB6Passes() throws {
@@ -34,7 +38,7 @@ private func underBudget() -> UIBenchRecord {
     var record = underBudget()
     record.pageDown = Array(repeating: 25, count: 200)
     let report = try UIBenchReport(record: record)
-    #expect(report.cases.filter { $0.budget?.id == "B6" }.count == 8)
+    #expect(report.cases.filter { $0.budget?.id == "B6" }.count == 12)
     #expect(report.overBudget.map(\.name) == ["W2 Fn-↓ key → frame"])
 }
 

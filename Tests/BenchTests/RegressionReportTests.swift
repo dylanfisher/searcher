@@ -118,6 +118,10 @@ private func uiRun(keyDown: Double, launches: Int = UIBenchReport.launches) -> U
         selectAll: Array(repeating: 5, count: 100),
         patchAllSelected: Array(repeating: 5, count: 100),
         reloadAllSelected: Array(repeating: 5, count: 20),
+        patchAddingAllSelected: Array(repeating: 5, count: 100),
+        clickHalf: Array(repeating: 5, count: 100),
+        patchAfterShiftDown: Array(repeating: 5, count: 100),
+        loadAfterSelectAll: Array(repeating: 5, count: 20),
         sortChange: Array(repeating: 90, count: launches))
 }
 

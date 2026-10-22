@@ -3,6 +3,7 @@ import Darwin
 import Foundation
 import TestSupport
 import Testing
+import os
 
 @testable import Browser
 
@@ -125,6 +126,23 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     lister.release(running[0])
     #expect(lister.waitForCalls(5))
     #expect(lister.calls.map(\.path).dropFirst(4).first == focused)
+}
+
+@MainActor @Test func prepareRunsOnTheLoadsWorkerAndNotTheMainThread() async {
+    let lister = GatedLister(["/big": .batches([files("e", 0..<300), files("e", 300..<400)])])
+    lister.release("/big")
+    let service = ListingService(lister: lister)
+    let preparedOnMain = OSAllocatedUnfairLock(initialState: [Bool]())
+    let delivered = OSAllocatedUnfairLock(initialState: 0)
+
+    service.load(
+        Location(path: "/big"),
+        prepare: { _ in preparedOnMain.withLock { $0.append(Thread.isMainThread) } },
+        onUpdate: { _ in delivered.withLock { $0 += 1 } })
+    await settle { delivered.withLock { $0 } == 2 }
+
+    // A first batch and the full listing, each prepared once.
+    #expect(preparedOnMain.withLock { $0 } == [false, false])
 }
 
 @Test func folderReadInOneBatchGetsOneFullUpdate() async {

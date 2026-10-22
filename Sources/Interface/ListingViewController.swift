@@ -91,8 +91,13 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         var reloaded = false
         if shownVersion != pane.stateVersion {
             shownVersion = pane.stateVersion
+            let shown = listing
             listing = pane.state.listing
-            tableView.reloadData()
+            if shown != nil, listing != nil, pane.location == shownLocation {
+                refreshRows()
+            } else {
+                tableView.reloadData()
+            }
             reloaded = true
         }
         let rows = listing.map { pane.selection.rows(in: $0) } ?? []
@@ -123,6 +128,24 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             }
         } else if cursorMoved, let listing, let row = pane.selection.cursorRow(in: listing) {
             tableView.scrollRowToVisible(row)
+        }
+    }
+
+    /// Shows a new listing of the folder on screen, from a patch, a sort or a load, in the row
+    /// views the table has. `reloadData` drops them and lays out a new screen of rows: on W2 in a
+    /// release build that made the pass that lands a patch take about 23 ms, most of it in the
+    /// next layout and drawing.
+    private func refreshRows() {
+        tableView.noteNumberOfRowsChanged()
+        guard let listing else { return }
+        tableView.enumerateAvailableRowViews { rowView, row in
+            guard row < listing.count else { return }
+            for (index, tableColumn) in tableView.tableColumns.enumerated() {
+                guard let cell = rowView.view(atColumn: index) as? NSTableCellView,
+                    let column = SortColumn(identifier: tableColumn.identifier)
+                else { continue }
+                configure(cell, column: column, row: row, in: listing)
+            }
         }
     }
 
@@ -167,6 +190,10 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         // For Shift- and Cmd-clicks, which `tableViewSelectionDidChange` reports to the pane, and
         // for showing the pane's multi-row selections.
         tableView.allowsMultipleSelection = true
+        // The inset style, which `.automatic` picks, rounds a selection's corners where it meets
+        // unselected rows, updating each changed row's neighbors: 13–16 ms on the main thread to
+        // select 100k rows in a release build. Full width draws the same selection in 0.2 ms.
+        tableView.style = .fullWidth
         tableView.usesAlternatingRowBackgroundColors = true
         tableView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         // Set before the delegate, so the first sort doesn't reach `sortDescriptorsDidChange`.
@@ -226,36 +253,17 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// to the pane. Keys never get here: they run the pane's commands. The clicked row becomes the
     /// cursor, or with no click the row the table selected last. A Shift-click keeps the pane's
     /// anchor, so Shift-↑ and Shift-↓ extend from where the range started; any other click puts
-    /// the anchor on the cursor.
+    /// the anchor on the cursor. The pane takes the table's rows as they are and names them off
+    /// the main thread.
     public func tableViewSelectionDidChange(_ notification: Notification) {
         guard !isShowingPane, let listing else { return }
-        let selected = tableView.selectedRowIndexes
-        let members: Selection.Members
-        // With most of the rows selected, such as after a Shift-click from the first row to the
-        // last, naming the rows left out costs less.
-        if selected.count * 2 > listing.count {
-            var left = IndexSet(integersIn: 0..<listing.count)
-            left.subtract(selected)
-            members = .allExcept(Self.names(at: left, in: listing))
-        } else {
-            members = .only(Self.names(at: selected, in: listing))
-        }
         let row =
             (0..<listing.count).contains(tableView.clickedRow)
             ? tableView.clickedRow : tableView.selectedRow
         let cursor = row >= 0 ? ExactName(listing[row].name) : nil
         let anchor =
             currentModifierFlags().contains(.shift) ? pane.selection.anchor ?? cursor : cursor
-        // The table has the rows, so the pane takes them as they are and looks nothing up.
-        pane.select(Selection(members, cursor: cursor, anchor: anchor), atRows: selected)
-    }
-
-    private static func names(at rows: IndexSet, in listing: Listing) -> Set<ExactName> {
-        var names = Set<ExactName>(minimumCapacity: rows.count)
-        for row in rows {
-            names.insert(ExactName(listing[row].name))
-        }
-        return names
+        pane.select(rows: tableView.selectedRowIndexes, cursor: cursor, anchor: anchor)
     }
 
     /// Runs Open on a double-click, as Cmd-↓ does. A row outside the selection is selected first;
@@ -281,6 +289,14 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         let cell =
             tableView.makeView(withIdentifier: identifier, owner: self) as? NSTableCellView
             ?? makeCell(for: column)
+        configure(cell, column: column, row: row, in: listing)
+        return cell
+    }
+
+    /// Shows `row` of `listing` in `cell`, a cell of `column`.
+    private func configure(
+        _ cell: NSTableCellView, column: SortColumn, row: Int, in listing: Listing
+    ) {
         let entry = listing[row]
         let text: String
         switch column {
@@ -295,7 +311,6 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             text = listing.kind(atRow: row).text
         }
         cell.textField?.stringValue = text
-        return cell
     }
 
     /// A cell laid out with frames and autoresizing, which costs less per row than constraints.
