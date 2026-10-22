@@ -438,3 +438,117 @@ private func shownNames(_ controller: ListingViewController) -> [String] {
     // The icon repeats the Kind column, so VoiceOver reads the name alone.
     #expect(name.imageView?.isAccessibilityElement() == false)
 }
+
+private func dataless(_ name: String, size: Int64) -> DirectoryEntry {
+    DirectoryEntry(
+        name: name, type: .regular, size: size, modified: testDate, isHidden: false,
+        isDataless: true)
+}
+
+/// The not-downloaded badge in a name cell, or nil when the cell shows none.
+@MainActor
+private func shownBadge(_ cell: NSTableCellView) -> NSImageView? {
+    let badge = cell.subviews.first {
+        $0.identifier == ListingViewController.notDownloadedBadgeIdentifier
+    }
+    guard let badge = badge as? NSImageView, !badge.isHidden else { return nil }
+    return badge
+}
+
+@MainActor @Test func aDatalessEntryShowsTheCloudBadgeOnItsRowOnly() async throws {
+    let iconCache = TypeIconCache()
+    let controller = await controller(
+        showing: [file("a.mp3", size: 1), dataless("b.mp3", size: 4_000_000), folder("c")],
+        iconCache: iconCache)
+
+    let names = try (0..<3).map { try cell(controller, row: $0, column: 0) }
+    #expect(shownBadge(names[0]) == nil)
+    #expect(shownBadge(names[2]) == nil)
+    let badge = try #require(shownBadge(names[1]))
+    #expect(badge.image === iconCache.notDownloadedBadge)
+    // The name ends before the badge starts.
+    let text = try #require(names[1].textField)
+    #expect(text.frame.maxX <= badge.frame.minX)
+    // VoiceOver reads the badge after the name.
+    #expect(badge.isAccessibilityElement())
+    #expect(badge.accessibilityLabel() == ListingViewController.notDownloadedLabel)
+    #expect(ListingViewController.notDownloadedLabel == "Not downloaded")
+    // The size is the file's logical size, not the nothing it takes on disk.
+    #expect(try cellText(controller)[1][1] == "4 MB")
+}
+
+/// A dataless file's icon comes from its type, as any file's does, so showing it reads nothing
+/// from the file.
+@MainActor @Test func aDatalessFileHasItsTypesIconAndNoIconIsMadeForIt() async throws {
+    let maker = IconMaker()
+    let controller = await controller(
+        showing: [file("a.mp3", size: 1), dataless("b.mp3", size: 2)],
+        iconCache: TypeIconCache(makeIcon: maker.icon(for:)))
+
+    let icons = try (0..<2).map {
+        try #require(cell(controller, row: $0, column: 0).imageView?.image)
+    }
+    #expect(icons[0] === icons[1])
+    #expect(maker.calls == [.mp3: 1])
+}
+
+/// A row view refilled in place drops the badge when its new entry is downloaded, and shows it
+/// when its new entry isn't.
+@MainActor @Test func refreshedRowsShowTheBadgeOfTheirNewEntry() async throws {
+    let lister = StubLister([:])
+    let controller = await controller(
+        showing: [dataless("a", size: 1), file("b", size: 2)], lister: lister)
+    controller.view.layoutSubtreeIfNeeded()
+    let table = controller.tableView
+    func nameCells() throws -> [NSTableCellView] {
+        try (0..<table.numberOfRows).map { row in
+            try #require(
+                table.view(atColumn: 0, row: row, makeIfNecessary: false) as? NSTableCellView)
+        }
+    }
+    let before = try nameCells()
+    #expect(before.map { shownBadge($0) != nil } == [true, false])
+
+    lister.set("/folder", to: [file("a", size: 1), dataless("b", size: 2)])
+    controller.pane.reload()
+    await settle { controller.listing?[0].isDataless == false }
+    controller.view.layoutSubtreeIfNeeded()
+
+    let after = try nameCells()
+    #expect(after[0] === before[0] && after[1] === before[1])
+    #expect(after.map { shownBadge($0) != nil } == [false, true])
+    // A name without a badge takes the badge's room back.
+    let widths = try after.map { try #require($0.textField).frame.width }
+    #expect(widths[0] > widths[1])
+}
+
+/// Narrowing the Name column below the name's width with the badge, then widening it, leaves the
+/// name, the gap and the badge as they were, and a downloaded entry shown in the cell later ends
+/// at the cell's padding.
+@MainActor @Test func aBadgedNameKeepsItsGapThroughAColumnResizeAndReuse() async throws {
+    let lister = StubLister([:])
+    let controller = await controller(
+        showing: [dataless("a", size: 1), file("b", size: 2)], lister: lister)
+    let table = controller.tableView
+    controller.view.layoutSubtreeIfNeeded()
+    let nameColumn = table.tableColumns[0]
+    let width = nameColumn.width
+    nameColumn.width = nameColumn.minWidth
+    controller.view.layoutSubtreeIfNeeded()
+    nameColumn.width = width
+    controller.view.layoutSubtreeIfNeeded()
+
+    let name = try #require(
+        table.view(atColumn: 0, row: 0, makeIfNecessary: false) as? NSTableCellView)
+    let text = try #require(name.textField)
+    let badge = try #require(shownBadge(name))
+    #expect(badge.frame.minX - text.frame.maxX == 4)
+
+    lister.set("/folder", to: [file("a", size: 1), file("b", size: 2)])
+    controller.pane.reload()
+    await settle { controller.listing?[0].isDataless == false }
+    controller.view.layoutSubtreeIfNeeded()
+
+    #expect(shownBadge(name) == nil)
+    #expect(name.bounds.width - text.frame.maxX == 2)
+}

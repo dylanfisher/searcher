@@ -1,9 +1,9 @@
 import AppKit
 import Browser
 
-/// A pane's entries in a view-based table: name with its type's icon, size, date modified and
-/// kind. A header click sorts the pane by that column and a second click reverses it; the user can
-/// resize and reorder the columns. The pane owns the sort and the selection; the table shows them
+/// A pane's entries in a view-based table: name with its type's icon, and a cloud badge when the
+/// entry isn't downloaded; size, date modified and kind. A header click sorts the pane by that
+/// column and a second click reverses it; the user can resize and reorder the columns. The pane owns the sort and the selection; the table shows them
 /// and reports the user's changes back (0017-list-view-columns.md).
 ///
 /// Everything it shows comes from the pane's `Listing` and the icon cache, so it makes no
@@ -12,6 +12,11 @@ import Browser
 public final class ListingViewController: NSViewController, NSTableViewDataSource,
     NSTableViewDelegate
 {
+    /// What VoiceOver reads for the badge on an entry whose contents aren't on this Mac.
+    static let notDownloadedLabel = "Not downloaded"
+    /// The name cell's badge view, shown only for an entry that isn't downloaded.
+    static let notDownloadedBadgeIdentifier = NSUserInterfaceItemIdentifier("notDownloadedBadge")
+
     let tableView: ListingTableView
     public let pane: Pane
 
@@ -303,6 +308,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         case .name:
             text = entry.name
             cell.imageView?.image = iconCache.icon(for: listing.kind(atRow: row).type)
+            showNotDownloadedBadge(entry.isDataless, in: cell)
         case .size:
             text = formatter.size(entry)
         case .dateModified:
@@ -312,6 +318,58 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         }
         cell.textField?.stringValue = text
     }
+
+    /// Shows or hides the name cell's badge and fits the name to it. A cell the table reuses, or a
+    /// row refilled in place, may have shown another entry's badge.
+    private func showNotDownloadedBadge(_ shown: Bool, in cell: NSTableCellView) {
+        let badge = Self.badge(in: cell)
+        if shown, badge.image == nil {
+            badge.image = iconCache.notDownloadedBadge
+        }
+        badge.isHidden = !shown
+        Self.fitName(in: cell)
+    }
+
+    /// Sets the name's width from the cell's: up to the badge when it shows, else up to the
+    /// trailing padding. Set outright, since autoresizing clamps a width at zero in a column
+    /// narrower than the name and the badge, and widening the column doesn't give that back.
+    private static func fitName(in cell: NSTableCellView) {
+        let badge = badge(in: cell)
+        guard let textField = cell.textField else {
+            preconditionFailure("the name cell has no text field: \(cell.subviews)")
+        }
+        let end = badge.isHidden ? cell.bounds.width - 2 : badge.frame.minX - badgeGap
+        let width = max(end - textField.frame.minX, 0)
+        if textField.frame.width != width {
+            textField.frame.size.width = width
+        }
+    }
+
+    private static func badge(in cell: NSTableCellView) -> NSImageView {
+        guard
+            let badge = cell.subviews.first(where: {
+                $0.identifier == notDownloadedBadgeIdentifier
+            }) as? NSImageView
+        else {
+            preconditionFailure("the name cell has no badge view: \(cell.subviews)")
+        }
+        return badge
+    }
+
+    /// Fits the names on screen to a Name column the user or the window resized.
+    public func tableViewColumnDidResize(_ notification: Notification) {
+        guard let column = notification.userInfo?["NSTableColumn"] as? NSTableColumn,
+            column.identifier == SortColumn.name.identifier
+        else { return }
+        let index = tableView.column(withIdentifier: column.identifier)
+        tableView.enumerateAvailableRowViews { rowView, _ in
+            guard let cell = rowView.view(atColumn: index) as? NSTableCellView else { return }
+            Self.fitName(in: cell)
+        }
+    }
+
+    /// The space between a name and its badge.
+    private static let badgeGap = 4.0
 
     /// A cell laid out with frames and autoresizing, which costs less per row than constraints.
     private func makeCell(for column: SortColumn) -> NSTableCellView {
@@ -341,6 +399,23 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         textField.autoresizingMask = [.width, .minYMargin, .maxYMargin]
         cell.addSubview(textField)
         cell.textField = textField
+        if column == .name {
+            // At the cell's trailing edge, as Finder draws it. Hidden until an entry needs it;
+            // a hidden view is no accessibility element, so VoiceOver reads it only when shown.
+            let badgeSize = 16.0
+            let badge = NSImageView(
+                frame: NSRect(
+                    x: column.width - 2 - badgeSize, y: (height - badgeSize) / 2,
+                    width: badgeSize, height: badgeSize))
+            badge.identifier = Self.notDownloadedBadgeIdentifier
+            badge.imageScaling = .scaleProportionallyUpOrDown
+            badge.contentTintColor = .secondaryLabelColor
+            badge.autoresizingMask = [.minXMargin, .minYMargin, .maxYMargin]
+            badge.setAccessibilityElement(true)
+            badge.setAccessibilityLabel(Self.notDownloadedLabel)
+            badge.isHidden = true
+            cell.addSubview(badge)
+        }
         return cell
     }
 }
