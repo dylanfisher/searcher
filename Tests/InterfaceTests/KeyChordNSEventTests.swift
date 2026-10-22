@@ -54,6 +54,18 @@ let arrowFlags: NSEvent.ModifierFlags = [.numericPad, .function]
     }
 }
 
+/// Fn-↑ and Fn-↓ on a laptop, and the Page Up and Page Down keys on a full keyboard.
+@MainActor @Test func pageKeysMapToPageUpAndPageDown() throws {
+    let pageDown = try KeyChord(
+        event: keyEvent(functionKey(NSPageDownFunctionKey), modifiers: .function))
+    let pageUp = try KeyChord(
+        event: keyEvent(functionKey(NSPageUpFunctionKey), modifiers: .function))
+
+    #expect(pageDown == KeyChord(.pageDown))
+    #expect(pageUp == KeyChord(.pageUp))
+    #expect(pageDown?.description == "Page Down")
+}
+
 @MainActor @Test func shiftedLetterIsTheLowercaseLetterWithShift() throws {
     let chord = try KeyChord(event: keyEvent("G", modifiers: [.command, .shift]))
     #expect(chord == KeyChord("g", modifiers: [.command, .shift]))
@@ -83,10 +95,9 @@ let arrowFlags: NSEvent.ModifierFlags = [.numericPad, .function]
 }
 
 @MainActor @Test func keysWithoutAChordSpellingGiveNil() throws {
-    // Keypad Enter, backspace, F1, Page Down, forward delete, and a dead key that typed nothing.
+    // Keypad Enter, backspace, F1, forward delete, and a dead key that typed nothing.
     let unmapped = [
-        "\u{03}", "\u{08}", functionKey(NSF1FunctionKey), functionKey(NSPageDownFunctionKey),
-        functionKey(NSDeleteFunctionKey), "",
+        "\u{03}", "\u{08}", functionKey(NSF1FunctionKey), functionKey(NSDeleteFunctionKey), "",
     ]
     for characters in unmapped {
         #expect(
@@ -102,7 +113,7 @@ let arrowFlags: NSEvent.ModifierFlags = [.numericPad, .function]
         KeyChord("g", modifiers: [.command, .shift]),
         KeyChord("1", modifiers: [.control, .option, .command]),
         KeyChord(.return, modifiers: .command), KeyChord(.tab), KeyChord(.space),
-        KeyChord(.escape),
+        KeyChord(.escape), KeyChord(.pageDown), KeyChord(.pageUp, modifiers: .shift),
     ]
     for chord in chords {
         let event = try keyEvent(

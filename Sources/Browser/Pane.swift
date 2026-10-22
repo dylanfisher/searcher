@@ -16,9 +16,22 @@ public final class Pane {
     public private(set) var stateVersion = 0
     public private(set) var sortColumn: SortColumn
     public private(set) var sortAscending: Bool
-    /// The selected entries' names. Names the listing doesn't have are dropped when a load
-    /// finishes, not before, so a name set before the rows arrive survives the partial listing.
-    public private(set) var selection: Set<ExactName> = []
+    /// The selected entries' names, the cursor and the anchor. Names the listing doesn't have are
+    /// dropped when a load finishes, not before, so a name set before the rows arrive survives
+    /// the partial listing.
+    public private(set) var selection = Selection()
+    /// Goes up each time the selection changes, other than by being resolved against a new
+    /// listing. A load, patch or sort resolves a copy of the selection off the main thread, and
+    /// the pane takes that copy only if this hasn't moved since the copy was made.
+    private var selectionVersion = 0
+    #if DEBUG
+        /// The per-entry work selection code has done on the main thread, as `Selection.work`
+        /// counts it. Debug builds only.
+        private(set) var mainSelectionWork = 0
+    #endif
+    /// How many whole rows the pane's view shows, set by the view when its size changes. Page Up
+    /// and Page Down move this many.
+    public var visibleRowCount = 0
     /// The name of the volume mounted at `/`, from the last listing update; nil until the first.
     public private(set) var rootVolumeName: String?
 
@@ -74,8 +87,9 @@ public final class Pane {
         waitingPatches = []
         relistAfterLoad = false
         self.location = location
-        state = .loading
-        selection = name.map { [ExactName($0)] } ?? []
+        selection = name.map { Selection([ExactName($0)], cursor: ExactName($0)) } ?? Selection()
+        selectionVersion += 1
+        show(.loading, after: .loaded(complete: false))
         startLoad()
         onChange?()
     }
@@ -85,8 +99,7 @@ public final class Pane {
     /// it points at a folder takes a file-system call, and the system resolves it.
     public func openSelection() {
         guard let listing = state.listing else { return }
-        let entries = selection.compactMap { listing.row(named: $0.name) }.sorted()
-            .map { listing[$0] }
+        let entries = selection.rows(in: listing).map { listing[$0] }
         if entries.count == 1, entries[0].type == .directory {
             navigate(to: location.child(named: entries[0].name))
             return
@@ -160,16 +173,32 @@ public final class Pane {
         waitingPatches = []
         patchIsRunning = true
         let version = stateVersion
+        let selection = selection
+        let selectionVersion = selectionVersion
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let original = listing
             var listing = listing
+            // Entries the listing didn't have, which a selection made by Select All must not take
+            // in. A name removed and written again in one batch is the same file name, so it
+            // stays selected, as it does in a selection by name.
+            var added: [String] = []
             for patch in patches {
                 switch patch {
-                case .update(let entry): listing.update(entry)
-                case .remove(let name): listing.remove(named: name)
+                case .update(let entry):
+                    if original.row(named: entry.name) == nil { added.append(entry.name) }
+                    listing.update(entry)
+                case .remove(let name):
+                    listing.remove(named: name)
                 }
             }
+            let change = Selection.Change.patched(added: added)
+            let resolved = selection.resolved(in: listing, after: change)
             DispatchQueue.main.async {
-                MainActor.assumeIsolated { self?.finishPatch(listing, from: version) }
+                MainActor.assumeIsolated {
+                    self?.finishPatch(
+                        listing, after: change, from: version,
+                        resolved: resolved, from: selectionVersion)
+                }
             }
         }
     }
@@ -184,7 +213,10 @@ public final class Pane {
         }
     }
 
-    private func finishPatch(_ listing: Listing, from version: Int) {
+    private func finishPatch(
+        _ listing: Listing, after change: Selection.Change, from version: Int,
+        resolved: Selection, from selectionVersion: Int
+    ) {
         patchIsRunning = false
         guard version == stateVersion else {
             // A load, a sort change or a navigation replaced the rows the patch started from, so
@@ -193,8 +225,7 @@ public final class Pane {
             relist()
             return
         }
-        selection = selection.filter { listing.row(named: $0.name) != nil }
-        state = .loaded(listing)
+        show(.loaded(listing), after: change, resolved: resolved, from: selectionVersion)
         startSortIfNeeded()
         onChange?()
         startPatch()
@@ -219,11 +250,17 @@ public final class Pane {
         let version = stateVersion
         let column = sortColumn
         let ascending = sortAscending
+        let selection = selection
+        let selectionVersion = selectionVersion
         sortQueue.async { [weak self] in
             var listing = listing
             listing.sort(by: column, ascending: ascending)
+            let resolved = selection.resolved(in: listing, after: .sameEntries)
             DispatchQueue.main.async {
-                MainActor.assumeIsolated { self?.finishSort(listing, from: version) }
+                MainActor.assumeIsolated {
+                    self?.finishSort(
+                        listing, from: version, resolved: resolved, from: selectionVersion)
+                }
             }
         }
     }
@@ -232,47 +269,81 @@ public final class Pane {
     /// changed them started its own sort when it needed one, so the last request wins and a
     /// load that landed meanwhile is kept. The selection is names, so it follows its entries to
     /// their new rows. Patches that waited for the sort are then applied to the rows shown.
-    private func finishSort(_ listing: Listing, from version: Int) {
+    private func finishSort(
+        _ listing: Listing, from version: Int, resolved: Selection, from selectionVersion: Int
+    ) {
         runningSorts -= 1
         defer { startPatch() }
         guard version == stateVersion, listing.column == sortColumn,
             listing.ascending == sortAscending
         else { return }
         switch state {
-        case .partial: state = .partial(listing)
-        case .loaded: state = .loaded(listing)
+        case .partial:
+            show(
+                .partial(listing), after: .sameEntries, resolved: resolved,
+                from: selectionVersion)
+        case .loaded:
+            show(
+                .loaded(listing), after: .sameEntries, resolved: resolved, from: selectionVersion
+            )
         case .loading, .denied, .failed:
             preconditionFailure("the state has no rows but kept the version a sort started from")
         }
         onChange?()
     }
 
+    /// Starts a load whose worker also resolves the selection, as it is now, against each listing
+    /// it hands over.
     private func startLoad() {
         load?.cancel()
         loadIsRunning = true
+        let selection = selection
+        let selectionVersion = selectionVersion
         load = service.load(
             location, sortedBy: sortColumn, ascending: sortAscending,
-            priority: isFocused ? .focused : .normal
-        ) { [weak self] update in
-            self?.receive(update)
-        }
+            priority: isFocused ? .focused : .normal,
+            prepare: { update in
+                switch update {
+                case .firstBatch(let listing, _):
+                    (update, selection.resolved(in: listing, after: .loaded(complete: false)))
+                case .full(let listing, _):
+                    (update, selection.resolved(in: listing, after: .loaded(complete: true)))
+                case .failed:
+                    (update, Selection?.none)
+                }
+            },
+            onUpdate: { [weak self] prepared in
+                self?.receive(prepared.0, resolved: prepared.1, from: selectionVersion)
+            })
     }
 
     /// Updates of a cancelled load never get here, so each one belongs to the current location.
-    private func receive(_ update: ListingUpdate) {
+    /// `resolved` is the selection at `selectionVersion`, resolved against the update's listing.
+    ///
+    /// Only a change by the user makes the pane resolve again here. A patch that landed during the
+    /// load also changed the selection, by resolving it, but such a patch makes the pane list the
+    /// folder again once this load ends, and that load starts from the selection the patch left.
+    private func receive(
+        _ update: ListingUpdate, resolved: Selection?, from selectionVersion: Int
+    ) {
         switch update {
         case .firstBatch(let listing, let rootVolumeName):
             self.rootVolumeName = rootVolumeName
-            state = .partial(listing)
+            show(
+                .partial(listing), after: .loaded(complete: false), resolved: resolved,
+                from: selectionVersion)
         case .full(let listing, let rootVolumeName):
             self.rootVolumeName = rootVolumeName
             loadIsRunning = false
-            selection = selection.filter { listing.row(named: $0.name) != nil }
-            state = .loaded(listing)
+            show(
+                .loaded(listing), after: .loaded(complete: true), resolved: resolved,
+                from: selectionVersion)
         case .failed(let error, let rootVolumeName):
             self.rootVolumeName = rootVolumeName
             loadIsRunning = false
-            state = error.reason == .privacyProtected ? .denied(error) : .failed(error)
+            show(
+                error.reason == .privacyProtected ? .denied(error) : .failed(error),
+                after: .loaded(complete: true))
         }
         // A load that started before `setSort` arrives in the old sort, and shows in it until
         // this sort lands.
@@ -286,27 +357,87 @@ public final class Pane {
 
     // MARK: - Selection
 
-    public func select(_ names: Set<ExactName>) {
-        guard names != selection else { return }
-        selection = names
+    /// Selects what `selection` names, finding its rows in the listing shown.
+    public func select(_ selection: Selection) {
+        set(onMain { selection.resolved(in: state.listing, after: .sameEntries) })
+    }
+
+    /// Selects `selection`, whose rows in the listing shown are `rows`, as a click in the table
+    /// gives them; nothing is looked up.
+    public func select(_ selection: Selection, atRows rows: IndexSet) {
+        guard let listing = state.listing else {
+            preconditionFailure("rows \(rows) were selected with no listing shown")
+        }
+        set(selection.resolved(toRows: rows, in: listing))
+    }
+
+    /// Takes a selection already resolved against the listing shown.
+    private func set(_ selection: Selection) {
+        guard selection != self.selection else { return }
+        self.selection = selection
+        selectionVersion += 1
         onChange?()
     }
 
-    /// Moves a single selected row by `delta` rows, stopping at the first and last. With nothing
-    /// selected, selects the first row going down and the last going up. Does nothing with
-    /// several rows selected, or with a selected name the listing doesn't have yet.
-    public func moveSelection(by delta: Int) {
-        guard let listing = state.listing, listing.count > 0 else { return }
-        let row: Int
-        if selection.isEmpty {
-            row = delta > 0 ? 0 : listing.count - 1
-        } else if selection.count == 1, let only = selection.first,
-            let current = listing.row(named: only.name)
-        {
-            row = min(max(current + delta, 0), listing.count - 1)
-        } else {
+    /// Shows `state`, finding the selection's rows in its listing, which replaced the last one by
+    /// `change`, on the main thread.
+    private func show(_ state: ListingState, after change: Selection.Change) {
+        self.state = state
+        selection = onMain { selection.resolved(in: state.listing, after: change) }
+    }
+
+    /// Shows `state` with `resolved`, the selection at `version` resolved off the main thread
+    /// against its listing, if the selection hasn't changed since. Otherwise resolves it here.
+    private func show(
+        _ state: ListingState, after change: Selection.Change, resolved: Selection?,
+        from version: Int
+    ) {
+        guard let resolved, version == selectionVersion else {
+            show(state, after: change)
             return
         }
-        select([ExactName(listing[row].name)])
+        self.state = state
+        selection = resolved
+    }
+
+    /// Runs selection work on the main thread, adding what it does per entry to
+    /// `mainSelectionWork` in a debug build.
+    private func onMain(_ work: () -> Selection) -> Selection {
+        #if DEBUG
+            let count = Selection.WorkCount()
+            defer { mainSelectionWork += count.count }
+            return Selection.$work.withValue(count, operation: work)
+        #else
+            return work()
+        #endif
+    }
+
+    /// Moves the cursor `delta` rows, stopping at the first and last row; see `Selection.moved`.
+    /// A plain move selects the cursor's row alone; an extending one selects from the anchor.
+    public func moveSelection(by delta: Int, extending: Bool = false) {
+        guard let listing = state.listing else { return }
+        set(onMain { selection.moved(by: delta, in: listing, extending: extending) })
+    }
+
+    /// Moves the cursor `pages` screens of rows, `visibleRowCount` rows each.
+    public func moveSelection(byPages pages: Int) {
+        // A pane squeezed below one row's height still moves a row per page.
+        moveSelection(by: pages * max(visibleRowCount, 1))
+    }
+
+    public func selectFirstRow() {
+        guard let listing = state.listing else { return }
+        set(onMain { selection.moved(toRow: 0, in: listing, extending: false) })
+    }
+
+    public func selectLastRow() {
+        guard let listing = state.listing else { return }
+        set(onMain { selection.moved(toRow: listing.count - 1, in: listing, extending: false) })
+    }
+
+    /// Selects every row shown, keeping the cursor and anchor where they were.
+    public func selectAll() {
+        guard let listing = state.listing else { return }
+        set(onMain { selection.all(in: listing) })
     }
 }

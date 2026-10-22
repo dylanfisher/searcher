@@ -25,6 +25,13 @@ struct UIBenchReport {
             ("open W1 → first rows frame", "B2.W1", record.openW1),
             ("open W2 → first rows frame", "B2.W2", record.openW2),
             ("W2 ↓ key → frame", "B6", record.keyDown),
+            ("W2 Opt-↓/↑ key → frame", "B6", record.optionArrows),
+            ("W2 Ctrl-Shift-↓ key → frame", "B6", record.controlShiftDown),
+            ("W2 Fn-↓ key → frame", "B6", record.pageDown),
+            ("W2 Shift-↓ key → frame", "B6", record.shiftDown),
+            ("W2 Cmd-A key → frame", "B6", record.selectAll),
+            ("W2 patch, all selected → frame", "B6", record.patchAllSelected),
+            ("W2 reload landing, all selected → frame", "B6", record.reloadAllSelected),
             ("W2 sort change → frame", "B8", record.sortChange),
         ]
         cases = try spans.map { span in

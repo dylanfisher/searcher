@@ -98,7 +98,7 @@ private struct Fixture {
 @MainActor @Test func doubleClickOutsideTheRowsOpensNothing() async throws {
     let fixture = Fixture()
     await settle { fixture.pane.state.isLoaded }
-    fixture.pane.select([ExactName("docs")])
+    fixture.pane.select(Selection([ExactName("docs")], cursor: ExactName("docs")))
     fixture.table.row = -1
 
     let action = try #require(fixture.table.doubleAction)
@@ -115,7 +115,7 @@ private struct Fixture {
     fixture.table.keyDown(with: down)
     fixture.table.keyDown(with: down)
 
-    #expect(fixture.pane.selection == [ExactName("b.txt")])
+    #expect(fixture.pane.selection.members == .only([ExactName("b.txt")]))
     #expect(fixture.table.selectedRowIndexes == [1])
 }
 
@@ -123,7 +123,7 @@ private struct Fixture {
     let fixture = Fixture()
     await settle { fixture.pane.state.isLoaded }
     fixture.table.selectRowIndexes([2], byExtendingSelection: false)
-    #expect(fixture.pane.selection == [ExactName("docs")])
+    #expect(fixture.pane.selection.members == .only([ExactName("docs")]))
 
     fixture.table.keyDown(
         with: try keyEvent(
@@ -205,7 +205,7 @@ private final class VolumeName: @unchecked Sendable {
 
     #expect(fixture.pane.location == Location(path: "/root"))
     await settle { fixture.pane.state.isLoaded }
-    #expect(fixture.pane.selection == [ExactName("docs")])
+    #expect(fixture.pane.selection.members == .only([ExactName("docs")]))
     #expect(fixture.table.selectedRowIndexes == [2])
 }
 

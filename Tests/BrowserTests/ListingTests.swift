@@ -255,3 +255,18 @@ func updateKeepsOrder(column: SortColumn, ascending: Bool) {
         #expect(listing.row(named: "missing") == nil)
     }
 }
+
+@Test func namesNotInAnotherListingAreTheOnesItAdds() {
+    // Composed and decomposed é have the same sort key and different bytes.
+    let old = Listing([file("a"), file("b"), file("d"), file("\u{e9}")])
+    let new = sorted(
+        [file("e\u{301}"), file("d", size: 5), file("c"), file("a"), file("\u{e9}"), file("z")],
+        .size)
+
+    // Compared as bytes, since `String` equality treats the two é as one.
+    #expect(
+        Set(new.names(notIn: old).map { Array($0.utf8) })
+            == Set(["c", "e\u{301}", "z"].map { Array($0.utf8) }))
+    #expect(old.names(notIn: new) == ["b"])
+    #expect(new.names(notIn: new).isEmpty)
+}

@@ -2,8 +2,8 @@ import AppKit
 import Browser
 
 extension KeyChord {
-    /// The chord a key event spells, or nil for a key `KeyChord.Key` has no case for (Page Up and
-    /// Down, F-keys, forward delete, keypad Enter, backspace) or a dead key that typed nothing.
+    /// The chord a key event spells, or nil for a key `KeyChord.Key` has no case for (Home and End,
+    /// F-keys, forward delete, keypad Enter, backspace) or a dead key that typed nothing.
     ///
     /// `charactersIgnoringModifiers` still applies Shift and Caps Lock, so a letter is lowercased
     /// and Shift is kept as a modifier. Whitespace and control characters become the named keys
@@ -31,6 +31,8 @@ extension KeyChord {
         case .down: Self.functionKey(NSDownArrowFunctionKey)
         case .left: Self.functionKey(NSLeftArrowFunctionKey)
         case .right: Self.functionKey(NSRightArrowFunctionKey)
+        case .pageUp: Self.functionKey(NSPageUpFunctionKey)
+        case .pageDown: Self.functionKey(NSPageDownFunctionKey)
         case .tab: "\t"
         case .return: "\r"
         // Menus spell the Delete key as backspace, though the key event types 0x7F.
@@ -69,6 +71,8 @@ extension KeyChord {
             case NSDownArrowFunctionKey: return .down
             case NSLeftArrowFunctionKey: return .left
             case NSRightArrowFunctionKey: return .right
+            case NSPageUpFunctionKey: return .pageUp
+            case NSPageDownFunctionKey: return .pageDown
             // AppKit's other function keys, which `Key` has no case for yet.
             case 0xF700...0xF8FF: return nil
             default: break

@@ -91,7 +91,7 @@ func otherFailuresShowTheErrorTextNotTheDeniedView(path: String) async {
 
     #expect(fixture.pane.location == Location(path: "/root"))
     #expect(fixture.deniedView.isHidden)
-    #expect(fixture.pane.selection == [ExactName("Mail")])
+    #expect(fixture.pane.selection.members == .only([ExactName("Mail")]))
 }
 
 @MainActor @Test func aLongFolderNameTruncatesWithinTheViewsWidth() async {

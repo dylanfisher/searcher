@@ -12,6 +12,24 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
     public var openW2: [Double]
     /// ↓ key event timestamp → frame with the moved selection, on W2 (B6).
     public var keyDown: [Double]
+    /// Opt-↓ and Opt-↑ alternating, each key event timestamp → frame with the moved selection, on
+    /// W2 (B6). This and the next three are the row commands other than ↓, timed in the launch
+    /// that times ↓.
+    public var optionArrows: [Double]
+    /// Ctrl-Shift-↓ key → frame, on W2 (B6).
+    public var controlShiftDown: [Double]
+    /// Fn-↓ (Page Down) key → frame, on W2 (B6).
+    public var pageDown: [Double]
+    /// Shift-↓ key → frame with the extended selection, on W2 (B6).
+    public var shiftDown: [Double]
+    /// Cmd-A key → frame with every row selected, on W2 (B6).
+    public var selectAll: [Double]
+    /// A folder change patch landing with every row selected → frame with the patched rows, on W2
+    /// (B6).
+    public var patchAllSelected: [Double]
+    /// A reload's complete listing landing with every row selected: start of the main thread's
+    /// pass that takes it in → frame with its rows, on W2 (B6).
+    public var reloadAllSelected: [Double]
     /// Sort column change → frame with the re-sorted rows, on W2 (B8).
     public var sortChange: [Double]
     /// Every run loop pass over the stall threshold (B10), all launches together.
@@ -34,12 +52,23 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
 
     public init(
         launch: [Double] = [], openW1: [Double] = [], openW2: [Double] = [],
-        keyDown: [Double] = [], sortChange: [Double] = [], stalls: [Stall] = []
+        keyDown: [Double] = [], optionArrows: [Double] = [], controlShiftDown: [Double] = [],
+        pageDown: [Double] = [], shiftDown: [Double] = [], selectAll: [Double] = [],
+        patchAllSelected: [Double] = [], reloadAllSelected: [Double] = [],
+        sortChange: [Double] = [],
+        stalls: [Stall] = []
     ) {
         self.launch = launch
         self.openW1 = openW1
         self.openW2 = openW2
         self.keyDown = keyDown
+        self.optionArrows = optionArrows
+        self.controlShiftDown = controlShiftDown
+        self.pageDown = pageDown
+        self.shiftDown = shiftDown
+        self.selectAll = selectAll
+        self.patchAllSelected = patchAllSelected
+        self.reloadAllSelected = reloadAllSelected
         self.sortChange = sortChange
         self.stalls = stalls
     }
@@ -50,6 +79,13 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         openW1 += other.openW1
         openW2 += other.openW2
         keyDown += other.keyDown
+        optionArrows += other.optionArrows
+        controlShiftDown += other.controlShiftDown
+        pageDown += other.pageDown
+        shiftDown += other.shiftDown
+        selectAll += other.selectAll
+        patchAllSelected += other.patchAllSelected
+        reloadAllSelected += other.reloadAllSelected
         sortChange += other.sortChange
         stalls += other.stalls
     }

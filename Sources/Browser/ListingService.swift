@@ -44,9 +44,27 @@ public final class ListingService: Sendable {
         priority: ListingLoad.Priority = .normal,
         onUpdate: @escaping @MainActor @Sendable (ListingUpdate) -> Void
     ) -> ListingLoad {
+        load(
+            location, sortedBy: column, ascending: ascending, priority: priority,
+            prepare: { $0 }, onUpdate: onUpdate)
+    }
+
+    /// Like `load(_:sortedBy:ascending:priority:onUpdate:)`, but runs `prepare` on the load's
+    /// worker thread for each update and hands its result to `onUpdate`, so work on the listing
+    /// stays off the main actor.
+    @discardableResult
+    public func load<Prepared: Sendable>(
+        _ location: Location, sortedBy column: SortColumn = .name, ascending: Bool = true,
+        priority: ListingLoad.Priority = .normal,
+        prepare: @escaping @Sendable (ListingUpdate) -> Prepared,
+        onUpdate: @escaping @MainActor @Sendable (Prepared) -> Void
+    ) -> ListingLoad {
         let load = ListingLoad(
             location: location, column: column, ascending: ascending, priority: priority,
-            onUpdate: onUpdate)
+            handOff: { update in
+                let prepared = prepare(update)
+                return { onUpdate(prepared) }
+            })
         scheduler.async {
             self.queue.add(load)
             self.startWaitingLoads()
@@ -108,9 +126,12 @@ public final class ListingService: Sendable {
     /// Updates reach the main queue in the order they're handed off, and a load cancelled in
     /// between, on the main actor, drops the rest there.
     private func hand(_ update: ListingUpdate, to load: ListingLoad) {
+        if load.isCancelled { return }
+        // The load's preparation runs here, on the worker thread.
+        let deliver = load.handOff(update)
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
-                if !load.isCancelled { load.onUpdate(update) }
+                if !load.isCancelled { deliver() }
             }
         }
     }

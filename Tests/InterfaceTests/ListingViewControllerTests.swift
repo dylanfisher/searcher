@@ -1,10 +1,10 @@
 import AppKit
 import Base
-import Browser
 import Foundation
 import TestSupport
 import Testing
 
+@testable import Browser
 @testable import Interface
 
 private func link(_ name: String) -> DirectoryEntry {
@@ -147,7 +147,7 @@ private func clickHeader(_ controller: ListingViewController, titled title: Stri
     let entries = (0..<2_000).map { file(String(format: "e%04d", $0), size: Int64($0)) }
     let controller = await controller(showing: entries)
     let table = controller.tableView
-    controller.pane.select([ExactName("e0000")])
+    controller.pane.select(Selection([ExactName("e0000")], cursor: ExactName("e0000")))
     #expect(table.selectedRowIndexes == [0])
 
     try clickHeader(controller, titled: "Size")
@@ -156,7 +156,7 @@ private func clickHeader(_ controller: ListingViewController, titled title: Stri
             && table.visibleRect.intersects(table.rect(ofRow: 1_999))
     }
 
-    #expect(controller.pane.selection == [ExactName("e0000")])
+    #expect(controller.pane.selection.members == .only([ExactName("e0000")]))
     #expect(controller.listing?[1_999].name == "e0000")
 }
 
@@ -212,7 +212,7 @@ private final class RowChangeCountingTableView: ListingTableView {
     await settle { controller.listing?.column == .size }
     table.selectRowIndexes([0], byExtendingSelection: false)
     #expect(try names(controller)[0] == "b")
-    #expect(controller.pane.selection == [ExactName("b")])
+    #expect(controller.pane.selection.members == .only([ExactName("b")]))
 
     lister.set(
         "/folder",
@@ -242,6 +242,141 @@ private final class RowChangeCountingTableView: ListingTableView {
 
     #expect(table.selectedRowIndexes == [1])
     #expect(table.reloads == 0)
+}
+
+/// A folder change that shifts the selected rows, such as a growing download sorted by size,
+/// leaves the view where the user scrolled it.
+@MainActor @Test func aPatchThatShiftsTheSelectionDoesNotScrollBackToTheCursor() async throws {
+    let entries = (0..<2_000).map { file(String(format: "e%04d", $0)) }
+    let controller = await controller(showing: entries)
+    let pane = controller.pane
+    let table = controller.tableView
+    controller.view.layoutSubtreeIfNeeded()
+    pane.select(Selection([ExactName("e0000"), ExactName("e0001")], cursor: ExactName("e0001")))
+    table.scrollRowToVisible(1_500)
+    let scrolled = table.visibleRect
+
+    // A new first row moves every row down one.
+    pane.apply(.patches([.update(file("a-new"))]), at: pane.location)
+    await settle { controller.listing?.count == 2_001 }
+    // Past the pass a scroll after a reload waits for.
+    await withCheckedContinuation { continuation in
+        DispatchQueue.main.async { continuation.resume() }
+    }
+
+    #expect(table.selectedRowIndexes == [1, 2])
+    #expect(table.visibleRect == scrolled)
+    #expect(!table.visibleRect.intersects(table.rect(ofRow: 2)))
+}
+
+@MainActor @Test func aMovedCursorIsScrolledIntoViewInTheSamePass() async throws {
+    let entries = (0..<2_000).map { file(String(format: "e%04d", $0)) }
+    let controller = await controller(showing: entries)
+    let table = controller.tableView
+    controller.view.layoutSubtreeIfNeeded()
+
+    controller.pane.selectLastRow()
+    #expect(table.visibleRect.contains(table.rect(ofRow: 1_999)))
+
+    // Extending up from the last row, the cursor moves and the anchor stays out of view.
+    controller.pane.selectFirstRow()
+    controller.pane.moveSelection(by: 100, extending: false)
+    for _ in 0..<60 {
+        controller.pane.moveSelection(by: -1, extending: true)
+    }
+    #expect(table.selectedRowIndexes == IndexSet(40...100))
+    #expect(table.visibleRect.contains(table.rect(ofRow: 40)))
+}
+
+@MainActor @Test func theViewReportsHowManyRowsFitAsThePage() async throws {
+    let entries = (0..<2_000).map { file(String(format: "e%04d", $0)) }
+    let controller = await controller(showing: entries)
+    let table = controller.tableView
+
+    controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 400)
+    controller.view.layoutSubtreeIfNeeded()
+    let tall = controller.pane.visibleRowCount
+    controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 200)
+    controller.view.layoutSubtreeIfNeeded()
+    let short = controller.pane.visibleRowCount
+
+    #expect(short > 1)
+    #expect(tall > short)
+    // That many rows fit between the header and the bottom edge, and one more doesn't. At the
+    // top of the list the header covers the part of the visible rect above y = 0.
+    let below = table.visibleRect.maxY
+    func span(_ rows: Int) -> CGFloat {
+        table.rect(ofRow: rows - 1).maxY - table.rect(ofRow: 0).minY
+    }
+    #expect(span(short) <= below)
+    #expect(span(short + 1) > below)
+}
+
+@MainActor @Test func aClickedSelectionReachesThePaneWithItsCursor() async throws {
+    let controller = await controller(
+        showing: [file("a"), file("b"), file("c"), file("d"), file("e")])
+    let table = controller.tableView
+
+    // A click selects through the table, as `selectRowIndexes` does; the table's last selected
+    // row is the cursor.
+    table.selectRowIndexes([1, 2], byExtendingSelection: false)
+
+    #expect(
+        controller.pane.selection
+            == Selection([ExactName("b"), ExactName("c")], cursor: ExactName("c")))
+    controller.pane.moveSelection(by: 1)
+    #expect(table.selectedRowIndexes == [3])
+}
+
+/// The table already has the rows, so the pane takes them without looking any name up.
+@MainActor @Test func aClickSelectingHalfTheRowsLooksNothingUp() async throws {
+    let entries = (0..<4_000).map { file(String(format: "e%04d", $0)) }
+    let controller = await controller(showing: entries)
+    let pane = controller.pane
+    let work = pane.mainSelectionWork
+
+    controller.tableView.selectRowIndexes(IndexSet(0..<2_000), byExtendingSelection: false)
+
+    #expect(pane.mainSelectionWork == work)
+    #expect(pane.selection.rows(in: try #require(pane.state.listing)) == IndexSet(0..<2_000))
+    #expect(pane.selection.contains(ExactName("e1999")))
+    #expect(!pane.selection.contains(ExactName("e2000")))
+}
+
+@MainActor @Test func aClickThatSelectsMostRowsNamesTheRowsLeftOut() async throws {
+    let controller = await controller(
+        showing: [file("a"), file("b"), file("c"), file("d"), file("e")])
+    let table = controller.tableView
+
+    table.selectRowIndexes([0, 1, 2, 4], byExtendingSelection: false)
+
+    #expect(controller.pane.selection.members == .allExcept([ExactName("d")]))
+    #expect(controller.pane.selection.cursor == ExactName("e"))
+    #expect(table.selectedRowIndexes == [0, 1, 2, 4])
+}
+
+@MainActor @Test func aShiftClickKeepsTheAnchorAndAPlainClickMovesIt() async throws {
+    let controller = await controller(
+        showing: [file("a"), file("b"), file("c"), file("d"), file("e")])
+    let table = controller.tableView
+    controller.pane.select(Selection([ExactName("d")], cursor: ExactName("d")))
+
+    // The table's own Shift-click range, from its anchor; with no click, the last row it
+    // selected, "c", is the cursor.
+    controller.currentModifierFlags = { .shift }
+    table.selectRowIndexes([1, 2], byExtendingSelection: false)
+    #expect(
+        controller.pane.selection
+            == Selection(
+                [ExactName("b"), ExactName("c")], cursor: ExactName("c"), anchor: ExactName("d")))
+    // Shift-↓ moves the cursor onto the kept anchor, so the range from it shrinks to the anchor
+    // and "c" leaves it.
+    controller.pane.moveSelection(by: 1, extending: true)
+    #expect(table.selectedRowIndexes == [1])
+
+    controller.currentModifierFlags = { [] }
+    table.selectRowIndexes([4], byExtendingSelection: false)
+    #expect(controller.pane.selection == Selection([ExactName("e")], cursor: ExactName("e")))
 }
 
 @MainActor @Test func twoMp3FilesShareOneIconAndNoIconIsMadePerFile() async throws {
