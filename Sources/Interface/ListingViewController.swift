@@ -309,13 +309,20 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     }
 
     /// Runs Open on a double-click, as Cmd-↓ does. A row outside the selection is selected first;
-    /// a double-click below the last row or on the header does nothing.
+    /// a double-click below the last row or on the header does nothing. With Command held, a
+    /// folder's row opens the folder in a new tab instead; a file still opens. The two clicks'
+    /// Cmd-click toggles have run by then, so the row is selected again if they left it out.
     @objc private func openClickedRow(_ sender: Any?) {
         let row = tableView.clickedRow
         guard let listing, row >= 0, row < listing.count else { return }
-        let name = ExactName(listing[row].name)
+        let entry = listing[row]
+        let name = ExactName(entry.name)
         if !pane.selection.contains(name) {
             pane.select(Selection([name], cursor: name))
+        }
+        if entry.type == .directory, currentModifierFlags().contains(.command) {
+            tableView.openInNewTab(pane.location.child(named: entry.name))
+            return
         }
         tableView.runCommand(NavigationCommands.open.id)
     }

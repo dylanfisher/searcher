@@ -136,6 +136,7 @@ public final class PaneViewController: NSViewController {
         pathBar.onSelect = { [weak pane] location, child in
             pane?.navigate(to: location, selecting: child)
         }
+        pathBar.onOpenInNewTab = { [weak self] folder in self?.openInNewTab(folder) }
         filterBar.isHidden = true
         filterBar.onChange = { [weak pane] text in pane?.commandPane.setFilter(text) }
         filterBar.onArrow = { [weak self] chord in
@@ -234,22 +235,35 @@ public final class PaneViewController: NSViewController {
     private func prepare(_ table: ListingTableView) {
         table.registry = Self.registry
         table.runCommand = { [weak self] id in self?.run(id) }
+        table.openInNewTab = { [weak self] folder in self?.openInNewTab(folder) }
         table.canRunCommand = { [weak self] id in self?.canRun(id) ?? false }
         table.commandIsCurrent = { [weak self] id in self?.isCurrent(id) }
         table.selectTyped = { [weak self] query in self?.selectTyped(query) ?? false }
     }
 
-    private func run(_ id: CommandID) {
-        binding(for: id).run(context)
+    private func run(_ id: CommandID, folder: Location? = nil) {
+        binding(for: id).run(context(folder: folder))
         windowLink?.didRunCommand()
     }
 
+    /// Runs Open in New Tab on `folder`, the one route for both clicks that open a tab. A path bar
+    /// button takes no keys, so its pane may not be the focused one; it takes the focus first, as
+    /// the context needs, and the new tab is made from it.
+    private func openInNewTab(_ folder: Location) {
+        if let tab = windowLink?.workspace.selectedTab,
+            let id = tab.panes.first(where: { $0.value === pane })?.key, id != tab.layout.focused
+        {
+            tab.focus(id)
+        }
+        run(WindowCommands.openInNewTab.id, folder: folder)
+    }
+
     private func canRun(_ id: CommandID) -> Bool {
-        binding(for: id).isEnabled?(context) ?? true
+        binding(for: id).isEnabled?(context()) ?? true
     }
 
     private func isCurrent(_ id: CommandID) -> Bool? {
-        binding(for: id).isCurrent?(context)
+        binding(for: id).isCurrent?(context())
     }
 
     private func binding(for id: CommandID) -> CommandBinding {
@@ -261,20 +275,21 @@ public final class PaneViewController: NSViewController {
 
     /// Commands act on `commandPane`, the focused column's pane in column mode. In a window the
     /// pane is the selected tab's focused pane, since the window keeps the first responder in it.
-    private var context: CommandContext {
+    /// `folder` is the clicked folder for Open in New Tab.
+    private func context(folder: Location? = nil) -> CommandContext {
         guard let link = windowLink else {
             return CommandContext(
                 pane: pane.commandPane,
                 toggleQuickLook: { [weak self] in self?.keyListing.quickLook.toggle() },
                 askForFolder: { [weak self] in self?.askForFolder() },
-                showFilter: { [weak self] in self?.showFilter() })
+                showFilter: { [weak self] in self?.showFilter() }, folder: folder)
         }
         return CommandContext(
             pane: pane.commandPane, workspace: link.workspace, tabBounds: link.tabBounds,
             didClosePane: link.didClosePane,
             toggleQuickLook: { [weak self] in self?.keyListing.quickLook.toggle() },
             askForFolder: { [weak self] in self?.askForFolder() },
-            showFilter: { [weak self] in self?.showFilter() })
+            showFilter: { [weak self] in self?.showFilter() }, folder: folder)
     }
 
     /// Shows the filter field and focuses it, its text selected. Typing then narrows the rows.
@@ -322,7 +337,7 @@ public final class PaneViewController: NSViewController {
     }
 
     private func selectTyped(_ query: String) -> Bool {
-        SelectionCommands.selectFirstRow(startingWith: query, in: context)
+        SelectionCommands.selectFirstRow(startingWith: query, in: context())
     }
 
     private func paneDidChange() {

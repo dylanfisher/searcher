@@ -3,7 +3,8 @@ import Browser
 
 /// A pane's folder as a row of buttons: the volume, then each folder down to the pane's. Clicking
 /// a folder above the pane's reports it with the child on the way down, so the pane can select
-/// the folder it came from. When the row doesn't fit, the folders between the ends shrink first.
+/// the folder it came from; Cmd-clicking any folder, the pane's own too, asks for it in a new tab.
+/// When the row doesn't fit, the folders between the ends shrink first.
 ///
 /// It shows only the location and volume name it's given, and no icons, so it makes no
 /// file-system call.
@@ -18,6 +19,12 @@ final class PathBarView: NSView {
 
     /// Runs with the clicked folder and the name of its child on the path to the pane's folder.
     var onSelect: (@MainActor (Location, String) -> Void)?
+    /// Runs with the Cmd-clicked folder.
+    var onOpenInNewTab: (@MainActor (Location) -> Void)?
+    /// The modifier keys held in the click being handled. Tests replace it.
+    var currentModifierFlags: @MainActor () -> NSEvent.ModifierFlags = {
+        NSApp?.currentEvent?.modifierFlags ?? []
+    }
 
     /// The location shown; nil until the first `show`.
     private(set) var location: Location?
@@ -119,6 +126,10 @@ final class PathBarView: NSView {
 
     @objc private func segmentClicked(_ sender: NSButton) {
         let index = sender.tag
+        if currentModifierFlags().contains(.command) {
+            onOpenInNewTab?(ancestors[index])
+            return
+        }
         guard index < ancestors.count - 1 else { return }
         onSelect?(ancestors[index], ancestors[index + 1].name)
     }

@@ -18,6 +18,9 @@ public struct CommandContext {
     /// Shows the pane's filter field and puts the keyboard focus in it. Only the pane's view can;
     /// a context built without it traps when Filter runs.
     public let showFilter: @MainActor () -> Void
+    /// The folder a click named, for Open in New Tab: a Cmd-double-clicked folder row or a
+    /// Cmd-clicked path bar segment. Nil when a key or menu item runs a command.
+    public let folder: Location?
     private let givenWorkspace: Workspace?
 
     /// With a `workspace`, `pane` must be the command pane of its selected tab's focused pane.
@@ -38,7 +41,8 @@ public struct CommandContext {
         },
         showFilter: @escaping @MainActor () -> Void = {
             preconditionFailure("this command context has no filter field")
-        }
+        },
+        folder: Location? = nil
     ) {
         if let workspace {
             precondition(
@@ -52,6 +56,7 @@ public struct CommandContext {
         self.toggleQuickLook = toggleQuickLook
         self.askForFolder = askForFolder
         self.showFilter = showFilter
+        self.folder = folder
     }
 
     /// The window's tabs. A context built for one pane, as the benches and pane tests build it,

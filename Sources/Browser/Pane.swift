@@ -170,6 +170,19 @@ public final class Pane {
         VolumeEvents.add(self)
     }
 
+    /// A pane at `location` in this pane's view mode, sorted as its focused column is, with its
+    /// folder sizes, services, settings and system actions. Split, New Tab and Open in New Tab
+    /// make their pane with it.
+    public func newPane(at location: Location) -> Pane {
+        let sorted = commandPane
+        let pane = Pane(
+            location: location, service: service, systemActions: systemActions,
+            settings: settings, sortedBy: sorted.sortColumn, ascending: sorted.sortAscending,
+            viewMode: viewMode)
+        pane.folderSizes = folderSizes
+        return pane
+    }
+
     // MARK: - Navigation
 
     /// Shows `location`: cancels the load of the folder it leaves, stops that folder's monitor,

@@ -49,12 +49,7 @@ public final class Tab {
     public func split(_ axis: Axis, in bounds: Rect) -> Pane? {
         let model = focusedPane
         guard let id = layout.split(axis, in: bounds) else { return nil }
-        let sorted = model.commandPane
-        let pane = Pane(
-            location: model.location, service: model.service, systemActions: model.systemActions,
-            settings: model.settings, sortedBy: sorted.sortColumn, ascending: sorted.sortAscending,
-            viewMode: model.viewMode)
-        pane.folderSizes = model.folderSizes
+        let pane = model.newPane(at: model.location)
         panes[id] = pane
         onFocusChange?()
         return pane
