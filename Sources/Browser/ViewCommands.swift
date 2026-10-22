@@ -1,6 +1,6 @@
 /// What the panes show and in what order: the hidden files and folders first toggles, which are
 /// app-wide `Settings`, and the sort keys, which sort the focused pane by a column. A sort key for
-/// the column already sorted by reverses it.
+/// the column already sorted by reverses it. Space opens and closes Quick Look on the selection.
 public enum ViewCommands: CommandSet {
     public static let toggleHidden = Command(
         id: CommandID("view.toggleHidden"), title: "Show Hidden Files",
@@ -19,6 +19,8 @@ public enum ViewCommands: CommandSet {
     public static let sortBySize = Command(
         id: CommandID("view.sortBySize"), title: "Sort by Size",
         chords: [KeyChord("6", modifiers: [.control, .option, .command])])
+    public static let toggleQuickLook = Command(
+        id: CommandID("view.toggleQuickLook"), title: "Quick Look", chords: [KeyChord(.space)])
 
     public static var bindings: [CommandBinding] {
         [
@@ -32,6 +34,7 @@ public enum ViewCommands: CommandSet {
             CommandBinding(sortByKind) { sort($0.pane, by: .kind) },
             CommandBinding(sortByDateModified) { sort($0.pane, by: .dateModified) },
             CommandBinding(sortBySize) { sort($0.pane, by: .size) },
+            CommandBinding(toggleQuickLook) { $0.toggleQuickLook() },
         ]
     }
 

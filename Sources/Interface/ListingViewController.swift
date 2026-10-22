@@ -1,5 +1,6 @@
 import AppKit
 import Browser
+import Quartz
 
 /// A pane's entries in a view-based table: name with its type's icon, and a cloud badge when the
 /// entry isn't downloaded; size, date modified and kind. A header click sorts the pane by that
@@ -18,6 +19,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     static let notDownloadedBadgeIdentifier = NSUserInterfaceItemIdentifier("notDownloadedBadge")
 
     let tableView: ListingTableView
+    /// Fills the Quick Look panel while this list controls it.
+    let quickLook: QuickLookController
     public let pane: Pane
 
     /// The rows on screen: the pane's listing when `paneDidChange` last ran; nil while it has none.
@@ -61,6 +64,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         self.tableView = tableView
         self.iconCache = iconCache
         self.formatter = formatter
+        quickLook = QuickLookController(pane: pane, table: tableView)
         super.init(nibName: nil, bundle: nil)
         configureTable()
         paneDidChange()
@@ -87,7 +91,10 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// sort, in the next pass. The selection's rows come resolved from the pane.
     public func paneDidChange() {
         isShowingPane = true
-        defer { isShowingPane = false }
+        defer {
+            isShowingPane = false
+            quickLook.paneDidChange()
+        }
         if tableSort != (pane.sortColumn, pane.sortAscending) {
             tableView.sortDescriptors = [
                 Self.sortDescriptor(pane.sortColumn, ascending: pane.sortAscending)
@@ -182,6 +189,28 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         }
         let height = scrollView.documentVisibleRect.height - (header ?? 0)
         pane.visibleRowCount = max(Int(height / pitch), 0)
+    }
+
+    // MARK: Quick Look
+
+    /// The panel asks the responder chain for a controller; the list in the key or main window
+    /// answers, so the panel previews the focused pane's selection.
+    public override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool {
+        true
+    }
+
+    // AppKit declares these on NSObject without an actor; the panel calls them on the main thread.
+
+    public override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        MainActor.assumeIsolated {
+            panel.dataSource = quickLook
+            panel.delegate = quickLook
+            quickLook.begin(panel)
+        }
+    }
+
+    public override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        MainActor.assumeIsolated { quickLook.end() }
     }
 
     // MARK: Columns

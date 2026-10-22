@@ -130,7 +130,10 @@ public final class PaneViewController: NSViewController {
         guard let binding = Self.bindings[id] else {
             preconditionFailure("no command is bound to \(id)")
         }
-        binding.run(CommandContext(pane: pane))
+        binding.run(
+            CommandContext(pane: pane) { [listingViewController] in
+                listingViewController.quickLook.toggle()
+            })
     }
 
     private func paneDidChange() {
