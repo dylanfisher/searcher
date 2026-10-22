@@ -122,12 +122,12 @@ private typealias SizeResult = Result<FolderSize, ListingError>
 
 private func service(
     _ walks: FakeWalks, cache: FolderSizeCache = FolderSizeCache(store: nil),
-    log: EventLog<String> = EventLog(),
+    log: EventLog<String> = EventLog(), mounted: [VolumeIdentity] = [],
     volumeOf: @escaping @Sendable (String) throws(ListingError) -> VolumeIdentity
 ) -> FolderSizeService {
     FolderSizeService(
         cache: cache, log: { log.append($0) }, walk: { try walks.walk($0, isCancelled: $1) },
-        volumeOf: volumeOf)
+        volumeOf: volumeOf, mountedVolumes: { mounted })
 }
 
 /// Asks for the size of `path` and logs each result as it reaches the main actor.
@@ -405,7 +405,7 @@ private func makeFolder(_ path: String) throws {
     for path in [parent, inside, outside] { request(sizes, path, into: log) }
     #expect(log.wait { $0.count == 3 })
 
-    try await sizes.recalculateSizes(under: parent)
+    #expect(await sizes.recalculateSizes(under: parent))
     await writer.flush()
 
     #expect(Set(await store(folder).loadSizes(share).keys) == [outside])
@@ -461,4 +461,78 @@ private func makeFolder(_ path: String) throws {
     #expect(
         await cache.size(of: children[children.count - 1], modified: firstModified, on: volume)
             != nil)
+}
+
+@Test func aThousandRequestsReadTheVolumeOnceAndKeepTheWalkLimits() async throws {
+    // A parent that isn't there, so the local walks start no FSEvents stream. Over a real folder
+    // this test made `aLocalChangeEventUnderAFolderDropsItsSize`, running beside it, see the
+    // creation of its own files as a change in 2 of 8 runs.
+    let parent = "/searcher-no-such-folder"
+    let folders = (0..<1_000).map { (path: parent + "/folder-\($0)", modified: firstModified) }
+    for (volume, most) in [(ListingService.listerVolume, 4), (share, 1)] {
+        let walks = FakeWalks()
+        walks.releaseAll()
+        let reads = EventLog<String>()
+        let sizes = service(walks) { path in
+            reads.append(path)
+            return volume
+        }
+        let log = EventLog<(String, SizeResult)>()
+
+        sizes.requestSizes(of: folders, in: parent, for: PaneID()) { index, result in
+            log.append((folders[index].path, result))
+        }
+
+        #expect(log.wait(timeout: 30) { $0.count == folders.count }, "\(volume.kind)")
+        #expect(reads.all == [parent], "\(volume.kind)")
+        #expect(walks.mostAtOnce <= most, "\(volume.kind)")
+    }
+}
+
+@Test func aRequestForNothingReadsNoVolume() async throws {
+    let walks = FakeWalks()
+    let reads = EventLog<String>()
+    let sizes = service(walks) { path in
+        reads.append(path)
+        return share
+    }
+
+    let asked = sizes.requestSizes(of: [], in: "/fake-mount", for: PaneID()) { _, _ in }
+    try await Task.sleep(for: .milliseconds(50))
+
+    #expect(asked.isEmpty)
+    #expect(reads.all.isEmpty)
+}
+
+@Test func aSubfolderAnotherVolumeIsMountedOnIsWalkedAsThatVolume() async throws {
+    let parent = "/searcher-mounts"
+    let music = VolumeIdentity(
+        device: "//dylan@nas.invalid/music", mountPoint: parent + "/music", kind: .network)
+    let walks = FakeWalks()
+    let cache = FolderSizeCache(store: nil)
+    let reads = EventLog<String>()
+    let sizes = service(walks, cache: cache, mounted: [music]) { path in
+        reads.append(path)
+        return ListingService.listerVolume
+    }
+    let log = EventLog<(String, SizeResult)>()
+    let folders = [
+        (path: parent + "/local", modified: firstModified),
+        (path: music.mountPoint, modified: firstModified),
+    ]
+
+    let asked = sizes.requestSizes(of: folders, in: parent, for: PaneID()) { index, result in
+        log.append((folders[index].path, result))
+    }
+    #expect(walks.waitForStarts(2))
+
+    // The share's walk is routed as the share's: its volume, so its limit and its cancel.
+    #expect(asked[0].volume == ListingService.listerVolume)
+    #expect(asked[1].volume == music)
+    sizes.cancelWalks(under: music.mountPoint)
+    #expect(walks.waitForCancelled(music.mountPoint))
+    walks.release(parent + "/local")
+    #expect(log.wait { $0.count == 1 })
+    #expect(log.all.map(\.0) == [parent + "/local"])
+    #expect(reads.all == [parent])
 }

@@ -73,6 +73,8 @@ public final class FolderSizeService: Sendable {
     /// Walks a folder, asking the closure it's given whether to stop.
     private let walkFolder: @Sendable (String, () -> Bool) throws -> TreeSizeWalker.Total
     private let volumeOf: @Sendable (String) throws(ListingError) -> VolumeIdentity
+    /// The mount table, read without asking any volume.
+    private let mountedVolumes: @Sendable () -> [VolumeIdentity]
     /// Owns `queue`; every change to it runs here.
     private let scheduler = DispatchQueue(label: "FolderSizeService", qos: .utility)
     private let queue = Queue()
@@ -87,17 +89,19 @@ public final class FolderSizeService: Sendable {
             volumeOf: VolumeIdentity.init(path:))
     }
 
-    /// A service that walks with `walk` and finds each folder's volume with `volumeOf`, both run
-    /// on `BlockingCallThread`s.
+    /// A service that walks with `walk` and finds each folder's volume with `volumeOf` and the
+    /// mount table with `mountedVolumes`, all run on `BlockingCallThread`s.
     init(
         cache: FolderSizeCache, log: @escaping @Sendable (String) -> Void,
         walk: @escaping @Sendable (String, () -> Bool) throws -> TreeSizeWalker.Total,
-        volumeOf: @escaping @Sendable (String) throws(ListingError) -> VolumeIdentity
+        volumeOf: @escaping @Sendable (String) throws(ListingError) -> VolumeIdentity,
+        mountedVolumes: @escaping @Sendable () -> [VolumeIdentity] = { VolumeIdentity.mounted() }
     ) {
         self.cache = cache
         self.log = log
         walkFolder = walk
         self.volumeOf = volumeOf
+        self.mountedVolumes = mountedVolumes
     }
 
     /// Asks for the size of the folder at `path` for `pane`. `modified` is the folder's own
@@ -110,11 +114,41 @@ public final class FolderSizeService: Sendable {
         onResult: @escaping @MainActor @Sendable (Result<FolderSize, ListingError>) -> Void
     ) -> Walk {
         let walk = Walk(path: path, modified: modified, pane: pane, onResult: onResult)
-        unfinished.add(walk)
-        // Queued in the order asked, so walks start in that order once their volumes are known.
-        scheduler.async { self.queue.add(walk) }
-        Task(priority: .utility) { await self.lookUp(walk) }
+        start([walk], volumeOf: path)
         return walk
+    }
+
+    /// Asks for the sizes of `folders`, subfolders of `parent`, for `pane`, as `requestSize`
+    /// does for each, reading the volume once, at `parent`, for all of them: a folder of 3,000
+    /// subfolders costs one volume read and one task, not 3,000 of each. `onResult` gets each
+    /// folder's index in `folders` with its result. A subfolder another volume is mounted on, as a
+    /// share under `/Volumes` is, is found in the mount table read with it and walked as that
+    /// volume's: its limit, its kept sizes, and `cancelWalks(under:)` at its mount point.
+    @discardableResult
+    public func requestSizes(
+        of folders: [(path: String, modified: Date)], in parent: String, for pane: PaneID,
+        onResult: @escaping @MainActor @Sendable (Int, Result<FolderSize, ListingError>) -> Void
+    ) -> [Walk] {
+        // Nothing to ask for reads no volume: on a share that stopped answering, each read would
+        // hold its thread for good.
+        guard !folders.isEmpty else { return [] }
+        let walks = folders.enumerated().map { index, folder in
+            Walk(path: folder.path, modified: folder.modified, pane: pane) {
+                onResult(index, $0)
+            }
+        }
+        start(walks, volumeOf: parent)
+        return walks
+    }
+
+    /// Queues `walks` in the order asked, so they start in that order once their volume is
+    /// known, and looks their sizes up.
+    private func start(_ walks: [Walk], volumeOf path: String) {
+        for walk in walks { unfinished.add(walk) }
+        scheduler.async {
+            for walk in walks { self.queue.add(walk) }
+        }
+        Task(priority: .utility) { await self.lookUp(walks, volumeOf: path) }
     }
 
     /// Cancels every walk asked for `pane`, waiting or running.
@@ -124,43 +158,68 @@ public final class FolderSizeService: Sendable {
         }
     }
 
-    /// Drops the kept sizes of `folder` and every folder under it, so the next request for each
-    /// walks again. Recalculate Sizes runs it.
-    public func recalculateSizes(under folder: String) async throws(ListingError) {
-        let volumeOf = volumeOf
-        let volume = try await BlockingCallThread.run(qos: .utility) {
-            () throws(ListingError) -> VolumeIdentity in
-            try volumeOf(folder)
+    /// Cancels every walk of the folder at `mountPoint` or under it, waiting or running, for every
+    /// pane: a running walk holds a folder open, which can keep the volume from unmounting.
+    public func cancelWalks(under mountPoint: String) {
+        for walk in unfinished.walks(under: mountPoint) {
+            walk.cancel()
         }
-        await cache.dropSizes(under: folder, on: volume)
     }
 
-    /// Reads the walk's volume, and delivers the kept size if there is one; otherwise lets the
-    /// walk start.
-    private func lookUp(_ walk: Walk) async {
+    /// Drops the kept sizes of `folder` and every folder under it, so the next request for each
+    /// walks again, and returns whether it did. Recalculate Sizes runs it. When the folder's
+    /// volume can't be read, nothing is dropped and the error goes to the log.
+    public func recalculateSizes(under folder: String) async -> Bool {
         let volumeOf = volumeOf
-        let path = walk.path
         let volume: VolumeIdentity
         do {
-            // On a thread of its own, since `statfs` blocks on a share that stopped answering.
             volume = try await BlockingCallThread.run(qos: .utility) {
                 () throws(ListingError) -> VolumeIdentity in
-                try volumeOf(path)
+                try volumeOf(folder)
             }
         } catch {
-            finish(walk, with: .failure(error), started: false)
+            log("can't recalculate the sizes under \(folder): \(error)")
+            return false
+        }
+        await cache.dropSizes(under: folder, on: volume)
+        return true
+    }
+
+    /// Reads the volume at `path` and the mount table once for `walks`, and delivers each kept
+    /// size; the walks without one may start. A walk of a folder the mount table has a volume
+    /// mounted on is that volume's.
+    private func lookUp(_ walks: [Walk], volumeOf path: String) async {
+        let volumeOf = volumeOf
+        let mountedVolumes = mountedVolumes
+        let volume: VolumeIdentity
+        let mounted: [VolumeIdentity]
+        do {
+            // On a thread of its own, since `statfs` blocks on a share that stopped answering.
+            // The mount table is read without asking any volume, so it doesn't.
+            (volume, mounted) = try await BlockingCallThread.run(qos: .utility) {
+                () throws(ListingError) -> (VolumeIdentity, [VolumeIdentity]) in
+                (try volumeOf(path), mountedVolumes())
+            }
+        } catch {
+            for walk in walks { finish(walk, with: .failure(error), started: false) }
             return
         }
-        if walk.isCancelled {
-            finish(walk, with: nil, started: false)
-            return
-        }
-        if let size = await cache.size(of: walk.path, modified: walk.modified, on: volume) {
-            finish(walk, with: .success(size), started: false)
-            return
+        let mountedAt = Dictionary(mounted.map { ($0.mountPoint, $0) }) { first, _ in first }
+        var ready: [(Walk, VolumeIdentity)] = []
+        for walk in walks {
+            let walkVolume = walk.path == path ? volume : mountedAt[walk.path] ?? volume
+            if walk.isCancelled {
+                finish(walk, with: nil, started: false)
+            } else if let size = await cache.size(
+                of: walk.path, modified: walk.modified, on: walkVolume)
+            {
+                finish(walk, with: .success(size), started: false)
+            } else {
+                ready.append((walk, walkVolume))
+            }
         }
         scheduler.async {
-            walk.volume = volume
+            for (walk, volume) in ready { walk.volume = volume }
             self.startWaitingWalks()
         }
     }
@@ -347,6 +406,10 @@ public final class FolderSizeService: Sendable {
 
         func walks(for pane: PaneID) -> [Walk] {
             lock.withLock { walks.values.filter { $0.pane == pane } }
+        }
+
+        func walks(under mountPoint: String) -> [Walk] {
+            lock.withLock { walks.values.filter { isPath($0.path, atOrUnder: mountPoint) } }
         }
     }
 

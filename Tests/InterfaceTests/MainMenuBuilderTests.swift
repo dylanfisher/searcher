@@ -217,7 +217,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
         view.items.map(\.title) == [
             "as List", "as Columns", "", "Show Hidden Files", "Folders First", "", "Sort by Name",
             "Sort by Kind",
-            "Sort by Date Modified", "Sort by Size",
+            "Sort by Date Modified", "Sort by Size", "", "Recalculate Sizes",
         ])
     let table = ListingTableView()
     let log = CommandLog()

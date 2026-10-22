@@ -12,6 +12,7 @@ public final class Settings {
     enum Key: String {
         case showHidden
         case foldersFirst
+        case folderSizes
         case terminalBundleID
     }
 
@@ -23,6 +24,11 @@ public final class Settings {
     /// Whether folders come before every other entry in each sort. Off by default.
     public var foldersFirst: Bool {
         didSet { store(foldersFirst, for: .foldersFirst, changed: foldersFirst != oldValue) }
+    }
+    /// Whether a pane in list view walks each subfolder for its size and shows it, on local and
+    /// network volumes alike. On by default.
+    public var folderSizes: Bool {
+        didSet { store(folderSizes, for: .folderSizes, changed: folderSizes != oldValue) }
     }
     /// The bundle ID of the app Open Terminal Here opens the pane's folder in. Terminal by default.
     public var terminalBundleID: String {
@@ -45,6 +51,7 @@ public final class Settings {
         self.defaults = defaults
         showHidden = Self.bool(.showHidden, in: defaults) ?? false
         foldersFirst = Self.bool(.foldersFirst, in: defaults) ?? false
+        folderSizes = Self.bool(.folderSizes, in: defaults) ?? true
         terminalBundleID = Self.string(.terminalBundleID, in: defaults) ?? "com.apple.Terminal"
     }
 

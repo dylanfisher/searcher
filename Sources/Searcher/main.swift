@@ -10,6 +10,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// which must not read or write the user's stores and brings its own service.
     private let cache: ListingCache?
     private let service: ListingService
+    /// Walks the windows' folders for their sizes; nil in a bench launch, which shows none.
+    private let folderSizes: FolderSizeService?
     private let systemActions = WorkspaceSystemActions()
     /// The user's own preferences, made on first use so a bench launch never reads them; the
     /// bench makes its own over a suite of its own.
@@ -22,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let bench {
             cache = nil
             service = bench.service
+            folderSizes = nil
         } else {
             let roots: StoreRoots
             do {
@@ -30,11 +33,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 preconditionFailure("\(error)")
             }
             let logger = Logger(category: "cache")
-            let cache = ListingCache(
-                store: ListingCacheStore(
-                    roots: roots, log: { logger.error("\($0, privacy: .public)") }))
+            // One store, so a share's sizes are kept in its volume file beside its listings.
+            let store = ListingCacheStore(
+                roots: roots, log: { logger.error("\($0, privacy: .public)") })
+            let cache = ListingCache(store: store)
             self.cache = cache
             service = ListingService(cache: cache)
+            let sizeLogger = Logger(category: "sizes")
+            folderSizes = FolderSizeService(
+                cache: FolderSizeCache(store: store),
+                log: { sizeLogger.error("\($0, privacy: .public)") })
         }
     }
 
@@ -101,6 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let controller = BrowserWindowController(
             location: Location(path: NSHomeDirectory()), service: service,
             systemActions: systemActions, settings: settings)
+        controller.paneViewController.pane.folderSizes = folderSizes
         guard let window = controller.window else {
             preconditionFailure("a browser window controller has no window")
         }

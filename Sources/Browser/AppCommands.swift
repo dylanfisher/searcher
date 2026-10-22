@@ -6,6 +6,7 @@ public enum AppCommands {
         ViewCommands.self,
         ColumnCommands.self,
         SystemCommands.self,
+        SizeCommands.self,
     ]
 
     /// Every command in every set, with what it does.

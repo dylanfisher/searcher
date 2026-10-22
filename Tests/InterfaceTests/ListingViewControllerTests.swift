@@ -565,3 +565,500 @@ private func shownBadge(_ cell: NSTableCellView) -> NSImageView? {
             && table.visibleRect.intersects(table.rect(ofRow: 0))
     }
 }
+
+// MARK: - Folder sizes
+
+/// A local volume for the held walks, so they run at once and each finishes when the test
+/// releases it. On a share they would run one at a time in whatever order they were asked for,
+/// and a walk the test hadn't released yet would hold up the rest. The fake folders can't be
+/// watched for changes, so their sizes are delivered and not kept.
+private let heldVolume = VolumeIdentity(
+    device: "/dev/disk-held", mountPoint: "/fake-mount", kind: .local)
+
+/// Folder walks that wait until the test releases their path with a total or fails it, and note
+/// each volume read, start and cancellation.
+private final class HeldWalks: @unchecked Sendable {
+    private let condition = NSCondition()
+    // Keyed by the path's bytes: `String` keys would take canonically equal paths as one.
+    private var totals: [[UInt8]: TreeSizeWalker.Total] = [:]
+    private var failures: Set<[UInt8]> = []
+    private var volumeReadCount = 0
+    private var startedPaths: [String] = []
+    private var cancelledPaths: [String] = []
+
+    var volumeReads: Int { condition.withLock { volumeReadCount } }
+    var started: [String] { condition.withLock { startedPaths } }
+    var cancelled: [String] { condition.withLock { cancelledPaths } }
+
+    /// A service whose mount table holds `mounted` alone.
+    func service(mounted: [VolumeIdentity] = []) -> FolderSizeService {
+        FolderSizeService(
+            cache: FolderSizeCache(store: nil), log: { _ in },
+            walk: { try self.walk($0, isCancelled: $1) },
+            volumeOf: { _ in
+                self.condition.withLock { self.volumeReadCount += 1 }
+                return heldVolume
+            },
+            mountedVolumes: { mounted })
+    }
+
+    func release(_ path: String, bytes: Int64, isPartial: Bool = false) {
+        condition.withLock {
+            failures.remove(Array(path.utf8))
+            totals[Array(path.utf8)] = TreeSizeWalker.Total(bytes: bytes, isPartial: isPartial)
+            condition.broadcast()
+        }
+    }
+
+    /// Makes walks of `path`, running or later, fail as a share that stopped answering does.
+    func fail(_ path: String) {
+        condition.withLock {
+            failures.insert(Array(path.utf8))
+            condition.broadcast()
+        }
+    }
+
+    private func walk(_ path: String, isCancelled: () -> Bool) throws -> TreeSizeWalker.Total {
+        condition.lock()
+        defer { condition.unlock() }
+        startedPaths.append(path)
+        while true {
+            if isCancelled() {
+                cancelledPaths.append(path)
+                throw CancellationError()
+            }
+            if failures.contains(Array(path.utf8)) { throw ListingError(path: path, code: EIO) }
+            if let total = totals[Array(path.utf8)] { return total }
+            condition.wait(until: Date(timeIntervalSinceNow: 0.001))
+        }
+    }
+}
+
+/// A lister whose calls wait while the test holds it, so a load can be kept in flight.
+private final class HoldableLister: Lister, @unchecked Sendable {
+    private let condition = NSCondition()
+    private var folders: [String: [DirectoryEntry]]
+    private var isHeld = false
+
+    init(_ folders: [String: [DirectoryEntry]] = [:]) {
+        self.folders = folders
+    }
+
+    func set(_ path: String, to entries: [DirectoryEntry]) {
+        condition.withLock { folders[path] = entries }
+    }
+
+    func hold() {
+        condition.withLock { isHeld = true }
+    }
+
+    func release() {
+        condition.withLock {
+            isHeld = false
+            condition.broadcast()
+        }
+    }
+
+    func list(_ path: String, onBatch: ([DirectoryEntry]) throws -> Void) throws {
+        condition.lock()
+        while isHeld { condition.wait() }
+        let entries = folders[path]
+        condition.unlock()
+        guard let entries else { throw ListingError(path: path, code: ENOENT) }
+        try onBatch(entries)
+    }
+}
+
+/// A controller showing `path` as `controller(showing:)` does, whose pane walks folder sizes
+/// with `walks` and waits out the time between size batches on `clock`. Tests that send volume
+/// events give a path of their own, since every pane on the path gets them.
+@MainActor
+private func sizedController(
+    at path: String = "/folder", showing entries: [DirectoryEntry], walks: HeldWalks,
+    clock: ManualClock = ManualClock(),
+    settings: Settings = untouchedSettings(), lister: HoldableLister = HoldableLister(),
+    sortedBy column: SortColumn = .name, ascending: Bool = true,
+    mounted: [VolumeIdentity] = []
+) async -> ListingViewController {
+    lister.set(path, to: entries)
+    let pane = Pane(
+        location: Location(path: path), service: ListingService(lister: lister),
+        systemActions: StubSystemActions(), settings: settings, sortedBy: column,
+        ascending: ascending)
+    pane.sizeBatchClock = clock
+    pane.folderSizes = walks.service(mounted: mounted)
+    let formatter = EntryCellFormatter(
+        locale: Locale(identifier: "en_US"), timeZone: TimeZone(identifier: "UTC")!)
+    let controller = ListingViewController(
+        pane: pane, iconCache: TypeIconCache(), formatter: formatter,
+        tableView: ListingTableView())
+    pane.onChange = { [weak controller] in controller?.paneDidChange() }
+    controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 400)
+    await settle { pane.state.isLoaded }
+    return controller
+}
+
+/// Each row's Size text.
+@MainActor
+private func sizeText(_ controller: ListingViewController) throws -> [String] {
+    try cellText(controller).map { $0[1] }
+}
+
+/// The walked size of the row named `name`.
+@MainActor
+private func folderSize(_ name: String, in pane: Pane) -> Listing.FolderSizeValue? {
+    guard let listing = pane.state.listing, let row = listing.row(named: name) else { return nil }
+    return listing.folderSize(atRow: row)
+}
+
+@MainActor @Test func aFolderShowsPendingTextUntilItsSizeArrivesAndGreaterOrEqualWhenPartial()
+    async throws
+{
+    let walks = HeldWalks()
+    let clock = ManualClock()
+    let controller = await sizedController(
+        showing: [folder("Music"), folder("Photos"), file("song", size: 500)], walks: walks,
+        clock: clock)
+    let pending = EntryCellFormatter.pendingSize
+    #expect(try sizeText(controller) == [pending, pending, "500 bytes"])
+
+    walks.release("/folder/Music", bytes: 4_000_000)
+    await settle { (try? sizeText(controller)) == ["4 MB", pending, "500 bytes"] }
+
+    walks.release("/folder/Photos", bytes: 2_000_000, isPartial: true)
+    clock.advance(by: Pane.sizeBatchInterval)
+    await settle { (try? sizeText(controller)) == ["4 MB", "≥ 2 MB", "500 bytes"] }
+}
+
+@MainActor @Test func aFailedWalkShowsNoSizeAndAReloadAsksAgain() async throws {
+    let walks = HeldWalks()
+    let clock = ManualClock()
+    let controller = await sizedController(
+        showing: [folder("Music")], walks: walks, clock: clock)
+    let pane = controller.pane
+    walks.fail("/folder/Music")
+    await settle { (try? sizeText(controller)) == [EntryCellFormatter.noSize] }
+
+    walks.release("/folder/Music", bytes: 4_000_000)
+    pane.reload()
+    clock.advance(by: Pane.sizeBatchInterval)
+
+    await settle { (try? sizeText(controller)) == ["4 MB"] }
+    #expect(walks.started == ["/folder/Music", "/folder/Music"])
+}
+
+@MainActor @Test func sizesReachTheRowsAtMostOncePerBatchInterval() async throws {
+    let walks = HeldWalks()
+    let clock = ManualClock()
+    let controller = await sizedController(
+        showing: [folder("a"), folder("b")], walks: walks, clock: clock)
+    let pane = controller.pane
+    walks.release("/folder/a", bytes: 1_000)
+    await settle { folderSize("a", in: pane) != nil }
+
+    walks.release("/folder/b", bytes: 2_000)
+    await settle { !pane.waitingSizes.isEmpty }
+    clock.advance(by: Pane.sizeBatchInterval - .milliseconds(1))
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(folderSize("b", in: pane) == nil)
+
+    clock.advance(by: .milliseconds(1))
+    await settle { folderSize("b", in: pane) == .size(bytes: 2_000, isPartial: false) }
+}
+
+@MainActor @Test func sortedBySizeAFolderWhoseSizeArrivesMovesAndStaysSelected() async throws {
+    let walks = HeldWalks()
+    let controller = await sizedController(
+        showing: [folder("a folder"), file("big", size: 3_000), file("small", size: 10)],
+        walks: walks, sortedBy: .size, ascending: false)
+    let pane = controller.pane
+    #expect(try names(controller) == ["big", "small", "a folder"])
+    pane.select(Selection([ExactName("a folder")], cursor: ExactName("a folder")))
+    #expect(controller.tableView.selectedRowIndexes == [2])
+
+    walks.release("/folder/a folder", bytes: 1_000_000)
+    await settle { (try? names(controller)) == ["a folder", "big", "small"] }
+
+    #expect(pane.selection.members == .only([ExactName("a folder")]))
+    #expect(controller.tableView.selectedRowIndexes == [0])
+}
+
+@MainActor @Test func aFolderRowsLabelReadsItsWalkedSize() async throws {
+    let walks = HeldWalks()
+    let controller = await sizedController(showing: [folder("Music")], walks: walks)
+    walks.release("/folder/Music", bytes: 4_000_000)
+    await settle { (try? sizeText(controller)) == ["4 MB"] }
+    controller.view.layoutSubtreeIfNeeded()
+
+    let rowView = try #require(controller.tableView.rowView(atRow: 0, makeIfNecessary: false))
+    let label = try #require(rowView.accessibilityLabel())
+    #expect(label.contains(", 4 MB, "))
+}
+
+@MainActor @Test func withFolderSizesOffNoWalkIsRequestedAndFoldersShowNoSize() async throws {
+    let walks = HeldWalks()
+    let settings = untouchedSettings()
+    settings.folderSizes = false
+    let controller = await sizedController(
+        showing: [folder("Music"), file("notes", size: 500)], walks: walks, settings: settings)
+    try await Task.sleep(for: .milliseconds(50))
+
+    #expect(walks.volumeReads == 0)
+    #expect(walks.started.isEmpty)
+    #expect(try sizeText(controller) == ["--", "500 bytes"])
+}
+
+@MainActor @Test func turningSizesOffDuringALoadKeepsThemOffWhenItLands() async throws {
+    let walks = HeldWalks()
+    let settings = untouchedSettings()
+    let lister = HoldableLister()
+    let clock = ManualClock()
+    let controller = await sizedController(
+        showing: [folder("Music")], walks: walks, clock: clock, settings: settings,
+        lister: lister)
+    let pane = controller.pane
+    walks.release("/folder/Music", bytes: 4_000_000)
+    await settle { (try? sizeText(controller)) == ["4 MB"] }
+
+    lister.hold()
+    let version = pane.stateVersion
+    pane.reload()
+    try await Task.sleep(for: .milliseconds(20))
+    settings.folderSizes = false
+    lister.release()
+    await settle { pane.stateVersion != version && pane.state.isLoaded }
+    clock.advance(by: Pane.sizeBatchInterval)
+    await settle { folderSize("Music", in: pane) == nil }
+
+    #expect(folderSize("Music", in: pane) == nil)
+    #expect(try sizeText(controller) == ["--"])
+}
+
+@MainActor @Test func navigatingAwayCancelsThePanesWalks() async throws {
+    let walks = HeldWalks()
+    let lister = HoldableLister(["/other": [file("x")]])
+    let controller = await sizedController(
+        showing: [folder("Music")], walks: walks, lister: lister)
+    await settle { walks.started == ["/folder/Music"] }
+
+    controller.pane.navigate(to: Location(path: "/other"))
+
+    await settle { walks.cancelled == ["/folder/Music"] }
+}
+
+@MainActor @Test func columnViewCancelsTheListsWalksAndRequestsNone() async throws {
+    let walks = HeldWalks()
+    let controller = await sizedController(showing: [folder("Music")], walks: walks)
+    let pane = controller.pane
+    await settle { walks.started == ["/folder/Music"] }
+
+    pane.setViewMode(.column)
+    await settle { walks.cancelled == ["/folder/Music"] }
+    let trail = try #require(pane.columnTrail)
+    await settle { trail.focused.pane.state.isLoaded }
+    try await Task.sleep(for: .milliseconds(50))
+
+    #expect(walks.started == ["/folder/Music"])
+}
+
+@MainActor @Test func aReloadKeepsTheSizesShownWithoutWalkingAgain() async throws {
+    let walks = HeldWalks()
+    let controller = await sizedController(showing: [folder("Music")], walks: walks)
+    let pane = controller.pane
+    walks.release("/folder/Music", bytes: 4_000_000)
+    await settle { (try? sizeText(controller)) == ["4 MB"] }
+
+    let reads = walks.volumeReads
+
+    for _ in 0..<5 {
+        let version = pane.stateVersion
+        pane.reload()
+        await settle { pane.stateVersion != version && pane.state.isLoaded }
+    }
+    try await Task.sleep(for: .milliseconds(50))
+
+    #expect(try sizeText(controller) == ["4 MB"])
+    #expect(walks.started.count == 1)
+    // A scan that finds nothing to ask for reads no volume: on a hung share each read would
+    // hold a thread for good.
+    #expect(walks.volumeReads == reads)
+}
+
+@MainActor @Test func patchesStillLandAfterSizesAreTurnedOffWhileTheRowsLoad() async throws {
+    let walks = HeldWalks()
+    let settings = untouchedSettings()
+    let lister = HoldableLister(["/other": [folder("Albums")]])
+    let controller = await sizedController(
+        showing: [folder("Music")], walks: walks, settings: settings, lister: lister)
+    let pane = controller.pane
+
+    lister.hold()
+    pane.navigate(to: Location(path: "/other"))
+    settings.folderSizes = false
+    lister.release()
+    await settle { pane.location.path == "/other" && pane.state.isLoaded }
+    pane.apply(.patches([.update(file("new"))]), at: pane.location)
+
+    await settle { pane.state.listing?.row(named: "new") != nil }
+}
+
+@MainActor @Test func canonicallyEqualFolderNamesEachGetTheirOwnWalkAndSize() async throws {
+    let composed = "Caf\u{E9}"
+    let decomposed = "Cafe\u{301}"
+    let walks = HeldWalks()
+    let clock = ManualClock()
+    let controller = await sizedController(
+        showing: [folder(composed), folder(decomposed)], walks: walks, clock: clock)
+    let pane = controller.pane
+    walks.release("/folder/" + composed, bytes: 1_000)
+    walks.release("/folder/" + decomposed, bytes: 2_000)
+
+    await settle {
+        clock.advance(by: Pane.sizeBatchInterval)
+        guard let listing = pane.state.listing, listing.count == 2 else { return false }
+        return (0..<2).allSatisfy { listing.folderSize(atRow: $0) != nil }
+    }
+    let listing = try #require(pane.state.listing)
+    let sizes = Dictionary(
+        uniqueKeysWithValues: (0..<2).map {
+            (Array(listing[$0].name.utf8), listing.folderSize(atRow: $0))
+        })
+    #expect(sizes[Array(composed.utf8)] == .size(bytes: 1_000, isPartial: false))
+    #expect(sizes[Array(decomposed.utf8)] == .size(bytes: 2_000, isPartial: false))
+    try await Task.sleep(for: .milliseconds(100))
+    clock.advance(by: Pane.sizeBatchInterval)
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(walks.started.count == 2)
+}
+
+// MARK: Volumes and visibility
+
+@MainActor @Test func aVolumeAboutToUnmountStopsThePanesWalks() async throws {
+    let walks = HeldWalks()
+    let controller = await sizedController(
+        at: "/volume-a", showing: [folder("Music")], walks: walks)
+    await settle { walks.started == ["/volume-a/Music"] }
+
+    VolumeEvents.willUnmount(at: "/volume-a")
+
+    await settle { walks.cancelled == ["/volume-a/Music"] }
+    _ = controller
+}
+
+@MainActor @Test func aGoneVolumeIsNotWalked() async throws {
+    let walks = HeldWalks()
+    let controller = await sizedController(
+        at: "/volume-b", showing: [folder("Music")], walks: walks)
+    let pane = controller.pane
+    await settle { walks.started == ["/volume-b/Music"] }
+
+    VolumeEvents.didUnmount(at: "/volume-b")
+    await settle { walks.cancelled == ["/volume-b/Music"] }
+    try await Task.sleep(for: .milliseconds(100))
+
+    #expect(walks.started == ["/volume-b/Music"])
+    if case .offline = pane.state {} else { Issue.record("the pane isn't offline: \(pane.state)") }
+}
+
+@MainActor @Test func aRemountedVolumeWalksTheFoldersWhoseWalksFailed() async throws {
+    let walks = HeldWalks()
+    let clock = ManualClock()
+    let controller = await sizedController(
+        at: "/volume-c",
+        showing: [folder("Music")], walks: walks, clock: clock)
+    walks.fail("/volume-c/Music")
+    await settle { (try? sizeText(controller)) == [EntryCellFormatter.noSize] }
+
+    walks.release("/volume-c/Music", bytes: 4_000_000)
+    VolumeEvents.didMount(at: "/volume-c")
+    clock.advance(by: Pane.sizeBatchInterval)
+
+    await settle { (try? sizeText(controller)) == ["4 MB"] }
+}
+
+@MainActor @Test func aHiddenTabsPanePausesItsWalksAndResumesWhenShown() async throws {
+    let walks = HeldWalks()
+    let controller = await sizedController(showing: [folder("Music")], walks: walks)
+    let pane = controller.pane
+    await settle { walks.started == ["/folder/Music"] }
+
+    pane.isVisible = false
+    await settle { walks.cancelled == ["/folder/Music"] }
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(walks.started.count == 1)
+
+    pane.isVisible = true
+    await settle { walks.started.count == 2 }
+    walks.release("/folder/Music", bytes: 4_000_000)
+    await settle { (try? sizeText(controller)) == ["4 MB"] }
+}
+
+// MARK: Sizes and patches
+
+@MainActor @Test func aSizeBatchWaitsForARunningPatch() async throws {
+    let walks = HeldWalks()
+    let controller = await sizedController(
+        showing: [folder("Music"), file("a")], walks: walks)
+    let pane = controller.pane
+    let queue = DispatchQueue(label: "held rows")
+    pane.rowWorkQueue = queue
+    queue.suspend()
+    pane.apply(.patches([.update(file("b"))]), at: pane.location)
+
+    walks.release("/folder/Music", bytes: 4_000_000)
+    await settle { !pane.waitingSizes.isEmpty }
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(!pane.waitingSizes.isEmpty)
+
+    queue.resume()
+    await settle {
+        folderSize("Music", in: pane) != nil && pane.state.listing?.row(named: "b") != nil
+    }
+}
+
+@MainActor @Test func aSizeBatchThatWaitedGoesBeforeTheNextPatch() async throws {
+    let walks = HeldWalks()
+    let clock = ManualClock()
+    let controller = await sizedController(
+        showing: [folder("Music"), file("a")], walks: walks, clock: clock)
+    let pane = controller.pane
+    let queue = DispatchQueue(label: "held rows")
+    pane.rowWorkQueue = queue
+    queue.suspend()
+    pane.apply(.patches([.update(file("b"))]), at: pane.location)
+    walks.release("/folder/Music", bytes: 4_000_000)
+    await settle { !pane.waitingSizes.isEmpty }
+    clock.advance(by: Pane.sizeBatchInterval)
+    pane.apply(.patches([.update(file("c"))]), at: pane.location)
+
+    // Each state the rows go through: whether they have the size, and whether they have "c".
+    var shown: [(size: Bool, c: Bool)] = []
+    pane.onChange = { [weak controller] in
+        shown.append(
+            (folderSize("Music", in: pane) != nil, pane.state.listing?.row(named: "c") != nil))
+        controller?.paneDidChange()
+    }
+    queue.resume()
+    await settle {
+        folderSize("Music", in: pane) != nil && pane.state.listing?.row(named: "c") != nil
+    }
+
+    #expect(shown.contains { $0.size && !$0.c }, "\(shown)")
+}
+
+@MainActor @Test func aVolumeUnmountingUnderThePanesFolderStopsThatFoldersWalk() async throws {
+    let share = VolumeIdentity(
+        device: "//dylan@nas.invalid/music", mountPoint: "/volume-d/music", kind: .network)
+    let walks = HeldWalks()
+    let controller = await sizedController(
+        at: "/volume-d", showing: [folder("music"), folder("other")], walks: walks,
+        mounted: [share])
+    await settle { Set(walks.started) == ["/volume-d/music", "/volume-d/other"] }
+
+    VolumeEvents.willUnmount(at: "/volume-d/music")
+
+    await settle { walks.cancelled == ["/volume-d/music"] }
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(walks.cancelled == ["/volume-d/music"])
+    _ = controller
+}

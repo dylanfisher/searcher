@@ -15,10 +15,18 @@ public enum VolumeEvents {
     }
 
     /// The volume at `mountPoint` is about to unmount: running loads on it stop, since a folder
-    /// a load has open can keep the volume from unmounting.
+    /// a load has open can keep the volume from unmounting. So do folder size walks on it, those
+    /// of panes above it too, such as a pane at `/Volumes` walking a share mounted there.
     public static func willUnmount(at mountPoint: String) {
         for pane in panes(on: mountPoint) {
             pane.volumeWillUnmount()
+        }
+        var services: [ObjectIdentifier: FolderSizeService] = [:]
+        for case let service? in panes.map({ $0.pane?.folderSizes }) {
+            services[ObjectIdentifier(service)] = service
+        }
+        for service in services.values {
+            service.cancelWalks(under: mountPoint)
         }
     }
 
