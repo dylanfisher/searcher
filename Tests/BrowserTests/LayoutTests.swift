@@ -1,5 +1,6 @@
 import Browser
 import Foundation
+import TestSupport
 import Testing
 
 private let bounds = Rect(x: 0, y: 0, width: 1200, height: 800)
@@ -312,23 +313,10 @@ private func isClose(_ a: Double, _ b: Double) -> Bool {
 
 // MARK: Random edits
 
-/// SplitMix64, so a failing seed replays the same edits.
-private struct SeededGenerator: RandomNumberGenerator {
-    var state: UInt64
-
-    mutating func next() -> UInt64 {
-        state &+= 0x9E37_79B9_7F4A_7C15
-        var z = state
-        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
-        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
-        return z ^ (z >> 31)
-    }
-}
-
 /// Random edits keep every pane listed once, focus and history valid, frames and dividers tiling
 /// the rect, and every pane at least the minimum size.
 @Test(arguments: 0..<200) func randomEditsKeepInvariants(seed: Int) {
-    var random = SeededGenerator(state: UInt64(seed))
+    var random = SeededGenerator(seed: UInt64(seed))
     var layout = Layout()
     for _ in 0..<(12 + seed % 30) {
         let direction = Direction.allCases.randomElement(using: &random)!

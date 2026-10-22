@@ -1,7 +1,7 @@
 /// The folders a pane has left, for Back and Forward. Each entry keeps the entry that was
 /// selected there, so stepping back selects it again. A filter isn't kept: Back doesn't restore
 /// one (`tmp/behavior.md`).
-public struct History: Sendable {
+public struct History: Equatable, Sendable {
     /// A folder left and the entry under the cursor when the pane left it.
     public struct Entry: Equatable, Sendable {
         public let location: Location
@@ -14,11 +14,17 @@ public struct History: Sendable {
     }
 
     /// Nearest last.
-    private var backEntries: [Entry] = []
+    public private(set) var backEntries: [Entry] = []
     /// Nearest last.
-    private var forwardEntries: [Entry] = []
+    public private(set) var forwardEntries: [Entry] = []
 
     public init() {}
+
+    /// A history with these entries, nearest last, as `TabState` stores them.
+    public init(back: [Entry], forward: [Entry]) {
+        backEntries = back
+        forwardEntries = forward
+    }
 
     public var canGoBack: Bool { !backEntries.isEmpty }
     public var canGoForward: Bool { !forwardEntries.isEmpty }
