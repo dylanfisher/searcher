@@ -33,3 +33,14 @@ import Testing
         stalls: [UIBenchRecord.Stall(milliseconds: 70, span: "sort change")])
     #expect(try UIBenchRecord.decode(record.encoded()) == record)
 }
+
+@Test func appendKeepsTheSplitSamples() {
+    var record = UIBenchRecord(splitDown: [1], gridDown: [2], tenPaneOpen: [3])
+    record.append(UIBenchRecord(splitDown: [], gridDown: [4], tenPaneOpen: [5]))
+    #expect(record == UIBenchRecord(splitDown: [1], gridDown: [2, 4], tenPaneOpen: [3, 5]))
+}
+
+@Test func splitSamplesSurviveJSON() throws {
+    let record = UIBenchRecord(splitDown: [1.5], gridDown: [2], tenPaneOpen: [70])
+    #expect(try UIBenchRecord.decode(record.encoded()) == record)
+}

@@ -24,6 +24,10 @@ private func samples(for scenario: Scenario, atFraction fraction: Double) throws
         record.revisit = try at("B4", 20)
     case .columnWalk:
         record.columnWalkKey = try at("B6", 120)
+    case .splits:
+        record.splitDown = try at("B6", 500)
+        record.gridDown = try at("B6", 500)
+        record.tenPaneOpen = try at("B2.W2", 20)
     }
     return record
 }
@@ -49,7 +53,7 @@ func scenarioOverBudgetFailsNamingEachCase(_ scenario: Scenario) throws {
         try UIBenchReport(record: try samples(for: scenario, atFraction: 0.5), scenario: scenario)
             .cases.compactMap { $0.budget?.id }
     }
-    #expect(budgets == [["B6", "B6", "B6"], ["B3"], ["B4"], ["B6"]])
+    #expect(budgets == [["B6", "B6", "B6"], ["B3"], ["B4"], ["B6"], ["B6", "B6", "B2.W2"]])
 }
 
 @Test func scenarioReportsOnlyItsOwnSpans() throws {
@@ -102,7 +106,7 @@ func scenarioOverBudgetFailsNamingEachCase(_ scenario: Scenario) throws {
     #expect(!report.passed)
 }
 
-@Test(arguments: [Scenario.columnKeys, .cold, .revisit])
+@Test(arguments: [Scenario.columnKeys, .cold, .revisit, .splits])
 func otherScenariosReportStallsOnly(_ scenario: Scenario) throws {
     var record = try samples(for: scenario, atFraction: 0.5)
     record.stalls = [UIBenchRecord.Stall(milliseconds: 60, span: "between spans")]
@@ -118,7 +122,8 @@ func otherScenariosReportStallsOnly(_ scenario: Scenario) throws {
         try BenchArguments.parse(["--ui", "/b/Searcher.app", "--scenario", "warm"])
     } throws: { error in
         String(describing: error)
-            == "unknown scenario warm; the scenarios are column-keys, cold, revisit, column-walk"
+            == "unknown scenario warm; the scenarios are column-keys, cold, revisit, column-walk, "
+            + "splits"
     }
 }
 
@@ -126,7 +131,7 @@ func otherScenariosReportStallsOnly(_ scenario: Scenario) throws {
     #expect {
         try BenchArguments.parse(["--ui", "/b/Searcher.app", "--scenario"])
     } throws: { error in
-        String(describing: error).contains("column-keys, cold, revisit, column-walk")
+        String(describing: error).contains("column-keys, cold, revisit, column-walk, splits")
     }
 }
 
@@ -176,4 +181,18 @@ func pathScenarioWithoutAPathFails(_ scenario: Scenario) {
         #expect(UIBenchReport.launches(for: scenario) == 1)
         #expect(UIBenchReport.path(for: scenario) != UIBenchReport.path)
     }
+}
+
+@Test func splitsRunsOnW2WithoutAPath() throws {
+    #expect(
+        try BenchArguments.parse(["--ui", "/b/Searcher.app", "--scenario", "splits"])
+            == .ui(app: "/b/Searcher.app", folder: nil, scenario: .splits))
+}
+
+@Test func keysArePressedInTheFirstLaunchOfTheCIRunAndTheW2Scenarios() {
+    #expect(UIBenchReport.keyPresses(launch: 0, scenario: nil) == UIBenchReport.keyPresses)
+    #expect(UIBenchReport.keyPresses(launch: 1, scenario: nil) == 0)
+    #expect(UIBenchReport.keyPresses(launch: 0, scenario: .columnKeys) == UIBenchReport.keyPresses)
+    #expect(UIBenchReport.keyPresses(launch: 0, scenario: .splits) == UIBenchReport.keyPresses)
+    #expect(UIBenchReport.keyPresses(launch: 0, scenario: .cold) == 0)
 }

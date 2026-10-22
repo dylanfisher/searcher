@@ -13,15 +13,19 @@ import os
 /// landing after Cmd-A on its first batch, and type-to-select keys (B6), and on W2 a sort column
 /// change, Cmd-Shift-. showing and hiding hidden files, Folders First on and off, and two sort
 /// keys (B8), then the keys of a filter query and the Esc that clears it (B7), then W2 in column
-/// view: ↓ through folder rows, each opening a column, and → and ← (B6). The stall
-/// watchdog's stalls (B10) are collected for the whole launch. It starts the
-/// launch warm-up where a normal launch does and waits for it to end before the first span after
-/// launch. It writes the samples to the runner's output file and exits; any failure is printed to
-/// standard error and exits 1.
+/// view: ↓ through folder rows, each opening a column, and → and ← (B6), then ↓ in the focused
+/// pane of a two-pane split and of a 4-pane grid (B6). Every launch ends by opening W2 in ten
+/// panes at once (B2), timed to the first frame after which the whole window, not only the
+/// focused pane, has nothing left to draw: the other panes' drawing can fall inside the sample, so
+/// it is the longest a user could wait for the focused pane's rows. The stall watchdog's stalls
+/// (B10) are collected for the whole launch. It starts the launch warm-up where a normal launch
+/// does and waits for it to end before the first span after launch. It writes the samples to the
+/// runner's output file and exits; any failure is printed to standard error and exits 1.
 ///
 /// A launch for a scenario (`UIBenchOptions.Scenario`) times only that scenario's spans after
-/// the launch: column view on W2, or on a share's folder the runner names, opening subfolders
-/// cold (B3), opening them again to their cached rows (B4), or walking it in column view (B10).
+/// the launch: column view on W2, the split cases on W2, or on a share's folder the runner names,
+/// opening subfolders cold (B3), opening them again to their cached rows (B4), or walking it in
+/// column view (B10).
 ///
 /// The window is never activated, so it never takes focus: it is ordered in front on the second
 /// display when there is one, and a window that isn't visible fails the run, since a covered
@@ -74,6 +78,9 @@ final class UIBench {
     /// Set by `main.swift`; the bench stops it before reading the stalls.
     var watchdog: StallWatchdog?
     private var controller: BrowserWindowController?
+    /// For each unfocused pane while ↓ runs in a split: the run loop passes in which a view of it
+    /// needed drawing.
+    private var redraws: [Int] = []
     /// Called each time the pane's views have shown a change, until it returns true.
     private var whenShown: (@MainActor (Pane) -> Bool)?
     /// When the main run loop last woke, on `FrameCommitTimer`'s clock, while a span that starts
@@ -175,6 +182,13 @@ final class UIBench {
             try await revisit(options.folders, from: options.w1)
         case .columnWalk:
             try await walkColumns(options.w1)
+        case .splits:
+            _ = try await open(options.w2, "open W2")
+            try await waitUntilLoaded()
+            try await pressKeysInSplits(options.keyPresses)
+            for _ in 0..<UIBenchOptions.tenPaneOpens {
+                record.tenPaneOpen.append(try await openInTenPanes())
+            }
         }
     }
 
@@ -203,17 +217,21 @@ final class UIBench {
         record.sortChange.append(try await changeSort())
         try await changeViewSettings()
         record.filterKey += try await typeFilter()
-        // Last: it leaves the pane in column view with Folders First on.
+        // It leaves the pane in column view with Folders First on.
         try await pressColumnKeys(options.keyPresses)
+        // Last: they leave the window split.
+        try await pressKeysInSplits(options.keyPresses)
+        record.tenPaneOpen.append(try await openInTenPanes())
     }
 
     // MARK: Spans
 
     /// Navigates the pane to `path` and times it to the frame with the first rows: its cached
-    /// rows when `cached`, which fails when the folder's own rows come first.
-    private func open(_ path: String, _ name: StaticString, cached: Bool = false) async throws
-        -> Double
-    {
+    /// rows when `cached`, which fails when the folder's own rows come first. `others` are
+    /// navigated there first, in the same pass, so their loads are asked before the pane's.
+    private func open(
+        _ path: String, _ name: StaticString, cached: Bool = false, others: [Pane] = []
+    ) async throws -> Double {
         try requireVisible()
         let pane = try requirePane()
         let window = try requireWindow()
@@ -258,6 +276,9 @@ final class UIBench {
                     continuation.resume(returning: .success($0))
                 }
                 return true
+            }
+            for other in others {
+                other.navigate(to: Location(path: path))
             }
             pane.navigate(to: Location(path: path))
         }
@@ -679,6 +700,223 @@ final class UIBench {
         }
     }
 
+    /// Times `count` ↓ presses in the focused pane of a two-pane split, then of a 4-pane grid,
+    /// every pane on W2 in list view sorted by name. The tiling keys make the splits, and the
+    /// pane each split makes has the keys and no selection. Fails when an unfocused pane needs
+    /// drawing during the presses: ↓ changes only the focused pane.
+    private func pressKeysInSplits(_ count: Int) async throws {
+        guard count > 0 else { return }
+        let pane = try requirePane()
+        if pane.viewMode == .column {
+            // As the single pane's ↓ runs. Read by the list's own load, which lists W2 again.
+            pane.settings.foldersFirst = false
+            pane.setViewMode(.list)
+            try await waitUntilLoaded()
+        }
+        guard try requireTab().panes.count == 1 else {
+            throw Failure("the split cases start from one pane")
+        }
+        try await split(into: 2)
+        record.splitDown = try await pressDownCountingRedraws(count, in: "two panes")
+        try await split(into: 4)
+        record.gridDown = try await pressDownCountingRedraws(count, in: "a 4-pane grid")
+    }
+
+    /// `pressDown(count)` in the focused pane, once the window has drawn everything it needed
+    /// to, counting for each other pane the run loop passes in which a view of it needed drawing.
+    /// Prints the counts and fails unless each is zero.
+    private func pressDownCountingRedraws(_ count: Int, in layout: String) async throws
+        -> [Double]
+    {
+        try await waitUntilDrawn()
+        let paneCount = try requireTab().panes.count
+        let focused = try requireController().paneViewController.view
+        guard let layoutView = focused.superview else {
+            throw Failure("the focused pane's view isn't in a layout view")
+        }
+        let unfocused = layoutView.subviews.filter { $0 !== focused }
+        guard unfocused.count == paneCount - 1 else {
+            throw Failure(
+                "the layout view holds \(layoutView.subviews.count) views for \(paneCount) panes")
+        }
+        redraws = Array(repeating: 0, count: unfocused.count)
+        // Order 0, before AppKit lays out and draws and Core Animation commits, so the views that
+        // draw in this pass still say they need to.
+        let observer = CFRunLoopObserverCreateWithHandler(
+            nil, CFRunLoopActivity.beforeWaiting.rawValue, true, 0
+        ) { [weak self] _, _ in
+            MainActor.assumeIsolated {
+                for (index, view) in unfocused.enumerated() where Self.needsDrawing(view) {
+                    self?.redraws[index] += 1
+                }
+            }
+        }
+        guard let observer else { preconditionFailure("CFRunLoopObserverCreate failed") }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+        defer { CFRunLoopObserverInvalidate(observer) }
+        let samples = try await pressDown(count)
+        print("bench-ui: unfocused pane redraws during \(count) ↓ in \(layout): \(redraws)")
+        guard redraws.allSatisfy({ $0 == 0 }) else {
+            throw Failure(
+                "an unfocused pane needed drawing during \(count) ↓ in \(layout), in \(redraws) "
+                    + "run loop passes; ↓ should change only the focused pane")
+        }
+        return samples
+    }
+
+    /// Whether `view`, or a view in it, is shown and waits to be drawn.
+    private static func needsDrawing(_ view: NSView) -> Bool {
+        guard !view.isHidden else { return false }
+        return view.needsDisplay || view.subviews.contains(where: needsDrawing)
+    }
+
+    /// Puts every pane on W1, splits the window into ten panes, then times all ten opening W2 at
+    /// once, the focused pane's load asked last, to the frame with the focused pane's first rows
+    /// (B2). The rest of the load, until every pane holds its complete listing, is a span of its
+    /// own, so the stalls of the whole load can be counted (B10).
+    private func openInTenPanes() async throws -> Double {
+        try await moveEveryPane(to: options.w1)
+        try await split(into: 10)
+        try await waitUntilDrawn()
+        let tab = try requireTab()
+        let focused = try requirePane()
+        let others = tab.layout.panes.compactMap { tab.panes[$0] }.filter { $0 !== focused }
+        let sample = try await open(options.w2, UIBenchRecord.tenPaneOpenSpan, others: others)
+        let restStart = ContinuousClock.now
+        for pane in tab.panes.values {
+            try await waitUntilLoaded(pane)
+        }
+        spans.append(TimedSpan(name: UIBenchRecord.tenPaneRestSpan, start: restStart, end: .now))
+        return sample
+    }
+
+    /// Navigates every pane of the tab to `path`, untimed, and waits for each to hold its
+    /// complete listing.
+    private func moveEveryPane(to path: String) async throws {
+        let tab = try requireTab()
+        for pane in tab.panes.values {
+            pane.navigate(to: Location(path: path))
+        }
+        for pane in tab.panes.values {
+            try await waitUntilLoaded(pane)
+        }
+    }
+
+    /// Splits the tab with the tiling keys until it has `count` panes: each time the largest pane
+    /// with room, the first in the layout's order among equals, along its longer side if that has
+    /// room, after the focus keys move the focus to it. The pane a split makes lists its folder;
+    /// this waits for every pane to hold its complete listing after each split.
+    private func split(into count: Int) async throws {
+        let tab = try requireTab()
+        let minimum = 2 * Layout.minimumPaneSize + Layout.dividerThickness
+        while tab.panes.count < count {
+            let frames = tab.layout.frames(in: try tabBounds())
+            var largest: (pane: PaneID, axis: Axis, area: Double)?
+            for pane in tab.layout.panes {
+                guard let frame = frames[pane] else { continue }
+                let sides: [(axis: Axis, length: Double)] = [
+                    (.horizontal, frame.width), (.vertical, frame.height),
+                ]
+                guard
+                    let side = sides.sorted(by: { $0.length > $1.length })
+                        .first(where: { $0.length >= minimum })
+                else { continue }
+                let area = frame.width * frame.height
+                if largest.map({ area > $0.area }) ?? true {
+                    largest = (pane, side.axis, area)
+                }
+            }
+            guard let largest else {
+                throw Failure(
+                    "no pane has room to split, with \(tab.panes.count) of \(count): \(frames)")
+            }
+            try await focus(largest.pane)
+            let before = tab.panes.count
+            _ = try await press(
+                [largest.axis == .horizontal ? .splitRight : .splitDown], "split key")
+            guard tab.panes.count == before + 1 else {
+                throw Failure("the split key left \(tab.panes.count) panes, not \(before + 1)")
+            }
+            // The new pane has the focus, and `open` is told when its views show a change.
+            try requireController().paneViewController.onShow = { [weak self] in
+                self?.paneShown()
+            }
+            for pane in tab.panes.values {
+                try await waitUntilLoaded(pane)
+            }
+        }
+    }
+
+    /// Moves the focus to `target` with the focus keys, and waits for each pane they focus to
+    /// list its folder again, which gaining the focus starts (`Pane.didGainFocus`), so no load
+    /// is left running.
+    private func focus(_ target: PaneID) async throws {
+        let tab = try requireTab()
+        guard let directions = Self.focusKeys(to: target, in: tab.layout) else {
+            throw Failure("no focus keys reach pane \(target) from \(tab.layout.focused)")
+        }
+        var focused: [(pane: Pane, version: Int)] = []
+        for direction in directions {
+            let before = tab.focusedPane
+            // Read before the key: the listing it starts can land before its frame.
+            let versions = tab.panes.mapValues(\.stateVersion)
+            _ = try await press([.focus(direction)], "focus key")
+            let pane = tab.focusedPane
+            guard pane !== before, let version = versions[tab.layout.focused] else {
+                throw Failure("the focus key \(direction) left the focus where it was")
+            }
+            if !focused.contains(where: { $0.pane === pane }) {
+                focused.append((pane, version))
+            }
+        }
+        guard tab.layout.focused == target else {
+            throw Failure(
+                "the focus keys \(directions) focused \(tab.layout.focused), not \(target)")
+        }
+        guard try requireWindow().firstResponder === requireController().paneViewController.keyView
+        else { throw Failure("the focused pane's table doesn't have the keys") }
+        let deadline = ContinuousClock.now + .seconds(30)
+        while focused.contains(where: { pane, version in
+            guard pane.stateVersion != version, case .loaded = pane.state else { return true }
+            return false
+        }) {
+            guard ContinuousClock.now < deadline else {
+                throw Failure("the panes the focus keys passed did not list again in 30 s")
+            }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
+    /// The focus keys that move the focus from `layout`'s focused pane to `target`, found by
+    /// pressing them on copies of the layout, which focus as the tab does.
+    private static func focusKeys(to target: PaneID, in layout: Layout) -> [Direction]? {
+        var queue: [(layout: Layout, keys: [Direction])] = [(layout, [])]
+        var seen: Set<PaneID> = [layout.focused]
+        var index = 0
+        while index < queue.count {
+            let (current, keys) = queue[index]
+            index += 1
+            if current.focused == target { return keys }
+            for direction in Direction.allCases {
+                var next = current
+                next.focus(direction)
+                if seen.insert(next.focused).inserted {
+                    queue.append((next, keys + [direction]))
+                }
+            }
+        }
+        return nil
+    }
+
+    /// The size the tab's panes fill, as the window gives it to the tiling commands.
+    private func tabBounds() throws -> Rect {
+        try requireWindow().contentView?.layoutSubtreeIfNeeded()
+        guard let layoutView = try requireController().paneViewController.view.superview else {
+            throw Failure("the focused pane's view isn't in a layout view")
+        }
+        return Rect(layoutView.bounds)
+    }
+
     /// Opens each of `folders` from `parent` once, untimed, so the cache keeps its listing, then
     /// each again from `parent`, timed to the frame with its cached rows (B4). The service starts
     /// a folder's insert just after it hands the listing over; the parent's load comes between
@@ -798,6 +1036,24 @@ final class UIBench {
         static let sortByName = Key(
             characters: "1", keyCode: 18, flags: [.control, .option, .command])
         static let commandF = Key(characters: "f", keyCode: 3, flags: .command)
+        static let splitRight = Key(characters: "\\", keyCode: 42, flags: .command)
+        /// Shift applies to the character: a US keyboard types "|".
+        static let splitDown = Key(characters: "|", keyCode: 42, flags: [.command, .shift])
+
+        /// Cmd-Opt and an arrow: the tiling key that focuses the pane that way.
+        static func focus(_ direction: Direction) -> Key {
+            let flags: NSEvent.ModifierFlags = [.numericPad, .function, .command, .option]
+            return switch direction {
+            case .left:
+                Key(characters: function(NSLeftArrowFunctionKey), keyCode: 123, flags: flags)
+            case .right:
+                Key(characters: function(NSRightArrowFunctionKey), keyCode: 124, flags: flags)
+            case .down:
+                Key(characters: function(NSDownArrowFunctionKey), keyCode: 125, flags: flags)
+            case .up:
+                Key(characters: function(NSUpArrowFunctionKey), keyCode: 126, flags: flags)
+            }
+        }
         static let escape = Key(characters: "\u{1B}", keyCode: 53, flags: [])
 
         /// The character AppKit types for a function key such as `NSDownArrowFunctionKey`.
@@ -1059,6 +1315,16 @@ final class UIBench {
         if check(pane) { whenShown = nil }
     }
 
+    /// Waits until the window has drawn everything it needed to.
+    private func waitUntilDrawn() async throws {
+        let window = try requireWindow()
+        await withCheckedContinuation { continuation in
+            FrameCommitTimer.time(from: FrameCommitTimer.now, in: window) { _ in
+                continuation.resume()
+            }
+        }
+    }
+
     /// Waits for `target`, else the window's pane, to hold its complete listing.
     private func waitUntilLoaded(_ target: Pane? = nil) async throws {
         let pane = try target ?? requirePane()
@@ -1128,6 +1394,16 @@ final class UIBench {
     private func requireWindow() throws -> NSWindow {
         guard let window = controller?.window else { throw Failure("the bench window is gone") }
         return window
+    }
+
+    private func requireController() throws -> BrowserWindowController {
+        guard let controller else { throw Failure("the bench window is gone") }
+        return controller
+    }
+
+    /// The window's selected tab.
+    private func requireTab() throws -> Tab {
+        try requireController().workspace.selectedTab
     }
 
     private func requirePane() throws -> Pane {

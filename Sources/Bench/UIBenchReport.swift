@@ -11,7 +11,7 @@ struct UIBenchReport {
     /// App processes per run: each gives one sample of every span but the key presses.
     static let launches = BenchCase.runs
     /// ↓ presses in the first launch, the count docs/performance.md times B6 over. Also the ↓
-    /// presses through W2's first column in column view.
+    /// presses through W2's first column in column view, and in the focused pane of a split.
     static let keyPresses = 500
     /// A launch that takes longer than this, in seconds, is stuck and is stopped.
     static let launchTimeout = 120
@@ -28,6 +28,13 @@ struct UIBenchReport {
         scenario == nil ? launches : 1
     }
 
+    /// The ↓ presses launch `launch` (from 0) of a run makes: the CI run's first launch and the
+    /// scenarios that press keys on W2 press `keyPresses`, every other launch none.
+    static func keyPresses(launch: Int, scenario: UIBenchOptions.Scenario?) -> Int {
+        let pressesKeys = scenario == nil || scenario == .columnKeys || scenario == .splits
+        return launch == 0 && pressesKeys ? keyPresses : 0
+    }
+
     /// One case per span, in the order the app times them.
     let cases: [BenchReport.Case]
     /// Longest first.
@@ -40,6 +47,11 @@ struct UIBenchReport {
             ("W2 column view ↓ through folders → frame", "B6", record.columnDown),
             ("W2 column view → key → frame", "B6", record.columnRight),
             ("W2 column view ← key → frame", "B6", record.columnLeft),
+        ]
+        let splits: [(name: String, budget: String, samples: [Double])] = [
+            ("W2 two-pane split ↓ key → frame", "B6", record.splitDown),
+            ("W2 4-pane grid ↓ key → frame", "B6", record.gridDown),
+            ("open W2 in ten panes → focused first rows frame", "B2.W2", record.tenPaneOpen),
         ]
         let spans: [(name: String, budget: String, samples: [Double])]
         switch scenario {
@@ -73,9 +85,11 @@ struct UIBenchReport {
                     ("W2 folders first → frame", "B8", record.foldersFirstToggle),
                     ("W2 sort key → frame", "B8", record.sortKey),
                     ("W2 filter key → frame", "B7", record.filterKey),
-                ] + columnKeys
+                ] + columnKeys + splits
         case .columnKeys:
             spans = columnKeys
+        case .splits:
+            spans = splits
         case .cold:
             spans = [("cold open of a subfolder → first rows frame", "B3", record.coldOpen)]
         case .revisit:
@@ -91,7 +105,11 @@ struct UIBenchReport {
         }
         stalls = record.stalls.sorted { $0.milliseconds > $1.milliseconds }
         stallBudget = scenario == .columnWalk ? try Budget.named("B10") : nil
+        timesTenPanes = scenario == nil || scenario == .splits
     }
+
+    /// Whether the run opens ten panes at once, whose stalls are counted on their own line.
+    let timesTenPanes: Bool
 
     var overBudget: [BenchReport.Case] { cases.filter(\.overBudget) }
 
@@ -114,6 +132,13 @@ struct UIBenchReport {
             } ?? "(B10, reported only)"
         lines.append("stalls: \(stalls.count)\(longest) \(judged)")
         lines += stalls.map { "  \(format($0.milliseconds)) ms in \($0.span)" }
+        if timesTenPanes {
+            // B10 while ten panes load, as the plan asks; reported, since no share is opened.
+            let during = stalls.filter { UIBenchRecord.tenPaneSpans.contains($0.span) }
+            let longest = during.first.map { ", longest \(format($0.milliseconds)) ms" } ?? ""
+            lines.append(
+                "stalls during the ten-pane load: \(during.count)\(longest) (B10, reported only)")
+        }
         return lines.joined(separator: "\n")
     }
 

@@ -24,8 +24,9 @@
 #                         non-zero when an enforced case is over budget or the record
 #                         is missing or doesn't hold one run's 20 launches
 #   --ui                  build the release Searcher.app and time its UI in 20 new
-#                         processes (B1, B2, B6, B7, B8, B10; B6 in column view too)
-#                         instead of the harness cases; writes .build/bench-ui.json. With
+#                         processes (B1, B2, B6, B7, B8, B10; B6 in column view and
+#                         in splits, B2 in ten panes too) instead of the harness
+#                         cases; writes .build/bench-ui.json. With
 #                         --path, the folder is opened as both W1 and W2. The window opens
 #                         in the background on the second display if there is one and
 #                         never takes focus; a run whose window is covered fails saying
