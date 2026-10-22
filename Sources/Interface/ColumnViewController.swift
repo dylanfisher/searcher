@@ -46,10 +46,39 @@ final class ColumnViewController: NSViewController {
     /// column leaves the view where the user scrolled it.
     private var scrolledTo: (focus: Int, count: Int)?
 
-    init(pane: Pane, iconCache: TypeIconCache, formatter: EntryCellFormatter) {
+    /// Posts an accessibility notification. Tests replace it to record what would be posted.
+    var postAccessibility:
+        @MainActor (
+            Any, NSAccessibility.Notification, [NSAccessibility.NotificationUserInfoKey: Any]?
+        )
+            -> Void = { element, notification, userInfo in
+                NSAccessibility.post(
+                    element: element, notification: notification, userInfo: userInfo)
+            }
+    /// The focused column VoiceOver was last told of, or learned of from its table taking the
+    /// keys; nil in list mode and before the first column shows.
+    private weak var reportedFocus: ListingViewController?
+    /// Each shown column's spinner and its wait for the spinner delay, by the column's pane.
+    private var spinners: [ObjectIdentifier: ColumnSpinner] = [:]
+    /// The columns last set as the browser's accessibility children; nil before the first set.
+    /// Until a list is set, AppKit gives the view's shown subviews, spinners among them.
+    private var browserChildren: [NSView]?
+    /// Starts a wait of the given length on the clock, taking the deadline at once, and returns
+    /// the wait.
+    private let startWait: @MainActor (Duration) -> @Sendable () async throws -> Void
+
+    /// `clock` times each column's spinner delay.
+    init<C: Clock<Duration>>(
+        pane: Pane, iconCache: TypeIconCache, formatter: EntryCellFormatter,
+        clock: C = ContinuousClock()
+    ) {
         self.pane = pane
         self.iconCache = iconCache
         self.formatter = formatter
+        startWait = { duration in
+            let deadline = clock.now.advanced(by: duration)
+            return { try await clock.sleep(until: deadline, tolerance: nil) }
+        }
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -66,6 +95,10 @@ final class ColumnViewController: NSViewController {
         scrollView.autohidesScrollers = true
         // Past the last column, the color the columns' rows are drawn on.
         scrollView.backgroundColor = .controlBackgroundColor
+        // VoiceOver reads the columns as it reads `NSBrowser`'s: a browser whose children are
+        // the columns, each a scroll area named for its folder.
+        columnsView.setAccessibilityElement(true)
+        columnsView.setAccessibilityRole(.browser)
         view = scrollView
     }
 
@@ -88,8 +121,20 @@ final class ColumnViewController: NSViewController {
         monitoredGenerations = monitoredGenerations.filter { id, _ in
             columnControllers.contains { ObjectIdentifier($0.pane) == id }
         }
+        for (id, spinner) in spinners
+        where !columnControllers.contains(where: { ObjectIdentifier($0.pane) == id }) {
+            spinner.wait?.cancel()
+            spinner.indicator.removeFromSuperview()
+            spinners[id] = nil
+        }
+        let columnViews = columnControllers.map(\.view)
+        if browserChildren.map({ !$0.elementsEqual(columnViews, by: ===) }) ?? true {
+            browserChildren = columnViews
+            columnsView.setAccessibilityChildren(columnViews)
+        }
         for controller in columnControllers {
             controller.paneDidChange()
+            showSpinner(for: controller.pane)
             let generation = controller.pane.monitorGeneration
             if monitoredGenerations.updateValue(
                 generation, forKey: ObjectIdentifier(controller.pane))
@@ -100,6 +145,7 @@ final class ColumnViewController: NSViewController {
         }
         layoutColumns()
         scrollToFocusedColumn()
+        reportFocus()
     }
 
     override func viewDidLayout() {
@@ -114,14 +160,24 @@ final class ColumnViewController: NSViewController {
             showsNamesOnly: true)
         prepareTable(table)
         table.setAccessibilityLabel(column.pane.location.name)
-        table.didBecomeFirstResponder = { [weak self, weak column] in
+        controller.view.setAccessibilityLabel(column.pane.location.name)
+        table.didBecomeFirstResponder = { [weak self, weak column, weak controller] in
             guard let self, let column, let trail = self.pane.columnTrail else { return }
             self.isFollowingFirstResponder = true
             defer { self.isFollowingFirstResponder = false }
+            // AppKit tells VoiceOver of the table taking the keys.
+            self.reportedFocus = controller
             trail.focus(column)
         }
         addChild(controller)
         columnsView.addSubview(controller.view)
+        let indicator = NSProgressIndicator()
+        indicator.style = .spinning
+        indicator.controlSize = .small
+        indicator.isDisplayedWhenStopped = false
+        indicator.isHidden = true
+        columnsView.addSubview(indicator)
+        spinners[ObjectIdentifier(column.pane)] = ColumnSpinner(indicator: indicator)
         return controller
     }
 
@@ -154,7 +210,66 @@ final class ColumnViewController: NSViewController {
             }
             separators[index].frame = NSRect(
                 x: x + Self.columnWidth, y: 0, width: 1, height: height)
+            if let indicator = spinners[ObjectIdentifier(controller.pane)]?.indicator {
+                let side = Self.spinnerSide
+                let spinnerFrame = NSRect(
+                    x: x + Self.columnWidth - side - Self.spinnerInset, y: Self.spinnerInset,
+                    width: side, height: side)
+                if indicator.frame != spinnerFrame {
+                    indicator.frame = spinnerFrame
+                }
+            }
         }
+    }
+
+    /// The side of a column's small spinner, and its distance from the column's bottom and right
+    /// edges.
+    private static let spinnerSide = 16.0
+    private static let spinnerInset = 6.0
+
+    /// The spinner of the column at `index`, left to right.
+    func spinner(forColumnAt index: Int) -> NSProgressIndicator? {
+        guard columnControllers.indices.contains(index) else { return nil }
+        return spinners[ObjectIdentifier(columnControllers[index].pane)]?.indicator
+    }
+
+    /// Shows `pane`'s column spinner once its listing has been in flight for
+    /// `LoadTimeouts.spinnerDelay`, as the pane's status view does, and hides it when the listing
+    /// lands. Moving between in-flight states keeps the wait running.
+    private func showSpinner(for pane: Pane) {
+        guard let spinner = spinners[ObjectIdentifier(pane)] else {
+            preconditionFailure("the column at \(pane.location.path) has no spinner")
+        }
+        guard PaneStatusView.isInFlight(pane.state) else {
+            spinner.wait?.cancel()
+            spinner.wait = nil
+            spinner.indicator.stopAnimation(nil)
+            spinner.indicator.isHidden = true
+            return
+        }
+        guard spinner.wait == nil else { return }
+        let wait = startWait(LoadTimeouts.spinnerDelay)
+        spinner.wait = Task { [weak spinner] in
+            do {
+                try await wait()
+            } catch is CancellationError {
+                return
+            } catch {
+                preconditionFailure("the clock failed a wait with \(error)")
+            }
+            guard let spinner, !Task.isCancelled else { return }
+            spinner.indicator.isHidden = false
+            spinner.indicator.startAnimation(nil)
+        }
+    }
+
+    /// Tells VoiceOver the focused column changed, on the table it moved to, once per change.
+    /// The first column shown isn't reported: its table taking the keys is.
+    private func reportFocus() {
+        let focused = focusedController
+        defer { reportedFocus = focused }
+        guard let focused, let reported = reportedFocus, reported !== focused else { return }
+        postAccessibility(focused.tableView, .focusedUIElementChanged, nil)
     }
 
     /// Scrolls the focused column fully into view, with the column right of it too where it
@@ -173,5 +288,17 @@ final class ColumnViewController: NSViewController {
                 focused.union(columnControllers[trail.focusedIndex + 1].view.frame))
         }
         columnsView.scrollToVisible(focused)
+    }
+}
+
+/// A column's spinner, and its wait for the spinner delay while the column's listing is in
+/// flight.
+@MainActor
+private final class ColumnSpinner {
+    let indicator: NSProgressIndicator
+    var wait: Task<Void, Never>?
+
+    init(indicator: NSProgressIndicator) {
+        self.indicator = indicator
     }
 }

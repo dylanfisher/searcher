@@ -202,15 +202,16 @@ private struct Fixture {
     #expect(fixture.pane.location == Location(path: "/r/docs/sub"))
 }
 
-/// The views and children of the shown columns, and nothing else: a column and its separator
-/// each.
+/// The views and children of the shown columns, and nothing else: a column, its separator and
+/// its spinner each.
 @MainActor
 private func expectOnlyShownColumns(in controller: ColumnViewController) {
     let shown = controller.columnControllers
     #expect(controller.children.count == shown.count)
     #expect(zip(controller.children, shown).allSatisfy { $0 === $1 })
     let subviews = controller.columnsView.subviews
-    #expect(subviews.count == shown.count * 2)
+    #expect(subviews.count == shown.count * 3)
+    #expect(subviews.filter { $0 is NSProgressIndicator }.count == shown.count)
     #expect(shown.allSatisfy { column in subviews.contains { $0 === column.view } })
     #expect(subviews.filter { $0 is NSBox }.count == shown.count)
 }
@@ -240,4 +241,81 @@ private func expectOnlyShownColumns(in controller: ColumnViewController) {
     }
     #expect(docsController == nil && docsTable == nil && docsPane == nil)
     #expect(otherController == nil && otherPane == nil)
+}
+
+/// `/r/docs/sub` open in three columns, where `/r` and `/r/docs` listed at once and
+/// `/r/docs/sub` stays in flight until the test releases it, so only the third column is
+/// loading. The column view's spinners wait on `clock`.
+@MainActor
+private struct LoadingThirdColumn {
+    let lister = GatedLister(tree.mapValues { .batches([$0]) })
+    let clock = ManualClock()
+    let pane: Pane
+    let controller: ColumnViewController
+    let trail: ColumnTrail
+
+    init() async throws {
+        lister.release("/r")
+        lister.release("/r/docs")
+        pane = Pane(
+            location: Location(path: "/r"),
+            service: ListingService(lister: lister, clock: clock, rootVolumeName: { "Test Disk" }),
+            systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true,
+            viewMode: .column)
+        let controller = ColumnViewController(
+            pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
+            clock: clock)
+        controller.startMonitor = { _ in }
+        pane.onChange = { [weak controller] in controller?.paneDidChange() }
+        controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 400)
+        self.controller = controller
+        let trail = try #require(pane.columnTrail)
+        self.trail = trail
+        await settle { trail.focused.pane.state.isLoaded }
+        trail.columns[0].pane.select(Selection([ExactName("docs")], cursor: ExactName("docs")))
+        await settle { trail.columns.count == 2 && trail.columns[1].pane.state.isLoaded }
+        trail.columns[1].pane.select(Selection([ExactName("sub")], cursor: ExactName("sub")))
+    }
+
+    func spinners() throws -> [NSProgressIndicator] {
+        try (0..<trail.columns.count).map { try #require(controller.spinner(forColumnAt: $0)) }
+    }
+}
+
+@MainActor @Test func eachColumnShowsItsOwnSpinnerOnceItsLoadPassesTheDelay() async throws {
+    let fixture = try await LoadingThirdColumn()
+    #expect(fixture.trail.columns.count == 3)
+    let spinners = try fixture.spinners()
+    #expect(spinners.allSatisfy { $0.isHidden })
+
+    // Real time passing doesn't show a spinner; only the injected clock does.
+    try await Task.sleep(for: .milliseconds(300))
+    #expect(spinners.allSatisfy { $0.isHidden })
+
+    fixture.clock.advance(by: LoadTimeouts.spinnerDelay)
+    await settle { !spinners[2].isHidden }
+    #expect(spinners[0].isHidden)
+    #expect(spinners[1].isHidden)
+    #expect(fixture.controller.columnControllers[2].view.frame.contains(spinners[2].frame))
+
+    fixture.lister.release("/r/docs/sub")
+    await settle { fixture.trail.columns[2].pane.state.isLoaded }
+    #expect(spinners.allSatisfy { $0.isHidden })
+}
+
+/// A shown spinner sits in the browser's view, but VoiceOver's browser holds only the columns.
+@MainActor @Test func aShownColumnSpinnerIsNotOneOfTheBrowsersChildren() async throws {
+    let fixture = try await LoadingThirdColumn()
+    let spinners = try fixture.spinners()
+    fixture.clock.advance(by: LoadTimeouts.spinnerDelay)
+    await settle { !spinners[2].isHidden }
+
+    let children = try #require(
+        fixture.controller.columnsView.accessibilityChildren() as? [NSView])
+    let columns = fixture.controller.columnControllers.map(\.view)
+    #expect(children.count == columns.count)
+    #expect(zip(children, columns).allSatisfy { $0 === $1 })
+
+    fixture.lister.release("/r/docs/sub")
+    await settle { fixture.trail.columns[2].pane.state.isLoaded }
 }

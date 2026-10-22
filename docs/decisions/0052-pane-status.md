@@ -44,8 +44,8 @@ volume. M2.5 also adds a deny list for file-system calls in Interface and the ap
   A pane whose volume unmounts takes the name from the mount point `VolumeEvents` reports, and
   the path bar stays as it was until an update brings the root volume's name.
 - **Column view.** The path bar belongs to the owner pane and shows the focused column's folder,
-  so the status view shows the focused column's state too. Each column's own spinner is still to
-  come (M2.8).
+  so the status view shows the focused column's state too. Each column also shows its own
+  spinner, see [0053](0053-column-accessibility.md).
 - **Nothing on the main thread waits for a share.** The test drives a pane view controller over
   a lister that never returns through the spinner, slow and offline, and checks that no read,
   no volume read and no mount table read ran on the main thread. It doesn't time the main run

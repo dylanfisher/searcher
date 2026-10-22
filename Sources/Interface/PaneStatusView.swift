@@ -10,6 +10,15 @@ import Browser
 /// makes no file-system call.
 @MainActor
 final class PaneStatusView: NSView {
+    /// Posts an accessibility notification. Tests replace it to record what would be posted.
+    var postAccessibility:
+        @MainActor (
+            Any, NSAccessibility.Notification, [NSAccessibility.NotificationUserInfoKey: Any]?
+        )
+            -> Void = { element, notification, userInfo in
+                NSAccessibility.post(
+                    element: element, notification: notification, userInfo: userInfo)
+            }
     let spinner = NSProgressIndicator()
     let note = NSTextField(labelWithString: "")
 
@@ -26,6 +35,9 @@ final class PaneStatusView: NSView {
     private var refreshedListedAt: Date?
     /// The slow or offline state the note shows and the volume it names; nil for no note.
     private var shown: (state: ListingState, volumeName: String)?
+    /// Whether the note last announced said offline rather than slow, and the volume it named;
+    /// nil since the note went away. A pane that stays slow or offline is announced once.
+    private var announced: (isOffline: Bool, volumeName: String)?
 
     init<C: Clock<Duration>>(
         clock: C = ContinuousClock(), now: @escaping @MainActor () -> Date = { Date() }
@@ -80,11 +92,32 @@ final class PaneStatusView: NSView {
             shown = nil
         }
         showNote()
+        announceNote()
+    }
+
+    /// Tells VoiceOver the note when the pane turns slow or offline, or its volume changes, at
+    /// high priority so it isn't dropped behind the row being read.
+    private func announceNote() {
+        guard let shown, !note.isHidden else {
+            announced = nil
+            return
+        }
+        let isOffline = if case .offline = shown.state { true } else { false }
+        let headline = (isOffline: isOffline, volumeName: shown.volumeName)
+        guard announced.map({ $0 != headline }) ?? true else { return }
+        announced = headline
+        postAccessibility(
+            note, .announcementRequested,
+            [
+                .announcement: note.stringValue,
+                .priority: NSAccessibilityPriorityLevel.high.rawValue,
+            ])
     }
 
     /// Whether the folder's listing is still on its way: nothing yet, a first batch, cached rows,
-    /// or a slow read. An offline pane's load keeps going, but the note says it gave up.
-    private static func isInFlight(_ state: ListingState) -> Bool {
+    /// or a slow read. An offline pane's load keeps going, but the note says it gave up. Each
+    /// column of column view shows its own spinner by it too.
+    static func isInFlight(_ state: ListingState) -> Bool {
         switch state {
         case .loading, .partial, .cachedRefreshing, .slow: true
         case .loaded, .offline, .denied, .failed: false
