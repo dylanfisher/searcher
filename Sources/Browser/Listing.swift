@@ -70,6 +70,37 @@ public struct Listing: Sendable {
         return rowPosition(of: index)
     }
 
+    /// The names of the entries this listing has and `other` doesn't. Walks both name orders side
+    /// by side, so it compares keys once per entry and looks up or hashes nothing.
+    public func names(notIn other: Listing) -> [String] {
+        var added: [String] = []
+        var mine = 0
+        var theirs = 0
+        while mine < nameOrder.count {
+            let a = Int(nameOrder[mine])
+            guard theirs < other.nameOrder.count else {
+                added.append(entries[a].name)
+                mine += 1
+                continue
+            }
+            let b = Int(other.nameOrder[theirs])
+            if keys[a] == other.keys[b],
+                entries[a].name.utf8.elementsEqual(other.entries[b].name.utf8)
+            {
+                mine += 1
+                theirs += 1
+            } else if Self.namePrecedes(
+                keys[a], entries[a].name, other.keys[b], other.entries[b].name)
+            {
+                added.append(entries[a].name)
+                mine += 1
+            } else {
+                theirs += 1
+            }
+        }
+        return added
+    }
+
     /// Puts the rows in `column` order. Sorting by name reuses the name order the listing keeps.
     /// Call it off the main thread.
     public mutating func sort(by column: SortColumn, ascending: Bool) {

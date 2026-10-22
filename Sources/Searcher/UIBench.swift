@@ -7,10 +7,12 @@ import os
 /// The app's UI bench mode, which `scripts/bench --ui` launches through the bench runner. One
 /// launch times, each to the Core Animation commit of the frame that shows it: process start →
 /// first window (B1), open W1 and W2 → first rows (B2), the ↓ presses the runner asks for on W2
-/// (B6), and a sort column change on W2 (B8). The stall watchdog's stalls (B10) are collected
-/// for the whole launch. It starts the launch warm-up where a normal launch does and waits for it
-/// to end before the first span after launch. It writes the samples to the runner's output file
-/// and exits; any failure is printed to standard error and exits 1.
+/// and, in the same launch, presses of each other row command, Cmd-A, and folder change patches
+/// and reloads landing with every row selected (B6), and a sort column change on W2 (B8). The
+/// stall watchdog's stalls (B10) are collected for the whole launch. It starts the launch warm-up
+/// where a normal launch does and waits for it to end before the first span after launch. It
+/// writes the samples to the runner's output file and exits; any failure is printed to standard
+/// error and exits 1.
 ///
 /// The window is never activated, so it never takes focus: it is ordered in front on the second
 /// display when there is one, and a window that isn't visible fails the run, since a covered
@@ -18,6 +20,13 @@ import os
 /// intervals in the `bench` category wrap each span.
 @MainActor
 final class UIBench {
+    /// Presses of each row command other than ↓, in the launch that presses ↓.
+    static let rowCommandPresses = 200
+    /// Cmd-A presses, and patches landing with every row selected, in the same launch.
+    static let allSelectedSamples = 100
+    /// Reloads of W2 with every row selected, in the same launch. Each lists the folder again.
+    static let reloadSamples = 20
+
     private let options: UIBenchOptions
     /// When the process started, on `FrameCommitTimer`'s clock.
     private let processStart = UIBench.processStartTime()
@@ -43,6 +52,9 @@ final class UIBench {
     private var controller: BrowserWindowController?
     /// Called each time the pane's views have shown a change, until it returns true.
     private var whenShown: (@MainActor (Pane) -> Bool)?
+    /// When the main run loop last woke, on `FrameCommitTimer`'s clock, while a span that starts
+    /// at a pass's start watches it.
+    private var lastWake: TimeInterval = 0
     /// Turns the runner's SIGTERM, sent to a launch that took too long, into a failure, so the
     /// temporary folder and suite are still removed.
     private var terminationSource: (any DispatchSourceSignal)?
@@ -116,6 +128,14 @@ final class UIBench {
         record.openW2.append(try await open(options.w2, "open W2"))
         try await waitUntilLoaded()
         record.keyDown = try await pressDown(options.keyPresses)
+        if options.keyPresses > 0 {
+            try await pressRowCommands(Self.rowCommandPresses)
+            record.selectAll = try await pressSelectAll(Self.allSelectedSamples)
+            record.patchAllSelected = try await patchWithAllSelected(Self.allSelectedSamples)
+            record.reloadAllSelected = try await reloadWithAllSelected(Self.reloadSamples)
+            // The sort change times one selected row, as it did before these cases.
+            _ = try await press([.down], "key down before sort")
+        }
         record.sortChange.append(try await changeSort())
     }
 
@@ -158,7 +178,6 @@ final class UIBench {
     /// with the moved selection, and checks the selection moved that many rows.
     private func pressDown(_ count: Int) async throws -> [Double] {
         guard count > 0 else { return [] }
-        let window = try requireWindow()
         let pane = try requirePane()
         let rows = pane.state.listing?.count ?? 0
         guard rows >= count else {
@@ -166,32 +185,224 @@ final class UIBench {
                 "\(pane.location.path) has \(rows) entries, too few for \(count) ↓ presses; "
                     + "pass a folder with at least \(count)")
         }
-        let down = String(Character(Unicode.Scalar(UInt32(NSDownArrowFunctionKey))!))
+        let samples = try await press(Array(repeating: Key.down, count: count), "key down")
+        // With nothing selected, the first ↓ selects the first row.
+        try expectCursor(atRow: count - 1, after: "\(count) ↓ presses")
+        return samples
+    }
+
+    /// Times each row command but ↓ over `count` presses on W2, after `pressDown`: Opt-↓ and
+    /// Opt-↑ alternating, then Ctrl-Shift-↓, Fn-↓ and Shift-↓, each from where the one before
+    /// left the cursor. Checks where each leaves the cursor and selection.
+    private func pressRowCommands(_ count: Int) async throws {
+        let pane = try requirePane()
+        let rows = pane.state.listing?.count ?? 0
+
+        let alternating = (0..<count).map { $0.isMultiple(of: 2) ? Key.optionDown : .optionUp }
+        record.optionArrows = try await press(alternating, "Opt-arrow key")
+        try expectCursor(
+            atRow: count.isMultiple(of: 2) ? 0 : rows - 1,
+            after: "\(count) Opt-↓ and Opt-↑ presses")
+
+        var start = try cursorRow()
+        record.controlShiftDown = try await press(
+            Array(repeating: Key.controlShiftDown, count: count), "Ctrl-Shift-down key")
+        try expectCursor(atRow: min(start + 10 * count, rows - 1), after: "\(count) Ctrl-Shift-↓")
+
+        start = try cursorRow()
+        let page = max(pane.visibleRowCount, 1)
+        record.pageDown = try await press(
+            Array(repeating: Key.pageDown, count: count), "Fn-down key")
+        try expectCursor(
+            atRow: min(start + page * count, rows - 1), after: "\(count) Fn-↓ of \(page) rows")
+
+        start = try cursorRow()
+        record.shiftDown = try await press(
+            Array(repeating: Key.shiftDown, count: count), "Shift-down key")
+        let end = min(start + count, rows - 1)
+        guard let listing = pane.state.listing,
+            pane.selection.rows(in: listing) == IndexSet(start...end)
+        else {
+            throw Failure(
+                "\(count) Shift-↓ from row \(start) should select rows \(start)...\(end), but the "
+                    + "selection is \(pane.selection)")
+        }
+    }
+
+    /// Times `count` presses of Cmd-A on W2, each after an untimed ↓ that leaves one row
+    /// selected, and leaves every row selected.
+    private func pressSelectAll(_ count: Int) async throws -> [Double] {
+        let pane = try requirePane()
+        var samples: [Double] = []
+        for _ in 0..<count {
+            _ = try await press([.down], "key down before Cmd-A")
+            samples += try await press([.commandA], "Cmd-A key")
+        }
+        guard pane.selection.members == .allExcept([]) else {
+            throw Failure("Cmd-A should select every row, but the selection is \(pane.selection)")
+        }
+        return samples
+    }
+
+    /// Lands `count` folder change patches on W2 with every row selected, each timed from the
+    /// call to the frame that shows it. Each patch updates the size of an entry in the first rows
+    /// in memory, so it moves no row and makes no file-system call; the pane applies it as it
+    /// applies its monitor's, off the main thread and then on it.
+    /// Lists W2 again `count` times with every row selected, and times each complete listing's
+    /// landing, from the start of the run loop pass that takes it in to the frame that shows it.
+    /// The folder is read, and the selection resolved against it, off the main thread, so the
+    /// span is the main thread's share and the drawing.
+    private func reloadWithAllSelected(_ count: Int) async throws -> [Double] {
+        let pane = try requirePane()
+        let window = try requireWindow()
+        guard pane.selection.members == .allExcept([]) else {
+            throw Failure("reloads should land with every row selected, not \(pane.selection)")
+        }
+        // When the main thread last woke, which starts the pass that takes the listing in.
+        let wake = CFRunLoopObserverCreateWithHandler(
+            nil, CFRunLoopActivity.afterWaiting.rawValue, true, 0
+        ) { [weak self] _, _ in
+            MainActor.assumeIsolated { self?.lastWake = FrameCommitTimer.now }
+        }
+        guard let wake else { preconditionFailure("CFRunLoopObserverCreate failed") }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), wake, .commonModes)
+        defer { CFRunLoopObserverInvalidate(wake) }
         var samples: [Double] = []
         for _ in 0..<count {
             try requireVisible()
-            let interval = begin("key down")
+            let version = pane.stateVersion
+            let interval = begin("reload")
+            samples.append(
+                await withCheckedContinuation { continuation in
+                    whenShown = { [self] pane in
+                        guard pane.stateVersion != version, case .loaded = pane.state else {
+                            return false
+                        }
+                        timeFrame(from: lastWake, in: window, "reload", interval) {
+                            continuation.resume(returning: $0)
+                        }
+                        return true
+                    }
+                    pane.reload()
+                })
+        }
+        guard pane.selection.members == .allExcept([]) else {
+            throw Failure("reloads changed the selection of every row to \(pane.selection)")
+        }
+        return samples
+    }
+
+    private func patchWithAllSelected(_ count: Int) async throws -> [Double] {
+        let pane = try requirePane()
+        let window = try requireWindow()
+        guard pane.selection.members == .allExcept([]) else {
+            throw Failure("patches should land with every row selected, not \(pane.selection)")
+        }
+        var samples: [Double] = []
+        for index in 0..<count {
+            try requireVisible()
+            guard let listing = pane.state.listing, listing.count > 0, case .loaded = pane.state
+            else { throw Failure("\(pane.location.path) isn't loaded for the patch") }
+            let entry = listing[index % listing.count]
+            let changed = DirectoryEntry(
+                name: entry.name, type: entry.type, size: (entry.size ?? 0) + 1,
+                modified: entry.modified, isHidden: entry.isHidden, isDataless: entry.isDataless)
+            let version = pane.stateVersion
+            let start = FrameCommitTimer.now
+            let interval = begin("patch")
+            samples.append(
+                await withCheckedContinuation { continuation in
+                    whenShown = { [self] pane in
+                        guard pane.stateVersion != version else { return false }
+                        timeFrame(from: start, in: window, "patch", interval) {
+                            continuation.resume(returning: $0)
+                        }
+                        return true
+                    }
+                    pane.apply(.patches([.update(changed)]), at: pane.location)
+                })
+        }
+        guard pane.selection.members == .allExcept([]) else {
+            throw Failure("patches changed the selection of every row to \(pane.selection)")
+        }
+        return samples
+    }
+
+    /// A synthetic key press: what the event types, its key code and the flags a real press of
+    /// it carries.
+    private struct Key {
+        let characters: String
+        let keyCode: UInt16
+        let flags: NSEvent.ModifierFlags
+
+        /// Arrow events carry `.numericPad` and `.function` along with the modifiers held.
+        static let down = Key(
+            characters: function(NSDownArrowFunctionKey), keyCode: 125,
+            flags: [.numericPad, .function])
+        static let optionDown = Key(
+            characters: function(NSDownArrowFunctionKey), keyCode: 125,
+            flags: [.numericPad, .function, .option])
+        static let optionUp = Key(
+            characters: function(NSUpArrowFunctionKey), keyCode: 126,
+            flags: [.numericPad, .function, .option])
+        static let controlShiftDown = Key(
+            characters: function(NSDownArrowFunctionKey), keyCode: 125,
+            flags: [.numericPad, .function, .control, .shift])
+        static let shiftDown = Key(
+            characters: function(NSDownArrowFunctionKey), keyCode: 125,
+            flags: [.numericPad, .function, .shift])
+        /// Fn-↓ types Page Down.
+        static let pageDown = Key(
+            characters: function(NSPageDownFunctionKey), keyCode: 121, flags: .function)
+        static let commandA = Key(characters: "a", keyCode: 0, flags: .command)
+
+        /// The character AppKit types for a function key such as `NSDownArrowFunctionKey`.
+        private static func function(_ code: Int) -> String {
+            String(Character(Unicode.Scalar(UInt32(code))!))
+        }
+    }
+
+    /// Sends each key to the list's window in turn, each timed from the event's timestamp to the
+    /// frame that shows its change, as a span named `name`.
+    private func press(_ keys: [Key], _ name: StaticString) async throws -> [Double] {
+        let window = try requireWindow()
+        var samples: [Double] = []
+        for key in keys {
+            try requireVisible()
+            let interval = begin(name)
             guard
                 let event = NSEvent.keyEvent(
-                    with: .keyDown, location: .zero, modifierFlags: [.numericPad, .function],
+                    with: .keyDown, location: .zero, modifierFlags: key.flags,
                     timestamp: FrameCommitTimer.now, windowNumber: window.windowNumber,
-                    context: nil, characters: down, charactersIgnoringModifiers: down,
-                    isARepeat: false, keyCode: 125)
-            else { throw Failure("could not make a ↓ key event") }
+                    context: nil, characters: key.characters,
+                    charactersIgnoringModifiers: key.characters, isARepeat: false,
+                    keyCode: key.keyCode)
+            else { throw Failure("could not make a key event for \(name)") }
             // Straight to the window: the app isn't active, so its key window gets no keys from
             // the event queue.
             window.sendEvent(event)
-            samples.append(try await frame(from: event.timestamp, "key down", interval))
-        }
-        // With nothing selected, the first ↓ selects the first row.
-        guard let listing = pane.state.listing, listing.count >= count,
-            pane.selection == [ExactName(listing[count - 1].name)]
-        else {
-            throw Failure(
-                "\(count) ↓ presses should select row \(count), but the selection is \(pane.selection)"
-            )
+            samples.append(try await frame(from: event.timestamp, name, interval))
         }
         return samples
+    }
+
+    private func cursorRow() throws -> Int {
+        let pane = try requirePane()
+        guard let listing = pane.state.listing, let row = pane.selection.cursorRow(in: listing)
+        else { throw Failure("the pane has no cursor row: \(pane.selection)") }
+        return row
+    }
+
+    /// Throws unless `row` alone is selected, with the cursor on it.
+    private func expectCursor(atRow row: Int, after presses: String) throws {
+        let pane = try requirePane()
+        guard let listing = pane.state.listing, row < listing.count,
+            pane.selection
+                == Selection([ExactName(listing[row].name)], cursor: ExactName(listing[row].name))
+        else {
+            throw Failure(
+                "\(presses) should select row \(row) alone, but the selection is \(pane.selection)")
+        }
     }
 
     /// Sorts by the next column through the table's sort descriptors, as a header click does, and

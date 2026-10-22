@@ -53,11 +53,20 @@ struct PaneFixture {
         return fixture
     }
 
+    /// Selects `names`, with the cursor and anchor on the last.
     func select(_ names: String...) {
-        pane.select(Set(names.map(ExactName.init)))
+        pane.select(
+            Selection(Set(names.map(ExactName.init)), cursor: names.last.map(ExactName.init)))
     }
 
-    var selectedNames: Set<String> { Set(pane.selection.map(\.name)) }
+    /// The names selected one by one; records an issue after Select All, which names none.
+    var selectedNames: Set<String> {
+        guard case .only(let names) = pane.selection.members else {
+            Issue.record("expected named entries, not \(pane.selection.members)")
+            return []
+        }
+        return Set(names.map(\.name))
+    }
 }
 
 extension ListingState {
@@ -202,7 +211,7 @@ func drainMainQueue() async {
     await settle { fixture.pane.state.isLoaded }
     await drainMainQueue()
 
-    #expect(fixture.pane.selection == [ExactName(composed)])
+    #expect(fixture.pane.selection.members == .only([ExactName(composed)]))
     #expect(!fixture.pane.selection.contains(ExactName(decomposed)))
 }
 
@@ -408,18 +417,9 @@ private func heldSortQueue() -> DispatchQueue {
     fixture.pane.moveSelection(by: 1)
     #expect(fixture.selectedNames == ["a.txt"])
 
-    fixture.pane.select([])
+    fixture.pane.select(Selection())
     fixture.pane.moveSelection(by: -1)
     #expect(fixture.selectedNames == ["docs"])
-}
-
-@MainActor @Test func movingWithSeveralRowsSelectedChangesNothing() async {
-    let fixture = await PaneFixture.loaded()
-    fixture.select("a.txt", "b.txt")
-
-    fixture.pane.moveSelection(by: 1)
-
-    #expect(fixture.selectedNames == ["a.txt", "b.txt"])
 }
 
 @MainActor @Test func onChangeFiresWhenTheSelectionChanges() async {

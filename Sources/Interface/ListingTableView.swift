@@ -31,7 +31,8 @@ class ListingTableView: NSTableView {
 
     /// A key with Command, Control or Option that no command takes beeps here instead of reaching
     /// `NSTableView`, whose key bindings would move the table's selection behind the pane's back
-    /// (Ctrl-N is Move Down). Plain and Shift-only keys still go to `super`.
+    /// (Ctrl-N is Move Down). Unbound plain and Shift-only keys still go to `super`; the ones
+    /// `NSTableView` would move or extend its selection with (↑, ↓, Shift-↑, Shift-↓) are bound.
     override func keyDown(with event: NSEvent) {
         if let chord = KeyChord(event: event) {
             if let command = registry.command(for: chord) {

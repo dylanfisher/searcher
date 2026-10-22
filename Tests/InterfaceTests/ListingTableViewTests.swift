@@ -81,7 +81,8 @@ private struct RecordingTable {
     let recording = RecordingTable(registry: try AppCommands.registry())
     let unbound = [
         try keyEvent("k", modifiers: .command), try keyEvent("n", modifiers: .control),
-        try keyEvent(functionKey(NSDownArrowFunctionKey), modifiers: arrowFlags.union(.option)),
+        try keyEvent(
+            functionKey(NSDownArrowFunctionKey), modifiers: arrowFlags.union([.option, .shift])),
     ]
     for press in unbound {
         recording.table.keyDown(with: press)
@@ -102,11 +103,56 @@ private struct RecordingTable {
 }
 
 @MainActor @Test func selectAllWithNoCommandOnItsChordBeepsAndKeepsTheSelection() throws {
-    let recording = RecordingTable(registry: try AppCommands.registry())
+    let recording = RecordingTable(registry: CommandRegistry())
     recording.table.selectAll(nil)
 
     #expect(recording.beeps == 1)
     #expect(recording.ran.isEmpty)
+    #expect(recording.table.selectedRowIndexes == [1])
+}
+
+@MainActor @Test func selectAllRunsTheSelectAllCommand() throws {
+    let recording = RecordingTable(registry: try AppCommands.registry())
+    recording.table.selectAll(nil)
+
+    #expect(recording.ran == [SelectionCommands.selectAll.id])
+    #expect(recording.table.selectedRowIndexes == [1])
+}
+
+/// `NSTableView` extends its own selection on Shift-↑ and Shift-↓; these keys and the other row
+/// movement keys run the pane's commands instead.
+@MainActor @Test func rowMovementKeysRunTheirCommandsAndNeverReachTheTable() throws {
+    let recording = RecordingTable(registry: try AppCommands.registry())
+    let down = functionKey(NSDownArrowFunctionKey)
+    let up = functionKey(NSUpArrowFunctionKey)
+    let presses: [(NSEvent, CommandID)] = [
+        (try keyEvent(down, modifiers: arrowFlags.union(.shift)), SelectionCommands.extendDown.id),
+        (try keyEvent(up, modifiers: arrowFlags.union(.shift)), SelectionCommands.extendUp.id),
+        (try keyEvent(down, modifiers: arrowFlags.union(.option)), SelectionCommands.selectLast.id),
+        (try keyEvent(up, modifiers: arrowFlags.union(.option)), SelectionCommands.selectFirst.id),
+        (
+            try keyEvent(down, modifiers: arrowFlags.union([.control, .shift])),
+            SelectionCommands.tenRowsDown.id
+        ),
+        (
+            try keyEvent(up, modifiers: arrowFlags.union([.control, .shift])),
+            SelectionCommands.tenRowsUp.id
+        ),
+        (
+            try keyEvent(functionKey(NSPageDownFunctionKey), modifiers: .function),
+            SelectionCommands.pageDown.id
+        ),
+        (
+            try keyEvent(functionKey(NSPageUpFunctionKey), modifiers: .function),
+            SelectionCommands.pageUp.id
+        ),
+    ]
+    for (event, _) in presses {
+        recording.table.keyDown(with: event)
+    }
+
+    #expect(recording.ran == presses.map(\.1))
+    #expect(recording.beeps == 0)
     #expect(recording.table.selectedRowIndexes == [1])
 }
 

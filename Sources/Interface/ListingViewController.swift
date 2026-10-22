@@ -25,6 +25,20 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// Set while the table is changed to match the pane, so the delegate calls that causes don't
     /// report the change back.
     private var isShowingPane = false
+    /// The pane's cursor when `paneDidChange` last ran, so the row is scrolled to only when it
+    /// moves: Cmd-A leaves the view where the user scrolled it.
+    private var shownCursor: ExactName?
+    /// The folder and row order shown. A reload scrolls to the cursor only when it shows a new
+    /// folder or a new sort; a folder change patch leaves the view where the user scrolled it.
+    private var shownLocation: Location?
+    private var shownOrder: (column: SortColumn, ascending: Bool)?
+    /// A new folder or sort is showing and the cursor's row hasn't been scrolled to yet.
+    private var scrollsToCursorAfterReload = false
+    /// The modifier keys held in the event being handled, read when a click changes the
+    /// selection. Tests replace it.
+    var currentModifierFlags: @MainActor () -> NSEvent.ModifierFlags = {
+        NSApp?.currentEvent?.modifierFlags ?? []
+    }
 
     public convenience init(
         pane: Pane, iconCache: TypeIconCache = .shared, formatter: EntryCellFormatter = .init()
@@ -62,8 +76,10 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     }
 
     /// Shows the pane's sort, rows and selection. Reloads the rows, in one reload, only when the
-    /// pane's state has changed since the last call, so moving the selection costs no reload. A
-    /// single selected row is scrolled into view, after a reload in the next run loop pass.
+    /// pane's state has changed since the last call, so moving the selection costs no reload. The
+    /// cursor's row is scrolled into view when the cursor moves, in the same pass so the frame
+    /// that shows the new selection shows the row, or after a reload that shows a new folder or
+    /// sort, in the next pass. The selection's rows come resolved from the pane.
     public func paneDidChange() {
         isShowingPane = true
         defer { isShowingPane = false }
@@ -79,33 +95,65 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             tableView.reloadData()
             reloaded = true
         }
-        let rows = IndexSet(pane.selection.compactMap { listing?.row(named: $0.name) })
-        if rows != tableView.selectedRowIndexes {
+        let rows = listing.map { pane.selection.rows(in: $0) } ?? []
+        let rowsChanged = rows != tableView.selectedRowIndexes
+        if rowsChanged {
             tableView.selectRowIndexes(rows, byExtendingSelection: false)
-            if rows.count == 1, let row = rows.first {
-                if reloaded {
-                    scrollToSelectionInTheNextPass()
-                } else {
-                    tableView.scrollRowToVisible(row)
-                }
+        }
+        if pane.location != shownLocation {
+            shownLocation = pane.location
+            scrollsToCursorAfterReload = true
+        }
+        if reloaded, let listing,
+            shownOrder.map({ $0 != (listing.column, listing.ascending) }) ?? true
+        {
+            shownOrder = (listing.column, listing.ascending)
+            scrollsToCursorAfterReload = true
+        }
+        let cursorMoved = pane.selection.cursor != shownCursor
+        shownCursor = pane.selection.cursor
+        if reloaded {
+            guard scrollsToCursorAfterReload, let listing else { return }
+            if pane.selection.cursorRow(in: listing) != nil {
+                scrollsToCursorAfterReload = false
+                scrollToCursorInTheNextPass()
+            } else if case .loaded = pane.state {
+                // The cursor isn't in the folder, so there is nothing to scroll to.
+                scrollsToCursorAfterReload = false
             }
+        } else if cursorMoved, let listing, let row = pane.selection.cursorRow(in: listing) {
+            tableView.scrollRowToVisible(row)
         }
     }
 
-    /// Scrolls to a single selected row once this run loop pass ends. In the pass that reloads
-    /// 100k rows, scrolling made the table lay out a screen of row views on the spot, 15–18 ms in
-    /// a release build on top of the reload and the drawing; a pass later it takes about 4 ms.
-    /// The selection is read again then, since a key may have moved it.
-    private func scrollToSelectionInTheNextPass() {
+    /// Scrolls to the cursor's row once this run loop pass ends. In the pass that reloads 100k
+    /// rows, scrolling made the table lay out a screen of row views on the spot, 15–18 ms in a
+    /// release build on top of the reload and the drawing; a pass later it takes about 4 ms. The
+    /// cursor is read again then, since a key may have moved it.
+    private func scrollToCursorInTheNextPass() {
         DispatchQueue.main.async { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, self.pane.selection.count == 1,
-                    let name = self.pane.selection.first,
-                    let row = self.listing?.row(named: name.name)
+                guard let self, let listing = self.listing,
+                    let row = self.pane.selection.cursorRow(in: listing)
                 else { return }
                 self.tableView.scrollRowToVisible(row)
             }
         }
+    }
+
+    /// Tells the pane how many whole rows fit, for Page Up and Page Down.
+    public override func viewDidLayout() {
+        super.viewDidLayout()
+        let pitch = tableView.rowHeight + tableView.intercellSpacing.height
+        guard let scrollView = view as? NSScrollView, pitch > 0 else {
+            preconditionFailure("the list's view is \(view), with rows \(pitch) points apart")
+        }
+        // The rows scroll under the column header, whose clip view overlaps the content view.
+        let header = tableView.headerView?.superview.map {
+            scrollView.contentView.frame.intersection($0.frame).height
+        }
+        let height = scrollView.documentVisibleRect.height - (header ?? 0)
+        pane.visibleRowCount = max(Int(height / pitch), 0)
     }
 
     // MARK: Columns
@@ -116,6 +164,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         }
         tableView.allowsColumnReordering = true
         tableView.allowsColumnResizing = true
+        // For Shift- and Cmd-clicks, which `tableViewSelectionDidChange` reports to the pane, and
+        // for showing the pane's multi-row selections.
         tableView.allowsMultipleSelection = true
         tableView.usesAlternatingRowBackgroundColors = true
         tableView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
@@ -172,9 +222,40 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         pane.setSort(column, ascending: ascending)
     }
 
+    /// Reports a selection the table changed itself, by a click, Shift-click, Cmd-click or drag,
+    /// to the pane. Keys never get here: they run the pane's commands. The clicked row becomes the
+    /// cursor, or with no click the row the table selected last. A Shift-click keeps the pane's
+    /// anchor, so Shift-↑ and Shift-↓ extend from where the range started; any other click puts
+    /// the anchor on the cursor.
     public func tableViewSelectionDidChange(_ notification: Notification) {
         guard !isShowingPane, let listing else { return }
-        pane.select(Set(tableView.selectedRowIndexes.map { ExactName(listing[$0].name) }))
+        let selected = tableView.selectedRowIndexes
+        let members: Selection.Members
+        // With most of the rows selected, such as after a Shift-click from the first row to the
+        // last, naming the rows left out costs less.
+        if selected.count * 2 > listing.count {
+            var left = IndexSet(integersIn: 0..<listing.count)
+            left.subtract(selected)
+            members = .allExcept(Self.names(at: left, in: listing))
+        } else {
+            members = .only(Self.names(at: selected, in: listing))
+        }
+        let row =
+            (0..<listing.count).contains(tableView.clickedRow)
+            ? tableView.clickedRow : tableView.selectedRow
+        let cursor = row >= 0 ? ExactName(listing[row].name) : nil
+        let anchor =
+            currentModifierFlags().contains(.shift) ? pane.selection.anchor ?? cursor : cursor
+        // The table has the rows, so the pane takes them as they are and looks nothing up.
+        pane.select(Selection(members, cursor: cursor, anchor: anchor), atRows: selected)
+    }
+
+    private static func names(at rows: IndexSet, in listing: Listing) -> Set<ExactName> {
+        var names = Set<ExactName>(minimumCapacity: rows.count)
+        for row in rows {
+            names.insert(ExactName(listing[row].name))
+        }
+        return names
     }
 
     /// Runs Open on a double-click, as Cmd-↓ does. A row outside the selection is selected first;
@@ -184,7 +265,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         guard let listing, row >= 0, row < listing.count else { return }
         let name = ExactName(listing[row].name)
         if !pane.selection.contains(name) {
-            pane.select([name])
+            pane.select(Selection([name], cursor: name))
         }
         tableView.runCommand(NavigationCommands.open.id)
     }

@@ -7,7 +7,12 @@ import Testing
 private func underBudget() -> UIBenchRecord {
     UIBenchRecord(
         launch: [200, 210], openW1: [10, 12], openW2: [30, 40],
-        keyDown: Array(repeating: 4, count: 500), sortChange: [90, 100], stalls: [])
+        keyDown: Array(repeating: 4, count: 500), optionArrows: Array(repeating: 5, count: 200),
+        controlShiftDown: Array(repeating: 5, count: 200),
+        pageDown: Array(repeating: 6, count: 200),
+        shiftDown: Array(repeating: 5, count: 200), selectAll: Array(repeating: 6, count: 100),
+        patchAllSelected: Array(repeating: 7, count: 100),
+        reloadAllSelected: Array(repeating: 8, count: 20), sortChange: [90, 100], stalls: [])
 }
 
 @Test func keyDownUnderB6Passes() throws {
@@ -23,6 +28,14 @@ private func underBudget() -> UIBenchRecord {
     let report = try UIBenchReport(record: record)
     #expect(!report.passed)
     #expect(report.overBudget.map { $0.budget?.id } == ["B6"])
+}
+
+@Test func eachRowCommandIsItsOwnB6Case() throws {
+    var record = underBudget()
+    record.pageDown = Array(repeating: 25, count: 200)
+    let report = try UIBenchReport(record: record)
+    #expect(report.cases.filter { $0.budget?.id == "B6" }.count == 8)
+    #expect(report.overBudget.map(\.name) == ["W2 Fn-↓ key → frame"])
 }
 
 @Test func stallsAreReportedWithTheirSpanAndDontFail() throws {

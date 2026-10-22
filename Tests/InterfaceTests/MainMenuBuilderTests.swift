@@ -124,8 +124,8 @@ private func buildMenu(_ registry: CommandRegistry) throws -> NSMenu {
     #expect(titles.contains("Zoom"))
 }
 
-/// An unshown window holding a pane's table, whose Cmd-A, Cmd-C and Cmd-V are bound to commands
-/// that only record, and a text field.
+/// An unshown window holding a pane's table, whose Cmd-A (Select All), Cmd-C and Cmd-V are bound
+/// to commands that only record, and a text field.
 @MainActor
 private struct TextFieldWindow {
     let window = NSWindow(
@@ -138,7 +138,7 @@ private struct TextFieldWindow {
     init() throws {
         window.isReleasedWhenClosed = false
         var registry = try AppCommands.registry()
-        for key: Character in ["a", "c", "v"] {
+        for key: Character in ["c", "v"] {
             try registry.register(
                 Command(
                     id: CommandID("file.\(key)"), title: "File \(key)",
@@ -183,5 +183,5 @@ private struct TextFieldWindow {
     #expect(try receiver(of: selectAll, in: setup.window) === setup.table)
     #expect(setup.table.tryToPerform(try #require(selectAll.action), with: selectAll))
 
-    #expect(setup.log.ids == [CommandID("file.a")])
+    #expect(setup.log.ids == [SelectionCommands.selectAll.id])
 }

@@ -13,20 +13,22 @@ public final class ListingLoad: @unchecked Sendable {
     public let column: SortColumn
     public let ascending: Bool
     public let priority: Priority
-    let onUpdate: @MainActor @Sendable (ListingUpdate) -> Void
+    /// Runs on the load's worker thread for each update, and returns what to run on the main actor
+    /// for it.
+    let handOff: @Sendable (ListingUpdate) -> @MainActor @Sendable () -> Void
 
     private let lock = NSLock()
     private var cancelled = false
 
     init(
         location: Location, column: SortColumn, ascending: Bool, priority: Priority,
-        onUpdate: @escaping @MainActor @Sendable (ListingUpdate) -> Void
+        handOff: @escaping @Sendable (ListingUpdate) -> @MainActor @Sendable () -> Void
     ) {
         self.location = location
         self.column = column
         self.ascending = ascending
         self.priority = priority
-        self.onUpdate = onUpdate
+        self.handOff = handOff
     }
 
     /// Stops the load: a waiting load never starts, a running one stops at its next batch, and an
