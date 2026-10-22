@@ -46,6 +46,10 @@ public final class Pane {
     public var visibleRowCount = 0
     /// The name of the volume mounted at `/`, from the last listing update; nil until the first.
     public private(set) var rootVolumeName: String?
+    /// The name of the volume holding the folder, for the note a slow or offline pane shows:
+    /// from the last update that could make it slow or offline, or from the mount point of a
+    /// volume that unmounted under it. Nil until one of those.
+    public private(set) var volumeName: String?
 
     /// Watching `location`. The pane stops it, and drops it, when it navigates or closes. A
     /// monitor handed to a closed pane, one that finished starting after its column went, is
@@ -339,7 +343,7 @@ public final class Pane {
         let cached = pendingGoCached
         pendingGo = nil
         pendingGoCached = nil
-        if case .failed(let error, _) = update,
+        if case .failed(let error, _, _) = update,
             error.reason == .notFound || error.reason == .notADirectory
         {
             finish(error)
@@ -803,8 +807,9 @@ public final class Pane {
             show(
                 .loaded(listing), after: .loaded(complete: true), resolved: resolved,
                 from: selectionVersion)
-        case .failed(let error, let rootVolumeName):
+        case .failed(let error, let rootVolumeName, let volumeName):
             self.rootVolumeName = rootVolumeName
+            self.volumeName = volumeName
             loadIsRunning = false
             switch error.reason {
             case .unreachable: goOffline()
@@ -812,17 +817,20 @@ public final class Pane {
             case .permissionDenied, .notFound, .notADirectory, .other:
                 show(.failed(error), after: .loaded(complete: true))
             }
-        case .volumeGone(_, let rootVolumeName):
+        case .volumeGone(_, let rootVolumeName, let volumeName):
             self.rootVolumeName = rootVolumeName
+            self.volumeName = volumeName
             loadIsRunning = false
             goOffline()
-        case .slow(let rootVolumeName):
+        case .slow(let rootVolumeName, let volumeName):
             self.rootVolumeName = rootVolumeName
+            self.volumeName = volumeName
             // The pane keeps waiting; the load's last update still comes if the read returns.
             if case .offline = state { return }
             state = .slow(keptRows)
-        case .gaveUp(let rootVolumeName):
+        case .gaveUp(let rootVolumeName, let volumeName):
             self.rootVolumeName = rootVolumeName
+            self.volumeName = volumeName
             // The load keeps going, and its last update still replaces the offline state.
             if case .offline = state { return }
             goOffline()
@@ -877,8 +885,10 @@ public final class Pane {
     /// mounts again or the pane leaves, nothing lists the folder: what is left at the mount
     /// point isn't it. A pending `goToFolder` is a folder the pane is leaving for, so it goes
     /// on. In column mode each column goes offline on its own.
-    func volumeDidUnmount() {
+    func volumeDidUnmount(at mountPoint: String) {
         guard columnTrail == nil, !isClosed else { return }
+        // The volume can't be asked, and may have gone before any update named it.
+        volumeName = VolumeIdentity.name(mountedAt: mountPoint)
         load?.cancel()
         loadIsRunning = false
         relistAfterLoad = false

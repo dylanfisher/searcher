@@ -40,8 +40,10 @@ stacked single-column tables over `NSBrowser`.
 - **The filter field shows the focused column's filter.** Moving to another column shows that
   column's text, or hides the field when it has none. The field is emptied before it gives up the
   keys, so its end-of-editing action can't send the old text to the pane now in front.
-- **Overlays are the list's only.** The spinner, the access explanation and the error line stay
-  hidden in column view; the pane holds no rows there. Each column's own spinner state is M2.8's.
+- **Overlays are the list's only.** The spinner (superseded: it moved to the path bar row and
+  shows the focused column's state, see [0052](0052-pane-status.md)), the access explanation and
+  the error line stay hidden in column view; the pane holds no rows there. Each column's own
+  spinner state is M2.8's.
 - **View menu.** as List (Cmd-1) and as Columns (Cmd-3) head the View menu, with a check mark on
   the pane's mode. The check comes from `CommandBinding.isCurrent`, which reads the pane through
   the command context, since view mode is per pane while `isChecked` reads app-wide `Settings`.

@@ -349,7 +349,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     _ = load(service, folder.path, into: log)
 
     #expect(await log.wait(for: 1))
-    guard case .failed(let error, _) = await log.updates.first else {
+    guard case .failed(let error, _, _) = await log.updates.first else {
         Issue.record("updates are \(await log.updates)")
         return
     }
@@ -449,9 +449,9 @@ private func permutations<Element>(_ elements: [Element]) -> [[Element]] {
     let names = await log.updates.map { update in
         switch update {
         case .firstBatch(_, let rootVolumeName), .full(_, let rootVolumeName),
-            .failed(_, let rootVolumeName), .slow(let rootVolumeName),
-            .gaveUp(let rootVolumeName),
-            .cached(_, _, let rootVolumeName), .volumeGone(_, let rootVolumeName):
+            .failed(_, let rootVolumeName, _), .slow(let rootVolumeName, _),
+            .gaveUp(let rootVolumeName, _),
+            .cached(_, _, let rootVolumeName), .volumeGone(_, let rootVolumeName, _):
             rootVolumeName
         }
     }
@@ -608,6 +608,139 @@ private func waitForSleeps(_ count: Int, on clock: ManualClock) async -> Bool {
     #expect(threads.all.allSatisfy { $0 })
 }
 
+/// The name a stall or failure update gives the folder's volume.
+private func volumeName(_ update: ListingUpdate) -> String? {
+    switch update {
+    case .slow(_, let volumeName), .gaveUp(_, let volumeName), .failed(_, _, let volumeName),
+        .volumeGone(_, _, let volumeName):
+        volumeName
+    case .cached, .firstBatch, .full: nil
+    }
+}
+
+@Test func stallUpdatesNameAShareByItsMountPointFromTheMountTable() async {
+    let music = VolumeIdentity(
+        device: "//me@nas/music", mountPoint: "/net/nas/music", kind: .network)
+    let lister = GatedLister([
+        "/net/nas/music/album": .blockForever, "/local/stuck": .blockForever,
+    ])
+    lister.releaseAll()
+    let clock = ManualClock()
+    let service = ListingService(
+        lister: lister, clock: clock, rootVolumeName: { "Test Disk" },
+        volumeOf: { $0.hasPrefix("/net/") ? music : disk }, mountedVolumes: { [music, disk] })
+    let shareLog = UpdateLog()
+    let localLog = UpdateLog()
+    _ = load(service, "/net/nas/music/album", into: shareLog)
+    _ = load(service, "/local/stuck", into: localLog)
+    #expect(lister.waitForCalls(2))
+
+    clock.advance(by: LoadTimeouts.giveUp)
+    #expect(await shareLog.wait(for: 2))
+    #expect(await localLog.wait(for: 2))
+
+    #expect(await shareLog.updates.map(volumeName) == ["music", "music"])
+    #expect(await localLog.updates.map(volumeName) == ["Test Disk", "Test Disk"])
+}
+
+@Test func stallUpdatesNameALocalDiskByItsMountPointAndAFirmlinkedPathByTheRoot() async {
+    let backup = VolumeIdentity(
+        device: "/dev/disk5s1", mountPoint: "/Volumes/Backup", kind: .local)
+    let data = VolumeIdentity(
+        device: "/dev/disk3s5", mountPoint: "/System/Volumes/Data", kind: .local)
+    let lister = GatedLister([
+        "/Volumes/Backup/photos": .blockForever, "/Users/dylan": .blockForever,
+    ])
+    lister.releaseAll()
+    let clock = ManualClock()
+    let service = ListingService(
+        lister: lister, clock: clock, rootVolumeName: { "Test Disk" },
+        volumeOf: { $0.hasPrefix("/Volumes/") ? backup : disk },
+        mountedVolumes: { [disk, data, backup] })
+    let backupLog = UpdateLog()
+    let homeLog = UpdateLog()
+    _ = load(service, "/Volumes/Backup/photos", into: backupLog)
+    _ = load(service, "/Users/dylan", into: homeLog)
+    #expect(lister.waitForCalls(2))
+
+    clock.advance(by: LoadTimeouts.slow)
+    #expect(await backupLog.wait(for: 1))
+    #expect(await homeLog.wait(for: 1))
+
+    #expect(await backupLog.updates.map(volumeName) == ["Backup"])
+    // /Users is a firmlink into the Data volume, but by its text it is on the root.
+    #expect(await homeLog.updates.map(volumeName) == ["Test Disk"])
+}
+
+/// A share in the mount table at `/net/nas/music` for the failure tests below.
+private let musicShare = VolumeIdentity(
+    device: "//me@nas/music", mountPoint: "/net/nas/music", kind: .network)
+
+@Test func aShareThatUnmountedBeforeTheVolumeReadIsNamedByWhereItWasMounted() async {
+    let mounts = LeftBehindMountPoint()
+    let lister = GatedLister(["/a/x": .batches([files("e", 0..<1)])])
+    lister.releaseAll()
+    let service = ListingService(
+        lister: lister, rootVolumeName: { "Test Disk" },
+        volumeOf: { path throws(ListingError) in
+            let volume = mounts.volume(of: path)
+            // The mount point went with the share, as the system removes it on unmount.
+            if volume == disk, path.hasPrefix("/a") {
+                throw ListingError(path: path, code: ENOENT)
+            }
+            return volume
+        })
+    let log = UpdateLog()
+    _ = load(service, "/a/x", into: log)
+    #expect(await log.wait(for: 1))
+
+    mounts.unmount()
+    _ = load(service, "/a/x", into: log)
+    #expect(await log.wait(for: 2))
+
+    guard case .volumeGone(_, _, let volumeName) = await log.updates.last else {
+        Issue.record("updates are \(await log.updates)")
+        return
+    }
+    #expect(volumeName == "a")
+}
+
+@Test func aVolumeReadThatFailsNamesTheShareFromTheMountTable() async {
+    let lister = GatedLister([:])
+    let service = ListingService(
+        lister: lister, rootVolumeName: { "Test Disk" },
+        volumeOf: { path throws(ListingError) in throw ListingError(path: path, code: ENOTCONN) },
+        mountedVolumes: { [musicShare, disk] })
+    let log = UpdateLog()
+
+    _ = load(service, "/net/nas/music/album", into: log)
+    #expect(await log.wait(for: 1))
+
+    #expect(await log.updates.map(volumeName) == ["music"])
+}
+
+@Test func aShareThatDropsMidReadNamesItselfFromTheMountTable() async {
+    let lister = GatedLister([
+        "/net/nas/music/album": .failure(
+            ListingError(path: "/net/nas/music/album", code: ENOTCONN))
+    ])
+    lister.releaseAll()
+    let service = ListingService(
+        lister: lister, rootVolumeName: { "Test Disk" }, volumeOf: { _ in musicShare },
+        mountedVolumes: { [musicShare, disk] })
+    let log = UpdateLog()
+
+    _ = load(service, "/net/nas/music/album", into: log)
+    #expect(await log.wait(for: 1))
+
+    guard case .failed(let error, _, let volumeName) = await log.updates.last else {
+        Issue.record("updates are \(await log.updates)")
+        return
+    }
+    #expect(error.reason == .unreachable)
+    #expect(volumeName == "music")
+}
+
 @Test func slowLoadsGiveUpTheirSlots() async {
     let stuck = (1...ListingService.mostRunningLoads).map { "/net-\($0)/stuck" }
     let lister = GatedLister(
@@ -692,7 +825,7 @@ private func waitForSleeps(_ count: Int, on clock: ManualClock) async -> Bool {
     _ = load(service, "/a/gone", into: log)
 
     #expect(await log.wait(for: 1))
-    guard case .failed(let error, _) = await log.updates.first else {
+    guard case .failed(let error, _, _) = await log.updates.first else {
         Issue.record("updates are \(await log.updates)")
         return
     }
@@ -726,7 +859,7 @@ private func waitForSleeps(_ count: Int, on clock: ManualClock) async -> Bool {
     _ = load(service, "/x", into: log)
 
     #expect(await log.wait(for: 1))
-    guard case .failed(let failure, _) = await log.updates.first else {
+    guard case .failed(let failure, _, _) = await log.updates.first else {
         Issue.record("updates are \(await log.updates)")
         return
     }
@@ -869,7 +1002,7 @@ private final class LeftBehindMountPoint: @unchecked Sendable {
 
     _ = load(service, "/a/y", into: log)
     #expect(await log.wait(for: 1))
-    guard case .failed(let error, _) = await log.updates.last else {
+    guard case .failed(let error, _, _) = await log.updates.last else {
         Issue.record("a folder missing from a mounted share isn't failed: \(await log.updates)")
         return
     }
@@ -878,11 +1011,13 @@ private final class LeftBehindMountPoint: @unchecked Sendable {
     mounts.unmount()
     _ = load(service, "/a/y", into: log)
     #expect(await log.wait(for: 2))
-    guard case .volumeGone(let goneError, _) = await log.updates.last else {
+    guard case .volumeGone(let goneError, _, let volumeName) = await log.updates.last else {
         Issue.record("updates are \(await log.updates)")
         return
     }
     #expect(goneError.reason == .notFound)
+    // The mount table no longer has the share; the service remembered where it was mounted.
+    #expect(volumeName == "a")
 }
 
 /// Delivers one batch, then fails as a share that drops the connection does.

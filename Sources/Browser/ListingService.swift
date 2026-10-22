@@ -143,8 +143,12 @@ public final class ListingService: Sendable {
         // load's volume decides when it may start.
         BlockingCallThread.start { self.place(load) }
         // Read on a thread of its own, so the stall timers, which run on the concurrency pool,
-        // only pass it on, and placing the load doesn't wait for it.
-        BlockingCallThread.start { load.stall.setRootVolumeName(self.rootVolumeName()) }
+        // only pass them on, and placing the load doesn't wait for them.
+        BlockingCallThread.start {
+            let root = self.rootVolumeName()
+            load.stall.setVolumeNames(
+                root: root, folder: self.volumeName(of: load.location.path, root: root))
+        }
         return load
     }
 
@@ -159,12 +163,29 @@ public final class ListingService: Sendable {
         }
     }
 
+    /// The name of the volume holding `path` for a slow or offline note: the volume, network or
+    /// local, whose mount point is the longest one holding it in the mount table, or `root`, the
+    /// root volume's name, for a path whose longest mount point is `/`. Asks no volume, so a
+    /// volume that stopped answering can't hold it. A path is placed by its text, so a firmlinked
+    /// path such as `/Users` is on the root, where `statfs` would name the Data volume behind it.
+    private func volumeName(of path: String, root: String) -> String {
+        guard let volume = Self.longestMount(holding: path, in: mountedVolumes()),
+            volume.mountPoint != "/"
+        else { return root }
+        return volume.name
+    }
+
     /// The network volume whose mount point is the longest one holding `path`, from the mount
     /// table.
     private func mountedNetworkVolume(holding path: String) -> VolumeIdentity? {
-        mountedVolumes()
-            .filter { $0.kind == .network && $0.holds(path) }
-            .max { $0.mountPoint.count < $1.mountPoint.count }
+        Self.longestMount(holding: path, in: mountedVolumes().filter { $0.kind == .network })
+    }
+
+    /// The volume in `volumes` whose mount point is the longest one holding `path`.
+    private static func longestMount(
+        holding path: String, in volumes: [VolumeIdentity]
+    ) -> VolumeIdentity? {
+        volumes.filter { $0.holds(path) }.max { $0.mountPoint.count < $1.mountPoint.count }
     }
 
     /// Runs on the load's `BlockingCallThread`. Hands over the folder's cached rows, unless
@@ -178,11 +199,19 @@ public final class ListingService: Sendable {
             scheduler.async { self.queue.remove(load) }
             guard error.reason == .notFound, let gone = goneVolume(holding: load.location.path)
             else {
-                handLast(.failed(error, rootVolumeName: rootVolumeName()), to: load)
+                let root = rootVolumeName()
+                handLast(
+                    .failed(
+                        error, rootVolumeName: root,
+                        volumeName: volumeName(of: load.location.path, root: root)),
+                    to: load)
                 return
             }
             let report: @Sendable () -> Void = {
-                self.handLast(.volumeGone(error, rootVolumeName: self.rootVolumeName()), to: load)
+                self.handLast(
+                    .volumeGone(
+                        error, rootVolumeName: self.rootVolumeName(), volumeName: gone.name),
+                    to: load)
             }
             guard cache != nil, cachedFrom != gone else { return report() }
             handCachedRows(of: load, on: gone, then: report)
@@ -295,10 +324,15 @@ public final class ListingService: Sendable {
             load.stall.finish {}
             return
         case .failure(let error as ListingError):
-            if error.reason == .notFound, goneVolume(holding: load.location.path) != nil {
-                handLast(.volumeGone(error, rootVolumeName: rootVolumeName), to: load)
+            if error.reason == .notFound, let gone = goneVolume(holding: load.location.path) {
+                handLast(
+                    .volumeGone(error, rootVolumeName: rootVolumeName, volumeName: gone.name),
+                    to: load)
             } else {
-                handLast(.failed(error, rootVolumeName: rootVolumeName), to: load)
+                let name = volumeName(of: load.location.path, root: rootVolumeName)
+                handLast(
+                    .failed(error, rootVolumeName: rootVolumeName, volumeName: name),
+                    to: load)
             }
             return
         case .failure(let error):
@@ -381,10 +415,13 @@ public final class ListingService: Sendable {
             }
             // Handed while the stall is locked, so it reaches the main queue before the load's
             // last update.
-            load.stall.report(kind, generation: generation) { rootVolumeName in
+            load.stall.report(kind, generation: generation) { names in
                 switch kind {
-                case .slow: self.hand(.slow(rootVolumeName: rootVolumeName), to: load)
-                case .giveUp: self.hand(.gaveUp(rootVolumeName: rootVolumeName), to: load)
+                case .slow:
+                    self.hand(.slow(rootVolumeName: names.root, volumeName: names.folder), to: load)
+                case .giveUp:
+                    self.hand(
+                        .gaveUp(rootVolumeName: names.root, volumeName: names.folder), to: load)
                 }
             }
         }
@@ -543,12 +580,18 @@ extension VolumeIdentity {
 
 /// A load's waits for a batch: reported slow after `LoadTimeouts.slow` and given up after
 /// `LoadTimeouts.giveUp`, each at most once, counted from the request and from each batch. A
-/// report waits for the root volume's name, which the load's thread reads, so no timer reads the
-/// file system on the concurrency pool.
+/// report waits for the volume names, which a load's thread reads, so no timer reads the file
+/// system on the concurrency pool.
 final class LoadStall: @unchecked Sendable {
     enum Kind {
         case slow
         case giveUp
+    }
+
+    /// The root volume's name, for the path bar, and the name of the volume holding the folder.
+    struct VolumeNames {
+        let root: String
+        let folder: String
     }
 
     // `lock` guards everything below.
@@ -557,9 +600,9 @@ final class LoadStall: @unchecked Sendable {
     private var generation = 0
     private var reported: Set<Kind> = []
     private var isFinished = false
-    private var rootVolumeName: String?
-    /// Reports due before the root volume's name was read.
-    private var waitingReports: [(String) -> Void] = []
+    private var volumeNames: VolumeNames?
+    /// Reports due before the volume names were read.
+    private var waitingReports: [(VolumeNames) -> Void] = []
 
     /// Cancels the running timers and starts the ones `makeTimers` returns for a new generation,
     /// unless the load has ended.
@@ -572,30 +615,31 @@ final class LoadStall: @unchecked Sendable {
         }
     }
 
-    /// Runs `report` with the root volume's name once per kind, if the timers of `generation`
-    /// are still the current ones and the load hasn't ended or been cancelled. Before the name is
-    /// read, the report waits for it.
-    func report(_ kind: Kind, generation: Int, _ report: @escaping (String) -> Void) {
+    /// Runs `report` with the volume names once per kind, if the timers of `generation` are
+    /// still the current ones and the load hasn't ended or been cancelled. Before the names are
+    /// read, the report waits for them.
+    func report(_ kind: Kind, generation: Int, _ report: @escaping (VolumeNames) -> Void) {
         lock.withLock {
             guard !isFinished, generation == self.generation, !reported.contains(kind) else {
                 return
             }
             reported.insert(kind)
-            if let rootVolumeName {
-                report(rootVolumeName)
+            if let volumeNames {
+                report(volumeNames)
             } else {
                 waitingReports.append(report)
             }
         }
     }
 
-    /// Takes the root volume's name, read on the load's thread, and runs the reports that
-    /// waited for it.
-    func setRootVolumeName(_ name: String) {
+    /// Takes the volume names, read on a load's thread, and runs the reports that waited for
+    /// them.
+    func setVolumeNames(root: String, folder: String) {
         lock.withLock {
-            rootVolumeName = name
+            let names = VolumeNames(root: root, folder: folder)
+            volumeNames = names
             guard !isFinished else { return }
-            for report in waitingReports { report(name) }
+            for report in waitingReports { report(names) }
             waitingReports = []
         }
     }

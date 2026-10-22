@@ -337,6 +337,21 @@ func aShareThatStopsAnsweringGoesOfflineWithTheCachedRows(code: Int32) async {
     #expect(pane.state.names == ["a", "b"])
 }
 
+@MainActor @Test func aPaneThatGivesUpNamesItsShareFromTheMountTable() async {
+    let dead = GatedLister([music: .blockForever])
+    dead.releaseAll()
+    let fixture = await OfflineFixture(at: music, lister: dead, mounted: [share])
+    let pane = fixture.pane
+    #expect(dead.waitForCall(music))
+
+    fixture.clock.advance(by: LoadTimeouts.slow)
+    await settle { pane.state.isSlow }
+    #expect(pane.volumeName == "share")
+    fixture.clock.advance(by: LoadTimeouts.giveUp - LoadTimeouts.slow)
+    await settle { pane.state.isOffline }
+    #expect(pane.volumeName == "share")
+}
+
 @MainActor @Test func focusingAPaneOnAnUnreachableShareKeepsItsRows() async {
     let healthy = GatedLister([music: .batches([[file("a")]])])
     healthy.releaseAll()
@@ -655,6 +670,19 @@ func aShareThatStopsAnsweringGoesOfflineWithTheCachedRows(code: Int32) async {
 
         #expect(pane.state.isOffline)
         #expect(pane.state.names == ["a"])
+    }
+
+    @Test func aPaneThatUnmountsBeforeItsFirstUpdateNamesTheVolumeByItsMountPoint() async {
+        let mountPoint = uniqueMountPoint()
+        let lister = GatedLister([mountPoint + "/music": .blockForever])
+        lister.releaseAll()
+        let pane = stubPane(at: mountPoint + "/music", lister: lister)
+        #expect(lister.waitForCall(mountPoint + "/music"))
+
+        VolumeEvents.didUnmount(at: mountPoint)
+
+        #expect(pane.state.isOffline)
+        #expect(pane.volumeName == Location(path: mountPoint).name)
     }
 
     @Test func aClosedPaneIgnoresUnmountAndMount() async {

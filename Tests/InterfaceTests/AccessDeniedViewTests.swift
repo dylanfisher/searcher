@@ -54,7 +54,7 @@ extension ListingState {
     #expect(!fixture.deniedView.isHidden)
     #expect(fixture.deniedView.titleLabel.stringValue.contains("“Mail”"))
     #expect(fixture.controller.messageLabel.isHidden)
-    #expect(fixture.controller.spinner.isHidden)
+    #expect(fixture.controller.status.spinner.isHidden)
 }
 
 @MainActor @Test func theButtonOpensFullDiskAccessInSystemSettings() async throws {
