@@ -83,6 +83,12 @@ extension ListingState {
     var isLoading: Bool { if case .loading = self { true } else { false } }
     var isDenied: Bool { if case .denied = self { true } else { false } }
     var isFailed: Bool { if case .failed = self { true } else { false } }
+    var error: ListingError? {
+        switch self {
+        case .denied(let error), .failed(let error): error
+        case .loading, .partial, .loaded: nil
+        }
+    }
 
     var names: [String] {
         guard let listing else { return [] }
@@ -461,6 +467,173 @@ private func heldSortQueue() -> DispatchQueue {
 
     #expect(fixture.actions.openedFiles == [URL(fileURLWithPath: "/root/a.txt")])
     #expect(fixture.pane.location == Location(path: "/root"))
+}
+
+/// A pane over a temporary folder holding `folder` (with `inside.txt`), `file.txt`, links to
+/// each, a link to the folder's link, a broken link and a link to itself, loaded.
+@MainActor
+private func linkTree() async throws -> (Pane, StubSystemActions, TemporaryFolder) {
+    let root = try TemporaryFolder("PaneTests")
+    let path = root.url.path
+    try FileManager.default.createDirectory(
+        atPath: path + "/folder", withIntermediateDirectories: false)
+    try Data().write(to: root.url.appending(path: "folder/inside.txt"))
+    try Data().write(to: root.url.appending(path: "file.txt"))
+    for (link, target) in [
+        ("folder link", "folder"), ("link to link", "folder link"), ("file link", "file.txt"),
+        ("broken link", "missing"), ("loop", "loop"),
+    ] {
+        try FileManager.default.createSymbolicLink(
+            atPath: path + "/" + link, withDestinationPath: target)
+    }
+    let actions = StubSystemActions()
+    let pane = Pane(
+        location: Location(path: path), service: ListingService(), systemActions: actions,
+        settings: untouchedSettings())
+    await settle { pane.state.isLoaded }
+    return (pane, actions, root)
+}
+
+@MainActor @Test func openOnALinkToAFolderLoadsItAtTheLinksPath() async throws {
+    let (pane, actions, root) = try await linkTree()
+    pane.select(Selection([ExactName("folder link")], cursor: ExactName("folder link")))
+
+    pane.openSelection()
+    await settle { pane.location.name == "folder link" && pane.state.isLoaded }
+
+    #expect(pane.location == Location(path: root.url.path).child(named: "folder link"))
+    #expect(pane.state.names == ["inside.txt"])
+    #expect(actions.openedFiles.isEmpty)
+
+    pane.goBack()
+    await settle { pane.location.path == root.url.path && pane.state.isLoaded }
+    #expect(pane.selection.cursor == ExactName("folder link"))
+}
+
+@MainActor @Test func openOnALinkToALinkToAFolderLoadsTheFolder() async throws {
+    let (pane, actions, root) = try await linkTree()
+    pane.select(Selection([ExactName("link to link")], cursor: ExactName("link to link")))
+
+    pane.openSelection()
+    await settle { pane.location.name == "link to link" && pane.state.isLoaded }
+
+    #expect(pane.location == Location(path: root.url.path).child(named: "link to link"))
+    #expect(pane.state.names == ["inside.txt"])
+    #expect(actions.openedFiles.isEmpty)
+}
+
+@MainActor @Test func openOnALinkToAFileOrABrokenLinkHandsItToTheSystem() async throws {
+    let (pane, actions, root) = try await linkTree()
+    for name in ["file link", "broken link"] {
+        pane.select(Selection([ExactName(name)], cursor: ExactName(name)))
+        let opened = actions.openedFiles.count
+
+        pane.openSelection()
+        await settle { actions.openedFiles.count == opened + 1 }
+
+        #expect(actions.openedFiles.last?.path == root.url.path + "/" + name)
+        #expect(pane.location.path == root.url.path)
+    }
+}
+
+@MainActor @Test func openOnSeveralEntriesHandsLinksToTheSystemUnresolved() async throws {
+    let (pane, actions, root) = try await linkTree()
+    pane.select(
+        Selection(
+            [ExactName("folder link"), ExactName("file.txt"), ExactName("folder")],
+            cursor: ExactName("folder")))
+
+    pane.openSelection()
+
+    #expect(
+        Set(actions.openedFiles.map(\.lastPathComponent)) == ["folder link", "file.txt"])
+    #expect(pane.location.path == root.url.path)
+}
+
+@MainActor @Test func openOnALinkThatLandsAfterThePaneMovedDoesNothing() async throws {
+    let (pane, actions, root) = try await linkTree()
+    pane.select(Selection([ExactName("folder link")], cursor: ExactName("folder link")))
+
+    pane.openSelection()
+    pane.navigate(to: Location(path: root.url.path).child(named: "folder"))
+    // The link's listing would land on the main queue by now.
+    try await Task.sleep(for: .milliseconds(100))
+    await drainMainQueue()
+
+    #expect(pane.location == Location(path: root.url.path).child(named: "folder"))
+    #expect(actions.openedFiles.isEmpty)
+}
+
+@MainActor @Test func openOnALinkToItselfShowsTheFailedState() async throws {
+    let (pane, actions, root) = try await linkTree()
+    pane.select(Selection([ExactName("loop")], cursor: ExactName("loop")))
+
+    pane.openSelection()
+    await settle { pane.location.name == "loop" && pane.state.isFailed }
+
+    #expect(pane.location == Location(path: root.url.path).child(named: "loop"))
+    #expect(pane.state.error?.code == ELOOP)
+    #expect(actions.openedFiles.isEmpty)
+}
+
+@MainActor @Test func openOnALinkThenBackAndForwardDoesNotOpenTheLinkLate() async throws {
+    let (pane, actions, root) = try await linkTree()
+    pane.navigate(to: Location(path: root.url.path).child(named: "folder"))
+    await settle { pane.location.name == "folder" && pane.state.isLoaded }
+    pane.goBack()
+    await settle { pane.location.path == root.url.path && pane.state.isLoaded }
+    pane.select(Selection([ExactName("folder link")], cursor: ExactName("folder link")))
+
+    pane.openSelection()
+    pane.goForward()
+    pane.goBack()
+    try await Task.sleep(for: .milliseconds(100))
+    await drainMainQueue()
+
+    #expect(pane.location.path == root.url.path)
+    #expect(pane.canGoForward)
+    #expect(actions.openedFiles.isEmpty)
+}
+
+@MainActor @Test func goToFolderDuringALinkOpenWins() async throws {
+    // The link is real, so anything that reads it finds a folder; the go's listing is held so
+    // it lands last.
+    let root = try TemporaryFolder("PaneTests")
+    let path = root.url.path
+    try FileManager.default.createDirectory(
+        atPath: path + "/folder", withIntermediateDirectories: false)
+    try FileManager.default.createSymbolicLink(
+        atPath: path + "/folder link", withDestinationPath: "folder")
+    let link = DirectoryEntry(
+        name: "folder link", type: .symbolicLink, size: nil, modified: Date(), isHidden: false,
+        isDataless: false)
+    let lister = GatedLister([
+        path: .batches([[folder("folder"), link]]),
+        path + "/folder": .batches([[file("inside.txt")]]),
+        path + "/folder link": .batches([[file("through the link.txt")]]),
+    ])
+    lister.release(path)
+    lister.release(path + "/folder link")
+    let pane = Pane(
+        location: Location(path: path), service: ListingService(lister: lister),
+        systemActions: StubSystemActions(), settings: untouchedSettings())
+    await settle { pane.state.isLoaded }
+    pane.select(Selection([ExactName("folder link")], cursor: ExactName("folder link")))
+    var finished: [ListingError?] = []
+
+    pane.openSelection()
+    pane.goToFolder(Location(path: path + "/folder")) { finished.append($0) }
+    try await Task.sleep(for: .milliseconds(100))
+    await drainMainQueue()
+    // The link's load was cancelled: its rows never reached the pane, which still shows its own.
+    #expect(pane.state.names == ["folder", "folder link"])
+    #expect(pane.location == Location(path: path))
+    lister.release(path + "/folder")
+    await settle { finished.count == 1 && pane.state.isLoaded }
+
+    #expect(pane.location == Location(path: path + "/folder"))
+    #expect(finished.count == 1)
+    #expect(finished.first.map { $0 == nil } == true)
 }
 
 @MainActor @Test func openWithNothingSelectedDoesNothing() async {

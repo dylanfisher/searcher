@@ -222,8 +222,8 @@ public final class Pane {
     }
 
     /// Opens the selected folder in this pane, or hands the selected files to the system. With
-    /// several entries selected, folders are skipped. A symbolic link counts as a file: whether
-    /// it points at a folder takes a file-system call, and the system resolves it.
+    /// several entries selected, folders are skipped and symbolic links count as files, which the
+    /// system resolves. A single selected link opens as what it points at does (`openLink`).
     public func openSelection() {
         guard let listing = state.listing else { return }
         // A provisional selection knows only the rows near the cursor. Opening right after a
@@ -235,10 +235,33 @@ public final class Pane {
             navigate(to: location.child(named: entries[0].name))
             return
         }
-        for entry in entries where entry.type != .directory {
-            systemActions.openFile(
-                URL(fileURLWithPath: location.child(named: entry.name).path, isDirectory: false))
+        if entries.count == 1, entries[0].type == .symbolicLink {
+            openLink(location.child(named: entries[0].name))
+            return
         }
+        for entry in entries where entry.type != .directory {
+            openFile(location.child(named: entry.name))
+        }
+    }
+
+    /// Opens `link` as Go to folder would, so listing it is the check: a link to a folder moves
+    /// the pane to the link's own path on its first rows. A link to a file or a broken one leaves
+    /// the pane where it is and goes to the system. Any other failure shows in the pane. A later
+    /// navigation or Go to folder cancels the open, as it cancels any pending go.
+    private func openLink(_ link: Location) {
+        goToFolder(link) { [weak self] error in
+            guard let self, let error else { return }
+            switch error.reason {
+            case .notADirectory, .notFound:
+                openFile(link)
+            case .privacyProtected, .permissionDenied, .other:
+                preconditionFailure("goToFolder moved the pane for \(error) but reported it")
+            }
+        }
+    }
+
+    private func openFile(_ location: Location) {
+        systemActions.openFile(URL(fileURLWithPath: location.path, isDirectory: false))
     }
 
     /// Shows the folder that holds this one, with this one selected. Does nothing at `/`.
