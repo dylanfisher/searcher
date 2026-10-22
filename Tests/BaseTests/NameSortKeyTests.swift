@@ -204,13 +204,42 @@ func pinnedOrderMatchesLocalizedStandardCompare() {
     #expect(NameSortKey("file007") == NameSortKey("file7"))
 }
 
+@Test func foldDropsCaseAccentsAndWidth() {
+    #expect(utf8(NameSortKey.fold("Ünïcode Ｆｉｌｅ")) == utf8(NameSortKey.fold("unicode file")))
+    #expect(utf8(NameSortKey.fold("unicode file")) == utf8("unicode file"))
+    #expect(utf8(NameSortKey.fold("Re\u{301}sumé")) == utf8("resume"))
+}
+
+@Test func foldKeepsLettersTheRootOrderKeepsApart() {
+    // Canonical decomposition splits й into и and a breve; the fold puts them back together.
+    #expect(utf8(NameSortKey.fold("Йогурт")) == utf8("йогурт"))
+    #expect(utf8(NameSortKey.fold("и\u{306}")) == utf8("й"))
+    #expect(utf8(NameSortKey.fold("أحمد")) == utf8("أحمد"))
+}
+
+@Test func keyFollowsTheFold() {
+    for name in corpus {
+        #expect(NameSortKey(name) == NameSortKey(NameSortKey.fold(name)), "\(name)")
+    }
+}
+
 @Test func parallelBuildMatchesSerialBuild() {
     // Enough names for several chunks, with a remainder so the last chunk is short.
     let names = (0..<20_011).map { "\(corpus[$0 % corpus.count]) \($0)" }
-    #expect(NameSortKey.keys(for: names) == names.map(NameSortKey.init))
+    let built = NameSortKey.foldedNamesAndKeys(for: names)
+    #expect(built.keys == names.map(NameSortKey.init))
+    #expect(built.foldedNames.map(utf8) == names.map { utf8(NameSortKey.fold($0)) })
 }
 
 @Test func parallelBuildHandlesFewNames() {
-    #expect(NameSortKey.keys(for: []).isEmpty)
-    #expect(NameSortKey.keys(for: ["b", "a"]) == [NameSortKey("b"), NameSortKey("a")])
+    let none = NameSortKey.foldedNamesAndKeys(for: [])
+    #expect(none.keys.isEmpty && none.foldedNames.isEmpty)
+    let two = NameSortKey.foldedNamesAndKeys(for: ["B", "a"])
+    #expect(two.keys == [NameSortKey("B"), NameSortKey("a")])
+    #expect(two.foldedNames == ["b", "a"])
+}
+
+/// A string's bytes, since `String` equality treats canonically equivalent strings as equal.
+private func utf8(_ string: String) -> [UInt8] {
+    Array(string.utf8)
 }

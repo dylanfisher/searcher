@@ -6,16 +6,24 @@ import Testing
 
 private func file(_ name: String, size: Int64 = 0, modified: TimeInterval = 0) -> DirectoryEntry {
     DirectoryEntry(
-        name: name, type: .regular, size: size, modified: Date(timeIntervalSince1970: modified))
+        name: name, type: .regular, size: size, modified: Date(timeIntervalSince1970: modified),
+        isHidden: false, isDataless: false)
 }
 
 private func folder(_ name: String, modified: TimeInterval = 0) -> DirectoryEntry {
     DirectoryEntry(
-        name: name, type: .directory, size: nil, modified: Date(timeIntervalSince1970: modified))
+        name: name, type: .directory, size: nil, modified: Date(timeIntervalSince1970: modified),
+        isHidden: false, isDataless: false)
 }
 
 private func names(_ listing: Listing) -> [String] {
     (0..<listing.count).map { listing[$0].name }
+}
+
+/// Each row's folded name as bytes, since `String` equality treats canonically equivalent strings
+/// as equal.
+private func foldedNames(_ listing: Listing) -> [[UInt8]] {
+    (0..<listing.count).map { Array(listing.foldedName(atRow: $0).utf8) }
 }
 
 private func sorted(_ entries: [DirectoryEntry], _ column: SortColumn, ascending: Bool = true)
@@ -218,7 +226,24 @@ func updateKeepsOrder(column: SortColumn, ascending: Bool) {
         #expect(
             (0..<listing.count).map { listing.kind(atRow: $0) }
                 == (0..<fresh.count).map { fresh.kind(atRow: $0) })
+        #expect(foldedNames(listing) == foldedNames(fresh))
     }
+}
+
+@Test func foldedNamesMatchTheFoldOfEachName() {
+    // Enough entries that the build folds them in parallel chunks.
+    let accented = ["Résumé", "ÜBER", "Ｆｉｌｅ", "plain", "Йогурт"]
+    let entries = (0..<3_001).map { file("\(accented[$0 % accented.count]) \($0)") }
+    var listing = Listing(entries)
+    listing.update(file("Ünïcode Ｆｉｌｅ"))
+    listing.remove(named: "plain 3")
+
+    #expect(listing.count == entries.count)
+    for row in 0..<listing.count {
+        let expected = Array(NameSortKey.fold(listing[row].name).utf8)
+        #expect(Array(listing.foldedName(atRow: row).utf8) == expected, "\(listing[row].name)")
+    }
+    #expect(listing.row(named: "Ünïcode Ｆｉｌｅ").map(listing.foldedName) == "unicode file")
 }
 
 @Test func rowNamedFindsTheRowInEveryOrder() {

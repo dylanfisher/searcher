@@ -11,7 +11,7 @@ private func files(_ prefix: String, _ numbers: some Sequence<Int>) -> [Director
     numbers.map {
         DirectoryEntry(
             name: "\(prefix)\($0)", type: .regular, size: Int64($0),
-            modified: Date(timeIntervalSince1970: 0))
+            modified: Date(timeIntervalSince1970: 0), isHidden: false, isDataless: false)
     }
 }
 
@@ -288,9 +288,11 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
 
 @Test func repeatedNameKeepsTheLastEntry() async {
     let stale = DirectoryEntry(
-        name: "a", type: .regular, size: 1, modified: Date(timeIntervalSince1970: 0))
+        name: "a", type: .regular, size: 1, modified: Date(timeIntervalSince1970: 0),
+        isHidden: false, isDataless: false)
     let fresh = DirectoryEntry(
-        name: "a", type: .regular, size: 2, modified: Date(timeIntervalSince1970: 1))
+        name: "a", type: .regular, size: 2, modified: Date(timeIntervalSince1970: 1),
+        isHidden: false, isDataless: false)
     let lister = GatedLister(["/folder": .batches([[stale], [fresh]])])
     lister.release("/folder")
     let service = ListingService(lister: lister)
@@ -318,7 +320,9 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     #expect(Set(names.map { Array($0.utf8) }).count == 120)
     #expect(Set(names).count == 1)
     let entries = names.map {
-        DirectoryEntry(name: $0, type: .regular, size: 1, modified: Date(timeIntervalSince1970: 0))
+        DirectoryEntry(
+            name: $0, type: .regular, size: 1, modified: Date(timeIntervalSince1970: 0),
+            isHidden: false, isDataless: false)
     }
     let lister = GatedLister(["/folder": .batches([entries])])
     lister.release("/folder")

@@ -1,8 +1,9 @@
-import Base
 import Darwin
 import Foundation
 import TestSupport
 import Testing
+
+@testable import Base
 
 @Test func listingMatchesFileManager() throws {
     let folder = try TemporaryFolder("DirectoryListerTests")
@@ -82,6 +83,92 @@ import Testing
     }
 }
 
+@Test func hiddenFlagIsReported() throws {
+    let folder = try TemporaryFolder("DirectoryListerTests")
+    try Data().write(to: folder.url.appending(path: "plain"))
+    try Data().write(to: folder.url.appending(path: "flagged"))
+    #expect(chflags(folder.url.path + "/flagged", UInt32(UF_HIDDEN)) == 0)
+
+    var listed: [DirectoryEntry] = []
+    try DirectoryLister().list(folder.url.path) { listed += $0 }
+
+    let plain = try #require(listed.first { $0.name == "plain" })
+    let flagged = try #require(listed.first { $0.name == "flagged" })
+    #expect(!plain.isHidden)
+    #expect(flagged.isHidden)
+    #expect(!plain.isDataless && !flagged.isDataless)
+    #expect(try DirectoryLister().entry(named: "flagged", inDirectory: folder.url.path) == flagged)
+}
+
+@Test func hiddenFlagAgreesWithFileManagerOnATempTree() throws {
+    let folder = try TemporaryFolder("DirectoryListerTests")
+    for name in ["plain", "flagged"] {
+        try Data().write(to: folder.url.appending(path: name))
+        try FileManager.default.createDirectory(
+            at: folder.url.appending(path: name + " folder"), withIntermediateDirectories: false)
+    }
+    #expect(chflags(folder.url.path + "/flagged", UInt32(UF_HIDDEN)) == 0)
+    #expect(chflags(folder.url.path + "/flagged folder", UInt32(UF_HIDDEN)) == 0)
+
+    try expectHiddenFlagAgreesWithFileManager(folder.url.path)
+}
+
+@Test func hiddenFlagAgreesWithFileManagerAtRoot() throws {
+    try expectHiddenFlagAgreesWithFileManager("/")
+}
+
+@Test func datalessFlagParsesFromARawRecord() throws {
+    #expect(
+        try parseRecord(flags: UInt32(SF_DATALESS))
+            == DirectoryEntry(
+                name: "cloud.txt", type: .regular, size: 4096,
+                modified: Date(timeIntervalSince1970: 1_600_000_000), isHidden: false,
+                isDataless: true))
+}
+
+@Test func recordWithoutFlagsReadsAsUnflaggedWithoutAStat() throws {
+    // The record parses with directory -1, so a stat of the entry would throw EBADF.
+    #expect(
+        try parseRecord(flags: nil)
+            == DirectoryEntry(
+                name: "cloud.txt", type: .regular, size: 4096,
+                modified: Date(timeIntervalSince1970: 1_600_000_000), isHidden: false,
+                isDataless: false))
+}
+
+/// Parses one getattrlistbulk record as the lister requests it, for a 4096-byte regular file
+/// named cloud.txt, with `flags` or without the flags attribute: attributes in bitmap order,
+/// then the name the name reference points to. The directory is -1, so a stat fails.
+private func parseRecord(flags: UInt32?) throws -> DirectoryEntry? {
+    var record: [UInt8] = []
+    func append<T>(_ value: T) { withUnsafeBytes(of: value) { record += $0 } }
+    let name = Array("cloud.txt".utf8) + [0]
+    var returned = attribute_set_t()
+    returned.commonattr =
+        attrgroup_t(ATTR_CMN_RETURNED_ATTRS) | attrgroup_t(ATTR_CMN_NAME)
+        | attrgroup_t(ATTR_CMN_OBJTYPE) | attrgroup_t(ATTR_CMN_MODTIME)
+        | (flags == nil ? 0 : attrgroup_t(ATTR_CMN_FLAGS))
+    returned.fileattr = attrgroup_t(ATTR_FILE_DATALENGTH)
+    let fixedSize =
+        MemoryLayout<attrreference_t>.size + MemoryLayout<fsobj_type_t>.size
+        + MemoryLayout<timespec>.size + (flags == nil ? 0 : MemoryLayout<UInt32>.size)
+        + MemoryLayout<off_t>.size
+    let headerSize = MemoryLayout<UInt32>.size + MemoryLayout<attribute_set_t>.size
+    append(UInt32(headerSize + fixedSize + name.count))
+    append(returned)
+    // The name's offset counts from the start of its reference.
+    append(attrreference_t(attr_dataoffset: Int32(fixedSize), attr_length: UInt32(name.count)))
+    append(fsobj_type_t(VREG.rawValue))
+    append(timespec(tv_sec: 1_600_000_000, tv_nsec: 0))
+    if let flags { append(flags) }
+    append(off_t(4096))
+    record += name
+
+    return try record.withUnsafeBytes {
+        try DirectoryLister().parse($0.baseAddress!, directory: -1, path: "/nowhere")
+    }
+}
+
 @Test func unreadableFolderThrowsPermissionDenied() throws {
     let folder = try TemporaryFolder("DirectoryListerTests")
     let locked = folder.url.appending(path: "locked")
@@ -139,6 +226,23 @@ import Testing
     #expect(calls == 1)
 }
 
+/// Checks the listing of `path` has hidden and shown names, and that each name's hidden flag
+/// matches `isHiddenKey`. That key also counts dot names, which the flag doesn't cover, so only
+/// other names are compared.
+private func expectHiddenFlagAgreesWithFileManager(_ path: String) throws {
+    var listed: [DirectoryEntry] = []
+    try DirectoryLister().list(path) { listed += $0 }
+
+    let named = listed.filter { !$0.name.hasPrefix(".") }
+    #expect(named.contains { $0.isHidden })
+    #expect(named.contains { !$0.isHidden })
+    for entry in named {
+        let url = URL(filePath: path).appending(path: entry.name)
+        let expected = try url.resourceValues(forKeys: [.isHiddenKey]).isHidden
+        #expect(entry.isHidden == expected, "\(entry.name)")
+    }
+}
+
 /// The reference listing: `FileManager`'s URLs with resource keys, which describe a symlink itself
 /// rather than its target.
 private func fileManagerListing(_ folder: URL) throws -> [DirectoryEntry] {
@@ -160,7 +264,8 @@ private func fileManagerListing(_ folder: URL) throws -> [DirectoryEntry] {
             name: try #require(values.name),
             type: type,
             size: type == .regular ? Int64(try #require(values.fileSize)) : nil,
-            modified: try #require(values.contentModificationDate))
+            modified: try #require(values.contentModificationDate), isHidden: false,
+            isDataless: false)
     }
     .sorted { $0.name < $1.name }
 }
