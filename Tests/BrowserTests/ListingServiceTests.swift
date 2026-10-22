@@ -118,10 +118,11 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
         _ = load(service, path, into: log)
     }
     #expect(lister.waitForCalls(4))
-    for path in waiting {
-        _ = load(service, path, into: log)
-    }
-    _ = load(service, focused, priority: .focused, into: log)
+    let queued =
+        waiting.map { load(service, $0, into: log) }
+        + [load(service, focused, priority: .focused, into: log)]
+    // Each load's volume is read on a thread of its own, so wait until every one is known.
+    await settle { queued.allSatisfy { $0.volume != nil } }
 
     lister.release(running[0])
     #expect(lister.waitForCalls(5))
@@ -397,7 +398,7 @@ private func permutations<Element>(_ elements: [Element]) -> [[Element]] {
     let names = await log.updates.map { update in
         switch update {
         case .firstBatch(_, let rootVolumeName), .full(_, let rootVolumeName),
-            .failed(_, let rootVolumeName):
+            .failed(_, let rootVolumeName), .slow(let rootVolumeName):
             rootVolumeName
         }
     }
@@ -412,5 +413,260 @@ private func permutations<Element>(_ elements: [Element]) -> [[Element]] {
 @Test func readingTheRootVolumeNameOnTheMainThreadTraps() async {
     await #expect(processExitsWith: .failure) {
         await MainActor.run { _ = ListingService.readRootVolumeName() }
+    }
+}
+
+// MARK: - Slow volumes
+
+private let shareA = VolumeIdentity(device: "//me@nas-a/share", mountPoint: "/a", kind: .network)
+private let shareB = VolumeIdentity(device: "//me@nas-b/share", mountPoint: "/b", kind: .network)
+private let disk = VolumeIdentity(device: "/dev/disk9s1", mountPoint: "/", kind: .local)
+
+/// The volume a test path is on: `/a/…` on share A, `/b/…` on share B, `/net-<n>/…` on a share of
+/// its own, anything else on the local disk. No path is looked up on the file system.
+@Sendable private func volume(of path: String) -> VolumeIdentity {
+    let top = path.split(separator: "/").first.map(String.init) ?? ""
+    if top == "a" { return shareA }
+    if top == "b" { return shareB }
+    if top.hasPrefix("net-") {
+        return VolumeIdentity(device: "//me@\(top)/share", mountPoint: "/\(top)", kind: .network)
+    }
+    return disk
+}
+
+private func service(_ lister: any Lister, clock: ManualClock = ManualClock()) -> ListingService {
+    ListingService(lister: lister, clock: clock, volumeOf: volume(of:))
+}
+
+private func isSlow(_ update: ListingUpdate) -> Bool {
+    if case .slow = update { return true }
+    return false
+}
+
+@Test func aBlockedShareDoesntHoldLoadsOnAnother() async {
+    let lister = GatedLister([
+        "/a/stuck": .blockForever,
+        "/a/1": .batches([]), "/a/2": .batches([]), "/a/3": .batches([]),
+        "/b/first": .batches([files("e", 0..<3)]), "/b/fifth": .batches([files("e", 0..<3)]),
+    ])
+    lister.release("/b/first")
+    lister.release("/b/fifth")
+    let service = service(lister)
+    let log = UpdateLog()
+
+    _ = load(service, "/a/stuck", into: log)
+    #expect(lister.waitForCall("/a/stuck"))
+    _ = load(service, "/b/first", into: log)
+    #expect(await log.wait(for: 1))
+
+    for path in ["/a/1", "/a/2", "/a/3"] {
+        _ = load(service, path, into: log)
+    }
+    _ = load(service, "/b/fifth", into: log)
+    #expect(await log.wait(for: 2))
+    guard case .full(let listing, _) = await log.updates.last else {
+        Issue.record("updates are \(await log.updates)")
+        return
+    }
+    #expect(listing.count == 3)
+    // At most one blocking read on share A: the other three wait behind the stuck one.
+    #expect(lister.calls.filter { $0.path.hasPrefix("/a/") }.map(\.path) == ["/a/stuck"])
+}
+
+@Test func aBlockedLoadIsSlowOnceTheClockPassesTheThreshold() async {
+    let lister = GatedLister(["/a/stuck": .blockForever, "/a/second": .batches([])])
+    lister.release("/a/second")
+    let clock = ManualClock()
+    let service = service(lister, clock: clock)
+    let log = UpdateLog()
+    _ = load(service, "/a/stuck", into: log)
+    #expect(lister.waitForCall("/a/stuck"))
+
+    clock.advance(by: LoadTimeouts.slow - .milliseconds(1))
+    #expect(await !log.wait(for: 1, timeout: 0.2))
+    clock.advance(by: .milliseconds(1))
+    #expect(await log.wait(for: 1))
+    #expect(await log.updates.map(isSlow) == [true])
+
+    // The slow read is still in flight, so a second load on its share waits behind it.
+    let second = UpdateLog()
+    _ = load(service, "/a/second", into: second)
+    #expect(!lister.waitForCall("/a/second", timeout: 0.3))
+    #expect(await second.updates.isEmpty)
+}
+
+@Test func slowLoadsGiveUpTheirSlots() async {
+    let stuck = (1...ListingService.mostRunningLoads).map { "/net-\($0)/stuck" }
+    let lister = GatedLister(
+        Dictionary(uniqueKeysWithValues: stuck.map { ($0, GatedLister.Outcome.blockForever) })
+            .merging(["/local": .batches([files("e", 0..<3)])]) { $1 })
+    lister.release("/local")
+    let clock = ManualClock()
+    let service = service(lister, clock: clock)
+    let ignored = UpdateLog()
+    for path in stuck {
+        _ = load(service, path, into: ignored)
+    }
+    #expect(lister.waitForCalls(stuck.count))
+    let log = UpdateLog()
+    _ = load(service, "/local", into: log)
+    // Every slot is held by a read on a share that stopped answering.
+    #expect(!lister.waitForCall("/local", timeout: 0.2))
+
+    clock.advance(by: LoadTimeouts.slow)
+    #expect(await log.wait(for: 1))
+    guard case .full = await log.updates.first else {
+        Issue.record("updates are \(await log.updates)")
+        return
+    }
+    #expect(await ignored.wait(for: stuck.count))
+    #expect(await ignored.updates.allSatisfy(isSlow))
+}
+
+@Test func fourLoadsOnOneLocalVolumeRunAtOnce() async {
+    let paths = (0..<6).map { "/local-\($0)" }
+    let lister = GatedLister(
+        Dictionary(uniqueKeysWithValues: paths.map { ($0, .batches([files("f", 0..<3)])) }))
+    defer { lister.releaseAll() }
+    let service = service(lister)
+    let log = UpdateLog()
+    for path in paths {
+        _ = load(service, path, into: log)
+    }
+
+    #expect(lister.waitForCalls(4))
+    #expect(!lister.waitForCalls(5, timeout: 0.2))
+    lister.releaseAll()
+    #expect(await log.wait(for: paths.count))
+    #expect(lister.mostAtOnce == 4)
+}
+
+@Test func aLoadThatKeepsReadingIsNotSlow() async {
+    let lister = SteppedLister(batches: [files("a", 0..<3), files("b", 0..<3), files("c", 0..<3)])
+    let clock = ManualClock()
+    let service = service(lister, clock: clock)
+    let log = UpdateLog()
+    _ = load(service, "/a/reading", into: log)
+
+    #expect(lister.step())
+    clock.advance(by: .seconds(2))
+    #expect(lister.step())
+    clock.advance(by: .seconds(2))
+    // Four seconds since the read started, two since its last batch.
+    #expect(await !log.wait(for: 1, timeout: 0.2))
+    clock.advance(by: LoadTimeouts.slow - .seconds(2))
+    #expect(await log.wait(for: 1))
+    #expect(await log.updates.map(isSlow) == [true])
+
+    #expect(lister.step())
+    #expect(await log.wait(for: 2))
+    guard case .full(let listing, _) = await log.updates.last else {
+        Issue.record("updates are \(await log.updates)")
+        return
+    }
+    #expect(listing.count == 9)
+}
+
+@Test func aShareThatDroppedTheConnectionIsUnreachable() async {
+    let lister = GatedLister([
+        "/a/gone": .delayedFailure(ListingError(path: "/a/gone", code: ENOTCONN), delay: 0.05)
+    ])
+    lister.releaseAll()
+    let service = service(lister)
+    let log = UpdateLog()
+    _ = load(service, "/a/gone", into: log)
+
+    #expect(await log.wait(for: 1))
+    guard case .failed(let error, _) = await log.updates.first else {
+        Issue.record("updates are \(await log.updates)")
+        return
+    }
+    #expect(error.reason == .unreachable)
+}
+
+@Test func batchesThatArriveSlowlyAllArrive() async {
+    let lister = GatedLister([
+        "/a/trickle": .delayedBatches([files("a", 0..<3), files("b", 0..<3)], delay: 0.02)
+    ])
+    lister.releaseAll()
+    let service = service(lister)
+    let log = UpdateLog()
+    _ = load(service, "/a/trickle", into: log)
+
+    #expect(await log.wait(for: 1))
+    guard case .full(let listing, _) = await log.updates.first else {
+        Issue.record("updates are \(await log.updates)")
+        return
+    }
+    #expect(listing.count == 6)
+}
+
+@Test func aVolumeThatCantBeReadFailsTheLoad() async {
+    let lister = GatedLister(["/x": .batches([])])
+    lister.releaseAll()
+    let error = ListingError(path: "/x", code: ENOENT)
+    let service = ListingService(
+        lister: lister, volumeOf: { _ throws(ListingError) in throw error })
+    let log = UpdateLog()
+    _ = load(service, "/x", into: log)
+
+    #expect(await log.wait(for: 1))
+    guard case .failed(let failure, _) = await log.updates.first else {
+        Issue.record("updates are \(await log.updates)")
+        return
+    }
+    #expect(failure == error)
+    #expect(lister.calls.isEmpty)
+}
+
+@Test func loadsReadOnBlockingCallThreads() async {
+    let onBlockingThread = OSAllocatedUnfairLock(initialState: [Bool]())
+    let lister = ProbeLister {
+        onBlockingThread.withLock { $0.append(BlockingCallThread.isCurrent) }
+    }
+    let service = ListingService(lister: lister) {
+        onBlockingThread.withLock { $0.append(BlockingCallThread.isCurrent) }
+        return "Test Disk"
+    }
+    let log = UpdateLog()
+    _ = load(service, "/folder", into: log)
+
+    #expect(await log.wait(for: 1))
+    #expect(onBlockingThread.withLock { $0 } == [true, true])
+}
+
+/// A lister that runs `probe` on the calling thread and returns an empty folder.
+private struct ProbeLister: Lister {
+    let probe: @Sendable () -> Void
+
+    func list(_ path: String, onBatch: ([DirectoryEntry]) throws -> Void) throws {
+        probe()
+        try onBatch([])
+    }
+}
+
+/// Delivers one batch each time a test calls `step`, so a test can move a clock between batches
+/// knowing the service has taken the one before.
+private final class SteppedLister: Lister, @unchecked Sendable {
+    private let batches: [[DirectoryEntry]]
+    private let steps = DispatchSemaphore(value: 0)
+    private let taken = DispatchSemaphore(value: 0)
+
+    init(batches: [[DirectoryEntry]]) {
+        self.batches = batches
+    }
+
+    func list(_ path: String, onBatch: ([DirectoryEntry]) throws -> Void) throws {
+        for batch in batches {
+            steps.wait()
+            defer { taken.signal() }
+            try onBatch(batch)
+        }
+    }
+
+    /// Lets the next batch go and returns once the service has taken it; false after 5 seconds.
+    func step() -> Bool {
+        steps.signal()
+        return taken.wait(timeout: .now() + 5) == .success
     }
 }

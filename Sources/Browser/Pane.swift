@@ -181,6 +181,8 @@ public final class Pane {
             receive(update, resolved: resolved, from: goSelectionVersion)
             return
         }
+        // A slow read hasn't said whether the folder is there, so the pane stays.
+        if case .slow = update { return }
         pendingGo = nil
         if case .failed(let error, _) = update,
             error.reason == .notFound || error.reason == .notADirectory
@@ -258,7 +260,7 @@ public final class Pane {
             switch error.reason {
             case .notADirectory, .notFound:
                 openFile(link)
-            case .privacyProtected, .permissionDenied, .other:
+            case .privacyProtected, .permissionDenied, .unreachable, .other:
                 preconditionFailure("goToFolder moved the pane for \(error) but reported it")
             }
         }
@@ -522,7 +524,7 @@ public final class Pane {
             selection.resolved(in: listing, after: .loaded(complete: false))
         case .full(let listing, _):
             selection.resolved(in: listing, after: .loaded(complete: true))
-        case .failed:
+        case .failed, .slow:
             nil
         }
     }
@@ -554,6 +556,9 @@ public final class Pane {
             show(
                 error.reason == .privacyProtected ? .denied(error) : .failed(error),
                 after: .loaded(complete: true))
+        case .slow:
+            // The pane keeps waiting; the load's last update still comes if the read returns.
+            return
         }
         // A load that started before `setSort` arrives in the old sort, and shows in it until
         // this sort lands.

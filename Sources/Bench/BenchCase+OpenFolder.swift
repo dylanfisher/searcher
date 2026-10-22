@@ -108,6 +108,9 @@ extension BenchCase {
                 switch update {
                 case .firstBatch:
                     firstRows.milliseconds = firstRows.milliseconds ?? elapsed
+                case .slow:
+                    // The full listing or the failure still follows.
+                    break
                 case .full(let listing, _):
                     // A folder read in one batch gets no first batch; its rows appear in full.
                     continuation.resume(

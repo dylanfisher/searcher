@@ -9,6 +9,10 @@ public struct ListingError: Error, Equatable, Sendable, CustomStringConvertible 
         case permissionDenied
         case notFound
         case notADirectory
+        /// The volume stopped answering or failed to read: a share whose server or connection
+        /// went away, or a local disk with a read error. Whoever shows it checks the volume's kind
+        /// before saying "server".
+        case unreachable
         case other
     }
 
@@ -27,6 +31,9 @@ public struct ListingError: Error, Equatable, Sendable, CustomStringConvertible 
         case EACCES: .permissionDenied
         case ENOENT: .notFound
         case ENOTDIR: .notADirectory
+        // What SMB and NFS return when a server stops answering or the connection drops. A failing
+        // local disk returns EIO too, and is reported the same way.
+        case ENOTCONN, ETIMEDOUT, EIO, EHOSTDOWN: .unreachable
         default: .other
         }
     }

@@ -79,7 +79,7 @@ final class GoToFolderSheet: NSObject, NSTextFieldDelegate {
             messageLabel.stringValue = "There’s no folder at “\(error.path)”."
         case .notADirectory:
             messageLabel.stringValue = "“\(error.path)” isn’t a folder."
-        case .privacyProtected, .permissionDenied, .other:
+        case .privacyProtected, .permissionDenied, .unreachable, .other:
             preconditionFailure("the pane stayed for \(error), which it shows by moving")
         }
         messageLabel.isHidden = false

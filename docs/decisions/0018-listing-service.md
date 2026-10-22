@@ -20,7 +20,8 @@ The first batch goes out when the lister delivers its second batch and at least 
 arrived. It holds the first 200 read, sorted. A folder read in one batch (a W1 folder is about 300
 entries, and one 256 KB buffer holds about 2,000) gets only the full listing.
 
-Loads run on `DispatchQueue.global(qos: .userInitiated)`, never on the Swift concurrency pool. One
+Loads run on `DispatchQueue.global(qos: .userInitiated)`, never on the Swift concurrency pool
+(superseded: they now run on `BlockingCallThread`s, see [0038](0038-slow-volumes.md)). One
 serial queue owns the waiting loads and the running count, so `load` costs its caller one
 `async`. A repeated name replaces the earlier entry in place: names are compared by their UTF-8
 bytes, as `Listing` compares them, and the last entry read wins. Updates go out with

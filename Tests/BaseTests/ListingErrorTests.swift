@@ -12,3 +12,11 @@ import Testing
     #expect(privacy == .privacyProtected)
     #expect(unix == .permissionDenied)
 }
+
+/// A share that stopped answering fails with these, where a local folder doesn't.
+@Test func lostConnectionErrorsAreUnreachable() {
+    for code in [ENOTCONN, ETIMEDOUT, EIO, EHOSTDOWN] {
+        #expect(ListingError(path: "/net/share", code: code).reason == .unreachable)
+    }
+    #expect(ListingError(path: "/missing", code: ENOENT).reason != .unreachable)
+}

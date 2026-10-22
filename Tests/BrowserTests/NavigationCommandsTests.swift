@@ -372,6 +372,31 @@ func goToAMissingFolderReportsItAndLeavesThePaneWhereItWas(path: String, code: I
     #expect(!pane.canGoBack)
 }
 
+@MainActor @Test func goToAFolderThatGoesSlowLeavesThePaneWhereItWas() async {
+    let lister = GatedLister([
+        "/root": .batches([[folder("docs"), file("a.txt")]]), "/root/slow": .blockForever,
+    ])
+    lister.releaseAll()
+    let clock = ManualClock()
+    let pane = Pane(
+        location: Location(path: "/root"), service: ListingService(lister: lister, clock: clock),
+        systemActions: StubSystemActions(), settings: untouchedSettings())
+    await settle { pane.state.isLoaded }
+    let result = GoResult()
+
+    pane.goToFolder(Location(path: "/root/slow"), then: result.record)
+    #expect(lister.waitForCall("/root/slow"))
+    clock.advance(by: LoadTimeouts.slow)
+    // The slow update reaches the main queue from the load's timer task, with nothing to wait on.
+    try? await Task.sleep(for: .milliseconds(200))
+    await drainMainQueue()
+
+    #expect(!result.finished)
+    #expect(pane.location == Location(path: "/root"))
+    #expect(pane.state.names == ["a.txt", "docs"])
+    #expect(!pane.canGoBack)
+}
+
 @MainActor @Test func navigatingToThePanesOwnFolderKeepsItsMonitorAndIsNoStep() async {
     let (pane, _) = await goToFixture()
     let monitor = StubMonitor()
