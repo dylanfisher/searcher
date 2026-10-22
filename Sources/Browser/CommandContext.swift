@@ -8,6 +8,9 @@ public struct CommandContext {
     /// Asks the user for a folder to show in `pane`, in the pane's window. Only the view that runs
     /// commands can show one; a context built without it traps when Go to folder runs.
     public let askForFolder: @MainActor () -> Void
+    /// Shows the pane's filter field and puts the keyboard focus in it. Only the pane's view can;
+    /// a context built without it traps when Filter runs.
+    public let showFilter: @MainActor () -> Void
 
     public init(
         pane: Pane,
@@ -16,10 +19,14 @@ public struct CommandContext {
         },
         askForFolder: @escaping @MainActor () -> Void = {
             preconditionFailure("this command context can't ask for a folder")
+        },
+        showFilter: @escaping @MainActor () -> Void = {
+            preconditionFailure("this command context has no filter field")
         }
     ) {
         self.pane = pane
         self.toggleQuickLook = toggleQuickLook
         self.askForFolder = askForFolder
+        self.showFilter = showFilter
     }
 }

@@ -16,6 +16,9 @@ public final class Pane {
     public private(set) var stateVersion = 0
     public private(set) var sortColumn: SortColumn
     public private(set) var sortAscending: Bool
+    /// The filter field's text. The rows follow it once a sort lands, as they follow a sort
+    /// change; leaving the folder clears it, and History doesn't keep it.
+    public private(set) var filter = NameFilter()
     /// The selected entries' names, the cursor and the anchor. Names the listing doesn't have are
     /// dropped when a load finishes, not before, so a name set before the rows arrive survives
     /// the partial listing.
@@ -217,6 +220,7 @@ public final class Pane {
         waitingPatches = []
         relistAfterLoad = false
         self.location = location
+        filter = NameFilter()
         selection = name.map { Selection([$0], cursor: $0) } ?? Selection()
         selectionVersion += 1
     }
@@ -394,6 +398,16 @@ public final class Pane {
         onChange?()
     }
 
+    /// Takes the filter field's text at once and filters a copy of the rows off the main actor,
+    /// as `setSort` sorts them; the rows change when that lands. A query typed before it lands
+    /// starts its own, and the older result is dropped.
+    public func setFilter(_ text: String) {
+        guard text != filter.text else { return }
+        filter = NameFilter(text)
+        startSortIfNeeded()
+        onChange?()
+    }
+
     /// A view setting changed: the rows show or hide hidden entries, or put folders first, once
     /// a sort lands.
     private func settingsDidChange() {
@@ -405,16 +419,18 @@ public final class Pane {
     public func isArranged(_ listing: Listing) -> Bool {
         listing.column == sortColumn && listing.ascending == sortAscending
             && listing.foldersFirst == settings.foldersFirst
-            && listing.showsHidden == settings.showHidden
+            && listing.showsHidden == settings.showHidden && listing.filter == filter
     }
 
-    /// Sorts a copy of the rows off the main actor when they aren't in the pane's sort, or don't
-    /// show hidden entries or put folders first as the settings ask.
+    /// Sorts a copy of the rows off the main actor when they aren't in the pane's sort, don't
+    /// show hidden entries or put folders first as the settings ask, or aren't filtered by the
+    /// pane's filter.
     ///
-    /// Showing hidden entries changes which entries the rows hold, so the selection is resolved as
-    /// against a new load: entries that appear aren't taken into a Select All, and selected ones
-    /// that are hidden are dropped once the folder is fully listed. When the cursor's entry is
-    /// hidden, the cursor moves to the row that followed it (`keepingCursor`).
+    /// Showing hidden entries or changing the filter changes which entries the rows hold, so the
+    /// selection is resolved as against a new load: entries that appear aren't taken into a Select
+    /// All, and selected ones that leave the rows are dropped once the folder is fully listed.
+    /// When the cursor's entry is hidden, the cursor moves to the row that followed it
+    /// (`keepingCursor`); when the filter drops it, to the first row (`keepingFirstRow`).
     private func startSortIfNeeded() {
         guard let listing = state.listing, !isArranged(listing) else { return }
         sortCount += 1
@@ -424,8 +440,10 @@ public final class Pane {
         let ascending = sortAscending
         let foldersFirst = settings.foldersFirst
         let showsHidden = settings.showHidden
+        let filter = filter
+        let filterChanged = listing.filter != filter
         let change: Selection.Change
-        if listing.showsHidden == showsHidden {
+        if listing.showsHidden == showsHidden, !filterChanged {
             change = .sameEntries
         } else if case .loaded = state {
             change = .loaded(complete: true)
@@ -438,9 +456,12 @@ public final class Pane {
             var listing = listing
             listing.sort(
                 by: column, ascending: ascending, foldersFirst: foldersFirst,
-                showsHidden: showsHidden)
-            let resolved = Self.keepingCursor(
-                of: selection, in: selection.resolved(in: listing, after: change), listing)
+                showsHidden: showsHidden, filter: filter)
+            let resolved =
+                filterChanged
+                ? Self.keepingFirstRow(selection.resolved(in: listing, after: change), listing)
+                : Self.keepingCursor(
+                    of: selection, in: selection.resolved(in: listing, after: change), listing)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self?.finishSort(
@@ -483,7 +504,7 @@ public final class Pane {
         let selectionVersion = selectionVersion
         load = service.load(
             location, sortedBy: sortColumn, ascending: sortAscending,
-            foldersFirst: settings.foldersFirst, showsHidden: settings.showHidden,
+            foldersFirst: settings.foldersFirst, showsHidden: settings.showHidden, filter: filter,
             priority: isFocused ? .focused : .normal,
             prepare: { update in (update, Self.resolve(selection, against: update)) },
             onUpdate: { [weak self] prepared in
@@ -600,6 +621,15 @@ public final class Pane {
             let row = listing.row(nearest: cursor.name)
         else { return resolved }
         return resolved.cursorMoved(toRow: row, in: listing)
+    }
+
+    /// `resolved` with the cursor moved to the first row when `listing`, newly filtered, has no
+    /// row for it; that row is selected if nothing else is.
+    private nonisolated static func keepingFirstRow(_ resolved: Selection, _ listing: Listing)
+        -> Selection
+    {
+        guard resolved.cursorRow(in: listing) == nil, listing.count > 0 else { return resolved }
+        return resolved.cursorMoved(toRow: 0, in: listing)
     }
 
     private func finishSettling(_ settled: Selection, from selectionVersion: Int, state: Int) {

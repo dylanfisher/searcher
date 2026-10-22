@@ -55,6 +55,9 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
     /// A sort key (Ctrl-Opt-Cmd-6, then Ctrl-Opt-Cmd-1) → frame with the re-sorted rows, on W2
     /// (B8). Two per launch.
     public var sortKey: [Double]
+    /// A key typed in the filter field, or Esc clearing it → frame with the rows filtered by the
+    /// new text, on W2 (B7). Six per launch: five characters, then Esc.
+    public var filterKey: [Double]
     /// Every run loop pass over the stall threshold (B10), all launches together.
     public var stalls: [Stall]
 
@@ -81,7 +84,7 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         patchAddingAllSelected: [Double] = [], clickHalf: [Double] = [],
         patchAfterShiftDown: [Double] = [], loadAfterSelectAll: [Double] = [],
         typeSelect: [Double] = [], sortChange: [Double] = [], hiddenToggle: [Double] = [],
-        foldersFirstToggle: [Double] = [], sortKey: [Double] = [],
+        foldersFirstToggle: [Double] = [], sortKey: [Double] = [], filterKey: [Double] = [],
         stalls: [Stall] = []
     ) {
         self.launch = launch
@@ -104,6 +107,7 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         self.hiddenToggle = hiddenToggle
         self.foldersFirstToggle = foldersFirstToggle
         self.sortKey = sortKey
+        self.filterKey = filterKey
         self.stalls = stalls
     }
 
@@ -129,6 +133,7 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         hiddenToggle += other.hiddenToggle
         foldersFirstToggle += other.foldersFirstToggle
         sortKey += other.sortKey
+        filterKey += other.filterKey
         stalls += other.stalls
     }
 

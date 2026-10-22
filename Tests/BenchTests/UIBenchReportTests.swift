@@ -18,7 +18,16 @@ private func underBudget() -> UIBenchRecord {
         patchAfterShiftDown: Array(repeating: 9, count: 100),
         loadAfterSelectAll: Array(repeating: 9, count: 20),
         typeSelect: Array(repeating: 5, count: 24), sortChange: [90, 100],
-        hiddenToggle: [40, 50], foldersFirstToggle: [40, 50], sortKey: [60, 70], stalls: [])
+        hiddenToggle: [40, 50], foldersFirstToggle: [40, 50], sortKey: [60, 70],
+        filterKey: Array(repeating: 20, count: 24), stalls: [])
+}
+
+@Test func filterKeysAreTheirOwnB7Case() throws {
+    var record = underBudget()
+    record.filterKey = Array(repeating: 60, count: 24)
+    let report = try UIBenchReport(record: record)
+    #expect(report.overBudget.map(\.name) == ["W2 filter key → frame"])
+    #expect(report.overBudget.map { $0.budget?.id } == ["B7"])
 }
 
 @Test func keyDownUnderB6Passes() throws {
