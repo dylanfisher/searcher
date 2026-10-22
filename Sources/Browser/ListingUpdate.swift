@@ -1,11 +1,12 @@
 import Base
 
-/// What a listing load hands the main actor.
+/// What a listing load hands the main actor. Each update carries the name of the volume mounted at
+/// `/`, read on the load's thread, for the root of the pane's path bar.
 public enum ListingUpdate: Sendable {
     /// The first entries read, sorted, while the rest of a large folder is still being read.
-    case firstBatch(Listing)
+    case firstBatch(Listing, rootVolumeName: String)
     /// Every entry in the folder, sorted. The load's last update.
-    case full(Listing)
+    case full(Listing, rootVolumeName: String)
     /// The folder couldn't be listed. The load's last update.
-    case failed(ListingError)
+    case failed(ListingError, rootVolumeName: String)
 }

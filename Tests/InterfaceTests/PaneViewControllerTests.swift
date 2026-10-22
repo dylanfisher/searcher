@@ -44,9 +44,13 @@ private struct Fixture {
     let controller: PaneViewController
     let table: ClickedRowTableView
 
-    init(lister: any Lister = StubLister(Fixture.folders), monitors: Bool = false) {
+    init(
+        lister: any Lister = StubLister(Fixture.folders), monitors: Bool = false,
+        rootVolumeName: @escaping @Sendable () -> String = { "Test Disk" }
+    ) {
         pane = Pane(
-            location: Location(path: "/root"), service: ListingService(lister: lister),
+            location: Location(path: "/root"),
+            service: ListingService(lister: lister, rootVolumeName: rootVolumeName),
             systemActions: actions, isFocused: true)
         table = ClickedRowTableView()
         controller = PaneViewController(
@@ -135,6 +139,97 @@ private let arrowFlags: NSEvent.ModifierFlags = [.numericPad, .function]
     await settle { fixture.pane.state.isLoaded }
     #expect(fixture.pane.location == Location(path: "/root"))
     #expect(fixture.table.selectedRowIndexes == [2])
+}
+
+@MainActor @Test func pathBarShowsTheVolumeNameTheListingCarried() async throws {
+    let fixture = Fixture()
+    await settle { fixture.pane.state.isLoaded }
+
+    #expect(fixture.controller.pathBar.segments.map(\.title) == ["Test Disk", "root"])
+}
+
+/// A volume name a test can change between loads.
+private final class VolumeName: @unchecked Sendable {
+    private let lock = NSLock()
+    private var name: String
+
+    init(_ name: String) { self.name = name }
+
+    var value: String {
+        get { lock.withLock { name } }
+        set { lock.withLock { name = newValue } }
+    }
+}
+
+@MainActor @Test func aRenamedVolumeReachesThePathBarOnTheNextLoad() async throws {
+    let volume = VolumeName("Old Disk")
+    let fixture = Fixture(rootVolumeName: { volume.value })
+    await settle { fixture.pane.state.isLoaded }
+    #expect(fixture.controller.pathBar.segments.first?.title == "Old Disk")
+
+    volume.value = "New Disk"
+    fixture.pane.reload()
+
+    await settle { fixture.controller.pathBar.segments.first?.title == "New Disk" }
+    #expect(fixture.controller.pathBar.segments.map(\.title) == ["New Disk", "root"])
+}
+
+@MainActor @Test func inAWindowTheListEndsWhereThePathBarStarts() async throws {
+    let window = BrowserWindowController(
+        location: Location(path: "/root"),
+        service: ListingService(lister: StubLister(Fixture.folders)) { "Test Disk" },
+        systemActions: StubSystemActions())
+    let controller = window.paneViewController
+    await settle { controller.pane.state.isLoaded }
+    window.window?.contentView?.layoutSubtreeIfNeeded()
+
+    let pane = controller.view.bounds
+    let list = controller.listingViewController.view.frame
+    let bar = controller.pathBar.frame
+    #expect(pane.width > 0 && pane.height > PathBarView.height)
+    #expect(bar == NSRect(x: 0, y: 0, width: pane.width, height: PathBarView.height))
+    #expect(list == NSRect(x: 0, y: bar.maxY, width: pane.width, height: pane.height - bar.maxY))
+    #expect(!list.intersects(bar))
+    let header = try #require(controller.listingViewController.tableView.headerView)
+    let headerInPane = header.convert(header.bounds, to: controller.view)
+    #expect(!headerInPane.isEmpty)
+    #expect(pane.contains(headerInPane))
+    #expect(!headerInPane.intersects(bar))
+}
+
+@MainActor @Test func clickingAPathBarSegmentGoesThereWithTheChildSelected() async throws {
+    let fixture = Fixture()
+    await settle { fixture.pane.state.isLoaded }
+    fixture.pane.navigate(to: Location(path: "/root/docs"))
+    await settle { fixture.pane.state.isLoaded }
+
+    fixture.controller.pathBar.segments[1].performClick(nil)
+
+    #expect(fixture.pane.location == Location(path: "/root"))
+    await settle { fixture.pane.state.isLoaded }
+    #expect(fixture.pane.selection == [ExactName("docs")])
+    #expect(fixture.table.selectedRowIndexes == [2])
+}
+
+@MainActor @Test func pathBarChangesInTheSameUpdateAsTheNewFoldersFirstRows() async throws {
+    let lister = GatedLister(Fixture.folders.mapValues { .batches([$0]) })
+    let fixture = Fixture(lister: lister)
+    lister.release("/root")
+    await settle { fixture.pane.state.isLoaded }
+    // What each pane change left on screen, recorded as the views finish updating for it, in
+    // the run loop pass that changed the pane and so before the window next draws.
+    var shown: [(rows: [String], path: Location?)] = []
+    fixture.controller.onShow = {
+        shown.append((rowNames(fixture.table), fixture.controller.pathBar.location))
+    }
+
+    fixture.pane.navigate(to: Location(path: "/root/docs"))
+    lister.release("/root/docs")
+    await settle { fixture.pane.state.isLoaded }
+
+    let firstRows = try #require(shown.firstIndex { $0.rows == ["inside.txt"] })
+    #expect(shown[firstRows].path == Location(path: "/root/docs"))
+    #expect(shown[..<firstRows].allSatisfy { $0.path == Location(path: "/root") })
 }
 
 @MainActor @Test func fileCreatedInThePanesFolderShowsUp() async throws {

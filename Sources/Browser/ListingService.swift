@@ -13,13 +13,26 @@ public final class ListingService: Sendable {
     public static let firstBatchCount = 200
 
     private let lister: any Lister
+    /// Reads the name of the volume mounted at `/` on a load's worker thread.
+    private let rootVolumeName: @Sendable () -> String
     /// Owns `queue`; every change to it runs here, so `load` costs its caller one dispatch.
     private let scheduler = DispatchQueue(label: "ListingService", qos: .userInitiated)
     private let queue = Queue()
     private let workers = DispatchQueue.global(qos: .userInitiated)
 
-    public init(lister: any Lister = DirectoryLister()) {
+    /// `rootVolumeName` runs once per load, on the load's worker thread.
+    public init(
+        lister: any Lister = DirectoryLister(),
+        rootVolumeName: @escaping @Sendable () -> String = { readRootVolumeName() }
+    ) {
         self.lister = lister
+        self.rootVolumeName = rootVolumeName
+    }
+
+    /// The name of the volume mounted at `/`, as Finder shows it. Call it off the main thread.
+    public static func readRootVolumeName() -> String {
+        dispatchPrecondition(condition: .notOnQueue(.main))
+        return FileManager.default.displayName(atPath: "/")
     }
 
     /// Queues a load of `location`, sorted by `column`. `onUpdate` runs on the main actor with a
@@ -60,6 +73,8 @@ public final class ListingService: Sendable {
         var entries = UniqueEntries()
         var batchCount = 0
         var sentFirstBatch = false
+        // Read for each load, so a renamed volume shows its new name.
+        let rootVolumeName = rootVolumeName()
         do {
             try lister.list(load.location.path) { batch in
                 if load.isCancelled { throw Cancelled() }
@@ -72,20 +87,22 @@ public final class ListingService: Sendable {
                     let first = Listing(
                         Array(entries.all.prefix(Self.firstBatchCount)), column: load.column,
                         ascending: load.ascending)
-                    hand(.firstBatch(first), to: load)
+                    hand(.firstBatch(first, rootVolumeName: rootVolumeName), to: load)
                 }
             }
         } catch is Cancelled {
             return
         } catch let error as ListingError {
-            hand(.failed(error), to: load)
+            hand(.failed(error, rootVolumeName: rootVolumeName), to: load)
             return
         } catch {
             preconditionFailure("\(type(of: lister)) threw \(error), which isn't a ListingError")
         }
         if load.isCancelled { return }
         hand(
-            .full(Listing(entries.all, column: load.column, ascending: load.ascending)), to: load)
+            .full(
+                Listing(entries.all, column: load.column, ascending: load.ascending),
+                rootVolumeName: rootVolumeName), to: load)
     }
 
     /// Updates reach the main queue in the order they're handed off, and a load cancelled in

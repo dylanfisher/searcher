@@ -137,7 +137,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     _ = load(service, "/w1", into: log)
 
     #expect(await log.wait(for: 1))
-    guard case .full(let listing) = await log.updates.first else {
+    guard case .full(let listing, _) = await log.updates.first else {
         Issue.record("first update is \(String(describing: await log.updates.first))")
         return
     }
@@ -155,8 +155,8 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
 
     #expect(await log.wait(for: 2))
     let updates = await log.updates
-    guard updates.count == 2, case .firstBatch(let first) = updates[0],
-        case .full(let full) = updates[1]
+    guard updates.count == 2, case .firstBatch(let first, _) = updates[0],
+        case .full(let full, _) = updates[1]
     else {
         Issue.record("updates are \(updates)")
         return
@@ -174,7 +174,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     service.load(Location(path: "/folder"), sortedBy: .size, ascending: false) { log.append($0) }
 
     #expect(await log.wait(for: 1))
-    guard case .full(let listing) = await log.updates.first else {
+    guard case .full(let listing, _) = await log.updates.first else {
         Issue.record("updates are \(await log.updates)")
         return
     }
@@ -279,7 +279,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     _ = load(service, folder.path, into: log)
 
     #expect(await log.wait(for: 1))
-    guard case .failed(let error) = await log.updates.first else {
+    guard case .failed(let error, _) = await log.updates.first else {
         Issue.record("updates are \(await log.updates)")
         return
     }
@@ -298,7 +298,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     _ = load(service, "/folder", into: log)
 
     #expect(await log.wait(for: 1))
-    guard case .full(let listing) = await log.updates.first else {
+    guard case .full(let listing, _) = await log.updates.first else {
         Issue.record("updates are \(await log.updates)")
         return
     }
@@ -327,7 +327,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     _ = load(service, "/folder", into: log)
 
     #expect(await log.wait(for: 1))
-    guard case .full(let listing) = await log.updates.first else {
+    guard case .full(let listing, _) = await log.updates.first else {
         Issue.record("updates are \(await log.updates)")
         return
     }
@@ -354,4 +354,41 @@ private func permutations<Element>(_ elements: [Element]) -> [[Element]] {
 
     #expect(await log.wait(for: 1))
     #expect(lister.calls == [.init(path: "/folder", qos: .userInitiated, onMainThread: false)])
+}
+
+@Test func everyUpdateCarriesTheRootVolumeName() async {
+    let lister = GatedLister([
+        "/big": .batches([files("e", 300..<600), files("e", 0..<300)]),
+        "/gone": .failure(ListingError(path: "/gone", code: ENOENT)),
+    ])
+    lister.releaseAll()
+    let service = ListingService(lister: lister) {
+        dispatchPrecondition(condition: .notOnQueue(.main))
+        return "Test Disk"
+    }
+    let log = UpdateLog()
+    _ = load(service, "/big", into: log)
+    #expect(await log.wait(for: 2))
+    _ = load(service, "/gone", into: log)
+    #expect(await log.wait(for: 3))
+
+    let names = await log.updates.map { update in
+        switch update {
+        case .firstBatch(_, let rootVolumeName), .full(_, let rootVolumeName),
+            .failed(_, let rootVolumeName):
+            rootVolumeName
+        }
+    }
+    #expect(names == ["Test Disk", "Test Disk", "Test Disk"])
+}
+
+@Test func rootVolumeNameIsReadOffTheMainThread() async {
+    let name = await Task.detached { ListingService.readRootVolumeName() }.value
+    #expect(name == FileManager.default.displayName(atPath: "/"))
+}
+
+@Test func readingTheRootVolumeNameOnTheMainThreadTraps() async {
+    await #expect(processExitsWith: .failure) {
+        await MainActor.run { _ = ListingService.readRootVolumeName() }
+    }
 }

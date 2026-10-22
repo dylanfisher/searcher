@@ -19,6 +19,8 @@ public final class Pane {
     /// The selected entries' names. Names the listing doesn't have are dropped when a load
     /// finishes, not before, so a name set before the rows arrive survives the partial listing.
     public private(set) var selection: Set<ExactName> = []
+    /// The name of the volume mounted at `/`, from the last listing update; nil until the first.
+    public private(set) var rootVolumeName: String?
 
     /// Watching `location`. The pane stops it, and drops it, when it navigates.
     public var monitor: (any FolderMonitoring)?
@@ -259,13 +261,16 @@ public final class Pane {
     /// Updates of a cancelled load never get here, so each one belongs to the current location.
     private func receive(_ update: ListingUpdate) {
         switch update {
-        case .firstBatch(let listing):
+        case .firstBatch(let listing, let rootVolumeName):
+            self.rootVolumeName = rootVolumeName
             state = .partial(listing)
-        case .full(let listing):
+        case .full(let listing, let rootVolumeName):
+            self.rootVolumeName = rootVolumeName
             loadIsRunning = false
             selection = selection.filter { listing.row(named: $0.name) != nil }
             state = .loaded(listing)
-        case .failed(let error):
+        case .failed(let error, let rootVolumeName):
+            self.rootVolumeName = rootVolumeName
             loadIsRunning = false
             state = error.reason == .privacyProtected ? .denied(error) : .failed(error)
         }
