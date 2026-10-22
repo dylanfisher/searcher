@@ -30,14 +30,15 @@ struct PaneFixture {
 
     init(
         at path: String, folders: [String: [DirectoryEntry]], held: Bool = false,
-        sortedBy column: SortColumn = .name, ascending: Bool = true
+        settings: Settings = untouchedSettings(), sortedBy column: SortColumn = .name,
+        ascending: Bool = true
     ) {
         lister = GatedLister(folders.mapValues { .batches([$0]) })
         if !held { lister.releaseAll() }
         actions = StubSystemActions()
         pane = Pane(
             location: Location(path: path), service: ListingService(lister: lister),
-            systemActions: actions, sortedBy: column, ascending: ascending)
+            systemActions: actions, settings: settings, sortedBy: column, ascending: ascending)
     }
 
     /// A pane at `/root` with files `a.txt` and `b.txt` and a folder `docs`, already loaded.
@@ -105,7 +106,7 @@ func drainMainQueue() async {
     lister.releaseAll()
     let pane = Pane(
         location: Location(path: "/big"), service: ListingService(lister: lister),
-        systemActions: StubSystemActions())
+        systemActions: StubSystemActions(), settings: untouchedSettings())
     var seen: [String] = []
     pane.onChange = {
         switch pane.state {
@@ -128,7 +129,7 @@ func drainMainQueue() async {
     lister.releaseAll()
     let pane = Pane(
         location: Location(path: "/secret"), service: ListingService(lister: lister),
-        systemActions: StubSystemActions())
+        systemActions: StubSystemActions(), settings: untouchedSettings())
 
     await settle { pane.state.isDenied }
 
@@ -141,7 +142,7 @@ func drainMainQueue() async {
     lister.releaseAll()
     let pane = Pane(
         location: Location(path: "/var/root"), service: ListingService(lister: lister),
-        systemActions: StubSystemActions())
+        systemActions: StubSystemActions(), settings: untouchedSettings())
 
     await settle { pane.state.isFailed || pane.state.isDenied }
 
@@ -153,7 +154,7 @@ func drainMainQueue() async {
     lister.releaseAll()
     let pane = Pane(
         location: Location(path: "/gone"), service: ListingService(lister: lister),
-        systemActions: StubSystemActions())
+        systemActions: StubSystemActions(), settings: untouchedSettings())
 
     await settle { pane.state.isFailed }
 }
@@ -290,7 +291,7 @@ func drainMainQueue() async {
     let lister = StubLister(["/root": [file("a", size: 3), file("b", size: 1), file("c", size: 2)]])
     let pane = Pane(
         location: Location(path: "/root"), service: ListingService(lister: lister),
-        systemActions: StubSystemActions())
+        systemActions: StubSystemActions(), settings: untouchedSettings())
     await settle { pane.state.isLoaded }
     lister.set(
         "/root",
@@ -338,7 +339,7 @@ private func heldSortQueue() -> DispatchQueue {
     let lister = StubLister(["/root": [file("a", size: 1), file("b", size: 2)]])
     let pane = Pane(
         location: Location(path: "/root"), service: ListingService(lister: lister),
-        systemActions: StubSystemActions())
+        systemActions: StubSystemActions(), settings: untouchedSettings())
     await settle { pane.state.isLoaded }
     let sorts = heldSortQueue()
     pane.sortQueue = sorts
@@ -494,7 +495,8 @@ private func heldSortQueue() -> DispatchQueue {
     lister.releaseAll()
     let pane = Pane(
         location: Location(path: "/big"), service: ListingService(lister: lister),
-        systemActions: StubSystemActions(), sortedBy: .size, ascending: false)
+        systemActions: StubSystemActions(), settings: untouchedSettings(),
+        sortedBy: .size, ascending: false)
 
     await settle { pane.state.isLoaded }
 
@@ -515,7 +517,7 @@ private func heldSortQueue() -> DispatchQueue {
     service.load(Location(path: "/normal")) { _ in }
     _ = Pane(
         location: Location(path: "/pane"), service: service, systemActions: StubSystemActions(),
-        isFocused: true)
+        settings: untouchedSettings(), isFocused: true)
 
     lister.release(holds[0])
 
@@ -612,7 +614,7 @@ private final class HeldLister: Lister, @unchecked Sendable {
     let held = HeldLister(lister, gate, heldFrom: 2)
     let pane = Pane(
         location: Location(path: "/root"), service: ListingService(lister: held),
-        systemActions: StubSystemActions())
+        systemActions: StubSystemActions(), settings: untouchedSettings())
     await settle { pane.state.names == ["a"] }
     pane.reload()
     #expect(gate.waitForCalls(1))
@@ -636,7 +638,7 @@ private final class HeldLister: Lister, @unchecked Sendable {
     let pane = Pane(
         location: Location(path: "/root"),
         service: ListingService(lister: HeldLister(lister, gate)),
-        systemActions: StubSystemActions())
+        systemActions: StubSystemActions(), settings: untouchedSettings())
     #expect(gate.waitForCalls(1))
 
     // The file appears after the lister has read the folder, but before the load ends.
@@ -664,7 +666,7 @@ private final class HeldLister: Lister, @unchecked Sendable {
     let lister = StubLister(["/root": [file("a", size: 1), file("b", size: 2)]])
     let pane = Pane(
         location: Location(path: "/root"), service: ListingService(lister: lister),
-        systemActions: StubSystemActions())
+        systemActions: StubSystemActions(), settings: untouchedSettings())
     await settle { pane.state.isLoaded }
     lister.set("/root", to: [file("a", size: 1), file("b", size: 2), file("c", size: 3)])
 
@@ -695,7 +697,7 @@ private final class HeldLister: Lister, @unchecked Sendable {
         let lister = StubLister(["/wide": wideEntries(count)])
         let pane = Pane(
             location: Location(path: "/wide"), service: ListingService(lister: lister),
-            systemActions: StubSystemActions())
+            systemActions: StubSystemActions(), settings: untouchedSettings())
         await settle { pane.state.isLoaded }
         return (pane, lister)
     }
@@ -773,7 +775,7 @@ private final class HeldLister: Lister, @unchecked Sendable {
         lister.releaseAll()
         let pane = Pane(
             location: Location(path: "/wide"), service: ListingService(lister: lister),
-            systemActions: StubSystemActions())
+            systemActions: StubSystemActions(), settings: untouchedSettings())
         var work: Int?
         pane.onChange = {
             guard case .partial = pane.state, work == nil else { return }
@@ -802,7 +804,7 @@ private func heldSettlePane() async -> (Pane, StubSystemActions, DispatchQueue) 
         location: Location(path: "/n"),
         service: ListingService(
             lister: StubLister(["/n": (0..<100).map { file(String(format: "n%03d", $0)) }])),
-        systemActions: actions)
+        systemActions: actions, settings: untouchedSettings())
     await settle { pane.state.isLoaded }
     let held = DispatchQueue(label: "held settles")
     held.suspend()

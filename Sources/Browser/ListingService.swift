@@ -35,32 +35,35 @@ public final class ListingService: Sendable {
         return FileManager.default.displayName(atPath: "/")
     }
 
-    /// Queues a load of `location`, sorted by `column`. `onUpdate` runs on the main actor with a
-    /// `firstBatch` (folders that take more than one read), then `full` or `failed`, unless the
-    /// load is cancelled first.
+    /// Queues a load of `location`, sorted by `column`, with folders first and hidden entries
+    /// shown as asked (`Listing`). `onUpdate` runs on the main actor with a `firstBatch` (folders
+    /// that take more than one read), then `full` or `failed`, unless the load is cancelled first.
     @discardableResult
     public func load(
         _ location: Location, sortedBy column: SortColumn = .name, ascending: Bool = true,
+        foldersFirst: Bool = false, showsHidden: Bool = true,
         priority: ListingLoad.Priority = .normal,
         onUpdate: @escaping @MainActor @Sendable (ListingUpdate) -> Void
     ) -> ListingLoad {
         load(
-            location, sortedBy: column, ascending: ascending, priority: priority,
-            prepare: { $0 }, onUpdate: onUpdate)
+            location, sortedBy: column, ascending: ascending, foldersFirst: foldersFirst,
+            showsHidden: showsHidden, priority: priority, prepare: { $0 }, onUpdate: onUpdate)
     }
 
-    /// Like `load(_:sortedBy:ascending:priority:onUpdate:)`, but runs `prepare` on the load's
-    /// worker thread for each update and hands its result to `onUpdate`, so work on the listing
-    /// stays off the main actor.
+    /// Like `load(_:sortedBy:ascending:foldersFirst:showsHidden:priority:onUpdate:)`, but runs
+    /// `prepare` on the load's worker thread for each update and hands its result to `onUpdate`,
+    /// so work on the listing stays off the main actor.
     @discardableResult
     public func load<Prepared: Sendable>(
         _ location: Location, sortedBy column: SortColumn = .name, ascending: Bool = true,
+        foldersFirst: Bool = false, showsHidden: Bool = true,
         priority: ListingLoad.Priority = .normal,
         prepare: @escaping @Sendable (ListingUpdate) -> Prepared,
         onUpdate: @escaping @MainActor @Sendable (Prepared) -> Void
     ) -> ListingLoad {
         let load = ListingLoad(
-            location: location, column: column, ascending: ascending, priority: priority,
+            location: location, column: column, ascending: ascending,
+            foldersFirst: foldersFirst, showsHidden: showsHidden, priority: priority,
             handOff: { update in
                 let prepared = prepare(update)
                 return { onUpdate(prepared) }
@@ -104,7 +107,8 @@ public final class ListingService: Sendable {
                     sentFirstBatch = true
                     let first = Listing(
                         Array(entries.all.prefix(Self.firstBatchCount)), column: load.column,
-                        ascending: load.ascending)
+                        ascending: load.ascending, foldersFirst: load.foldersFirst,
+                        showsHidden: load.showsHidden)
                     hand(.firstBatch(first, rootVolumeName: rootVolumeName), to: load)
                 }
             }
@@ -119,7 +123,9 @@ public final class ListingService: Sendable {
         if load.isCancelled { return }
         hand(
             .full(
-                Listing(entries.all, column: load.column, ascending: load.ascending),
+                Listing(
+                    entries.all, column: load.column, ascending: load.ascending,
+                    foldersFirst: load.foldersFirst, showsHidden: load.showsHidden),
                 rootVolumeName: rootVolumeName), to: load)
     }
 

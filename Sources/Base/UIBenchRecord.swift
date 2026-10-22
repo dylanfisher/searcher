@@ -43,6 +43,15 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
     public var loadAfterSelectAll: [Double]
     /// Sort column change → frame with the re-sorted rows, on W2 (B8).
     public var sortChange: [Double]
+    /// Cmd-Shift-. key → frame with hidden files shown or hidden, on W2 (B8). Two per launch:
+    /// shown, then hidden again.
+    public var hiddenToggle: [Double]
+    /// Folders First turned on or off → frame with the rearranged rows, on W2 (B8). Two per
+    /// launch: on, then off.
+    public var foldersFirstToggle: [Double]
+    /// A sort key (Ctrl-Opt-Cmd-6, then Ctrl-Opt-Cmd-1) → frame with the re-sorted rows, on W2
+    /// (B8). Two per launch.
+    public var sortKey: [Double]
     /// Every run loop pass over the stall threshold (B10), all launches together.
     public var stalls: [Stall]
 
@@ -68,7 +77,8 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         patchAllSelected: [Double] = [], reloadAllSelected: [Double] = [],
         patchAddingAllSelected: [Double] = [], clickHalf: [Double] = [],
         patchAfterShiftDown: [Double] = [], loadAfterSelectAll: [Double] = [],
-        sortChange: [Double] = [],
+        sortChange: [Double] = [], hiddenToggle: [Double] = [],
+        foldersFirstToggle: [Double] = [], sortKey: [Double] = [],
         stalls: [Stall] = []
     ) {
         self.launch = launch
@@ -87,6 +97,9 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         self.patchAfterShiftDown = patchAfterShiftDown
         self.loadAfterSelectAll = loadAfterSelectAll
         self.sortChange = sortChange
+        self.hiddenToggle = hiddenToggle
+        self.foldersFirstToggle = foldersFirstToggle
+        self.sortKey = sortKey
         self.stalls = stalls
     }
 
@@ -108,6 +121,9 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         patchAfterShiftDown += other.patchAfterShiftDown
         loadAfterSelectAll += other.loadAfterSelectAll
         sortChange += other.sortChange
+        hiddenToggle += other.hiddenToggle
+        foldersFirstToggle += other.foldersFirstToggle
+        sortKey += other.sortKey
         stalls += other.stalls
     }
 

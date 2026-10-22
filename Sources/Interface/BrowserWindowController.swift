@@ -7,7 +7,10 @@ import Browser
 public final class BrowserWindowController: NSWindowController {
     public let paneViewController: PaneViewController
 
-    public init(location: Location, service: ListingService, systemActions: any SystemActions) {
+    public init(
+        location: Location, service: ListingService, systemActions: any SystemActions,
+        settings: Settings
+    ) {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -16,7 +19,8 @@ public final class BrowserWindowController: NSWindowController {
         )
         let layout = Layout()
         let pane = Pane(
-            location: location, service: service, systemActions: systemActions, isFocused: true)
+            location: location, service: service, systemActions: systemActions, settings: settings,
+            isFocused: true)
         paneViewController = PaneViewController(pane: pane)
         window.contentView = PaneLayoutView(
             layout: layout, paneViews: [layout.focused: paneViewController.view])

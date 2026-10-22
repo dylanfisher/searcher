@@ -51,7 +51,7 @@ private struct Fixture {
         pane = Pane(
             location: Location(path: "/root"),
             service: ListingService(lister: lister, rootVolumeName: rootVolumeName),
-            systemActions: actions, isFocused: true)
+            systemActions: actions, settings: untouchedSettings(), isFocused: true)
         table = ClickedRowTableView()
         controller = PaneViewController(
             pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
@@ -177,7 +177,7 @@ private final class VolumeName: @unchecked Sendable {
     let window = BrowserWindowController(
         location: Location(path: "/root"),
         service: ListingService(lister: StubLister(Fixture.folders)) { "Test Disk" },
-        systemActions: StubSystemActions())
+        systemActions: StubSystemActions(), settings: untouchedSettings())
     let controller = window.paneViewController
     await settle { controller.pane.state.isLoaded }
     window.window?.contentView?.layoutSubtreeIfNeeded()
@@ -237,7 +237,8 @@ private final class VolumeName: @unchecked Sendable {
     try await Task.detached { try Data().write(to: url.appending(path: "old.txt")) }.value
     let pane = Pane(
         location: Location(path: url.path), service: ListingService(),
-        systemActions: StubSystemActions(), isFocused: true)
+        systemActions: StubSystemActions(), settings: untouchedSettings(),
+        isFocused: true)
     let table = ListingTableView()
     let controller = PaneViewController(
         pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),

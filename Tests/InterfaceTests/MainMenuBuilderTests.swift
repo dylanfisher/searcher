@@ -1,5 +1,7 @@
 import AppKit
 import Browser
+import Foundation
+import TestSupport
 import Testing
 
 @testable import Interface
@@ -10,15 +12,18 @@ private func allItems(_ menu: NSMenu) -> [NSMenuItem] {
     menu.items.flatMap { [$0] + ($0.submenu.map(allItems) ?? []) }
 }
 
-/// The item a key press would trigger: the one whose key equivalent spells the event's chord.
+/// The item a key press would trigger: the one whose key equivalent spells one of the event's
+/// chords, tried in order.
 @MainActor
 private func item(for event: NSEvent, in menu: NSMenu) throws -> NSMenuItem {
-    let chord = try #require(KeyChord(event: event))
-    return try #require(
+    let chords = KeyChord.candidates(for: event)
+    let found = chords.lazy.compactMap { chord in
         allItems(menu).first {
             $0.keyEquivalent == chord.keyEquivalent
                 && $0.keyEquivalentModifierMask == chord.keyEquivalentModifierMask
-        }, "no menu item for \(chord)")
+        }
+    }.first
+    return try #require(found, "no menu item for \(chords)")
 }
 
 /// The responder AppKit would send `item`'s action to: the first one up the chain from the
@@ -56,7 +61,12 @@ private func buildMenu(_ registry: CommandRegistry) throws -> NSMenu {
     #expect(!commandItems.isEmpty)
     for item in commandItems {
         let id = try #require(item.representedObject as? CommandID)
-        let chord = try #require(registry.command(for: id)?.chords.first)
+        let command = try #require(registry.command(for: id))
+        guard let chord = command.chords.first else {
+            // A command with no chord, such as Folders First, has no key equivalent.
+            #expect(item.keyEquivalent.isEmpty, "\(id)")
+            continue
+        }
         #expect(item.keyEquivalent == chord.keyEquivalent, "\(id)")
         #expect(item.keyEquivalentModifierMask == chord.keyEquivalentModifierMask, "\(id)")
     }
@@ -184,4 +194,69 @@ private struct TextFieldWindow {
     #expect(setup.table.tryToPerform(try #require(selectAll.action), with: selectAll))
 
     #expect(setup.log.ids == [SelectionCommands.selectAll.id])
+}
+
+/// Settings for a test that never changes one, over a `temporarySuite` under the temporary
+/// directory. Nothing is written, so nothing is left. TestSupport can't build `Settings`, which
+/// is in Browser, so each test target has this and `storedSettings`.
+@MainActor
+func untouchedSettings() -> Settings {
+    Settings(defaults: temporarySuite(in: FileManager.default.temporaryDirectory.path))
+}
+
+/// Settings stored in `folder`, which takes the suite's file with it when the test removes it.
+@MainActor
+func storedSettings(in folder: TemporaryFolder) -> Settings {
+    Settings(defaults: temporarySuite(in: folder.url.path))
+}
+
+@MainActor @Test func viewMenuRunsTheTogglesAndSortKeysWithTheirChords() throws {
+    let menu = try buildMenu(try AppCommands.registry())
+    let view = try #require(menu.items.first { $0.title == "View" }?.submenu)
+    #expect(
+        view.items.map(\.title) == [
+            "Show Hidden Files", "Folders First", "", "Sort by Name", "Sort by Kind",
+            "Sort by Date Modified", "Sort by Size",
+        ])
+    let table = ListingTableView()
+    let log = CommandLog()
+    table.runCommand = { log.ids.append($0) }
+
+    // Cmd-Shift-. types ">" on a US keyboard; the chord names the unshifted key.
+    let presses = [
+        try #require(
+            NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0,
+                windowNumber: 0, context: nil, characters: ">", charactersIgnoringModifiers: ">",
+                isARepeat: false, keyCode: 47)),
+        try keyEvent("6", modifiers: [.control, .option, .command]),
+    ]
+    for press in presses {
+        let item = try item(for: press, in: menu)
+        #expect(table.tryToPerform(try #require(item.action), with: item))
+    }
+
+    #expect(log.ids == [ViewCommands.toggleHidden.id, ViewCommands.sortBySize.id])
+}
+
+@MainActor @Test func viewMenuCheckMarksFollowTheSettings() throws {
+    let folder = try TemporaryFolder("MainMenuBuilderTests")
+    let settings = storedSettings(in: folder)
+    let menu = try buildMenu(try AppCommands.registry())
+    MainMenuBuilder.showChecks(in: menu, settings: settings)
+    let hidden = try #require(allItems(menu).first { $0.title == "Show Hidden Files" })
+    let foldersFirst = try #require(allItems(menu).first { $0.title == "Folders First" })
+    let sortByName = try #require(allItems(menu).first { $0.title == "Sort by Name" })
+    #expect(hidden.state == .off)
+    #expect(foldersFirst.state == .off)
+
+    settings.showHidden = true
+    #expect(hidden.state == .on)
+    #expect(foldersFirst.state == .off)
+
+    settings.foldersFirst = true
+    settings.showHidden = false
+    #expect(hidden.state == .off)
+    #expect(foldersFirst.state == .on)
+    #expect(sortByName.state == .off)
 }

@@ -31,7 +31,7 @@ private func controller(
     lister.set("/folder", to: entries)
     let pane = Pane(
         location: Location(path: "/folder"), service: ListingService(lister: lister),
-        systemActions: StubSystemActions())
+        systemActions: StubSystemActions(), settings: untouchedSettings())
     let formatter = EntryCellFormatter(
         locale: Locale(identifier: "en_US"), timeZone: TimeZone(identifier: "UTC")!)
     let controller = ListingViewController(

@@ -76,7 +76,7 @@ extension BenchCase {
     private static let w1Path = Fixture(.w1).path.path
     private static let w2Path = Fixture(.w2).path.path
 
-    private static func budget(_ id: String) -> Budget {
+    static func budget(_ id: String) -> Budget {
         do {
             return try Budget.named(id)
         } catch {

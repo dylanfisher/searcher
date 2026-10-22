@@ -186,7 +186,7 @@ private func widePane(_ count: Int) async -> (Pane, StubLister) {
     let lister = StubLister(["/wide": wideEntries(count)])
     let pane = Pane(
         location: Location(path: "/wide"), service: ListingService(lister: lister),
-        systemActions: StubSystemActions())
+        systemActions: StubSystemActions(), settings: untouchedSettings())
     await settle { pane.state.isLoaded }
     return (pane, lister)
 }

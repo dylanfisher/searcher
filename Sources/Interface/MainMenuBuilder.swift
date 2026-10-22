@@ -102,15 +102,25 @@ public enum MainMenuBuilder {
                 .command(NavigationCommands.open.id), .command(NavigationCommands.goToParent.id),
             ]
         ),
-        Menu(title: "View", items: []),
+        Menu(
+            title: "View",
+            items: [
+                .command(ViewCommands.toggleHidden.id),
+                .command(ViewCommands.toggleFoldersFirst.id),
+                .separator,
+                .command(ViewCommands.sortByName.id), .command(ViewCommands.sortByKind.id),
+                .command(ViewCommands.sortByDateModified.id), .command(ViewCommands.sortBySize.id),
+            ]),
         windowMenu,
     ]
 
     /// Builds the menus and makes them `app`'s menu bar, with the Window menu as its windows menu.
-    public static func install(in app: NSApplication, appName: String, registry: CommandRegistry)
-        throws(BuildError)
-    {
+    /// Items for commands that toggle a setting show its state from `settings`.
+    public static func install(
+        in app: NSApplication, appName: String, registry: CommandRegistry, settings: Settings
+    ) throws(BuildError) {
         let bar = try build(appName: appName, registry: registry)
+        showChecks(in: bar, settings: settings)
         guard let windows = bar.items.first(where: { $0.title == windowMenu.title })?.submenu else {
             preconditionFailure("the menu bar has no \(windowMenu.title) menu")
         }
@@ -131,6 +141,39 @@ public enum MainMenuBuilder {
             bar.addItem(barItem)
         }
         return bar
+    }
+
+    /// Gives each item of a command that turns a setting on and off (`CommandBinding.isChecked`)
+    /// a check mark while the setting is on, now and after each change, for as long as `bar`
+    /// exists.
+    static func showChecks(in bar: NSMenu, settings: Settings) {
+        let isChecked = Dictionary(
+            uniqueKeysWithValues: AppCommands.bindings.compactMap { binding in
+                binding.isChecked.map { (binding.command.id, $0) }
+            })
+        let items: [(NSMenuItem, @MainActor @Sendable (Settings) -> Bool)] =
+            allItems(in: bar).compactMap { item in
+                guard let id = item.representedObject as? CommandID, let check = isChecked[id]
+                else { return nil }
+                return (item, check)
+            }
+        showChecks(items, settings: settings)
+        settings.observe(for: bar) { [weak settings] in
+            guard let settings else { return }
+            showChecks(items, settings: settings)
+        }
+    }
+
+    private static func showChecks(
+        _ items: [(NSMenuItem, @MainActor @Sendable (Settings) -> Bool)], settings: Settings
+    ) {
+        for (item, isChecked) in items {
+            item.state = isChecked(settings) ? .on : .off
+        }
+    }
+
+    private static func allItems(in menu: NSMenu) -> [NSMenuItem] {
+        menu.items.flatMap { [$0] + ($0.submenu.map(allItems) ?? []) }
     }
 
     private static func appMenu(_ appName: String) -> Menu {

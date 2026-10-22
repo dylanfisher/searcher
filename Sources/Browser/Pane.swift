@@ -46,6 +46,9 @@ public final class Pane {
     public var onChange: (@MainActor () -> Void)?
 
     private let service: ListingService
+    /// The app-wide settings. The rows follow `showHidden` and `foldersFirst`: a change re-sorts
+    /// them off the main actor, as a sort change does.
+    public let settings: Settings
     /// How the pane and its views reach the system outside the app's windows.
     public let systemActions: any SystemActions
     private var load: ListingLoad?
@@ -69,16 +72,18 @@ public final class Pane {
     /// Starts listing `location` right away, ahead of other panes' loads if `isFocused`.
     public init(
         location: Location, service: ListingService, systemActions: any SystemActions,
-        sortedBy column: SortColumn = .name, ascending: Bool = true,
+        settings: Settings, sortedBy column: SortColumn = .name, ascending: Bool = true,
         isFocused: Bool = false
     ) {
         self.location = location
         self.service = service
         self.systemActions = systemActions
+        self.settings = settings
         self.isFocused = isFocused
         sortColumn = column
         sortAscending = ascending
         startLoad()
+        settings.observe(for: self) { [weak self] in self?.settingsDidChange() }
     }
 
     // MARK: - Navigation
@@ -249,52 +254,80 @@ public final class Pane {
         onChange?()
     }
 
-    /// Sorts a copy of the rows off the main actor when they aren't in the pane's sort.
+    /// A view setting changed: the rows show or hide hidden entries, or put folders first, once
+    /// a sort lands.
+    private func settingsDidChange() {
+        startSortIfNeeded()
+        onChange?()
+    }
+
+    /// Whether `listing` is in the pane's sort and shows what the settings ask for.
+    public func isArranged(_ listing: Listing) -> Bool {
+        listing.column == sortColumn && listing.ascending == sortAscending
+            && listing.foldersFirst == settings.foldersFirst
+            && listing.showsHidden == settings.showHidden
+    }
+
+    /// Sorts a copy of the rows off the main actor when they aren't in the pane's sort, or don't
+    /// show hidden entries or put folders first as the settings ask.
+    ///
+    /// Showing hidden entries changes which entries the rows hold, so the selection is resolved as
+    /// against a new load: entries that appear aren't taken into a Select All, and selected ones
+    /// that are hidden are dropped once the folder is fully listed. When the cursor's entry is
+    /// hidden, the cursor moves to the row that followed it (`keepingCursor`).
     private func startSortIfNeeded() {
-        guard let listing = state.listing,
-            listing.column != sortColumn || listing.ascending != sortAscending
-        else { return }
+        guard let listing = state.listing, !isArranged(listing) else { return }
         sortCount += 1
         runningSorts += 1
         let version = stateVersion
         let column = sortColumn
         let ascending = sortAscending
+        let foldersFirst = settings.foldersFirst
+        let showsHidden = settings.showHidden
+        let change: Selection.Change
+        if listing.showsHidden == showsHidden {
+            change = .sameEntries
+        } else if case .loaded = state {
+            change = .loaded(complete: true)
+        } else {
+            change = .loaded(complete: false)
+        }
         let selection = selection
         let selectionVersion = selectionVersion
         sortQueue.async { [weak self] in
             var listing = listing
-            listing.sort(by: column, ascending: ascending)
-            let resolved = selection.resolved(in: listing, after: .sameEntries)
+            listing.sort(
+                by: column, ascending: ascending, foldersFirst: foldersFirst,
+                showsHidden: showsHidden)
+            let resolved = Self.keepingCursor(
+                of: selection, in: selection.resolved(in: listing, after: change), listing)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self?.finishSort(
-                        listing, from: version, resolved: resolved, from: selectionVersion)
+                        listing, after: change, from: version, resolved: resolved,
+                        from: selectionVersion)
                 }
             }
         }
     }
 
-    /// Shows the sorted rows unless the state or the sort changed since the sort started. Whatever
-    /// changed them started its own sort when it needed one, so the last request wins and a
-    /// load that landed meanwhile is kept. The selection is names, so it follows its entries to
-    /// their new rows. Patches that waited for the sort are then applied to the rows shown.
+    /// Shows the sorted rows unless the state, the sort or a view setting changed since the sort
+    /// started. Whatever changed them started its own sort when it needed one, so the last
+    /// request wins and a load that landed meanwhile is kept. The selection is names, so it
+    /// follows its entries to their new rows. Patches that waited for the sort are then applied
+    /// to the rows shown.
     private func finishSort(
-        _ listing: Listing, from version: Int, resolved: Selection, from selectionVersion: Int
+        _ listing: Listing, after change: Selection.Change, from version: Int,
+        resolved: Selection, from selectionVersion: Int
     ) {
         runningSorts -= 1
         defer { startPatch() }
-        guard version == stateVersion, listing.column == sortColumn,
-            listing.ascending == sortAscending
-        else { return }
+        guard version == stateVersion, isArranged(listing) else { return }
         switch state {
         case .partial:
-            show(
-                .partial(listing), after: .sameEntries, resolved: resolved,
-                from: selectionVersion)
+            show(.partial(listing), after: change, resolved: resolved, from: selectionVersion)
         case .loaded:
-            show(
-                .loaded(listing), after: .sameEntries, resolved: resolved, from: selectionVersion
-            )
+            show(.loaded(listing), after: change, resolved: resolved, from: selectionVersion)
         case .loading, .denied, .failed:
             preconditionFailure("the state has no rows but kept the version a sort started from")
         }
@@ -310,6 +343,7 @@ public final class Pane {
         let selectionVersion = selectionVersion
         load = service.load(
             location, sortedBy: sortColumn, ascending: sortAscending,
+            foldersFirst: settings.foldersFirst, showsHidden: settings.showHidden,
             priority: isFocused ? .focused : .normal,
             prepare: { update in
                 switch update {
@@ -400,13 +434,26 @@ public final class Pane {
         let selectionVersion = selectionVersion
         let version = stateVersion
         settleQueue.async { [weak self] in
-            let settled = selection.settled(in: listing)
+            let settled = Self.keepingCursor(
+                of: selection, in: selection.settled(in: listing), listing)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self?.finishSettling(settled, from: selectionVersion, state: version)
                 }
             }
         }
+    }
+
+    /// `resolved`, `selection` resolved or settled against `listing`, with the cursor moved to
+    /// the row that followed `selection`'s cursor when `listing` hides that entry
+    /// (`Selection.cursorMoved`). A cursor `listing` lacks altogether is left as `resolved` has it.
+    private nonisolated static func keepingCursor(
+        of selection: Selection, in resolved: Selection, _ listing: Listing
+    ) -> Selection {
+        guard let cursor = selection.cursor, resolved.cursorRow(in: listing) == nil,
+            let row = listing.row(nearest: cursor.name)
+        else { return resolved }
+        return resolved.cursorMoved(toRow: row, in: listing)
     }
 
     private func finishSettling(_ settled: Selection, from selectionVersion: Int, state: Int) {

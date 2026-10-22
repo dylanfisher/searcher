@@ -10,7 +10,8 @@ import os
 /// and, in the same launch, presses of each other row command, Cmd-A, folder change patches and
 /// reloads landing with every row selected, a patch that adds a row under them, a click selecting
 /// half the rows, a patch landing after Shift-↓ changed that selection while it ran, and a reload
-/// landing after Cmd-A on its first batch (B6), and a sort column change on W2 (B8). The
+/// landing after Cmd-A on its first batch (B6), and on W2 a sort column change, Cmd-Shift-.
+/// showing and hiding hidden files, Folders First on and off, and two sort keys (B8). The
 /// stall watchdog's stalls (B10) are collected for the whole launch. It starts the launch warm-up
 /// where a normal launch does and waits for it to end before the first span after launch. It
 /// writes the samples to the runner's output file and exits; any failure is printed to standard
@@ -110,9 +111,12 @@ final class UIBench {
             throw Failure("the UI bench needs \(StallWatchdog.thresholdArgument) to count stalls")
         }
         let root = try await tempRoot.value
+        guard let defaults = UserDefaults(suiteName: root.suiteName) else {
+            throw Failure("UserDefaults refused the suite \(root.suiteName)")
+        }
         let controller = BrowserWindowController(
             location: Location(path: root.folder.path), service: service,
-            systemActions: systemActions)
+            systemActions: systemActions, settings: Settings(defaults: defaults))
         self.controller = controller
         controller.paneViewController.onShow = { [weak self] in self?.paneShown() }
         let window = try requireWindow()
@@ -147,6 +151,7 @@ final class UIBench {
             _ = try await press([.down], "key down before sort")
         }
         record.sortChange.append(try await changeSort())
+        try await changeViewSettings()
     }
 
     // MARK: Spans
@@ -454,7 +459,8 @@ final class UIBench {
     /// Lists W2 again `count` times, presses Cmd-A when the first batch shows, and times the
     /// complete listing's landing, which the load resolved against the selection from before
     /// Cmd-A, from the start of the main run loop pass that takes it in to the frame. Only the
-    /// first batch's entries stay selected once the selection settles.
+    /// first batch's rows stay selected once the selection settles: fewer than
+    /// `ListingService.firstBatchCount` when the batch holds hidden files, which have no row.
     private func loadAfterSelectAll(_ count: Int) async throws -> [Double] {
         let pane = try requirePane()
         let window = try requireWindow()
@@ -467,13 +473,15 @@ final class UIBench {
             let version = pane.stateVersion
             let interval = begin("load after Cmd-A")
             var pressed = false
+            var firstBatchRows = 0
             let shown: Result<Double, Failure> = await withCheckedContinuation { continuation in
                 whenShown = { [self] pane in
                     guard pane.stateVersion != version else { return false }
                     switch pane.state {
-                    case .partial:
+                    case .partial(let listing):
                         if !pressed {
                             pressed = true
+                            firstBatchRows = listing.count
                             // As a key typed while the first rows show; the full listing's
                             // hand-off is queued behind it.
                             DispatchQueue.main.async { window.sendEvent(commandA) }
@@ -499,12 +507,14 @@ final class UIBench {
             }
             samples.append(try shown.get())
             try await waitUntilSettled()
-            guard let listing = pane.state.listing,
-                pane.selection.rows(in: listing).count == ListingService.firstBatchCount
-            else {
+            guard let listing = pane.state.listing else {
+                throw Failure("W2 has no rows after its reload: \(pane.state)")
+            }
+            let selected = pane.selection.rows(in: listing)
+            guard selected.count == firstBatchRows else {
                 throw Failure(
-                    "Cmd-A on the first batch should select its \(ListingService.firstBatchCount) "
-                        + "entries, but the selection is \(pane.selection)")
+                    "Cmd-A on a first batch of \(firstBatchRows) rows left \(selected.count) of "
+                        + "\(listing.count) rows selected")
             }
         }
         return samples
@@ -537,6 +547,13 @@ final class UIBench {
         static let pageDown = Key(
             characters: function(NSPageDownFunctionKey), keyCode: 121, flags: .function)
         static let commandA = Key(characters: "a", keyCode: 0, flags: .command)
+        /// Shift applies to the character: a US keyboard types ">".
+        static let commandShiftPeriod = Key(
+            characters: ">", keyCode: 47, flags: [.command, .shift])
+        static let sortBySize = Key(
+            characters: "6", keyCode: 22, flags: [.control, .option, .command])
+        static let sortByName = Key(
+            characters: "1", keyCode: 18, flags: [.control, .option, .command])
 
         /// The character AppKit types for a function key such as `NSDownArrowFunctionKey`.
         private static func function(_ code: Int) -> String {
@@ -638,6 +655,76 @@ final class UIBench {
                         Failure(
                             "changing the table's sort to \(next) left the pane sorted by \(before)"
                         )))
+            }
+        }
+        return try shown.get()
+    }
+
+    /// Shows and hides hidden files with Cmd-Shift-., turns Folders First on and off as its menu
+    /// item does, and presses the sort keys for Size and Name, on W2, each timed to the frame
+    /// with the rows rearranged, which the pane does off the main thread. The settings are in
+    /// the bench's own suite, so each launch starts from their defaults and ends there.
+    private func changeViewSettings() async throws {
+        let pane = try requirePane()
+        let window = try requireWindow()
+        for shown in [true, false] {
+            let event = try keyEvent(.commandShiftPeriod, in: window)
+            record.hiddenToggle.append(
+                try await timeViewChange(
+                    "hidden toggle", from: event.timestamp,
+                    check: { $0.settings.showHidden == shown }
+                ) { window.sendEvent(event) })
+        }
+        guard
+            let foldersFirst = AppCommands.bindings.first(where: {
+                $0.command == ViewCommands.toggleFoldersFirst
+            })
+        else { throw Failure("\(ViewCommands.toggleFoldersFirst.id) isn't registered") }
+        for on in [true, false] {
+            record.foldersFirstToggle.append(
+                try await timeViewChange(
+                    "folders first", from: FrameCommitTimer.now,
+                    check: { $0.settings.foldersFirst == on }
+                ) { foldersFirst.run(CommandContext(pane: pane)) })
+        }
+        for (key, column) in [(Key.sortBySize, SortColumn.size), (.sortByName, .name)] {
+            let event = try keyEvent(key, in: window)
+            record.sortKey.append(
+                try await timeViewChange(
+                    "sort key", from: event.timestamp, check: { $0.sortColumn == column }
+                ) { window.sendEvent(event) })
+        }
+    }
+
+    /// Runs `change` and times it from `start` to the frame that shows the pane's rows in its
+    /// sort and settings again. Fails at once when `check` says `change` didn't take.
+    private func timeViewChange(
+        _ name: StaticString, from start: TimeInterval, check: (Pane) -> Bool,
+        _ change: () -> Void
+    ) async throws -> Double {
+        try requireVisible()
+        let pane = try requirePane()
+        let window = try requireWindow()
+        let version = pane.stateVersion
+        let interval = begin(name)
+        let shown: Result<Double, Failure> = await withCheckedContinuation { continuation in
+            whenShown = { [self] pane in
+                guard pane.stateVersion != version, pane.state.listing.map(pane.isArranged) == true
+                else { return false }
+                timeFrame(from: start, in: window, name, interval) {
+                    continuation.resume(returning: .success($0))
+                }
+                return true
+            }
+            change()
+            if !check(pane) {
+                whenShown = nil
+                continuation.resume(
+                    returning: .failure(
+                        Failure(
+                            "\(name) changed nothing: the pane sorts by \(pane.sortColumn), "
+                                + "showHidden \(pane.settings.showHidden), "
+                                + "foldersFirst \(pane.settings.foldersFirst)")))
             }
         }
         return try shown.get()

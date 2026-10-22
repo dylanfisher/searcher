@@ -30,7 +30,7 @@ private func sorted(_ entries: [DirectoryEntry], _ column: SortColumn, ascending
     -> Listing
 {
     var listing = Listing(entries)
-    listing.sort(by: column, ascending: ascending)
+    listing.sort(by: column, ascending: ascending, foldersFirst: false, showsHidden: true)
     return listing
 }
 
@@ -113,7 +113,7 @@ private let everyOrder: [(SortColumn, Bool)] = SortColumn.allCases.flatMap { col
     var listing = Listing([file("c", size: 1), file("a", size: 3), file("b", size: 2)])
     let entries = listing.entries
     let byName = names(listing)
-    listing.sort(by: .size, ascending: true)
+    listing.sort(by: .size, ascending: true, foldersFirst: false, showsHidden: true)
     #expect(listing.entries == entries)
     #expect(names(listing) != byName)
     #expect(names(listing) == ["c", "b", "a"])
@@ -124,7 +124,7 @@ private let everyOrder: [(SortColumn, Bool)] = SortColumn.allCases.flatMap { col
         let listing = Listing([file("c", size: 1), file("a", size: 3)])
         await MainActor.run {
             var listing = listing
-            listing.sort(by: .size, ascending: true)
+            listing.sort(by: .size, ascending: true, foldersFirst: false, showsHidden: true)
         }
     }
 }
@@ -269,4 +269,118 @@ func updateKeepsOrder(column: SortColumn, ascending: Bool) {
             == Set(["c", "e\u{301}", "z"].map { Array($0.utf8) }))
     #expect(old.names(notIn: new) == ["b"])
     #expect(new.names(notIn: new).isEmpty)
+}
+
+// MARK: - Hidden entries and folders first
+
+/// A file with the hidden flag, as `chflags hidden` sets it.
+private func flagged(_ name: String, size: Int64 = 0, modified: TimeInterval = 0)
+    -> DirectoryEntry
+{
+    DirectoryEntry(
+        name: name, type: .regular, size: size, modified: Date(timeIntervalSince1970: modified),
+        isHidden: true, isDataless: false)
+}
+
+private func arranged(
+    _ entries: [DirectoryEntry], _ column: SortColumn, ascending: Bool, foldersFirst: Bool = false,
+    showsHidden: Bool = true
+) -> Listing {
+    var listing = Listing(entries)
+    listing.sort(
+        by: column, ascending: ascending, foldersFirst: foldersFirst, showsHidden: showsHidden)
+    return listing
+}
+
+/// Dot names and flagged entries, with ties and spreads in every column.
+private let hiddenMix: [DirectoryEntry] = [
+    file("b", size: 3, modified: 2), file(".profile", size: 9, modified: 1),
+    flagged("flagged", size: 1, modified: 5), file("a.txt", size: 2, modified: 4),
+    folder(".git", modified: 3), folder("docs", modified: 6), flagged("c", size: 3, modified: 2),
+]
+private let shownNames: Set = ["b", "a.txt", "docs"]
+
+@Test func withHiddenOffDotAndFlaggedEntriesAreAbsentAndWithItOnTheyAreInSortOrder() {
+    for (column, ascending) in everyOrder {
+        let all = arranged(hiddenMix, column, ascending: ascending)
+        let hidden = arranged(hiddenMix, column, ascending: ascending, showsHidden: false)
+
+        #expect(Set(names(hidden)) == shownNames, "\(column) \(ascending)")
+        #expect(names(hidden) == names(all).filter(shownNames.contains), "\(column) \(ascending)")
+        #expect(all.count == hiddenMix.count)
+        // Shown again, they're where a listing that never hid them has them.
+        var shownAgain = hidden
+        shownAgain.sort(by: column, ascending: ascending, foldersFirst: false, showsHidden: true)
+        #expect(names(shownAgain) == names(all), "\(column) \(ascending)")
+    }
+    #expect(Set(names(Listing(hiddenMix, showsHidden: false))) == shownNames)
+}
+
+@Test func aHiddenEntryHasNoRowAndItsNearestRowIsTheNextShownOne() {
+    let listing = Listing([file("a"), flagged("b"), file("c"), flagged("d")], showsHidden: false)
+
+    #expect(names(listing) == ["a", "c"])
+    #expect(listing.row(named: "b") == nil)
+    #expect(listing.row(nearest: "b") == 1)
+    #expect(listing.row(nearest: "a") == 0)
+    // Nothing follows "d", so the last row is the nearest.
+    #expect(listing.row(nearest: "d") == 1)
+    #expect(listing.row(nearest: "not there") == nil)
+    #expect(Listing([flagged("x")], showsHidden: false).row(nearest: "x") == nil)
+}
+
+@Test func namesNotInCountOnlyTheEntriesEachListingShows() {
+    let hidden = Listing([file("a"), flagged("b"), file(".c")], showsHidden: false)
+    var shown = hidden
+    shown.sort(by: .name, ascending: true, foldersFirst: false, showsHidden: true)
+
+    #expect(Set(shown.names(notIn: hidden)) == ["b", ".c"])
+    #expect(hidden.names(notIn: shown).isEmpty)
+}
+
+@Test func foldersFirstPutsEveryFolderFirstForEachColumnAndDirection() {
+    // "Mail.app" is a package, which Finder sorts with the files.
+    let entries = [
+        file("b", size: 5, modified: 3), folder("d", modified: 9), file("a", size: 1, modified: 1),
+        folder("c", modified: 2), folder("Mail.app", modified: 4), file("f", size: 9, modified: 5),
+        folder("e", modified: 2),
+    ]
+    let folders: Set = ["c", "d", "e"]
+    for (column, ascending) in everyOrder {
+        let plain = names(arranged(entries, column, ascending: ascending))
+        let first = names(arranged(entries, column, ascending: ascending, foldersFirst: true))
+
+        let expected = plain.filter(folders.contains) + plain.filter { !folders.contains($0) }
+        #expect(first == expected, "\(column) \(ascending)")
+    }
+}
+
+@Test(arguments: SortColumn.allCases, [true, false])
+func patchesKeepFoldersFirstAndHiddenEntriesOut(column: SortColumn, ascending: Bool) {
+    var listing = arranged(
+        patchBase, column, ascending: ascending, foldersFirst: true, showsHidden: false)
+    let new = [
+        folder("Aardvark"), flagged("item 3b.mp3", size: 2, modified: 3), file(".zz", size: 99),
+        file("zz", size: 99), folder(".cache"),
+    ]
+    for entry in new {
+        listing.update(entry)
+    }
+    listing.remove(named: "item 0.mp3")
+    listing.remove(named: ".zz")
+    // A shown entry that gains the hidden flag leaves the rows.
+    let nowHidden = flagged("item 5.jpg", size: 5)
+    listing.update(nowHidden)
+
+    let expected = (patchBase + new)
+        .filter { $0.name != "item 0.mp3" && $0.name != ".zz" }
+        .map { $0.name == nowHidden.name ? nowHidden : $0 }
+    let fresh = arranged(
+        expected, column, ascending: ascending, foldersFirst: true, showsHidden: false)
+    #expect(names(listing) == names(fresh))
+    #expect(listing.row(named: nowHidden.name) == nil)
+
+    listing.sort(by: column, ascending: ascending, foldersFirst: true, showsHidden: true)
+    let shown = arranged(expected, column, ascending: ascending, foldersFirst: true)
+    #expect(names(listing) == names(shown))
 }

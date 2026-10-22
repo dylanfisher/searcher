@@ -12,6 +12,8 @@ public final class ListingLoad: @unchecked Sendable {
     public let location: Location
     public let column: SortColumn
     public let ascending: Bool
+    public let foldersFirst: Bool
+    public let showsHidden: Bool
     public let priority: Priority
     /// Runs on the load's worker thread for each update, and returns what to run on the main actor
     /// for it.
@@ -21,12 +23,15 @@ public final class ListingLoad: @unchecked Sendable {
     private var cancelled = false
 
     init(
-        location: Location, column: SortColumn, ascending: Bool, priority: Priority,
+        location: Location, column: SortColumn, ascending: Bool, foldersFirst: Bool,
+        showsHidden: Bool, priority: Priority,
         handOff: @escaping @Sendable (ListingUpdate) -> @MainActor @Sendable () -> Void
     ) {
         self.location = location
         self.column = column
         self.ascending = ascending
+        self.foldersFirst = foldersFirst
+        self.showsHidden = showsHidden
         self.priority = priority
         self.handOff = handOff
     }
