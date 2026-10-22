@@ -15,6 +15,13 @@ import Testing
     #expect(!root.device.isEmpty)
 }
 
+@Test func theMountTableHoldsTheRootVolumeAsAVolumeReadSeesIt() async throws {
+    let (mounted, root) = try await BlockingCallThread.run { () throws(ListingError) in
+        (VolumeIdentity.mounted(), try VolumeIdentity(path: "/"))
+    }
+    #expect(mounted.contains(root))
+}
+
 @Test func pathsInOneFolderAreOnOneVolume() async throws {
     let folder = try TemporaryFolder("VolumeIdentityTests")
     let path = folder.url.path

@@ -41,8 +41,8 @@ private struct DeniedFixture {
 extension ListingState {
     fileprivate var hasEnded: Bool {
         switch self {
-        case .loading, .partial: false
-        case .loaded, .denied, .failed: true
+        case .loading, .partial, .cachedRefreshing, .slow: false
+        case .loaded, .offline, .denied, .failed: true
         }
     }
 }

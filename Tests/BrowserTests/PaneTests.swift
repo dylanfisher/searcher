@@ -83,10 +83,13 @@ extension ListingState {
     var isLoading: Bool { if case .loading = self { true } else { false } }
     var isDenied: Bool { if case .denied = self { true } else { false } }
     var isFailed: Bool { if case .failed = self { true } else { false } }
+    var isCachedRefreshing: Bool { if case .cachedRefreshing = self { true } else { false } }
+    var isSlow: Bool { if case .slow = self { true } else { false } }
+    var isOffline: Bool { if case .offline = self { true } else { false } }
     var error: ListingError? {
         switch self {
         case .denied(let error), .failed(let error): error
-        case .loading, .partial, .loaded: nil
+        case .loading, .partial, .loaded, .cachedRefreshing, .slow, .offline: nil
         }
     }
 
@@ -127,6 +130,7 @@ func drainMainQueue() async {
         case .loading: seen.append("loading")
         case .partial: seen.append("partial")
         case .loaded: seen.append("loaded")
+        case .cachedRefreshing, .slow, .offline: seen.append("kept")
         case .denied, .failed: seen.append("error")
         }
     }

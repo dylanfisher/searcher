@@ -105,6 +105,11 @@ public final class Pane {
     /// The selection version when the last `goToFolder` moved the pane. Its load's later updates
     /// were resolved from the selection it started with then.
     private var goSelectionVersion = 0
+    /// The cached rows of a `goToFolder` that hasn't moved the pane yet, shown when it moves.
+    private var pendingGoCached: (update: ListingUpdate, resolved: Selection?)?
+    /// When the rows of the `loaded` state were listed, for the slow and offline states that keep
+    /// them.
+    private var loadedAt: Date?
 
     /// Starts listing `location` right away, ahead of other panes' loads if `isFocused`, with
     /// `name` to be selected once it's listed. In column mode the first column lists it instead.
@@ -276,10 +281,13 @@ public final class Pane {
     public func cancelGoToFolder() {
         pendingGo?.load.cancel()
         pendingGo = nil
+        pendingGoCached = nil
     }
 
-    /// An update of a `goToFolder` load. The first one moves the pane, or reports why it stays;
-    /// the ones after it belong to the folder the pane moved to, whose load it now is.
+    /// An update of a `goToFolder` load. The first one that says whether the folder is there moves
+    /// the pane, or reports why it stays; the ones after it belong to the folder the pane moved
+    /// to, whose load it now is. Cached rows don't say, since the folder may have gone since they
+    /// were listed: they wait, and show once the pane moves.
     private func receiveGo(
         _ update: ListingUpdate, resolved: Selection?, request: Int,
         _ finish: @MainActor (ListingError?) -> Void
@@ -288,9 +296,18 @@ public final class Pane {
             receive(update, resolved: resolved, from: goSelectionVersion)
             return
         }
-        // A slow read hasn't said whether the folder is there, so the pane stays.
-        if case .slow = update { return }
+        // A stalled read hasn't said whether the folder is there, so the pane stays.
+        switch update {
+        case .slow, .gaveUp: return
+        case .cached, .firstBatch, .full, .failed, .volumeGone: break
+        }
+        if case .cached = update {
+            pendingGoCached = (update, resolved)
+            return
+        }
+        let cached = pendingGoCached
         pendingGo = nil
+        pendingGoCached = nil
         if case .failed(let error, _) = update,
             error.reason == .notFound || error.reason == .notADirectory
         {
@@ -310,6 +327,11 @@ public final class Pane {
         load = pending.load
         loadIsRunning = true
         goSelectionVersion = selectionVersion
+        // The rows shown are the folder's the pane left.
+        show(.loading, after: .loaded(complete: false))
+        if let cached {
+            receive(cached.update, resolved: cached.resolved, from: selectionVersion)
+        }
         receive(update, resolved: resolved, from: selectionVersion)
         finish(nil)
     }
@@ -347,6 +369,7 @@ public final class Pane {
     /// `goToFolder`, its monitor and patches. Takes `location` with `name` to be selected.
     private func leave(for location: Location, selecting name: ExactName?) {
         cancelGoToFolder()
+        loadedAt = nil
         load?.cancel()
         monitor?.stop()
         monitor = nil
@@ -631,14 +654,7 @@ public final class Pane {
         runningSorts -= 1
         defer { startPatch() }
         guard version == stateVersion, isArranged(listing) else { return }
-        switch state {
-        case .partial:
-            show(.partial(listing), after: change, resolved: resolved, from: selectionVersion)
-        case .loaded:
-            show(.loaded(listing), after: change, resolved: resolved, from: selectionVersion)
-        case .loading, .denied, .failed:
-            preconditionFailure("the state has no rows but kept the version a sort started from")
-        }
+        show(state.showing(listing), after: change, resolved: resolved, from: selectionVersion)
         onChange?()
     }
 
@@ -665,11 +681,11 @@ public final class Pane {
         _ selection: Selection, against update: ListingUpdate
     ) -> Selection? {
         switch update {
-        case .firstBatch(let listing, _):
+        case .cached(let listing, _, _), .firstBatch(let listing, _):
             selection.resolved(in: listing, after: .loaded(complete: false))
         case .full(let listing, _):
             selection.resolved(in: listing, after: .loaded(complete: true))
-        case .failed, .slow:
+        case .failed, .slow, .gaveUp, .volumeGone:
             nil
         }
     }
@@ -684,26 +700,60 @@ public final class Pane {
         _ update: ListingUpdate, resolved: Selection?, from selectionVersion: Int
     ) {
         switch update {
+        case .cached(let listing, let listedAt, let rootVolumeName):
+            self.rootVolumeName = rootVolumeName
+            // Rows already shown are the folder's own, and at least as new as the cache's.
+            guard state.listing == nil else { return }
+            // A pane that already went slow or offline stays so, showing the cached rows.
+            let kept = ListingState.KeptRows(
+                listing: listing, listedAt: listedAt, isComplete: false)
+            let shown: ListingState =
+                switch state {
+                case .slow: .slow(kept)
+                case .offline: .offline(kept)
+                case .loading, .partial, .loaded, .cachedRefreshing, .denied, .failed:
+                    .cachedRefreshing(listing, listedAt: listedAt)
+                }
+            show(shown, after: .loaded(complete: false), resolved: resolved, from: selectionVersion)
         case .firstBatch(let listing, let rootVolumeName):
             self.rootVolumeName = rootVolumeName
+            // Complete rows from an earlier listing, the pane's own or cached, stay until the
+            // full listing replaces them, so a share that stops after its first batch still
+            // shows them.
+            guard keptRows?.listedAt == nil else { return }
             show(
                 .partial(listing), after: .loaded(complete: false), resolved: resolved,
                 from: selectionVersion)
         case .full(let listing, let rootVolumeName):
             self.rootVolumeName = rootVolumeName
             loadIsRunning = false
+            loadedAt = Date()
             show(
                 .loaded(listing), after: .loaded(complete: true), resolved: resolved,
                 from: selectionVersion)
         case .failed(let error, let rootVolumeName):
             self.rootVolumeName = rootVolumeName
             loadIsRunning = false
-            show(
-                error.reason == .privacyProtected ? .denied(error) : .failed(error),
-                after: .loaded(complete: true))
-        case .slow:
+            switch error.reason {
+            case .unreachable: goOffline()
+            case .privacyProtected: show(.denied(error), after: .loaded(complete: true))
+            case .permissionDenied, .notFound, .notADirectory, .other:
+                show(.failed(error), after: .loaded(complete: true))
+            }
+        case .volumeGone(_, let rootVolumeName):
+            self.rootVolumeName = rootVolumeName
+            loadIsRunning = false
+            goOffline()
+        case .slow(let rootVolumeName):
+            self.rootVolumeName = rootVolumeName
             // The pane keeps waiting; the load's last update still comes if the read returns.
-            return
+            if case .offline = state { return }
+            state = .slow(keptRows)
+        case .gaveUp(let rootVolumeName):
+            self.rootVolumeName = rootVolumeName
+            // The load keeps going, and its last update still replaces the offline state.
+            if case .offline = state { return }
+            goOffline()
         }
         // A load that started before `setSort` arrives in the old sort, and shows in it until
         // this sort lands.
@@ -713,6 +763,26 @@ public final class Pane {
             startLoad()
         }
         onChange?()
+    }
+
+    /// The rows shown, as a slow or offline state keeps them.
+    private var keptRows: ListingState.KeptRows? {
+        switch state {
+        case .loaded(let listing):
+            ListingState.KeptRows(listing: listing, listedAt: loadedAt, isComplete: true)
+        case .partial(let listing):
+            ListingState.KeptRows(listing: listing, listedAt: nil, isComplete: false)
+        case .cachedRefreshing(let listing, let listedAt):
+            ListingState.KeptRows(listing: listing, listedAt: listedAt, isComplete: false)
+        case .slow(let kept), .offline(let kept): kept
+        case .loading, .denied, .failed: nil
+        }
+    }
+
+    /// Shows the folder as offline, keeping the rows shown. They are the same listing, so the
+    /// selection stays as it is.
+    private func goOffline() {
+        state = .offline(keptRows)
     }
 
     // MARK: - Selection

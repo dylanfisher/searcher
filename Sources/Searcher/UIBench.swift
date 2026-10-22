@@ -175,7 +175,7 @@ final class UIBench {
         let shown: Result<Double, Failure> = await withCheckedContinuation { continuation in
             whenShown = { [self] pane in
                 switch pane.state {
-                case .loading:
+                case .loading, .slow:
                     return false
                 case .partial(let listing), .loaded(let listing):
                     guard listing.count > 0 else {
@@ -183,6 +183,11 @@ final class UIBench {
                             returning: .failure(Failure("\(path) is empty, so no rows were timed")))
                         return true
                     }
+                case .cachedRefreshing:
+                    preconditionFailure("the bench's listing service has no cache")
+                case .offline:
+                    continuation.resume(returning: .failure(Failure("\(path) went offline")))
+                    return true
                 case .denied(let error), .failed(let error):
                     continuation.resume(
                         returning: .failure(Failure("\(path) could not be listed: \(error)")))
@@ -465,13 +470,15 @@ final class UIBench {
         return samples
     }
 
-    /// Lists W2 again `count` times, presses Cmd-A when the first batch shows, and times the
-    /// complete listing's landing, which the load resolved against the selection from before
-    /// Cmd-A, from the start of the main run loop pass that takes it in to the frame. Only the
-    /// first batch's rows stay selected once the selection settles: fewer than
+    /// Opens W2 again from its parent `count` times, presses Cmd-A when the first batch shows,
+    /// and times the complete listing's landing, which the load resolved against the selection
+    /// from before Cmd-A, from the start of the main run loop pass that takes it in to the frame.
+    /// A reload would keep W2's complete rows until the new listing lands, so it shows no first
+    /// batch. Only the first batch's rows stay selected once the selection settles: fewer than
     /// `ListingService.firstBatchCount` when the batch holds hidden files, which have no row.
     private func loadAfterSelectAll(_ count: Int) async throws -> [Double] {
         let pane = try requirePane()
+        let w2 = pane.location
         let window = try requireWindow()
         let commandA = try keyEvent(.commandA, in: window)
         let wake = watchWakes()
@@ -479,6 +486,8 @@ final class UIBench {
         var samples: [Double] = []
         for _ in 0..<count {
             try requireVisible()
+            pane.goToParent()
+            try await waitUntilLoaded()
             let version = pane.stateVersion
             let interval = begin("load after Cmd-A")
             var pressed = false
@@ -499,25 +508,27 @@ final class UIBench {
                     case .loaded:
                         guard pressed else {
                             continuation.resume(
-                                returning: .failure(Failure("W2's reload showed no first batch")))
+                                returning: .failure(Failure("W2's load showed no first batch")))
                             return true
                         }
                         timeFrame(from: lastWake, in: window, "load after Cmd-A", interval) {
                             continuation.resume(returning: .success($0))
                         }
                         return true
-                    case .loading, .denied, .failed:
+                    case .loading, .slow:
+                        return false
+                    case .cachedRefreshing, .offline, .denied, .failed:
                         continuation.resume(
-                            returning: .failure(Failure("W2's reload failed: \(pane.state)")))
+                            returning: .failure(Failure("W2's load failed: \(pane.state)")))
                         return true
                     }
                 }
-                pane.reload()
+                pane.navigate(to: w2)
             }
             samples.append(try shown.get())
             try await waitUntilSettled()
             guard let listing = pane.state.listing else {
-                throw Failure("W2 has no rows after its reload: \(pane.state)")
+                throw Failure("W2 has no rows after its load: \(pane.state)")
             }
             let selected = pane.selection.rows(in: listing)
             guard selected.count == firstBatchRows else {
@@ -857,7 +868,9 @@ final class UIBench {
             case .loaded: return
             case .denied(let error), .failed(let error):
                 throw Failure("\(pane.location.path) could not be listed: \(error)")
-            case .loading, .partial: break
+            case .offline:
+                throw Failure("\(pane.location.path) went offline")
+            case .loading, .partial, .cachedRefreshing, .slow: break
             }
             guard ContinuousClock.now < deadline else {
                 throw Failure("\(pane.location.path) did not finish loading in 30 s")

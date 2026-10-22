@@ -12,7 +12,11 @@ extension BenchCase {
         BenchCase(
             name: "cache hit → sorted Listing, 3.2k entries", budget: budget("B4"),
             unit: .milliseconds
-        ) { try await timeCacheHit(entries: $0.map(listedEntries) ?? cachedEntries) }
+        ) { try await timeCacheHit(entries: $0.map(listedEntries) ?? cachedEntries) },
+        BenchCase(
+            name: "revisit → pane shows cached rows, 3.2k entries", budget: budget("B4"),
+            unit: .milliseconds
+        ) { try await timeCachedRows(entries: $0.map(listedEntries) ?? cachedEntries) },
     ]
 
     private static let cachedVolume = VolumeIdentity(
@@ -55,6 +59,74 @@ extension BenchCase {
             throw CacheMissed(path: cachedPath)
         }
         return elapsed
+    }
+
+    /// A pane opening a folder the cache holds in memory, through `ListingService`: from the
+    /// pane asking for the folder to it holding the cached rows, sorted, with the selection
+    /// resolved. The share's read is held until then, as a share that answers late holds it, and
+    /// lets the full listing land before the next run.
+    private static func timeCachedRows(entries: [DirectoryEntry]) async throws -> Double {
+        let root = try TempRoot(prefix: "searcher-bench-cached")
+        defer {
+            do {
+                try root.remove()
+            } catch {
+                printError("removing \(root.folder.path): \(error)")
+            }
+        }
+        let cache = ListingCache(store: nil)
+        await cache.insert(
+            ListingCache.Folder(entries: entries, listedAt: Date()), at: cachedPath,
+            on: cachedVolume)
+        return try await timeCachedRows(
+            entries: entries, cache: cache, suiteName: root.suiteName)
+    }
+
+    @MainActor
+    private static func timeCachedRows(
+        entries: [DirectoryEntry], cache: ListingCache, suiteName: String
+    ) async throws -> Double {
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            throw ViewBenchFailed(description: "UserDefaults refused the suite \(suiteName)")
+        }
+        let lister = HeldLister(entries: entries)
+        let service = ListingService(
+            lister: lister, volumeOf: { _ in cachedVolume }, cache: cache)
+        let start = ContinuousClock.now
+        let pane = Pane(
+            location: Location(path: cachedPath), service: service,
+            systemActions: NoSystemActions(), settings: Settings(defaults: defaults))
+        await waitUntil(pane) { pane in
+            if case .cachedRefreshing = pane.state { true } else { false }
+        }
+        let elapsed = milliseconds(.now - start)
+        guard pane.state.listing?.count == entries.count else {
+            throw CacheMissed(path: cachedPath)
+        }
+        lister.release()
+        await waitUntil(pane) { pane in
+            if case .loaded = pane.state { true } else { false }
+        }
+        return elapsed
+    }
+
+    /// Holds each read until `release`, then returns `entries` in one batch.
+    private final class HeldLister: Lister, @unchecked Sendable {
+        private let entries: [DirectoryEntry]
+        private let released = DispatchSemaphore(value: 0)
+
+        init(entries: [DirectoryEntry]) {
+            self.entries = entries
+        }
+
+        func list(_ path: String, onBatch: ([DirectoryEntry]) throws -> Void) throws {
+            released.wait()
+            try onBatch(entries)
+        }
+
+        func release() {
+            released.signal()
+        }
     }
 
     struct CacheMissed: Error, CustomStringConvertible {

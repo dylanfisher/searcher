@@ -109,14 +109,15 @@ public final class ColumnTrail {
     }
 
     /// Makes the columns right of `column` match its selection: the selected folder's column
-    /// next, or nothing. While the selection can't tell yet, because the cursor's entry hasn't
-    /// arrived in a partial listing, the columns stay.
+    /// next, or nothing. While the selection can't tell yet, because the cursor's entry isn't in
+    /// rows that aren't a complete listing (a first batch or cached rows, slow or offline or
+    /// not), the columns stay.
     private func follow(_ column: Column) {
         guard let index = columns.firstIndex(where: { $0 === column }) else { return }
         let pane = column.pane
         guard let listing = pane.state.listing else { return }
         let cursorRow = pane.selection.cursorRow(in: listing)
-        if cursorRow == nil, case .partial = pane.state { return }
+        if cursorRow == nil, !pane.state.showsCompleteListing { return }
         var folder: String?
         if let cursorRow, listing[cursorRow].type == .directory,
             pane.selection.rows(in: listing) == IndexSet(integer: cursorRow)
