@@ -13,12 +13,15 @@ public final class Tab {
     /// Runs after an edit that may focus another pane: focus, split, and closing a pane. Its
     /// workspace sets it, to move the focus of the panes' loads.
     var onFocusChange: (@MainActor () -> Void)?
-    private var isClosed = false
+    /// Set once `closePane` reported `.tab`, `removeFocusedPane` took the last pane, or `close`
+    /// ran.
+    public private(set) var isClosed = false
 
-    /// A tab of one pane.
-    public init(pane: Pane) {
-        layout = Layout()
-        panes = [layout.focused: pane]
+    /// A tab of one pane, named `id` in the layout. A pane moved in from another tab keeps its
+    /// ID.
+    public init(pane: Pane, id: PaneID = PaneID()) {
+        layout = Layout(pane: id)
+        panes = [id: pane]
     }
 
     public var focusedPane: Pane {
@@ -66,6 +69,20 @@ public final class Tab {
             return .tab
         }
         panes[closed] = nil
+        onFocusChange?()
+        return .pane
+    }
+
+    /// Takes the focused pane out, open, for another window, then focuses the pane focused before
+    /// it. The last pane leaves the tab closed, as `closePane` does: it reports `.tab`, and the
+    /// caller drops the tab.
+    public func removeFocusedPane() -> CloseResult {
+        checkOpen()
+        guard let removed = layout.close() else {
+            isClosed = true
+            return .tab
+        }
+        panes[removed] = nil
         onFocusChange?()
         return .pane
     }

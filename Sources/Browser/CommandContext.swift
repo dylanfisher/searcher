@@ -1,5 +1,6 @@
-/// What a command acts on: the focused pane, the window's workspace when the view has one, and
-/// the views around them that Browser can't reach.
+/// What a command acts on: the focused pane, the window's workspace and the list of every
+/// window's workspace when the view has them, and the views around them that Browser can't
+/// reach.
 @MainActor
 public struct CommandContext {
     public let pane: Pane
@@ -22,11 +23,13 @@ public struct CommandContext {
     /// Cmd-clicked path bar segment. Nil when a key or menu item runs a command.
     public let folder: Location?
     private let givenWorkspace: Workspace?
+    private let givenWorkspaces: WorkspaceList?
 
     /// With a `workspace`, `pane` must be the command pane of its selected tab's focused pane.
     public init(
         pane: Pane,
         workspace: Workspace? = nil,
+        workspaces: WorkspaceList? = nil,
         tabBounds: @escaping @MainActor () -> Rect = {
             preconditionFailure("this command context has no tab bounds")
         },
@@ -51,6 +54,7 @@ public struct CommandContext {
         }
         self.pane = pane
         givenWorkspace = workspace
+        givenWorkspaces = workspaces
         self.tabBounds = tabBounds
         self.didClosePane = didClosePane
         self.toggleQuickLook = toggleQuickLook
@@ -66,6 +70,15 @@ public struct CommandContext {
             preconditionFailure("this command context has no workspace")
         }
         return givenWorkspace
+    }
+
+    /// Every open window's workspace, for the commands that open, move or merge windows. A
+    /// context built without it traps when one of those asks.
+    public var workspaces: WorkspaceList {
+        guard let givenWorkspaces else {
+            preconditionFailure("this command context has no workspace list")
+        }
+        return givenWorkspaces
     }
 
     /// The tab the tiling commands act on: the workspace's selected one.

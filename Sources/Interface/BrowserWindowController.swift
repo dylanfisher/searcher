@@ -10,19 +10,23 @@ import Quartz
 /// first responder stays in the selected tab's focused pane: a command that moves the focus moves
 /// the first responder, and a click or the key view loop that moves the first responder into
 /// another pane focuses that pane. A tab that isn't selected keeps its views, out of the window
-/// (docs/decisions/0054-tabs-in-window.md).
+/// (docs/decisions/0054-tabs-in-window.md). A pane or tab moved in from another window brings its
+/// pane view controllers with it (docs/decisions/0057-windows-and-tear-out.md).
 @MainActor
 public final class BrowserWindowController: NSWindowController, NSWindowDelegate,
     NSMenuItemValidation
 {
     public let workspace: Workspace
+    /// Every window's workspace, this one's included.
+    public let workspaces: WorkspaceList
     let tabStrip: TabStripViewController
     /// Holds the selected tab's layout view, under the tab strip.
     private let tabHost = NSView()
     private let tabStripHeight: NSLayoutConstraint
     /// Each open tab's views, shown or not.
     private var tabViews: [TabID: TabViews] = [:]
-    /// Set once the workspace closed with its last tab; the window shows nothing after that.
+    /// Set once the workspace closed with its last tab or the window closed; the window shows
+    /// nothing after that.
     private var isClosed = false
 
     /// A tab's layout view and a view controller for each of its panes.
@@ -36,9 +40,32 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         }
     }
 
-    public init(
+    /// Runs after each command, before the window shows its workspace, so the other windows can
+    /// show what it changed in theirs and in the list.
+    var onCommand: (@MainActor () -> Void)?
+    /// Runs as the window closes.
+    var onClose: (@MainActor (BrowserWindowController) -> Void)?
+    /// Hands over the view controller another window has for a pane that moved here, or nil.
+    private let takePaneController: @MainActor (PaneID) -> PaneViewController?
+
+    /// A window of one tab at `location`, in a list of its own, as the UI bench opens it.
+    public convenience init(
         location: Location, service: ListingService, systemActions: any SystemActions,
         settings: Settings
+    ) {
+        let pane = Pane(
+            location: location, service: service, systemActions: systemActions, settings: settings)
+        let workspaces = WorkspaceList()
+        let workspace = Workspace(tab: Tab(pane: pane))
+        workspaces.add(workspace)
+        self.init(workspace: workspace, workspaces: workspaces)
+    }
+
+    /// A window showing `workspace`, one of `workspaces`. `takePaneController` hands over another
+    /// window's view controller for a pane that moved into `workspace`.
+    init(
+        workspace: Workspace, workspaces: WorkspaceList,
+        takePaneController: @escaping @MainActor (PaneID) -> PaneViewController? = { _ in nil }
     ) {
         // The window has its own tab strip; AppKit's tabs would add a second kind of tab and
         // their items in the Window menu.
@@ -51,9 +78,9 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         )
         window.tabbingMode = .disallowed
         window.isReleasedWhenClosed = false
-        let pane = Pane(
-            location: location, service: service, systemActions: systemActions, settings: settings)
-        workspace = Workspace(tab: Tab(pane: pane))
+        self.workspace = workspace
+        self.workspaces = workspaces
+        self.takePaneController = takePaneController
         let strip = TabStripViewController(workspace: workspace)
         tabStrip = strip
         tabStripHeight = strip.view.heightAnchor.constraint(equalToConstant: 0)
@@ -111,12 +138,21 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// window's.
     public func windowDidBecomeKey(_ notification: Notification) {
         guard !isClosed else { return }
-        workspace.isActive = true
+        workspaces.activate(workspace)
     }
 
     public func windowDidResignKey(_ notification: Notification) {
         guard !isClosed else { return }
         workspace.isActive = false
+    }
+
+    /// The window closes for good: its panes stop their loads, walks and watches now. A
+    /// workspace whose tabs merged into another window closes none, and a pane that moved out is
+    /// no longer here.
+    public func windowWillClose(_ notification: Notification) {
+        isClosed = true
+        workspace.closeAllTabs()
+        onClose?(self)
     }
 
     // MARK: Menu items from outside the panes' tables
@@ -126,7 +162,8 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// commands' items stay off there, so the text-editing keys stay with a text field.
     private static let windowCommands: Set<CommandID> = [
         TilingCommands.closePane.id, WindowCommands.closeTab.id, WindowCommands.newTab.id,
-        WindowCommands.nextTab.id, WindowCommands.previousTab.id,
+        WindowCommands.nextTab.id, WindowCommands.previousTab.id, WindowCommands.newWindow.id,
+        WindowCommands.movePaneToNewWindow.id, WindowCommands.mergeWindowIntoTab.id,
     ]
 
     /// Runs a window or tab command's menu item on the focused pane's table. A table with the
@@ -159,20 +196,25 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// Shows the workspace as it is now: drops the views of closed tabs and panes, makes views
     /// for new ones, puts the selected tab's layout view in the window, marks its focused pane,
     /// moves the first responder into that pane, and shows the titles. Cheap when nothing
-    /// changed, since it runs after every command.
-    private func showWorkspace() {
-        guard !isClosed else { return }
+    /// changed, since it runs after every command. Tabs moved in from another window get their
+    /// views here too, selected or not, while that window can still hand its views over.
+    func showWorkspace() {
+        guard !isClosed, !workspace.isClosed else { return }
         let open = Set(workspace.tabs.map(\.id))
         for (id, views) in tabViews where !open.contains(id) {
             views.layoutView.removeFromSuperview()
             tabViews[id] = nil
         }
+        for tab in workspace.tabs where tabViews[tab.id] == nil {
+            tabViews[tab.id] = makeViews(for: tab)
+        }
         let tab = workspace.selectedTab
-        let views = tabViews[tab.id] ?? makeViews(for: tab)
-        tabViews[tab.id] = views
+        guard let views = tabViews[tab.id] else {
+            preconditionFailure("the selected tab \(tab.id) has no views")
+        }
         views.paneControllers = views.paneControllers.filter { tab.panes[$0.key] != nil }
         for (id, pane) in tab.panes where views.paneControllers[id] == nil {
-            views.paneControllers[id] = makePaneController(for: pane)
+            views.paneControllers[id] = makePaneController(for: pane, id: id)
         }
         if views.layoutView.superview !== tabHost {
             for view in tabHost.subviews {
@@ -193,7 +235,10 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     }
 
     private func makeViews(for tab: Tab) -> TabViews {
-        let controllers = tab.panes.mapValues(makePaneController(for:))
+        let controllers = Dictionary(
+            uniqueKeysWithValues: tab.panes.map {
+                ($0.key, makePaneController(for: $0.value, id: $0.key))
+            })
         let layoutView = PaneLayoutView(
             layout: tab.layout, paneViews: controllers.mapValues(\.view))
         layoutView.autoresizingMask = [.width, .height]
@@ -205,16 +250,25 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         return TabViews(layoutView: layoutView, paneControllers: controllers)
     }
 
-    private func makePaneController(for pane: Pane) -> PaneViewController {
-        let controller = PaneViewController(pane: pane)
+    /// A view controller for pane `id`: the one another window had, if the pane moved here, so
+    /// it keeps its table, scroll position and folder monitor; else a new one.
+    private func makePaneController(for pane: Pane, id: PaneID) -> PaneViewController {
+        let controller = takePaneController(id) ?? PaneViewController(pane: pane)
+        precondition(
+            controller.pane === pane,
+            "the view controller handed over for pane \(id) at \(pane.location.path) shows \(controller.pane.location.path)"
+        )
         controller.windowLink = PaneViewController.WindowLink(
-            workspace: workspace,
+            workspace: workspace, workspaces: workspaces,
             tabBounds: { [weak self] in
                 guard let self else { preconditionFailure("the pane's window is gone") }
                 return tabBounds()
             },
             didClosePane: { [weak self] result in self?.didClose(result) },
-            didRunCommand: { [weak self] in self?.showWorkspace() })
+            didRunCommand: { [weak self] in
+                self?.onCommand?()
+                self?.showWorkspace()
+            })
         controller.onLocationChange = { [weak self] _ in self?.showTitles() }
         return controller
     }
@@ -226,6 +280,27 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             preconditionFailure("the selected tab has no layout view")
         }
         return Rect(view.bounds)
+    }
+
+    /// Gives up the view controller of pane `id`, which moved to another window, if this window
+    /// has one. Its view leaves this window's layout now, before the other window adds it, so a
+    /// later update here can't take it out of that window.
+    func handOver(_ id: PaneID) -> PaneViewController? {
+        guard let views = tabViews.values.first(where: { $0.paneControllers[id] != nil }),
+            let controller = views.paneControllers.removeValue(forKey: id)
+        else { return nil }
+        showWorkspace()
+        return controller
+    }
+
+    /// Closes the window of a workspace that gave its tabs to another window.
+    func closeWindow() {
+        precondition(
+            workspace.isClosed,
+            "the window of tab \(workspace.selectedTab.id) closes this way only once its tabs moved away"
+        )
+        isClosed = true
+        window?.close()
     }
 
     /// What Close Pane or Close Tab closed. A closed pane or tab loses its views when the window
@@ -272,7 +347,8 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// pane of the selected tab, that pane takes the focus, so the commands its keys and menu
     /// items run act on it.
     private func firstResponderDidChange() {
-        guard !isClosed, let responder = window?.firstResponder as? NSView else { return }
+        guard !isClosed, !workspace.isClosed, let responder = window?.firstResponder as? NSView
+        else { return }
         let tab = workspace.selectedTab
         guard let views = tabViews[tab.id],
             let id = views.paneControllers.first(where: {

@@ -113,5 +113,6 @@ It walks the responder chain once; with no panel it is one check.
 
 The ring's color is read when it is drawn on; a change of accent color while a split shows takes
 effect at the next focus change. Closing a window with its close button leaves its workspace's
-tabs to be freed with the window controller, as the one-pane window did. Tabs have no close
+tabs to be freed with the window controller, as the one-pane window did (superseded: the
+window now closes its panes, see [0057](0057-windows-and-tear-out.md)). Tabs have no close
 button and can't be dragged; Close Tab and Close Pane close them.

@@ -95,7 +95,7 @@ private func buildMenu(_ registry: CommandRegistry) throws -> NSMenu {
     let error = #expect(throws: MainMenuBuilder.BuildError.self) {
         try buildMenu(CommandRegistry())
     }
-    #expect(error?.description.contains(WindowCommands.newTab.id.rawValue) == true)
+    #expect(error?.description.contains(WindowCommands.newWindow.id.rawValue) == true)
 }
 
 @MainActor @Test func aCommandOnAnAppOrWindowChordFailsNamingBoth() throws {
@@ -326,7 +326,8 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     let file = try #require(menu.items.first { $0.title == "File" }?.submenu)
     #expect(
         file.items.map(\.title) == [
-            "New Tab", "Close Tab", "", "Reveal in Finder", "Open Terminal Here", "", "Filter",
+            "New Window", "New Tab", "Close Tab", "", "Reveal in Finder", "Open Terminal Here",
+            "", "Filter",
         ])
     let edit = try #require(menu.items.first { $0.title == "Edit" }?.submenu)
     #expect(edit.items.map(\.title).contains("Copy Path"))
@@ -365,8 +366,9 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     let window = try #require(menu.items.first { $0.title == "Window" }?.submenu)
     #expect(
         window.items.map(\.title) == [
-            "Minimize", "Zoom", "", "Show Previous Tab", "Show Next Tab", "", "Focus Other Pane",
-            "", "Close Pane",
+            "Minimize", "Zoom", "", "Show Previous Tab", "Show Next Tab", "",
+            "Move Pane to New Window", "Merge Window into Tab", "", "Focus Other Pane", "",
+            "Close Pane",
         ])
     #expect(!allItems(menu).contains { $0.action == #selector(NSWindow.performClose(_:)) })
     let focusOtherPane = try #require(window.items.first { $0.title == "Focus Other Pane" })
