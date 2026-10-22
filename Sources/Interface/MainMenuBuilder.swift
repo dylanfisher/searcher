@@ -99,7 +99,11 @@ public enum MainMenuBuilder {
         Menu(
             title: "Go",
             items: [
+                .command(NavigationCommands.back.id), .command(NavigationCommands.forward.id),
+                .separator,
                 .command(NavigationCommands.open.id), .command(NavigationCommands.goToParent.id),
+                .separator,
+                .command(NavigationCommands.goToFolder.id),
             ]
         ),
         Menu(

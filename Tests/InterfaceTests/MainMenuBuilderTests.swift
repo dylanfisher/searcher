@@ -94,7 +94,7 @@ private func buildMenu(_ registry: CommandRegistry) throws -> NSMenu {
     let error = #expect(throws: MainMenuBuilder.BuildError.self) {
         try buildMenu(CommandRegistry())
     }
-    #expect(error?.description.contains(NavigationCommands.open.id.rawValue) == true)
+    #expect(error?.description.contains(NavigationCommands.back.id.rawValue) == true)
 }
 
 @MainActor @Test func aCommandOnAnAppOrWindowChordFailsNamingBoth() throws {
@@ -259,4 +259,63 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(hidden.state == .off)
     #expect(foldersFirst.state == .on)
     #expect(sortByName.state == .off)
+}
+
+@MainActor @Test func goMenuHasBackForwardAndGoToFolderWithTheirChords() throws {
+    let menu = try buildMenu(try AppCommands.registry())
+    let go = try #require(menu.items.first { $0.title == "Go" }?.submenu)
+    #expect(
+        go.items.map(\.title) == [
+            "Back", "Forward", "", "Open", "Go to Parent", "", "Go to Folder…",
+        ])
+    let table = ListingTableView()
+    let log = CommandLog()
+    table.runCommand = { log.ids.append($0) }
+
+    let presses = [
+        try keyEvent("[", modifiers: .command), try keyEvent("]", modifiers: .command),
+        try keyEvent("g", characters: "G", modifiers: [.command, .shift]),
+    ]
+    for press in presses {
+        let item = try item(for: press, in: menu)
+        #expect(table.tryToPerform(try #require(item.action), with: item))
+    }
+
+    #expect(
+        log.ids == [
+            NavigationCommands.back.id, NavigationCommands.forward.id,
+            NavigationCommands.goToFolder.id,
+        ])
+}
+
+@MainActor @Test func backAndForwardItemsDisableAtTheEndsOfHistory() async throws {
+    let pane = Pane(
+        location: Location(path: "/a"),
+        service: ListingService(
+            lister: StubLister(["/a": [file("x")], "/b": [file("y")]]),
+            rootVolumeName: { "Test Disk" }),
+        systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true)
+    let table = ListingTableView()
+    let controller = PaneViewController(
+        pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
+        tableView: table, monitorsFolders: false)
+    let menu = try buildMenu(try AppCommands.registry())
+    let back = try #require(allItems(menu).first { $0.title == "Back" })
+    let forward = try #require(allItems(menu).first { $0.title == "Forward" })
+    let goToFolder = try #require(allItems(menu).first { $0.title == "Go to Folder…" })
+    await settle { pane.state.isLoaded }
+    #expect(!table.validateMenuItem(back))
+    #expect(!table.validateMenuItem(forward))
+    #expect(table.validateMenuItem(goToFolder))
+
+    pane.navigate(to: Location(path: "/b"))
+    await settle { pane.state.isLoaded }
+    #expect(table.validateMenuItem(back))
+    #expect(!table.validateMenuItem(forward))
+
+    pane.goBack()
+    await settle { pane.state.isLoaded }
+    #expect(!table.validateMenuItem(back))
+    #expect(table.validateMenuItem(forward))
+    withExtendedLifetime(controller) {}
 }

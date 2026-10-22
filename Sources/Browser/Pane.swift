@@ -68,6 +68,15 @@ public final class Pane {
     private var runningSorts = 0
     /// Where sorts run. Tests suspend a queue of their own here to hold a sort.
     var sortQueue = DispatchQueue.global(qos: .userInitiated)
+    /// The folders left, for Back and Forward.
+    private var history = History()
+    /// The load of a `goToFolder` that hasn't moved the pane yet, and the request it answers.
+    private var pendingGo: (load: ListingLoad, request: Int)?
+    /// Counts `goToFolder` calls, so an update tells whether its go is still pending.
+    private var goRequest = 0
+    /// The selection version when the last `goToFolder` moved the pane. Its load's later updates
+    /// were resolved from the selection it started with then.
+    private var goSelectionVersion = 0
 
     /// Starts listing `location` right away, ahead of other panes' loads if `isFocused`.
     public init(
@@ -89,19 +98,127 @@ public final class Pane {
     // MARK: - Navigation
 
     /// Shows `location`: cancels the load of the folder it leaves, stops that folder's monitor,
-    /// and starts listing. `name` is the entry to select once it's listed.
+    /// and starts listing. `name` is the entry to select once it's listed. The folder left goes
+    /// into the history, so Back returns to it. Navigating to the folder the pane is in isn't a
+    /// step: it lists the folder again and keeps its monitor, selecting `name` if given.
     public func navigate(to location: Location, selecting name: String? = nil) {
+        guard location != self.location else {
+            cancelGoToFolder()
+            if let name {
+                select(Selection([ExactName(name)], cursor: ExactName(name)))
+            }
+            reload()
+            return
+        }
+        history.leave(here)
+        move(to: location, selecting: name.map(ExactName.init))
+    }
+
+    public var canGoBack: Bool { history.canGoBack }
+    public var canGoForward: Bool { history.canGoForward }
+
+    /// Shows the folder the pane was in before this one, with the entry selected there when the
+    /// pane left it. Does nothing at the start of the history. A folder gone since fails to
+    /// list like any other.
+    public func goBack() {
+        guard let entry = history.back(from: here) else { return }
+        move(to: entry.location, selecting: entry.selected)
+    }
+
+    /// Shows the folder Back last left, with the entry selected there. Does nothing at the end of
+    /// the history.
+    public func goForward() {
+        guard let entry = history.forward(from: here) else { return }
+        move(to: entry.location, selecting: entry.selected)
+    }
+
+    /// Lists `target` and shows it once its first rows arrive. Until then the pane stays where it
+    /// is, with its rows, selection and folder monitor. A folder that isn't there or isn't a folder
+    /// leaves the pane where it was; one the app can't read is shown, explaining why, as a
+    /// navigation to it would. `finish` runs once, with the error the pane stayed for or nil once
+    /// it moved, unless the pane navigates or the go is cancelled first. Going to the folder the
+    /// pane is in lists it again, keeping its monitor, and finishes at once.
+    public func goToFolder(
+        _ target: Location, then finish: @escaping @MainActor (ListingError?) -> Void
+    ) {
+        cancelGoToFolder()
+        // The folder the pane is in is listed again, as a reload, keeping its monitor.
+        guard target != location else {
+            reload()
+            finish(nil)
+            return
+        }
+        goRequest += 1
+        let request = goRequest
+        let start = Selection()
+        let load = service.load(
+            target, sortedBy: sortColumn, ascending: sortAscending,
+            foldersFirst: settings.foldersFirst, showsHidden: settings.showHidden,
+            priority: isFocused ? .focused : .normal,
+            prepare: { update in (update, Self.resolve(start, against: update)) },
+            onUpdate: { [weak self] prepared in
+                self?.receiveGo(prepared.0, resolved: prepared.1, request: request, finish)
+            })
+        pendingGo = (load, request)
+    }
+
+    /// Stops a `goToFolder` that hasn't moved the pane yet; its `finish` never runs.
+    public func cancelGoToFolder() {
+        pendingGo?.load.cancel()
+        pendingGo = nil
+    }
+
+    /// An update of a `goToFolder` load. The first one moves the pane, or reports why it stays;
+    /// the ones after it belong to the folder the pane moved to, whose load it now is.
+    private func receiveGo(
+        _ update: ListingUpdate, resolved: Selection?, request: Int,
+        _ finish: @MainActor (ListingError?) -> Void
+    ) {
+        guard let pending = pendingGo, pending.request == request else {
+            receive(update, resolved: resolved, from: goSelectionVersion)
+            return
+        }
+        pendingGo = nil
+        if case .failed(let error, _) = update,
+            error.reason == .notFound || error.reason == .notADirectory
+        {
+            finish(error)
+            return
+        }
+        history.leave(here)
+        leave(for: pending.load.location, selecting: nil)
+        load = pending.load
+        loadIsRunning = true
+        goSelectionVersion = selectionVersion
+        receive(update, resolved: resolved, from: selectionVersion)
+        finish(nil)
+    }
+
+    /// The pane as it is, as History keeps it.
+    private var here: History.Entry {
+        History.Entry(location: location, selected: selection.cursor)
+    }
+
+    /// Moves to `location` without touching the history, and lists it.
+    private func move(to location: Location, selecting name: ExactName?) {
+        leave(for: location, selecting: name)
+        show(.loading, after: .loaded(complete: false))
+        startLoad()
+        onChange?()
+    }
+
+    /// Stops everything the pane does for the folder it leaves: its load, a pending
+    /// `goToFolder`, its monitor and patches. Takes `location` with `name` to be selected.
+    private func leave(for location: Location, selecting name: ExactName?) {
+        cancelGoToFolder()
         load?.cancel()
         monitor?.stop()
         monitor = nil
         waitingPatches = []
         relistAfterLoad = false
         self.location = location
-        selection = name.map { Selection([ExactName($0)], cursor: ExactName($0)) } ?? Selection()
+        selection = name.map { Selection([$0], cursor: $0) } ?? Selection()
         selectionVersion += 1
-        show(.loading, after: .loaded(complete: false))
-        startLoad()
-        onChange?()
     }
 
     /// Opens the selected folder in this pane, or hands the selected files to the system. With
@@ -345,19 +462,25 @@ public final class Pane {
             location, sortedBy: sortColumn, ascending: sortAscending,
             foldersFirst: settings.foldersFirst, showsHidden: settings.showHidden,
             priority: isFocused ? .focused : .normal,
-            prepare: { update in
-                switch update {
-                case .firstBatch(let listing, _):
-                    (update, selection.resolved(in: listing, after: .loaded(complete: false)))
-                case .full(let listing, _):
-                    (update, selection.resolved(in: listing, after: .loaded(complete: true)))
-                case .failed:
-                    (update, Selection?.none)
-                }
-            },
+            prepare: { update in (update, Self.resolve(selection, against: update)) },
             onUpdate: { [weak self] prepared in
                 self?.receive(prepared.0, resolved: prepared.1, from: selectionVersion)
             })
+    }
+
+    /// `selection` resolved against a load's update, on the load's worker thread; nil for a
+    /// failure, which has no rows.
+    private nonisolated static func resolve(
+        _ selection: Selection, against update: ListingUpdate
+    ) -> Selection? {
+        switch update {
+        case .firstBatch(let listing, _):
+            selection.resolved(in: listing, after: .loaded(complete: false))
+        case .full(let listing, _):
+            selection.resolved(in: listing, after: .loaded(complete: true))
+        case .failed:
+            nil
+        }
     }
 
     /// Updates of a cancelled load never get here, so each one belongs to the current location.
