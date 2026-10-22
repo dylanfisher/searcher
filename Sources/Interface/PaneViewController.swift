@@ -44,6 +44,8 @@ public final class PaneViewController: NSViewController {
     /// is stopped instead of kept.
     private var monitorRequest = 0
     private let logger = Logger(category: "pane")
+    /// The Go to folder sheet while it is up.
+    private var goToFolderSheet: GoToFolderSheet?
 
     public convenience init(pane: Pane) {
         self.init(
@@ -64,6 +66,7 @@ public final class PaneViewController: NSViewController {
         super.init(nibName: nil, bundle: nil)
         tableView.registry = Self.registry
         tableView.runCommand = { [weak self] id in self?.run(id) }
+        tableView.canRunCommand = { [weak self] id in self?.canRun(id) ?? false }
         pane.onChange = { [weak self] in self?.paneDidChange() }
         pathBar.onSelect = { [weak pane] location, child in
             pane?.navigate(to: location, selecting: child)
@@ -127,13 +130,39 @@ public final class PaneViewController: NSViewController {
     }
 
     private func run(_ id: CommandID) {
+        binding(for: id).run(context)
+    }
+
+    private func canRun(_ id: CommandID) -> Bool {
+        binding(for: id).isEnabled?(context) ?? true
+    }
+
+    private func binding(for id: CommandID) -> CommandBinding {
         guard let binding = Self.bindings[id] else {
             preconditionFailure("no command is bound to \(id)")
         }
-        binding.run(
-            CommandContext(pane: pane) { [listingViewController] in
+        return binding
+    }
+
+    private var context: CommandContext {
+        CommandContext(
+            pane: pane,
+            toggleQuickLook: { [listingViewController] in
                 listingViewController.quickLook.toggle()
-            })
+            },
+            askForFolder: { [weak self] in self?.askForFolder() })
+    }
+
+    /// Shows the Go to folder sheet over the pane's window, unless it is already up.
+    private func askForFolder() {
+        guard goToFolderSheet == nil else { return }
+        guard let window = view.window else {
+            preconditionFailure("Go to folder ran for a pane with no window")
+        }
+        let sheet = GoToFolderSheet(pane: pane, home: NSHomeDirectory())
+        sheet.onClose = { [weak self] in self?.goToFolderSheet = nil }
+        goToFolderSheet = sheet
+        sheet.present(over: window)
     }
 
     private func paneDidChange() {

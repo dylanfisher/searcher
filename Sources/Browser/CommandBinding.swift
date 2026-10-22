@@ -5,13 +5,19 @@ public struct CommandBinding: Sendable {
     /// For a command that turns a setting on and off: whether it is on, which its menu item shows
     /// as a check mark. Nil for other commands.
     public let isChecked: (@MainActor @Sendable (Settings) -> Bool)?
+    /// For a command that does nothing in some states, such as Back with no folder to go back to:
+    /// whether it would do something, which its menu item shows by being enabled. Nil for
+    /// commands that can always run.
+    public let isEnabled: (@MainActor @Sendable (CommandContext) -> Bool)?
 
     public init(
         _ command: Command, isChecked: (@MainActor @Sendable (Settings) -> Bool)? = nil,
+        isEnabled: (@MainActor @Sendable (CommandContext) -> Bool)? = nil,
         run: @escaping @MainActor @Sendable (CommandContext) -> Void
     ) {
         self.command = command
         self.isChecked = isChecked
+        self.isEnabled = isEnabled
         self.run = run
     }
 }

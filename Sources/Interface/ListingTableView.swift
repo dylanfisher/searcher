@@ -6,13 +6,18 @@ import Browser
 /// selection rather than the table's own. A main menu item for a command runs it here, so it acts
 /// on the pane whose table has focus, and AppKit disables it when no table has focus.
 @MainActor
-class ListingTableView: NSTableView {
+class ListingTableView: NSTableView, NSMenuItemValidation {
     /// Where a key's chord is looked up.
     var registry = CommandRegistry()
     /// Runs a command for this table's pane: one a key or menu item found in `registry`, or Open
     /// on a double-click. Set by the pane's view controller before the table takes a key.
     var runCommand: @MainActor (CommandID) -> Void = { id in
         preconditionFailure("ListingTableView has no command runner for \(id)")
+    }
+    /// Whether a command would do something on this table's pane, for its menu item. Set with
+    /// `runCommand`.
+    var canRunCommand: @MainActor (CommandID) -> Bool = { id in
+        preconditionFailure("ListingTableView has no command check for \(id)")
     }
     /// Signals a key that does nothing. Tests replace it.
     var beep: @MainActor () -> Void = { NSSound.beep() }
@@ -54,6 +59,17 @@ class ListingTableView: NSTableView {
             preconditionFailure("menu item \"\(sender.title)\" holds no command ID")
         }
         runCommand(id)
+    }
+
+    /// Disables a command's menu item while the command would do nothing, such as Back at the
+    /// start of the pane's history. Its key still reaches `keyDown`, where the command does
+    /// nothing. Other items sent here, such as Select All, stay enabled.
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        guard item.action == #selector(runMenuCommand(_:)) else { return true }
+        guard let id = item.representedObject as? CommandID else {
+            preconditionFailure("menu item \"\(item.title)\" holds no command ID")
+        }
+        return canRunCommand(id)
     }
 
     /// Select All from the Edit menu runs the command bound to its chord, as the key would. The
