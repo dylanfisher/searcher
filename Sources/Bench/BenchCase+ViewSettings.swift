@@ -133,5 +133,17 @@ extension BenchCase {
         func openURL(_ url: URL) {
             preconditionFailure("the bench asked to open \(url)")
         }
+
+        func copyToPasteboard(_ text: String) {
+            preconditionFailure("the bench asked to copy \(text)")
+        }
+
+        func revealInFinder(_ urls: [URL]) {
+            preconditionFailure("the bench asked to reveal \(urls)")
+        }
+
+        func open(_ folder: URL, inAppWithBundleID bundleID: String) {
+            preconditionFailure("the bench asked to open \(folder.path) in \(bundleID)")
+        }
     }
 }

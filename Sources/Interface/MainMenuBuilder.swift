@@ -69,7 +69,12 @@ public enum MainMenuBuilder {
     /// The menus after the app menu, in menu bar order. A menu with no items is left out of the
     /// bar until a step gives it some.
     static let menus = [
-        Menu(title: "File", items: []),
+        Menu(
+            title: "File",
+            items: [
+                .command(SystemCommands.revealInFinder.id),
+                .command(SystemCommands.openTerminal.id),
+            ]),
         Menu(
             title: "Edit",
             items: [
@@ -90,6 +95,7 @@ public enum MainMenuBuilder {
                     StandardAction(
                         title: "Copy", action: #selector(NSText.copy(_:)),
                         chord: KeyChord("c", modifiers: .command), isTextEditing: true)),
+                .command(SystemCommands.copyPath.id),
                 .standard(
                     StandardAction(
                         title: "Paste", action: #selector(NSText.paste(_:)),

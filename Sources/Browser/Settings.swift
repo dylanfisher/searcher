@@ -6,12 +6,13 @@ import Foundation
 ///
 /// A key that is missing reads as the preference's default. A value of the wrong type is removed
 /// and reads as the default too: stored data has one shape, and UserDefaults' own readers would
-/// turn the string "YES" or the number 1 into true.
+/// turn the string "YES" or the number 1 into true, and a number into a string.
 @MainActor
 public final class Settings {
     enum Key: String {
         case showHidden
         case foldersFirst
+        case terminalBundleID
     }
 
     /// Whether panes list hidden entries: names starting with a dot, and entries with the hidden
@@ -22,6 +23,14 @@ public final class Settings {
     /// Whether folders come before every other entry in each sort. Off by default.
     public var foldersFirst: Bool {
         didSet { store(foldersFirst, for: .foldersFirst, changed: foldersFirst != oldValue) }
+    }
+    /// The bundle ID of the app Open Terminal Here opens the pane's folder in. Terminal by default.
+    public var terminalBundleID: String {
+        didSet {
+            store(
+                terminalBundleID, for: .terminalBundleID,
+                changed: terminalBundleID != oldValue)
+        }
     }
 
     private let defaults: UserDefaults
@@ -36,6 +45,7 @@ public final class Settings {
         self.defaults = defaults
         showHidden = Self.bool(.showHidden, in: defaults) ?? false
         foldersFirst = Self.bool(.foldersFirst, in: defaults) ?? false
+        terminalBundleID = Self.string(.terminalBundleID, in: defaults) ?? "com.apple.Terminal"
     }
 
     /// Runs `handler` after each change of a setting, for as long as `owner` exists.
@@ -43,7 +53,7 @@ public final class Settings {
         observers.append(Observer(owner: owner, handler: handler))
     }
 
-    private func store(_ value: Bool, for key: Key, changed: Bool) {
+    private func store(_ value: Any, for key: Key, changed: Bool) {
         guard changed else { return }
         defaults.set(value, forKey: key.rawValue)
         observers.removeAll { $0.owner == nil }
@@ -59,6 +69,17 @@ public final class Settings {
         // A Boolean reads back as an NSNumber, as integers do; only CFBoolean is one.
         if let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() {
             return number.boolValue
+        }
+        defaults.removeObject(forKey: key.rawValue)
+        return nil
+    }
+
+    /// The string stored under `key`; nil when there is none or it has another type, which is
+    /// removed.
+    private static func string(_ key: Key, in defaults: UserDefaults) -> String? {
+        guard let value = defaults.object(forKey: key.rawValue) else { return nil }
+        if let string = value as? String {
+            return string
         }
         defaults.removeObject(forKey: key.rawValue)
         return nil

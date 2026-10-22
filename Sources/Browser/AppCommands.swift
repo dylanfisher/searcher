@@ -4,6 +4,7 @@ public enum AppCommands {
         NavigationCommands.self,
         SelectionCommands.self,
         ViewCommands.self,
+        SystemCommands.self,
     ]
 
     /// Every command in every set, with what it does.

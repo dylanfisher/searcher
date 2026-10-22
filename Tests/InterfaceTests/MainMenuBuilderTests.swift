@@ -94,7 +94,7 @@ private func buildMenu(_ registry: CommandRegistry) throws -> NSMenu {
     let error = #expect(throws: MainMenuBuilder.BuildError.self) {
         try buildMenu(CommandRegistry())
     }
-    #expect(error?.description.contains(NavigationCommands.back.id.rawValue) == true)
+    #expect(error?.description.contains(SystemCommands.revealInFinder.id.rawValue) == true)
 }
 
 @MainActor @Test func aCommandOnAnAppOrWindowChordFailsNamingBoth() throws {
@@ -318,4 +318,26 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(!table.validateMenuItem(back))
     #expect(table.validateMenuItem(forward))
     withExtendedLifetime(controller) {}
+}
+
+@MainActor @Test func copyPathRevealAndOpenTerminalHaveItemsWithTheirChords() throws {
+    let menu = try buildMenu(try AppCommands.registry())
+    let file = try #require(menu.items.first { $0.title == "File" }?.submenu)
+    #expect(file.items.map(\.title) == ["Reveal in Finder", "Open Terminal Here"])
+    let edit = try #require(menu.items.first { $0.title == "Edit" }?.submenu)
+    #expect(edit.items.map(\.title).contains("Copy Path"))
+    let table = ListingTableView()
+    let log = CommandLog()
+    table.runCommand = { log.ids.append($0) }
+
+    for key in ["c", "r", "t"] {
+        let item = try item(for: try keyEvent(key, modifiers: [.option, .command]), in: menu)
+        #expect(table.tryToPerform(try #require(item.action), with: item))
+    }
+
+    #expect(
+        log.ids == [
+            SystemCommands.copyPath.id, SystemCommands.revealInFinder.id,
+            SystemCommands.openTerminal.id,
+        ])
 }
