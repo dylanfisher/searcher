@@ -532,6 +532,58 @@ private final class WindowFixture {
     #expect(rowNames(table) == ["new.txt", "old.txt"])
 }
 
+/// The temporary folder stands for a volume's mount point: volume events place panes by path.
+@MainActor @Test func aRemountedVolumeIsWatchedAgainInTheList() async throws {
+    let folder = try TemporaryFolder("PaneViewControllerTests")
+    let url = folder.url
+    try await Task.detached { try Data().write(to: url.appending(path: "old.txt")) }.value
+    let pane = Pane(
+        location: Location(path: url.path), service: ListingService(),
+        systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true)
+    let table = ListingTableView()
+    let controller = PaneViewController(
+        pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
+        tableView: table, monitorsFolders: true)
+    _ = controller.view
+    await settle { pane.state.isLoaded && pane.monitor != nil }
+
+    VolumeEvents.didUnmount(at: url.path)
+    #expect(pane.monitor == nil)
+    VolumeEvents.didMount(at: url.path)
+    await settle { pane.state.isLoaded && pane.monitor != nil }
+
+    try await Task.detached { try Data().write(to: url.appending(path: "new.txt")) }.value
+
+    await settle { rowNames(table) == ["new.txt", "old.txt"] }
+    #expect(rowNames(table) == ["new.txt", "old.txt"])
+}
+
+@MainActor @Test func aRemountedVolumeIsWatchedAgainInEachColumn() async throws {
+    let folder = try TemporaryFolder("PaneViewControllerTests")
+    let url = folder.url
+    let pane = Pane(
+        location: Location(path: url.path), service: ListingService(),
+        systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true,
+        viewMode: .column)
+    let controller = PaneViewController(
+        pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
+        tableView: ListingTableView(), monitorsFolders: true)
+    _ = controller.view
+    let column = try #require(pane.columnTrail?.columns.first?.pane)
+    await settle { column.state.isLoaded && column.monitor != nil }
+
+    VolumeEvents.didUnmount(at: url.path)
+    #expect(column.monitor == nil)
+    VolumeEvents.didMount(at: url.path)
+    await settle { column.state.isLoaded && column.monitor != nil }
+
+    try await Task.detached { try Data().write(to: url.appending(path: "new.txt")) }.value
+
+    let table = try #require(controller.columnViewController.columnControllers.first?.tableView)
+    await settle { rowNames(table) == ["new.txt"] }
+    #expect(rowNames(table) == ["new.txt"])
+}
+
 @MainActor @Test func quickLookOpensOnTheFocusedColumnNotTheList() async throws {
     let setup = await WindowFixture()
     setup.fixture.table.beep = { Issue.record("the list beeped") }

@@ -29,6 +29,9 @@ final class ColumnViewController: NSViewController {
     var startMonitor: @MainActor (Pane) -> Void = { pane in
         preconditionFailure("no monitor starter for the column at \(pane.location.path)")
     }
+    /// Each shown column's `monitorGeneration` when its monitor was started, by its pane. A
+    /// column whose generation moves, after its volume mounts again, gets a new monitor.
+    private var monitoredGenerations: [ObjectIdentifier: Int] = [:]
     /// True while a column's table taking the keys moves the trail's focus to it, so the change
     /// that reports doesn't move the keys again.
     private(set) var isFollowingFirstResponder = false
@@ -82,8 +85,18 @@ final class ColumnViewController: NSViewController {
         columnControllers = columns.map { column in
             kept.first { $0.pane === column.pane } ?? makeController(for: column)
         }
+        monitoredGenerations = monitoredGenerations.filter { id, _ in
+            columnControllers.contains { ObjectIdentifier($0.pane) == id }
+        }
         for controller in columnControllers {
             controller.paneDidChange()
+            let generation = controller.pane.monitorGeneration
+            if monitoredGenerations.updateValue(
+                generation, forKey: ObjectIdentifier(controller.pane))
+                != generation
+            {
+                startMonitor(controller.pane)
+            }
         }
         layoutColumns()
         scrollToFocusedColumn()
@@ -109,7 +122,6 @@ final class ColumnViewController: NSViewController {
         }
         addChild(controller)
         columnsView.addSubview(controller.view)
-        startMonitor(column.pane)
         return controller
     }
 

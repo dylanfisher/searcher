@@ -35,6 +35,26 @@ import Testing
         #expect(!fired.wait(timeout: 0.5) { !$0.isEmpty })
     }
 
+    @Test func forcedDetachRevokesTheWatchAndClosesTheDescriptor() async throws {
+        let image = try await DiskImage("VnodeWatchTests")
+        let changed = EventLog<Void>()
+        let revoked = EventLog<Void>()
+        let watch = try VnodeWatch(path: image.mountPoint) {
+            changed.append(())
+        } onRevoke: {
+            revoked.append(())
+        }
+        defer { watch.stop() }
+        let descriptor = watch.fileDescriptor
+        #expect(path(of: descriptor) == image.mountPoint)
+
+        try await image.detach(force: true)
+
+        #expect(revoked.wait { !$0.isEmpty })
+        #expect(descriptorIsClosed(descriptor, wasAt: image.mountPoint))
+        #expect(changed.all.isEmpty)
+    }
+
     @Test func missingFolderThrowsNotFound() {
         #expect(throws: ListingError(path: "/no/such/folder", code: ENOENT)) {
             try VnodeWatch(path: "/no/such/folder") {}
