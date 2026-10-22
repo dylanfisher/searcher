@@ -180,6 +180,23 @@ private func isClose(_ a: Double, _ b: Double) -> Bool {
     #expect(isClose(try #require(frames[built[0]]).width, (1200 - divider) / 2))
 }
 
+@Test func resizeMovesTheDividerOnTheRightEdgeWhateverTheTreesShape() throws {
+    // (p0 | p1) | p2: the innermost split holding p1 is p0 | p1, on its left edge, but ← moves
+    // the divider on its right edge, as it does in p0 | (p1 | p2).
+    var layout = Layout()
+    let p0 = layout.focused
+    let p2 = try splitPane(&layout, .horizontal, in: bounds)
+    layout.focus(p0)
+    let p1 = try splitPane(&layout, .horizontal, in: bounds)
+    let before = try #require(layout.frames(in: bounds)[p1])
+
+    layout.resize(.left, by: 40, in: bounds)
+
+    let frames = layout.frames(in: bounds)
+    #expect(isClose(try #require(frames[p1]).maxX, before.maxX - 40))
+    #expect(isClose(try #require(frames[p2]).width, (1200 - divider) / 2 + 40))
+}
+
 @Test func resizeClampsAtMinimumPaneSize() throws {
     var built = lShape()
     built.layout.resize(.right, by: 10_000, in: bounds)
