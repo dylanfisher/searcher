@@ -351,7 +351,10 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         let entry = listing[row]
         switch column {
         case .name: return entry.name
-        case .size: return formatter.size(entry)
+        case .size:
+            return formatter.size(
+                entry, folderSize: listing.folderSize(atRow: row),
+                showsFolderSizes: pane.showsFolderSizes)
         case .dateModified: return formatter.date(entry.modified)
         case .kind: return listing.kind(atRow: row).text
         }
@@ -368,7 +371,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
 
     /// Sets what VoiceOver reads for `row`: the name, kind, size and date, taken from the text its
     /// cells show, then "Not downloaded" for an entry that isn't (0040-list-accessibility.md). An
-    /// entry without a size leaves it out rather than read the Size column's "--". A column of
+    /// entry without a size, a folder still being walked among them, leaves it out rather than
+    /// read the Size column's "--" or "…". A column of
     /// column view shows names only, so it formats the other parts from the entry.
     private func label(_ rowView: NSTableRowView, row: Int, in listing: Listing) {
         let entry = listing[row]
@@ -385,7 +389,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             return text
         }
         var parts = [text(.name), text(.kind)]
-        if entry.size != nil {
+        if entry.size != nil || hasWalkedSize(row, in: listing) {
             parts.append(text(.size))
         }
         parts.append("modified \(text(.dateModified))")
@@ -393,6 +397,14 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             parts.append(Self.notDownloadedLabel)
         }
         rowView.setAccessibilityLabel(parts.joined(separator: ", "))
+    }
+
+    /// Whether `row` is a folder showing a size its walk found.
+    private func hasWalkedSize(_ row: Int, in listing: Listing) -> Bool {
+        guard pane.showsFolderSizes, case .size = listing.folderSize(atRow: row) else {
+            return false
+        }
+        return true
     }
 
     /// Shows or hides the name cell's badge and fits the name to it. A cell the table reuses, or a

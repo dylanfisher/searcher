@@ -11,7 +11,30 @@ import Foundation
 /// Without `showsHidden`, hidden entries (`isHidden(_:)`) are kept but have no row, so showing
 /// them again is a sort, not a new listing. Entries a non-empty `filter` doesn't match are kept
 /// the same way.
+///
+/// A folder's size is its walk's total (`applyFolderSizes`), kept beside the entry: a folder
+/// without one sorts by size as it did before its walk, below a zero-byte file.
 public struct Listing: Sendable {
+    /// What a walk found for a folder.
+    public enum FolderSizeValue: Equatable, Sendable {
+        /// The total of the files under it; a lower bound when `isPartial`.
+        case size(bytes: Int64, isPartial: Bool)
+        /// The walk stopped with an error.
+        case failed
+    }
+
+    /// A walk's result for a folder, as the folder was when its own modification date was
+    /// `modified`.
+    public struct FolderSizeUpdate: Equatable, Sendable {
+        public let modified: Date
+        public let value: FolderSizeValue
+
+        public init(modified: Date, value: FolderSizeValue) {
+            self.modified = modified
+            self.value = value
+        }
+    }
+
     /// The entries in the order they were added, hidden ones included. Rows are indexes into this
     /// array.
     public private(set) var entries: [DirectoryEntry]
@@ -29,6 +52,8 @@ public struct Listing: Sendable {
     private var kindIndexes: [Int32]
     /// Each entry's position in `nameOrder`, so a tie in any column is one integer compare.
     private var nameRanks: [Int32]
+    /// Each folder's walked size; nil for a folder not walked yet and for every other entry.
+    private var folderSizes: [FolderSizeValue?]
 
     /// Indexes into `entries` in ascending name order.
     private var nameOrder: [Int32]
@@ -57,6 +82,7 @@ public struct Listing: Sendable {
         (foldedNames, keys) = NameSortKey.foldedNamesAndKeys(for: entries.map(\.name))
         kindIndexes = []
         nameRanks = []
+        folderSizes = Array(repeating: nil, count: entries.count)
         nameOrder = []
         rows = []
         indexKinds()
@@ -74,6 +100,12 @@ public struct Listing: Sendable {
 
     public func kind(atRow row: Int) -> EntryKind {
         kinds[Int(kindIndexes[Int(rows[row])])]
+    }
+
+    /// The walked size of the folder at `row`; nil until one is applied, and for anything but a
+    /// folder.
+    public func folderSize(atRow row: Int) -> FolderSizeValue? {
+        folderSizes[Int(rows[row])]
     }
 
     /// The entry at `row`'s name as `NameSortKey.fold` folds it. Match it on its `utf8` view; the
@@ -188,13 +220,61 @@ public struct Listing: Sendable {
         rows = pairs.map { nameOrder[Int($0.rank)] }
     }
 
-    /// Adds `entry`, or replaces the entry with its name, and moves only that entry's row. Call it
-    /// off the main thread.
+    /// Adds `entry`, or replaces the entry with its name, and moves only that entry's row. A
+    /// folder keeps its walked size while its own modification date stays the same. Call it off
+    /// the main thread.
     public mutating func update(_ entry: DirectoryEntry) {
         dispatchPrecondition(condition: .notOnQueue(.main))
         let key = NameSortKey(entry.name)
+        let kept = index(named: entry.name, key: key).found.flatMap { index in
+            Self.isSameFolder(entries[index], entry) ? folderSizes[index] : nil
+        }
         remove(named: entry.name, key: key)
-        insert(entry, key: key)
+        insert(entry, key: key, folderSize: kept)
+    }
+
+    /// Gives each folder named in `updates` its walked size, if its own modification date is the
+    /// one the update was walked at, and moves the rows sorted by size. Names of files, of
+    /// entries the listing lacks, and of folders whose date moved are skipped. Returns whether a
+    /// size changed. Call it off the main thread.
+    @discardableResult
+    public mutating func applyFolderSizes(_ updates: [ExactName: FolderSizeUpdate]) -> Bool {
+        dispatchPrecondition(condition: .notOnQueue(.main))
+        var changed = false
+        for (exact, update) in updates {
+            guard let index = index(named: exact.name, key: NameSortKey(exact.name)).found,
+                entries[index].type == .directory, entries[index].modified == update.modified,
+                folderSizes[index] != update.value
+            else { continue }
+            folderSizes[index] = update.value
+            changed = true
+        }
+        if changed, column == .size { sortAgain() }
+        return changed
+    }
+
+    /// Drops every folder's walked size, so folders sort and show as before their walks. Call it
+    /// off the main thread.
+    public mutating func clearFolderSizes() {
+        dispatchPrecondition(condition: .notOnQueue(.main))
+        guard folderSizes.contains(where: { $0 != nil }) else { return }
+        folderSizes = Array(repeating: nil, count: entries.count)
+        if column == .size { sortAgain() }
+    }
+
+    /// Sorts the rows again in the listing's own order. A batch of sizes can move any number of
+    /// rows: moving them one at a time, as `update` does, shifts the row array once per size,
+    /// where a sort of 100k entries takes about 6 ms in a release build.
+    private mutating func sortAgain() {
+        sort(
+            by: column, ascending: ascending, foldersFirst: foldersFirst, showsHidden: showsHidden,
+            filter: filter)
+    }
+
+    /// Whether `new` is the folder `old` was, with the same modification date, so its walked
+    /// size still holds.
+    private static func isSameFolder(_ old: DirectoryEntry, _ new: DirectoryEntry) -> Bool {
+        old.type == .directory && new.type == .directory && old.modified == new.modified
     }
 
     /// Removes the entry named `name` and its row, and returns it; nil if there is none.
@@ -287,7 +367,9 @@ public struct Listing: Sendable {
 
     // MARK: - Patching
 
-    private mutating func insert(_ entry: DirectoryEntry, key: NameSortKey) {
+    private mutating func insert(
+        _ entry: DirectoryEntry, key: NameSortKey, folderSize: FolderSizeValue?
+    ) {
         let position = index(named: entry.name, key: key).position
         let index = Int32(entries.count)
         let kind = EntryKind(entry.type, pathExtension: EntryKind.pathExtension(of: entry.name))
@@ -296,6 +378,7 @@ public struct Listing: Sendable {
         keys.append(key)
         foldedNames.append(NameSortKey.fold(entry.name))
         kindIndexes.append(kindIndex)
+        folderSizes.append(folderSize)
         let rank = Int32(position)
         Self.shift(&nameRanks, past: rank - 1, by: 1)
         nameRanks.append(rank)
@@ -318,6 +401,7 @@ public struct Listing: Sendable {
         foldedNames.remove(at: index)
         kindIndexes.remove(at: index)
         nameRanks.remove(at: index)
+        folderSizes.remove(at: index)
         // Every index and rank past the removed one shifts down by one.
         let removedIndex = Int32(index)
         let removedRank = Int32(position)
@@ -386,14 +470,21 @@ public struct Listing: Sendable {
         case .name:
             preconditionFailure("rows sorted by name come from nameOrder")
         case .size:
-            // Entries without a size sort below a zero-byte file.
-            value = UInt64(bitPattern: entries[index].size ?? -1) ^ (1 << 63)
+            // Entries without a size, folders not walked yet among them, sort below a zero-byte
+            // file.
+            value = UInt64(bitPattern: entries[index].size ?? walkedBytes(index) ?? -1) ^ (1 << 63)
         case .dateModified:
             value = Self.orderedBits(entries[index].modified.timeIntervalSinceReferenceDate)
         case .kind:
             value = UInt64(kindRanks[Int(kindIndexes[index])])
         }
         return ascending ? value : ~value
+    }
+
+    /// The walked size of the folder at `index`, if it has one.
+    private func walkedBytes(_ index: Int) -> Int64? {
+        guard case .size(let bytes, _) = folderSizes[index] else { return nil }
+        return bytes
     }
 
     /// Bits of `seconds` whose unsigned order is the numeric order.

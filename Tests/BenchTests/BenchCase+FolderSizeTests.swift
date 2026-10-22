@@ -4,9 +4,10 @@ import Testing
 
 @testable import Bench
 
-@Test func folderSizeCaseCoversB5W3() {
-    #expect(BenchCase.folderSize.map(\.budget?.id) == ["B5.W3"])
+@Test func folderSizeCasesCoverB5W3AndTheResortOfB8() {
+    #expect(BenchCase.folderSize.map(\.budget?.id) == ["B5.W3", "B8"])
     #expect(BenchCase.registered.contains { $0.name == "walk W3: folder size" })
+    #expect(BenchCase.registered.contains { $0.name == "W2: size updates re-sorted" })
 }
 
 @Test func folderSizeCaseRunsOnAFolder() async throws {

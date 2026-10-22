@@ -58,6 +58,16 @@ private func expectLeavesMatchPanes(_ tab: Tab) {
     expectLeavesMatchPanes(tab)
 }
 
+@MainActor @Test func splitGivesTheNewPaneTheFocusedPanesFolderSizeService() throws {
+    let (tab, fixture) = makeTab()
+    let sizes = FolderSizeService(cache: FolderSizeCache(store: nil), log: { _ in })
+    fixture.pane.folderSizes = sizes
+
+    let new = try #require(tab.split(.horizontal, in: bounds))
+
+    #expect(new.folderSizes === sizes)
+}
+
 @MainActor @Test func splitInListModeKeepsTheFocusedPanesSort() throws {
     let (tab, fixture) = makeTab()
     fixture.pane.setSort(.dateModified, ascending: false)

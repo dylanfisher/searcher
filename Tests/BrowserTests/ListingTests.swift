@@ -384,3 +384,101 @@ func patchesKeepFoldersFirstAndHiddenEntriesOut(column: SortColumn, ascending: B
     let shown = arranged(expected, column, ascending: ascending, foldersFirst: true)
     #expect(names(listing) == names(shown))
 }
+
+// MARK: - Folder sizes
+
+private func walked(_ bytes: Int64, partial: Bool = false, modified: TimeInterval = 0)
+    -> Listing.FolderSizeUpdate
+{
+    Listing.FolderSizeUpdate(
+        modified: Date(timeIntervalSince1970: modified),
+        value: .size(bytes: bytes, isPartial: partial))
+}
+
+/// `sizes` keyed by exact name, as the pane hands them over.
+private func exact(_ sizes: [String: Listing.FolderSizeUpdate])
+    -> [ExactName: Listing.FolderSizeUpdate]
+{
+    Dictionary(uniqueKeysWithValues: sizes.map { (ExactName($0.key), $0.value) })
+}
+
+private func folderSizes(_ listing: Listing) -> [Listing.FolderSizeValue?] {
+    (0..<listing.count).map { listing.folderSize(atRow: $0) }
+}
+
+@Test func walkedFolderSizesSortWithTheFilesAndPendingFoldersStayBelowThem() {
+    let entries = [file("big", size: 300), folder("a"), folder("b"), file("small", size: 10)]
+    var listing = sorted(entries, .size, ascending: false)
+
+    listing.applyFolderSizes(exact(["b": walked(1_000), "a": walked(50, partial: true)]))
+
+    #expect(names(listing) == ["b", "big", "a", "small"])
+    #expect(
+        folderSizes(listing) == [
+            .size(bytes: 1_000, isPartial: false), nil, .size(bytes: 50, isPartial: true), nil,
+        ])
+
+    var oneWalked = sorted(entries, .size, ascending: false)
+    oneWalked.applyFolderSizes(exact(["a": walked(1_000)]))
+    // "b" has no size yet, so it still sorts below a zero-byte file.
+    #expect(names(oneWalked) == ["a", "big", "small", "b"])
+}
+
+@Test func aSizeWalkedAtAnotherFolderDateOrForAFileIsNotApplied() {
+    var listing = Listing([folder("a", modified: 10), file("f", size: 5)])
+
+    let changed = listing.applyFolderSizes(
+        exact([
+            "a": walked(1_000, modified: 20), "f": walked(1_000), "gone": walked(1),
+        ]))
+
+    #expect(!changed)
+    #expect(folderSizes(listing) == [nil, nil])
+}
+
+@Test func aPatchKeepsAFoldersSizeUntilTheFoldersOwnDateChanges() {
+    var listing = Listing([folder("a", modified: 10), folder("b", modified: 10)])
+    listing.applyFolderSizes(exact(["a": walked(7, modified: 10), "b": walked(9, modified: 10)]))
+
+    listing.update(folder("a", modified: 10))
+    listing.update(folder("b", modified: 11))
+
+    #expect(folderSizes(listing) == [.size(bytes: 7, isPartial: false), nil])
+}
+
+@Test func clearedFolderSizesSortAsPendingAgain() {
+    var listing = sorted([folder("a"), file("f", size: 5)], .size, ascending: false)
+    listing.applyFolderSizes(exact(["a": walked(1_000)]))
+    #expect(names(listing) == ["a", "f"])
+
+    listing.clearFolderSizes()
+
+    #expect(names(listing) == ["f", "a"])
+    #expect(folderSizes(listing) == [nil, nil])
+}
+
+@Test func aFailedWalkIsKeptAsFailed() {
+    var listing = Listing([folder("a")])
+
+    listing.applyFolderSizes(
+        exact([
+            "a": Listing.FolderSizeUpdate(modified: Date(timeIntervalSince1970: 0), value: .failed)
+        ]))
+
+    #expect(folderSizes(listing) == [.failed])
+}
+
+@Test func canonicallyEqualFolderNamesGetTheirOwnSizes() {
+    let composed = "Caf\u{E9}"
+    let decomposed = "Cafe\u{301}"
+    var listing = Listing([folder(composed), folder(decomposed)])
+
+    listing.applyFolderSizes([ExactName(composed): walked(1), ExactName(decomposed): walked(2)])
+
+    let sizes = Dictionary(
+        uniqueKeysWithValues: (0..<2).map {
+            (Array(listing[$0].name.utf8), listing.folderSize(atRow: $0))
+        })
+    #expect(sizes[Array(composed.utf8)] == .size(bytes: 1, isPartial: false))
+    #expect(sizes[Array(decomposed.utf8)] == .size(bytes: 2, isPartial: false))
+}

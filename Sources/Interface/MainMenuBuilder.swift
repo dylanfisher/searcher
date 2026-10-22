@@ -125,6 +125,8 @@ public enum MainMenuBuilder {
                 .separator,
                 .command(ViewCommands.sortByName.id), .command(ViewCommands.sortByKind.id),
                 .command(ViewCommands.sortByDateModified.id), .command(ViewCommands.sortBySize.id),
+                .separator,
+                .command(SizeCommands.recalculateSizes.id),
             ]),
         windowMenu,
     ]

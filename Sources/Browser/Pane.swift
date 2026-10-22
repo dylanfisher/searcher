@@ -9,7 +9,11 @@ import Foundation
 public final class Pane {
     public private(set) var location: Location
     public private(set) var state = ListingState.loading {
-        didSet { stateVersion += 1 }
+        didSet {
+            stateVersion += 1
+            startSizeScan()
+            startSizeBatchAfterThisPass()
+        }
     }
     /// Goes up each time `state` is set, so a view can tell new rows from a selection change
     /// without comparing listings.
@@ -98,6 +102,11 @@ public final class Pane {
                 column.pane.isVisible = isVisible
             }
             updateLoadPriority()
+            if isVisible {
+                startSizeScan()
+            } else {
+                cancelSizeWalks()
+            }
         }
     }
     /// Folder change patches not yet applied, in the order they arrived.
@@ -112,6 +121,8 @@ public final class Pane {
     /// the state, which would drop the running sort and start another, so a folder that changes
     /// faster than a sort takes would never show the new sort.
     private var runningSorts = 0
+    /// Where patches and size batches run. Tests suspend a queue of their own here to hold one.
+    var rowWorkQueue = DispatchQueue.global(qos: .userInitiated)
     /// Where sorts run. Tests suspend a queue of their own here to hold a sort.
     var sortQueue = DispatchQueue.global(qos: .userInitiated)
     /// The folders left, for Back and Forward.
@@ -263,6 +274,7 @@ public final class Pane {
         monitor = nil
         waitingPatches = []
         relistAfterLoad = false
+        forgetFolderSizes()
     }
 
     /// Lists `target` and shows it once its first rows arrive. Until then the pane stays where it
@@ -395,6 +407,7 @@ public final class Pane {
         waitingPatches = []
         relistAfterLoad = false
         volumeIsGone = false
+        forgetFolderSizes()
         self.location = location
         filter = NameFilter()
         selection = name.map { Selection([$0], cursor: $0) } ?? Selection()
@@ -523,7 +536,8 @@ public final class Pane {
     /// Patches the listing with every waiting patch, unless a patch or a sort is running; each
     /// starts the next patch when it lands.
     private func startPatch() {
-        guard !patchIsRunning, runningSorts == 0, !waitingPatches.isEmpty else { return }
+        guard !patchIsRunning, runningSorts == 0, !waitingPatches.isEmpty, !sizeBatchIsDue
+        else { return }
         guard case .loaded(let listing) = state else {
             // No rows to patch: the first load is still running, or the folder failed to list.
             // Listing it again, after a running load, reads the change.
@@ -543,7 +557,7 @@ public final class Pane {
         let version = stateVersion
         let selection = selection
         let selectionVersion = selectionVersion
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        rowWorkQueue.async { [weak self] in
             let original = listing
             var listing = listing
             // Entries the listing didn't have, which a selection made by Select All must not take
@@ -592,12 +606,14 @@ public final class Pane {
             // its result is out of date. Listing the folder again reads the change.
             waitingPatches = []
             relist()
+            startSizeBatch()
             return
         }
         show(.loaded(listing), after: change, resolved: resolved, from: selectionVersion)
         startSortIfNeeded()
         onChange?()
         startPatch()
+        startSizeBatch()
     }
 
     /// Takes the new sort at once, so the header shows it and the loads that follow arrive in its
@@ -620,9 +636,11 @@ public final class Pane {
     }
 
     /// A view setting changed: the rows show or hide hidden entries, or put folders first, once
-    /// a sort lands. In column mode each column follows the change itself, and a closed pane
-    /// has nothing to follow it with.
+    /// a sort lands, and show or drop folder sizes once a size batch lands. In column mode each
+    /// column follows the change itself, and a closed pane has nothing to follow it with.
     private func settingsDidChange() {
+        // Followed in column mode too, so the list the pane switches back to has it.
+        followSizeSetting()
         guard columnTrail == nil, !isClosed else { return }
         startSortIfNeeded()
         onChange?()
@@ -695,7 +713,10 @@ public final class Pane {
         resolved: Selection, from selectionVersion: Int
     ) {
         runningSorts -= 1
-        defer { startPatch() }
+        defer {
+            startPatch()
+            startSizeBatch()
+        }
         guard version == stateVersion, isArranged(listing) else { return }
         show(state.showing(listing), after: change, resolved: resolved, from: selectionVersion)
         onChange?()
@@ -708,13 +729,21 @@ public final class Pane {
         loadIsRunning = true
         let selection = selection
         let selectionVersion = selectionVersion
+        // A load started with sizes the setting has since turned off drops them when it lands.
+        let sizes = showsFolderSizes ? knownSizes : [:]
         load = service.load(
             location, sortedBy: sortColumn, ascending: sortAscending,
             foldersFirst: settings.foldersFirst, showsHidden: settings.showHidden, filter: filter,
             priority: loadPriority,
-            prepare: { update in (update, Self.resolve(selection, against: update)) },
+            prepare: { update in
+                let update = Self.applying(sizes, to: update)
+                return (update, Self.resolve(selection, against: update))
+            },
             onUpdate: { [weak self] prepared in
+                // A full listing is the time to ask again for the walks that failed.
+                if case .full = prepared.0 { self?.failedSizes = [] }
                 self?.receive(prepared.0, resolved: prepared.1, from: selectionVersion)
+                if !sizes.isEmpty { self?.dropSizesIfOff() }
             })
     }
 
@@ -835,6 +864,8 @@ public final class Pane {
     /// the unmount is refused. The monitor stays: it doesn't keep the volume from unmounting.
     /// In column mode each column stops its own load.
     func volumeWillUnmount() {
+        // A running walk has a folder open too.
+        cancelSizeWalks()
         guard columnTrail == nil, !isClosed, loadIsRunning else { return }
         load?.cancel()
         loadIsRunning = false
@@ -855,6 +886,7 @@ public final class Pane {
         monitor = nil
         waitingPatches = []
         volumeIsGone = true
+        cancelSizeWalks()
         goOffline()
         onChange?()
     }
@@ -865,6 +897,7 @@ public final class Pane {
     func volumeDidMount() {
         guard columnTrail == nil, !isClosed else { return }
         volumeIsGone = false
+        failedSizes = []
         monitor?.stop()
         monitor = nil
         monitorGeneration += 1
@@ -1019,5 +1052,307 @@ public final class Pane {
     public func selectAll() {
         guard let listing = state.listing else { return }
         set(onMain { selection.all(in: listing) })
+    }
+
+    // MARK: - Folder sizes
+
+    /// The least time from one batch of folder sizes reaching the rows to the next.
+    public static let sizeBatchInterval: Duration = .milliseconds(250)
+
+    /// Walks the subfolders of a list pane's folder for their sizes while `Settings.folderSizes`
+    /// is on. The pane's owner sets it once; a pane without one, such as a column's, shows no
+    /// folder sizes.
+    public var folderSizes: FolderSizeService? {
+        didSet {
+            precondition(oldValue == nil, "a pane's folder size service is set once")
+            sizeSettingSeen = settings.folderSizes
+            startSizeScan()
+        }
+    }
+    /// Whether folder rows show walked sizes: a list pane with a size service, with the setting
+    /// on.
+    public var showsFolderSizes: Bool {
+        folderSizes != nil && settings.folderSizes && viewMode == .list
+    }
+    /// Whether the pane asks for walks now: it shows folder sizes, is in the selected tab, and
+    /// its volume is mounted. A hidden tab's pane mustn't hold a share's one walk while the
+    /// focused pane waits for sizes.
+    private var walksFolders: Bool {
+        showsFolderSizes && isVisible && !volumeIsGone && !isClosed
+    }
+    /// Where the pane waits out `sizeBatchInterval`. Tests pass a clock they advance.
+    var sizeBatchClock: any Clock<Duration> = ContinuousClock()
+    /// Names the pane's walks to `folderSizes`, which cancels them by it.
+    private let sizeWalkOwner = PaneID()
+    /// The folder's own date each walk was asked for. A folder whose listing shows another date
+    /// is walked again.
+    private var requestedSizes: [ExactName: Date] = [:]
+    /// The sizes walked for the folder shown. Each new listing of it gets them.
+    private var knownSizes: [ExactName: Listing.FolderSizeUpdate] = [:]
+    /// Folders whose walk failed. They aren't asked for again until the folder is fully listed
+    /// again, so a folder that keeps failing doesn't walk again on every batch.
+    private var failedSizes: Set<ExactName> = []
+    /// Sizes not yet applied to the rows.
+    private(set) var waitingSizes: [ExactName: Listing.FolderSizeUpdate] = [:]
+    /// Goes up whenever the pane's walks are cancelled, so a result of one asked for before is
+    /// dropped when it lands.
+    private var sizeGeneration = 0
+    private var sizeScanIsRunning = false
+    /// The rows changed while a scan ran; scan them again when it lands.
+    private var sizeScanIsStale = false
+    /// A batch started less than `sizeBatchInterval` ago.
+    private var sizeBatchIsWaiting = false
+    /// `Settings.folderSizes` as the pane last followed it.
+    private var sizeSettingSeen = false
+    /// The setting changed since the rows were last refreshed: the next batch lands even if no
+    /// size changed, so folder rows switch between pending text and no size, and it drops every
+    /// size when the setting is off.
+    private var sizeSettingChanged = false
+    /// Where scans find the folders to walk and ask for them.
+    private let sizeScanQueue = DispatchQueue.global(qos: .utility)
+
+    /// Drops the kept sizes of the folder and every folder under it, and walks its subfolders
+    /// again once that is done. The sizes shown stay until the new ones arrive. When the drop
+    /// fails, the service logs why and the pane keeps what it has.
+    public func recalculateSizes() {
+        guard showsFolderSizes, let folderSizes else { return }
+        let folder = location
+        Task { [weak self] in
+            guard await folderSizes.recalculateSizes(under: folder.path) else { return }
+            guard let self, self.location == folder else { return }
+            self.forgetFolderSizes()
+            self.startSizeScan()
+        }
+    }
+
+    /// Cancels the pane's walks. The sizes walked stay, and the folders not walked yet are asked
+    /// for again by the next scan.
+    private func cancelSizeWalks() {
+        folderSizes?.cancelWalks(for: sizeWalkOwner)
+        sizeGeneration += 1
+        requestedSizes = [:]
+    }
+
+    /// Cancels the pane's walks and forgets the sizes of the folder it shows.
+    private func forgetFolderSizes() {
+        cancelSizeWalks()
+        knownSizes = [:]
+        failedSizes = []
+        waitingSizes = [:]
+    }
+
+    /// `Settings.folderSizes` changed: turned off, the walks stop and the rows drop their sizes;
+    /// turned on, the folders are walked.
+    private func followSizeSetting() {
+        guard folderSizes != nil, settings.folderSizes != sizeSettingSeen else { return }
+        sizeSettingSeen = settings.folderSizes
+        if !settings.folderSizes { forgetFolderSizes() }
+        sizeSettingChanged = true
+        startSizeScan()
+        startSizeBatch()
+    }
+
+    /// A load that applied known sizes landed after the setting was turned off: the rows drop
+    /// them.
+    private func dropSizesIfOff() {
+        guard !showsFolderSizes else { return }
+        sizeSettingChanged = true
+        startSizeBatch()
+    }
+
+    /// Finds, off the main actor, the folder rows not yet walked at their current date and asks
+    /// for those walks there, and finds the known sizes the rows lack and queues them. Runs after
+    /// each change of the rows, one scan at a time.
+    private func startSizeScan() {
+        guard walksFolders, let folderSizes, let listing = state.listing else { return }
+        guard !sizeScanIsRunning else {
+            sizeScanIsStale = true
+            return
+        }
+        sizeScanIsRunning = true
+        let requested = requestedSizes
+        let known = knownSizes
+        let failed = failedSizes
+        let generation = sizeGeneration
+        let folder = location
+        let owner = sizeWalkOwner
+        sizeScanQueue.async { [weak self] in
+            var found: [(name: ExactName, modified: Date)] = []
+            var missing: [ExactName: Listing.FolderSizeUpdate] = [:]
+            for row in 0..<listing.count {
+                let entry = listing[row]
+                guard entry.type == .directory else { continue }
+                let name = ExactName(entry.name)
+                if let update = known[name], update.modified == entry.modified {
+                    if listing.folderSize(atRow: row) != update.value { missing[name] = update }
+                } else if requested[name] != entry.modified, !failed.contains(name) {
+                    found.append((name, entry.modified))
+                }
+            }
+            let asked = found
+            let walks = folderSizes.requestSizes(
+                of: asked.map { (folder.child(named: $0.name.name).path, $0.modified) },
+                in: folder.path, for: owner
+            ) { index, result in
+                self?.receiveSize(
+                    result, of: asked[index].name, modified: asked[index].modified,
+                    from: generation)
+            }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else {
+                        for walk in walks { walk.cancel() }
+                        return
+                    }
+                    self.finishSizeScan(
+                        asked: asked, walks: walks, missing: missing, from: generation)
+                }
+            }
+        }
+    }
+
+    private func finishSizeScan(
+        asked: [(name: ExactName, modified: Date)], walks: [FolderSizeService.Walk],
+        missing: [ExactName: Listing.FolderSizeUpdate], from generation: Int
+    ) {
+        sizeScanIsRunning = false
+        if generation == sizeGeneration, walksFolders {
+            for folder in asked { requestedSizes[folder.name] = folder.modified }
+            waitingSizes.merge(missing) { waiting, _ in waiting }
+            startSizeBatch()
+        } else {
+            // The walks were asked for after the pane cancelled its walks, so that cancel
+            // didn't reach them.
+            for walk in walks { walk.cancel() }
+        }
+        if sizeScanIsStale {
+            sizeScanIsStale = false
+            startSizeScan()
+        }
+    }
+
+    private func receiveSize(
+        _ result: Result<FolderSize, ListingError>, of name: ExactName, modified: Date,
+        from generation: Int
+    ) {
+        // A walk the scan asked for can land before the scan does, after a cancel it missed.
+        guard generation == sizeGeneration else { return }
+        let value: Listing.FolderSizeValue
+        switch result {
+        case .success(let size):
+            value = .size(bytes: size.bytes, isPartial: size.isPartial)
+            knownSizes[name] = Listing.FolderSizeUpdate(modified: modified, value: value)
+        case .failure:
+            value = .failed
+            failedSizes.insert(name)
+            requestedSizes[name] = nil
+        }
+        waitingSizes[name] = Listing.FolderSizeUpdate(modified: modified, value: value)
+        startSizeBatch()
+    }
+
+    /// A batch has sizes to apply, has waited out the interval since the last one, and has rows
+    /// to apply them to. It goes before the next patch, so a folder that keeps changing can't hold
+    /// sizes back.
+    private var sizeBatchIsDue: Bool {
+        !sizeBatchIsWaiting && (!waitingSizes.isEmpty || sizeSettingChanged)
+            && state.listing != nil
+    }
+
+    /// Starts a batch that waited for rows once the pass that changed them, and set the selection
+    /// beside them, ends. Without it a batch due while there were no rows, such as the one that
+    /// drops sizes after the setting went off during a load, would keep patches waiting for good.
+    private func startSizeBatchAfterThisPass() {
+        guard sizeBatchIsDue else { return }
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated { self?.startSizeBatch() }
+        }
+    }
+
+    /// Applies the waiting sizes to a copy of the rows off the main actor, as a patch is applied,
+    /// and resolves the selection there: rows sorted by size move, and the selection follows its
+    /// names. Batches start at most once per `sizeBatchInterval`, and not while a patch, a sort
+    /// or another batch runs; each of those starts the next batch when it lands.
+    private func startSizeBatch() {
+        guard sizeBatchIsDue, !patchIsRunning, runningSorts == 0, let listing = state.listing
+        else { return }
+        let sizes = waitingSizes
+        let settingChanged = sizeSettingChanged
+        let clearing = !showsFolderSizes
+        waitingSizes = [:]
+        sizeSettingChanged = false
+        // Sizes and patches take turns on the rows, so neither lands on rows the other replaced.
+        patchIsRunning = true
+        sizeBatchIsWaiting = true
+        let version = stateVersion
+        let selection = selection
+        let selectionVersion = selectionVersion
+        rowWorkQueue.async { [weak self] in
+            var listing = listing
+            if clearing { listing.clearFolderSizes() }
+            let changed = listing.applyFolderSizes(sizes) || settingChanged
+            let resolved = selection.resolved(in: listing, after: .sameEntries)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self?.finishSizeBatch(
+                        changed ? listing : nil, settingChanged: settingChanged, from: version,
+                        resolved: resolved, from: selectionVersion)
+                }
+            }
+        }
+        let clock = sizeBatchClock
+        Task { [weak self] in
+            do {
+                try await clock.sleep(for: Self.sizeBatchInterval)
+            } catch {
+                preconditionFailure("the clock failed a wait with \(error)")
+            }
+            self?.sizeBatchIsWaiting = false
+            self?.startSizeBatch()
+        }
+    }
+
+    /// Shows the rows with the batch's sizes, nil when none changed, unless a load, patch, sort
+    /// or navigation replaced the rows meanwhile. The scan that followed that change queued the
+    /// known sizes the new rows lack.
+    private func finishSizeBatch(
+        _ listing: Listing?, settingChanged: Bool, from version: Int, resolved: Selection,
+        from selectionVersion: Int
+    ) {
+        patchIsRunning = false
+        defer {
+            startPatch()
+            startSizeBatch()
+        }
+        guard version == stateVersion else {
+            sizeSettingChanged = sizeSettingChanged || settingChanged
+            return
+        }
+        guard let listing else { return }
+        show(
+            state.showing(listing), after: .sameEntries, resolved: resolved, from: selectionVersion)
+        startSortIfNeeded()
+        onChange?()
+    }
+
+    /// `update` with `sizes` applied to its listing, on the load's worker, so a folder listed
+    /// again shows the sizes walked for it at once.
+    private nonisolated static func applying(
+        _ sizes: [ExactName: Listing.FolderSizeUpdate], to update: ListingUpdate
+    ) -> ListingUpdate {
+        guard !sizes.isEmpty else { return update }
+        switch update {
+        case .cached(var listing, let listedAt, let rootVolumeName):
+            listing.applyFolderSizes(sizes)
+            return .cached(listing, listedAt: listedAt, rootVolumeName: rootVolumeName)
+        case .firstBatch(var listing, let rootVolumeName):
+            listing.applyFolderSizes(sizes)
+            return .firstBatch(listing, rootVolumeName: rootVolumeName)
+        case .full(var listing, let rootVolumeName):
+            listing.applyFolderSizes(sizes)
+            return .full(listing, rootVolumeName: rootVolumeName)
+        case .failed, .slow, .gaveUp, .volumeGone:
+            return update
+        }
     }
 }

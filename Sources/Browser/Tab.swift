@@ -43,7 +43,7 @@ public final class Tab {
     // MARK: Leaves
 
     /// Splits the focused pane along `axis` and focuses the new pane, which shows the focused
-    /// pane's folder in its view mode and sort, using the same service, settings and system
+    /// pane's folder in its view mode and sort, using the same services, settings and system
     /// actions. Returns `nil` and adds nothing when a half would be under the minimum size.
     @discardableResult
     public func split(_ axis: Axis, in bounds: Rect) -> Pane? {
@@ -54,6 +54,7 @@ public final class Tab {
             location: model.location, service: model.service, systemActions: model.systemActions,
             settings: model.settings, sortedBy: sorted.sortColumn, ascending: sorted.sortAscending,
             viewMode: model.viewMode)
+        pane.folderSizes = model.folderSizes
         panes[id] = pane
         onFocusChange?()
         return pane
