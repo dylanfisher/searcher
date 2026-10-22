@@ -123,6 +123,7 @@ private struct Fixture {
     let fixture = Fixture()
     await settle { fixture.pane.state.isLoaded }
     fixture.table.selectRowIndexes([2], byExtendingSelection: false)
+    await settle { fixture.pane.selection.isSettled }
     #expect(fixture.pane.selection.members == .only([ExactName("docs")]))
 
     fixture.table.keyDown(

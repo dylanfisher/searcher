@@ -7,8 +7,10 @@ import os
 /// The app's UI bench mode, which `scripts/bench --ui` launches through the bench runner. One
 /// launch times, each to the Core Animation commit of the frame that shows it: process start →
 /// first window (B1), open W1 and W2 → first rows (B2), the ↓ presses the runner asks for on W2
-/// and, in the same launch, presses of each other row command, Cmd-A, and folder change patches
-/// and reloads landing with every row selected (B6), and a sort column change on W2 (B8). The
+/// and, in the same launch, presses of each other row command, Cmd-A, folder change patches and
+/// reloads landing with every row selected, a patch that adds a row under them, a click selecting
+/// half the rows, a patch landing after Shift-↓ changed that selection while it ran, and a reload
+/// landing after Cmd-A on its first batch (B6), and a sort column change on W2 (B8). The
 /// stall watchdog's stalls (B10) are collected for the whole launch. It starts the launch warm-up
 /// where a normal launch does and waits for it to end before the first span after launch. It
 /// writes the samples to the runner's output file and exits; any failure is printed to standard
@@ -22,9 +24,11 @@ import os
 final class UIBench {
     /// Presses of each row command other than ↓, in the launch that presses ↓.
     static let rowCommandPresses = 200
-    /// Cmd-A presses, and patches landing with every row selected, in the same launch.
+    /// Cmd-A presses, patches landing with every row selected or after Shift-↓, and clicks
+    /// selecting half the rows, in the same launch.
     static let allSelectedSamples = 100
-    /// Reloads of W2 with every row selected, in the same launch. Each lists the folder again.
+    /// Reloads of W2 with every row selected, and after Cmd-A on the first batch, in the same
+    /// launch. Each lists the folder again.
     static let reloadSamples = 20
 
     private let options: UIBenchOptions
@@ -133,6 +137,12 @@ final class UIBench {
             record.selectAll = try await pressSelectAll(Self.allSelectedSamples)
             record.patchAllSelected = try await patchWithAllSelected(Self.allSelectedSamples)
             record.reloadAllSelected = try await reloadWithAllSelected(Self.reloadSamples)
+            // These change the selection from every row, so they come after the cases above.
+            record.patchAddingAllSelected = try await patchAddingWithAllSelected(
+                Self.allSelectedSamples)
+            record.clickHalf = try await clickHalf(Self.allSelectedSamples)
+            record.patchAfterShiftDown = try await patchAfterShiftDown(Self.allSelectedSamples)
+            record.loadAfterSelectAll = try await loadAfterSelectAll(Self.reloadSamples)
             // The sort change times one selected row, as it did before these cases.
             _ = try await press([.down], "key down before sort")
         }
@@ -244,10 +254,6 @@ final class UIBench {
         return samples
     }
 
-    /// Lands `count` folder change patches on W2 with every row selected, each timed from the
-    /// call to the frame that shows it. Each patch updates the size of an entry in the first rows
-    /// in memory, so it moves no row and makes no file-system call; the pane applies it as it
-    /// applies its monitor's, off the main thread and then on it.
     /// Lists W2 again `count` times with every row selected, and times each complete listing's
     /// landing, from the start of the run loop pass that takes it in to the frame that shows it.
     /// The folder is read, and the selection resolved against it, off the main thread, so the
@@ -258,14 +264,7 @@ final class UIBench {
         guard pane.selection.members == .allExcept([]) else {
             throw Failure("reloads should land with every row selected, not \(pane.selection)")
         }
-        // When the main thread last woke, which starts the pass that takes the listing in.
-        let wake = CFRunLoopObserverCreateWithHandler(
-            nil, CFRunLoopActivity.afterWaiting.rawValue, true, 0
-        ) { [weak self] _, _ in
-            MainActor.assumeIsolated { self?.lastWake = FrameCommitTimer.now }
-        }
-        guard let wake else { preconditionFailure("CFRunLoopObserverCreate failed") }
-        CFRunLoopAddObserver(CFRunLoopGetMain(), wake, .commonModes)
+        let wake = watchWakes()
         defer { CFRunLoopObserverInvalidate(wake) }
         var samples: [Double] = []
         for _ in 0..<count {
@@ -292,6 +291,10 @@ final class UIBench {
         return samples
     }
 
+    /// Lands `count` folder change patches on W2 with every row selected, each timed from the
+    /// call to the frame that shows it. Each patch updates the size of an entry in the first rows
+    /// in memory, so it moves no row and makes no file-system call; the pane applies it as it
+    /// applies its monitor's, off the main thread and then on it.
     private func patchWithAllSelected(_ count: Int) async throws -> [Double] {
         let pane = try requirePane()
         let window = try requireWindow()
@@ -324,6 +327,185 @@ final class UIBench {
         }
         guard pane.selection.members == .allExcept([]) else {
             throw Failure("patches changed the selection of every row to \(pane.selection)")
+        }
+        return samples
+    }
+
+    /// Lands `count` patches on W2 with every row selected, each adding an entry in memory that
+    /// sorts right after the first row, so every row below it moves down one. Each is timed from
+    /// the call to the frame that shows it, and the added entries stay out of the selection.
+    private func patchAddingWithAllSelected(_ count: Int) async throws -> [Double] {
+        let pane = try requirePane()
+        let window = try requireWindow()
+        guard pane.selection.members == .allExcept([]) else {
+            throw Failure("patches should land with every row selected, not \(pane.selection)")
+        }
+        var samples: [Double] = []
+        for index in 0..<count {
+            try requireVisible()
+            guard let listing = pane.state.listing, listing.count > 0, case .loaded = pane.state
+            else { throw Failure("\(pane.location.path) isn't loaded for the patch") }
+            let name = "\(listing[0].name)-added-\(index)"
+            let added = DirectoryEntry(
+                name: name, type: .regular, size: 0, modified: Date(), isHidden: false,
+                isDataless: false)
+            let version = pane.stateVersion
+            let start = FrameCommitTimer.now
+            let interval = begin("patch adding")
+            samples.append(
+                await withCheckedContinuation { continuation in
+                    whenShown = { [self] pane in
+                        guard pane.stateVersion != version else { return false }
+                        timeFrame(from: start, in: window, "patch adding", interval) {
+                            continuation.resume(returning: $0)
+                        }
+                        return true
+                    }
+                    pane.apply(.patches([.update(added)]), at: pane.location)
+                })
+            guard let patched = pane.state.listing, let row = patched.row(named: name),
+                row < patched.count / 2, !pane.selection.contains(ExactName(name))
+            else {
+                throw Failure(
+                    "\(name) should be added unselected near the top, but the selection is "
+                        + "\(pane.selection)")
+            }
+        }
+        return samples
+    }
+
+    /// Selects half of W2's rows `count` times as a click or Shift-click does, through the table's
+    /// selection, each after an untimed ↓, and times each from the change to the frame. The
+    /// table's mouse tracking isn't timed: the window never takes clicks, since it isn't active.
+    private func clickHalf(_ count: Int) async throws -> [Double] {
+        let pane = try requirePane()
+        guard let table = controller?.paneViewController.keyView as? NSTableView else {
+            throw Failure("the pane's key view isn't its table")
+        }
+        let half = IndexSet(integersIn: 0..<(pane.state.listing?.count ?? 0) / 2)
+        var samples: [Double] = []
+        for _ in 0..<count {
+            _ = try await press([.down], "key down before click")
+            try await waitUntilSettled()
+            try requireVisible()
+            let start = FrameCommitTimer.now
+            let interval = begin("click half")
+            table.selectRowIndexes(half, byExtendingSelection: false)
+            samples.append(try await frame(from: start, "click half", interval))
+            try await waitUntilSettled()
+        }
+        guard let listing = pane.state.listing, pane.selection.rows(in: listing) == half,
+            case .only(let names) = pane.selection.members, names.count == half.count
+        else {
+            throw Failure(
+                "a click should select rows \(half), but the selection is \(pane.selection)")
+        }
+        return samples
+    }
+
+    /// Lands `count` patches on W2 with half the rows selected, each after a Shift-↓ sent while
+    /// it runs, so the selection the patch resolved is out of date when it lands. Each is timed
+    /// from the start of the main run loop pass that takes the patch in to the frame that shows
+    /// it, then the selection is left to settle.
+    private func patchAfterShiftDown(_ count: Int) async throws -> [Double] {
+        let pane = try requirePane()
+        let window = try requireWindow()
+        guard let listing = pane.state.listing, case .loaded = pane.state else {
+            throw Failure("\(pane.location.path) isn't loaded for the patch")
+        }
+        let before = pane.selection.rows(in: listing)
+        let start = try cursorRow()
+        let shiftDown = try keyEvent(.shiftDown, in: window)
+        let wake = watchWakes()
+        defer { CFRunLoopObserverInvalidate(wake) }
+        var samples: [Double] = []
+        for index in 0..<count {
+            try requireVisible()
+            let entry = listing[index % listing.count]
+            let changed = DirectoryEntry(
+                name: entry.name, type: entry.type, size: (entry.size ?? 0) + 1,
+                modified: entry.modified, isHidden: entry.isHidden, isDataless: entry.isDataless)
+            let version = pane.stateVersion
+            let interval = begin("patch after Shift-down")
+            samples.append(
+                await withCheckedContinuation { continuation in
+                    whenShown = { [self] pane in
+                        guard pane.stateVersion != version else { return false }
+                        timeFrame(from: lastWake, in: window, "patch after Shift-down", interval) {
+                            continuation.resume(returning: $0)
+                        }
+                        return true
+                    }
+                    pane.apply(.patches([.update(changed)]), at: pane.location)
+                    // The patch hands its result over on the main queue, so this runs first.
+                    window.sendEvent(shiftDown)
+                })
+            try await waitUntilSettled()
+        }
+        let expected = before.union(IndexSet(start...min(start + count, listing.count - 1)))
+        guard let patched = pane.state.listing, pane.selection.rows(in: patched) == expected else {
+            throw Failure(
+                "\(count) Shift-↓ during patches should select \(expected), but the selection is "
+                    + "\(pane.selection)")
+        }
+        return samples
+    }
+
+    /// Lists W2 again `count` times, presses Cmd-A when the first batch shows, and times the
+    /// complete listing's landing, which the load resolved against the selection from before
+    /// Cmd-A, from the start of the main run loop pass that takes it in to the frame. Only the
+    /// first batch's entries stay selected once the selection settles.
+    private func loadAfterSelectAll(_ count: Int) async throws -> [Double] {
+        let pane = try requirePane()
+        let window = try requireWindow()
+        let commandA = try keyEvent(.commandA, in: window)
+        let wake = watchWakes()
+        defer { CFRunLoopObserverInvalidate(wake) }
+        var samples: [Double] = []
+        for _ in 0..<count {
+            try requireVisible()
+            let version = pane.stateVersion
+            let interval = begin("load after Cmd-A")
+            var pressed = false
+            let shown: Result<Double, Failure> = await withCheckedContinuation { continuation in
+                whenShown = { [self] pane in
+                    guard pane.stateVersion != version else { return false }
+                    switch pane.state {
+                    case .partial:
+                        if !pressed {
+                            pressed = true
+                            // As a key typed while the first rows show; the full listing's
+                            // hand-off is queued behind it.
+                            DispatchQueue.main.async { window.sendEvent(commandA) }
+                        }
+                        return false
+                    case .loaded:
+                        guard pressed else {
+                            continuation.resume(
+                                returning: .failure(Failure("W2's reload showed no first batch")))
+                            return true
+                        }
+                        timeFrame(from: lastWake, in: window, "load after Cmd-A", interval) {
+                            continuation.resume(returning: .success($0))
+                        }
+                        return true
+                    case .loading, .denied, .failed:
+                        continuation.resume(
+                            returning: .failure(Failure("W2's reload failed: \(pane.state)")))
+                        return true
+                    }
+                }
+                pane.reload()
+            }
+            samples.append(try shown.get())
+            try await waitUntilSettled()
+            guard let listing = pane.state.listing,
+                pane.selection.rows(in: listing).count == ListingService.firstBatchCount
+            else {
+                throw Failure(
+                    "Cmd-A on the first batch should select its \(ListingService.firstBatchCount) "
+                        + "entries, but the selection is \(pane.selection)")
+            }
         }
         return samples
     }
@@ -370,20 +552,39 @@ final class UIBench {
         for key in keys {
             try requireVisible()
             let interval = begin(name)
-            guard
-                let event = NSEvent.keyEvent(
-                    with: .keyDown, location: .zero, modifierFlags: key.flags,
-                    timestamp: FrameCommitTimer.now, windowNumber: window.windowNumber,
-                    context: nil, characters: key.characters,
-                    charactersIgnoringModifiers: key.characters, isARepeat: false,
-                    keyCode: key.keyCode)
-            else { throw Failure("could not make a key event for \(name)") }
+            let event = try keyEvent(key, in: window)
             // Straight to the window: the app isn't active, so its key window gets no keys from
             // the event queue.
             window.sendEvent(event)
             samples.append(try await frame(from: event.timestamp, name, interval))
         }
         return samples
+    }
+
+    /// A press of `key` for `window`, stamped now.
+    private func keyEvent(_ key: Key, in window: NSWindow) throws -> NSEvent {
+        guard
+            let event = NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: key.flags,
+                timestamp: FrameCommitTimer.now, windowNumber: window.windowNumber,
+                context: nil, characters: key.characters,
+                charactersIgnoringModifiers: key.characters, isARepeat: false,
+                keyCode: key.keyCode)
+        else { throw Failure("could not make a key event for \(key.characters)") }
+        return event
+    }
+
+    /// Notes in `lastWake` each time the main run loop wakes, which starts the pass that takes a
+    /// worker's result in, until the observer is invalidated.
+    private func watchWakes() -> CFRunLoopObserver {
+        let wake = CFRunLoopObserverCreateWithHandler(
+            nil, CFRunLoopActivity.afterWaiting.rawValue, true, 0
+        ) { [weak self] _, _ in
+            MainActor.assumeIsolated { self?.lastWake = FrameCommitTimer.now }
+        }
+        guard let wake else { preconditionFailure("CFRunLoopObserverCreate failed") }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), wake, .commonModes)
+        return wake
     }
 
     private func cursorRow() throws -> Int {
@@ -490,6 +691,18 @@ final class UIBench {
             }
             guard ContinuousClock.now < deadline else {
                 throw Failure("\(pane.location.path) did not finish loading in 30 s")
+            }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
+    /// Waits for the pane to finish naming or resolving a selection off the main thread.
+    private func waitUntilSettled() async throws {
+        let pane = try requirePane()
+        let deadline = ContinuousClock.now + .seconds(30)
+        while !pane.selection.isSettled {
+            guard ContinuousClock.now < deadline else {
+                throw Failure("the selection did not settle in 30 s: \(pane.selection)")
             }
             try await Task.sleep(for: .milliseconds(5))
         }

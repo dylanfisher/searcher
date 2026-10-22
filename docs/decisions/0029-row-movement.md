@@ -42,9 +42,34 @@ name about 32 ms, and a click selecting half the rows 32–51 ms.
   or loaded, partly or completely. A patch and a complete load drop names the listing doesn't
   have. `ListingService.load` takes a `prepare` step that runs on the load's worker for each
   update. The main thread takes the resolved copy if the user hasn't changed the selection since
-  the work started (`selectionVersion`), and otherwise resolves the current one itself. Names are
-  looked up one by one when few are selected; past one in eight rows, where the review's W2
-  timings cross, every row is checked against the set instead.
+  the work started (`selectionVersion`). Names are looked up one by one when few are selected;
+  past one in eight rows, where the review's W2 timings cross, every row is checked against the
+  set instead.
+- **A selection changed during the work settles off the main thread too.** When the user changed
+  the selection while a load, patch or sort ran, the main thread shows the new listing with the
+  current selection provisionally: it checks only the rows within a page of the cursor
+  (`Selection.provisional`), so the change shows at once, and keeps the listing change as
+  pending. A worker then settles the selection (`Selection.settled`) and the pane takes the
+  result if neither the selection nor the state changed meanwhile; otherwise it settles the
+  selection as it is then, one at a time. Moves on an unsettled selection work on the rows they
+  change, as before, and keep those names as edits, applied over the members when it settles.
+  Two pending changes combine: two patches add what both added, and any other pair counts as a
+  load, compared with the baseline, where the later listing says whether a missing name is gone.
+  `members` traps until the selection is settled, so nothing reads half-resolved names.
+- **The table draws a full-width selection.** `NSTableView`'s `.automatic` style is `.inset`,
+  which rounds a selection's corners where it meets unselected rows and updates each changed
+  row's neighbors to do it (`_updateAdjacentSelectionWiewsForRow:` in a sample, called once per
+  changed row). In a release build on 100k rows, `selectRowIndexes` from one row to all took
+  13–15 ms with it and 0.2 ms with `.fullWidth`; shifting 50k selected rows by one, 6–8 ms and
+  0.01 ms. The table keeps its own selection, so clicks, Shift-clicks and VoiceOver work as
+  before.
+- **A new listing of the folder on screen refreshes the rows in place.** A patch, a sort or a
+  reload of the folder shown tells the table the row count (`noteNumberOfRowsChanged`) and
+  fills the cells of the row views it already has, instead of `reloadData`, which drops them
+  and lays out and draws a new screen of rows. In a release build on 100k rows, the main
+  thread's pass that lands a patch went from about 23 ms to 1.5 ms. A new folder still reloads.
+  This replaces the one `reloadData` per listing that [0006](0006-concurrency-shape.md) describes
+  for a folder already on screen.
 - **Moves.** A plain move puts the cursor on the target row and selects it alone, collapsing a
   multi-row selection. An extending move keeps the anchor and changes the range from the anchor to
   the cursor, as `NSTableView` and Finder do. Rows the old range covered and the new one doesn't
@@ -71,8 +96,10 @@ name about 32 ms, and a click selecting half the rows 32–51 ms.
 - **Clicks.** `tableViewSelectionDidChange` reports a selection the table made itself to the pane:
   the selected rows as members, the clicked row as the cursor (or, with no click, the row the
   table selected last), and the anchor on the cursor. A Shift-click, read from the current event's
-  modifier flags, keeps the pane's anchor instead. The table's rows go to the pane with the
-  selection (`Pane.select(_:atRows:)`), so nothing is looked up; only the names are built.
+  modifier flags, keeps the pane's anchor instead. The table's rows go to the pane as they are
+  (`Pane.select(rows:cursor:anchor:)`), and the selection holds them unnamed until a worker
+  names them, so the main thread builds one name, the cursor's. A worker that resolves the
+  selection for a load, patch or sort names them first.
 - **Patched names.** A patch counts an entry as added only if the listing before the whole batch
   lacked it, so a name removed and written again in one batch stays selected under Select All,
   as it does in a selection by name.
@@ -83,8 +110,14 @@ name about 32 ms, and a click selecting half the rows 32–51 ms.
   through `Pane.apply`, the path the folder monitor's patches take, so it makes no file-system
   call. A reload lists W2 again on the load's worker, as any reload does; its span runs from the
   start of the main run loop pass that takes the listing in to the frame, so it times the main
-  thread's share and not the listing. Each case checks where it leaves the selection, and each is
-  its own field in `UIBenchRecord` and its own B6 case in the report.
+  thread's share and not the listing. Then come 100 patches that each add an entry right after
+  the first row under Select All, 100 selection changes to half the rows through the table as a
+  click makes them (the window isn't active, so it takes no real clicks), 100 patches that each
+  land after a Shift-↓ sent while they run, with half the rows selected, and 20 reloads with
+  Cmd-A pressed on the first batch. The last two are timed from the start of the pass that takes
+  the result in, like a reload, and each waits for the selection to settle before the next.
+  Each case checks where it leaves the selection, and each is its own field in `UIBenchRecord`
+  and its own B6 case in the report.
 
 ## Alternatives considered
 
@@ -105,26 +138,68 @@ name about 32 ms, and a click selecting half the rows 32–51 ms.
 - **Page by the visible count minus one, keeping a row of context.** Rejected: nothing in the
   key table asks for it, and the cursor would land on the last visible row instead of the next
   page.
+- **Resolve on the main thread when the selection changed during the work.** This was the M1.2
+  version. Rejected: in a release build on 100k W2-like names it took 105–119 ms when Cmd-A on
+  the first batch met the full listing, and 47–70 ms for a patch or sort landing after Shift-↓
+  with half the rows selected.
+- **Hold the new listing back until the selection is resolved against it.** Rejected: loads,
+  patches and sorts each read the state the moment they land, to start the next sort or patch
+  or relist, and the order in which states replace each other would change.
+- **Replay the user's moves on the worker's result.** Rejected: a move by rows means something
+  else in a re-sorted listing, and Cmd-A on a first batch still needs the full comparison.
+- **Draw the selection from the pane in the row views and keep the table's selection small.**
+  Rejected: the full-width style removes the cost with one line, and a selection the table
+  doesn't hold would need its own click handling and VoiceOver reporting.
+- **Diff the index sets and change only the rows that moved.** Measured: with the inset style,
+  deselecting one row and selecting another under 50k selected rows took as long as replacing
+  the set, so the cost isn't in the size of the change; with full width neither costs anything.
+- **Keep naming a click's rows on the main thread.** Rejected: 13–15 ms for half of 100k rows,
+  plus a comparison of the old and new name sets in `Pane.set`.
 
 ## Consequences
 
 `Selection.rows(in:)` trusts the rows it was last resolved to, so code that hands a selection a
 different listing must resolve it first; `Pane` is the only place that does. Tests guard the
-large-selection paths with `Selection.work`, a task-local count of names looked up and entries
+large-selection paths with `Selection.work`, a task-local count of names looked up, built,
 walked or compared, and `Pane.mainSelectionWork`, the part of it done on the main thread, not
-with timings. Both exist in debug builds only.
+with timings. Both exist in debug builds only, and the tests that read them are compiled only
+there, so `swift test -c release` builds.
 
 The worker resolves the selection the load, patch or sort started with. A patch that lands
 during a load changes the selection without the user, so the load's copy can be older than the
 one shown; such a patch makes the pane list the folder again once the load ends, and that load
-starts from the patched selection. A selection the user changes while the work runs is resolved
-on the main thread when the work lands, at the old cost: up to a walk of every row, or a
-comparison of both listings after Select All.
+starts from the patched selection.
 
-A click still builds a name for each row it selects, or for each row it leaves out when it
-selects more than half. On 100k synthetic ASCII names in an optimized build, a click selecting
-half the rows took 1.8 ms; W2's mixed names cost more per name, and the UI bench doesn't time
-clicks.
+Until a provisional selection settles, rows more than a page from the cursor don't show as
+selected, so rows the user scrolled to away from the cursor can show unselected for the few
+frames a settle takes (a walk of W2 is about 33 ms). Opening the selection in that time settles
+it on the main thread first. While a key repeats faster than a settle, each settle is dropped
+and started again, and the selection stays provisional until the key is released. A name a
+pending patch removed and a later one wrote again counts as never removed, as it does within
+one batch.
+
+The full-width style changes the look: the selection spans the row from edge to edge with
+square corners, as tables did before macOS 11, instead of an inset rounded highlight.
+
+Measured with `./scripts/bench --ui`, alternating with the M1.2 commit 1fad9b3, with
+`--check-idle` saying idle before and after each run. B6 p95s in ms; the cases after reload
+are new, so the baseline has none:
+
+| B6 case | 1fad9b3, 3 runs | This change, 3 runs |
+|---|---|---|
+| ↓ | 10.15, 9.27, 9.26 | 9.43, 9.02, 10.42 |
+| Opt-↓/↑ | 10.25, 10.00, 9.01 | 13.52, 14.14, 10.44 |
+| Ctrl-Shift-↓ | 8.85, 9.12, 10.51 | 9.70, 12.08, 8.66 |
+| Fn-↓ | 9.47, 10.09, 9.42 | 11.13, 10.47, 10.11 |
+| Shift-↓ | 9.04, 9.12, 9.08 | 10.23, 10.84, 9.01 |
+| Cmd-A | 9.87, 10.14, 10.87 | 7.57, 8.39, 7.34 |
+| Patch, all selected | 42.50, 44.17, 42.27 | 8.61, 9.27, 8.79 |
+| Reload landing, all selected | 42.91, 42.90, 41.82 | 10.39, 12.27, 9.10 |
+| Patch adding a row, all selected | — | 13.95, 10.82, 14.29 |
+| Click selecting half | — | 5.79, 7.30, 8.00 |
+| Patch landing after Shift-↓ | — | 1.74, 1.68, 1.78 |
+| Load landing after Cmd-A on first batch | — | 10.34, 9.86, 9.85 |
+| Stalls over 50 ms | 0; 15, all in launch; 0 | 0, 0, 0 |
 
 A pane's `visibleRowCount` is 0 until the view first lays out, so a page move before then moves
 one row. The cursor can sit on a row that isn't selected (after a Cmd-click that deselects it),

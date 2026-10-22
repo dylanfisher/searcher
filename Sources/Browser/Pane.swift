@@ -20,10 +20,15 @@ public final class Pane {
     /// dropped when a load finishes, not before, so a name set before the rows arrive survives
     /// the partial listing.
     public private(set) var selection = Selection()
-    /// Goes up each time the selection changes, other than by being resolved against a new
-    /// listing. A load, patch or sort resolves a copy of the selection off the main thread, and
-    /// the pane takes that copy only if this hasn't moved since the copy was made.
+    /// Goes up each time the selection changes, other than by being resolved or settled. A load,
+    /// patch or sort resolves a copy of the selection off the main thread, and the pane takes that
+    /// copy only if this hasn't moved since the copy was made. Otherwise it shows the current
+    /// selection provisionally and settles it off the main thread too.
     private var selectionVersion = 0
+    /// A copy of the selection is being settled off the main thread.
+    private var settleIsRunning = false
+    /// Where selections settle. Tests suspend a queue of their own here to hold one unsettled.
+    var settleQueue = DispatchQueue.global(qos: .userInitiated)
     #if DEBUG
         /// The per-entry work selection code has done on the main thread, as `Selection.work`
         /// counts it. Debug builds only.
@@ -99,6 +104,10 @@ public final class Pane {
     /// it points at a folder takes a file-system call, and the system resolves it.
     public func openSelection() {
         guard let listing = state.listing else { return }
+        // A provisional selection knows only the rows near the cursor. Opening right after a
+        // change that raced a load, patch or sort is rare enough to settle it here.
+        let selection =
+            selection.isProvisional ? onMain { selection.settled(in: listing) } : selection
         let entries = selection.rows(in: listing).map { listing[$0] }
         if entries.count == 1, entries[0].type == .directory {
             navigate(to: location.child(named: entries[0].name))
@@ -362,13 +371,13 @@ public final class Pane {
         set(onMain { selection.resolved(in: state.listing, after: .sameEntries) })
     }
 
-    /// Selects `selection`, whose rows in the listing shown are `rows`, as a click in the table
-    /// gives them; nothing is looked up.
-    public func select(_ selection: Selection, atRows rows: IndexSet) {
+    /// Selects `rows` of the listing shown, as a click in the table gives them. They are named off
+    /// the main thread.
+    public func select(rows: IndexSet, cursor: ExactName?, anchor: ExactName?) {
         guard let listing = state.listing else {
             preconditionFailure("rows \(rows) were selected with no listing shown")
         }
-        set(selection.resolved(toRows: rows, in: listing))
+        set(Selection(rows: rows, in: listing, cursor: cursor, anchor: anchor))
     }
 
     /// Takes a selection already resolved against the listing shown.
@@ -376,6 +385,37 @@ public final class Pane {
         guard selection != self.selection else { return }
         self.selection = selection
         selectionVersion += 1
+        startSettlingIfNeeded()
+        onChange?()
+    }
+
+    /// Settles a copy of an unsettled selection off the main thread, one at a time. The pane
+    /// takes it if neither the selection nor the state changed meanwhile; otherwise it settles
+    /// the selection as it is then. Whatever changed the state resolved the selection, or
+    /// started this again.
+    private func startSettlingIfNeeded() {
+        guard !settleIsRunning, !selection.isSettled, let listing = state.listing else { return }
+        settleIsRunning = true
+        let selection = selection
+        let selectionVersion = selectionVersion
+        let version = stateVersion
+        settleQueue.async { [weak self] in
+            let settled = selection.settled(in: listing)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self?.finishSettling(settled, from: selectionVersion, state: version)
+                }
+            }
+        }
+    }
+
+    private func finishSettling(_ settled: Selection, from selectionVersion: Int, state: Int) {
+        settleIsRunning = false
+        guard selectionVersion == self.selectionVersion, state == stateVersion else {
+            startSettlingIfNeeded()
+            return
+        }
+        selection = settled
         onChange?()
     }
 
@@ -387,13 +427,23 @@ public final class Pane {
     }
 
     /// Shows `state` with `resolved`, the selection at `version` resolved off the main thread
-    /// against its listing, if the selection hasn't changed since. Otherwise resolves it here.
+    /// against its listing, if the selection hasn't changed since. Otherwise shows the current
+    /// selection provisionally, the rows within a page of the cursor, and settles it off the main
+    /// thread.
     private func show(
         _ state: ListingState, after change: Selection.Change, resolved: Selection?,
         from version: Int
     ) {
         guard let resolved, version == selectionVersion else {
-            show(state, after: change)
+            guard let listing = state.listing else {
+                show(state, after: change)
+                return
+            }
+            self.state = state
+            selection = onMain {
+                selection.provisional(in: listing, after: change, radius: max(visibleRowCount, 1))
+            }
+            startSettlingIfNeeded()
             return
         }
         self.state = state
