@@ -41,6 +41,9 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
     /// A reload's complete listing landing after Cmd-A on its first batch: start of the main
     /// thread's pass that takes it in → frame, on W2 (B6).
     public var loadAfterSelectAll: [Double]
+    /// A type-to-select key → frame with the first matching row selected, on W2 sorted by name
+    /// (B6).
+    public var typeSelect: [Double]
     /// Sort column change → frame with the re-sorted rows, on W2 (B8).
     public var sortChange: [Double]
     /// Cmd-Shift-. key → frame with hidden files shown or hidden, on W2 (B8). Two per launch:
@@ -77,7 +80,7 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         patchAllSelected: [Double] = [], reloadAllSelected: [Double] = [],
         patchAddingAllSelected: [Double] = [], clickHalf: [Double] = [],
         patchAfterShiftDown: [Double] = [], loadAfterSelectAll: [Double] = [],
-        sortChange: [Double] = [], hiddenToggle: [Double] = [],
+        typeSelect: [Double] = [], sortChange: [Double] = [], hiddenToggle: [Double] = [],
         foldersFirstToggle: [Double] = [], sortKey: [Double] = [],
         stalls: [Stall] = []
     ) {
@@ -96,6 +99,7 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         self.clickHalf = clickHalf
         self.patchAfterShiftDown = patchAfterShiftDown
         self.loadAfterSelectAll = loadAfterSelectAll
+        self.typeSelect = typeSelect
         self.sortChange = sortChange
         self.hiddenToggle = hiddenToggle
         self.foldersFirstToggle = foldersFirstToggle
@@ -120,6 +124,7 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         clickHalf += other.clickHalf
         patchAfterShiftDown += other.patchAfterShiftDown
         loadAfterSelectAll += other.loadAfterSelectAll
+        typeSelect += other.typeSelect
         sortChange += other.sortChange
         hiddenToggle += other.hiddenToggle
         foldersFirstToggle += other.foldersFirstToggle

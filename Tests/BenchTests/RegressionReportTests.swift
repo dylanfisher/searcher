@@ -122,6 +122,7 @@ private func uiRun(keyDown: Double, launches: Int = UIBenchReport.launches) -> U
         clickHalf: Array(repeating: 5, count: 100),
         patchAfterShiftDown: Array(repeating: 5, count: 100),
         loadAfterSelectAll: Array(repeating: 5, count: 20),
+        typeSelect: Array(repeating: 5, count: 24),
         sortChange: Array(repeating: 90, count: launches),
         hiddenToggle: Array(repeating: 40, count: 2 * launches),
         foldersFirstToggle: Array(repeating: 40, count: 2 * launches),

@@ -126,7 +126,7 @@ final class QuickLookController: NSObject, @preconcurrency QLPreviewPanelDataSou
                 table.registry.command(for:)
             ).first
         else { return false }
-        table.runCommand(command.id)
+        table.run(command.id)
         return true
     }
 

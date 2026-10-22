@@ -1,5 +1,6 @@
 import AppKit
 import Browser
+import TestSupport
 import Testing
 
 @testable import Interface
@@ -10,21 +11,28 @@ private final class ThreeRows: NSObject, NSTableViewDataSource {
     func numberOfRows(in tableView: NSTableView) -> Int { 3 }
 }
 
-/// A table with the app's commands, whose runner only records what it is asked to run. Row 1 is
-/// selected and several rows may be, so the table's own ↑, ↓ or select-all would change
-/// the selection.
+/// A table with the app's commands, whose runner and type-select only record what they are asked
+/// to do. Row 1 is selected and several rows may be, so the table's own ↑, ↓ or select-all would
+/// change the selection. Type-select finds a match unless `matches` is false, and its query
+/// resets on `clock`.
 @MainActor
 private struct RecordingTable {
     let table = ListingTableView()
     let rows = ThreeRows()
+    let clock = ManualClock()
     private let log = Log()
 
-    init(registry: CommandRegistry) {
+    init(registry: CommandRegistry, matches: Bool = true) {
         table.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name")))
         table.dataSource = rows
         table.allowsMultipleSelection = true
         table.registry = registry
         table.runCommand = { [log] in log.ids.append($0) }
+        table.typeSelect = TypeSelect(clock: clock)
+        table.selectTyped = { [log] in
+            log.queries.append($0)
+            return matches
+        }
         table.beep = { [log] in log.beeps += 1 }
         table.reloadData()
         table.selectRowIndexes([1], byExtendingSelection: false)
@@ -32,10 +40,13 @@ private struct RecordingTable {
 
     var ran: [CommandID] { log.ids }
     var beeps: Int { log.beeps }
+    /// The query type-select was asked to select, once per key it took.
+    var queries: [String] { log.queries }
 
     @MainActor private final class Log {
         var ids: [CommandID] = []
         var beeps = 0
+        var queries: [String] = []
     }
 }
 
@@ -178,6 +189,7 @@ private final class CountingRows: NSObject, NSTableViewDataSource, NSTableViewDe
     table.dataSource = rows
     table.delegate = rows
     table.registry = try AppCommands.registry()
+    table.selectTyped = { _ in true }
     table.reloadData()
     rows.viewsMade = 0
 
@@ -215,4 +227,116 @@ func commandShiftPeriodRunsShowHiddenFilesWhereverTheLayoutPutsThePeriod(
 
     #expect(recording.ran == [ViewCommands.toggleHidden.id])
     #expect(recording.beeps == 0)
+}
+
+// MARK: - Type-select
+
+/// The app's registry binds Space to Quick Look. The test table's runner only records the ID,
+/// so no panel opens.
+private let quickLook = ViewCommands.toggleQuickLook
+
+@MainActor @Test func aPlainLetterWithNoCommandGoesToTypeSelect() throws {
+    let recording = RecordingTable(registry: try AppCommands.registry())
+    recording.table.keyDown(with: try keyEvent("r"))
+    recording.table.keyDown(with: try keyEvent("E", modifiers: .shift))
+
+    #expect(recording.queries == ["r", "re"])
+    #expect(recording.ran.isEmpty)
+    #expect(recording.beeps == 0)
+    #expect(recording.table.selectedRowIndexes == [1])
+}
+
+@MainActor @Test func aLetterBoundToACommandRunsTheCommand() throws {
+    var registry = try AppCommands.registry()
+    let letter = Command(id: CommandID("test.letter"), title: "Letter", chords: [KeyChord("q")])
+    try registry.register(letter)
+    let recording = RecordingTable(registry: registry)
+    recording.table.keyDown(with: try keyEvent("q"))
+
+    #expect(recording.ran == [letter.id])
+    #expect(recording.queries.isEmpty)
+}
+
+@MainActor @Test func aCommandLetterWithNoCommandBeepsAndTypesNothing() throws {
+    let recording = RecordingTable(registry: try AppCommands.registry())
+    recording.table.keyDown(with: try keyEvent("k", modifiers: .command))
+
+    #expect(recording.queries.isEmpty)
+    #expect(recording.beeps == 1)
+}
+
+@MainActor @Test func aQueryWithNoMatchBeepsAndKeepsTheSelection() throws {
+    let recording = RecordingTable(registry: try AppCommands.registry(), matches: false)
+    recording.table.keyDown(with: try keyEvent("x"))
+
+    #expect(recording.queries == ["x"])
+    #expect(recording.beeps == 1)
+    #expect(recording.table.selectedRowIndexes == [1])
+}
+
+@MainActor @Test func spaceWithinTheResetIntervalJoinsTheQuery() throws {
+    let recording = RecordingTable(registry: try AppCommands.registry())
+    recording.table.keyDown(with: try keyEvent("m"))
+    recording.clock.advance(by: .milliseconds(500))
+    recording.table.keyDown(with: try keyEvent(" "))
+    recording.table.keyDown(with: try keyEvent("f"))
+
+    #expect(recording.queries == ["m", "m ", "m f"])
+    #expect(recording.ran.isEmpty)
+}
+
+@MainActor @Test func spaceWithNoQueryRunsItsCommand() throws {
+    let recording = RecordingTable(registry: try AppCommands.registry())
+    recording.table.keyDown(with: try keyEvent(" "))
+
+    #expect(recording.ran == [quickLook.id])
+    #expect(recording.queries.isEmpty)
+}
+
+@MainActor @Test func spaceAfterTheResetIntervalRunsItsCommand() throws {
+    let recording = RecordingTable(registry: try AppCommands.registry())
+    recording.table.keyDown(with: try keyEvent("m"))
+    recording.clock.advance(by: TypeSelect.resetInterval)
+    recording.table.keyDown(with: try keyEvent(" "))
+
+    #expect(recording.ran == [quickLook.id])
+    #expect(recording.queries == ["m"])
+}
+
+@MainActor @Test func shiftSpaceWhileTypingIsNotTypeSelect() throws {
+    let recording = RecordingTable(registry: try AppCommands.registry())
+    recording.table.keyDown(with: try keyEvent("m"))
+    recording.table.keyDown(with: try keyEvent(" ", modifiers: .shift))
+
+    #expect(recording.queries == ["m"])
+    #expect(recording.ran.isEmpty)
+}
+
+@MainActor @Test func aCommandBetweenKeysStartsANewQuery() throws {
+    let recording = RecordingTable(registry: try AppCommands.registry())
+    recording.table.keyDown(with: try keyEvent("b"))
+    recording.table.keyDown(
+        with: try keyEvent(functionKey(NSDownArrowFunctionKey), modifiers: arrowFlags))
+    recording.table.keyDown(with: try keyEvent("c"))
+
+    #expect(recording.queries == ["b", "c"])
+    #expect(recording.ran == [SelectionCommands.selectNext.id])
+}
+
+@MainActor @Test func aMenuCommandBetweenKeysStartsANewQuery() throws {
+    let recording = RecordingTable(registry: try AppCommands.registry())
+    recording.table.keyDown(with: try keyEvent("b"))
+    recording.table.selectAll(nil)
+    recording.table.keyDown(with: try keyEvent("c"))
+
+    #expect(recording.queries == ["b", "c"])
+}
+
+@MainActor @Test func aMissedKeyStaysInTheQuery() throws {
+    let recording = RecordingTable(registry: try AppCommands.registry(), matches: false)
+    recording.table.keyDown(with: try keyEvent("x"))
+    recording.table.keyDown(with: try keyEvent("y"))
+
+    #expect(recording.queries == ["x", "xy"])
+    #expect(recording.beeps == 2)
 }

@@ -1,6 +1,6 @@
 /// Row movement and selection: the arrows, Opt-, Ctrl-Shift- and Fn-arrows move the cursor and
 /// select its row alone, Shift-arrows extend the selection from the anchor, and Cmd-A selects
-/// every row.
+/// every row. Type-to-select, which no chord runs, selects by name.
 public enum SelectionCommands: CommandSet {
     public static let selectNext = Command(
         id: CommandID("selection.next"), title: "Select Next Row", chords: [KeyChord(.down)])
@@ -47,5 +47,20 @@ public enum SelectionCommands: CommandSet {
             CommandBinding(pageUp) { $0.pane.moveSelection(byPages: -1) },
             CommandBinding(selectAll) { $0.pane.selectAll() },
         ]
+    }
+
+    /// Type-to-select: selects the first row in display order whose name starts with `query`,
+    /// alone, with the cursor on it. Returns false and leaves the selection as it is when no
+    /// row matches.
+    @MainActor
+    public static func selectFirstRow(startingWith query: String, in context: CommandContext)
+        -> Bool
+    {
+        guard let listing = context.pane.state.listing,
+            let row = TypeSelect.firstRow(startingWith: query, in: listing)
+        else { return false }
+        let name = ExactName(listing[row].name)
+        context.pane.select(Selection([name], cursor: name))
+        return true
     }
 }
