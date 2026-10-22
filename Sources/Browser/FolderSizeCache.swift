@@ -92,9 +92,9 @@ public actor FolderSizeCache {
     /// them out of date: changes there can no longer be seen, or were lost.
     func dropLocalSizes(under folder: String) {
         for (volume, records) in volumes where volume.kind == .local {
-            volumes[volume] = records.filter { !Self.path($0.key, isIn: folder) }
+            volumes[volume] = records.filter { !isPath($0.key, atOrUnder: folder) }
         }
-        for (number, walk) in walks where Self.path(walk.path, isIn: folder) {
+        for (number, walk) in walks where isPath(walk.path, atOrUnder: folder) {
             walks[number]?.isStale = true
         }
     }
@@ -103,11 +103,7 @@ public actor FolderSizeCache {
     /// the volume's file.
     public func dropSizes(under folder: String, on volume: VolumeIdentity) async {
         let records = await records(on: volume)
-        await replace(records.filter { !Self.path($0.key, isIn: folder) }, on: volume)
-    }
-
-    private static func path(_ path: String, isIn folder: String) -> Bool {
-        path == folder || path.hasPrefix(folder.hasSuffix("/") ? folder : folder + "/")
+        await replace(records.filter { !isPath($0.key, atOrUnder: folder) }, on: volume)
     }
 
     /// The sizes kept for `volume`, read from the store on a network volume's first use.

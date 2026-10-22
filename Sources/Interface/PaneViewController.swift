@@ -63,6 +63,8 @@ public final class PaneViewController: NSViewController {
     private let monitorsFolders: Bool
     /// The location the list's last monitor was started for; nil in column mode.
     private var monitoredLocation: Location?
+    /// The pane's `monitorGeneration` when the list's last monitor was started.
+    private var monitoredGeneration = 0
     /// The location `onLocationChange` last reported.
     private var shownLocation: Location?
     /// Counts monitor starts, so a monitor that finishes starting after a newer one was asked for
@@ -411,11 +413,14 @@ public final class PaneViewController: NSViewController {
 
     // MARK: Folder monitor
 
-    /// Starts a monitor for the list's folder when it changes. Each column starts its own
-    /// when it shows (`ColumnViewController.startMonitor`).
+    /// Starts a monitor for the list's folder when it changes or its volume mounts again. Each
+    /// column starts its own when it shows (`ColumnViewController.startMonitor`).
     private func startMonitorIfNeeded() {
-        guard pane.viewMode == .list, pane.location != monitoredLocation else { return }
+        guard pane.viewMode == .list,
+            pane.location != monitoredLocation || pane.monitorGeneration != monitoredGeneration
+        else { return }
         monitoredLocation = pane.location
+        monitoredGeneration = pane.monitorGeneration
         monitorRequest += 1
         let request = monitorRequest
         let location = pane.location

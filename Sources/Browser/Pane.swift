@@ -53,6 +53,9 @@ public final class Pane {
             self.monitor = nil
         }
     }
+    /// Goes up when the pane's folder needs a new monitor though its location hasn't changed:
+    /// when its volume mounts again. Whoever starts monitors compares it with the location.
+    public private(set) var monitorGeneration = 0
     /// Runs after the location, state, sort or selection changes. In column mode it also runs
     /// after any column changes. A column's pane reports to its trail here, so only the trail
     /// sets it.
@@ -70,6 +73,8 @@ public final class Pane {
     public var commandPane: Pane { columnTrail?.focused.pane ?? self }
     /// Closed for good: a column that was truncated or a trail that was dropped.
     private var isClosed = false
+    /// The folder's volume was unmounted, so the pane is offline and doesn't list the folder.
+    private var volumeIsGone = false
 
     let service: ListingService
     /// The app-wide settings. The rows follow `showHidden` and `foldersFirst`: a change re-sorts
@@ -147,6 +152,7 @@ public final class Pane {
             columnTrail = ColumnTrail(owner: self, at: location, selecting: name, sortedLike: self)
         }
         settings.observe(for: self) { [weak self] in self?.settingsDidChange() }
+        VolumeEvents.add(self)
     }
 
     // MARK: - Navigation
@@ -388,6 +394,7 @@ public final class Pane {
         monitor = nil
         waitingPatches = []
         relistAfterLoad = false
+        volumeIsGone = false
         self.location = location
         filter = NameFilter()
         selection = name.map { Selection([$0], cursor: $0) } ?? Selection()
@@ -468,7 +475,7 @@ public final class Pane {
     /// In column mode, the focused column's folder.
     public func reload() {
         if let trail = columnTrail { return trail.focused.pane.reload() }
-        guard !loadIsRunning else { return }
+        guard !loadIsRunning, !volumeIsGone else { return }
         startLoad()
     }
 
@@ -567,6 +574,7 @@ public final class Pane {
     /// Lists the folder for a change: now, or once the running load ends, since that load may
     /// have read past the changed entry before the change happened.
     private func relist() {
+        if volumeIsGone { return }
         if loadIsRunning {
             relistAfterLoad = true
         } else {
@@ -818,6 +826,50 @@ public final class Pane {
     /// selection stays as it is.
     private func goOffline() {
         state = .offline(keptRows)
+    }
+
+    // MARK: - Volume events
+
+    /// The volume holding `location` is about to unmount. A running load has the folder open,
+    /// which can keep the volume from unmounting, so it stops; focus lists the folder again if
+    /// the unmount is refused. The monitor stays: it doesn't keep the volume from unmounting.
+    /// In column mode each column stops its own load.
+    func volumeWillUnmount() {
+        guard columnTrail == nil, !isClosed, loadIsRunning else { return }
+        load?.cancel()
+        loadIsRunning = false
+        relistAfterLoad = false
+    }
+
+    /// The volume holding `location` was unmounted. Stops the load, the folder monitor and
+    /// waiting patches, and shows the folder offline with the rows shown. Until the volume
+    /// mounts again or the pane leaves, nothing lists the folder: what is left at the mount
+    /// point isn't it. A pending `goToFolder` is a folder the pane is leaving for, so it goes
+    /// on. In column mode each column goes offline on its own.
+    func volumeDidUnmount() {
+        guard columnTrail == nil, !isClosed else { return }
+        load?.cancel()
+        loadIsRunning = false
+        relistAfterLoad = false
+        monitor?.stop()
+        monitor = nil
+        waitingPatches = []
+        volumeIsGone = true
+        goOffline()
+        onChange?()
+    }
+
+    /// A volume mounted at `location` or above it: lists the folder again, and asks for a new
+    /// monitor by moving `monitorGeneration`. A monitor still running watches the folder that
+    /// was there before, so it stops.
+    func volumeDidMount() {
+        guard columnTrail == nil, !isClosed else { return }
+        volumeIsGone = false
+        monitor?.stop()
+        monitor = nil
+        monitorGeneration += 1
+        reload()
+        onChange?()
     }
 
     // MARK: - Selection

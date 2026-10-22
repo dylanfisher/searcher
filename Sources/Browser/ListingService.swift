@@ -537,7 +537,7 @@ private final class NetworkVolumes: @unchecked Sendable {
 extension VolumeIdentity {
     /// `path` is the mount point or under it, by its text.
     fileprivate func holds(_ path: String) -> Bool {
-        mountPoint == "/" || path == mountPoint || path.hasPrefix(mountPoint + "/")
+        isPath(path, atOrUnder: mountPoint)
     }
 }
 

@@ -578,3 +578,131 @@ func aShareThatStopsAnsweringGoesOfflineWithTheCachedRows(code: Int32) async {
     await settle { pane.state.isCachedRefreshing }
     #expect(pane.state.names == ["a"])
 }
+
+@MainActor @Suite(.serialized) struct PaneVolumeEventTests {
+    @Test func aPaneOnAnUnmountedVolumeGoesOfflineWithItsRowsAndListsAgainWhenItMounts()
+        async throws
+    {
+        let image = try await DiskImage("PaneOfflineTests")
+        try Data().write(to: URL(fileURLWithPath: image.mountPoint + "/a"))
+        let pane = Pane(
+            location: Location(path: image.mountPoint), service: ListingService(),
+            systemActions: StubSystemActions(), settings: untouchedSettings())
+        await settle { pane.state.isLoaded }
+        #expect(pane.state.names == ["a"])
+        // Nothing watches the folder, so its rows show `b` only once it is listed again.
+        try Data().write(to: URL(fileURLWithPath: image.mountPoint + "/b"))
+        try await image.detach()
+
+        VolumeEvents.didUnmount(at: image.mountPoint)
+
+        guard case .offline(let kept) = pane.state else {
+            Issue.record("expected offline, not \(pane.state)")
+            return
+        }
+        #expect(kept?.isComplete == true)
+        #expect(pane.state.names == ["a"])
+
+        try await image.attach()
+        VolumeEvents.didMount(at: image.mountPoint)
+
+        await settle { pane.state.isLoaded }
+        #expect(pane.state.names == ["a", "b"])
+        try await image.detach()
+    }
+
+    /// A mount point no other test uses, since every pane hears every volume event.
+    private func uniqueMountPoint() -> String {
+        "/volume-events-\(UUID().uuidString)"
+    }
+
+    private func stubPane(
+        at path: String, lister: any Lister, viewMode: ViewMode = .list
+    ) -> Pane {
+        Pane(
+            location: Location(path: path), service: ListingService(lister: lister),
+            systemActions: StubSystemActions(), settings: untouchedSettings(), viewMode: viewMode)
+    }
+
+    @Test func willUnmountCancelsARunningLoadOnTheVolume() async {
+        let mountPoint = uniqueMountPoint()
+        let music = mountPoint + "/music"
+        let lister = GatedLister([music: .blockForever])
+        lister.releaseAll()
+        let pane = stubPane(at: music, lister: lister)
+        #expect(lister.waitForCall(music))
+        let load = pane.load
+
+        VolumeEvents.willUnmount(at: mountPoint)
+
+        #expect(load?.isCancelled == true)
+    }
+
+    @Test func aPaneOnAGoneVolumeStaysOfflineWhenItGainsFocusOrIsAskedToRelist() async {
+        let mountPoint = uniqueMountPoint()
+        let lister = StubLister([mountPoint: [file("a")]])
+        let pane = stubPane(at: mountPoint, lister: lister)
+        await settle { pane.state.isLoaded }
+        // The folder left at the mount point once the volume is gone.
+        lister.set(mountPoint, to: [])
+
+        VolumeEvents.didUnmount(at: mountPoint)
+        pane.didLoseFocus()
+        pane.didGainFocus()
+        pane.reload()
+        pane.apply(.relist, at: Location(path: mountPoint))
+        await letTimersLand()
+
+        #expect(pane.state.isOffline)
+        #expect(pane.state.names == ["a"])
+    }
+
+    @Test func aClosedPaneIgnoresUnmountAndMount() async {
+        let mountPoint = uniqueMountPoint()
+        let lister = StubLister([mountPoint: [file("a")]])
+        let offline = stubPane(at: mountPoint, lister: lister)
+        await settle { offline.state.isLoaded }
+        VolumeEvents.didUnmount(at: mountPoint)
+        #expect(offline.state.isOffline)
+        offline.close()
+
+        VolumeEvents.didMount(at: mountPoint)
+        await letTimersLand()
+        #expect(offline.state.isOffline)
+
+        let loaded = stubPane(at: mountPoint, lister: lister)
+        await settle { loaded.state.isLoaded }
+        loaded.close()
+        VolumeEvents.didUnmount(at: mountPoint)
+        #expect(loaded.state.isLoaded)
+    }
+
+    @Test func aColumnModePaneGoesOfflineThroughItsColumn() async throws {
+        let mountPoint = uniqueMountPoint()
+        let lister = StubLister([mountPoint: [file("a")]])
+        let pane = stubPane(at: mountPoint, lister: lister, viewMode: .column)
+        let trail = try #require(pane.columnTrail)
+        let column = trail.columns[0].pane
+        await settle { column.state.isLoaded }
+
+        VolumeEvents.didUnmount(at: mountPoint)
+
+        #expect(column.state.isOffline)
+        #expect(column.state.names == ["a"])
+        VolumeEvents.didMount(at: mountPoint)
+        await settle { column.state.isLoaded }
+    }
+
+    @Test func aPaneOnAnotherVolumeStaysAsItIs() async throws {
+        let folder = try TemporaryFolder("PaneOfflineTests")
+        let pane = Pane(
+            location: Location(path: folder.url.path), service: ListingService(),
+            systemActions: StubSystemActions(), settings: untouchedSettings())
+        await settle { pane.state.isLoaded }
+
+        // A mount point that starts the pane's path as text but isn't one of its folders.
+        VolumeEvents.didUnmount(at: String(folder.url.path.dropLast()))
+
+        #expect(pane.state.isLoaded)
+    }
+}

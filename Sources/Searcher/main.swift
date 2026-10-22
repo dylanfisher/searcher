@@ -65,6 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         installMainMenu()
+        VolumeNotifications.start()
         let window = openWindow()
         NSApp.activate()
         LaunchWarmup.shared.start(after: window)

@@ -239,6 +239,61 @@ private func freshListing(of folder: String) throws -> Listing {
     }
 }
 
+/// The path `descriptor` refers to, or nil if it isn't open.
+private func openPath(_ descriptor: Int32) -> String? {
+    var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+    guard fcntl(descriptor, F_GETPATH, &buffer) != -1 else { return nil }
+    return String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+}
+
+/// A monitor on a disk image's root, watched as a network folder is.
+private func vnodeMonitor(
+    _ image: DiskImage, onChange: @escaping @Sendable (FolderChange) -> Void
+) async throws -> FolderMonitor {
+    let location = Location(path: image.mountPoint)
+    let monitor = try await BlockingCallThread.run {
+        try FolderMonitor(location: location, volume: .network, onChange: onChange)
+    }
+    #expect(monitor.watcher == .vnode)
+    return monitor
+}
+
+@MainActor @Suite(.serialized) struct FolderMonitorDiskImageTests {
+    /// The watch opens its folder for events only, which doesn't keep a volume from unmounting,
+    /// so will-unmount leaves it: if the unmount is refused, the pane is still watched.
+    @Test func willUnmountLeavesThePaneMonitorAndAPlainDetachRevokesIt() async throws {
+        let image = try await DiskImage("FolderMonitorTests")
+        let pane = Pane(
+            location: Location(path: image.mountPoint), service: ListingService(),
+            systemActions: StubSystemActions(), settings: untouchedSettings())
+        await settle { pane.state.isLoaded }
+        let monitor = try await vnodeMonitor(image) { _ in }
+        pane.monitor = monitor
+        let descriptor = try #require(monitor.vnodeDescriptor)
+
+        VolumeEvents.willUnmount(at: image.mountPoint)
+
+        #expect(pane.monitor === monitor)
+        #expect(openPath(descriptor) == image.mountPoint)
+        try await image.detach()
+        await settle { descriptorIsClosed(descriptor, wasAt: image.mountPoint) }
+    }
+
+    @Test func forcedDetachRevokesTheWatchAndTheMonitorStopsCleanly() async throws {
+        let image = try await DiskImage("FolderMonitorTests")
+        let log = EventLog<FolderChange>()
+        let monitor = try await vnodeMonitor(image, onChange: log.append)
+        let descriptor = try #require(monitor.vnodeDescriptor)
+
+        try await image.detach(force: true)
+
+        await settle { descriptorIsClosed(descriptor, wasAt: image.mountPoint) }
+        monitor.stop()
+        #expect(monitor.vnodeDescriptor == nil)
+        #expect(log.all.isEmpty)
+    }
+}
+
 /// Watches the folder named by `SEARCHER_NAS_FOLDER` and waits for a change made on the server.
 /// Skipped unless it is set. Run it as
 /// `SEARCHER_NAS_FOLDER=/Volumes/main/searcher-spike ./scripts/test --filter nasChangeRelists`,

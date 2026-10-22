@@ -38,6 +38,10 @@ public final class FolderMonitor: FolderMonitoring, @unchecked Sendable {
     /// one call at a time, so a pane can patch a copy of its listing there; it isn't called on the
     /// main thread. A call already running when `stop` is called may finish.
     ///
+    /// A vnode watch whose volume is unmounted closes its descriptor and reports nothing more,
+    /// not even `relist`: the folder is gone with its volume, and `VolumeEvents` takes the pane
+    /// offline.
+    ///
     /// Opening the folder blocks on a network volume that has stopped answering, so this traps on
     /// the main thread.
     ///
