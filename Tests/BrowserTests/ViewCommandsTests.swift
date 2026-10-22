@@ -248,3 +248,39 @@ private func holdSorts(of pane: Pane) -> DispatchQueue {
         #expect(pane.selection.rows(in: listing) == IndexSet(0..<3_600))
     }
 #endif
+
+@MainActor @Test func commandThreeShowsColumnsAndCommandOneTheList() async throws {
+    let temp = try TemporaryFolder("ViewCommandsTests")
+    let fixture = await viewPane([file("a"), file("b")], in: temp)
+    let pane = fixture.pane
+    fixture.select("b")
+
+    try run(KeyChord("3", modifiers: .command), on: pane)
+    #expect(pane.viewMode == .column)
+    #expect(pane.columnTrail?.columns.map(\.pane.location) == [Location(path: "/view")])
+    // Again in column mode, it keeps the trail.
+    let trail = pane.columnTrail
+    try run(KeyChord("3", modifiers: .command), on: pane.commandPane)
+    #expect(pane.columnTrail === trail)
+
+    try run(KeyChord("1", modifiers: .command), on: pane.commandPane)
+    #expect(pane.viewMode == .list)
+    await settle { pane.state.isLoaded }
+    #expect(pane.selection.cursor == ExactName("b"))
+
+    // Again in list mode, it does nothing.
+    try run(KeyChord("1", modifiers: .command), on: pane)
+    #expect(pane.viewMode == .list)
+    #expect(pane.state.isLoaded)
+}
+
+@MainActor @Test func theColumnKeysDoNothingInListMode() async throws {
+    let fixture = await PaneFixture.loaded()
+    fixture.select("docs")
+
+    try run(KeyChord(.right), on: fixture.pane)
+    try run(KeyChord(.left), on: fixture.pane)
+
+    #expect(fixture.pane.location == Location(path: "/root"))
+    #expect(fixture.pane.viewMode == .list)
+}

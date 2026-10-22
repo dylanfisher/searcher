@@ -43,20 +43,45 @@ public final class Pane {
     /// The name of the volume mounted at `/`, from the last listing update; nil until the first.
     public private(set) var rootVolumeName: String?
 
-    /// Watching `location`. The pane stops it, and drops it, when it navigates.
-    public var monitor: (any FolderMonitoring)?
-    /// Runs after the location, state, sort or selection changes.
+    /// Watching `location`. The pane stops it, and drops it, when it navigates or closes. A
+    /// monitor handed to a closed pane, one that finished starting after its column went, is
+    /// stopped at once.
+    public var monitor: (any FolderMonitoring)? {
+        didSet {
+            guard isClosed, let monitor else { return }
+            monitor.stop()
+            self.monitor = nil
+        }
+    }
+    /// Runs after the location, state, sort or selection changes. In column mode it also runs
+    /// after any column changes. A column's pane reports to its trail here, so only the trail
+    /// sets it.
     public var onChange: (@MainActor () -> Void)?
 
-    private let service: ListingService
+    /// List or columns. Cmd-1 and Cmd-3 switch it.
+    public private(set) var viewMode = ViewMode.list
+    /// The columns, in column mode; nil in list mode.
+    public private(set) var columnTrail: ColumnTrail?
+    /// For a column's pane, the trail it is in. Its Open, Go to parent, Back and Forward act on
+    /// the trail and its owner, and it never navigates itself.
+    public internal(set) weak var containingTrail: ColumnTrail?
+    /// The pane keys and commands act on: this one in list mode, the focused column's in column
+    /// mode. Its rows, selection, sort and filter are the ones a key changes.
+    public var commandPane: Pane { columnTrail?.focused.pane ?? self }
+    /// Closed for good: a column that was truncated or a trail that was dropped.
+    private var isClosed = false
+
+    let service: ListingService
     /// The app-wide settings. The rows follow `showHidden` and `foldersFirst`: a change re-sorts
     /// them off the main actor, as a sort change does.
     public let settings: Settings
     /// How the pane and its views reach the system outside the app's windows.
     public let systemActions: any SystemActions
-    private var load: ListingLoad?
+    private(set) var load: ListingLoad?
     private var loadIsRunning = false
-    private var isFocused: Bool
+    /// Whether loads go ahead of other panes'. A trail moves it between its columns without
+    /// listing them again.
+    var isFocused: Bool
     /// Folder change patches not yet applied, in the order they arrived.
     private var waitingPatches: [FolderChange.Patch] = []
     private var patchIsRunning = false
@@ -81,11 +106,12 @@ public final class Pane {
     /// were resolved from the selection it started with then.
     private var goSelectionVersion = 0
 
-    /// Starts listing `location` right away, ahead of other panes' loads if `isFocused`.
+    /// Starts listing `location` right away, ahead of other panes' loads if `isFocused`, with
+    /// `name` to be selected once it's listed.
     public init(
         location: Location, service: ListingService, systemActions: any SystemActions,
         settings: Settings, sortedBy column: SortColumn = .name, ascending: Bool = true,
-        isFocused: Bool = false
+        isFocused: Bool = false, selecting name: ExactName? = nil
     ) {
         self.location = location
         self.service = service
@@ -94,6 +120,7 @@ public final class Pane {
         self.isFocused = isFocused
         sortColumn = column
         sortAscending = ascending
+        selection = name.map { Selection([$0], cursor: $0) } ?? Selection()
         startLoad()
         settings.observe(for: self) { [weak self] in self?.settingsDidChange() }
     }
@@ -104,11 +131,15 @@ public final class Pane {
     /// and starts listing. `name` is the entry to select once it's listed. The folder left goes
     /// into the history, so Back returns to it. Navigating to the folder the pane is in isn't a
     /// step: it lists the folder again and keeps its monitor, selecting `name` if given.
+    ///
+    /// In column mode the pane is in the focused column's folder, and a navigation starts the
+    /// trail again with one column at `location`.
     public func navigate(to location: Location, selecting name: String? = nil) {
+        precondition(containingTrail == nil, "a column navigates through its trail's owner")
         guard location != self.location else {
             cancelGoToFolder()
             if let name {
-                select(Selection([ExactName(name)], cursor: ExactName(name)))
+                commandPane.select(Selection([ExactName(name)], cursor: ExactName(name)))
             }
             reload()
             return
@@ -117,13 +148,15 @@ public final class Pane {
         move(to: location, selecting: name.map(ExactName.init))
     }
 
-    public var canGoBack: Bool { history.canGoBack }
-    public var canGoForward: Bool { history.canGoForward }
+    /// A column's pane answers for its trail's owner, whose history it is.
+    public var canGoBack: Bool { containingTrail?.owner.canGoBack ?? history.canGoBack }
+    public var canGoForward: Bool { containingTrail?.owner.canGoForward ?? history.canGoForward }
 
     /// Shows the folder the pane was in before this one, with the entry selected there when the
     /// pane left it. Does nothing at the start of the history. A folder gone since fails to
     /// list like any other.
     public func goBack() {
+        if let trail = containingTrail { return trail.owner.goBack() }
         guard let entry = history.back(from: here) else { return }
         move(to: entry.location, selecting: entry.selected)
     }
@@ -131,8 +164,74 @@ public final class Pane {
     /// Shows the folder Back last left, with the entry selected there. Does nothing at the end of
     /// the history.
     public func goForward() {
+        if let trail = containingTrail { return trail.owner.goForward() }
         guard let entry = history.forward(from: here) else { return }
         move(to: entry.location, selecting: entry.selected)
+    }
+
+    // MARK: - View mode
+
+    /// Switches between the list and columns. Columns start with one at the pane's folder, with
+    /// the entry under the cursor selected; the pane's own load and monitor stop and its rows
+    /// go, since that column has its own, so `state` holds no listing in column mode. The list
+    /// starts at the focused column's folder, in its sort, with
+    /// the entry under its cursor selected, and the columns close. Neither is a step in the
+    /// history. Switching to the mode the pane is in does nothing.
+    public func setViewMode(_ mode: ViewMode) {
+        precondition(containingTrail == nil, "a column has no view mode of its own")
+        guard mode != viewMode else { return }
+        switch mode {
+        case .column:
+            let cursor = selection.cursor
+            stopListing()
+            // The columns hold the rows now. The pane's own would only be sorted again on each
+            // settings change and read by a view that should show the columns instead.
+            show(.loading, after: .loaded(complete: true))
+            viewMode = .column
+            columnTrail = ColumnTrail(
+                owner: self, at: location, selecting: cursor, sortedLike: self)
+            onChange?()
+        case .list:
+            guard let trail = columnTrail else {
+                preconditionFailure("column mode without a trail")
+            }
+            let focused = trail.focused.pane
+            trail.close()
+            columnTrail = nil
+            viewMode = .list
+            sortColumn = focused.sortColumn
+            sortAscending = focused.sortAscending
+            move(to: focused.location, selecting: focused.selection.cursor)
+        }
+    }
+
+    /// The trail's focus or a column changed. The pane is in the focused column's folder, so the
+    /// path bar, the window title and History follow the focus.
+    func trailDidChange() {
+        guard let trail = columnTrail else { return }
+        location = trail.focused.pane.location
+        onChange?()
+    }
+
+    /// Stops the pane's load, its folder monitor and anything pending for its rows, for good.
+    /// A column's pane closes when the trail drops it.
+    func close() {
+        isClosed = true
+        stopListing()
+        columnTrail?.close()
+        containingTrail = nil
+        onChange = nil
+    }
+
+    /// Stops the load, a pending `goToFolder`, the monitor and waiting patches.
+    private func stopListing() {
+        cancelGoToFolder()
+        load?.cancel()
+        loadIsRunning = false
+        monitor?.stop()
+        monitor = nil
+        waitingPatches = []
+        relistAfterLoad = false
     }
 
     /// Lists `target` and shows it once its first rows arrive. Until then the pane stays where it
@@ -144,6 +243,7 @@ public final class Pane {
     public func goToFolder(
         _ target: Location, then finish: @escaping @MainActor (ListingError?) -> Void
     ) {
+        precondition(containingTrail == nil, "a column goes to a folder through its trail's owner")
         cancelGoToFolder()
         // The folder the pane is in is listed again, as a reload, keeping its monitor.
         guard target != location else {
@@ -192,6 +292,14 @@ public final class Pane {
         }
         history.leave(here)
         leave(for: pending.load.location, selecting: nil)
+        if columnTrail != nil {
+            // The new column lists the folder itself.
+            pending.load.cancel()
+            restartTrail()
+            onChange?()
+            finish(nil)
+            return
+        }
         load = pending.load
         loadIsRunning = true
         goSelectionVersion = selectionVersion
@@ -201,15 +309,31 @@ public final class Pane {
 
     /// The pane as it is, as History keeps it.
     private var here: History.Entry {
-        History.Entry(location: location, selected: selection.cursor)
+        History.Entry(location: location, selected: commandPane.selection.cursor)
     }
 
-    /// Moves to `location` without touching the history, and lists it.
+    /// Moves to `location` without touching the history, and lists it: in column mode, in a
+    /// trail started again at it.
     private func move(to location: Location, selecting name: ExactName?) {
         leave(for: location, selecting: name)
-        show(.loading, after: .loaded(complete: false))
-        startLoad()
+        if columnTrail != nil {
+            restartTrail()
+        } else {
+            show(.loading, after: .loaded(complete: false))
+            startLoad()
+        }
         onChange?()
+    }
+
+    /// Closes the columns and starts one at `location`, with the selection's cursor selected.
+    /// The new column takes the focused column's sort, since the pane's own isn't kept in step
+    /// in column mode.
+    private func restartTrail() {
+        guard let old = columnTrail else { preconditionFailure("restarting a trail in list mode") }
+        let model = old.focused.pane
+        old.close()
+        columnTrail = ColumnTrail(
+            owner: self, at: location, selecting: selection.cursor, sortedLike: model)
     }
 
     /// Stops everything the pane does for the folder it leaves: its load, a pending
@@ -238,11 +362,15 @@ public final class Pane {
             selection.isProvisional ? onMain { selection.settled(in: listing) } : selection
         let entries = selection.rows(in: listing).map { listing[$0] }
         if entries.count == 1, entries[0].type == .directory {
+            // A column moves into the folder's column instead, as → does.
+            if let trail = containingTrail { return trail.openFolder(from: self) }
             navigate(to: location.child(named: entries[0].name))
             return
         }
         if entries.count == 1, entries[0].type == .symbolicLink {
-            openLink(location.child(named: entries[0].name))
+            // A link has no column, so a column opens it as the owner would: a link to a folder
+            // starts the trail again at the link.
+            (containingTrail?.owner ?? self).openLink(location.child(named: entries[0].name))
             return
         }
         for entry in entries where entry.type != .directory {
@@ -270,8 +398,10 @@ public final class Pane {
         systemActions.openFile(URL(fileURLWithPath: location.path, isDirectory: false))
     }
 
-    /// Shows the folder that holds this one, with this one selected. Does nothing at `/`.
+    /// Shows the folder that holds this one, with this one selected. Does nothing at `/`. A
+    /// column moves to the column on its left instead, as ← does.
     public func goToParent() {
+        if let trail = containingTrail { return trail.moveLeft() }
         guard let parent = location.parent else { return }
         navigate(to: parent, selecting: location.name)
     }
@@ -280,19 +410,24 @@ public final class Pane {
 
     /// Lists the folder again. A load already running will deliver current entries, so it is left
     /// alone. The rows on screen stay until the new listing arrives.
+    /// In column mode, the focused column's folder.
     public func reload() {
+        if let trail = columnTrail { return trail.focused.pane.reload() }
         guard !loadIsRunning else { return }
         startLoad()
     }
 
-    /// The pane is the one keys go to. The folder may have changed while another pane was.
+    /// The pane is the one keys go to. The folder may have changed while another pane was. In
+    /// column mode the focused column takes the focus and lists its folder again.
     public func didGainFocus() {
         isFocused = true
+        if let trail = columnTrail { return trail.focused.pane.didGainFocus() }
         reload()
     }
 
     public func didLoseFocus() {
         isFocused = false
+        columnTrail?.focused.pane.didLoseFocus()
     }
 
     // MARK: - Folder changes
@@ -300,9 +435,10 @@ public final class Pane {
     /// Applies a change its monitor reported for `location`. Patches are applied to a copy of the
     /// listing off the main actor, since `Listing.update` must run there; `relist` lists the
     /// folder again. A change for a folder the pane has left is ignored, since a monitor can
-    /// report once more after it is stopped.
+    /// report once more after it is stopped. In column mode each column applies its own changes
+    /// and the pane has no rows of its own to change, so it ignores them.
     public func apply(_ change: FolderChange, at location: Location) {
-        guard location == self.location else { return }
+        guard location == self.location, columnTrail == nil, !isClosed else { return }
         switch change {
         case .relist:
             relist()
@@ -411,8 +547,10 @@ public final class Pane {
     }
 
     /// A view setting changed: the rows show or hide hidden entries, or put folders first, once
-    /// a sort lands.
+    /// a sort lands. In column mode each column follows the change itself, and a closed pane
+    /// has nothing to follow it with.
     private func settingsDidChange() {
+        guard columnTrail == nil, !isClosed else { return }
         startSortIfNeeded()
         onChange?()
     }
