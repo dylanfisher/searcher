@@ -13,7 +13,7 @@ import Quartz
 public final class ListingViewController: NSViewController, NSTableViewDataSource,
     NSTableViewDelegate
 {
-    /// What VoiceOver reads for the badge on an entry whose contents aren't on this Mac.
+    /// What VoiceOver reads last in the row label of an entry whose contents aren't on this Mac.
     static let notDownloadedLabel = "Not downloaded"
     /// The name cell's badge view, shown only for an entry that isn't downloaded.
     static let notDownloadedBadgeIdentifier = NSUserInterfaceItemIdentifier("notDownloadedBadge")
@@ -158,6 +158,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
                 else { continue }
                 configure(cell, column: column, row: row, in: listing)
             }
+            label(rowView, row: row, in: listing)
         }
     }
 
@@ -348,6 +349,40 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         cell.textField?.stringValue = text
     }
 
+    /// Labels each row view the table adds, its cells already filled, so a label is built only
+    /// for the rows on screen.
+    public func tableView(
+        _ tableView: NSTableView, didAdd rowView: NSTableRowView, forRow row: Int
+    ) {
+        guard let listing, row < listing.count else { return }
+        label(rowView, row: row, in: listing)
+    }
+
+    /// Sets what VoiceOver reads for `row`: the name, kind, size and date, taken from the text its
+    /// cells show, then "Not downloaded" for an entry that isn't (0040-list-accessibility.md). An
+    /// entry without a size leaves it out rather than read the Size column's "--".
+    private func label(_ rowView: NSTableRowView, row: Int, in listing: Listing) {
+        let entry = listing[row]
+        func text(_ column: SortColumn) -> String {
+            let index = tableView.column(withIdentifier: column.identifier)
+            guard index >= 0, let cell = rowView.view(atColumn: index) as? NSTableCellView,
+                let text = cell.textField?.stringValue
+            else {
+                preconditionFailure("row \(row) has no \(column) cell to label it from")
+            }
+            return text
+        }
+        var parts = [text(.name), text(.kind)]
+        if entry.size != nil {
+            parts.append(text(.size))
+        }
+        parts.append("modified \(text(.dateModified))")
+        if entry.isDataless {
+            parts.append(Self.notDownloadedLabel)
+        }
+        rowView.setAccessibilityLabel(parts.joined(separator: ", "))
+    }
+
     /// Shows or hides the name cell's badge and fits the name to it. A cell the table reuses, or a
     /// row refilled in place, may have shown another entry's badge.
     private func showNotDownloadedBadge(_ shown: Bool, in cell: NSTableCellView) {
@@ -429,8 +464,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         cell.addSubview(textField)
         cell.textField = textField
         if column == .name {
-            // At the cell's trailing edge, as Finder draws it. Hidden until an entry needs it;
-            // a hidden view is no accessibility element, so VoiceOver reads it only when shown.
+            // At the cell's trailing edge, as Finder draws it. Hidden until an entry needs it.
+            // The row's label says the entry isn't downloaded, so the badge isn't read again.
             let badgeSize = 16.0
             let badge = NSImageView(
                 frame: NSRect(
@@ -440,8 +475,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             badge.imageScaling = .scaleProportionallyUpOrDown
             badge.contentTintColor = .secondaryLabelColor
             badge.autoresizingMask = [.minXMargin, .minYMargin, .maxYMargin]
-            badge.setAccessibilityElement(true)
-            badge.setAccessibilityLabel(Self.notDownloadedLabel)
+            badge.setAccessibilityElement(false)
             badge.isHidden = true
             cell.addSubview(badge)
         }

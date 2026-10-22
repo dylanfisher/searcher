@@ -23,8 +23,8 @@ what the directory read returned.
   name's width is set from the cell's, never shifted by the badge's, and set again when the Name
   column resizes: autoresizing clamps a width at zero in a column narrower than the name and the
   badge, and a shifted width would carry that error from then on.
-- **VoiceOver.** The shown badge is an accessibility element labeled "Not downloaded", read
-  after the name. Hidden, it isn't an element.
+- **VoiceOver.** The row's label ends with "Not downloaded", and the badge is not an
+  accessibility element, so the state is read once ([0040](0040-list-accessibility.md)).
 - **No reads.** The row's icon still comes from its type, looked up from the name's extension,
   and the size is the logical size from the bulk read (`ATTR_FILE_DATALENGTH`). Nothing in the
   listing or icon path opens a file or asks for its thumbnail or preview; the lister reads
