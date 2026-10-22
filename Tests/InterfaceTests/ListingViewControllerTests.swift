@@ -672,6 +672,10 @@ private final class HoldableLister: Lister, @unchecked Sendable {
 /// A controller showing `path` as `controller(showing:)` does, whose pane walks folder sizes
 /// with `walks` and waits out the time between size batches on `clock`. Tests that send volume
 /// events give a path of their own, since every pane on the path gets them.
+///
+/// A batch's wait reads the clock when its task starts on the cooperative pool, which can be
+/// after the batch lands. An advance before then doesn't end the wait, so a test that advances
+/// once first settles until `clock.waitingSleeps` shows the wait.
 @MainActor
 private func sizedController(
     at path: String = "/folder", showing entries: [DirectoryEntry], walks: HeldWalks,
@@ -726,6 +730,7 @@ private func folderSize(_ name: String, in pane: Pane) -> Listing.FolderSizeValu
     await settle { (try? sizeText(controller)) == ["4 MB", pending, "500 bytes"] }
 
     walks.release("/folder/Photos", bytes: 2_000_000, isPartial: true)
+    await settle { clock.waitingSleeps == 1 }
     clock.advance(by: Pane.sizeBatchInterval)
     await settle { (try? sizeText(controller)) == ["4 MB", "≥ 2 MB", "500 bytes"] }
 }
@@ -741,6 +746,7 @@ private func folderSize(_ name: String, in pane: Pane) -> Listing.FolderSizeValu
 
     walks.release("/folder/Music", bytes: 4_000_000)
     pane.reload()
+    await settle { clock.waitingSleeps == 1 }
     clock.advance(by: Pane.sizeBatchInterval)
 
     await settle { (try? sizeText(controller)) == ["4 MB"] }
@@ -758,6 +764,7 @@ private func folderSize(_ name: String, in pane: Pane) -> Listing.FolderSizeValu
 
     walks.release("/folder/b", bytes: 2_000)
     await settle { !pane.waitingSizes.isEmpty }
+    await settle { clock.waitingSleeps == 1 }
     clock.advance(by: Pane.sizeBatchInterval - .milliseconds(1))
     try await Task.sleep(for: .milliseconds(50))
     #expect(folderSize("b", in: pane) == nil)
@@ -827,6 +834,7 @@ private func folderSize(_ name: String, in pane: Pane) -> Listing.FolderSizeValu
     settings.folderSizes = false
     lister.release()
     await settle { pane.stateVersion != version && pane.state.isLoaded }
+    await settle { clock.waitingSleeps == 1 }
     clock.advance(by: Pane.sizeBatchInterval)
     await settle { folderSize("Music", in: pane) == nil }
 
@@ -971,6 +979,7 @@ private func folderSize(_ name: String, in pane: Pane) -> Listing.FolderSizeValu
 
     walks.release("/volume-c/Music", bytes: 4_000_000)
     VolumeEvents.didMount(at: "/volume-c")
+    await settle { clock.waitingSleeps == 1 }
     clock.advance(by: Pane.sizeBatchInterval)
 
     await settle { (try? sizeText(controller)) == ["4 MB"] }

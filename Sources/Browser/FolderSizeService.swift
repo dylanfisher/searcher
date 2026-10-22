@@ -218,8 +218,9 @@ public final class FolderSizeService: Sendable {
                 ready.append((walk, walkVolume))
             }
         }
+        let found = ready
         scheduler.async {
-            for (walk, volume) in ready { walk.volume = volume }
+            for (walk, volume) in found { walk.volume = volume }
             self.startWaitingWalks()
         }
     }

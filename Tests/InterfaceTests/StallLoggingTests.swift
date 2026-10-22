@@ -47,16 +47,17 @@ import Testing
     }
 
     #if DEBUG
-        @MainActor @Test func debugLaunchWithoutTheThresholdLogsThatTheWatchdogIsOff() throws {
+        @MainActor @Test func debugLaunchWithoutTheThresholdLogsThatTheWatchdogIsOff() async throws
+        {
             let (logger, category) = testLogger()
 
             let watchdog = StallLogging.start(arguments: ["Searcher"], logger: logger)
 
             #expect(watchdog == nil)
-            #expect(
-                try loggedMessages(in: category) == [
-                    "stall watchdog is off: launched without --stall-threshold-ms"
-                ])
+            // Read off the main actor: the read waits on logd, which a loaded machine slows to
+            // seconds, and the main actor runs every other @MainActor test in this target.
+            let messages = try await Task.detached { try loggedMessages(in: category) }.value
+            #expect(messages == ["stall watchdog is off: launched without --stall-threshold-ms"])
         }
     #endif
 }
