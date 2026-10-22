@@ -217,7 +217,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         tableColumn.width = column.width
         tableColumn.minWidth = 40
         tableColumn.sortDescriptorPrototype = sortDescriptor(
-            column, ascending: column.firstClickAscending)
+            column, ascending: column.firstAscending)
         // Only the name column takes up a change in the table's width.
         tableColumn.resizingMask =
             column == .name ? [.userResizingMask, .autoresizingMask] : .userResizingMask
@@ -457,13 +457,5 @@ extension SortColumn {
 
     fileprivate var alignment: NSTextAlignment {
         self == .size ? .right : .natural
-    }
-
-    /// As in Finder, the first click on Size or Date Modified puts the largest or newest first.
-    fileprivate var firstClickAscending: Bool {
-        switch self {
-        case .name, .kind: true
-        case .size, .dateModified: false
-        }
     }
 }

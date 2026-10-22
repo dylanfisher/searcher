@@ -196,3 +196,23 @@ private final class CountingRows: NSObject, NSTableViewDataSource, NSTableViewDe
     #expect(recording.ran.isEmpty)
     #expect(recording.table.selectedRowIndexes == [2])
 }
+
+/// Cmd-Shift-. on a US keyboard types ">" on the period key (47). On a French AZERTY one it
+/// types "." on the key whose own character is ";", which is key code 41 on the test machine's
+/// layout. Either runs Show Hidden Files.
+@MainActor @Test(arguments: [(">", 47), (".", 41)] as [(String, UInt16)])
+func commandShiftPeriodRunsShowHiddenFilesWhereverTheLayoutPutsThePeriod(
+    typed: String, keyCode: UInt16
+) throws {
+    let recording = RecordingTable(registry: try AppCommands.registry())
+    let event = try #require(
+        NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0,
+            windowNumber: 0, context: nil, characters: typed, charactersIgnoringModifiers: typed,
+            isARepeat: false, keyCode: keyCode))
+
+    recording.table.keyDown(with: event)
+
+    #expect(recording.ran == [ViewCommands.toggleHidden.id])
+    #expect(recording.beeps == 0)
+}

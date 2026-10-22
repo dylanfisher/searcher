@@ -34,8 +34,9 @@ class ListingTableView: NSTableView {
     /// (Ctrl-N is Move Down). Unbound plain and Shift-only keys still go to `super`; the ones
     /// `NSTableView` would move or extend its selection with (↑, ↓, Shift-↑, Shift-↓) are bound.
     override func keyDown(with event: NSEvent) {
-        if let chord = KeyChord(event: event) {
-            if let command = registry.command(for: chord) {
+        let chords = KeyChord.candidates(for: event)
+        if let chord = chords.first {
+            if let command = chords.lazy.compactMap(registry.command(for:)).first {
                 runCommand(command.id)
                 return
             }

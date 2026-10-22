@@ -260,6 +260,16 @@ public struct Selection: Equatable, Sendable {
         return move(to: row, from: current, in: listing, extending: extending)
     }
 
+    /// The selection after its cursor's entry left the rows, as when hidden files are hidden: the
+    /// cursor and anchor move to `row`, and when nothing else is selected, so does the selection.
+    public func cursorMoved(toRow row: Int, in listing: Listing) -> Selection {
+        guard !isEmpty else { return moved(toRow: row, in: listing, extending: false) }
+        var moved = self
+        moved.cursor = ExactName(listing[row].name)
+        moved.anchor = moved.cursor
+        return moved
+    }
+
     /// Every entry of `listing`, keeping the cursor and anchor. Does nothing to an empty listing.
     public func all(in listing: Listing) -> Selection {
         guard listing.count > 0 else { return self }

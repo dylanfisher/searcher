@@ -6,4 +6,13 @@ public enum SortColumn: Sendable, CaseIterable {
     case size
     case dateModified
     case kind
+
+    /// The direction a header click or a sort key starts a column in. As in Finder, Size and Date
+    /// Modified start with the largest or newest first.
+    public var firstAscending: Bool {
+        switch self {
+        case .name, .kind: true
+        case .size, .dateModified: false
+        }
+    }
 }

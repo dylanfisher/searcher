@@ -16,7 +16,8 @@ private func underBudget() -> UIBenchRecord {
         patchAddingAllSelected: Array(repeating: 7, count: 100),
         clickHalf: Array(repeating: 9, count: 100),
         patchAfterShiftDown: Array(repeating: 9, count: 100),
-        loadAfterSelectAll: Array(repeating: 9, count: 20), sortChange: [90, 100], stalls: [])
+        loadAfterSelectAll: Array(repeating: 9, count: 20), sortChange: [90, 100],
+        hiddenToggle: [40, 50], foldersFirstToggle: [40, 50], sortKey: [60, 70], stalls: [])
 }
 
 @Test func keyDownUnderB6Passes() throws {

@@ -28,7 +28,7 @@ private struct DeniedFixture {
         lister.releaseAll()
         pane = Pane(
             location: Location(path: path), service: ListingService(lister: lister),
-            systemActions: actions, isFocused: true)
+            systemActions: actions, settings: untouchedSettings(), isFocused: true)
         controller = PaneViewController(
             pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
             tableView: table, monitorsFolders: false)
@@ -101,7 +101,8 @@ func otherFailuresShowTheErrorTextNotTheDeniedView(path: String) async {
     lister.releaseAll()
     let pane = Pane(
         location: Location(path: path), service: ListingService(lister: lister),
-        systemActions: StubSystemActions(), isFocused: true)
+        systemActions: StubSystemActions(), settings: untouchedSettings(),
+        isFocused: true)
     let controller = PaneViewController(
         pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
         tableView: ListingTableView(), monitorsFolders: false)

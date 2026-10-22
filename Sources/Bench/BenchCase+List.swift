@@ -36,7 +36,10 @@ extension BenchCase {
         cases.append(
             BenchCase(name: "sort W2: by size", budget: nil, unit: .milliseconds) {
                 var listing = Listing(try entries($0 ?? w2Path))
-                return time { listing.sort(by: .size, ascending: false) }
+                return time {
+                    listing.sort(
+                        by: .size, ascending: false, foldersFirst: false, showsHidden: true)
+                }
             })
         return cases
     }()

@@ -122,7 +122,10 @@ private func uiRun(keyDown: Double, launches: Int = UIBenchReport.launches) -> U
         clickHalf: Array(repeating: 5, count: 100),
         patchAfterShiftDown: Array(repeating: 5, count: 100),
         loadAfterSelectAll: Array(repeating: 5, count: 20),
-        sortChange: Array(repeating: 90, count: launches))
+        sortChange: Array(repeating: 90, count: launches),
+        hiddenToggle: Array(repeating: 40, count: 2 * launches),
+        foldersFirstToggle: Array(repeating: 40, count: 2 * launches),
+        sortKey: Array(repeating: 60, count: 2 * launches))
 }
 
 /// Judges one CI run per ↓ p95 in order, each against the history the one before it kept, and

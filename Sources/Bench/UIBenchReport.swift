@@ -37,6 +37,9 @@ struct UIBenchReport {
             ("W2 patch landing after Shift-↓ → frame", "B6", record.patchAfterShiftDown),
             ("W2 load landing after Cmd-A on first batch → frame", "B6", record.loadAfterSelectAll),
             ("W2 sort change → frame", "B8", record.sortChange),
+            ("W2 Cmd-Shift-. key → frame", "B8", record.hiddenToggle),
+            ("W2 folders first → frame", "B8", record.foldersFirstToggle),
+            ("W2 sort key → frame", "B8", record.sortKey),
         ]
         cases = try spans.map { span in
             guard !span.samples.isEmpty else { throw NoSamples(span: span.name) }

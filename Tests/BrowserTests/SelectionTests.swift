@@ -82,7 +82,7 @@ private func at(_ row: Int) -> Selection {
 @Test func rowsFollowTheListingsDisplayOrder() async {
     let bySize = await Task.detached {
         var listing = rows25()
-        listing.sort(by: .size, ascending: false)
+        listing.sort(by: .size, ascending: false, foldersFirst: false, showsHidden: true)
         return listing
     }.value
     let selection = Selection(names(2...3), cursor: name(3), anchor: name(2))

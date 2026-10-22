@@ -71,6 +71,32 @@ let arrowFlags: NSEvent.ModifierFlags = [.numericPad, .function]
     #expect(chord == KeyChord("g", modifiers: [.command, .shift]))
 }
 
+/// Shift applies to punctuation too, and where "." sits depends on the layout. A US keyboard
+/// types ">" for Shift and the period key; a French AZERTY one types "." for Shift and the key
+/// whose own character is ";". The typed character comes first, then the key's own.
+@Test func shiftedPunctuationMeansTheTypedCharacterThenTheKeysOwn() {
+    let flags: NSEvent.ModifierFlags = [.command, .shift]
+    let modifiers: KeyChord.Modifiers = [.command, .shift]
+
+    #expect(
+        KeyChord.candidates(typed: ">", unshifted: ".", flags: flags) == [
+            KeyChord(">", modifiers: modifiers), KeyChord(".", modifiers: modifiers),
+        ])
+    #expect(
+        KeyChord.candidates(typed: ".", unshifted: ";", flags: flags) == [
+            KeyChord(".", modifiers: modifiers), KeyChord(";", modifiers: modifiers),
+        ])
+    // A letter and an unshifted key have one meaning.
+    #expect(
+        KeyChord.candidates(typed: "G", unshifted: "g", flags: flags) == [
+            KeyChord("g", modifiers: modifiers)
+        ])
+    #expect(
+        KeyChord.candidates(typed: ".", unshifted: ".", flags: .command) == [
+            KeyChord(".", modifiers: .command)
+        ])
+}
+
 @MainActor @Test func capsLockLetterIsTheLowercaseLetter() throws {
     let chord = try KeyChord(event: keyEvent("A", modifiers: .capsLock))
     #expect(chord == KeyChord("a"))

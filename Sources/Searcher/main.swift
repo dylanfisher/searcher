@@ -8,6 +8,9 @@ import os
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let service = ListingService()
     private let systemActions = WorkspaceSystemActions()
+    /// The user's own preferences, made on first use so a bench launch never reads them; the
+    /// bench makes its own over a suite of its own.
+    private lazy var settings = Settings(defaults: .standard)
     private var windows: [BrowserWindowController] = []
     private let bench: UIBench?
 
@@ -44,7 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         do {
             try MainMenuBuilder.install(
-                in: NSApp, appName: appName, registry: AppCommands.registry())
+                in: NSApp, appName: appName, registry: AppCommands.registry(), settings: settings)
         } catch {
             preconditionFailure("the main menu doesn't match the app's commands: \(error)")
         }
@@ -56,7 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func openWindow() -> NSWindow {
         let controller = BrowserWindowController(
             location: Location(path: NSHomeDirectory()), service: service,
-            systemActions: systemActions)
+            systemActions: systemActions, settings: settings)
         guard let window = controller.window else {
             preconditionFailure("a browser window controller has no window")
         }
