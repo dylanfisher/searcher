@@ -17,7 +17,16 @@ public class PaneLayoutView: NSView {
         }
     }
 
-    private let paneViews: [PaneID: NSView]
+    private var paneViews: [PaneID: NSView]
+    /// Gives a split a new ratio for a divider drag or VoiceOver, and returns the layout to show.
+    /// A window replaces it to set the ratio on the tab that owns the layout.
+    var applyRatio:
+        @MainActor (_ layout: Layout, _ ratio: Double, _ path: [LayoutNode.Child], _ bounds: Rect)
+            -> Layout = { layout, ratio, path, bounds in
+                var layout = layout
+                layout.setRatio(ratio, at: path, in: bounds)
+                return layout
+            }
     /// `layout.dividers(in:)` for the current bounds.
     private var dividers: [Layout.Divider] = []
     private var dividerElements: [[LayoutNode.Child]: DividerAccessibilityElement] = [:]
@@ -41,6 +50,21 @@ public class PaneLayoutView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("PaneLayoutView is built in code")
+    }
+
+    /// Shows `layout` with `paneViews`, one view for each of its panes: adds the views it didn't
+    /// have and removes the ones it no longer has.
+    public func show(_ layout: Layout, paneViews: [PaneID: NSView]) {
+        precondition(Set(layout.panes) == Set(paneViews.keys), "every pane needs one view")
+        guard layout != self.layout || paneViews != self.paneViews else { return }
+        for (pane, view) in self.paneViews where paneViews[pane] !== view {
+            view.removeFromSuperview()
+        }
+        for (pane, view) in paneViews where self.paneViews[pane] !== view {
+            addSubview(view)
+        }
+        self.paneViews = paneViews
+        self.layout = layout
     }
 
     func paneView(for pane: PaneID) -> NSView {
@@ -78,7 +102,7 @@ public class PaneLayoutView: NSView {
     }
 
     private func setRatio(_ ratio: Double, at path: [LayoutNode.Child]) {
-        layout.setRatio(ratio, at: path, in: Rect(bounds))
+        layout = applyRatio(layout, ratio, path, Rect(bounds))
     }
 
     // MARK: Dividers

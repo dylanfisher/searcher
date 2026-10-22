@@ -104,6 +104,44 @@ private struct RecordingTable {
     #expect(recording.table.selectedRowIndexes == [1])
 }
 
+/// Tab, Ctrl-Tab and Ctrl-Shift-Tab move the key view when no command takes them: their command
+/// is off, as Focus Other Pane is with one pane, or none is bound.
+@MainActor @Test func aTabKeyWhoseCommandIsOffOrUnboundGoesToTheTableWithoutABeep() throws {
+    let presses = [
+        try keyEvent("\t"), try keyEvent("\t", modifiers: .control),
+        try keyEvent("\u{19}", modifiers: [.control, .shift]),
+    ]
+    let off = RecordingTable(registry: try AppCommands.registry())
+    var asked: [CommandID] = []
+    off.table.canRunCommand = {
+        asked.append($0)
+        return false
+    }
+    let unbound = RecordingTable(registry: CommandRegistry())
+    for recording in [off, unbound] {
+        for press in presses {
+            recording.table.keyDown(with: press)
+        }
+        #expect(recording.ran.isEmpty)
+        #expect(recording.beeps == 0)
+    }
+    #expect(
+        asked == [
+            DualPaneCommands.focusOtherPane.id, WindowCommands.nextTab.id,
+            WindowCommands.previousTab.id,
+        ])
+}
+
+@MainActor @Test func aTabKeyWhoseCommandIsOnRunsIt() throws {
+    let recording = RecordingTable(registry: try AppCommands.registry())
+    recording.table.canRunCommand = { _ in true }
+
+    recording.table.keyDown(with: try keyEvent("\t"))
+    recording.table.keyDown(with: try keyEvent("\t", modifiers: .control))
+
+    #expect(recording.ran == [DualPaneCommands.focusOtherPane.id, WindowCommands.nextTab.id])
+}
+
 @MainActor @Test func anUnboundUnmodifiedKeyDoesNotBeep() throws {
     let recording = RecordingTable(registry: CommandRegistry())
     recording.table.keyDown(

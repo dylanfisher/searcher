@@ -33,8 +33,8 @@ these need the context's workspace, which the pane's view doesn't pass yet.
   other pane's `openLink`, so a link to a folder lists there and a link to a file goes to the
   system, and files open as Cmd-↓ opens them. With one pane it splits right first even when the
   selection is a file, as the key table says.
-- **Not in the app yet.** `DualPaneCommands` is not in `AppCommands.sets`, for the reason 0044
-  gives. `AppCommandsTests` registers it beside the app's commands and `TilingCommands`, so a
+- **Not in the app yet** (superseded: see [0054](0054-tabs-in-window.md)). `DualPaneCommands`
+  is not in `AppCommands.sets`, for the reason 0044 gives. `AppCommandsTests` registers it beside the app's commands and `TilingCommands`, so a
   clash fails now.
 
 ## Tab and the keys it meets
@@ -46,7 +46,8 @@ No registered command uses Tab. Once M3.5 binds the set:
   as any command does.
 - **The table** looks up the registry before `super.keyDown` ([0027](0027-key-dispatch.md)), so
   Tab runs the command and `NSTableView` never moves the key view. With one pane Tab does
-  nothing and doesn't beep, since a command took it. Shift-Tab stays unbound and still moves to
+  nothing and doesn't beep, since a command took it (superseded: see
+  [0054](0054-tabs-in-window.md); with one pane Tab moves the key view). Shift-Tab stays unbound and still moves to
   the previous key view.
 - **The filter field** gets Tab from its field editor as `insertTab:`, which `FilterBarView`
   doesn't handle, so the field moves the keyboard focus to the next key view and the command

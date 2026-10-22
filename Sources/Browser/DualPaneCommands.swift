@@ -1,10 +1,7 @@
 /// The dual-pane keys: focus the other pane, show the focused pane's folder there, and open the
 /// selection there. The other pane is the selected tab's `Layout.otherPane`. With one pane, the
 /// two that act on the other pane split right first and keep the focus where it was; focusing
-/// the other pane does nothing.
-///
-/// Not in `AppCommands.sets` yet: the panes' views build their contexts without a workspace
-/// (docs/decisions/0047-other-pane.md).
+/// the other pane is off (docs/decisions/0047-other-pane.md).
 public enum DualPaneCommands: CommandSet {
     public static let focusOtherPane = Command(
         id: CommandID("dualPane.focusOtherPane"), title: "Focus Other Pane",
@@ -20,11 +17,14 @@ public enum DualPaneCommands: CommandSet {
 
     public static var bindings: [CommandBinding] {
         [
-            CommandBinding(focusOtherPane) { context in
-                if let other = context.tab.layout.otherPane {
-                    context.tab.focus(other)
-                }
-            },
+            // Off with one pane, so the table hands Tab on to move the key view.
+            CommandBinding(
+                focusOtherPane, isEnabled: { $0.tab.layout.otherPane != nil },
+                run: { context in
+                    if let other = context.tab.layout.otherPane {
+                        context.tab.focus(other)
+                    }
+                }),
             CommandBinding(sameFolderInOtherPane) { context in
                 otherPane(in: context)?.navigate(to: context.pane.location)
             },

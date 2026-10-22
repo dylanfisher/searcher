@@ -13,6 +13,14 @@ public final class Workspace {
             if selectedTab !== oldValue { updatePanes() }
         }
     }
+    /// Whether the workspace's window is the key window. Only then does the selected tab's
+    /// focused pane have the focus, so with two windows only the key one's loads go first. The
+    /// window sets it.
+    public var isActive = true {
+        didSet {
+            if isActive != oldValue { updatePanes() }
+        }
+    }
     /// The pane last told it gained the focus, until it is told it lost it.
     private weak var focusedPane: Pane?
 
@@ -73,19 +81,20 @@ public final class Workspace {
     }
 
     /// Shows the selected tab's panes and hides every other tab's, then tells the selected tab's
-    /// focused pane it has the focus, and the pane that had it that it lost it. Gaining the focus
-    /// lists a pane's folder again unless its load is still running (`Pane.didGainFocus`).
+    /// focused pane it has the focus, while the workspace is active, and the pane that had it
+    /// that it lost it. Gaining the focus lists a pane's folder again unless its load is still
+    /// running (`Pane.didGainFocus`).
     private func updatePanes() {
         for tab in tabs {
             for pane in tab.panes.values {
                 pane.isVisible = tab === selectedTab
             }
         }
-        let pane = selectedTab.focusedPane
+        let pane = isActive ? selectedTab.focusedPane : nil
         guard pane !== focusedPane else { return }
         focusedPane?.didLoseFocus()
         focusedPane = pane
-        pane.didGainFocus()
+        pane?.didGainFocus()
     }
 
     private func index(of id: TabID) -> Int {

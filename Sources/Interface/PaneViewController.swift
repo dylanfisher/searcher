@@ -37,6 +37,33 @@ public final class PaneViewController: NSViewController {
     private weak var shownCommandPane: Pane?
     private var shownCommandLocation: Location?
 
+    /// What the pane's commands need from the window showing it, which sets it.
+    struct WindowLink {
+        /// The window's tabs; the pane is in one of them.
+        let workspace: Workspace
+        /// The size the selected tab's panes fill.
+        let tabBounds: @MainActor () -> Rect
+        /// Takes what Close Pane or Close Tab closed.
+        let didClosePane: @MainActor (CloseResult) -> Void
+        /// Runs after each command, so the window shows what it changed.
+        let didRunCommand: @MainActor () -> Void
+    }
+
+    /// Set by the window showing the pane. Without it, as tests show a pane on its own, commands
+    /// get a context with no workspace, which traps on a tiling, other-pane or tab command.
+    var windowLink: WindowLink?
+
+    /// Draws a ring around the pane, for the pane with the keys while another pane shows.
+    var showsFocus = false {
+        didSet {
+            guard showsFocus != oldValue else { return }
+            view.wantsLayer = true
+            view.layer?.borderWidth = showsFocus ? Self.focusRingWidth : 0
+            view.layer?.borderColor = NSColor.keyboardFocusIndicatorColor.cgColor
+        }
+    }
+    private static let focusRingWidth = 2.0
+
     /// Runs after the pane shows a new location, for the window title.
     public var onLocationChange: (@MainActor (Location) -> Void)?
     /// Runs each time the views have been updated for a change of the pane, in the same run loop
@@ -118,6 +145,15 @@ public final class PaneViewController: NSViewController {
                 preconditionFailure("no command is bound to \(chord) for the filter field")
             }
             table.run(command.id)
+        }
+        // Tab in the field does what it does in the list: with two panes or more, the other
+        // pane takes the keys.
+        filterBar.onTab = { [weak self] in
+            guard let self, let command = Self.registry.command(for: KeyChord(.tab)),
+                canRun(command.id)
+            else { return false }
+            keyListing.tableView.run(command.id)
+            return true
         }
         filterBar.onCancel = { [weak self] in self?.closeFilter() }
         filterBar.isFilterChord = { chord in
@@ -205,6 +241,7 @@ public final class PaneViewController: NSViewController {
 
     private func run(_ id: CommandID) {
         binding(for: id).run(context)
+        windowLink?.didRunCommand()
     }
 
     private func canRun(_ id: CommandID) -> Bool {
@@ -222,10 +259,19 @@ public final class PaneViewController: NSViewController {
         return binding
     }
 
-    /// Commands act on `commandPane`, the focused column's pane in column mode.
+    /// Commands act on `commandPane`, the focused column's pane in column mode. In a window the
+    /// pane is the selected tab's focused pane, since the window keeps the first responder in it.
     private var context: CommandContext {
-        CommandContext(
-            pane: pane.commandPane,
+        guard let link = windowLink else {
+            return CommandContext(
+                pane: pane.commandPane,
+                toggleQuickLook: { [weak self] in self?.keyListing.quickLook.toggle() },
+                askForFolder: { [weak self] in self?.askForFolder() },
+                showFilter: { [weak self] in self?.showFilter() })
+        }
+        return CommandContext(
+            pane: pane.commandPane, workspace: link.workspace, tabBounds: link.tabBounds,
+            didClosePane: link.didClosePane,
             toggleQuickLook: { [weak self] in self?.keyListing.quickLook.toggle() },
             askForFolder: { [weak self] in self?.askForFolder() },
             showFilter: { [weak self] in self?.showFilter() })

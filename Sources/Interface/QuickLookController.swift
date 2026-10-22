@@ -119,14 +119,18 @@ final class QuickLookController: NSObject, @preconcurrency QLPreviewPanelDataSou
     }
 
     /// Runs the command the registry binds to `event`'s key, and says whether there was one. Keys
-    /// no command takes, such as Escape, are left to the panel.
+    /// no command takes, such as Escape, are left to the panel. A key for a table that no longer
+    /// has its window's keys is taken and dropped: the window moved the focus to another pane,
+    /// and a command run on this one would act on a pane that isn't focused.
     func handle(_ event: NSEvent) -> Bool {
         guard event.type == .keyDown,
             let command = KeyChord.candidates(for: event).lazy.compactMap(
                 table.registry.command(for:)
             ).first
         else { return false }
-        table.run(command.id)
+        if table.window?.firstResponder === table {
+            table.run(command.id)
+        }
         return true
     }
 
