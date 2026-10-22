@@ -9,13 +9,13 @@ import os
 /// first window (B1), open W1 and W2 → first rows (B2), the ↓ presses the runner asks for on W2
 /// and, in the same launch, presses of each other row command, Cmd-A, folder change patches and
 /// reloads landing with every row selected, a patch that adds a row under them, a click selecting
-/// half the rows, a patch landing after Shift-↓ changed that selection while it ran, and a reload
-/// landing after Cmd-A on its first batch (B6), and on W2 a sort column change, Cmd-Shift-.
-/// showing and hiding hidden files, Folders First on and off, and two sort keys (B8). The
-/// stall watchdog's stalls (B10) are collected for the whole launch. It starts the launch warm-up
-/// where a normal launch does and waits for it to end before the first span after launch. It
-/// writes the samples to the runner's output file and exits; any failure is printed to standard
-/// error and exits 1.
+/// half the rows, a patch landing after Shift-↓ changed that selection while it ran, a reload
+/// landing after Cmd-A on its first batch, and type-to-select keys (B6), and on W2 a sort column
+/// change, Cmd-Shift-. showing and hiding hidden files, Folders First on and off, and two sort
+/// keys (B8). The stall watchdog's stalls (B10) are collected for the whole launch. It starts the
+/// launch warm-up where a normal launch does and waits for it to end before the first span after
+/// launch. It writes the samples to the runner's output file and exits; any failure is printed to
+/// standard error and exits 1.
 ///
 /// The window is never activated, so it never takes focus: it is ordered in front on the second
 /// display when there is one, and a window that isn't visible fails the run, since a covered
@@ -31,6 +31,10 @@ final class UIBench {
     /// Reloads of W2 with every row selected, and after Cmd-A on the first batch, in the same
     /// launch. Each lists the folder again.
     static let reloadSamples = 20
+    /// Type-to-select queries in the same launch, each after a pause that starts a new one.
+    static let typeSelectQueries = 2
+    /// Keys typed per type-to-select query.
+    static let typeSelectLength = 12
 
     private let options: UIBenchOptions
     /// When the process started, on `FrameCommitTimer`'s clock.
@@ -147,6 +151,7 @@ final class UIBench {
             record.clickHalf = try await clickHalf(Self.allSelectedSamples)
             record.patchAfterShiftDown = try await patchAfterShiftDown(Self.allSelectedSamples)
             record.loadAfterSelectAll = try await loadAfterSelectAll(Self.reloadSamples)
+            record.typeSelect = try await typeSelect(Self.typeSelectQueries)
             // The sort change times one selected row, as it did before these cases.
             _ = try await press([.down], "key down before sort")
         }
@@ -516,6 +521,34 @@ final class UIBench {
                     "Cmd-A on a first batch of \(firstBatchRows) rows left \(selected.count) of "
                         + "\(listing.count) rows selected")
             }
+        }
+        return samples
+    }
+
+    /// Types the first `typeSelectLength` characters of the last row with an ASCII name `count`
+    /// times, each after a pause of `TypeSelect.resetInterval` so it starts a new query, and times
+    /// each key from its timestamp to the frame. W2 is sorted by name here, and its last ASCII
+    /// name sorts after most rows, so each key scans most of the listing before it matches.
+    /// Checks the cursor ends on the first row that starts with the typed text.
+    private func typeSelect(_ count: Int) async throws -> [Double] {
+        let pane = try requirePane()
+        guard let listing = pane.state.listing,
+            let target = (0..<listing.count).last(where: {
+                listing[$0].name.utf8.allSatisfy { $0 < 0x80 }
+            })
+        else { throw Failure("\(pane.location.path) has no row with an ASCII name to type") }
+        let typed = String(listing[target].name.prefix(Self.typeSelectLength))
+        let keys = typed.map {
+            Key(characters: String($0), keyCode: 0, flags: $0.isUppercase ? .shift : [])
+        }
+        var samples: [Double] = []
+        for _ in 0..<count {
+            try await Task.sleep(for: TypeSelect.resetInterval)
+            samples += try await press(keys, "type-select key")
+            guard let shown = pane.state.listing,
+                let row = TypeSelect.firstRow(startingWith: typed, in: shown)
+            else { throw Failure("no row of \(pane.location.path) starts with \(typed)") }
+            try expectCursor(atRow: row, after: "typing \(typed)")
         }
         return samples
     }

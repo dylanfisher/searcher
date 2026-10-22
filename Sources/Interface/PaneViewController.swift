@@ -67,6 +67,7 @@ public final class PaneViewController: NSViewController {
         tableView.registry = Self.registry
         tableView.runCommand = { [weak self] id in self?.run(id) }
         tableView.canRunCommand = { [weak self] id in self?.canRun(id) ?? false }
+        tableView.selectTyped = { [weak self] query in self?.selectTyped(query) ?? false }
         pane.onChange = { [weak self] in self?.paneDidChange() }
         pathBar.onSelect = { [weak pane] location, child in
             pane?.navigate(to: location, selecting: child)
@@ -165,6 +166,10 @@ public final class PaneViewController: NSViewController {
         sheet.present(over: window)
     }
 
+    private func selectTyped(_ query: String) -> Bool {
+        SelectionCommands.selectFirstRow(startingWith: query, in: context)
+    }
+
     private func paneDidChange() {
         listingViewController.paneDidChange()
         showState()
@@ -172,6 +177,8 @@ public final class PaneViewController: NSViewController {
         if pane.location != monitoredLocation {
             monitoredLocation = pane.location
             listingViewController.tableView.setAccessibilityLabel(pane.location.name)
+            // A query typed in the folder left doesn't carry into this one.
+            listingViewController.tableView.typeSelect.reset()
             spinner.setAccessibilityLabel("Loading \(pane.location.name)")
             accessDeniedView.folderName = pane.location.name
             startMonitor()

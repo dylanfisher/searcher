@@ -278,3 +278,15 @@ private let downArrow = functionKey(NSDownArrowFunctionKey)
 
     #expect(fixture.panel.reloads == reloads)
 }
+
+/// A key the panel hands back runs its command through the table, which ends the query, as the
+/// same key in the list does.
+@MainActor @Test func aCommandFromThePanelEndsTheTypeSelectQuery() async throws {
+    let fixture = await Fixture([file("a.png"), file("b.png"), file("c.png")])
+    fixture.table.keyDown(with: try keyEvent("b"))
+    #expect(fixture.table.typeSelect.isTyping)
+
+    #expect(fixture.quickLook.handle(try keyEvent(downArrow, modifiers: arrowFlags)))
+
+    #expect(!fixture.table.typeSelect.isTyping)
+}

@@ -16,7 +16,8 @@ private func underBudget() -> UIBenchRecord {
         patchAddingAllSelected: Array(repeating: 7, count: 100),
         clickHalf: Array(repeating: 9, count: 100),
         patchAfterShiftDown: Array(repeating: 9, count: 100),
-        loadAfterSelectAll: Array(repeating: 9, count: 20), sortChange: [90, 100],
+        loadAfterSelectAll: Array(repeating: 9, count: 20),
+        typeSelect: Array(repeating: 5, count: 24), sortChange: [90, 100],
         hiddenToggle: [40, 50], foldersFirstToggle: [40, 50], sortKey: [60, 70], stalls: [])
 }
 
@@ -39,8 +40,16 @@ private func underBudget() -> UIBenchRecord {
     var record = underBudget()
     record.pageDown = Array(repeating: 25, count: 200)
     let report = try UIBenchReport(record: record)
-    #expect(report.cases.filter { $0.budget?.id == "B6" }.count == 12)
+    #expect(report.cases.filter { $0.budget?.id == "B6" }.count == 13)
     #expect(report.overBudget.map(\.name) == ["W2 Fn-↓ key → frame"])
+}
+
+@Test func typeSelectKeysAreTheirOwnB6Case() throws {
+    var record = underBudget()
+    record.typeSelect = Array(repeating: 25, count: 24)
+    let report = try UIBenchReport(record: record)
+    #expect(report.overBudget.map(\.name) == ["W2 type-select key → frame"])
+    #expect(report.overBudget.map { $0.budget?.id } == ["B6"])
 }
 
 @Test func stallsAreReportedWithTheirSpanAndDontFail() throws {

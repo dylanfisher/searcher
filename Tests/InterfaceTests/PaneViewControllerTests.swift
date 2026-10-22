@@ -252,3 +252,35 @@ private final class VolumeName: @unchecked Sendable {
     await settle { rowNames(table) == ["new.txt", "old.txt"] }
     #expect(rowNames(table) == ["new.txt", "old.txt"])
 }
+
+@MainActor @Test func aCommandThatOpensAFolderStartsANewQueryThere() async throws {
+    let fixture = Fixture()
+    fixture.table.beep = {}
+    await settle { fixture.pane.state.isLoaded }
+
+    fixture.table.keyDown(with: try keyEvent("d"))
+    #expect(fixture.pane.selection.members == .only([ExactName("docs")]))
+    fixture.table.keyDown(
+        with: try keyEvent(
+            functionKey(NSDownArrowFunctionKey), modifiers: arrowFlags.union(.command)))
+    await settle { fixture.pane.state.isLoaded }
+    fixture.table.keyDown(with: try keyEvent("i"))
+
+    #expect(fixture.table.typeSelect.query == "i")
+    #expect(fixture.pane.selection.members == .only([ExactName("inside.txt")]))
+}
+
+/// A path bar click moves the pane without a command.
+@MainActor @Test func aNewLocationStartsANewQuery() async throws {
+    let fixture = Fixture()
+    fixture.table.beep = {}
+    await settle { fixture.pane.state.isLoaded }
+
+    fixture.table.keyDown(with: try keyEvent("d"))
+    fixture.pane.navigate(to: Location(path: "/root/docs"))
+    await settle { fixture.pane.state.isLoaded }
+    fixture.table.keyDown(with: try keyEvent("i"))
+
+    #expect(fixture.table.typeSelect.query == "i")
+    #expect(fixture.pane.selection.members == .only([ExactName("inside.txt")]))
+}

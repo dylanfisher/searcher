@@ -36,6 +36,7 @@ struct UIBenchReport {
             ("W2 click selecting half → frame", "B6", record.clickHalf),
             ("W2 patch landing after Shift-↓ → frame", "B6", record.patchAfterShiftDown),
             ("W2 load landing after Cmd-A on first batch → frame", "B6", record.loadAfterSelectAll),
+            ("W2 type-select key → frame", "B6", record.typeSelect),
             ("W2 sort change → frame", "B8", record.sortChange),
             ("W2 Cmd-Shift-. key → frame", "B8", record.hiddenToggle),
             ("W2 folders first → frame", "B8", record.foldersFirstToggle),

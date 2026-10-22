@@ -19,6 +19,13 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
     var canRunCommand: @MainActor (CommandID) -> Bool = { id in
         preconditionFailure("ListingTableView has no command check for \(id)")
     }
+    /// The text typed into this list since the last pause. Tests give it a clock they advance.
+    var typeSelect = TypeSelect()
+    /// Selects the first row of this table's pane whose name starts with a query, returning
+    /// whether one did. Set by the pane's view controller before the table takes a key.
+    var selectTyped: @MainActor (String) -> Bool = { query in
+        preconditionFailure("ListingTableView has no type-select for \(query)")
+    }
     /// Signals a key that does nothing. Tests replace it.
     var beep: @MainActor () -> Void = { NSSound.beep() }
 
@@ -36,21 +43,39 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
 
     /// A key with Command, Control or Option that no command takes beeps here instead of reaching
     /// `NSTableView`, whose key bindings would move the table's selection behind the pane's back
-    /// (Ctrl-N is Move Down). Unbound plain and Shift-only keys still go to `super`; the ones
-    /// `NSTableView` would move or extend its selection with (↑, ↓, Shift-↑, Shift-↓) are bound.
+    /// (Ctrl-N is Move Down). A printable key with Shift or nothing else that no command takes
+    /// goes to type-select, and so does Space while a query is being typed, ahead of the command
+    /// on Space; a query with no match beeps, and a command ends the query
+    /// (0034-type-to-select.md). Other unbound plain and Shift-only keys still go to `super`; the
+    /// ones `NSTableView` would move or extend its selection with (↑, ↓, Shift-↑, Shift-↓) are
+    /// bound.
     override func keyDown(with event: NSEvent) {
         let chords = KeyChord.candidates(for: event)
         if let chord = chords.first {
+            if chord == KeyChord(.space), typeSelect.isTyping {
+                select(typing: " ")
+                return
+            }
             if let command = chords.lazy.compactMap(registry.command(for:)).first {
-                runCommand(command.id)
+                run(command.id)
                 return
             }
             if !chord.modifiers.isDisjoint(with: [.command, .control, .option]) {
                 beep()
                 return
             }
+            if let text = TypeSelect.text(for: chord) {
+                select(typing: text)
+                return
+            }
         }
         super.keyDown(with: event)
+    }
+
+    private func select(typing text: String) {
+        if !selectTyped(typeSelect.type(text)) {
+            beep()
+        }
     }
 
     /// The action of each main menu item for a command; the item holds the command's ID.
@@ -58,7 +83,7 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
         guard let id = sender.representedObject as? CommandID else {
             preconditionFailure("menu item \"\(sender.title)\" holds no command ID")
         }
-        runCommand(id)
+        run(id)
     }
 
     /// Disables a command's menu item while the command would do nothing, such as Back at the
@@ -81,6 +106,14 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
             beep()
             return
         }
-        runCommand(command.id)
+        run(command.id)
+    }
+
+    /// Runs a command from a key or menu item, here or handed on by the Quick Look panel, ending
+    /// the type-select query, as Finder does: a letter typed after ↓ starts a new search rather
+    /// than extending the last one.
+    func run(_ id: CommandID) {
+        typeSelect.reset()
+        runCommand(id)
     }
 }
