@@ -18,8 +18,10 @@ enum BenchArguments: Equatable {
     /// `previous` file is stated, not an error.
     case compare(previous: String, current: String)
     /// Launch the app bundle at `app` in its UI bench mode, opening `folder` as both workloads
-    /// when given.
-    case ui(app: String, folder: String?)
+    /// when given: the CI run, or one scenario.
+    case ui(app: String, folder: String?, scenario: UIBenchOptions.Scenario?)
+    /// Print what `--scenario` takes.
+    case help
     /// Print `stallArguments()` on one line, for scripts that launch the app.
     case printStallArguments
     /// Judge the UI bench record `current` against the history file `previous` kept by the last
@@ -32,13 +34,53 @@ enum BenchArguments: Equatable {
         [StallWatchdog.thresholdArgument, try Budget.named("B10").formattedLimit]
     }
 
+    /// The scenarios `--ui --scenario` runs, one line each; `scripts/bench --help` prints it.
+    static var scenarioHelp: String {
+        let lines = UIBenchOptions.Scenario.allCases.map { scenario in
+            let summary: String
+            switch scenario {
+            case .columnKeys:
+                summary =
+                    "W2 in column view: ↓ through folder rows, each opening a column, then → and ← "
+                    + "(B6); the CI run times it too"
+            case .cold:
+                summary =
+                    "open \(ColdChildren.count) never-opened subfolders of --path once each, as "
+                    + "--cold-children picks them (B3 cold); once per mount; run before revisit"
+            case .revisit:
+                summary = "open the same subfolders again, timed to their cached rows (B4)"
+            case .columnWalk:
+                summary =
+                    "walk --path in column view with ↓, → and ←; fails on any stall after the "
+                    + "launch warm-up (B6, B10)"
+            }
+            let path = scenario.needsPath ? " --path <dir>" : ""
+            return "  \(scenario.rawValue)\(path)\n      \(summary)"
+        }
+        return (["scenarios, run with --ui --scenario <name>; each is one launch:"] + lines)
+            .joined(separator: "\n")
+    }
+
     /// Checks that a `--path` folder exists, so call it off the main thread.
     static func parse(_ arguments: [String]) throws -> BenchArguments {
         var folder: String?
         var app: String?
+        var scenario: UIBenchOptions.Scenario?
         var remaining = arguments[...]
         while let argument = remaining.popFirst() {
             switch argument {
+            case "--help":
+                return .help
+            case "--scenario":
+                let names = UIBenchOptions.Scenario.allCases.map(\.rawValue)
+                    .joined(separator: ", ")
+                guard let name = remaining.popFirst() else {
+                    throw Invalid("--scenario needs a name; the scenarios are \(names)")
+                }
+                guard let named = UIBenchOptions.Scenario(rawValue: name) else {
+                    throw Invalid("unknown scenario \(name); the scenarios are \(names)")
+                }
+                scenario = named
             case "--print-budget":
                 guard let id = remaining.popFirst() else {
                     throw Invalid("--print-budget needs an ID")
@@ -80,7 +122,15 @@ enum BenchArguments: Equatable {
                 throw Invalid("unknown argument \(argument)")
             }
         }
-        if let app { return .ui(app: app, folder: folder) }
+        if let scenario {
+            guard app != nil else { throw Invalid("--scenario \(scenario.rawValue) needs --ui") }
+            // Never a default folder: these time a share, which only the caller can name.
+            if scenario.needsPath, folder == nil {
+                throw Invalid(
+                    "\(scenario.rawValue) needs --path <dir>, the folder on the share to time")
+            }
+        }
+        if let app { return .ui(app: app, folder: folder, scenario: scenario) }
         return .run(folder: folder)
     }
 

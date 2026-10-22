@@ -24,14 +24,27 @@
 #                         non-zero when an enforced case is over budget or the record
 #                         is missing or doesn't hold one run's 20 launches
 #   --ui                  build the release Searcher.app and time its UI in 20 new
-#                         processes (B1, B2, B6, B8, B10) instead of the harness cases;
-#                         writes .build/bench-ui.json. With --path, the folder is opened
-#                         as both W1 and W2. The window opens in the background on the
-#                         second display if there is one and never takes focus; a run
-#                         whose window is covered fails saying so. The bundle is built
-#                         at .build/bench/Searcher.app.
+#                         processes (B1, B2, B6, B7, B8, B10; B6 in column view too)
+#                         instead of the harness cases; writes .build/bench-ui.json. With
+#                         --path, the folder is opened as both W1 and W2. The window opens
+#                         in the background on the second display if there is one and
+#                         never takes focus; a run whose window is covered fails saying
+#                         so. The bundle is built at .build/bench/Searcher.app.
+#   --ui --scenario <name>
+#                         one launch that times one scenario instead, and writes
+#                         .build/bench-ui-<name>.json. cold, revisit and column-walk time
+#                         a share's folder and need --path, which never has a default.
+#                         cold: once per mount; run before revisit. A second cold run on
+#                         the same mount passes with warm numbers. --help lists the
+#                         scenarios
+#   --help                print this, then the scenarios
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+if [ "${1:-}" = --help ]; then
+  # The comment block above, without its leading "# ".
+  sed -n '2,/^set -euo/{/^#/s/^# \{0,1\}//p;}' "$0"
+fi
 
 args=()
 ui=false

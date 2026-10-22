@@ -77,3 +77,16 @@ private func makeChildren(_ count: Int, in folder: TemporaryFolder) throws {
     #expect(children.count == 20)
     #expect(children.values.allSatisfy { $0 == 1 })
 }
+
+@Test func childrenAreTheFirstTwentyFoldersByNameUnlisted() throws {
+    let folder = try TemporaryFolder("ColdChildrenTests")
+    try makeChildren(25, in: folder)
+    let lister = CountingLister()
+    let children = try ColdChildren.children(of: folder.url.path, lister: lister)
+    #expect(
+        children
+            == (0..<25).map { "album-\($0)" }.sorted().prefix(20).map {
+                folder.url.path + "/" + $0
+            })
+    #expect(lister.listed == [folder.url.path: 1])
+}

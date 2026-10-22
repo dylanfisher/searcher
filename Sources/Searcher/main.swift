@@ -7,7 +7,7 @@ import os
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Listings of network folders, kept in the user's caches folder; nil in a bench launch,
-    /// which must not read or write the user's stores.
+    /// which must not read or write the user's stores and brings its own service.
     private let cache: ListingCache?
     private let service: ListingService
     private let systemActions = WorkspaceSystemActions()
@@ -19,7 +19,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     init(bench: UIBench?) {
         self.bench = bench
-        if bench == nil {
+        if let bench {
+            cache = nil
+            service = bench.service
+        } else {
             let roots: StoreRoots
             do {
                 roots = try StoreRoots.user()
@@ -32,9 +35,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     roots: roots, log: { logger.error("\($0, privacy: .public)") }))
             self.cache = cache
             service = ListingService(cache: cache)
-        } else {
-            cache = nil
-            service = ListingService()
         }
     }
 
@@ -61,7 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let bench {
             // The bench opens its own window and never activates the app.
-            bench.start(service: service, systemActions: systemActions)
+            bench.start(systemActions: systemActions)
             return
         }
         installMainMenu()

@@ -58,6 +58,21 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
     /// A key typed in the filter field, or Esc clearing it → frame with the rows filtered by the
     /// new text, on W2 (B7). Six per launch: five characters, then Esc.
     public var filterKey: [Double]
+    /// ↓ key → frame in W2's first column, sorted with Folders First, each ↓ moving onto a folder
+    /// and opening its column (B6).
+    public var columnDown: [Double]
+    /// → key → frame, from W2's first column into the selected folder's (B6).
+    public var columnRight: [Double]
+    /// ← key → frame, back to W2's first column (B6).
+    public var columnLeft: [Double]
+    /// `cold` scenario: open a never-opened subfolder of `--path` → frame with its first rows
+    /// (B3).
+    public var coldOpen: [Double]
+    /// `revisit` scenario: open a subfolder of `--path` listed before → frame with its cached
+    /// rows (B4).
+    public var revisit: [Double]
+    /// `column-walk` scenario: each arrow key walking `--path` in column view → frame (B6).
+    public var columnWalkKey: [Double]
     /// Every run loop pass over the stall threshold (B10), all launches together.
     public var stalls: [Stall]
 
@@ -75,6 +90,13 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
 
     /// The span name of a stall reported while no span was running.
     public static let betweenSpans = "between spans"
+    /// The span name of the launch, B1's span, which starts at the process start.
+    public static let launchSpan: StaticString = "launch"
+    /// The span name of the rest of the launch: from the first window's frame until the window
+    /// is visible and the launch warm-up has ended. Nothing in it is timed.
+    public static let warmUpSpan = "launch warm-up"
+    /// The spans of the launch, before the first span after it.
+    public static var launchSpans: Set<String> { ["\(launchSpan)", warmUpSpan] }
 
     public init(
         launch: [Double] = [], openW1: [Double] = [], openW2: [Double] = [],
@@ -85,6 +107,8 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         patchAfterShiftDown: [Double] = [], loadAfterSelectAll: [Double] = [],
         typeSelect: [Double] = [], sortChange: [Double] = [], hiddenToggle: [Double] = [],
         foldersFirstToggle: [Double] = [], sortKey: [Double] = [], filterKey: [Double] = [],
+        columnDown: [Double] = [], columnRight: [Double] = [], columnLeft: [Double] = [],
+        coldOpen: [Double] = [], revisit: [Double] = [], columnWalkKey: [Double] = [],
         stalls: [Stall] = []
     ) {
         self.launch = launch
@@ -108,6 +132,12 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         self.foldersFirstToggle = foldersFirstToggle
         self.sortKey = sortKey
         self.filterKey = filterKey
+        self.columnDown = columnDown
+        self.columnRight = columnRight
+        self.columnLeft = columnLeft
+        self.coldOpen = coldOpen
+        self.revisit = revisit
+        self.columnWalkKey = columnWalkKey
         self.stalls = stalls
     }
 
@@ -134,6 +164,12 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         foldersFirstToggle += other.foldersFirstToggle
         sortKey += other.sortKey
         filterKey += other.filterKey
+        columnDown += other.columnDown
+        columnRight += other.columnRight
+        columnLeft += other.columnLeft
+        coldOpen += other.coldOpen
+        revisit += other.revisit
+        columnWalkKey += other.columnWalkKey
         stalls += other.stalls
     }
 
