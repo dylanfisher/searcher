@@ -19,6 +19,8 @@ public final class ListingLoad: @unchecked Sendable {
     /// Runs on the load's worker thread for each update, and returns what to run on the main actor
     /// for it.
     let handOff: @Sendable (ListingUpdate) -> @MainActor @Sendable () -> Void
+    /// The waits after which the service reports the load slow and given up.
+    let stall = LoadStall()
 
     // `lock` guards `cancelled` and `storedVolume`.
     private let lock = NSLock()
@@ -43,9 +45,9 @@ public final class ListingLoad: @unchecked Sendable {
     /// Stops the load: a waiting load never starts, a running one stops at its next batch, and an
     /// update already on its way to the main actor is dropped there.
     public func cancel() {
-        lock.lock()
-        defer { lock.unlock() }
-        cancelled = true
+        lock.withLock { cancelled = true }
+        // Its slow and give-up timers stop with it, whether it ran, waits or is being placed.
+        stall.finish {}
     }
 
     public var isCancelled: Bool {

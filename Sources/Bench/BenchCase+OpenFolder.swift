@@ -108,7 +108,7 @@ extension BenchCase {
                 switch update {
                 case .firstBatch:
                     firstRows.milliseconds = firstRows.milliseconds ?? elapsed
-                case .slow:
+                case .slow, .gaveUp:
                     // The full listing or the failure still follows.
                     break
                 case .full(let listing, _):
@@ -117,7 +117,9 @@ extension BenchCase {
                         returning: Opened(
                             firstRows: firstRows.milliseconds ?? elapsed, full: elapsed,
                             listing: listing))
-                case .failed(let error, _):
+                case .cached:
+                    preconditionFailure("the bench's listing service has no cache")
+                case .failed(let error, _), .volumeGone(let error, _):
                     continuation.resume(throwing: error)
                 }
             }

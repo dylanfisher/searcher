@@ -357,7 +357,7 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
     #expect(paths(pane) == ["/r", "/r/docs", "/r/docs/sub"])
 }
 
-@MainActor @Test func aColumnWhoseLoadGoesSlowKeepsWaitingAndKeepsTheTrail() async {
+@MainActor @Test func aColumnWhoseLoadGoesSlowIsSlowAndKeepsTheTrail() async {
     var outcomes = tree.mapValues { GatedLister.Outcome.batches([$0]) }
     outcomes["/r/docs"] = .blockForever
     let lister = GatedLister(outcomes)
@@ -379,10 +379,11 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
     try? await Task.sleep(for: .milliseconds(200))
     await drainMainQueue()
 
-    #expect(trail(pane).columns[1].pane.state.isLoading)
+    #expect(trail(pane).columns[1].pane.state.isSlow)
+    #expect(trail(pane).columns[1].pane.state.listing == nil)
     #expect(paths(pane) == ["/r", "/r/docs"])
     #expect(trail(pane).focusedIndex == 0)
-    #expect(changes == 0)
+    #expect(changes == 1)
 }
 
 @MainActor @Test func backKeepsTheFocusedColumnsSort() async throws {
@@ -538,4 +539,75 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
 
     #expect(trail(pane).columns[1].pane.load?.priority == .focused)
     #expect(trail(pane).columns[0].pane.load?.priority == .normal)
+}
+
+@MainActor @Test func aColumnGoesCachedRefreshingThenOfflineLikeAListPane() async {
+    let share = VolumeIdentity(device: "//me@nas.invalid/n", mountPoint: "/n", kind: .network)
+    let listedAt = Date(timeIntervalSinceReferenceDate: 700_000_000)
+    let cache = ListingCache(store: nil)
+    for (path, entries) in ["/n": [folder("docs"), file("a.txt")], "/n/docs": [file("x.txt")]] {
+        await cache.insert(
+            ListingCache.Folder(entries: entries, listedAt: listedAt), at: path, on: share)
+    }
+    // The share stops answering: no read of it ever returns.
+    let lister = GatedLister(["/n": .blockForever, "/n/docs": .blockForever])
+    lister.releaseAll()
+    let clock = ManualClock()
+    let service = ListingService(
+        lister: lister, clock: clock, volumeOf: { _ in share }, cache: cache)
+    let pane = Pane(
+        location: Location(path: "/n"), service: service, systemActions: StubSystemActions(),
+        settings: untouchedSettings(), isFocused: true)
+    await settle { pane.state.isCachedRefreshing }
+
+    pane.setViewMode(.column)
+    let first = trail(pane).columns[0]
+    await settle { first.pane.state.isCachedRefreshing }
+    #expect(first.pane.state.names == ["a.txt", "docs"])
+    select("docs", in: first)
+    await settle { paths(pane) == ["/n", "/n/docs"] }
+    let second = trail(pane).columns[1]
+    await settle { second.pane.state.isCachedRefreshing }
+    #expect(second.pane.state.names == ["x.txt"])
+
+    clock.advance(by: LoadTimeouts.giveUp)
+    await settle { first.pane.state.isOffline && second.pane.state.isOffline }
+    #expect(first.pane.state.names == ["a.txt", "docs"])
+    #expect(first.pane.state.listedAt == listedAt)
+    #expect(second.pane.state.names == ["x.txt"])
+    #expect(paths(pane) == ["/n", "/n/docs"])
+}
+
+@MainActor @Test func cachedRowsThatLackTheSelectedFolderKeepTheColumnsToTheRight() async throws {
+    let share = VolumeIdentity(device: "//me@nas.invalid/n", mountPoint: "/n", kind: .network)
+    let cache = ListingCache(store: nil)
+    // Cached before docs was made, so the parent's cached rows don't have it.
+    await cache.insert(
+        ListingCache.Folder(entries: [file("a.txt")], listedAt: testDate), at: "/n", on: share)
+    let lister = GatedLister([
+        "/n": .blockForever, "/n/docs": .batches([[file("x.txt")]]),
+    ])
+    lister.release("/n/docs")
+    let clock = ManualClock()
+    let service = ListingService(
+        lister: lister, clock: clock, volumeOf: { _ in share }, cache: cache)
+    let pane = Pane(
+        location: Location(path: "/n/docs"), service: service,
+        systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true)
+    await settle { pane.state.isLoaded }
+    pane.setViewMode(.column)
+    await settle { trail(pane).focused.pane.state.isLoaded }
+
+    try press(KeyChord(.left), on: pane)
+    let parent = trail(pane).columns[0].pane
+    await settle { parent.state.isCachedRefreshing }
+    #expect(paths(pane) == ["/n", "/n/docs"])
+
+    clock.advance(by: LoadTimeouts.slow)
+    await settle { parent.state.isSlow }
+    #expect(paths(pane) == ["/n", "/n/docs"])
+
+    clock.advance(by: LoadTimeouts.giveUp - LoadTimeouts.slow)
+    await settle { parent.state.isOffline }
+    #expect(paths(pane) == ["/n", "/n/docs"])
 }

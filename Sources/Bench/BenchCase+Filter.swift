@@ -42,8 +42,8 @@ extension BenchCase {
             systemActions: NoSystemActions(), settings: Settings(defaults: defaults))
         await waitUntil(pane) {
             switch $0.state {
-            case .loaded, .denied, .failed: true
-            case .loading, .partial: false
+            case .loaded, .offline, .denied, .failed: true
+            case .loading, .partial, .cachedRefreshing, .slow: false
             }
         }
         guard case .loaded(let listing) = pane.state, listing.count > 0 else {

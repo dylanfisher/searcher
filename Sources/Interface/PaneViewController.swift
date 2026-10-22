@@ -258,10 +258,12 @@ public final class PaneViewController: NSViewController {
     }
 
     private func showState() {
-        if case .loading = pane.state {
+        // A slow folder with no rows to show is still loading.
+        switch pane.state {
+        case .loading, .slow(nil):
             spinner.isHidden = false
             spinner.startAnimation(nil)
-        } else {
+        case .partial, .loaded, .cachedRefreshing, .slow(.some), .offline, .denied, .failed:
             spinner.stopAnimation(nil)
             spinner.isHidden = true
         }
@@ -274,7 +276,9 @@ public final class PaneViewController: NSViewController {
             let query = listing.filter == pane.filter ? pane.filter.text : listing.filter.text
             messageLabel.stringValue = FilterBarView.noMatchMessage(query)
             messageLabel.isHidden = false
-        case .loading, .partial, .loaded:
+        // The cached, slow and offline states show their rows; their notes come with the
+        // pane's status view.
+        case .loading, .partial, .loaded, .cachedRefreshing, .slow, .offline:
             break
         case .denied:
             accessDeniedView.isHidden = false

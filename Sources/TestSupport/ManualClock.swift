@@ -39,6 +39,11 @@ public final class ManualClock: Clock, @unchecked Sendable {
 
     public var minimumResolution: Duration { .zero }
 
+    /// Sleeps waiting for an advance: started, not yet woken and not cancelled.
+    public var waitingSleeps: Int {
+        lock.withLock { sleepers.count }
+    }
+
     /// Moves the clock forward and wakes every sleep whose deadline it reaches.
     public func advance(by duration: Duration) {
         precondition(duration >= .zero, "a clock can't go back \(duration)")

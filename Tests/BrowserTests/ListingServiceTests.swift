@@ -398,7 +398,9 @@ private func permutations<Element>(_ elements: [Element]) -> [[Element]] {
     let names = await log.updates.map { update in
         switch update {
         case .firstBatch(_, let rootVolumeName), .full(_, let rootVolumeName),
-            .failed(_, let rootVolumeName), .slow(let rootVolumeName):
+            .failed(_, let rootVolumeName), .slow(let rootVolumeName),
+            .gaveUp(let rootVolumeName),
+            .cached(_, _, let rootVolumeName), .volumeGone(_, let rootVolumeName):
             rootVolumeName
         }
     }
@@ -440,6 +442,11 @@ private func service(_ lister: any Lister, clock: ManualClock = ManualClock()) -
 
 private func isSlow(_ update: ListingUpdate) -> Bool {
     if case .slow = update { return true }
+    return false
+}
+
+private func isFull(_ update: ListingUpdate) -> Bool {
+    if case .full = update { return true }
     return false
 }
 
@@ -495,6 +502,61 @@ private func isSlow(_ update: ListingUpdate) -> Bool {
     #expect(await second.updates.isEmpty)
 }
 
+/// Blocks until `clock` has `count` sleeps waiting; false after 5 seconds.
+private func waitForSleeps(_ count: Int, on clock: ManualClock) async -> Bool {
+    let deadline = Date(timeIntervalSinceNow: 5)
+    while clock.waitingSleeps != count {
+        if Date() > deadline { return false }
+        try? await Task.sleep(for: .milliseconds(2))
+    }
+    return true
+}
+
+@Test func aLoadCancelledWhileQueuedStopsItsTimersAndSendsNothing() async {
+    let lister = GatedLister(["/a/stuck": .blockForever, "/a/second": .batches([])])
+    let clock = ManualClock()
+    let service = service(lister, clock: clock)
+    _ = load(service, "/a/stuck", into: UpdateLog())
+    #expect(lister.waitForCall("/a/stuck"))
+    // The stuck load's slow and give-up waits, and its read's slot timer.
+    #expect(await waitForSleeps(3, on: clock))
+    let second = UpdateLog()
+    let queued = load(service, "/a/second", into: second)
+    #expect(await waitForSleeps(5, on: clock))
+
+    queued.cancel()
+
+    #expect(await waitForSleeps(3, on: clock))
+    clock.advance(by: LoadTimeouts.giveUp)
+    try? await Task.sleep(for: .milliseconds(200))
+    await drainMainQueue()
+    #expect(await second.updates.isEmpty)
+}
+
+@Test func stallReportsReadTheRootVolumeNameOnTheLoadsThread() async {
+    let lister = GatedLister(["/a/stuck": .blockForever])
+    let clock = ManualClock()
+    let threads = EventLog<Bool>()
+    let service = ListingService(
+        lister: lister, clock: clock,
+        rootVolumeName: {
+            threads.append(BlockingCallThread.isCurrent)
+            return "Test Disk"
+        }, volumeOf: volume(of:))
+    let log = UpdateLog()
+    _ = load(service, "/a/stuck", into: log)
+    #expect(lister.waitForCall("/a/stuck"))
+
+    clock.advance(by: LoadTimeouts.slow)
+    #expect(await log.wait(for: 1))
+    clock.advance(by: LoadTimeouts.giveUp - LoadTimeouts.slow)
+    #expect(await log.wait(for: 2))
+
+    #expect(await log.updates.map(isSlow) == [true, false])
+    #expect(!threads.all.isEmpty)
+    #expect(threads.all.allSatisfy { $0 })
+}
+
 @Test func slowLoadsGiveUpTheirSlots() async {
     let stuck = (1...ListingService.mostRunningLoads).map { "/net-\($0)/stuck" }
     let lister = GatedLister(
@@ -514,11 +576,13 @@ private func isSlow(_ update: ListingUpdate) -> Bool {
     #expect(!lister.waitForCall("/local", timeout: 0.2))
 
     clock.advance(by: LoadTimeouts.slow)
+    // The local load waited 3 s too, so a slow update can come before its listing.
     #expect(await log.wait(for: 1))
-    guard case .full = await log.updates.first else {
-        Issue.record("updates are \(await log.updates)")
-        return
+    let deadline = Date(timeIntervalSinceNow: 5)
+    while await !log.updates.contains(where: isFull), Date() < deadline {
+        try? await Task.sleep(for: .milliseconds(2))
     }
+    #expect(await log.updates.contains(where: isFull))
     #expect(await ignored.wait(for: stuck.count))
     #expect(await ignored.updates.allSatisfy(isSlow))
 }
@@ -632,7 +696,11 @@ private func isSlow(_ update: ListingUpdate) -> Bool {
     _ = load(service, "/folder", into: log)
 
     #expect(await log.wait(for: 1))
-    #expect(onBlockingThread.withLock { $0 } == [true, true])
+    // The read, the volume name for the listing, and maybe already the name the stall timers
+    // keep, which is read on a thread of its own.
+    let threads = onBlockingThread.withLock { $0 }
+    #expect(threads.count >= 2)
+    #expect(threads.allSatisfy { $0 })
 }
 
 /// A lister that runs `probe` on the calling thread and returns an empty folder.
@@ -669,4 +737,151 @@ private final class SteppedLister: Lister, @unchecked Sendable {
         steps.signal()
         return taken.wait(timeout: .now() + 5) == .success
     }
+}
+
+// MARK: - Listing cache
+
+@Test func aCachedFolderIsHandedOverBeforeItsRead() async {
+    let listedAt = Date(timeIntervalSinceReferenceDate: 700_000_000)
+    let cache = ListingCache(store: nil)
+    await cache.insert(
+        ListingCache.Folder(entries: files("e", [2, 1]), listedAt: listedAt), at: "/a/x",
+        on: shareA)
+    let lister = GatedLister(["/a/x": .batches([files("e", 0..<3)])])
+    let service = ListingService(lister: lister, volumeOf: volume(of:), cache: cache)
+    let log = UpdateLog()
+
+    _ = load(service, "/a/x", into: log)
+    #expect(await log.wait(for: 1))
+    guard case .cached(let cached, let cachedAt, _) = await log.updates.first else {
+        Issue.record("updates are \(await log.updates)")
+        return
+    }
+    #expect(names(cached) == ["e1", "e2"])
+    #expect(cachedAt == listedAt)
+
+    lister.release("/a/x")
+    #expect(await log.wait(for: 2))
+    guard case .full(let listing, _) = await log.updates.last else {
+        Issue.record("updates are \(await log.updates)")
+        return
+    }
+    #expect(names(listing) == ["e0", "e1", "e2"])
+}
+
+@Test func aFullListingOnAShareIsCachedAndOneOnALocalVolumeIsNot() async {
+    let cache = ListingCache(store: nil)
+    let lister = GatedLister([
+        "/a/x": .batches([files("e", 0..<3)]), "/local": .batches([files("l", 0..<2)]),
+    ])
+    lister.releaseAll()
+    let service = ListingService(lister: lister, volumeOf: volume(of:), cache: cache)
+    let log = UpdateLog()
+
+    _ = load(service, "/a/x", into: log)
+    _ = load(service, "/local", into: log)
+    #expect(await log.wait(for: 2))
+
+    let deadline = Date(timeIntervalSinceNow: 5)
+    while await cache.folder(at: "/a/x", on: shareA) == nil, Date() < deadline {
+        try? await Task.sleep(for: .milliseconds(2))
+    }
+    #expect(await cache.folder(at: "/a/x", on: shareA)?.entries == files("e", 0..<3))
+    #expect(await cache.folder(at: "/local", on: disk) == nil)
+}
+
+/// Share A is mounted at `/a` until `unmount`; after that its mount point is an empty folder on
+/// the local disk, so `/a/…` reads as the disk.
+private final class LeftBehindMountPoint: @unchecked Sendable {
+    private let lock = NSLock()
+    private var mounted = true
+
+    func unmount() {
+        lock.withLock { mounted = false }
+    }
+
+    func volume(of path: String) -> VolumeIdentity {
+        let isOnShareA = path == "/a" || path.hasPrefix("/a/")
+        return isOnShareA && lock.withLock({ mounted }) ? shareA : disk
+    }
+}
+
+@Test func notFoundOnAShareNoLongerMountedIsVolumeGone() async {
+    let mounts = LeftBehindMountPoint()
+    let lister = GatedLister([
+        "/a/x": .batches([files("e", 0..<1)]),
+        "/a/y": .failure(ListingError(path: "/a/y", code: ENOENT)),
+    ])
+    lister.releaseAll()
+    let service = ListingService(lister: lister, volumeOf: { mounts.volume(of: $0) })
+    let log = UpdateLog()
+
+    _ = load(service, "/a/y", into: log)
+    #expect(await log.wait(for: 1))
+    guard case .failed(let error, _) = await log.updates.last else {
+        Issue.record("a folder missing from a mounted share isn't failed: \(await log.updates)")
+        return
+    }
+    #expect(error.reason == .notFound)
+
+    mounts.unmount()
+    _ = load(service, "/a/y", into: log)
+    #expect(await log.wait(for: 2))
+    guard case .volumeGone(let goneError, _) = await log.updates.last else {
+        Issue.record("updates are \(await log.updates)")
+        return
+    }
+    #expect(goneError.reason == .notFound)
+}
+
+/// Delivers one batch, then fails as a share that drops the connection does.
+private struct FailsAfterABatchLister: Lister {
+    func list(_ path: String, onBatch: ([DirectoryEntry]) throws -> Void) throws {
+        try onBatch(files("new", 0..<3))
+        throw ListingError(path: path, code: ENOTCONN)
+    }
+}
+
+@Test func aListingThatFailsPartWayLeavesTheCacheAsItWas() async {
+    let kept = ListingCache.Folder(entries: files("old", 0..<2), listedAt: testDate)
+    let cache = ListingCache(store: nil)
+    await cache.insert(kept, at: "/a/x", on: shareA)
+    let service = ListingService(
+        lister: FailsAfterABatchLister(), volumeOf: volume(of:), cache: cache)
+    let log = UpdateLog()
+
+    _ = load(service, "/a/x", into: log)
+    #expect(await log.wait(for: 2))
+    guard case .failed = await log.updates.last else {
+        Issue.record("updates are \(await log.updates)")
+        return
+    }
+    // Waits for any insert the load started.
+    await cache.flush()
+
+    #expect(await cache.folder(at: "/a/x", on: shareA) == kept)
+}
+
+@Test func theCachedRowsComeBeforeAVolumeReadReturns() async {
+    let cache = ListingCache(store: nil)
+    await cache.insert(
+        ListingCache.Folder(entries: files("e", 0..<2), listedAt: testDate), at: "/a/x",
+        on: shareA)
+    let lister = GatedLister(["/a/x": .blockForever])
+    let service = ListingService(
+        lister: lister,
+        volumeOf: { _ throws(ListingError) in
+            DispatchSemaphore(value: 0).wait()
+            preconditionFailure("a volume read that never returns returned")
+        }, mountedVolumes: { [disk, shareA] }, cache: cache)
+    let log = UpdateLog()
+
+    _ = load(service, "/a/x", into: log)
+
+    #expect(await log.wait(for: 1))
+    guard case .cached(let listing, _, _) = await log.updates.first else {
+        Issue.record("updates are \(await log.updates)")
+        return
+    }
+    #expect(names(listing) == ["e0", "e1"])
 }

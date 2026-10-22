@@ -6,7 +6,10 @@ import os
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let service = ListingService()
+    /// Listings of network folders, kept in the user's caches folder; nil in a bench launch,
+    /// which must not read or write the user's stores.
+    private let cache: ListingCache?
+    private let service: ListingService
     private let systemActions = WorkspaceSystemActions()
     /// The user's own preferences, made on first use so a bench launch never reads them; the
     /// bench makes its own over a suite of its own.
@@ -16,7 +19,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     init(bench: UIBench?) {
         self.bench = bench
+        if bench == nil {
+            let roots: StoreRoots
+            do {
+                roots = try StoreRoots.user()
+            } catch {
+                preconditionFailure("\(error)")
+            }
+            let logger = Logger(category: "cache")
+            let cache = ListingCache(
+                store: ListingCacheStore(
+                    roots: roots, log: { logger.error("\($0, privacy: .public)") }))
+            self.cache = cache
+            service = ListingService(cache: cache)
+        } else {
+            cache = nil
+            service = ListingService()
+        }
     }
+
+    /// Writes the cache's unwritten saves before the app quits, so listings made in the last two
+    /// seconds outlive it. Quits after `quitFlushLimit` whatever the write is doing.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let cache else { return .terminateNow }
+        let deadline = ContinuousClock.now.advanced(by: Self.quitFlushLimit)
+        Task {
+            if !(await cache.flush(by: deadline, clock: .continuous)) {
+                let limit = String(describing: Self.quitFlushLimit)
+                Logger(category: "cache").fault(
+                    "the listing cache didn't finish writing in \(limit, privacy: .public); quitting without it"
+                )
+            }
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
+    /// How long quitting waits for the listing cache to write.
+    private static let quitFlushLimit: Duration = .seconds(2)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let bench {

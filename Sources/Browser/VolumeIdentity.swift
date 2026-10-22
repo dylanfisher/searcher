@@ -28,6 +28,25 @@ public struct VolumeIdentity: Hashable, Sendable {
             kind: VolumeKind(mountFlags: info.f_flags))
     }
 
+    /// Every mounted volume, from the kernel's mount table (`getmntinfo` with `MNT_NOWAIT`),
+    /// which no volume is asked for, so it returns while a share hangs. It places a path by its
+    /// text alone, so `VolumeIdentity(path:)` stays the answer for a path through a link.
+    public static func mounted() -> [VolumeIdentity] {
+        BlockingCallThread.requireCurrent()
+        var buffer: UnsafeMutablePointer<statfs>?
+        let count = getmntinfo_r_np(&buffer, MNT_NOWAIT)
+        guard count > 0, let buffer else {
+            preconditionFailure("getmntinfo_r_np failed with errno \(errno)")
+        }
+        defer { free(buffer) }
+        return (0..<Int(count)).map { index in
+            var info = buffer[index]
+            return VolumeIdentity(
+                device: string(&info.f_mntfromname), mountPoint: string(&info.f_mntonname),
+                kind: VolumeKind(mountFlags: info.f_flags))
+        }
+    }
+
     /// A NUL-terminated `statfs` name field as a `String`.
     private static func string<Field>(_ field: inout Field) -> String {
         withUnsafeBytes(of: &field) { bytes in

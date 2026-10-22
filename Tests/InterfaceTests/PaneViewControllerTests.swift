@@ -155,6 +155,27 @@ private struct Fixture {
     #expect(fixture.controller.pathBar.segments.map(\.title) == ["Test Disk", "root"])
 }
 
+@MainActor @Test func aPaneThatGivesUpBeforeAnyUpdateShowsItsPathOffline() async throws {
+    let lister = GatedLister(["/root": .blockForever])
+    lister.releaseAll()
+    let clock = ManualClock()
+    let pane = Pane(
+        location: Location(path: "/root"),
+        service: ListingService(lister: lister, clock: clock, rootVolumeName: { "Test Disk" }),
+        systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true)
+    let controller = PaneViewController(
+        pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
+        tableView: ListingTableView(), monitorsFolders: false)
+    controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 400)
+
+    clock.advance(by: LoadTimeouts.giveUp)
+    await settle {
+        if case .offline = pane.state { true } else { false }
+    }
+
+    #expect(controller.pathBar.segments.map(\.title) == ["Test Disk", "root"])
+}
+
 /// A volume name a test can change between loads.
 private final class VolumeName: @unchecked Sendable {
     private let lock = NSLock()
