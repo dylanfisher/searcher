@@ -13,3 +13,137 @@ jobs:
       - run: swift --version
       - run: ./scripts/setup
       - run: ./scripts/check
+
+  # Times the harness cases on the runner. The bench exits non-zero when a
+  # budgeted p95 is over budget, which fails the job. Cases more than 10%
+  # slower than the previous run are reported and never fail it.
+  bench:
+    needs: check
+    runs-on: macos-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+      - run: ./scripts/setup
+
+      # The newest earlier run on this branch that kept a report, else the
+      # newest on main. No report found is not an error: the compare step
+      # says so.
+      - name: Download the previous report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          mkdir -p .build/previous
+          for branch in "$BRANCH" main; do
+            # A failing list (auth, permissions) fails the step. A failing
+            # download is skipped: an older run may have no report.
+            ids=$(gh run list --workflow check.yml --branch "$branch" --limit 20 \
+              --json databaseId --jq '.[].databaseId')
+            for id in $ids; do
+              [ "$id" = "$GITHUB_RUN_ID" ] && continue
+              if gh run download "$id" --name bench-report --dir .build/previous 2>/dev/null; then
+                echo "previous report: run $id on $branch"
+                exit 0
+              fi
+            done
+          done
+          echo "no earlier run has a bench report"
+
+      - run: ./scripts/bench
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-report
+          path: .build/bench.json
+          if-no-files-found: error
+
+      - name: Compare with the previous report
+        if: always()
+        run: |
+          status=0
+          ./scripts/bench compare .build/previous/bench.json .build/bench.json \
+            > .build/compare.txt || status=$?
+          cat .build/compare.txt
+          sed 's/^/- /' .build/compare.txt >> "$GITHUB_STEP_SUMMARY"
+          exit $status
+
+  # Times the app's UI on the runner (B1, B2, B6, B8, stalls). Its own job, so a
+  # UI run that can't finish doesn't hide the harness results. A UI case is
+  # report-only until its p95 stays within 10% across three consecutive runs on
+  # one branch; from then on its p95 over budget fails the job. The history that
+  # decides this travels in the bench-ui-report artifact. A run that doesn't
+  # finish, such as a window the runner's display doesn't show, fails the job
+  # and says so in the summary.
+  bench-ui:
+    needs: check
+    runs-on: macos-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+      - run: ./scripts/setup
+
+      # The same search as the bench job's, for the UI artifact.
+      - name: Download the previous UI history
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          mkdir -p .build/previous
+          for branch in "$BRANCH" main; do
+            ids=$(gh run list --workflow check.yml --branch "$branch" --limit 20 \
+              --json databaseId --jq '.[].databaseId')
+            for id in $ids; do
+              [ "$id" = "$GITHUB_RUN_ID" ] && continue
+              if gh run download "$id" --name bench-ui-report --dir .build/previous 2>/dev/null; then
+                echo "previous UI history: run $id on $branch"
+                exit 0
+              fi
+            done
+          done
+          echo "no earlier run has a UI history"
+
+      # Over budget exits non-zero too, and is judged by the next step against
+      # the history, so this step doesn't fail on it. A run that didn't finish
+      # leaves no complete .build/bench-ui.json, which the next step fails on.
+      - name: UI bench
+        run: |
+          status=0
+          ./scripts/bench --ui || status=$?
+          echo "scripts/bench --ui exited with status $status"
+
+      - name: Judge the UI bench against the history
+        if: always()
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          status=0
+          ./scripts/bench compare-ui .build/previous/bench-ui-history.json .build/bench-ui.json \
+            "$BRANCH" > .build/compare-ui.txt || status=$?
+          cat .build/compare-ui.txt
+          sed 's/^/- /' .build/compare-ui.txt >> "$GITHUB_STEP_SUMMARY"
+          if [ "$status" -ne 0 ] && [ ! -s .build/compare-ui.txt ]; then
+            echo "- compare-ui failed with status $status; its error is in the step's log" \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit $status
+
+      # A history is written only when the run finished. A run without one
+      # uploads nothing, so the next run finds the previous artifact and its
+      # history rather than an artifact that has none.
+      - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('.build/bench-ui-history.json') != ''
+        with:
+          name: bench-ui-report
+          path: |
+            .build/bench-ui.json
+            .build/bench-ui-history.json
+          if-no-files-found: error

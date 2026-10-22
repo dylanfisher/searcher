@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Build Searcher.app around the Searcher executable, so TCC prompts, caches,
+# Services and the default file viewer setting belong to Searcher rather than
+# to Terminal. Prints the bundle's path on stdout, the only line there, for
+# other scripts to use:
+#   -c debug|release   build configuration (default debug)
+#   -o <path>           where to put the bundle (default .build/Searcher.app);
+#                       replaced if it exists
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+config=debug
+app=.build/Searcher.app
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -c) config="${2:?-c needs debug or release}"; shift 2 ;;
+    -o) app="${2:?-o needs a path ending in .app}"; shift 2 ;;
+    *) printf 'unknown argument: %s\n' "$1" >&2; exit 1 ;;
+  esac
+done
+case "$config" in debug|release) ;; *) printf -- '-c must be debug or release, got %s\n' "$config" >&2; exit 1 ;; esac
+case "$app" in *.app) ;; *) printf -- '-o must end in .app, got %s\n' "$app" >&2; exit 1 ;; esac
+
+# Build output goes to stderr so stdout carries only the bundle path.
+swift build -c "$config" --product Searcher >&2
+bin="$(swift build -c "$config" --show-bin-path)"
+
+rm -rf "$app"
+mkdir -p "$app/Contents/MacOS"
+# The plist is copied as is: it is the only place the bundle ID is written.
+cp Sources/Searcher/Info.plist "$app/Contents/Info.plist"
+cp "$bin/Searcher" "$app/Contents/MacOS/Searcher"
+
+# Full Disk Access is granted to the signature's designated requirement. An ad
+# hoc signature's requirement is the code hash, which changes with every build;
+# a certificate's requirement names the certificate, so the grant carries over.
+if [ -n "${SEARCHER_SIGN_ID:-}" ]; then
+  codesign --force --sign "$SEARCHER_SIGN_ID" "$app" >&2
+else
+  codesign --force --sign - "$app" >&2
+  echo "SEARCHER_SIGN_ID is not set, so $app is signed ad hoc: renew its Full Disk Access grant after each rebuild." >&2
+fi
+
+echo "$app"

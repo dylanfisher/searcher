@@ -51,8 +51,9 @@ Format: [Conventional Commits](https://www.conventionalcommits.org/).
 
 - **Summary:** imperative mood ("add", not "added"), lowercase after the colon, no trailing period,
   72 characters max for the whole title line. It completes the sentence "This commit will…".
-- **Scope:** expected when the change sits in one tier: `base`, `browser`, `interface`, `app`, or
-  `c` — the tiers in [map.md](map.md). Omit it for changes that span tiers or touch only tooling.
+- **Scope:** expected when the change sits in one tier: `base`, `browser`, `interface`, `app`,
+  `c`, or `bench` — the tiers in [map.md](map.md), with `bench` for the tools tier. Omit it for
+  changes that span tiers or touch only tooling.
 - **Body:** required unless the title says everything. Explain why the change was made, what
   alternatives were rejected, and anything a reviewer should look at closely. Don't list the files
   changed — the diff does that. Wrap at 72. A `perf` commit always states before/after numbers and

@@ -13,8 +13,9 @@ concurrency, with and without a small first batch (spike S4).
 ## Decision
 
 A single listing service owns a work queue and runs at most four loads at once at userInitiated
-QoS. The focused pane's load jumps the queue. Each load delivers a sorted first batch of 200
-entries, then the full sorted listing; sort keys are built in parallel chunks. Batches reach the
+QoS. The focused pane's load jumps the queue. Each load of a folder that takes more than one read
+delivers a sorted first batch of 200 entries, then the full sorted listing; a folder read in one
+batch gets only the full listing. Sort keys are built in parallel chunks. Batches reach the
 main thread as one array swap and `reloadData`. Folder-size walks run on a separate, cancelable
 queue at utility QoS, four at once.
 

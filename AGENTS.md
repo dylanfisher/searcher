@@ -46,7 +46,7 @@ Non-negotiable, regardless of stack. Rationale: [docs/principles.md](docs/princi
 
 ## Definition of done
 
-- `./scripts/check` passes clean.
+- `./scripts/check` passes clean, and no budget in [docs/performance.md](docs/performance.md) is missed.
 - New behavior has a test that fails without the change.
 - No new dependencies, no new files outside the agreed layout, no TODOs left behind.
 - If a decision was non-obvious, record it in `docs/decisions/`.

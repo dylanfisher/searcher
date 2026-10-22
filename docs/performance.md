@@ -2,7 +2,7 @@
 
 Budgets every change is measured against, the workloads they run on, and how they're checked.
 `Sources/Bench/Budget.swift` holds the same numbers for the harness, and a test fails if the two
-differ. Until the harness exists, this file is the only copy.
+differ. A budget with one number per workload has one ID per workload there, such as `B2.W1`.
 
 ## Reference workloads
 
@@ -49,7 +49,7 @@ Warm cache unless noted. The budget is the p95 of the runs.
 | Gate | Runs bench | Fails on |
 |---|---|---|
 | `./scripts/check` | no | — |
-| CI | yes | harness p95 over budget; UI bench p95 over budget once its p95s stay within 10% across three consecutive runs (reported until then); >10% slower than the last run on the same branch, else `main`, is reported, not failed |
+| CI | yes | harness p95 over budget; UI bench p95 over budget once its p95s stay within 10% across three consecutive runs (reported until then); a harness case >10% slower than the last run on the same branch, else `main`, is reported, not failed |
 | Milestone | manual W4, W6, W7 | any budget miss |
 
 ## Measurement
@@ -62,4 +62,5 @@ Warm cache unless noted. The budget is the p95 of the runs.
 
 The stall watchdog also runs in debug builds, so hangs show up in daily use. OSSignposter marks
 sit on the same intervals, so Instruments shows them if Xcode is installed later. Rationale:
-[0002-performance-measurement](decisions/0002-performance-measurement.md).
+[0002-performance-measurement](decisions/0002-performance-measurement.md); how the UI bench
+launches the app and where its spans end: [0022-ui-bench-mode](decisions/0022-ui-bench-mode.md).
