@@ -28,6 +28,12 @@ private let album = ListingCache.Folder(
     ],
     listedAt: Date(timeIntervalSinceReferenceDate: 780_000_000.5))
 
+private let albumSize = FolderSizeCache.Record(
+    size: FolderSize(
+        bytes: 123_456_789, isPartial: true,
+        walkedAt: Date(timeIntervalSinceReferenceDate: 780_000_001.25)),
+    folderModified: Date(timeIntervalSinceReferenceDate: 779_000_000.5))
+
 private func roots(_ folder: TemporaryFolder) -> StoreRoots {
     StoreRoots(
         caches: folder.url.appending(path: "Caches"),
@@ -54,6 +60,39 @@ private func store(
     #expect(loaded == ["/Music/Album": album])
 }
 
+@Test func folderSizesAreKeptInTheVolumesFileBesideItsListings() async throws {
+    let folder = try TemporaryFolder("ListingCacheStoreTests")
+    let writer = store(folder)
+    await writer.save(["/Music/Album": album], for: share)
+    await writer.saveSizes(["/Music/Album": albumSize], for: share)
+    await writer.flush()
+
+    let reader = store(folder)
+    #expect(await reader.load(share) == ["/Music/Album": album])
+    #expect(await reader.loadSizes(share) == ["/Music/Album": albumSize])
+    let files = try FileManager.default.contentsOfDirectory(
+        atPath: roots(folder).caches.appending(path: "listings").path)
+    #expect(files == [writer.url(for: share).lastPathComponent])
+}
+
+@Test func writingListingsKeepsSizesWrittenEarlierAndTheOtherWayRound() async throws {
+    let folder = try TemporaryFolder("ListingCacheStoreTests")
+    let sizesFirst = store(folder)
+    await sizesFirst.saveSizes(["/Music/Album": albumSize], for: share)
+    await sizesFirst.flush()
+    let foldersNext = store(folder)
+    await foldersNext.save(["/Music/Album": album], for: share)
+    await foldersNext.flush()
+    #expect(await store(folder).loadSizes(share) == ["/Music/Album": albumSize])
+
+    let sizesLast = store(folder)
+    await sizesLast.saveSizes([:], for: share)
+    await sizesLast.flush()
+    let reader = store(folder)
+    #expect(await reader.load(share) == ["/Music/Album": album])
+    #expect(await reader.loadSizes(share).isEmpty)
+}
+
 @Test func filesLiveInListingsUnderTheCachesRoot() async throws {
     let folder = try TemporaryFolder("ListingCacheStoreTests")
     let writer = store(folder)
@@ -68,7 +107,8 @@ private func store(
 }
 
 enum StoreDamage: CaseIterable, Sendable {
-    case missingField, extraField, randomBytes, versionField, sizeOnFolder
+    case missingField, extraField, randomBytes, versionField, sizeOnFolder, missingSizes,
+        extraFieldInASize
 }
 
 @Test(arguments: StoreDamage.allCases)
@@ -76,6 +116,7 @@ func aFileThatDoesNotDecodeIsDeletedAndLoggedAndMisses(_ damage: StoreDamage) as
     let folder = try TemporaryFolder("ListingCacheStoreTests")
     let writer = store(folder)
     await writer.save(["/Music/Album": album], for: share)
+    await writer.saveSizes(["/Music/Album": albumSize], for: share)
     await writer.flush()
     let url = writer.url(for: share)
 
@@ -96,6 +137,14 @@ func aFileThatDoesNotDecodeIsDeletedAndLoggedAndMisses(_ damage: StoreDamage) as
     case .sizeOnFolder:
         // `album`'s second entry is the folder "Scans".
         entries[1]["size"] = Int64(1)
+    case .missingSizes:
+        plist["sizes"] = nil
+    case .extraFieldInASize:
+        var sizes = plist["sizes"] as! [String: Any]
+        var size = sizes["/Music/Album"] as! [String: Any]
+        size["physicalBytes"] = Int64(1)
+        sizes["/Music/Album"] = size
+        plist["sizes"] = sizes
     case .randomBytes:
         break
     }
@@ -112,8 +161,10 @@ func aFileThatDoesNotDecodeIsDeletedAndLoggedAndMisses(_ damage: StoreDamage) as
     try damaged.write(to: url)
 
     let log = EventLog<String>()
-    let loaded = await store(folder, log: log).load(share)
+    let reader = store(folder, log: log)
+    let loaded = await reader.load(share)
     #expect(loaded.isEmpty)
+    #expect(await reader.loadSizes(share).isEmpty)
     #expect(!FileManager.default.fileExists(atPath: url.path))
     #expect(log.all.count == 1)
     #expect(log.all.first?.contains(url.path) == true)
@@ -220,7 +271,7 @@ func aFileThatDoesNotDecodeIsDeletedAndLoggedAndMisses(_ damage: StoreDamage) as
     let log = EventLog<String>()
     let writes = EventLog<URL>()
     // Room for the small volume's file and a few hundred bytes, less than `album` encodes to.
-    let writer = store(folder, log: log, byteCap: smallSize + 200) { data, url in
+    let writer = store(folder, log: log, byteCap: smallSize + 300) { data, url in
         writes.append(url)
         try AtomicWrite.write(data, to: url)
     }
