@@ -195,10 +195,11 @@ final class UIBench {
     }
 
     /// Sorts by the next column through the table's sort descriptors, as a header click does, and
-    /// times it to the frame with the re-sorted rows.
+    /// times it to the frame with the re-sorted rows, which the pane sorts off the main thread.
     private func changeSort() async throws -> Double {
         try requireVisible()
         let pane = try requirePane()
+        let window = try requireWindow()
         guard let table = controller?.paneViewController.keyView as? NSTableView,
             let current = table.sortDescriptors.first?.key,
             let next = table.tableColumns.lazy.compactMap(\.sortDescriptorPrototype)
@@ -207,12 +208,27 @@ final class UIBench {
         let before = pane.sortColumn
         let start = FrameCommitTimer.now
         let interval = begin("sort change")
-        table.sortDescriptors = [next]
-        let elapsed = try await frame(from: start, "sort change", interval)
-        guard pane.sortColumn != before else {
-            throw Failure("changing the table's sort to \(next) left the pane sorted by \(before)")
+        let shown: Result<Double, Failure> = await withCheckedContinuation { continuation in
+            whenShown = { [self] pane in
+                guard let listing = pane.state.listing, listing.column != before else {
+                    return false
+                }
+                timeFrame(from: start, in: window, "sort change", interval) {
+                    continuation.resume(returning: .success($0))
+                }
+                return true
+            }
+            table.sortDescriptors = [next]
+            if pane.sortColumn == before {
+                whenShown = nil
+                continuation.resume(
+                    returning: .failure(
+                        Failure(
+                            "changing the table's sort to \(next) left the pane sorted by \(before)"
+                        )))
+            }
         }
-        return elapsed
+        return try shown.get()
     }
 
     /// The time from `start` to the commit of the window's next drawn frame, ending `interval`

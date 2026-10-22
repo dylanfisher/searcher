@@ -63,6 +63,38 @@ private let arrowFlags: NSEvent.ModifierFlags = [.numericPad, .function]
     #expect(recording.ran == [NavigationCommands.open.id])
 }
 
+/// Three rows named "a", "b" and "c" in one column, counting the views it makes.
+@MainActor
+private final class CountingRows: NSObject, NSTableViewDataSource, NSTableViewDelegate {
+    var viewsMade = 0
+
+    func numberOfRows(in tableView: NSTableView) -> Int { 3 }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int)
+        -> NSView?
+    {
+        viewsMade += 1
+        return NSTextField(labelWithString: ["a", "b", "c"][row])
+    }
+}
+
+@MainActor @Test func aLetterKeyMakesNoRowViewsForTypeSelect() throws {
+    let table = ListingTableView()
+    let rows = CountingRows()
+    table.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name")))
+    table.dataSource = rows
+    table.delegate = rows
+    table.registry = try AppCommands.registry()
+    table.reloadData()
+    rows.viewsMade = 0
+
+    table.keyDown(with: try keyEvent("c"))
+
+    #expect(!table.allowsTypeSelect)
+    #expect(rows.viewsMade == 0)
+    #expect(table.selectedRowIndexes.isEmpty)
+}
+
 @MainActor @Test func keyWithoutACommandGoesToTheTable() throws {
     let recording = RecordingTable(registry: CommandRegistry())
     recording.table.keyDown(

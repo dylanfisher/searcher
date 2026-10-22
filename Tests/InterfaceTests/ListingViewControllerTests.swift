@@ -131,11 +131,31 @@ private func clickHeader(_ controller: ListingViewController, titled title: Stri
     try clickHeader(controller, titled: "Size")
     #expect(controller.pane.sortColumn == .size)
     #expect(controller.pane.sortAscending == false)
+    await settle { controller.listing?.column == .size }
     #expect(try names(controller) == ["big", "mid", "small", "a folder", "b folder"])
 
     try clickHeader(controller, titled: "Size")
     #expect(controller.pane.sortAscending == true)
+    await settle { controller.listing?.ascending == true }
     #expect(try names(controller) == ["a folder", "b folder", "small", "mid", "big"])
+}
+
+@MainActor @Test func aSortKeepsTheSelectedEntrySelectedAndScrolledIntoView() async throws {
+    // By name "e0000" is the first row; by size, largest first, it is the last.
+    let entries = (0..<2_000).map { file(String(format: "e%04d", $0), size: Int64($0)) }
+    let controller = await controller(showing: entries)
+    let table = controller.tableView
+    controller.pane.select([ExactName("e0000")])
+    #expect(table.selectedRowIndexes == [0])
+
+    try clickHeader(controller, titled: "Size")
+    await settle {
+        table.selectedRowIndexes == [1_999]
+            && table.visibleRect.intersects(table.rect(ofRow: 1_999))
+    }
+
+    #expect(controller.pane.selection == [ExactName("e0000")])
+    #expect(controller.listing?[1_999].name == "e0000")
 }
 
 @MainActor @Test func columnsResizeAndReorder() async {
@@ -187,6 +207,7 @@ private final class RowChangeCountingTableView: ListingTableView {
         showing: [file("a", size: 1), file("b", size: 3), file("c", size: 2)], lister: lister,
         tableView: table)
     try clickHeader(controller, titled: "Size")
+    await settle { controller.listing?.column == .size }
     table.selectRowIndexes([0], byExtendingSelection: false)
     #expect(try names(controller)[0] == "b")
     #expect(controller.pane.selection == [ExactName("b")])

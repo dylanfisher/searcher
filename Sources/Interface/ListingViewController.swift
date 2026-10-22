@@ -62,7 +62,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     }
 
     /// Shows the pane's sort, rows and selection. Reloads the rows, in one reload, only when the
-    /// pane's state has changed since the last call, so moving the selection costs no reload.
+    /// pane's state has changed since the last call, so moving the selection costs no reload. A
+    /// single selected row is scrolled into view, after a reload in the next run loop pass.
     public func paneDidChange() {
         isShowingPane = true
         defer { isShowingPane = false }
@@ -71,16 +72,38 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
                 Self.sortDescriptor(pane.sortColumn, ascending: pane.sortAscending)
             ]
         }
+        var reloaded = false
         if shownVersion != pane.stateVersion {
             shownVersion = pane.stateVersion
             listing = pane.state.listing
             tableView.reloadData()
+            reloaded = true
         }
         let rows = IndexSet(pane.selection.compactMap { listing?.row(named: $0.name) })
         if rows != tableView.selectedRowIndexes {
             tableView.selectRowIndexes(rows, byExtendingSelection: false)
             if rows.count == 1, let row = rows.first {
-                tableView.scrollRowToVisible(row)
+                if reloaded {
+                    scrollToSelectionInTheNextPass()
+                } else {
+                    tableView.scrollRowToVisible(row)
+                }
+            }
+        }
+    }
+
+    /// Scrolls to a single selected row once this run loop pass ends. In the pass that reloads
+    /// 100k rows, scrolling made the table lay out a screen of row views on the spot, 15–18 ms in
+    /// a release build on top of the reload and the drawing; a pass later it takes about 4 ms.
+    /// The selection is read again then, since a key may have moved it.
+    private func scrollToSelectionInTheNextPass() {
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.pane.selection.count == 1,
+                    let name = self.pane.selection.first,
+                    let row = self.listing?.row(named: name.name)
+                else { return }
+                self.tableView.scrollRowToVisible(row)
             }
         }
     }

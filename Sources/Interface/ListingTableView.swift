@@ -13,6 +13,18 @@ class ListingTableView: NSTableView {
         preconditionFailure("ListingTableView has no command runner for \(id)")
     }
 
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        // AppKit's type-select makes a row view for each row it checks, on the main thread, so a
+        // letter key in a 100k-entry folder costs hundreds of milliseconds.
+        allowsTypeSelect = false
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("ListingTableView is built in code")
+    }
+
     override func keyDown(with event: NSEvent) {
         if let chord = KeyChord(event: event), let command = registry.command(for: chord) {
             runCommand(command.id)

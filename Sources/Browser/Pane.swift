@@ -36,9 +36,15 @@ public final class Pane {
     private var patchIsRunning = false
     /// A change arrived while a load was running; list the folder again when it ends.
     private var relistAfterLoad = false
-    /// Listings re-sorted on the main actor because they arrived in another sort than the pane's.
-    /// Zero while every load is asked for the pane's sort.
-    private(set) var mainActorSortCount = 0
+    /// Sorts started off the main actor: one per sort change over rows, and one per listing that
+    /// arrived in another sort than the pane's. Zero while every load is asked for the pane's sort.
+    private(set) var sortCount = 0
+    /// Sorts started and not yet landed. Patches wait while any runs: each landed patch changes
+    /// the state, which would drop the running sort and start another, so a folder that changes
+    /// faster than a sort takes would never show the new sort.
+    private var runningSorts = 0
+    /// Where sorts run. Tests suspend a queue of their own here to hold a sort.
+    var sortQueue = DispatchQueue.global(qos: .userInitiated)
 
     /// Starts listing `location` right away, ahead of other panes' loads if `isFocused`.
     public init(
@@ -131,10 +137,10 @@ public final class Pane {
         }
     }
 
-    /// Patches the listing with every waiting patch, unless a patch is already running; it starts
-    /// the next one when it lands.
+    /// Patches the listing with every waiting patch, unless a patch or a sort is running; each
+    /// starts the next patch when it lands.
     private func startPatch() {
-        guard !patchIsRunning, !waitingPatches.isEmpty else { return }
+        guard !patchIsRunning, runningSorts == 0, !waitingPatches.isEmpty else { return }
         guard case .loaded(let listing) = state else {
             // No rows to patch: the first load is still running, or the folder failed to list.
             // Listing it again, after a running load, reads the change.
@@ -187,18 +193,54 @@ public final class Pane {
         }
         selection = selection.filter { listing.row(named: $0.name) != nil }
         state = .loaded(listing)
+        startSortIfNeeded()
         onChange?()
         startPatch()
     }
 
-    /// Sorts the rows now, and the loads that follow arrive in this order.
+    /// Takes the new sort at once, so the header shows it and the loads that follow arrive in its
+    /// order, and sorts the rows off the main actor; they change when that sort lands.
     public func setSort(_ column: SortColumn, ascending: Bool) {
         sortColumn = column
         sortAscending = ascending
+        startSortIfNeeded()
+        onChange?()
+    }
+
+    /// Sorts a copy of the rows off the main actor when they aren't in the pane's sort.
+    private func startSortIfNeeded() {
+        guard let listing = state.listing,
+            listing.column != sortColumn || listing.ascending != sortAscending
+        else { return }
+        sortCount += 1
+        runningSorts += 1
+        let version = stateVersion
+        let column = sortColumn
+        let ascending = sortAscending
+        sortQueue.async { [weak self] in
+            var listing = listing
+            listing.sort(by: column, ascending: ascending)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self?.finishSort(listing, from: version) }
+            }
+        }
+    }
+
+    /// Shows the sorted rows unless the state or the sort changed since the sort started. Whatever
+    /// changed them started its own sort when it needed one, so the last request wins and a
+    /// load that landed meanwhile is kept. The selection is names, so it follows its entries to
+    /// their new rows. Patches that waited for the sort are then applied to the rows shown.
+    private func finishSort(_ listing: Listing, from version: Int) {
+        runningSorts -= 1
+        defer { startPatch() }
+        guard version == stateVersion, listing.column == sortColumn,
+            listing.ascending == sortAscending
+        else { return }
         switch state {
-        case .partial(let listing): state = .partial(sorted(listing))
-        case .loaded(let listing): state = .loaded(sorted(listing))
-        case .loading, .denied, .failed: break
+        case .partial: state = .partial(listing)
+        case .loaded: state = .loaded(listing)
+        case .loading, .denied, .failed:
+            preconditionFailure("the state has no rows but kept the version a sort started from")
         }
         onChange?()
     }
@@ -218,32 +260,23 @@ public final class Pane {
     private func receive(_ update: ListingUpdate) {
         switch update {
         case .firstBatch(let listing):
-            state = .partial(sorted(listing))
+            state = .partial(listing)
         case .full(let listing):
             loadIsRunning = false
-            let listing = sorted(listing)
             selection = selection.filter { listing.row(named: $0.name) != nil }
             state = .loaded(listing)
         case .failed(let error):
             loadIsRunning = false
             state = error.reason == .privacyProtected ? .denied(error) : .failed(error)
         }
+        // A load that started before `setSort` arrives in the old sort, and shows in it until
+        // this sort lands.
+        startSortIfNeeded()
         if !loadIsRunning, relistAfterLoad {
             relistAfterLoad = false
             startLoad()
         }
         onChange?()
-    }
-
-    /// `listing` in the pane's sort. A load that started before `setSort` arrives in the old one.
-    private func sorted(_ listing: Listing) -> Listing {
-        guard listing.column != sortColumn || listing.ascending != sortAscending else {
-            return listing
-        }
-        mainActorSortCount += 1
-        var listing = listing
-        listing.sort(by: sortColumn, ascending: sortAscending)
-        return listing
     }
 
     // MARK: - Selection
