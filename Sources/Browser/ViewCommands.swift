@@ -1,7 +1,7 @@
 /// What the panes show and in what order: the hidden files and folders first toggles, which are
 /// app-wide `Settings`, and the sort keys, which sort the focused pane by a column. A sort key for
 /// the column already sorted by reverses it. Space opens and closes Quick Look on the selection,
-/// and Cmd-F opens the pane's filter field.
+/// Cmd-F opens the pane's filter field, and Cmd-1 and Cmd-3 show the pane as a list or as columns.
 public enum ViewCommands: CommandSet {
     public static let toggleHidden = Command(
         id: CommandID("view.toggleHidden"), title: "Show Hidden Files",
@@ -25,6 +25,12 @@ public enum ViewCommands: CommandSet {
     public static let filter = Command(
         id: CommandID("view.filter"), title: "Filter",
         chords: [KeyChord("f", modifiers: .command)])
+    public static let asList = Command(
+        id: CommandID("view.asList"), title: "as List",
+        chords: [KeyChord("1", modifiers: .command)])
+    public static let asColumns = Command(
+        id: CommandID("view.asColumns"), title: "as Columns",
+        chords: [KeyChord("3", modifiers: .command)])
 
     public static var bindings: [CommandBinding] {
         [
@@ -40,7 +46,15 @@ public enum ViewCommands: CommandSet {
             CommandBinding(sortBySize) { sort($0.pane, by: .size) },
             CommandBinding(toggleQuickLook) { $0.toggleQuickLook() },
             CommandBinding(filter) { $0.showFilter() },
+            CommandBinding(asList) { tile(of: $0.pane).setViewMode(.list) },
+            CommandBinding(asColumns) { tile(of: $0.pane).setViewMode(.column) },
         ]
+    }
+
+    /// The pane that has the view mode: the trail's owner when `pane` is a column's.
+    @MainActor
+    private static func tile(of pane: Pane) -> Pane {
+        pane.containingTrail?.owner ?? pane
     }
 
     /// Sorts by `column` in its first direction, or reverses it if the pane already sorts by it.

@@ -4,6 +4,7 @@ public enum AppCommands {
         NavigationCommands.self,
         SelectionCommands.self,
         ViewCommands.self,
+        ColumnCommands.self,
         SystemCommands.self,
     ]
 
