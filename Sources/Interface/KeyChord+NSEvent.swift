@@ -22,6 +22,40 @@ extension KeyChord {
         self.init(key, modifiers: modifiers)
     }
 
+    /// The chord as an `NSMenuItem` key equivalent. A letter stays lowercase, with Shift in
+    /// `keyEquivalentModifierMask`, which AppKit matches and draws as ⇧.
+    var keyEquivalent: String {
+        switch key {
+        case .character(let character): String(character)
+        case .up: Self.functionKey(NSUpArrowFunctionKey)
+        case .down: Self.functionKey(NSDownArrowFunctionKey)
+        case .left: Self.functionKey(NSLeftArrowFunctionKey)
+        case .right: Self.functionKey(NSRightArrowFunctionKey)
+        case .tab: "\t"
+        case .return: "\r"
+        // Menus spell the Delete key as backspace, though the key event types 0x7F.
+        case .delete: "\u{8}"
+        case .space: " "
+        case .escape: "\u{1B}"
+        }
+    }
+
+    var keyEquivalentModifierMask: NSEvent.ModifierFlags {
+        var mask: NSEvent.ModifierFlags = []
+        if modifiers.contains(.control) { mask.insert(.control) }
+        if modifiers.contains(.option) { mask.insert(.option) }
+        if modifiers.contains(.command) { mask.insert(.command) }
+        if modifiers.contains(.shift) { mask.insert(.shift) }
+        return mask
+    }
+
+    private static func functionKey(_ code: Int) -> String {
+        guard let scalar = Unicode.Scalar(UInt32(code)) else {
+            preconditionFailure("\(code) is not a function key character")
+        }
+        return String(Character(scalar))
+    }
+
     private static func key(for character: Character) -> Key? {
         if character.unicodeScalars.count == 1, let scalar = character.unicodeScalars.first {
             switch Int(scalar.value) {

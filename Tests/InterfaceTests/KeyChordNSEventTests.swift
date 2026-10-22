@@ -23,7 +23,7 @@ func functionKey(_ code: Int) -> String {
 }
 
 /// Arrow events carry these flags along with the modifiers held.
-private let arrowFlags: NSEvent.ModifierFlags = [.numericPad, .function]
+let arrowFlags: NSEvent.ModifierFlags = [.numericPad, .function]
 
 @MainActor @Test func cmdDownCmdOAndCmdUpMapToTheRegisteredChords() throws {
     let registry = try AppCommands.registry()
@@ -93,4 +93,24 @@ private let arrowFlags: NSEvent.ModifierFlags = [.numericPad, .function]
             try KeyChord(event: keyEvent(characters)) == nil,
             "\(characters.unicodeScalars.map { $0.escaped(asASCII: true) })")
     }
+}
+
+@MainActor @Test func aKeyEquivalentReadsBackAsItsChord() throws {
+    let chords = [
+        KeyChord(.down, modifiers: .command), KeyChord(.up, modifiers: .command),
+        KeyChord(.left), KeyChord(.right, modifiers: .option), KeyChord("o", modifiers: .command),
+        KeyChord("g", modifiers: [.command, .shift]),
+        KeyChord("1", modifiers: [.control, .option, .command]),
+        KeyChord(.return, modifiers: .command), KeyChord(.tab), KeyChord(.space),
+        KeyChord(.escape),
+    ]
+    for chord in chords {
+        let event = try keyEvent(
+            chord.keyEquivalent, modifiers: chord.keyEquivalentModifierMask)
+        #expect(KeyChord(event: event) == chord, "\(chord)")
+    }
+}
+
+@MainActor @Test func deleteIsTheBackspaceKeyEquivalent() {
+    #expect(KeyChord(.delete, modifiers: .command).keyEquivalent == "\u{8}")
 }

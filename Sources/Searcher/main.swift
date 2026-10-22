@@ -21,16 +21,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             bench.start(service: service, systemActions: systemActions)
             return
         }
+        installMainMenu()
+        let window = openWindow()
+        NSApp.activate()
+        LaunchWarmup.shared.start(after: window)
+    }
+
+    /// A Dock click with no browser window open opens one. With a window open, even a minimized
+    /// one, AppKit's own handling brings it back.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool)
+        -> Bool
+    {
+        guard bench == nil, windows.isEmpty else { return true }
+        openWindow()
+        return false
+    }
+
+    private func installMainMenu() {
+        guard let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
+        else {
+            preconditionFailure("Info.plist has no CFBundleName for the app menu")
+        }
+        do {
+            try MainMenuBuilder.install(
+                in: NSApp, appName: appName, registry: AppCommands.registry())
+        } catch {
+            preconditionFailure("the main menu doesn't match the app's commands: \(error)")
+        }
+    }
+
+    /// Opens a browser window on the home folder. The controller is kept until its window
+    /// closes, so a closed window's pane stops watching its folder.
+    @discardableResult
+    private func openWindow() -> NSWindow {
         let controller = BrowserWindowController(
             location: Location(path: NSHomeDirectory()), service: service,
             systemActions: systemActions)
-        windows.append(controller)
-        controller.showWindow(nil)
-        NSApp.activate()
         guard let window = controller.window else {
-            preconditionFailure("the first browser window has no window")
+            preconditionFailure("a browser window controller has no window")
         }
-        LaunchWarmup.shared.start(after: window)
+        windows.append(controller)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(windowWillClose(_:)), name: NSWindow.willCloseNotification,
+            object: window)
+        controller.showWindow(nil)
+        return window
+    }
+
+    @objc private func windowWillClose(_ notification: Notification) {
+        windows.removeAll { $0.window === notification.object as? NSWindow }
     }
 }
 

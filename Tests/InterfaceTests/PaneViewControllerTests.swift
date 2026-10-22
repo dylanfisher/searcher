@@ -66,8 +66,6 @@ private struct Fixture {
     ]
 }
 
-private let arrowFlags: NSEvent.ModifierFlags = [.numericPad, .function]
-
 @MainActor @Test func showsASpinnerWhileLoadingAndTheTableWhenLoaded() async throws {
     let lister = GatedLister(Fixture.folders.mapValues { .batches([$0]) })
     let fixture = Fixture(lister: lister)
