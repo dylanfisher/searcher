@@ -111,6 +111,16 @@ private let everyOrder: [(SortColumn, Bool)] = SortColumn.allCases.flatMap { col
     #expect(names(listing) == ["c", "b", "a"])
 }
 
+@Test func sortingOnTheMainThreadTraps() async {
+    await #expect(processExitsWith: .failure) {
+        let listing = Listing([file("c", size: 1), file("a", size: 3)])
+        await MainActor.run {
+            var listing = listing
+            listing.sort(by: .size, ascending: true)
+        }
+    }
+}
+
 @Test func twoFilesOfOneTypeGetOneKind() {
     let listing = Listing([file("a.mp3"), file("b.MP3"), file("c.jpg"), folder("d")])
     let kinds = (0..<listing.count).map { listing.kind(atRow: $0) }

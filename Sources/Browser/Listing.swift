@@ -62,7 +62,9 @@ public struct Listing: Sendable {
     }
 
     /// Puts the rows in `column` order. Sorting by name reuses the name order the listing keeps.
+    /// Call it off the main thread.
     public mutating func sort(by column: SortColumn, ascending: Bool) {
+        dispatchPrecondition(condition: .notOnQueue(.main))
         self.column = column
         self.ascending = ascending
         if column == .name {

@@ -237,7 +237,153 @@ func drainMainQueue() async {
 
     #expect(fixture.pane.sortColumn == .size)
     #expect(!fixture.pane.sortAscending)
+    await settle { fixture.pane.state.listing?.column == .size }
     #expect(fixture.pane.state.names == ["a", "c", "b"])
+}
+
+@MainActor @Test func aSortChangeSortsOffTheMainThreadAndKeepsTheSelection() async {
+    let fixture = PaneFixture(
+        at: "/root",
+        folders: ["/root": [file("a", size: 3), file("b", size: 1), file("c", size: 2)]])
+    await settle { fixture.pane.state.isLoaded }
+    fixture.select("b")
+    let version = fixture.pane.stateVersion
+
+    fixture.pane.setSort(.size, ascending: false)
+
+    // The header's sort changes at once; the rows wait for the sort, which runs off the main
+    // thread, since `Listing.sort` traps on it.
+    #expect(fixture.pane.stateVersion == version)
+    #expect(fixture.pane.state.listing?.column == .name)
+    await settle { fixture.pane.state.listing?.column == .size }
+    #expect(fixture.pane.state.names == ["a", "c", "b"])
+    #expect(fixture.selectedNames == ["b"])
+    #expect(fixture.pane.sortCount == 1)
+}
+
+@MainActor @Test func theLastOfTwoSortRequestsWins() async {
+    let fixture = PaneFixture(
+        at: "/root",
+        folders: ["/root": [file("a", size: 3), file("b", size: 1), file("c", size: 2)]])
+    await settle { fixture.pane.state.isLoaded }
+
+    fixture.pane.setSort(.size, ascending: false)
+    fixture.pane.setSort(.size, ascending: true)
+    await settle { fixture.pane.state.listing?.column == .size }
+    await drainMainQueue()
+    await drainMainQueue()
+
+    #expect(fixture.pane.state.listing?.ascending == true)
+    #expect(fixture.pane.state.names == ["b", "c", "a"])
+}
+
+@MainActor @Test func aPatchThatArrivesWhileASortRunsIsKept() async {
+    let lister = StubLister(["/root": [file("a", size: 3), file("b", size: 1), file("c", size: 2)]])
+    let pane = Pane(
+        location: Location(path: "/root"), service: ListingService(lister: lister),
+        systemActions: StubSystemActions())
+    await settle { pane.state.isLoaded }
+    lister.set(
+        "/root",
+        to: [file("a", size: 3), file("b", size: 1), file("c", size: 2), file("d", size: 4)])
+
+    pane.setSort(.size, ascending: false)
+    pane.apply(.patches([.update(file("d", size: 4))]), at: pane.location)
+
+    // Applied over the old sort and sorted again, or listed again if the sort landed first.
+    await settle { pane.state.listing?.column == .size && pane.state.names.contains("d") }
+    await drainMainQueue()
+    #expect(pane.state.names == ["d", "a", "c", "b"])
+}
+
+/// A serial queue, suspended, for `Pane.sortQueue`: sorts wait on it until `resume()`.
+private func heldSortQueue() -> DispatchQueue {
+    let queue = DispatchQueue(label: "held sorts")
+    queue.suspend()
+    return queue
+}
+
+@MainActor @Test func aSortThatLandsAfterANavigationIsDropped() async {
+    let fixture = PaneFixture(
+        at: "/a",
+        folders: [
+            "/a": [file("a1", size: 1), file("a2", size: 2)],
+            "/b": [file("b1", size: 1), file("b2", size: 2)],
+        ])
+    await settle { fixture.pane.state.isLoaded }
+    let sorts = heldSortQueue()
+    fixture.pane.sortQueue = sorts
+
+    fixture.pane.setSort(.size, ascending: false)
+    fixture.pane.navigate(to: Location(path: "/b"))
+    // /b is asked for in the new sort, so it needs no sort of its own.
+    await settle { fixture.pane.state.isLoaded }
+    sorts.resume()
+    sorts.sync {}
+    await drainMainQueue()
+
+    #expect(fixture.pane.state.names == ["b2", "b1"])
+}
+
+@MainActor @Test func aSortThatLandsAfterAReloadIsDropped() async {
+    let lister = StubLister(["/root": [file("a", size: 1), file("b", size: 2)]])
+    let pane = Pane(
+        location: Location(path: "/root"), service: ListingService(lister: lister),
+        systemActions: StubSystemActions())
+    await settle { pane.state.isLoaded }
+    let sorts = heldSortQueue()
+    pane.sortQueue = sorts
+
+    pane.setSort(.size, ascending: false)
+    lister.set("/root", to: [file("a", size: 1), file("b", size: 2), file("c", size: 3)])
+    pane.reload()
+    await settle { pane.state.names.count == 3 }
+    sorts.resume()
+    sorts.sync {}
+    await drainMainQueue()
+
+    #expect(pane.state.names == ["c", "b", "a"])
+}
+
+@MainActor @Test func patchesThatArriveDuringASortWaitForItAndDontRestartIt() async {
+    let fixture = PaneFixture(
+        at: "/root",
+        folders: ["/root": [file("a", size: 3), file("b", size: 1), file("c", size: 2)]])
+    await settle { fixture.pane.state.isLoaded }
+    let sorts = heldSortQueue()
+    fixture.pane.sortQueue = sorts
+    let here = fixture.pane.location
+
+    fixture.pane.setSort(.size, ascending: false)
+    for (name, size) in [("d", 4), ("e", 0), ("f", 5)] {
+        fixture.pane.apply(.patches([.update(file(name, size: Int64(size)))]), at: here)
+        // Time for a patch to land, as each would during a slow sort.
+        try? await Task.sleep(for: .milliseconds(20))
+        await drainMainQueue()
+    }
+    #expect(fixture.pane.state.listing?.column == .name)
+    sorts.resume()
+
+    await settle { fixture.pane.state.names == ["f", "d", "a", "c", "b", "e"] }
+    #expect(fixture.pane.state.listing?.column == .size)
+    #expect(fixture.pane.sortCount == 1)
+    #expect(fixture.lister.calls.count == 1)
+}
+
+@MainActor @Test func aLoadThatArrivesInTheOldSortIsSortedOffTheMainThread() async {
+    let fixture = PaneFixture(
+        at: "/root",
+        folders: ["/root": [file("a", size: 3), file("b", size: 1), file("c", size: 2)]],
+        held: true)
+    #expect(fixture.lister.waitForCalls(1))
+
+    fixture.pane.setSort(.size, ascending: false)
+    fixture.lister.releaseAll()
+
+    await settle { fixture.pane.state.listing?.column == .size }
+    #expect(fixture.pane.state.isLoaded)
+    #expect(fixture.pane.state.names == ["a", "c", "b"])
+    #expect(fixture.pane.sortCount == 1)
 }
 
 @MainActor @Test func nextAndPreviousRowMoveTheSelectionAndClampAtTheEnds() async {
@@ -341,7 +487,7 @@ func drainMainQueue() async {
     #expect(fixture.lister.calls.count == 1)
 }
 
-@MainActor @Test func loadsArriveInThePanesSortWithoutReSortingOnMain() async {
+@MainActor @Test func loadsArriveInThePanesSortWithoutReSorting() async {
     let many = (0..<300).map { file("e\($0)", size: Int64($0)) }
     let more = (300..<400).map { file("e\($0)", size: Int64($0)) }
     let lister = GatedLister(["/big": .batches([many, more])])
@@ -352,7 +498,7 @@ func drainMainQueue() async {
 
     await settle { pane.state.isLoaded }
 
-    #expect(pane.mainActorSortCount == 0)
+    #expect(pane.sortCount == 0)
     #expect(pane.state.names.first == "e399")
 }
 
@@ -539,5 +685,5 @@ private final class HeldLister: Lister, @unchecked Sendable {
     #expect(fixture.pane.stateVersion == loaded)
 
     fixture.pane.setSort(.size, ascending: false)
-    #expect(fixture.pane.stateVersion > loaded)
+    await settle { fixture.pane.stateVersion > loaded }
 }
