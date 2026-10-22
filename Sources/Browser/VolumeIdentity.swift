@@ -17,6 +17,16 @@ public struct VolumeIdentity: Hashable, Sendable {
         self.kind = kind
     }
 
+    /// The volume's name as a pane's slow or offline note gives it: its mount point's last
+    /// component, read without asking the volume, which may not be answering.
+    public var name: String { Self.name(mountedAt: mountPoint) }
+
+    /// The name of the volume mounted at `mountPoint`, as `name` gives it, for a volume known
+    /// only by where it was mounted.
+    public static func name(mountedAt mountPoint: String) -> String {
+        Location(path: mountPoint).name
+    }
+
     /// Reads the volume holding `path`. `statfs` blocks on a share that has stopped answering, so
     /// this traps unless it runs on a `BlockingCallThread`.
     public init(path: String) throws(ListingError) {

@@ -32,8 +32,9 @@ patches to the listing, what the pane shows while it loads, or when the watchdog
 - **Monitors.** `PaneViewController` starts a `FolderMonitor` off the main thread each time the
   pane shows a new location, and hands it to `Pane.monitor` only if the pane is still there and
   no newer start was asked for; otherwise it stops it. A monitor that can't start is logged.
-- **Loading.** A spinner, and for a folder that failed to list a line with the error, sit over
-  the table. The table is never hidden: hiding the first responder moves focus to the next key
+- **Loading.** A spinner (superseded: one spinner per pane now sits in the path bar row, see
+  [0052](0052-pane-status.md)), and for a folder that failed to list a line with the error, sit
+  over the table. The table is never hidden: hiding the first responder moves focus to the next key
   view, and keys would stop reaching the pane after every navigation.
 - **Denied folders.** A folder in the `denied` state (privacy protection, not Unix permissions;
   see [0019](0019-pane-model.md)) shows `AccessDeniedView` over the table in place of the error
@@ -86,6 +87,7 @@ on a network volume keeps the gap. The fix there is to list the folder once more
 attaches: at once if the first load has ended, or after it ends (`relistAfterLoad`) if it is
 still running. It costs one extra listing per navigation on a vnode-watched volume.
 
-The spinner shows at once, so a fast folder can flash it for a frame until the spinner delay in
-`LoadTimeouts` lands. Each pane view controller builds nothing per key: the registry and the
+The spinner shows at once (superseded: it waits `LoadTimeouts.spinnerDelay`, see
+[0052](0052-pane-status.md)), so a fast folder can flash it for a frame until the spinner delay
+in `LoadTimeouts` lands. Each pane view controller builds nothing per key: the registry and the
 bindings by ID are built once for the app.

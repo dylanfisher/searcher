@@ -1,14 +1,109 @@
 #!/usr/bin/env bash
 # Tier rules the compiler can't see. Dependency direction is enforced by the
-# build itself (see docs/map.md); this covers which system frameworks each
-# tier may import.
+# build itself (see docs/map.md); this covers which system frameworks and
+# file-system calls each tier may use.
+#
+# Each rule has a file in scripts/arch-fixtures/ that breaks it. The script
+# first checks that every rule catches its fixture, so a pattern that stops
+# matching fails here instead of passing silently, then checks Sources.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Base and Browser stay UI-free so they can be tested without a window.
-bad=$(grep -rnE '^\s*(@[A-Za-z_]+\s+)*import\s+(AppKit|SwiftUI|Cocoa)\b' Sources/Base Sources/Browser || true)
-if [ -n "$bad" ]; then
-  printf 'UI framework imported below the interface tier:\n%s\n' "$bad" >&2
-  exit 1
-fi
-echo "no UI imports in Base or Browser"
+# name|pattern, a Perl regex matched against each file whole, so `\s` spans
+# the line breaks of a call split across lines. A fixture named <name>.swift
+# breaks each rule.
+ui_rules=(
+  'ui-import|^[ \t]*(@[A-Za-z_]+\s+)*import\s+(AppKit|SwiftUI|Cocoa)\b'
+)
+# Interface and the app reach the file system only through Browser and Base,
+# which run each call off the main thread. Bare stat and lstat aren't listed:
+# the words are too common to deny. FileHandle's standard streams are the
+# process's own pipes, not the file system, so the UI bench may report on them.
+fs_rules=(
+  'file-manager|\bFileManager\b'
+  'resource-values|[rR]esourceValues\b'
+  'get-resource-value|\bgetResourceValue\('
+  'icon-for-file|\bicon\(\s*forFiles?:'
+  'statfs|\bstatfs\b'
+  'fstatfs|\bfstatfs\b'
+  'getattrlistbulk|\bgetattrlistbulk\b'
+  'getattrlist|\bgetattrlist\b'
+  'display-name|\bdisplayName\(\s*atPath:'
+  'data-contents-of|\bData\(\s*contentsOf:'
+  'nsdata-contents-of|\bNSData\(\s*contentsOf(File)?:'
+  'string-contents-of|\bString\(\s*contentsOf:'
+  'string-contents-of-file|\bString\(\s*contentsOfFile:'
+  'image-contents-of|\bNSImage\(\s*contentsOf:'
+  'image-contents-of-file|\bNSImage\(\s*contentsOfFile:'
+  'file-handle|\bFileHandle\b(?!\.standard(Error|Output|Input)\b)'
+  'check-reachable|\bcheckResourceIsReachable\b'
+)
+
+# hits <pattern> <path...>: each match in the Swift files at or under <path...>,
+# comment lines left out, as file:line:text. A path that doesn't exist fails
+# the script: a renamed folder would otherwise pass unchecked.
+hits() {
+  local pattern=$1 path; shift
+  for path in "$@"; do
+    if [ ! -e "$path" ]; then
+      printf 'scripts/arch: %s does not exist\n' "$path" >&2
+      exit 2
+    fi
+  done
+  find "$@" -name '*.swift' -type f -print0 | xargs -0 -r env PATTERN="$pattern" perl -0777 -ne '
+    my $source = $_;
+    # Blank comment lines, keeping the line breaks, so lines still count.
+    $source =~ s{^[ \t]*//[^\n]*}{}mg;
+    while ($source =~ /$ENV{PATTERN}/mg) {
+      my $start = $-[0];
+      my $line = 1 + (substr($source, 0, $start) =~ tr/\n//);
+      my $lineStart = rindex($source, "\n", $start) + 1;
+      my $lineEnd = index($source, "\n", $start);
+      $lineEnd = length($source) if $lineEnd < 0;
+      print "$ARGV:$line:" . substr($source, $lineStart, $lineEnd - $lineStart) . "\n";
+    }
+  '
+}
+
+failed=0
+
+for rule in "${ui_rules[@]}" "${fs_rules[@]}"; do
+  name=${rule%%|*}
+  fixture="scripts/arch-fixtures/$name.swift"
+  if [ ! -f "$fixture" ]; then
+    printf 'rule %s has no fixture at %s\n' "$name" "$fixture" >&2
+    failed=1
+  elif [ -z "$(hits "${rule#*|}" "$fixture")" ]; then
+    printf 'rule %s no longer catches %s\n' "$name" "$fixture" >&2
+    failed=1
+  fi
+done
+for fixture in scripts/arch-fixtures/*.swift; do
+  name=$(basename "$fixture" .swift)
+  if ! printf '%s\n' "${ui_rules[@]}" "${fs_rules[@]}" | grep -q "^$name|"; then
+    printf '%s breaks no rule of scripts/arch\n' "$fixture" >&2
+    failed=1
+  fi
+done
+
+# check <message> <paths, space-separated> <rule...>
+check() {
+  local message=$1 paths=$2 rule bad; shift 2
+  for rule in "$@"; do
+    # $paths splits on spaces on purpose: Sources paths have none.
+    bad=$(hits "${rule#*|}" $paths)
+    if [ -n "$bad" ]; then
+      printf '%s (%s):\n%s\n' "$message" "${rule%%|*}" "$bad" >&2
+      failed=1
+    fi
+  done
+}
+
+check 'UI framework imported below the interface tier' 'Sources/Base Sources/Browser' \
+  "${ui_rules[@]}"
+check 'file-system call in Interface or the app' 'Sources/Interface Sources/Searcher' \
+  "${fs_rules[@]}"
+
+[ "$failed" -eq 0 ] || exit 1
+echo "every rule catches its fixture; no UI imports in Base or Browser;" \
+  "no file-system calls in Interface or Searcher"

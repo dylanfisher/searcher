@@ -33,7 +33,7 @@ public enum VolumeEvents {
     /// The volume at `mountPoint` is gone: panes on it go offline with the rows they show.
     public static func didUnmount(at mountPoint: String) {
         for pane in panes(on: mountPoint) {
-            pane.volumeDidUnmount()
+            pane.volumeDidUnmount(at: mountPoint)
         }
     }
 

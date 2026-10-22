@@ -3,13 +3,13 @@ import Base
 import Browser
 import os
 
-/// One pane: its list, with a spinner over it while the folder loads, an explanation with a way to
-/// grant access when the system refused to list the folder, or a line saying why another folder
-/// couldn't be listed, a path bar under it, and a filter field over it after Cmd-F. Keys and
-/// double-clicks in the list run the app's commands on this pane, and a folder monitor keeps the
-/// rows in step with the folder. In column view the columns take the list's place, each column
-/// with its own monitor, and keys run the commands on the focused column's pane
-/// (0041-column-model.md).
+/// One pane: its list, with an explanation over it with a way to grant access when the system
+/// refused to list the folder, or a line saying why another folder couldn't be listed, a path bar
+/// under it ending in the pane's spinner and slow or offline note, and a filter field over it
+/// after Cmd-F. Keys and double-clicks in the list run the app's commands on this pane, and a
+/// folder monitor keeps the rows in step with the folder. In column view the columns take the
+/// list's place, each column with its own monitor, and keys run the commands on the focused
+/// column's pane (0041-column-model.md).
 ///
 /// The list stays in place in every state, so the table keeps keyboard focus while a folder
 /// loads: hiding a first responder would hand focus to the next key view.
@@ -18,7 +18,9 @@ public final class PaneViewController: NSViewController {
     public let pane: Pane
     let listingViewController: ListingViewController
     let columnViewController: ColumnViewController
-    let spinner = NSProgressIndicator()
+    /// The spinner and note at the end of the path bar. In column view they show the focused
+    /// column's state, as the path bar shows its folder.
+    let status: PaneStatusView
     let messageLabel = NSTextField(wrappingLabelWithString: "")
     let accessDeniedView: AccessDeniedView
     let pathBar = PathBarView()
@@ -80,13 +82,15 @@ public final class PaneViewController: NSViewController {
             monitorsFolders: true)
     }
 
-    /// `monitorsFolders` is false for tests whose folders exist only in a stub lister.
+    /// `monitorsFolders` is false for tests whose folders exist only in a stub lister. Tests pass
+    /// a `status` view on their own clock.
     init(
         pane: Pane, iconCache: TypeIconCache, formatter: EntryCellFormatter,
-        tableView: ListingTableView, monitorsFolders: Bool
+        tableView: ListingTableView, monitorsFolders: Bool, status: PaneStatusView = .init()
     ) {
         self.pane = pane
         self.monitorsFolders = monitorsFolders
+        self.status = status
         accessDeniedView = AccessDeniedView(systemActions: pane.systemActions)
         listingViewController = ListingViewController(
             pane: pane, iconCache: iconCache, formatter: formatter, tableView: tableView)
@@ -134,13 +138,13 @@ public final class PaneViewController: NSViewController {
         let columns = columnViewController.view
         // Constraints rather than autoresizing: the container starts at zero size, where a list
         // frame 24 points shorter than it can't be set, and autoresizing would keep the error.
-        for view in [filterBar, list, columns, pathBar] {
+        for view in [filterBar, list, columns, pathBar, status] {
             view.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(view)
         }
         addChild(listingViewController)
         addChild(columnViewController)
-        for overlay in [spinner, messageLabel, accessDeniedView] {
+        for overlay in [messageLabel, accessDeniedView] {
             overlay.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(overlay)
         }
@@ -163,11 +167,15 @@ public final class PaneViewController: NSViewController {
             columns.trailingAnchor.constraint(equalTo: list.trailingAnchor),
             columns.bottomAnchor.constraint(equalTo: list.bottomAnchor),
             pathBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            pathBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            pathBar.trailingAnchor.constraint(equalTo: status.leadingAnchor),
             pathBar.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             pathBar.heightAnchor.constraint(equalToConstant: PathBarView.height),
-            spinner.centerXAnchor.constraint(equalTo: list.centerXAnchor),
-            spinner.centerYAnchor.constraint(equalTo: list.centerYAnchor),
+            status.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            status.topAnchor.constraint(equalTo: pathBar.topAnchor),
+            status.bottomAnchor.constraint(equalTo: pathBar.bottomAnchor),
+            // A long note truncates before it takes more than this of the bar.
+            status.widthAnchor.constraint(
+                lessThanOrEqualTo: container.widthAnchor, multiplier: 0.6),
             messageLabel.centerXAnchor.constraint(equalTo: list.centerXAnchor),
             messageLabel.centerYAnchor.constraint(equalTo: list.centerYAnchor),
             messageLabel.widthAnchor.constraint(
@@ -182,9 +190,6 @@ public final class PaneViewController: NSViewController {
     }
 
     private func configureOverlays() {
-        spinner.style = .spinning
-        spinner.controlSize = .regular
-        spinner.isDisplayedWhenStopped = false
         messageLabel.alignment = .center
         messageLabel.textColor = .secondaryLabelColor
     }
@@ -281,10 +286,10 @@ public final class PaneViewController: NSViewController {
         showViewMode(movingKeys: tableHadKeys)
         showState()
         showPath()
+        showStatus()
         if pane.location != shownLocation {
             shownLocation = pane.location
             listingViewController.tableView.setAccessibilityLabel(pane.location.name)
-            spinner.setAccessibilityLabel("Loading \(pane.location.name)")
             accessDeniedView.folderName = pane.location.name
             onLocationChange?(pane.location)
         }
@@ -358,24 +363,9 @@ public final class PaneViewController: NSViewController {
         filterBar.announceResult(count: listing.count, query: pane.filter.text)
     }
 
-    /// The spinner, the access explanation or the message over the list. Columns show none of
-    /// them: the pane's own state holds no rows in column mode.
+    /// The access explanation or the message over the list. Columns show neither: the pane's own
+    /// state holds no rows in column mode.
     private func showState() {
-        let isLoading: Bool
-        // A slow folder with no rows to show is still loading.
-        switch pane.state {
-        case .loading, .slow(nil):
-            isLoading = true
-        case .partial, .loaded, .cachedRefreshing, .slow(.some), .offline, .denied, .failed:
-            isLoading = false
-        }
-        if isLoading, pane.viewMode == .list {
-            spinner.isHidden = false
-            spinner.startAnimation(nil)
-        } else {
-            spinner.stopAnimation(nil)
-            spinner.isHidden = true
-        }
         accessDeniedView.isHidden = true
         messageLabel.isHidden = true
         guard pane.viewMode == .list else { return }
@@ -386,8 +376,8 @@ public final class PaneViewController: NSViewController {
             let query = listing.filter == pane.filter ? pane.filter.text : listing.filter.text
             messageLabel.stringValue = FilterBarView.noMatchMessage(query)
             messageLabel.isHidden = false
-        // The cached, slow and offline states show their rows; their notes come with the
-        // pane's status view.
+        // The cached, slow and offline states show their rows; their notes are the status
+        // view's.
         case .loading, .partial, .loaded, .cachedRefreshing, .slow, .offline:
             break
         case .denied:
@@ -398,16 +388,23 @@ public final class PaneViewController: NSViewController {
         }
     }
 
+    /// The spinner and note for the pane's state, or in column mode the focused column's: the
+    /// path bar they sit in names that column's folder.
+    private func showStatus() {
+        let shown = pane.commandPane
+        status.show(shown.state, location: shown.location, volumeName: shown.volumeName)
+    }
+
     /// Moves the path bar to the pane's location once something of it is on screen: its first
     /// rows, or why it couldn't be listed. While the folder loads the bar keeps showing the
     /// folder the pane left, so it never names a folder whose rows haven't arrived. In column
-    /// mode, the focused column's folder, once that column has something on screen.
+    /// mode, the focused column's folder, once that column has something on screen. A pane whose
+    /// volume unmounted before any listing update arrived has no root volume name to show, so
+    /// the bar waits for the next update that brings one.
     private func showPath() {
         let shown = pane.commandPane
         if case .loading = shown.state { return }
-        guard let rootVolumeName = shown.rootVolumeName else {
-            preconditionFailure("the pane has a listing update but no volume name")
-        }
+        guard let rootVolumeName = shown.rootVolumeName else { return }
         pathBar.show(shown.location, rootVolumeName: rootVolumeName)
     }
 

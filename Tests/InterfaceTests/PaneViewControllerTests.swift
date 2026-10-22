@@ -26,6 +26,7 @@ final class StubSystemActions: SystemActions {
 
 extension ListingState {
     var isLoaded: Bool { if case .loaded = self { true } else { false } }
+    var isOffline: Bool { if case .offline = self { true } else { false } }
 }
 
 /// The name in each row the table shows, read from the listing it was given.
@@ -52,18 +53,21 @@ private struct Fixture {
     let controller: PaneViewController
     let table: ClickedRowTableView
 
+    /// `clock` times the loads and the status view's spinner.
     init(
         lister: any Lister = StubLister(Fixture.folders), monitors: Bool = false,
-        rootVolumeName: @escaping @Sendable () -> String = { "Test Disk" }
+        rootVolumeName: @escaping @Sendable () -> String = { "Test Disk" },
+        clock: ManualClock = ManualClock(), at path: String = "/root"
     ) {
         pane = Pane(
-            location: Location(path: "/root"),
-            service: ListingService(lister: lister, rootVolumeName: rootVolumeName),
+            location: Location(path: path),
+            service: ListingService(lister: lister, clock: clock, rootVolumeName: rootVolumeName),
             systemActions: actions, settings: untouchedSettings(), isFocused: true)
         table = ClickedRowTableView()
         controller = PaneViewController(
             pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
-            tableView: table, monitorsFolders: monitors)
+            tableView: table, monitorsFolders: monitors,
+            status: PaneStatusView(clock: clock))
         controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 400)
     }
 
@@ -74,17 +78,21 @@ private struct Fixture {
     ]
 }
 
-@MainActor @Test func showsASpinnerWhileLoadingAndTheTableWhenLoaded() async throws {
+@MainActor @Test func showsASpinnerOnceALoadPassesTheDelayAndTheTableWhenLoaded() async throws {
     let lister = GatedLister(Fixture.folders.mapValues { .batches([$0]) })
-    let fixture = Fixture(lister: lister)
+    let clock = ManualClock()
+    let fixture = Fixture(lister: lister, clock: clock)
+    let spinner = fixture.controller.status.spinner
 
-    #expect(!fixture.controller.spinner.isHidden)
-    #expect(fixture.controller.spinner.accessibilityLabel() == "Loading root")
+    #expect(spinner.isHidden)
+    clock.advance(by: LoadTimeouts.spinnerDelay)
+    await settle { !spinner.isHidden }
+    #expect(spinner.accessibilityLabel() == "Loading root")
 
     lister.releaseAll()
     await settle { fixture.pane.state.isLoaded }
 
-    #expect(fixture.controller.spinner.isHidden)
+    #expect(spinner.isHidden)
     #expect(fixture.controller.listingViewController.view.isHidden == false)
     #expect(rowNames(fixture.table) == ["a.txt", "b.txt", "docs"])
     #expect(fixture.table.accessibilityLabel() == "root")
@@ -176,6 +184,163 @@ private struct Fixture {
     #expect(controller.pathBar.segments.map(\.title) == ["Test Disk", "root"])
 }
 
+@MainActor @Test func twoPanesSpinnersAreIndependent() async throws {
+    let lister = GatedLister([
+        "/Volumes/fast": .batches([[file("a.txt")]]),
+        "/Volumes/hung": .blockForever,
+    ])
+    lister.release("/Volumes/fast")
+    let clock = ManualClock()
+    let fast = Fixture(lister: lister, clock: clock, at: "/Volumes/fast")
+    let hung = Fixture(lister: lister, clock: clock, at: "/Volumes/hung")
+    await settle { fast.pane.state.isLoaded }
+
+    clock.advance(by: LoadTimeouts.spinnerDelay)
+    await settle { !hung.controller.status.spinner.isHidden }
+    #expect(fast.controller.status.spinner.isHidden)
+
+    clock.advance(by: LoadTimeouts.slow)
+    await settle { !hung.controller.status.note.isHidden }
+    #expect(hung.controller.status.note.stringValue == "Test Disk is slow to answer.")
+    #expect(fast.controller.status.note.isHidden)
+}
+
+@MainActor @Test func inColumnViewThePathBarShowsTheFocusedColumnsState() async throws {
+    let lister = GatedLister([
+        "/root": .batches([Fixture.folders["/root"] ?? []]),
+        "/root/docs": .blockForever,
+    ])
+    lister.releaseAll()
+    let clock = ManualClock()
+    let fixture = Fixture(lister: lister, clock: clock)
+    let status = fixture.controller.status
+    fixture.pane.setViewMode(.column)
+    let trail = try #require(fixture.pane.columnTrail)
+    await settle { trail.focused.pane.state.isLoaded }
+
+    trail.columns[0].pane.select(Selection([ExactName("docs")], cursor: ExactName("docs")))
+    await settle { trail.columns.count == 2 }
+    #expect(lister.waitForCall("/root/docs"))
+    clock.advance(by: LoadTimeouts.slow)
+    await settle {
+        if case .slow = trail.columns[1].pane.state { true } else { false }
+    }
+    #expect(status.note.isHidden)
+
+    trail.moveRight()
+
+    await settle { !status.note.isHidden }
+    #expect(status.note.stringValue == "Test Disk is slow to answer.")
+}
+
+/// Whether each call of a kind ran on the main thread, recorded from the calling thread.
+private final class MainThreadRecord: @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls: [Bool] = []
+
+    func record() { lock.withLock { calls.append(Thread.isMainThread) } }
+    var all: [Bool] { lock.withLock { calls } }
+}
+
+/// A share whose read never returns takes the pane through the spinner, slow and offline, and
+/// neither the read nor any volume or mount table read runs on the main thread, where it would
+/// block the app for as long as the share doesn't answer.
+@MainActor @Test func aPaneOnAShareThatNeverAnswersReadsNothingOnTheMainThread() async throws {
+    let lister = GatedLister(["/Volumes/nas": .blockForever])
+    lister.releaseAll()
+    let clock = ManualClock()
+    let volumeReads = MainThreadRecord()
+    let mountTableReads = MainThreadRecord()
+    let nas = VolumeIdentity(device: "//me@nas/nas", mountPoint: "/Volumes/nas", kind: .network)
+    let service = ListingService(
+        lister: lister, clock: clock, rootVolumeName: { "Test Disk" },
+        volumeOf: { _ in
+            volumeReads.record()
+            return nas
+        },
+        mountedVolumes: {
+            mountTableReads.record()
+            return [nas]
+        })
+    let pane = Pane(
+        location: Location(path: "/Volumes/nas"), service: service,
+        systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true)
+    let controller = PaneViewController(
+        pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
+        tableView: ListingTableView(), monitorsFolders: false,
+        status: PaneStatusView(clock: clock))
+    controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 400)
+    let note = controller.status.note
+
+    // The read has started, so the volume and mount table reads before it are done.
+    #expect(lister.waitForCall("/Volumes/nas"))
+    let spinner = controller.status.spinner
+    clock.advance(by: LoadTimeouts.spinnerDelay)
+    await settle { !spinner.isHidden }
+    clock.advance(by: LoadTimeouts.slow - LoadTimeouts.spinnerDelay)
+    await settle { note.stringValue == "nas is slow to answer." }
+    clock.advance(by: LoadTimeouts.giveUp - LoadTimeouts.slow)
+    await settle { note.stringValue == "nas is offline." }
+
+    #expect(lister.calls.count == 1)
+    #expect(lister.calls.allSatisfy { !$0.onMainThread })
+    #expect(!volumeReads.all.isEmpty)
+    #expect(volumeReads.all.allSatisfy { !$0 })
+    #expect(!mountTableReads.all.isEmpty)
+    #expect(mountTableReads.all.allSatisfy { !$0 })
+}
+
+@MainActor @Test func aVolumeThatUnmountsBeforeThePanesFirstUpdateShowsItOffline() async throws {
+    let mountPoint = "/pane-status-\(UUID().uuidString)"
+    let lister = GatedLister([mountPoint: .blockForever])
+    lister.releaseAll()
+    let fixture = Fixture(lister: lister, at: mountPoint)
+    #expect(lister.waitForCall(mountPoint))
+
+    VolumeEvents.didUnmount(at: mountPoint)
+
+    #expect(fixture.pane.state.isOffline)
+    #expect(
+        fixture.controller.status.note.stringValue
+            == "\(Location(path: mountPoint).name) is offline.")
+    // No update has named the root volume yet, so the bar has nothing to show.
+    #expect(fixture.controller.pathBar.segments.isEmpty)
+}
+
+@MainActor @Test func theStatusTakesAtMostSixTenthsOfThePathBarRow() async throws {
+    let lister = GatedLister(["/Volumes/nas": .blockForever])
+    lister.releaseAll()
+    let fixture = Fixture(lister: lister, at: "/Volumes/nas")
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 500, height: 300), styleMask: [.titled],
+        backing: .buffered, defer: true)
+    window.isReleasedWhenClosed = false
+    fixture.controller.view.frame = window.contentView?.bounds ?? .zero
+    window.contentView?.addSubview(fixture.controller.view)
+    let status = fixture.controller.status
+    status.show(
+        .offline(nil), location: Location(path: "/Volumes/nas"),
+        volumeName: String(repeating: "a very long share name ", count: 20))
+
+    window.contentView?.layoutSubtreeIfNeeded()
+
+    let width = fixture.controller.view.bounds.width
+    #expect(status.frame.width <= width * 0.6 + 0.5)
+    #expect(status.frame.width >= width * 0.6 - 0.5)
+    #expect(fixture.controller.pathBar.frame.maxX == status.frame.minX)
+}
+
+@MainActor @Test func theNoteGivesWayBeforeThePathBar() {
+    let status = PaneStatusView()
+
+    #expect(
+        status.note.contentCompressionResistancePriority(for: .horizontal)
+            < NSLayoutConstraint.Priority.defaultHigh)
+    #expect(
+        status.note.contentCompressionResistancePriority(for: .horizontal)
+            < status.spinner.contentCompressionResistancePriority(for: .horizontal))
+}
+
 /// A volume name a test can change between loads.
 private final class VolumeName: @unchecked Sendable {
     private let lock = NSLock()
@@ -215,7 +380,9 @@ private final class VolumeName: @unchecked Sendable {
     let list = controller.listingViewController.view.frame
     let bar = controller.pathBar.frame
     #expect(pane.width > 0 && pane.height > PathBarView.height)
-    #expect(bar == NSRect(x: 0, y: 0, width: pane.width, height: PathBarView.height))
+    let status = controller.status.frame
+    #expect(bar == NSRect(x: 0, y: 0, width: status.minX, height: PathBarView.height))
+    #expect(status.maxX == pane.width && status.minY == 0 && status.height == bar.height)
     #expect(list == NSRect(x: 0, y: bar.maxY, width: pane.width, height: pane.height - bar.maxY))
     #expect(!list.intersects(bar))
     let header = try #require(controller.listingViewController.tableView.headerView)
@@ -377,7 +544,7 @@ private final class WindowFixture {
     #expect(list.isHidden && !columns.isHidden)
     #expect(setup.window.firstResponder === setup.controller.keyView)
     #expect(setup.keyTable !== setup.fixture.table)
-    #expect(setup.controller.spinner.isHidden)
+    #expect(setup.controller.status.spinner.isHidden)
 
     // a.txt, b.txt, docs: the third row opens a second column, and → moves the keys into it.
     for _ in 0..<3 { try setup.press(NSDownArrowFunctionKey) }

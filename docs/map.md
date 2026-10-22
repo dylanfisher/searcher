@@ -50,8 +50,13 @@ beside them too: it imports base, and only test targets import it.
 
 Each tier is a SwiftPM target, so `Package.swift` is the dependency map. The build rejects an
 import of any target that isn't a declared dependency, and because the tiers form a chain, an
-upward dependency is a cycle, which SwiftPM refuses. `scripts/arch` covers the one rule the
-compiler can't see: no AppKit, SwiftUI or Cocoa import in Base or Browser.
+upward dependency is a cycle, which SwiftPM refuses. `scripts/arch` covers the rules the
+compiler can't see: no AppKit, SwiftUI or Cocoa import in Base or Browser, and no file-system
+call in Interface or the app. Its deny list names the file-system APIs (`FileManager`, URL
+resource values, `statfs` and the like); Interface and the app reach the file system only through
+Browser and Base, which make each call off the main thread. Each rule has a file in
+`scripts/arch-fixtures/` that breaks it, and the script fails if a rule stops catching its
+fixture or a folder it scans is gone. A new rule gets a fixture in the same change.
 
 ## Naming
 
