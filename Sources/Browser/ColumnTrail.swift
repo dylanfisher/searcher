@@ -98,6 +98,8 @@ public final class ColumnTrail {
             location: location, service: owner.service, systemActions: owner.systemActions,
             settings: owner.settings, sortedBy: model.sortColumn, ascending: model.sortAscending,
             isFocused: isFocused, selecting: name)
+        // A column added in a hidden tab waits behind visible panes' loads too.
+        pane.isVisible = owner.isVisible
         let column = Column(pane: pane)
         pane.containingTrail = self
         pane.onChange = { [weak self, weak column] in

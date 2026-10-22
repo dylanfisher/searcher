@@ -3,9 +3,14 @@ import Foundation
 /// One folder load asked of `ListingService`: what to list, how to sort it, and how soon. Cancel
 /// it when the pane no longer needs it; no update is handed off after that.
 public final class ListingLoad: @unchecked Sendable {
-    public enum Priority: Sendable {
-        case normal
-        /// The focused pane's load, which starts before every waiting normal load.
+    /// How soon a waiting load starts: a higher priority first, then in the order asked.
+    /// Declared lowest first, so `<` orders them.
+    public enum Priority: Comparable, Sendable {
+        /// A pane in a tab that isn't selected.
+        case hidden
+        /// A pane on screen.
+        case visible
+        /// The focused pane's load.
         case focused
     }
 
@@ -15,17 +20,17 @@ public final class ListingLoad: @unchecked Sendable {
     public let foldersFirst: Bool
     public let showsHidden: Bool
     public let filter: NameFilter
-    public let priority: Priority
     /// Runs on the load's worker thread for each update, and returns what to run on the main actor
     /// for it.
     let handOff: @Sendable (ListingUpdate) -> @MainActor @Sendable () -> Void
     /// The waits after which the service reports the load slow and given up.
     let stall = LoadStall()
 
-    // `lock` guards `cancelled` and `storedVolume`.
+    // `lock` guards `cancelled`, `storedVolume` and `storedPriority`.
     private let lock = NSLock()
     private var cancelled = false
     private var storedVolume: VolumeIdentity?
+    private var storedPriority: Priority
 
     init(
         location: Location, column: SortColumn, ascending: Bool, foldersFirst: Bool,
@@ -38,7 +43,7 @@ public final class ListingLoad: @unchecked Sendable {
         self.foldersFirst = foldersFirst
         self.showsHidden = showsHidden
         self.filter = filter
-        self.priority = priority
+        storedPriority = priority
         self.handOff = handOff
     }
 
@@ -54,6 +59,13 @@ public final class ListingLoad: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return cancelled
+    }
+
+    /// Read each time the service picks the next load to start, so changing it moves a waiting
+    /// load in the queue. It changes nothing once the load has started.
+    public var priority: Priority {
+        get { lock.withLock { storedPriority } }
+        set { lock.withLock { storedPriority = newValue } }
     }
 
     /// The volume the folder is on, once the service has read it; nil until then. The service

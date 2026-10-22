@@ -80,8 +80,21 @@ public final class Pane {
     private(set) var load: ListingLoad?
     private var loadIsRunning = false
     /// Whether loads go ahead of other panes'. A trail moves it between its columns without
-    /// listing them again.
-    var isFocused: Bool
+    /// listing them again. A change moves a waiting load in the queue.
+    var isFocused: Bool {
+        didSet { updateLoadPriority() }
+    }
+    /// Whether the pane is in the selected tab, set by its `Workspace`. A hidden pane's loads
+    /// start after every visible pane's. In column mode its columns follow it.
+    var isVisible = true {
+        didSet {
+            guard isVisible != oldValue else { return }
+            for column in columnTrail?.columns ?? [] {
+                column.pane.isVisible = isVisible
+            }
+            updateLoadPriority()
+        }
+    }
     /// Folder change patches not yet applied, in the order they arrived.
     private var waitingPatches: [FolderChange.Patch] = []
     private var patchIsRunning = false
@@ -99,7 +112,7 @@ public final class Pane {
     /// The folders left, for Back and Forward.
     private(set) var history = History()
     /// The load of a `goToFolder` that hasn't moved the pane yet, and the request it answers.
-    private var pendingGo: (load: ListingLoad, request: Int)?
+    private(set) var pendingGo: (load: ListingLoad, request: Int)?
     /// Counts `goToFolder` calls, so an update tells whether its go is still pending.
     private var goRequest = 0
     /// The selection version when the last `goToFolder` moved the pane. Its load's later updates
@@ -269,7 +282,7 @@ public final class Pane {
         let load = service.load(
             target, sortedBy: sortColumn, ascending: sortAscending,
             foldersFirst: settings.foldersFirst, showsHidden: settings.showHidden,
-            priority: isFocused ? .focused : .normal,
+            priority: loadPriority,
             prepare: { update in (update, Self.resolve(start, against: update)) },
             onUpdate: { [weak self] prepared in
                 self?.receiveGo(prepared.0, resolved: prepared.1, request: request, finish)
@@ -470,6 +483,16 @@ public final class Pane {
     public func didLoseFocus() {
         isFocused = false
         columnTrail?.focused.pane.didLoseFocus()
+    }
+
+    private var loadPriority: ListingLoad.Priority {
+        isFocused ? .focused : isVisible ? .visible : .hidden
+    }
+
+    /// Moves the pane's waiting loads in the service's queue; a started one is past caring.
+    private func updateLoadPriority() {
+        load?.priority = loadPriority
+        pendingGo?.load.priority = loadPriority
     }
 
     // MARK: - Folder changes
@@ -680,7 +703,7 @@ public final class Pane {
         load = service.load(
             location, sortedBy: sortColumn, ascending: sortAscending,
             foldersFirst: settings.foldersFirst, showsHidden: settings.showHidden, filter: filter,
-            priority: isFocused ? .focused : .normal,
+            priority: loadPriority,
             prepare: { update in (update, Self.resolve(selection, against: update)) },
             onUpdate: { [weak self] prepared in
                 self?.receive(prepared.0, resolved: prepared.1, from: selectionVersion)

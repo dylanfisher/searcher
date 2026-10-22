@@ -10,6 +10,9 @@ public final class Tab {
     public let id = TabID()
     public private(set) var layout: Layout
     public private(set) var panes: [PaneID: Pane]
+    /// Runs after an edit that may focus another pane: focus, split, and closing a pane. Its
+    /// workspace sets it, to move the focus of the panes' loads.
+    var onFocusChange: (@MainActor () -> Void)?
     private var isClosed = false
 
     /// A tab of one pane.
@@ -52,6 +55,7 @@ public final class Tab {
             settings: model.settings, sortedBy: sorted.sortColumn, ascending: sorted.sortAscending,
             viewMode: model.viewMode)
         panes[id] = pane
+        onFocusChange?()
         return pane
     }
 
@@ -66,6 +70,7 @@ public final class Tab {
             return .tab
         }
         panes[closed] = nil
+        onFocusChange?()
         return .pane
     }
 
@@ -85,11 +90,13 @@ public final class Tab {
     public func focus(_ pane: PaneID) {
         checkOpen()
         layout.focus(pane)
+        onFocusChange?()
     }
 
     public func focus(_ direction: Direction) {
         checkOpen()
         layout.focus(direction)
+        onFocusChange?()
     }
 
     public func move(_ direction: Direction) {

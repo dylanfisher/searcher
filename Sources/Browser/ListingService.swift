@@ -2,14 +2,15 @@ import Base
 import Foundation
 
 /// Lists folders for every pane: at most `mostRunningLoads` at once at userInitiated QoS, the
-/// focused pane's load first. A large folder gets a sorted first batch, then the full sorted
-/// listing. Each load first reads its folder's volume, then lists the folder, each on a
-/// `BlockingCallThread`; only the update hand-off runs on the main actor. A volume has at most
-/// `mostReads(on:)` reads in flight, and a load that reads no batch for `LoadTimeouts.slow` is
-/// reported slow and gives up its slot. With a `ListingCache`, a folder on a network volume gets
-/// its cached rows before the read starts, and each full listing of one is kept. See
-/// docs/decisions/0006-concurrency-shape.md, docs/decisions/0038-slow-volumes.md and
-/// docs/decisions/0045-cached-rows-first.md.
+/// focused pane's load first, then visible panes', then hidden ones'. A large folder gets a
+/// sorted first batch, then the full sorted listing. Each load first reads its folder's volume,
+/// then lists the folder, each on a `BlockingCallThread`; only the update hand-off runs on the
+/// main actor. A volume has at most `mostReads(on:)` reads in flight, and a load that reads no
+/// batch for `LoadTimeouts.slow` is reported slow and gives up its slot. With a `ListingCache`, a
+/// folder on a network volume gets its cached rows before the read starts, and each full listing
+/// of one is kept. See docs/decisions/0006-concurrency-shape.md,
+/// docs/decisions/0038-slow-volumes.md, docs/decisions/0045-cached-rows-first.md and
+/// docs/decisions/0048-pane-load-priority.md.
 public final class ListingService: Sendable {
     /// Ten 100k-entry folders loading together dropped frames with no limit (spike S4).
     public static let mostRunningLoads = 4
@@ -104,7 +105,7 @@ public final class ListingService: Sendable {
     public func load(
         _ location: Location, sortedBy column: SortColumn = .name, ascending: Bool = true,
         foldersFirst: Bool = false, showsHidden: Bool = true, filter: NameFilter = NameFilter(),
-        priority: ListingLoad.Priority = .normal,
+        priority: ListingLoad.Priority = .visible,
         onUpdate: @escaping @MainActor @Sendable (ListingUpdate) -> Void
     ) -> ListingLoad {
         load(
@@ -120,7 +121,7 @@ public final class ListingService: Sendable {
     public func load<Prepared: Sendable>(
         _ location: Location, sortedBy column: SortColumn = .name, ascending: Bool = true,
         foldersFirst: Bool = false, showsHidden: Bool = true, filter: NameFilter = NameFilter(),
-        priority: ListingLoad.Priority = .normal,
+        priority: ListingLoad.Priority = .visible,
         prepare: @escaping @Sendable (ListingUpdate) -> Prepared,
         onUpdate: @escaping @MainActor @Sendable (Prepared) -> Void
     ) -> ListingLoad {
@@ -469,14 +470,17 @@ public final class ListingService: Sendable {
             waiting.removeAll { $0 === load }
         }
 
-        /// The next load that may start: focused ones first, then in the order asked, among loads
-        /// whose volume is known and has a read to spare. Cancelled loads are dropped.
+        /// The next load that may start: the highest priority first, then in the order asked,
+        /// among loads whose volume is known and has a read to spare. Priorities are read here,
+        /// so one changed while its load waits counts. Cancelled loads are dropped.
         func next() -> ListingLoad? {
             waiting.removeAll { $0.isCancelled }
-            let index =
-                waiting.firstIndex { $0.priority == .focused && mayStart($0) }
-                ?? waiting.firstIndex(where: mayStart)
-            return index.map { waiting.remove(at: $0) }
+            var best: (index: Int, priority: ListingLoad.Priority)?
+            for (index, load) in waiting.enumerated() where mayStart(load) {
+                let priority = load.priority
+                if best.map({ priority > $0.priority }) ?? true { best = (index, priority) }
+            }
+            return best.map { waiting.remove(at: $0.index) }
         }
 
         func start(_ load: ListingLoad) {
