@@ -215,7 +215,8 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     let view = try #require(menu.items.first { $0.title == "View" }?.submenu)
     #expect(
         view.items.map(\.title) == [
-            "Show Hidden Files", "Folders First", "", "Sort by Name", "Sort by Kind",
+            "as List", "as Columns", "", "Show Hidden Files", "Folders First", "", "Sort by Name",
+            "Sort by Kind",
             "Sort by Date Modified", "Sort by Size",
         ])
     let table = ListingTableView()

@@ -57,6 +57,14 @@ public final class ColumnTrail {
         owner.trailDidChange()
     }
 
+    /// Moves the keys to `column`, as a click in it does, without selecting or listing anything.
+    /// Does nothing when it already has them.
+    public func focus(_ column: Column) {
+        guard let index = index(of: column.pane), index != focusedIndex else { return }
+        focus(index)
+        owner.trailDidChange()
+    }
+
     /// Open on a single folder in `column`'s pane: moves into the folder's column.
     func openFolder(from pane: Pane) {
         guard let index = index(of: pane) else { return }

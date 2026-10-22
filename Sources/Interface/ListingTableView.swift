@@ -19,6 +19,12 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
     var canRunCommand: @MainActor (CommandID) -> Bool = { id in
         preconditionFailure("ListingTableView has no command check for \(id)")
     }
+    /// For a command that puts this table's pane in a mode: whether the pane is in it, for its
+    /// menu item's check mark. Nil for other commands. Set with `runCommand`.
+    var commandIsCurrent: @MainActor (CommandID) -> Bool? = { _ in nil }
+    /// Runs when the table takes the keys, by a click or from code. A column's table moves the
+    /// trail's focus to its column here.
+    var didBecomeFirstResponder: @MainActor () -> Void = {}
     /// The text typed into this list since the last pause. Tests give it a clock they advance.
     var typeSelect = TypeSelect()
     /// Selects the first row of this table's pane whose name starts with a query, returning
@@ -88,13 +94,23 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
 
     /// Disables a command's menu item while the command would do nothing, such as Back at the
     /// start of the pane's history. Its key still reaches `keyDown`, where the command does
-    /// nothing. Other items sent here, such as Select All, stay enabled.
+    /// nothing. Other items sent here, such as Select All, stay enabled. Checks the item of the
+    /// pane's current mode, such as "as Columns".
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         guard item.action == #selector(runMenuCommand(_:)) else { return true }
         guard let id = item.representedObject as? CommandID else {
             preconditionFailure("menu item \"\(item.title)\" holds no command ID")
         }
+        if let isCurrent = commandIsCurrent(id) {
+            item.state = isCurrent ? .on : .off
+        }
         return canRunCommand(id)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        guard super.becomeFirstResponder() else { return false }
+        didBecomeFirstResponder()
+        return true
     }
 
     /// Select All from the Edit menu runs the command bound to its chord, as the key would. The
