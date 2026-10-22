@@ -14,6 +14,8 @@ public struct Listing: Sendable {
 
     // Parallel to `entries`.
     private var keys: [NameSortKey]
+    /// `NameSortKey.fold` of each name, for type-to-select and filtering.
+    private var foldedNames: [String]
     private var kindIndexes: [Int32]
     /// Each entry's position in `nameOrder`, so a tie in any column is one integer compare.
     private var nameRanks: [Int32]
@@ -28,14 +30,15 @@ public struct Listing: Sendable {
     private(set) var kinds: [EntryKind] = []
     private var kindRanks: [Int32] = []
 
-    /// Builds sort keys and kinds for `entries` and sorts them. Call it off the main thread.
+    /// Builds folded names, sort keys and kinds for `entries` and sorts them. Call it off the main
+    /// thread.
     ///
     /// - Precondition: no two entries have the same name.
     public init(_ entries: [DirectoryEntry], column: SortColumn = .name, ascending: Bool = true) {
         dispatchPrecondition(condition: .notOnQueue(.main))
         precondition(entries.count < Int32.max, "\(entries.count) entries don't fit Int32 indexes")
         self.entries = entries
-        keys = NameSortKey.keys(for: entries.map(\.name))
+        (foldedNames, keys) = NameSortKey.foldedNamesAndKeys(for: entries.map(\.name))
         kindIndexes = []
         nameRanks = []
         nameOrder = []
@@ -53,6 +56,12 @@ public struct Listing: Sendable {
 
     public func kind(atRow row: Int) -> EntryKind {
         kinds[Int(kindIndexes[Int(rows[row])])]
+    }
+
+    /// The entry at `row`'s name as `NameSortKey.fold` folds it. Match it on its `utf8` view; the
+    /// fold's documentation says why.
+    public func foldedName(atRow row: Int) -> String {
+        foldedNames[Int(rows[row])]
     }
 
     /// The row of the entry named `name`, or nil if there is none.
@@ -187,6 +196,7 @@ public struct Listing: Sendable {
         let kindIndex = kindIndex(of: kind)
         entries.append(entry)
         keys.append(key)
+        foldedNames.append(NameSortKey.fold(entry.name))
         kindIndexes.append(kindIndex)
         let rank = Int32(position)
         Self.shift(&nameRanks, past: rank - 1, by: 1)
@@ -204,6 +214,7 @@ public struct Listing: Sendable {
         nameOrder.remove(at: position)
         let entry = entries.remove(at: index)
         keys.remove(at: index)
+        foldedNames.remove(at: index)
         kindIndexes.remove(at: index)
         nameRanks.remove(at: index)
         // Every index and rank past the removed one shifts down by one.

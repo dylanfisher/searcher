@@ -67,7 +67,7 @@ public struct DirectoryLister: Lister {
     /// Reads one `getattrlistbulk` record. Attributes are packed in bitmap order and only those
     /// marked returned are present, so each field is read only if its bit is set. Returns nil for
     /// an entry deleted while the directory was being listed.
-    private func parse(_ record: UnsafeRawPointer, directory fd: Int32, path: String) throws
+    func parse(_ record: UnsafeRawPointer, directory fd: Int32, path: String) throws
         -> DirectoryEntry?
     {
         var field = record + MemoryLayout<UInt32>.size
@@ -96,6 +96,9 @@ public struct DirectoryLister: Lister {
             modified = field.loadUnaligned(as: timespec.self)
             field += MemoryLayout<timespec>.size
         }
+        // A file system without flags leaves them out, and XNU's `stat` reports 0 for it too, so
+        // stat'ing the entry would cost a call per entry for the same answer. APFS, HFS+, FAT32,
+        // exFAT, SMB and devfs all return them.
         var flags: UInt32 = 0
         if returned.commonattr & attrgroup_t(ATTR_CMN_FLAGS) != 0 {
             flags = field.loadUnaligned(as: UInt32.self)
@@ -109,8 +112,7 @@ public struct DirectoryLister: Lister {
         // A firmlink reports the attributes of its stub on the read-only system volume, such as
         // /Applications at /, where the data volume folder it points to holds the real ones.
         // `fstatat` follows it. An entry the bulk call couldn't fully describe is stat'ed too.
-        let isFirmlink = flags & UInt32(SF_FIRMLINK) != 0
-        guard !isFirmlink, let objectType, let modified,
+        guard flags & UInt32(SF_FIRMLINK) == 0, let objectType, let modified,
             objectType != fsobj_type_t(VREG.rawValue) || dataLength != nil
         else {
             return try stat(name, in: fd, path: path)
@@ -118,7 +120,8 @@ public struct DirectoryLister: Lister {
         let type = fileType(objectType)
         return DirectoryEntry(
             name: name, type: type, size: type == .regular ? dataLength : nil,
-            modified: date(modified))
+            modified: date(modified), isHidden: flags & UInt32(UF_HIDDEN) != 0,
+            isDataless: flags & UInt32(SF_DATALESS) != 0)
     }
 
     private func stat(_ name: String, in fd: Int32, path: String) throws -> DirectoryEntry? {
@@ -140,7 +143,8 @@ public struct DirectoryLister: Lister {
             }
         return DirectoryEntry(
             name: name, type: type, size: type == .regular ? info.st_size : nil,
-            modified: date(info.st_mtimespec))
+            modified: date(info.st_mtimespec), isHidden: info.st_flags & UInt32(UF_HIDDEN) != 0,
+            isDataless: info.st_flags & UInt32(SF_DATALESS) != 0)
     }
 
     private func fileType(_ objectType: fsobj_type_t) -> DirectoryEntry.FileType {

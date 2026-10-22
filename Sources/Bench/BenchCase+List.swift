@@ -4,9 +4,10 @@ import Foundation
 
 extension BenchCase {
     /// The lister alone, without the service around it: time to the first batch and to the full
-    /// listing on W1, W2 and W5 (`/`), then the sort key and the sort on W2's entries. Reported
-    /// only: B2 and B5 are measured through `ListingService` by `openFolder`, and B8 is the whole
-    /// column change, not its parts. A `--path` folder replaces each workload.
+    /// listing on W1, W2 and W5 (`/`), then the key build (folded names and sort keys in one
+    /// pass) and the sort on W2's entries. Reported only: B2 and B5 are measured through
+    /// `ListingService` by `openFolder`, and B8 is the whole column change, not its parts. A
+    /// `--path` folder replaces each workload.
     static let list: [BenchCase] = {
         var cases: [BenchCase] = []
         for (label, path) in [("W1", w1Path), ("W2", w2Path), ("W5", w5Path)] {
@@ -22,7 +23,7 @@ extension BenchCase {
         cases.append(
             BenchCase(name: "sort W2: key build", budget: nil, unit: .milliseconds) {
                 let names = try entries($0 ?? w2Path).map(\.name)
-                return time { _ = NameSortKey.keys(for: names) }
+                return time { _ = NameSortKey.foldedNamesAndKeys(for: names) }
             })
         cases.append(
             BenchCase(

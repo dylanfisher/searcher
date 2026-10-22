@@ -8,7 +8,9 @@ import Testing
 @testable import Interface
 
 private func link(_ name: String) -> DirectoryEntry {
-    DirectoryEntry(name: name, type: .symbolicLink, size: nil, modified: testDate)
+    DirectoryEntry(
+        name: name, type: .symbolicLink, size: nil, modified: testDate, isHidden: false,
+        isDataless: false)
 }
 
 private func kindText(_ type: DirectoryEntry.FileType, _ pathExtension: Substring) async -> String {

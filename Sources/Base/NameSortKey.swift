@@ -16,50 +16,105 @@ public struct NameSortKey: Sendable, Hashable, Comparable {
     /// - Precondition: no digit run in `name` has more than 255 digits after its leading zeros.
     ///   A file name is at most 255 bytes, so only a string that can't be a file name traps.
     public init(_ name: String) {
+        self.init(folded: Self.fold(name))
+    }
+
+    private init(folded: String) {
         var builder = Builder()
-        builder.bytes.reserveCapacity(name.utf8.count * 2)
-        if name.utf8.allSatisfy({ $0 < 0x80 }) {
-            // Most names are ASCII, where folding only lowercases; skipping the Foundation
-            // passes below halves the build time.
-            for byte in name.utf8 {
-                let lowercased = (0x41...0x5A).contains(byte) ? byte + 0x20 : byte
-                builder.append(Unicode.Scalar(lowercased))
+        builder.bytes.reserveCapacity(folded.utf8.count * 2)
+        if folded.utf8.allSatisfy({ $0 < 0x80 }) {
+            // Most names are ASCII; reading bytes rather than scalars halves the build time.
+            for byte in folded.utf8 {
+                builder.append(Unicode.Scalar(byte))
             }
         } else {
-            // Canonical decomposition splits accents off their letters and Hangul syllables into
-            // jamo. Folding with `.diacriticInsensitive` instead would also turn й into и, which
-            // the root order keeps apart.
-            let folded = name.folding(options: [.caseInsensitive, .widthInsensitive], locale: nil)
-            for scalar in folded.decomposedStringWithCanonicalMapping.unicodeScalars {
+            for scalar in folded.unicodeScalars {
                 builder.append(scalar)
             }
         }
         bytes = builder.bytes
     }
 
+    /// `name` with case, width and accents folded away: the text the key orders, and what
+    /// type-to-select and filtering match against. Letters the root order keeps apart from their
+    /// base letter, such as й, stay. The result is canonically decomposed otherwise.
+    ///
+    /// Match folded names on their `utf8` views (`utf8.starts(with:)`, a byte search), never with
+    /// `==`, `hasPrefix`, `contains` or `range(of:)`. Those compare whole characters, and a
+    /// decomposed Hangul syllable is one character made of several jamo: `fold("각")
+    /// .hasPrefix(fold("가"))` is false, while `fold("각").utf8.starts(with: fold("가").utf8)` is
+    /// true.
+    public static func fold(_ name: String) -> String {
+        if name.utf8.allSatisfy({ $0 < 0x80 }) {
+            // Most names are ASCII, where folding only lowercases. Skipping the Foundation passes
+            // below halves the build time, and a name without capitals is returned as it is, so
+            // the folded name shares its storage.
+            guard name.utf8.contains(where: { (0x41...0x5A).contains($0) }) else { return name }
+            return String(
+                decoding: name.utf8.map { (0x41...0x5A).contains($0) ? $0 + 0x20 : $0 },
+                as: UTF8.self)
+        }
+        // Canonical decomposition splits accents off their letters and Hangul syllables into
+        // jamo. Folding with `.diacriticInsensitive` instead would also turn й into и, which the
+        // root order keeps apart.
+        let caseless = name.folding(options: [.caseInsensitive, .widthInsensitive], locale: nil)
+        var folded = String.UnicodeScalarView()
+        for scalar in caseless.decomposedStringWithCanonicalMapping.unicodeScalars {
+            if scalar.isASCII {
+                folded.append(scalar)
+                continue
+            }
+            switch scalar.properties.generalCategory {
+            case .nonspacingMark, .enclosingMark, .format:
+                if let last = folded.last, let letter = Alphabet.composed(last, scalar) {
+                    folded.removeLast()
+                    folded.append(letter)
+                }
+            default:
+                folded.append(scalar)
+            }
+        }
+        return String(folded)
+    }
+
     public static func < (a: NameSortKey, b: NameSortKey) -> Bool {
         a.bytes.lexicographicallyPrecedes(b.bytes)
     }
 
-    /// The keys for `names`, in the same order, built in parallel chunks. Call it off the main
-    /// thread.
-    public static func keys(for names: [String]) -> [NameSortKey] {
+    /// The folded names and keys for `names`, in the same order, built in one pass of parallel
+    /// chunks. Call it off the main thread.
+    public static func foldedNamesAndKeys(for names: [String])
+        -> (foldedNames: [String], keys: [NameSortKey])
+    {
         // Spike S4 built 100k keys in 40 ms on one thread and 8 ms in 8 chunks. Below two
         // chunks' worth of names, dispatching costs more than it saves.
         let chunkCount = min(8, names.count / 1_000)
-        guard chunkCount > 1 else { return names.map(NameSortKey.init) }
-        return [NameSortKey](unsafeUninitializedCapacity: names.count) { buffer, count in
-            // Each chunk initializes its own range of indexes, so no two threads touch one key.
-            nonisolated(unsafe) let base = buffer.baseAddress!
-            DispatchQueue.concurrentPerform(iterations: chunkCount) { chunk in
-                let start = names.count * chunk / chunkCount
-                let end = names.count * (chunk + 1) / chunkCount
-                for index in start..<end {
-                    (base + index).initialize(to: NameSortKey(names[index]))
-                }
-            }
-            count = names.count
+        guard chunkCount > 1 else {
+            let foldedNames = names.map(fold)
+            return (foldedNames, foldedNames.map(NameSortKey.init(folded:)))
         }
+        var keys: [NameSortKey] = []
+        let foldedNames = [String](unsafeUninitializedCapacity: names.count) {
+            folded, foldedCount in
+            keys = [NameSortKey](unsafeUninitializedCapacity: names.count) { keys, keyCount in
+                // Each chunk initializes its own range of indexes, so no two threads touch one
+                // element.
+                nonisolated(unsafe) let foldedBase = folded.baseAddress!
+                nonisolated(unsafe) let keyBase = keys.baseAddress!
+                DispatchQueue.concurrentPerform(iterations: chunkCount) { chunk in
+                    let start = names.count * chunk / chunkCount
+                    let end = names.count * (chunk + 1) / chunkCount
+                    for index in start..<end {
+                        let name = fold(names[index])
+                        (foldedBase + index).initialize(to: name)
+                        (keyBase + index).initialize(to: NameSortKey(folded: name))
+                    }
+                }
+                keyCount = names.count
+            }
+            foldedCount = names.count
+        }
+        return (foldedNames, keys)
     }
 }
 
@@ -241,9 +296,8 @@ private struct Builder {
     private let tables = Tables.shared
     /// Where the digit count of the run in progress is.
     private var digitCountIndex: Int?
-    /// The last letter written from `Alphabet`, while only combining marks have followed it.
-    private var lastLetter: (scalar: Unicode.Scalar, encodingCount: Int)?
 
+    /// Appends one scalar of a folded name.
     mutating func append(_ scalar: Unicode.Scalar) {
         if scalar.isASCII {
             appendASCII(scalar)
@@ -255,10 +309,7 @@ private struct Builder {
             // `numericValue` is 0–9 for every decimal digit, whatever the script.
             appendDigit(UInt8(properties.numericValue!))
         case .nonspacingMark, .enclosingMark, .format:
-            if let last = lastLetter, let letter = Alphabet.composed(last.scalar, scalar) {
-                bytes.removeLast(last.encodingCount)
-                appendLetter(letter)
-            }
+            preconditionFailure("folding drops U+\(String(scalar.value, radix: 16))")
         case .spaceSeparator, .lineSeparator, .paragraphSeparator, .control:
             appendUTF8(Class.whitespace, scalar)
         case .connectorPunctuation, .dashPunctuation, .openPunctuation, .closePunctuation,
@@ -296,9 +347,7 @@ private struct Builder {
         case "0"..."9":
             appendDigit(UInt8(value - 0x30))
         case "a"..."z":
-            let encoding = tables.letters[scalar]!
-            appendEncoding(encoding)
-            lastLetter = (scalar, encoding.count)
+            appendEncoding(tables.letters[scalar]!)
         case "$":
             appendUTF8(Class.punctuationOrSymbol, Mark.currency, scalar)
         default:
@@ -314,7 +363,6 @@ private struct Builder {
     private mutating func appendLetter(_ scalar: Unicode.Scalar) {
         if let encoding = tables.letters[scalar] {
             appendEncoding(encoding)
-            lastLetter = (scalar, encoding.count)
             return
         }
         switch scalar.value {
@@ -399,7 +447,6 @@ private struct Builder {
     /// Ends any digit run before the next character is written.
     private mutating func beginCharacter() {
         digitCountIndex = nil
-        lastLetter = nil
     }
 
     private mutating func appendEncoding(_ encoding: LetterEncoding) {
