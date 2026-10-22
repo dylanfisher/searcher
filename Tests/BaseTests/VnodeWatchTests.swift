@@ -22,13 +22,15 @@ import Testing
         let fired = EventLog<Void>()
         let watch = try VnodeWatch(path: folder.url.path) { fired.append(()) }
         let descriptor = watch.fileDescriptor
-        #expect(fcntl(descriptor, F_GETFD) != -1)
+        let folderPath = String(cString: realpath(folder.url.path, nil))
+        #expect(path(of: descriptor) == folderPath)
 
         watch.stop()
         watch.stop()
 
-        #expect(fcntl(descriptor, F_GETFD) == -1)
-        #expect(errno == EBADF)
+        // Parallel tests can reopen the same descriptor number, so check what it refers to, not
+        // whether it is open.
+        #expect(path(of: descriptor) != folderPath)
         try Data().write(to: folder.url.appending(path: "after stop"))
         #expect(!fired.wait(timeout: 0.5) { !$0.isEmpty })
     }
@@ -37,5 +39,12 @@ import Testing
         #expect(throws: ListingError(path: "/no/such/folder", code: ENOENT)) {
             try VnodeWatch(path: "/no/such/folder") {}
         }
+    }
+
+    /// The path `descriptor` refers to, or nil if it isn't open.
+    private func path(of descriptor: Int32) -> String? {
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        guard fcntl(descriptor, F_GETPATH, &buffer) != -1 else { return nil }
+        return String(cString: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) })
     }
 }
