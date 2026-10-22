@@ -469,10 +469,8 @@ private func shownBadge(_ cell: NSTableCellView) -> NSImageView? {
     // The name ends before the badge starts.
     let text = try #require(names[1].textField)
     #expect(text.frame.maxX <= badge.frame.minX)
-    // VoiceOver reads the badge after the name.
-    #expect(badge.isAccessibilityElement())
-    #expect(badge.accessibilityLabel() == ListingViewController.notDownloadedLabel)
-    #expect(ListingViewController.notDownloadedLabel == "Not downloaded")
+    // The row's label says it isn't downloaded (ListingAccessibilityTests), not the badge.
+    #expect(!badge.isAccessibilityElement())
     // The size is the file's logical size, not the nothing it takes on disk.
     #expect(try cellText(controller)[1][1] == "4 MB")
 }

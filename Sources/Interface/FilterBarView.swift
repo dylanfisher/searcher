@@ -8,6 +8,24 @@ import Browser
 @MainActor
 final class FilterBarView: NSView, NSSearchFieldDelegate {
     static let height: CGFloat = 28
+    /// What VoiceOver calls the field.
+    static let fieldLabel = "Filter by name"
+
+    /// The line over a fully listed folder with no names matching `query`, and what VoiceOver
+    /// hears for it.
+    static func noMatchMessage(_ query: String) -> String {
+        "No items match “\(query)”."
+    }
+
+    /// Posts an accessibility notification. Tests replace it to record what would be posted.
+    var postAccessibility:
+        @MainActor (
+            Any, NSAccessibility.Notification, [NSAccessibility.NotificationUserInfoKey: Any]?
+        )
+            -> Void = { element, notification, userInfo in
+                NSAccessibility.post(
+                    element: element, notification: notification, userInfo: userInfo)
+            }
 
     let field = NSSearchField()
     /// Runs with the field's text after each change, typed or cleared with its button.
@@ -22,7 +40,7 @@ final class FilterBarView: NSView, NSSearchFieldDelegate {
     override init(frame: NSRect) {
         super.init(frame: frame)
         field.placeholderString = ViewCommands.filter.title
-        field.setAccessibilityLabel("Filter by name")
+        field.setAccessibilityLabel(Self.fieldLabel)
         field.delegate = self
         // The clear button sends the action; typing reaches `controlTextDidChange`.
         field.target = self
@@ -51,6 +69,20 @@ final class FilterBarView: NSView, NSSearchFieldDelegate {
         else { return super.performKeyEquivalent(with: event) }
         editor.selectAll(nil)
         return true
+    }
+
+    /// Tells VoiceOver how many rows the filter `query` left: "2 items", or the no-match line.
+    /// Called once a filtered listing lands, not per key, so only the latest query is read.
+    func announceResult(count: Int, query: String) {
+        let text =
+            switch count {
+            case 0: Self.noMatchMessage(query)
+            case 1: "1 item"
+            default: "\(count.formatted()) items"
+            }
+        postAccessibility(
+            field, .announcementRequested,
+            [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])
     }
 
     func controlTextDidChange(_ notification: Notification) {

@@ -10,6 +10,8 @@ import Browser
 @MainActor
 final class PathBarView: NSView {
     static let height: CGFloat = 24
+    /// What VoiceOver calls the bar, before it reads the segments in it.
+    static let label = "Path"
     /// The narrowest a segment gets before the ends shrink: about a letter and an ellipsis.
     static let minimumSegmentWidth: CGFloat = 32
     private static let inset: CGFloat = 6
@@ -28,6 +30,9 @@ final class PathBarView: NSView {
         super.init(frame: frame)
         // A row too long even at the minimum widths runs past the edge; keep it inside the bar.
         clipsToBounds = true
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
+        setAccessibilityLabel(Self.label)
     }
 
     @available(*, unavailable)
@@ -58,6 +63,9 @@ final class PathBarView: NSView {
             let separator = NSTextField(labelWithString: "›")
             separator.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
             separator.textColor = .tertiaryLabelColor
+            // Drawing between the buttons; VoiceOver would read it as a quotation mark. A
+            // control's accessibility element is its cell, so the cell is the one hidden.
+            separator.cell?.setAccessibilityElement(false)
             return separator
         }
         for view in segments + separators {

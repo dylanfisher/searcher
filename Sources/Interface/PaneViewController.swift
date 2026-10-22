@@ -22,6 +22,9 @@ public final class PaneViewController: NSViewController {
     let filterBar = FilterBarView()
     /// The filter bar's height: `FilterBarView.height` while it shows, else 0.
     private var filterBarHeight: NSLayoutConstraint?
+    /// The filter whose result VoiceOver last heard, so a patch or reload under the same filter
+    /// isn't announced again.
+    private var announcedFilter = NameFilter()
 
     /// Runs after the pane shows a new location, for the window title.
     public var onLocationChange: (@MainActor (Location) -> Void)?
@@ -231,12 +234,27 @@ public final class PaneViewController: NSViewController {
             // its filter.
             listingViewController.tableView.typeSelect.reset()
             hideFilter()
+            // The same query typed again before this folder's listing lands is its first result.
+            announcedFilter = NameFilter()
             spinner.setAccessibilityLabel("Loading \(pane.location.name)")
             accessDeniedView.folderName = pane.location.name
             startMonitor()
             onLocationChange?(pane.location)
         }
+        announceFilterResult()
         onShow?()
+    }
+
+    /// Tells VoiceOver how many rows the filter left once the folder is fully listed under the
+    /// pane's latest filter. The pane drops an older query's rows that land after a newer query
+    /// started, so keys typed faster than the rows land are announced once.
+    private func announceFilterResult() {
+        guard case .loaded(let listing) = pane.state, listing.filter == pane.filter,
+            listing.filter != announcedFilter
+        else { return }
+        announcedFilter = listing.filter
+        guard !listing.filter.isEmpty else { return }
+        filterBar.announceResult(count: listing.count, query: pane.filter.text)
     }
 
     private func showState() {
@@ -254,7 +272,7 @@ public final class PaneViewController: NSViewController {
             // The pane's text as typed: "Port" after "port" folds the same and filters nothing
             // again, but the message follows the field.
             let query = listing.filter == pane.filter ? pane.filter.text : listing.filter.text
-            messageLabel.stringValue = "No items match “\(query)”."
+            messageLabel.stringValue = FilterBarView.noMatchMessage(query)
             messageLabel.isHidden = false
         case .loading, .partial, .loaded:
             break
