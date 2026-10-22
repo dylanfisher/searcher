@@ -14,6 +14,10 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
     var runCommand: @MainActor (CommandID) -> Void = { id in
         preconditionFailure("ListingTableView has no command runner for \(id)")
     }
+    /// Runs Open in New Tab on a folder, for a Cmd-double-click on its row. Set with `runCommand`.
+    var openInNewTab: @MainActor (Location) -> Void = { folder in
+        preconditionFailure("ListingTableView has no runner to open \(folder) in a new tab")
+    }
     /// Whether a command would do something on this table's pane, for its menu item. Set with
     /// `runCommand`.
     var canRunCommand: @MainActor (CommandID) -> Bool = { id in

@@ -172,6 +172,60 @@ private func shiftedBracket(_ typed: String, keyCode: UInt16) throws -> NSEvent 
     #expect(firstController.view.superview === firstLayoutView)
 }
 
+@MainActor @Test func cmdClickInAnUnfocusedPanesPathBarOpensANewTabFromThatPane() async throws {
+    let fixture = try await Fixture()
+    let first = fixture.tab
+    let left = first.layout.focused
+    try fixture.press(try keyEvent("3", modifiers: .command))
+    let right = try fixture.splitRight()
+    // The focused pane is in list view, so the new tab's column view shows it came from the left.
+    try #require(first.panes[right]).setViewMode(.list)
+    let leftController = try fixture.paneController(left)
+    leftController.pathBar.currentModifierFlags = { .command }
+
+    // The bar shows the volume, then `root`; a button click leaves the keys where they were.
+    leftController.pathBar.segments[0].performClick(nil)
+
+    #expect(fixture.workspace.tabs.count == 2)
+    let added = fixture.tab
+    #expect(added !== first)
+    #expect(added.focusedPane.location == Location(path: "/"))
+    #expect(added.focusedPane.viewMode == .column)
+    #expect(first.layout.focused == left)
+    #expect(
+        try fixture.keyTable.isDescendant(of: fixture.paneController(added.layout.focused).view))
+}
+
+@MainActor @Test func aTablesOpenInNewTabRunsTheCommandOnItsPane() async throws {
+    let fixture = try await Fixture()
+    let first = fixture.tab
+
+    try fixture.keyTable.openInNewTab(Location(path: "/root/docs"))
+
+    #expect(fixture.workspace.tabs.count == 2)
+    #expect(fixture.tab !== first)
+    #expect(fixture.tab.focusedPane.location == Location(path: "/root/docs"))
+    #expect(
+        try fixture.keyTable.isDescendant(
+            of: fixture.paneController(fixture.tab.layout.focused).view))
+}
+
+@MainActor @Test func aColumnsTableOpensAFolderInANewColumnViewTab() async throws {
+    let fixture = try await Fixture()
+    try fixture.press(try keyEvent("3", modifiers: .command))
+    let pane = fixture.tab.focusedPane
+    await settle { pane.commandPane !== pane && pane.commandPane.state.isLoaded }
+    let column = try fixture.keyTable
+    let list = try fixture.paneController(fixture.tab.layout.focused).listingViewController
+    #expect(column !== list.tableView)
+
+    column.openInNewTab(Location(path: "/root/docs"))
+
+    #expect(fixture.workspace.tabs.count == 2)
+    #expect(fixture.tab.focusedPane.location == Location(path: "/root/docs"))
+    #expect(fixture.tab.focusedPane.viewMode == .column)
+}
+
 @MainActor @Test func tabKeysSwitchTabsAndEachTabKeepsItsLayout() async throws {
     let fixture = try await Fixture()
     let first = fixture.tab

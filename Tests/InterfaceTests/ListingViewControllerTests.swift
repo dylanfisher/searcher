@@ -412,6 +412,82 @@ private func shownNames(_ controller: ListingViewController) -> [String] {
     #expect(controller.pane.selection == Selection([ExactName("e")], cursor: ExactName("e")))
 }
 
+/// A controller over a folder `docs` and files `a.txt` and `b.txt` in a table that reports a
+/// double-click on a row, recording the commands and new tabs the table is asked for.
+@MainActor
+private final class DoubleClickFixture {
+    let table = ClickedRowTableView()
+    var ran: [CommandID] = []
+    var opened: [Location] = []
+    let controller: ListingViewController
+
+    init() async {
+        controller = await docsAndFiles(in: table)
+        table.runCommand = { [unowned self] in ran.append($0) }
+        table.openInNewTab = { [unowned self] in opened.append($0) }
+    }
+
+    func doubleClick(_ name: String) throws {
+        table.row = try #require(rowNames(table).firstIndex(of: name))
+        let action = try #require(table.doubleAction)
+        #expect(NSApplication.shared.sendAction(action, to: table.target, from: table))
+    }
+}
+
+@MainActor
+private func docsAndFiles(in table: ListingTableView) async -> ListingViewController {
+    await controller(showing: [folder("docs"), file("a.txt"), file("b.txt")], tableView: table)
+}
+
+@MainActor @Test func cmdDoubleClickOnAFolderRowOpensItInANewTab() async throws {
+    let fixture = await DoubleClickFixture()
+    fixture.controller.currentModifierFlags = { .command }
+
+    try fixture.doubleClick("docs")
+
+    #expect(fixture.opened == [Location(path: "/folder/docs")])
+    #expect(fixture.ran.isEmpty)
+    #expect(fixture.controller.pane.location == Location(path: "/folder"))
+    #expect(fixture.controller.pane.selection.contains(ExactName("docs")))
+}
+
+@MainActor @Test func cmdDoubleClickOnAFileOpensItAsADoubleClickDoes() async throws {
+    let fixture = await DoubleClickFixture()
+    fixture.controller.currentModifierFlags = { .command }
+
+    try fixture.doubleClick("a.txt")
+
+    #expect(fixture.ran == [NavigationCommands.open.id])
+    #expect(fixture.opened.isEmpty)
+    #expect(fixture.controller.pane.selection.contains(ExactName("a.txt")))
+}
+
+/// A guard on how the table reports AppKit's own Cmd-click toggles, not a test of the click: a
+/// real click can't be sent, since `NSTableView.mouseDown` tracks the press in a nested run loop
+/// that stops the main run loop the test runner's async main runs on, and the test process exits.
+/// It sets the rows a Cmd-click on `docs` and then a second one would leave selected, and checks
+/// the pane takes them without running a command or opening a tab.
+@MainActor @Test func aCmdClickOnARowStillTogglesItsSelection() async throws {
+    let fixture = await DoubleClickFixture()
+    let pane = fixture.controller.pane
+    fixture.controller.currentModifierFlags = { .command }
+    let docs = try #require(rowNames(fixture.table).firstIndex(of: "docs"))
+    let file = try #require(rowNames(fixture.table).firstIndex(of: "a.txt"))
+    pane.select(Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+
+    fixture.table.row = docs
+    fixture.table.selectRowIndexes([file, docs], byExtendingSelection: false)
+    await settle { pane.selection.isSettled }
+    #expect(pane.selection.contains(ExactName("docs")))
+    #expect(pane.selection.contains(ExactName("a.txt")))
+    fixture.table.selectRowIndexes([file], byExtendingSelection: false)
+    await settle { pane.selection.isSettled }
+
+    #expect(pane.selection.contains(ExactName("a.txt")))
+    #expect(!pane.selection.contains(ExactName("docs")))
+    #expect(fixture.ran.isEmpty && fixture.opened.isEmpty)
+}
+
 @MainActor @Test func twoMp3FilesShareOneIconAndNoIconIsMadePerFile() async throws {
     let maker = IconMaker()
     let controller = await controller(

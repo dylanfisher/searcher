@@ -82,3 +82,19 @@ private func pathBar(
     #expect(
         PathBarView.widths(natural: [50, 80], available: 200, minimum: 30) == [50, 80])
 }
+
+@MainActor @Test func cmdClickingASegmentOpensItsFolderInANewTabInsteadOfSelectingIt() {
+    let bar = pathBar(showing: "/Users/dylan/Projects")
+    bar.currentModifierFlags = { .command }
+    var selected: [Location] = []
+    var opened: [Location] = []
+    bar.onSelect = { location, _ in selected.append(location) }
+    bar.onOpenInNewTab = { opened.append($0) }
+
+    bar.segments[1].performClick(nil)
+    // The current folder too: it is a folder to open, though a plain click there does nothing.
+    bar.segments[3].performClick(nil)
+
+    #expect(opened == [Location(path: "/Users"), Location(path: "/Users/dylan/Projects")])
+    #expect(selected.isEmpty)
+}

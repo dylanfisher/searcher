@@ -1,12 +1,17 @@
 /// The tab keys: open a tab, close one, and show the next or previous one, on the context's
-/// workspace. They change the model only; the window shows the result
-/// (docs/decisions/0054-tabs-in-window.md).
+/// workspace, and Open in New Tab for a clicked folder. They change the model only; the window
+/// shows the result (docs/decisions/0054-tabs-in-window.md).
 public enum WindowCommands: CommandSet {
     /// Adds a tab after the selected one at the focused pane's folder, in its view mode and sort,
     /// and selects it.
     public static let newTab = Command(
         id: CommandID("window.newTab"), title: "New Tab",
         chords: [KeyChord("t", modifiers: .command)])
+    /// Adds a tab after the selected one at the context's `folder`, in the focused pane's view
+    /// mode and sort, and selects it. Cmd-double-click on a folder row and Cmd-click on a path bar
+    /// segment run it; it has no chord, and is off without a folder.
+    public static let openInNewTab = Command(
+        id: CommandID("window.openInNewTab"), title: "Open in New Tab", chords: [])
     /// Closes the selected tab, and the window with its last tab. The context's `didClosePane`
     /// gets what closed, as it does for Close Pane.
     public static let closeTab = Command(
@@ -29,8 +34,17 @@ public enum WindowCommands: CommandSet {
     public static var bindings: [CommandBinding] {
         [
             CommandBinding(newTab) { context in
-                context.workspace.add(Tab(pane: paneLike(context.tab.focusedPane)))
+                let focused = context.tab.focusedPane
+                context.workspace.add(Tab(pane: focused.newPane(at: focused.location)))
             },
+            CommandBinding(
+                openInNewTab, isEnabled: { $0.folder != nil },
+                run: { context in
+                    guard let folder = context.folder else {
+                        preconditionFailure("Open in New Tab ran with no folder")
+                    }
+                    context.workspace.add(Tab(pane: context.tab.focusedPane.newPane(at: folder)))
+                }),
             CommandBinding(closeTab) { context in
                 context.didClosePane(context.workspace.close(context.tab.id))
             },
@@ -53,18 +67,5 @@ public enum WindowCommands: CommandSet {
         }
         let count = tabs.count
         context.workspace.select(tabs[((index + offset) % count + count) % count].id)
-    }
-
-    /// A pane at `model`'s folder, in its view mode and sort, using the same services, settings
-    /// and system actions, as `Tab.split` makes one.
-    @MainActor
-    private static func paneLike(_ model: Pane) -> Pane {
-        let sorted = model.commandPane
-        let pane = Pane(
-            location: model.location, service: model.service, systemActions: model.systemActions,
-            settings: model.settings, sortedBy: sorted.sortColumn, ascending: sorted.sortAscending,
-            viewMode: model.viewMode)
-        pane.folderSizes = model.folderSizes
-        return pane
     }
 }
