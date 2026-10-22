@@ -2,11 +2,12 @@ import Base
 import CryptoKit
 import Foundation
 
-/// Keeps `ListingCache`'s volumes on disk: one binary plist per network volume in
-/// `<caches root>/listings/`, at most `byteCap` bytes in all, the least recently written file
-/// dropped first. Saves are written `writeDelay` after the first unwritten one, so a burst of
-/// loads costs one write per volume. A file that doesn't decode to the one stored shape is
-/// deleted and logged, and reads as empty. See docs/decisions/0039-listing-cache.md.
+/// Keeps `ListingCache`'s volumes on disk, with `FolderSizeCache`'s sizes on each: one binary
+/// plist per network volume in `<caches root>/listings/`, at most `byteCap` bytes in all, the
+/// least recently written file dropped first. Saves are written `writeDelay` after the first
+/// unwritten one, so a burst of loads costs one write per volume. A file that doesn't decode to
+/// the one stored shape is deleted and logged, and reads as empty. See
+/// docs/decisions/0039-listing-cache.md and docs/decisions/0043-folder-sizes.md.
 public actor ListingCacheStore {
     /// The default for `byteCap`.
     public static let defaultByteCap = 50_000_000
@@ -19,8 +20,13 @@ public actor ListingCacheStore {
     /// Starts a wait of the given length on the store's clock, taking the deadline at once.
     private let startWait: @Sendable (Duration) -> @Sendable () async throws -> Void
     private let write: @Sendable (Data, URL) throws -> Void
-    /// Saves not yet written, by volume.
+    /// Listings not yet written, by volume.
     private var pending: [VolumeIdentity: [String: ListingCache.Folder]] = [:]
+    /// Volumes whose sizes in `sizes` are not yet written.
+    private var pendingSizes: Set<VolumeIdentity> = []
+    /// The sizes of each volume as last saved or read, so writing a volume's listings needn't
+    /// read its file for its sizes.
+    private var sizes: [VolumeIdentity: [String: FolderSizeCache.Record]] = [:]
     private var writeScheduled = false
     /// Volumes whose last save encoded to more than `byteCap`, logged once until one fits.
     private var oversized: Set<VolumeIdentity> = []
@@ -50,6 +56,23 @@ public actor ListingCacheStore {
     public func save(_ folders: [String: ListingCache.Folder], for volume: VolumeIdentity) {
         precondition(volume.kind == .network, "local volume \(volume.mountPoint) can't be cached")
         pending[volume] = folders
+        scheduleWrite()
+    }
+
+    /// Saves `sizes` as every folder size kept for `volume`, replacing what was saved before. The
+    /// volume's listings stay as they are.
+    ///
+    /// - Precondition: `volume` is a network volume; local ones are never kept.
+    public func saveSizes(
+        _ sizes: [String: FolderSizeCache.Record], for volume: VolumeIdentity
+    ) {
+        precondition(volume.kind == .network, "local volume \(volume.mountPoint) can't be cached")
+        self.sizes[volume] = sizes
+        pendingSizes.insert(volume)
+        scheduleWrite()
+    }
+
+    private func scheduleWrite() {
         guard !writeScheduled else { return }
         writeScheduled = true
         let wait = startWait(Self.writeDelay)
@@ -67,22 +90,37 @@ public actor ListingCacheStore {
     /// or when the file doesn't decode, which deletes it.
     public func load(_ volume: VolumeIdentity) -> [String: ListingCache.Folder] {
         if let folders = pending[volume] { return folders }
+        return read(volume)?.folders.mapValues(\.folder) ?? [:]
+    }
+
+    /// The folder sizes kept for `volume`: the latest save, written or not. Empty when there is
+    /// no file, or when the file doesn't decode, which deletes it.
+    public func loadSizes(_ volume: VolumeIdentity) -> [String: FolderSizeCache.Record] {
+        if let sizes = sizes[volume] { return sizes }
+        let read = read(volume)?.sizes.mapValues(\.record) ?? [:]
+        sizes[volume] = read
+        return read
+    }
+
+    /// The volume's file, decoded; nil when there is none, or when it doesn't decode, which
+    /// deletes it.
+    private func read(_ volume: VolumeIdentity) -> StoredVolume? {
         let url = url(for: volume)
         do {
             let data: Data
             do {
                 data = try Data(contentsOf: url)
             } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
-                return [:]
+                return nil
             }
             let stored = try PropertyListDecoder().decode(StoredVolume.self, from: data)
             guard stored.device == volume.device, stored.mountPoint == volume.mountPoint else {
                 throw WrongVolume(device: stored.device, mountPoint: stored.mountPoint)
             }
-            return stored.folders.mapValues(\.folder)
+            return stored
         } catch {
             discard(url, because: error)
-            return [:]
+            return nil
         }
     }
 
@@ -90,9 +128,15 @@ public actor ListingCacheStore {
     /// that alone encodes to more than `byteCap` isn't written; its file, if any, stays as it was.
     public func flush() {
         writeScheduled = false
-        let writes = pending
+        let volumes = Set(pending.keys).union(pendingSizes)
+        guard !volumes.isEmpty else { return }
+        var writes: [VolumeIdentity: StoredVolume] = [:]
+        for volume in volumes {
+            // A volume saved in one part takes the other from its file.
+            writes[volume] = StoredVolume(volume, load(volume), loadSizes(volume))
+        }
         pending = [:]
-        guard !writes.isEmpty else { return }
+        pendingSizes = []
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         } catch {
@@ -101,10 +145,10 @@ public actor ListingCacheStore {
         }
         let encoder = PropertyListEncoder()
         encoder.outputFormat = .binary
-        for (volume, folders) in writes {
+        for (volume, stored) in writes {
             let url = url(for: volume)
             do {
-                let data = try encoder.encode(StoredVolume(volume, folders))
+                let data = try encoder.encode(stored)
                 // Written, a file over the cap would only be deleted again by `trim`, and saved
                 // and re-encoded at every write.
                 guard data.count <= byteCap else {
@@ -196,15 +240,21 @@ private struct StoredVolume: Codable {
     let device: String
     let mountPoint: String
     let folders: [String: StoredFolder]
+    /// Folder sizes by path. A path needn't have a listing in `folders`, nor the other way round.
+    let sizes: [String: StoredSize]
 
     enum CodingKeys: String, CodingKey, CaseIterable {
-        case device, mountPoint, folders
+        case device, mountPoint, folders, sizes
     }
 
-    init(_ volume: VolumeIdentity, _ folders: [String: ListingCache.Folder]) {
+    init(
+        _ volume: VolumeIdentity, _ folders: [String: ListingCache.Folder],
+        _ sizes: [String: FolderSizeCache.Record]
+    ) {
         device = volume.device
         mountPoint = volume.mountPoint
         self.folders = folders.mapValues(StoredFolder.init)
+        self.sizes = sizes.mapValues(StoredSize.init)
     }
 
     init(from decoder: any Decoder) throws {
@@ -213,6 +263,41 @@ private struct StoredVolume: Codable {
         device = try container.decode(String.self, forKey: .device)
         mountPoint = try container.decode(String.self, forKey: .mountPoint)
         folders = try container.decode([String: StoredFolder].self, forKey: .folders)
+        sizes = try container.decode([String: StoredSize].self, forKey: .sizes)
+    }
+}
+
+/// A `FolderSizeCache.Record`.
+private struct StoredSize: Codable {
+    let bytes: Int64
+    let partial: Bool
+    let walkedAt: Date
+    let folderModified: Date
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case bytes, partial, walkedAt, folderModified
+    }
+
+    init(_ record: FolderSizeCache.Record) {
+        bytes = record.size.bytes
+        partial = record.size.isPartial
+        walkedAt = record.size.walkedAt
+        folderModified = record.folderModified
+    }
+
+    init(from decoder: any Decoder) throws {
+        try requireKeys(Set(CodingKeys.allCases.map(\.stringValue)), in: decoder)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        bytes = try container.decode(Int64.self, forKey: .bytes)
+        partial = try container.decode(Bool.self, forKey: .partial)
+        walkedAt = try container.decode(Date.self, forKey: .walkedAt)
+        folderModified = try container.decode(Date.self, forKey: .folderModified)
+    }
+
+    var record: FolderSizeCache.Record {
+        FolderSizeCache.Record(
+            size: FolderSize(bytes: bytes, isPartial: partial, walkedAt: walkedAt),
+            folderModified: folderModified)
     }
 }
 

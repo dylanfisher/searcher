@@ -226,6 +226,74 @@ private func parseRecord(flags: UInt32?) throws -> DirectoryEntry? {
     #expect(calls == 1)
 }
 
+@Test func aFolderOnAnotherDeviceIsOpenedButNotRead() throws {
+    let folder = try TemporaryFolder("DirectoryListerTests")
+    try Data(count: 1).write(to: folder.url.appending(path: "file"))
+    var info = stat()
+    #expect(stat(folder.url.path, &info) == 0)
+    #expect(try DirectoryLister().device(of: folder.url.path) == info.st_dev)
+
+    var batches = 0
+    let readOther = try DirectoryLister().listWithoutMountPoints(
+        folder.url.path, ifOnDevice: info.st_dev &+ 1
+    ) { _ in batches += 1 }
+    #expect(!readOther)
+    #expect(batches == 0)
+    let readSame = try DirectoryLister().listWithoutMountPoints(
+        folder.url.path, ifOnDevice: info.st_dev
+    ) { _ in batches += 1 }
+    #expect(readSame)
+    #expect(batches == 1)
+}
+
+@Test(arguments: [(UInt32(DIR_MNTSTATUS_MNTPOINT), true), (UInt32(0), false)])
+func mountStatusParsesFromARawFolderRecord(status: UInt32, isMountPoint: Bool) throws {
+    var record: [UInt8] = []
+    func append<T>(_ value: T) { withUnsafeBytes(of: value) { record += $0 } }
+    let name = Array("Data".utf8) + [0]
+    var returned = attribute_set_t()
+    returned.commonattr =
+        attrgroup_t(ATTR_CMN_RETURNED_ATTRS) | attrgroup_t(ATTR_CMN_NAME)
+        | attrgroup_t(ATTR_CMN_OBJTYPE) | attrgroup_t(ATTR_CMN_MODTIME)
+        | attrgroup_t(ATTR_CMN_FLAGS)
+    returned.dirattr = attrgroup_t(ATTR_DIR_MOUNTSTATUS)
+    let fixedSize =
+        MemoryLayout<attrreference_t>.size + MemoryLayout<fsobj_type_t>.size
+        + MemoryLayout<timespec>.size + 2 * MemoryLayout<UInt32>.size
+    let headerSize = MemoryLayout<UInt32>.size + MemoryLayout<attribute_set_t>.size
+    append(UInt32(headerSize + fixedSize + name.count))
+    append(returned)
+    append(attrreference_t(attr_dataoffset: Int32(fixedSize), attr_length: UInt32(name.count)))
+    append(fsobj_type_t(VDIR.rawValue))
+    append(timespec(tv_sec: 1_600_000_000, tv_nsec: 0))
+    append(UInt32(0))
+    append(status)
+    record += name
+
+    let parsed = try record.withUnsafeBytes {
+        try DirectoryLister().parseRecord($0.baseAddress!, directory: -1, path: "/nowhere")
+    }
+    #expect(parsed?.entry.name == "Data")
+    #expect(parsed?.entry.type == .directory)
+    #expect(parsed?.isMountPoint == isMountPoint)
+}
+
+/// Read-only: `/System/Volumes` holds the mount points of the boot volume group, `Data` among
+/// them, on the same device as the folder itself.
+@Test func listingWithoutMountPointsLeavesOutMountedFolders() throws {
+    let path = "/System/Volumes"
+    var all: [String] = []
+    try DirectoryLister().list(path) { all += $0.map(\.name) }
+    #expect(all.contains("Data"))
+
+    var withoutMountPoints: [String] = []
+    let read = try DirectoryLister().listWithoutMountPoints(
+        path, ifOnDevice: try DirectoryLister().device(of: path)
+    ) { withoutMountPoints += $0.map(\.name) }
+    #expect(read)
+    #expect(!withoutMountPoints.contains("Data"))
+}
+
 /// Checks the listing of `path` has hidden and shown names, and that each name's hidden flag
 /// matches `isHiddenKey`. That key also counts dot names, which the flag doesn't cover, so only
 /// other names are compared.
