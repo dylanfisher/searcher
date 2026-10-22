@@ -244,10 +244,12 @@ private func freshListing(of folder: String) throws -> Listing {
 /// `SEARCHER_NAS_FOLDER=/Volumes/main/searcher-spike ./scripts/test --filter nasChangeRelists`,
 /// then create, rename or delete a file in that folder from another machine.
 @Test(.enabled(if: ProcessInfo.processInfo.environment["SEARCHER_NAS_FOLDER"] != nil))
-func nasChangeRelistsForManualCheck() throws {
+func nasChangeRelistsForManualCheck() async throws {
     let path = try #require(ProcessInfo.processInfo.environment["SEARCHER_NAS_FOLDER"])
     let log = EventLog<FolderChange>()
-    let monitor = try FolderMonitor(location: Location(path: path), onChange: log.append)
+    let monitor = try await BlockingCallThread.run {
+        try FolderMonitor(location: Location(path: path), onChange: log.append)
+    }
     defer { monitor.stop() }
     #expect(monitor.volume == .network)
     #expect(monitor.watcher == .vnode)

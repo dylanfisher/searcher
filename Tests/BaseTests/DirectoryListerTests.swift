@@ -204,7 +204,7 @@ private func parseRecord(flags: UInt32?) throws -> DirectoryEntry? {
 }
 
 @Test func otherErrnoKeepsItsCode() {
-    let error = ListingError(path: "/x", code: EIO)
+    let error = ListingError(path: "/x", code: ELOOP)
     #expect(error.reason == .other)
     #expect(String(describing: error).contains("/x"))
 }

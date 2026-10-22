@@ -1,4 +1,5 @@
 import AppKit
+import Base
 import Browser
 import os
 
@@ -278,8 +279,8 @@ public final class PaneViewController: NSViewController {
 
     // MARK: Folder monitor
 
-    /// Starts a monitor for the pane's location off the main thread, where `FolderMonitor` must
-    /// start, and hands it to the pane if the pane is still there when it's ready. Changes it
+    /// Starts a monitor for the pane's location on a `BlockingCallThread`, where `FolderMonitor`
+    /// must start, and hands it to the pane if the pane is still there when it's ready. Changes it
     /// reports go to the pane on the main actor.
     private func startMonitor() {
         guard monitorsFolders else { return }
@@ -287,7 +288,7 @@ public final class PaneViewController: NSViewController {
         let request = monitorRequest
         let location = pane.location
         let logger = logger
-        DispatchQueue.global(qos: .userInitiated).async { [weak self, weak pane] in
+        BlockingCallThread.start { [weak self, weak pane] in
             let monitor: FolderMonitor
             do {
                 monitor = try FolderMonitor(location: location) { [weak pane] change in

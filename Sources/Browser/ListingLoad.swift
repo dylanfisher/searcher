@@ -20,8 +20,10 @@ public final class ListingLoad: @unchecked Sendable {
     /// for it.
     let handOff: @Sendable (ListingUpdate) -> @MainActor @Sendable () -> Void
 
+    // `lock` guards `cancelled` and `storedVolume`.
     private let lock = NSLock()
     private var cancelled = false
+    private var storedVolume: VolumeIdentity?
 
     init(
         location: Location, column: SortColumn, ascending: Bool, foldersFirst: Bool,
@@ -50,5 +52,12 @@ public final class ListingLoad: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return cancelled
+    }
+
+    /// The volume the folder is on, once the service has read it; nil until then. The service
+    /// limits blocking reads per volume by it.
+    public internal(set) var volume: VolumeIdentity? {
+        get { lock.withLock { storedVolume } }
+        set { lock.withLock { storedVolume = newValue } }
     }
 }

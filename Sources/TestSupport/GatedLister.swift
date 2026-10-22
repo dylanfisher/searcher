@@ -9,7 +9,14 @@ public final class GatedLister: Lister, @unchecked Sendable {
     /// What a released call does.
     public enum Outcome: Sendable {
         case batches([[DirectoryEntry]])
+        /// Waits `delay` seconds before delivering each batch, as a slow share does.
+        case delayedBatches([[DirectoryEntry]], delay: TimeInterval)
         case failure(ListingError)
+        /// Waits `delay` seconds, then throws, as a share that drops the connection does.
+        case delayedFailure(ListingError, delay: TimeInterval)
+        /// Never returns, even once released, as a share that stopped answering doesn't. The
+        /// calling thread stays blocked for the rest of the process.
+        case blockForever
     }
 
     /// One `list` call, as it started.
@@ -55,6 +62,9 @@ public final class GatedLister: Lister, @unchecked Sendable {
         while !allReleased && !released.contains(path) {
             condition.wait()
         }
+        if case .blockForever = outcome {
+            while true { condition.wait() }
+        }
         condition.unlock()
         defer {
             condition.lock()
@@ -65,14 +75,29 @@ public final class GatedLister: Lister, @unchecked Sendable {
         }
         switch outcome {
         case .batches(let batches):
-            for batch in batches {
-                condition.lock()
-                deliveredCount += 1
-                condition.unlock()
-                try onBatch(batch)
-            }
+            try deliver(batches, delay: 0, to: onBatch)
+        case .delayedBatches(let batches, let delay):
+            try deliver(batches, delay: delay, to: onBatch)
         case .failure(let error):
             throw error
+        case .delayedFailure(let error, let delay):
+            Thread.sleep(forTimeInterval: delay)
+            throw error
+        case .blockForever:
+            preconditionFailure("a call that blocks forever returned")
+        }
+    }
+
+    private func deliver(
+        _ batches: [[DirectoryEntry]], delay: TimeInterval,
+        to onBatch: ([DirectoryEntry]) throws -> Void
+    ) throws {
+        for batch in batches {
+            if delay > 0 { Thread.sleep(forTimeInterval: delay) }
+            condition.lock()
+            deliveredCount += 1
+            condition.unlock()
+            try onBatch(batch)
         }
     }
 

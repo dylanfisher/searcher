@@ -67,13 +67,15 @@ public final class FolderMonitor: FolderMonitoring, @unchecked Sendable {
         }
     }
 
-    /// Starts watching `location` on the kind of volume it is on.
+    /// Starts watching `location` on the kind of volume it is on. Reading the volume blocks on a
+    /// share that has stopped answering, so this traps unless it runs on a `BlockingCallThread`.
     public convenience init(
         location: Location, onChange: @escaping @Sendable (FolderChange) -> Void
     ) throws {
         dispatchPrecondition(condition: .notOnQueue(.main))
         try self.init(
-            location: location, volume: try VolumeKind(path: location.path), onChange: onChange)
+            location: location, volume: try VolumeIdentity(path: location.path).kind,
+            onChange: onChange)
     }
 
     /// Stops watching and releases the watch's resources before returning.

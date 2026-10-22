@@ -510,6 +510,35 @@ private func linkTree() async throws -> (Pane, StubSystemActions, TemporaryFolde
     #expect(pane.selection.cursor == ExactName("folder link"))
 }
 
+@MainActor @Test func openOnALinkWhoseLoadGoesSlowLeavesThePaneWhereItWas() async {
+    let link = DirectoryEntry(
+        name: "link", type: .symbolicLink, size: nil, modified: testDate, isHidden: false,
+        isDataless: false)
+    let lister = GatedLister([
+        "/root": .batches([[link, file("a.txt")]]), "/root/link": .blockForever,
+    ])
+    lister.releaseAll()
+    let clock = ManualClock()
+    let actions = StubSystemActions()
+    let pane = Pane(
+        location: Location(path: "/root"), service: ListingService(lister: lister, clock: clock),
+        systemActions: actions, settings: untouchedSettings())
+    await settle { pane.state.isLoaded }
+    pane.select(Selection([ExactName("link")], cursor: ExactName("link")))
+
+    pane.openSelection()
+    #expect(lister.waitForCall("/root/link"))
+    clock.advance(by: LoadTimeouts.slow)
+    // The slow update reaches the main queue from the load's timer task, with nothing to wait on.
+    try? await Task.sleep(for: .milliseconds(200))
+    await drainMainQueue()
+
+    #expect(pane.location == Location(path: "/root"))
+    #expect(pane.state.names == ["a.txt", "link"])
+    #expect(actions.openedFiles.isEmpty)
+    #expect(!pane.canGoBack)
+}
+
 @MainActor @Test func openOnALinkToALinkToAFolderLoadsTheFolder() async throws {
     let (pane, actions, root) = try await linkTree()
     pane.select(Selection([ExactName("link to link")], cursor: ExactName("link to link")))
