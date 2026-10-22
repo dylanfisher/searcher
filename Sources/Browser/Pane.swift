@@ -97,7 +97,7 @@ public final class Pane {
     /// Where sorts run. Tests suspend a queue of their own here to hold a sort.
     var sortQueue = DispatchQueue.global(qos: .userInitiated)
     /// The folders left, for Back and Forward.
-    private var history = History()
+    private(set) var history = History()
     /// The load of a `goToFolder` that hasn't moved the pane yet, and the request it answers.
     private var pendingGo: (load: ListingLoad, request: Int)?
     /// Counts `goToFolder` calls, so an update tells whether its go is still pending.
@@ -107,11 +107,11 @@ public final class Pane {
     private var goSelectionVersion = 0
 
     /// Starts listing `location` right away, ahead of other panes' loads if `isFocused`, with
-    /// `name` to be selected once it's listed.
+    /// `name` to be selected once it's listed. In column mode the first column lists it instead.
     public init(
         location: Location, service: ListingService, systemActions: any SystemActions,
         settings: Settings, sortedBy column: SortColumn = .name, ascending: Bool = true,
-        isFocused: Bool = false, selecting name: ExactName? = nil
+        isFocused: Bool = false, selecting name: ExactName? = nil, viewMode: ViewMode = .list
     ) {
         self.location = location
         self.service = service
@@ -121,7 +121,13 @@ public final class Pane {
         sortColumn = column
         sortAscending = ascending
         selection = name.map { Selection([$0], cursor: $0) } ?? Selection()
-        startLoad()
+        switch viewMode {
+        case .list:
+            startLoad()
+        case .column:
+            self.viewMode = .column
+            columnTrail = ColumnTrail(owner: self, at: location, selecting: name, sortedLike: self)
+        }
         settings.observe(for: self) { [weak self] in self?.settingsDidChange() }
     }
 
@@ -219,6 +225,7 @@ public final class Pane {
         isClosed = true
         stopListing()
         columnTrail?.close()
+        columnTrail = nil
         containingTrail = nil
         onChange = nil
     }
