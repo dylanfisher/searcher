@@ -10,9 +10,17 @@ import Testing
 final class StubSystemActions: SystemActions {
     private(set) var openedFiles: [URL] = []
     private(set) var openedURLs: [URL] = []
+    private(set) var copiedTexts: [String] = []
+    private(set) var revealed: [[URL]] = []
+    private(set) var openedInApp: [OpenedInApp] = []
 
     func openFile(_ url: URL) { openedFiles.append(url) }
     func openURL(_ url: URL) { openedURLs.append(url) }
+    func copyToPasteboard(_ text: String) { copiedTexts.append(text) }
+    func revealInFinder(_ urls: [URL]) { revealed.append(urls) }
+    func open(_ folder: URL, inAppWithBundleID bundleID: String) {
+        openedInApp.append(OpenedInApp(folder: folder, bundleID: bundleID))
+    }
 }
 
 final class StubMonitor: FolderMonitoring {
