@@ -1,4 +1,4 @@
-# 00XX. Tiling commands: model only, kept out of the app until the window has a workspace
+# 0044. Tiling commands: model only, kept out of the app until the window has a workspace
 
 - **Date:** 2026-10-22
 - **Status:** accepted

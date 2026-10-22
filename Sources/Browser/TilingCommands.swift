@@ -4,7 +4,7 @@
 /// nothing to do.
 ///
 /// Not in `AppCommands.sets` yet: the panes' views build their contexts without a workspace,
-/// and the window shows one pane (docs/decisions/00XX-tiling-commands.md).
+/// and the window shows one pane (docs/decisions/0044-tiling-commands.md).
 public enum TilingCommands: CommandSet {
     /// How far one resize key moves a split, in points. The divider's VoiceOver increment uses it
     /// too.
