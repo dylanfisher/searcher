@@ -13,10 +13,17 @@ public struct UIBenchOptions: Sendable, Equatable {
         case revisit
         /// `--path` in column view walked with the arrow keys, counting stalls (B6, B10).
         case columnWalk = "column-walk"
+        /// W2 in a split window: ↓ in the focused pane of two panes and of a 4-pane grid (B6),
+        /// and ten panes opening W2 at once to the focused pane's first rows (B2).
+        case splits
 
         /// Whether it times a real folder, `--path`, which it never defaults to.
-        public var needsPath: Bool { self != .columnKeys }
+        public var needsPath: Bool { self != .columnKeys && self != .splits }
     }
+
+    /// Times the `splits` scenario's one launch opens W2 in ten panes, for as many samples as the
+    /// CI run's launches give, one each.
+    public static let tenPaneOpens = 20
 
     /// Where the app writes its `UIBenchRecord`.
     public let output: String

@@ -53,6 +53,12 @@ enum BenchArguments: Equatable {
                 summary =
                     "walk --path in column view with ↓, → and ←; fails on any stall after the "
                     + "launch warm-up (B6, B10)"
+            case .splits:
+                summary =
+                    "W2 in a split window: ↓ in the focused pane of two panes and of a 4-pane "
+                    + "grid (B6), and ten panes opening W2 to the focused pane's first rows, "
+                    + "\(UIBenchOptions.tenPaneOpens) times (B2, stalls counted); fails if an "
+                    + "unfocused pane redraws during ↓; the CI run times it too"
             }
             let path = scenario.needsPath ? " --path <dir>" : ""
             return "  \(scenario.rawValue)\(path)\n      \(summary)"

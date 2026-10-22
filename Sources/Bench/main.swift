@@ -96,7 +96,8 @@ func runCompareUI(previous: String, current: String, branch: String) throws -> B
 
 /// Launches the app bundle at `app` in its UI bench mode `UIBenchReport.launches(for:)` times,
 /// each a new process, so every launch is a cold launch (B1) with a warm file-system cache. The
-/// first launch also presses ↓ `UIBenchReport.keyPresses` times, in the list and in column view.
+/// first launch also presses ↓ `UIBenchReport.keyPresses` times, in the list, in column view and
+/// in two split layouts.
 /// A scenario is one launch that times only its own spans, on `folder` when it needs a real one.
 /// Each launch writes its samples to `UIBenchReport.path(for:)`; the runner reads them after it
 /// exits and writes all of them back there. Returns whether every span is within budget, and for
@@ -121,11 +122,11 @@ func runUI(app: String, folder: String?, scenario: UIBenchOptions.Scenario?) thr
     let tempPrefix = "searcher-bench-ui-\(ProcessInfo.processInfo.processIdentifier)"
     var record = UIBenchRecord()
     for launch in 0..<UIBenchReport.launches(for: scenario) {
-        let pressesKeys = launch == 0 && (scenario == nil || scenario == .columnKeys)
         let options = UIBenchOptions(
             output: output.path, w1: folder ?? Fixture(.w1).path.path,
             w2: folder ?? Fixture(.w2).path.path,
-            keyPresses: pressesKeys ? UIBenchReport.keyPresses : 0, tempPrefix: tempPrefix,
+            keyPresses: UIBenchReport.keyPresses(launch: launch, scenario: scenario),
+            tempPrefix: tempPrefix,
             scenario: scenario, folders: folders)
         // A launch that fails before writing must not leave the last one's samples to be read.
         if FileManager.default.fileExists(atPath: output.path) {

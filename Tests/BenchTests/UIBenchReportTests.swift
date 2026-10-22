@@ -21,7 +21,8 @@ private func underBudget() -> UIBenchRecord {
         hiddenToggle: [40, 50], foldersFirstToggle: [40, 50], sortKey: [60, 70],
         filterKey: Array(repeating: 20, count: 24), columnDown: Array(repeating: 6, count: 500),
         columnRight: Array(repeating: 6, count: 100), columnLeft: Array(repeating: 6, count: 100),
-        stalls: [])
+        splitDown: Array(repeating: 5, count: 500), gridDown: Array(repeating: 5, count: 500),
+        tenPaneOpen: Array(repeating: 70, count: 20), stalls: [])
 }
 
 @Test func filterKeysAreTheirOwnB7Case() throws {
@@ -51,7 +52,7 @@ private func underBudget() -> UIBenchRecord {
     var record = underBudget()
     record.pageDown = Array(repeating: 25, count: 200)
     let report = try UIBenchReport(record: record, scenario: nil)
-    #expect(report.cases.filter { $0.budget?.id == "B6" }.count == 16)
+    #expect(report.cases.filter { $0.budget?.id == "B6" }.count == 18)
     #expect(report.overBudget.map(\.name) == ["W2 Fn-↓ key → frame"])
 }
 
@@ -94,4 +95,53 @@ private func underBudget() -> UIBenchRecord {
     let report = try UIBenchReport(record: record, scenario: nil)
     #expect(report.overBudget.map(\.name) == ["W2 column view ↓ through folders → frame"])
     #expect(report.overBudget.map { $0.budget?.id } == ["B6"])
+}
+
+@Test func keysInASplitAreTheirOwnB6Cases() throws {
+    var record = underBudget()
+    // 30 of 500 over 16 ms puts the p95 over.
+    record.splitDown = Array(repeating: 4, count: 470) + Array(repeating: 25, count: 30)
+    let report = try UIBenchReport(record: record, scenario: nil)
+    #expect(report.overBudget.map(\.name) == ["W2 two-pane split ↓ key → frame"])
+    #expect(report.overBudget.map { $0.budget?.id } == ["B6"])
+}
+
+@Test func gridKeysAreJudgedOnTheGridSamplesAlone() throws {
+    var record = underBudget()
+    record.splitDown = Array(repeating: 4, count: 500)
+    record.gridDown = Array(repeating: 25, count: 500)
+    let report = try UIBenchReport(record: record, scenario: nil)
+    #expect(report.overBudget.map(\.name) == ["W2 4-pane grid ↓ key → frame"])
+    #expect(report.overBudget.map { $0.budget?.id } == ["B6"])
+}
+
+@Test func tenPaneOpenOverB2FailsNamingIt() throws {
+    var record = underBudget()
+    record.tenPaneOpen = Array(repeating: 70, count: 18) + [140, 150]
+    let report = try UIBenchReport(record: record, scenario: nil)
+    #expect(!report.passed)
+    #expect(report.overBudget.map(\.name) == ["open W2 in ten panes → focused first rows frame"])
+    #expect(report.overBudget.map { $0.budget?.id } == ["B2.W2"])
+}
+
+@Test func stallsDuringTheTenPaneLoadAreCountedAndDontFail() throws {
+    var record = underBudget()
+    record.stalls = [
+        UIBenchRecord.Stall(milliseconds: 55, span: "\(UIBenchRecord.tenPaneOpenSpan)"),
+        UIBenchRecord.Stall(milliseconds: 80, span: UIBenchRecord.tenPaneRestSpan),
+        UIBenchRecord.Stall(milliseconds: 90, span: "open W2"),
+    ]
+    let report = try UIBenchReport(record: record, scenario: nil)
+    #expect(report.passed)
+    #expect(
+        report.text.contains(
+            "stalls during the ten-pane load: 2, longest 80.00 ms (B10, reported only)"),
+        "\(report.text)")
+}
+
+@Test func noStallsDuringTheTenPaneLoadIsStated() throws {
+    let report = try UIBenchReport(record: underBudget(), scenario: nil)
+    #expect(
+        report.text.contains("stalls during the ten-pane load: 0 (B10, reported only)"),
+        "\(report.text)")
 }

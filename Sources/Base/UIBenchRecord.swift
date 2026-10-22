@@ -65,6 +65,15 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
     public var columnRight: [Double]
     /// ← key → frame, back to W2's first column (B6).
     public var columnLeft: [Double]
+    /// ↓ key → frame in the focused pane of a two-pane split, both panes on W2 (B6).
+    public var splitDown: [Double]
+    /// ↓ key → frame in the focused pane of a 4-pane grid, every pane on W2 (B6).
+    public var gridDown: [Double]
+    /// Ten panes of one window opening W2 at once, the focused pane's load asked last → frame
+    /// with the focused pane's first rows (B2.W2). The span ends at the first commit after which
+    /// the whole window has nothing to draw, so the other panes' drawing can fall inside it: the
+    /// longest a user could wait, not the focused pane's draw alone.
+    public var tenPaneOpen: [Double]
     /// `cold` scenario: open a never-opened subfolder of `--path` → frame with its first rows
     /// (B3).
     public var coldOpen: [Double]
@@ -97,6 +106,13 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
     public static let warmUpSpan = "launch warm-up"
     /// The spans of the launch, before the first span after it.
     public static var launchSpans: Set<String> { ["\(launchSpan)", warmUpSpan] }
+    /// The span name of ten panes opening W2, up to the focused pane's first rows frame.
+    public static let tenPaneOpenSpan: StaticString = "ten-pane open"
+    /// The span name of the rest of the ten panes' load: from the focused pane's first rows frame
+    /// until every pane holds its complete listing. Nothing in it is timed.
+    public static let tenPaneRestSpan = "ten-pane load"
+    /// The spans of the ten-pane load, whose stalls the report counts on their own.
+    public static var tenPaneSpans: Set<String> { ["\(tenPaneOpenSpan)", tenPaneRestSpan] }
 
     public init(
         launch: [Double] = [], openW1: [Double] = [], openW2: [Double] = [],
@@ -108,6 +124,7 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         typeSelect: [Double] = [], sortChange: [Double] = [], hiddenToggle: [Double] = [],
         foldersFirstToggle: [Double] = [], sortKey: [Double] = [], filterKey: [Double] = [],
         columnDown: [Double] = [], columnRight: [Double] = [], columnLeft: [Double] = [],
+        splitDown: [Double] = [], gridDown: [Double] = [], tenPaneOpen: [Double] = [],
         coldOpen: [Double] = [], revisit: [Double] = [], columnWalkKey: [Double] = [],
         stalls: [Stall] = []
     ) {
@@ -135,6 +152,9 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         self.columnDown = columnDown
         self.columnRight = columnRight
         self.columnLeft = columnLeft
+        self.splitDown = splitDown
+        self.gridDown = gridDown
+        self.tenPaneOpen = tenPaneOpen
         self.coldOpen = coldOpen
         self.revisit = revisit
         self.columnWalkKey = columnWalkKey
@@ -167,6 +187,9 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         columnDown += other.columnDown
         columnRight += other.columnRight
         columnLeft += other.columnLeft
+        splitDown += other.splitDown
+        gridDown += other.gridDown
+        tenPaneOpen += other.tenPaneOpen
         coldOpen += other.coldOpen
         revisit += other.revisit
         columnWalkKey += other.columnWalkKey
