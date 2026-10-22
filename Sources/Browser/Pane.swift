@@ -385,6 +385,16 @@ public final class Pane {
     /// several entries selected, folders are skipped and symbolic links count as files, which the
     /// system resolves. A single selected link opens as what it points at does (`openLink`).
     public func openSelection() {
+        openSelection(foldersIn: nil)
+    }
+
+    /// Opens the selection as `openSelection` does, except that a single selected folder, or link
+    /// to one, opens in `other`, which must not be a column. Files still go to the system.
+    public func openSelection(in other: Pane) {
+        openSelection(foldersIn: other)
+    }
+
+    private func openSelection(foldersIn other: Pane?) {
         guard let listing = state.listing else { return }
         // A provisional selection knows only the rows near the cursor. Opening right after a
         // change that raced a load, patch or sort is rare enough to settle it here.
@@ -392,6 +402,7 @@ public final class Pane {
             selection.isProvisional ? onMain { selection.settled(in: listing) } : selection
         let entries = selection.rows(in: listing).map { listing[$0] }
         if entries.count == 1, entries[0].type == .directory {
+            if let other { return other.navigate(to: location.child(named: entries[0].name)) }
             // A column moves into the folder's column instead, as → does.
             if let trail = containingTrail { return trail.openFolder(from: self) }
             navigate(to: location.child(named: entries[0].name))
@@ -400,7 +411,8 @@ public final class Pane {
         if entries.count == 1, entries[0].type == .symbolicLink {
             // A link has no column, so a column opens it as the owner would: a link to a folder
             // starts the trail again at the link.
-            (containingTrail?.owner ?? self).openLink(location.child(named: entries[0].name))
+            (other ?? containingTrail?.owner ?? self).openLink(
+                location.child(named: entries[0].name))
             return
         }
         for entry in entries where entry.type != .directory {
