@@ -46,8 +46,12 @@ public enum ViewCommands: CommandSet {
             CommandBinding(sortBySize) { sort($0.pane, by: .size) },
             CommandBinding(toggleQuickLook) { $0.toggleQuickLook() },
             CommandBinding(filter) { $0.showFilter() },
-            CommandBinding(asList) { tile(of: $0.pane).setViewMode(.list) },
-            CommandBinding(asColumns) { tile(of: $0.pane).setViewMode(.column) },
+            CommandBinding(
+                asList, isCurrent: { tile(of: $0.pane).viewMode == .list },
+                run: { tile(of: $0.pane).setViewMode(.list) }),
+            CommandBinding(
+                asColumns, isCurrent: { tile(of: $0.pane).viewMode == .column },
+                run: { tile(of: $0.pane).setViewMode(.column) }),
         ]
     }
 

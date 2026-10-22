@@ -5,7 +5,8 @@ import Quartz
 /// A pane's entries in a view-based table: name with its type's icon, and a cloud badge when the
 /// entry isn't downloaded; size, date modified and kind. A header click sorts the pane by that
 /// column and a second click reverses it; the user can resize and reorder the columns. The pane owns the sort and the selection; the table shows them
-/// and reports the user's changes back (0017-list-view-columns.md).
+/// and reports the user's changes back (0017-list-view-columns.md). In column view each column is
+/// one of these showing names only, with no header (`showsNamesOnly`).
 ///
 /// Everything it shows comes from the pane's `Listing` and the icon cache, so it makes no
 /// file-system call (0004-listing-view.md).
@@ -28,6 +29,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
 
     private let iconCache: TypeIconCache
     private let formatter: EntryCellFormatter
+    /// A column of column view: the Name column alone, with no header and no horizontal scroller.
+    private let showsNamesOnly: Bool
     /// The pane's `stateVersion` that `listing` came from.
     private var shownVersion: Int?
     /// Set while the table is changed to match the pane, so the delegate calls that causes don't
@@ -58,12 +61,13 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// `tableView` is the table to fill, for tests that watch how the rows change.
     init(
         pane: Pane, iconCache: TypeIconCache, formatter: EntryCellFormatter,
-        tableView: ListingTableView
+        tableView: ListingTableView, showsNamesOnly: Bool = false
     ) {
         self.pane = pane
         self.tableView = tableView
         self.iconCache = iconCache
         self.formatter = formatter
+        self.showsNamesOnly = showsNamesOnly
         quickLook = QuickLookController(pane: pane, table: tableView)
         super.init(nibName: nil, bundle: nil)
         configureTable()
@@ -79,7 +83,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         let scrollView = NSScrollView()
         scrollView.documentView = tableView
         scrollView.hasVerticalScroller = true
-        scrollView.hasHorizontalScroller = true
+        scrollView.hasHorizontalScroller = !showsNamesOnly
         scrollView.autohidesScrollers = true
         view = scrollView
     }
@@ -217,8 +221,11 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     // MARK: Columns
 
     private func configureTable() {
-        for column in SortColumn.allCases {
+        for column in showsNamesOnly ? [.name] : SortColumn.allCases {
             tableView.addTableColumn(Self.tableColumn(for: column))
+        }
+        if showsNamesOnly {
+            tableView.headerView = nil
         }
         tableView.allowsColumnReordering = true
         tableView.allowsColumnResizing = true
@@ -229,7 +236,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         // unselected rows, updating each changed row's neighbors: 13–16 ms on the main thread to
         // select 100k rows in a release build. Full width draws the same selection in 0.2 ms.
         tableView.style = .fullWidth
-        tableView.usesAlternatingRowBackgroundColors = true
+        tableView.usesAlternatingRowBackgroundColors = !showsNamesOnly
         tableView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         // Set before the delegate, so the first sort doesn't reach `sortDescriptorsDidChange`.
         tableView.sortDescriptors = [
@@ -332,21 +339,22 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     private func configure(
         _ cell: NSTableCellView, column: SortColumn, row: Int, in listing: Listing
     ) {
-        let entry = listing[row]
-        let text: String
-        switch column {
-        case .name:
-            text = entry.name
+        if column == .name {
             cell.imageView?.image = iconCache.icon(for: listing.kind(atRow: row).type)
-            showNotDownloadedBadge(entry.isDataless, in: cell)
-        case .size:
-            text = formatter.size(entry)
-        case .dateModified:
-            text = formatter.date(entry.modified)
-        case .kind:
-            text = listing.kind(atRow: row).text
+            showNotDownloadedBadge(listing[row].isDataless, in: cell)
         }
-        cell.textField?.stringValue = text
+        cell.textField?.stringValue = text(column, row: row, in: listing)
+    }
+
+    /// What `column`'s cell shows for `row` of `listing`.
+    private func text(_ column: SortColumn, row: Int, in listing: Listing) -> String {
+        let entry = listing[row]
+        switch column {
+        case .name: return entry.name
+        case .size: return formatter.size(entry)
+        case .dateModified: return formatter.date(entry.modified)
+        case .kind: return listing.kind(atRow: row).text
+        }
     }
 
     /// Labels each row view the table adds, its cells already filled, so a label is built only
@@ -360,10 +368,14 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
 
     /// Sets what VoiceOver reads for `row`: the name, kind, size and date, taken from the text its
     /// cells show, then "Not downloaded" for an entry that isn't (0040-list-accessibility.md). An
-    /// entry without a size leaves it out rather than read the Size column's "--".
+    /// entry without a size leaves it out rather than read the Size column's "--". A column of
+    /// column view shows names only, so it formats the other parts from the entry.
     private func label(_ rowView: NSTableRowView, row: Int, in listing: Listing) {
         let entry = listing[row]
         func text(_ column: SortColumn) -> String {
+            if showsNamesOnly, column != .name {
+                return self.text(column, row: row, in: listing)
+            }
             let index = tableView.column(withIdentifier: column.identifier)
             guard index >= 0, let cell = rowView.view(atColumn: index) as? NSTableCellView,
                 let text = cell.textField?.stringValue

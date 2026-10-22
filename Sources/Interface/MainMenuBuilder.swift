@@ -118,6 +118,8 @@ public enum MainMenuBuilder {
         Menu(
             title: "View",
             items: [
+                .command(ViewCommands.asList.id), .command(ViewCommands.asColumns.id),
+                .separator,
                 .command(ViewCommands.toggleHidden.id),
                 .command(ViewCommands.toggleFoldersFirst.id),
                 .separator,

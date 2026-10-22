@@ -611,3 +611,25 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
     await settle { parent.state.isOffline }
     #expect(paths(pane) == ["/n", "/n/docs"])
 }
+
+@MainActor @Test func focusingAColumnMovesTheKeysThereWithoutChangingTheColumns() async throws {
+    let fixture = await columnPane()
+    let pane = fixture.pane
+    select("docs", in: trail(pane).columns[0])
+    await settle { trail(pane).columns[1].pane.state.isLoaded }
+    var changes = 0
+    pane.onChange = { changes += 1 }
+
+    trail(pane).focus(trail(pane).columns[1])
+
+    #expect(trail(pane).focusedIndex == 1)
+    #expect(pane.location == Location(path: "/r/docs"))
+    #expect(pane.commandPane === trail(pane).columns[1].pane)
+    #expect(paths(pane) == ["/r", "/r/docs"])
+    #expect(trail(pane).columns[1].pane.selection.isEmpty)
+    #expect(changes == 1)
+
+    trail(pane).focus(trail(pane).columns[1])
+
+    #expect(changes == 1)
+}
