@@ -5,7 +5,7 @@ import Interface
 import os
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// Listings of network folders, kept in the user's caches folder; nil in a bench launch,
     /// which must not read or write the user's stores and brings its own service.
     private let cache: ListingCache?
@@ -16,7 +16,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The user's own preferences, made on first use so a bench launch never reads them; the
     /// bench makes its own over a suite of its own.
     private lazy var settings = Settings(defaults: .standard)
-    private var windows: [BrowserWindowController] = []
+    /// The browser windows, made on first use so a bench launch, which opens its own window,
+    /// never makes them.
+    private lazy var windows = WorkspaceWindows(
+        service: service, systemActions: systemActions, settings: settings,
+        folderSizes: folderSizes)
     private let bench: UIBench?
 
     init(bench: UIBench?) {
@@ -74,7 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         installMainMenu()
         VolumeNotifications.start()
-        let window = openWindow()
+        let window = openHomeWindow()
         NSApp.activate()
         LaunchWarmup.shared.start(after: window)
     }
@@ -84,9 +88,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool)
         -> Bool
     {
-        guard bench == nil, windows.isEmpty else { return true }
-        openWindow()
+        guard bench == nil, windows.controllers.isEmpty else { return true }
+        openHomeWindow()
         return false
+    }
+
+    /// New Window when no window has the keys, as when every window is closed: the menu item
+    /// reaches the app's delegate, which opens a window on the home folder. A window with the
+    /// keys runs the command itself, from its focused pane.
+    @objc func runMenuCommand(_ sender: NSMenuItem) {
+        guard sender.representedObject as? CommandID == WindowCommands.newWindow.id else {
+            preconditionFailure("menu item \"\(sender.title)\" reached the app without a window")
+        }
+        openHomeWindow()
+    }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        guard item.action == #selector(runMenuCommand(_:)) else { return true }
+        return bench == nil && item.representedObject as? CommandID == WindowCommands.newWindow.id
     }
 
     private func installMainMenu() {
@@ -102,27 +121,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Opens a browser window on the home folder. The controller is kept until its window
-    /// closes, so a closed window's pane stops watching its folder.
+    /// Opens a browser window on the home folder.
     @discardableResult
-    private func openWindow() -> NSWindow {
-        let controller = BrowserWindowController(
-            location: Location(path: NSHomeDirectory()), service: service,
-            systemActions: systemActions, settings: settings)
-        controller.paneViewController.pane.folderSizes = folderSizes
-        guard let window = controller.window else {
+    private func openHomeWindow() -> NSWindow {
+        guard let window = windows.open(at: Location(path: NSHomeDirectory())).window else {
             preconditionFailure("a browser window controller has no window")
         }
-        windows.append(controller)
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(windowWillClose(_:)), name: NSWindow.willCloseNotification,
-            object: window)
-        controller.showWindow(nil)
         return window
-    }
-
-    @objc private func windowWillClose(_ notification: Notification) {
-        windows.removeAll { $0.window === notification.object as? NSWindow }
     }
 }
 

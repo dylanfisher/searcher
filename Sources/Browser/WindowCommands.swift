@@ -1,6 +1,8 @@
 /// The tab keys: open a tab, close one, and show the next or previous one, on the context's
-/// workspace, and Open in New Tab for a clicked folder. They change the model only; the window
-/// shows the result (docs/decisions/0054-tabs-in-window.md).
+/// workspace, and Open in New Tab for a clicked folder; and the window commands: open a window,
+/// move a pane to a new one, and merge one into another. They change the model only; the windows
+/// show the result (docs/decisions/0054-tabs-in-window.md,
+/// docs/decisions/0057-windows-and-tear-out.md).
 public enum WindowCommands: CommandSet {
     /// Adds a tab after the selected one at the focused pane's folder, in its view mode and sort,
     /// and selects it.
@@ -31,8 +33,34 @@ public enum WindowCommands: CommandSet {
             KeyChord(.tab, modifiers: [.control, .shift]),
         ])
 
+    /// Opens a window with one tab at the focused pane's folder, in its view mode and sort.
+    public static let newWindow = Command(
+        id: CommandID("window.newWindow"), title: "New Window",
+        chords: [KeyChord("n", modifiers: .command)])
+    /// Moves the focused pane, with its rows, selection and watch, to a new window of one tab.
+    /// Its tab closes with its last pane. Off with one pane in the window.
+    public static let movePaneToNewWindow = Command(
+        id: CommandID("window.movePaneToNewWindow"), title: "Move Pane to New Window", chords: [])
+    /// Moves every tab of the window, in order, to the end of the most recently active other
+    /// window's strip and closes this one. Off with one window.
+    public static let mergeWindowIntoTab = Command(
+        id: CommandID("window.mergeWindowIntoTab"), title: "Merge Window into Tab", chords: [])
+
     public static var bindings: [CommandBinding] {
         [
+            CommandBinding(newWindow) { context in
+                let focused = context.tab.focusedPane
+                context.workspaces.add(
+                    Workspace(tab: Tab(pane: focused.newPane(at: focused.location))))
+            },
+            CommandBinding(
+                movePaneToNewWindow, isEnabled: { $0.workspace.paneCount > 1 },
+                run: { context in
+                    context.workspaces.add(Workspace(tab: context.workspace.removeFocusedPane()))
+                }),
+            CommandBinding(
+                mergeWindowIntoTab, isEnabled: { $0.workspaces.workspaces.count > 1 },
+                run: { context in context.workspaces.merge(context.workspace) }),
             CommandBinding(newTab) { context in
                 let focused = context.tab.focusedPane
                 context.workspace.add(Tab(pane: focused.newPane(at: focused.location)))

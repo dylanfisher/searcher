@@ -65,6 +65,9 @@ public enum MainMenuBuilder {
             .separator,
             .command(WindowCommands.previousTab.id), .command(WindowCommands.nextTab.id),
             .separator,
+            .command(WindowCommands.movePaneToNewWindow.id),
+            .command(WindowCommands.mergeWindowIntoTab.id),
+            .separator,
             // Tab is its key.
             .commandWithoutKey(DualPaneCommands.focusOtherPane.id),
             .separator,
@@ -79,7 +82,8 @@ public enum MainMenuBuilder {
         Menu(
             title: "File",
             items: [
-                .command(WindowCommands.newTab.id), .command(WindowCommands.closeTab.id),
+                .command(WindowCommands.newWindow.id), .command(WindowCommands.newTab.id),
+                .command(WindowCommands.closeTab.id),
                 .separator,
                 .command(SystemCommands.revealInFinder.id),
                 .command(SystemCommands.openTerminal.id),

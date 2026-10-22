@@ -41,6 +41,8 @@ public final class PaneViewController: NSViewController {
     struct WindowLink {
         /// The window's tabs; the pane is in one of them.
         let workspace: Workspace
+        /// Every window's workspace, for the commands that open, move or merge windows.
+        let workspaces: WorkspaceList
         /// The size the selected tab's panes fill.
         let tabBounds: @MainActor () -> Rect
         /// Takes what Close Pane or Close Tab closed.
@@ -49,8 +51,9 @@ public final class PaneViewController: NSViewController {
         let didRunCommand: @MainActor () -> Void
     }
 
-    /// Set by the window showing the pane. Without it, as tests show a pane on its own, commands
-    /// get a context with no workspace, which traps on a tiling, other-pane or tab command.
+    /// Set by the window showing the pane, and again by the window it moves to. Without it, as
+    /// tests show a pane on its own, commands get a context with no workspace, which traps on a
+    /// tiling, other-pane, tab or window command.
     var windowLink: WindowLink?
 
     /// Draws a ring around the pane, for the pane with the keys while another pane shows.
@@ -285,7 +288,8 @@ public final class PaneViewController: NSViewController {
                 showFilter: { [weak self] in self?.showFilter() }, folder: folder)
         }
         return CommandContext(
-            pane: pane.commandPane, workspace: link.workspace, tabBounds: link.tabBounds,
+            pane: pane.commandPane, workspace: link.workspace, workspaces: link.workspaces,
+            tabBounds: link.tabBounds,
             didClosePane: link.didClosePane,
             toggleQuickLook: { [weak self] in self?.keyListing.quickLook.toggle() },
             askForFolder: { [weak self] in self?.askForFolder() },
