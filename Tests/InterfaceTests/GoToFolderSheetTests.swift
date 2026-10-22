@@ -112,11 +112,11 @@ func aMissingFolderShowsWhyWithThePathAndStaysOpen(typed: String, path: String) 
 @MainActor @Test func escapeWhileAFolderListsStopsTheGo() async {
     let fixture = await Fixture(holding: ["/home/me/work/src"])
     fixture.go("src")
-    #expect(fixture.lister.waitForCall("/home/me/work/src"))
+    #expect(await fixture.lister.waitForCall("/home/me/work/src"))
 
     fixture.press(#selector(NSResponder.cancelOperation(_:)))
     fixture.lister.release("/home/me/work/src")
-    #expect(fixture.lister.waitForFinished(2))
+    #expect(await fixture.lister.waitForFinished(2))
     await drainMainQueue()
 
     #expect(fixture.closeCount == 1)

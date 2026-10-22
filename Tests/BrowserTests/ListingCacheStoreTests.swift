@@ -191,11 +191,11 @@ func aFileThatDoesNotDecodeIsDeletedAndLoggedAndMisses(_ damage: StoreDamage) as
     await writer.save(["/Music/Album": album], for: share)
     await writer.save(["/Music/Album": album, "/Music/Other": album], for: share)
 
-    #expect(!writes.wait(timeout: 0.2) { !$0.isEmpty })
+    #expect(await !writes.wait(timeout: 0.2) { !$0.isEmpty })
     clock.advance(by: ListingCacheStore.writeDelay)
-    #expect(writes.wait { !$0.isEmpty })
+    #expect(await writes.wait { !$0.isEmpty })
     // Both saves went out in one write.
-    #expect(!writes.wait(timeout: 0.2) { $0.count > 1 })
+    #expect(await !writes.wait(timeout: 0.2) { $0.count > 1 })
     #expect(writes.all == [false])
     #expect(await store(folder).load(share).count == 2)
 }

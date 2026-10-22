@@ -137,11 +137,11 @@ private func press(_ chord: KeyChord, on pane: Pane) throws {
     let subMonitor = StubMonitor()
     docs.monitor = docsMonitor
     sub.monitor = subMonitor
-    #expect(fixture.lister.waitForCall("/r/docs/sub"))
+    #expect(await fixture.lister.waitForCall("/r/docs/sub"))
 
     select("a.txt", in: first)
     fixture.lister.release("/r/docs/sub")
-    #expect(fixture.lister.waitForFinished(4))
+    #expect(await fixture.lister.waitForFinished(4))
     await drainMainQueue()
 
     #expect(paths(fixture.pane) == ["/r"])
@@ -370,7 +370,7 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
     pane.setViewMode(.column)
     await settle { trail(pane).focused.pane.state.isLoaded }
     select("docs", in: trail(pane).columns[0])
-    #expect(lister.waitForCall("/r/docs"))
+    #expect(await lister.waitForCall("/r/docs"))
     var changes = 0
     pane.onChange = { changes += 1 }
 
@@ -423,12 +423,12 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
     let pane = fixture.pane
     let monitor = StubMonitor()
     pane.monitor = monitor
-    #expect(fixture.lister.waitForCall("/r"))
+    #expect(await fixture.lister.waitForCall("/r"))
 
     pane.setViewMode(.column)
     fixture.lister.releaseAll()
     await settle { trail(pane).focused.pane.state.isLoaded }
-    #expect(fixture.lister.waitForFinished(2))
+    #expect(await fixture.lister.waitForFinished(2))
     await drainMainQueue()
 
     #expect(monitor.stopCount == 1)
@@ -442,7 +442,7 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
 
     fixture.pane.apply(.relist, at: fixture.pane.location)
 
-    #expect(!fixture.lister.waitForCalls(calls + 1, timeout: 0.5))
+    #expect(await !fixture.lister.waitForCalls(calls + 1, timeout: 0.5))
     #expect(fixture.pane.state.listing == nil)
 }
 
@@ -456,7 +456,7 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
     select("docs", in: trail(pane).columns[0])
     await settle { trail(pane).columns[1].pane.state.isLoaded }
     select("sub", in: trail(pane).columns[1])
-    #expect(fixture.lister.waitForCall("/r/docs/sub"))
+    #expect(await fixture.lister.waitForCall("/r/docs/sub"))
     let left = trail(pane).columns.map(\.pane)
     let monitors = left.map { column in
         let monitor = StubMonitor()
@@ -468,7 +468,7 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
     pane.navigate(to: Location(path: "/r/other"))
     fixture.lister.release("/r/docs/sub")
     await settle { trail(pane).focused.pane.state.isLoaded }
-    #expect(fixture.lister.waitForFinished(5))
+    #expect(await fixture.lister.waitForFinished(5))
     await drainMainQueue()
 
     #expect(paths(pane) == ["/r/other"])

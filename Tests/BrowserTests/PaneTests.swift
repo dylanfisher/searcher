@@ -182,11 +182,11 @@ func drainMainQueue() async {
         at: "/a", folders: ["/a": [file("from-a")], "/b": [file("from-b")]], held: true)
     let monitor = StubMonitor()
     fixture.pane.monitor = monitor
-    #expect(fixture.lister.waitForCall("/a"))
+    #expect(await fixture.lister.waitForCall("/a"))
 
     fixture.pane.navigate(to: Location(path: "/b"))
     fixture.lister.release("/a")
-    #expect(fixture.lister.waitForFinished(1))
+    #expect(await fixture.lister.waitForFinished(1))
     await drainMainQueue()
 
     #expect(monitor.stopCount == 1)
@@ -240,17 +240,17 @@ func drainMainQueue() async {
 
     fixture.pane.didGainFocus()
 
-    #expect(fixture.lister.waitForCalls(2))
+    #expect(await fixture.lister.waitForCalls(2))
     #expect(fixture.pane.state.isLoaded)
 }
 
 @MainActor @Test func regainingFocusWhileLoadingStartsNoSecondLoad() async {
     let fixture = PaneFixture(at: "/root", folders: ["/root": [file("a")]], held: true)
-    #expect(fixture.lister.waitForCalls(1))
+    #expect(await fixture.lister.waitForCalls(1))
 
     fixture.pane.didGainFocus()
 
-    #expect(!fixture.lister.waitForCalls(2, timeout: 0.2))
+    #expect(await !fixture.lister.waitForCalls(2, timeout: 0.2))
     fixture.lister.releaseAll()
     await settle { fixture.pane.state.isLoaded }
 }
@@ -403,7 +403,7 @@ private func heldSortQueue() -> DispatchQueue {
         at: "/root",
         folders: ["/root": [file("a", size: 3), file("b", size: 1), file("c", size: 2)]],
         held: true)
-    #expect(fixture.lister.waitForCalls(1))
+    #expect(await fixture.lister.waitForCalls(1))
 
     fixture.pane.setSort(.size, ascending: false)
     fixture.lister.releaseAll()
@@ -555,7 +555,7 @@ private func linkTree() async throws -> (Pane, StubSystemActions, TemporaryFolde
     pane.select(Selection([ExactName("link")], cursor: ExactName("link")))
 
     pane.openSelection()
-    #expect(lister.waitForCall("/root/link"))
+    #expect(await lister.waitForCall("/root/link"))
     clock.advance(by: LoadTimeouts.slow)
     // The slow update reaches the main queue from the load's timer task, with nothing to wait on.
     try? await Task.sleep(for: .milliseconds(200))
@@ -751,7 +751,7 @@ private func linkTree() async throws -> (Pane, StubSystemActions, TemporaryFolde
     for path in holds {
         service.load(Location(path: path)) { _ in }
     }
-    #expect(lister.waitForCalls(holds.count))
+    #expect(await lister.waitForCalls(holds.count))
     service.load(Location(path: "/normal")) { _ in }
     _ = Pane(
         location: Location(path: "/pane"), service: service, systemActions: StubSystemActions(),
@@ -759,7 +759,7 @@ private func linkTree() async throws -> (Pane, StubSystemActions, TemporaryFolde
 
     lister.release(holds[0])
 
-    #expect(lister.waitForCall("/pane"))
+    #expect(await lister.waitForCall("/pane"))
     #expect(!lister.calls.map(\.path).contains("/normal"))
 }
 
@@ -795,7 +795,7 @@ private func linkTree() async throws -> (Pane, StubSystemActions, TemporaryFolde
 
     fixture.pane.apply(.relist, at: fixture.pane.location)
 
-    #expect(fixture.lister.waitForCalls(2))
+    #expect(await fixture.lister.waitForCalls(2))
 }
 
 @MainActor @Test func aChangeForAFolderThePaneLeftIsIgnored() async {
@@ -855,7 +855,7 @@ private final class HeldLister: Lister, @unchecked Sendable {
         systemActions: StubSystemActions(), settings: untouchedSettings())
     await settle { pane.state.names == ["a"] }
     pane.reload()
-    #expect(gate.waitForCalls(1))
+    #expect(await gate.waitForCalls(1))
 
     // The reload has read the folder; the file appears, and its patch shows at once.
     lister.set("/root", to: [file("a"), file("new")])
@@ -877,7 +877,7 @@ private final class HeldLister: Lister, @unchecked Sendable {
         location: Location(path: "/root"),
         service: ListingService(lister: HeldLister(lister, gate)),
         systemActions: StubSystemActions(), settings: untouchedSettings())
-    #expect(gate.waitForCalls(1))
+    #expect(await gate.waitForCalls(1))
 
     // The file appears after the lister has read the folder, but before the load ends.
     lister.set("/root", to: [file("a"), file("new")])
@@ -890,7 +890,7 @@ private final class HeldLister: Lister, @unchecked Sendable {
 
 @MainActor @Test func aRelistDuringALoadListsTheFolderAgainOnceItEnds() async {
     let fixture = PaneFixture(at: "/root", folders: ["/root": [file("a")]], held: true)
-    #expect(fixture.lister.waitForCalls(1))
+    #expect(await fixture.lister.waitForCalls(1))
 
     fixture.pane.apply(.relist, at: fixture.pane.location)
     fixture.lister.releaseAll()

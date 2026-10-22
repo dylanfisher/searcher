@@ -67,14 +67,14 @@ private func freshListing(of folder: String) throws -> Listing {
         return (monitor, log)
     }
 
-    @Test func localFolderPatchesCreateDeleteAndRename() throws {
+    @Test func localFolderPatchesCreateDeleteAndRename() async throws {
         let folder = try TemporaryFolder("FolderMonitorTests")
         let (monitor, log) = try monitor(folder, volume: .local)
         defer { monitor.stop() }
         #expect(monitor.watcher == .fileEvents)
 
         try Data(count: 5).write(to: folder.url.appending(path: "created"))
-        #expect(log.wait { updatedNames($0).contains("created") })
+        #expect(await log.wait { updatedNames($0).contains("created") })
         let created = patches(log.all).compactMap {
             if case .update(let entry) = $0, entry.name == "created" { entry } else { nil }
         }
@@ -83,15 +83,15 @@ private func freshListing(of folder: String) throws -> Listing {
         try FileManager.default.moveItem(
             at: folder.url.appending(path: "created"), to: folder.url.appending(path: "renamed"))
         #expect(
-            log.wait {
+            await log.wait {
                 removedNames($0).contains("created") && updatedNames($0).contains("renamed")
             })
 
         try FileManager.default.removeItem(at: folder.url.appending(path: "renamed"))
-        #expect(log.wait { removedNames($0).contains("renamed") })
+        #expect(await log.wait { removedNames($0).contains("renamed") })
     }
 
-    @Test func networkFolderUsesVnodeAndRequestsRelist() throws {
+    @Test func networkFolderUsesVnodeAndRequestsRelist() async throws {
         let folder = try TemporaryFolder("FolderMonitorTests")
         let (monitor, log) = try monitor(folder, volume: .network)
         defer { monitor.stop() }
@@ -99,7 +99,7 @@ private func freshListing(of folder: String) throws -> Listing {
 
         try Data().write(to: folder.url.appending(path: "created"))
 
-        #expect(log.wait { $0.contains(.relist) })
+        #expect(await log.wait { $0.contains(.relist) })
         #expect(patches(log.all).isEmpty)
     }
 
@@ -123,14 +123,14 @@ private func freshListing(of folder: String) throws -> Listing {
         #expect(monitor.vnodeDescriptor == nil)
     }
 
-    @Test func stoppedMonitorSendsNothing() throws {
+    @Test func stoppedMonitorSendsNothing() async throws {
         let folder = try TemporaryFolder("FolderMonitorTests")
         let (monitor, log) = try monitor(folder, volume: .local)
         monitor.stop()
 
         try Data().write(to: folder.url.appending(path: "after stop"))
 
-        #expect(!log.wait(timeout: 1) { !$0.isEmpty })
+        #expect(await !log.wait(timeout: 1) { !$0.isEmpty })
     }
 
     @Test func missingFolderThrowsNotFound() {
@@ -177,7 +177,7 @@ private func freshListing(of folder: String) throws -> Listing {
         }
     }
 
-    @Test func writingAnExistingFileUpdatesItsRow() throws {
+    @Test func writingAnExistingFileUpdatesItsRow() async throws {
         let folder = try TemporaryFolder("FolderMonitorTests")
         let file = folder.url.appending(path: "grows")
         try Data(count: 3).write(to: file)
@@ -198,10 +198,10 @@ private func freshListing(of folder: String) throws -> Listing {
         try handle.write(contentsOf: Data(count: 4_000))
         try handle.close()
 
-        #expect(log.wait { _ in live.rows.map(\.size) == [4_003] })
+        #expect(await log.wait { _ in live.rows.map(\.size) == [4_003] })
     }
 
-    @Test func renamingTheWatchedFolderRequestsRelist() throws {
+    @Test func renamingTheWatchedFolderRequestsRelist() async throws {
         let parent = try TemporaryFolder("FolderMonitorTests")
         let watched = parent.url.appending(path: "watched")
         try FileManager.default.createDirectory(at: watched, withIntermediateDirectories: false)
@@ -213,10 +213,10 @@ private func freshListing(of folder: String) throws -> Listing {
         try FileManager.default.moveItem(
             at: watched, to: parent.url.appending(path: "moved"))
 
-        #expect(log.wait { $0.contains(.relist) })
+        #expect(await log.wait { $0.contains(.relist) })
     }
 
-    @Test func burstOfCreatesLeavesTheListingEqualToAFreshOne() throws {
+    @Test func burstOfCreatesLeavesTheListingEqualToAFreshOne() async throws {
         let folder = try TemporaryFolder("FolderMonitorTests")
         let live = LiveListing(try freshListing(of: folder.url.path))
         let log = EventLog<FolderChange>()
@@ -234,7 +234,7 @@ private func freshListing(of folder: String) throws -> Listing {
 
         let fresh = rowsOf(try freshListing(of: folder.url.path))
         #expect(fresh.count == 1_000)
-        #expect(log.wait(timeout: 20) { _ in live.rows == fresh })
+        #expect(await log.wait(timeout: 20) { _ in live.rows == fresh })
         #expect(!log.all.contains(.relist))
     }
 }
@@ -311,7 +311,7 @@ func nasChangeRelistsForManualCheck() async throws {
     print("Watching \(path) as a network volume. Change it on the NAS within 120 s.")
 
     let started = Date()
-    let relisted = log.wait(timeout: 120) { $0.contains(.relist) }
+    let relisted = await log.wait(timeout: 120) { $0.contains(.relist) }
 
     #expect(relisted)
     print("Re-list requested \(Date().timeIntervalSince(started)) s after the watch started.")
