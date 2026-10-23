@@ -97,6 +97,43 @@ public final class WorkspaceWindows {
         await fileOperations.cancelAll(by: deadline, clock: .continuous)
     }
 
+    /// Whether the app may quit: at once with no file operation unfinished and no question about
+    /// one waiting, else what `ask` answers when shown `quitAlert`, true for Quit. Paused
+    /// operations and ones waiting for an answer count as unfinished. Asking first follows
+    /// Finder; the app shows the alert, so tests never do.
+    public func shouldQuit(asking ask: (NSAlert) -> Bool) -> Bool {
+        guard let alert = quitAlert() else { return true }
+        return ask(alert)
+    }
+
+    /// The question quitting asks while file operations are unfinished or a question about one
+    /// waits, its first button Quit and its second Cancel; nil when there is nothing to stop.
+    /// Counts the operations in the queue's latest snapshots.
+    func quitAlert() -> NSAlert? {
+        let count = unfinished.count
+        let message: String
+        let information: String
+        switch count {
+        case 0:
+            guard prompter.shown != nil || prompter.waitingCount > 0 else { return nil }
+            message = "Quit while a file operation waits for an answer?"
+            information = "Quitting cancels it."
+        case 1:
+            message = "Quit while a file operation is running?"
+            information = "Quitting stops it, and removes anything it was partway through writing."
+        default:
+            message = "Quit while \(count) file operations are running?"
+            information =
+                "Quitting stops them, and removes anything they were partway through writing."
+        }
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.informativeText = information
+        alert.addButton(withTitle: "Quit")
+        alert.addButton(withTitle: "Cancel")
+        return alert
+    }
+
     /// Removes the drop folders of promises still on their way, as the app quits, waiting at
     /// most `quitCleanupLimit`. The removal runs off the main thread; the main thread only
     /// waits for it. Failures are logged, since no window is left to show them.

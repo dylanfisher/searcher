@@ -50,12 +50,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
-    /// Cancels the running file operations, so none leaves a partial item or a staging folder,
-    /// then writes the cache's unwritten saves before the app quits, so listings made in the last
-    /// two seconds outlive it. Quits after `quitLimit` whatever either is doing.
+    /// Asks first while file operations are unfinished, and stays open on Cancel. Then cancels
+    /// the running file operations, so none leaves a partial item or a staging folder, and
+    /// writes the cache's unwritten saves before the app quits, so listings made in the last two
+    /// seconds outlive it. Quits after `quitLimit` whatever either is doing.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // A bench launch has no cache and never makes the windows.
         guard let cache else { return .terminateNow }
+        guard windows.shouldQuit(asking: { $0.runModal() == .alertFirstButtonReturn }) else {
+            return .terminateCancel
+        }
         let deadline = ContinuousClock.now.advanced(by: Self.quitLimit)
         let windows = windows
         Task {

@@ -84,6 +84,23 @@ private func twoVolumes() async -> MountTable {
     #expect(operation([], into: "/Users/someone") == nil)
 }
 
+@MainActor @Test func optionDraggingItemsIntoTheirOwnFolderDuplicatesThem() async {
+    let mounts = await twoVolumes()
+    let sources = ["/Users/someone/a.txt", "/Users/someone/b"]
+    func operation(_ mask: NSDragOperation) -> DropOperation? {
+        DropOperation(dropping: sources, into: "/Users/someone", allowed: mask, mounts: mounts)
+    }
+
+    #expect(operation(option) == .duplicate)
+    #expect(operation(noKeys) == nil)
+    #expect(operation(command) == nil)
+    #expect(operation(commandOption) == nil)
+    #expect(DropOperation.duplicate.dragOperation(allowed: option) == .copy)
+    #expect(
+        DropOperation.duplicate.fileOperation(sources, into: "/Users/someone")
+            == .duplicate(sources))
+}
+
 @MainActor @Test func aPathOnNoKnownVolumeCopies() async {
     let table = MountTable(read: { [] })
     await settle { table.isRead }
@@ -281,6 +298,24 @@ private final class Fixture {
 
     await settle { fixture.selectedNames == ["x.txt", "y.txt"] }
     #expect(fixture.operations == [.move(sources.map(\.path), into: fixture.folder.path)])
+}
+
+@MainActor @Test func anOptionDropFromThePanesOwnFolderQueuesADuplicateAndSelectsIt()
+    async throws
+{
+    let fixture = try await Fixture()
+    defer { fixture.stop() }
+    let a = fixture.folder.appending(path: "a.txt")
+    let info = fixture.drag([a], mask: option)
+
+    #expect(fixture.validate(info, row: -1, .on) == .copy)
+    #expect(fixture.validate(info, row: try fixture.row("a.txt"), .on) == .copy)
+    #expect(fixture.accept(info, row: try fixture.row("a.txt"), .on))
+
+    await settle { fixture.exists(fixture.folder.appending(path: "a copy.txt")) }
+    await settle { fixture.selectedNames == ["a copy.txt"] }
+    #expect(fixture.exists(a))
+    #expect(fixture.operations == [.duplicate([a.path])])
 }
 
 @MainActor @Test func optionCopiesAndADropFromAnotherVolumeCopies() async throws {

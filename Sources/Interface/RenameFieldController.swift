@@ -4,10 +4,11 @@ import Browser
 
 /// Edits an entry's name in place, in a field over the name in its row, for Rename in the list
 /// or a column. The field opens with the name selected up to its extension, a folder's whole;
-/// Return renames through the queue with `FileCommands.rename`, and Esc, or the keys moving
-/// elsewhere, closes it with nothing renamed. A name `FileNameRule` refuses, or a rename the
-/// queue fails, such as onto a name already taken, keeps the field open with the reason under
-/// it. After a rename the field shows the new name over the old row until the monitor's patch
+/// Return, or the keys moving elsewhere by a click or Tab, renames through the queue with
+/// `FileCommands.rename`, as Finder does, and Esc closes it with nothing renamed. A name
+/// `FileNameRule` refuses, or a rename the queue fails, such as onto a name already taken, keeps
+/// the field open with the reason under it, taking the keys back if they had moved; a name
+/// emptied before the keys moved puts the old one back, as in Finder. After a rename the field shows the new name over the old row until the monitor's patch
 /// drops the old name; the pane then selects the new one. If no patch comes, as on a volume that
 /// reports no changes, the pane lists the folder again after `patchTimeout` and the field closes
 /// once that listing lands. New Folder opens the field through Rename once the pane selects the
@@ -226,30 +227,41 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
         showMessage(nil)
     }
 
-    /// The keys moved elsewhere, by a click or Tab: the edit ends with nothing renamed. Return
-    /// moves them back to the table itself, while the state is already past editing.
+    /// The keys moved elsewhere, by a click or Tab: the name is renamed as on Return, and the
+    /// keys stay where they went. Return and Esc move the keys themselves once the state is past
+    /// editing, so the end of editing that causes does nothing here.
     func controlTextDidEndEditing(_ notification: Notification) {
-        guard isEditing else { return }
-        close()
+        guard case .editing(let edit) = state else { return }
+        commit(edit, keysMoved: true)
     }
 
     // MARK: Renaming
 
-    private func commit(_ edit: Edit) {
+    /// Renames the entry to the field's text. `keysMoved` when the keys moved elsewhere, which
+    /// they keep unless the name can't be used.
+    private func commit(_ edit: Edit, keysMoved: Bool = false) {
         let newName = field.stringValue
-        if newName == edit.name {
-            close()
+        if newName == edit.name || (keysMoved && newName.isEmpty) {
+            close(keysMoved: keysMoved)
             return
         }
         if let problem = FileNameRule.problem(with: newName) {
             showMessage(Self.message(for: problem))
+            if keysMoved {
+                takeKeysBack(edit, selecting: newName)
+            }
             return
         }
         state = .renaming(edit, newName: newName)
         field.isEditable = false
-        table.window?.makeFirstResponder(table)
+        if !keysMoved {
+            table.window?.makeFirstResponder(table)
+        }
         let pane = pane
         Task { [weak self] in
+            // The click that moved the keys may have taken the pane to another folder first,
+            // which closed the field; `rename` names the entry in the pane's folder.
+            guard pane.location == edit.location else { return }
             let result = await FileCommands.rename(
                 edit.name, to: newName, in: pane, queue: edit.queue)
             self?.finish(edit, renamingTo: newName, with: result)
@@ -322,6 +334,23 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
             ])
     }
 
+    /// Gives the keys back to the field once the window has finished moving them elsewhere: a
+    /// first responder set while it moves them would be replaced by the view they went to.
+    /// Finder shows why the name can't be used in an alert and then edits it again.
+    private func takeKeysBack(_ edit: Edit, selecting newName: String) {
+        Task { [weak self] in
+            guard let self, case .editing(let current) = self.state, current.id == edit.id else {
+                return
+            }
+            guard self.place() != nil, let window = self.table.window else {
+                self.close(keysMoved: true)
+                return
+            }
+            window.makeFirstResponder(self.field)
+            self.selectBase(of: newName, isFolder: false)
+        }
+    }
+
     /// Selects the name up to its extension, as `UniqueName` splits it, or a folder's whole name.
     private func selectBase(of name: String, isFolder: Bool) {
         guard let editor = field.currentEditor() else {
@@ -361,9 +390,10 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
     }
 
     /// Hides the field, handing the keys back to the table first if the field has them: hiding
-    /// a first responder would hand them to the next key view.
-    private func close() {
-        let hadKeys = isEditing && field.currentEditor() != nil
+    /// a first responder would hand them to the next key view. `keysMoved` when they are on
+    /// their way elsewhere, where they stay.
+    private func close(keysMoved: Bool = false) {
+        let hadKeys = !keysMoved && isEditing && field.currentEditor() != nil
         patchWait?.cancel()
         patchWait = nil
         state = .idle

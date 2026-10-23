@@ -414,6 +414,133 @@ private final class FirstListingOnly: Lister, @unchecked Sendable {
     #expect(fixture.pane.state.listing?.row(named: "song.flac") != nil)
 }
 
+// MARK: The keys moving elsewhere
+
+extension Fixture {
+    /// Gives the keys to another text field in the window, as a click on it does, and returns
+    /// that field.
+    @discardableResult
+    func clickElsewhere() -> NSTextField {
+        let other = NSTextField(frame: NSRect(x: 0, y: 0, width: 100, height: 20))
+        window.contentView?.addSubview(other)
+        #expect(window.makeFirstResponder(other))
+        return other
+    }
+
+    /// Whether `other`'s editor has the keys.
+    func hasKeys(_ other: NSTextField) -> Bool {
+        (window.firstResponder as? NSTextView)?.delegate === other
+    }
+
+    /// Whether the rename field's editor has the keys.
+    var fieldHasKeys: Bool {
+        (window.firstResponder as? NSTextView)?.delegate === field.field
+    }
+}
+
+@MainActor @Test func clickingElsewhereRenamesAndLeavesTheKeysWhereTheyWent() async throws {
+    let fixture = try await Fixture("song.flac", "other.txt")
+    defer { fixture.stop() }
+    await fixture.select("song.flac")
+    try fixture.press(returnKey)
+    try fixture.type("tune")
+
+    let other = fixture.clickElsewhere()
+
+    #expect(fixture.hasKeys(other))
+    #expect(!fixture.field.isEditing)
+    await settle { fixture.exists("tune.flac") && !fixture.exists("song.flac") }
+    await settle { !fixture.field.isShown }
+    #expect(fixture.hasKeys(other))
+    #expect(fixture.operationCount == 1)
+}
+
+@MainActor @Test func tabRenames() async throws {
+    let fixture = try await Fixture("song.flac")
+    defer { fixture.stop() }
+    await fixture.select("song.flac")
+    try fixture.press(returnKey)
+    try fixture.type("tune")
+
+    try fixture.editor().doCommand(by: #selector(NSResponder.insertTab(_:)))
+
+    await settle { fixture.exists("tune.flac") && !fixture.exists("song.flac") }
+    #expect(fixture.operationCount == 1)
+}
+
+/// Finder shows why in an alert and then edits the name again; the field shows why under
+/// itself and takes the keys back.
+@MainActor @Test func clickingElsewhereWithATakenNameTakesTheKeysBackAndShowsWhy() async throws {
+    let fixture = try await Fixture("song.flac", "other.flac")
+    defer { fixture.stop() }
+    await fixture.select("song.flac")
+    try fixture.press(returnKey)
+    try fixture.type("other")
+
+    fixture.clickElsewhere()
+
+    await settle { fixture.field.message != nil }
+    #expect(
+        fixture.field.message == "The name “other.flac” is already taken. Choose another one.")
+    #expect(fixture.field.isEditing)
+    #expect(fixture.fieldHasKeys)
+    #expect(fixture.field.field.stringValue == "other.flac")
+    #expect(fixture.exists("song.flac") && fixture.exists("other.flac"))
+}
+
+@MainActor @Test func clickingElsewhereWithAnInvalidNameTakesTheKeysBackAndShowsWhy() async throws {
+    let fixture = try await Fixture("song.flac")
+    defer { fixture.stop() }
+    await fixture.select("song.flac")
+    try fixture.press(returnKey)
+    try fixture.type("a:b")
+
+    fixture.clickElsewhere()
+
+    await settle { fixture.fieldHasKeys }
+    #expect(fixture.field.message == RenameFieldController.message(for: .colon))
+    #expect(fixture.field.isEditing)
+    #expect(fixture.field.field.stringValue == "a:b.flac")
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(fixture.operationCount == 0)
+    #expect(fixture.exists("song.flac"))
+}
+
+/// As in Finder, an emptied name puts the old one back.
+@MainActor @Test func clickingElsewhereWithAnEmptyNameKeepsTheOldName() async throws {
+    let fixture = try await Fixture("song.flac")
+    defer { fixture.stop() }
+    await fixture.select("song.flac")
+    try fixture.press(returnKey)
+    let editor = try fixture.editor()
+    editor.selectAll(nil)
+    editor.deleteBackward(nil)
+    #expect(editor.string.isEmpty)
+
+    let other = fixture.clickElsewhere()
+
+    #expect(!fixture.field.isShown)
+    #expect(fixture.field.message == nil)
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(fixture.hasKeys(other))
+    #expect(fixture.operationCount == 0)
+    #expect(fixture.exists("song.flac"))
+}
+
+@MainActor @Test func clickingElsewhereWithTheNameUnchangedClosesTheField() async throws {
+    let fixture = try await Fixture("song.flac")
+    defer { fixture.stop() }
+    await fixture.select("song.flac")
+    try fixture.press(returnKey)
+
+    let other = fixture.clickElsewhere()
+
+    #expect(!fixture.field.isShown)
+    #expect(fixture.hasKeys(other))
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(fixture.operationCount == 0)
+}
+
 @MainActor @Test func returnWhileTheRenameWaitsForItsRowStartsNoSecondRename() async throws {
     let fixture = try await Fixture("song.flac", monitors: false)
     defer { fixture.stop() }
