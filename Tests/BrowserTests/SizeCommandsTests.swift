@@ -45,7 +45,7 @@ private final class CountedWalks: @unchecked Sendable {
                     self.counts[path, default: 0] += 1
                     return self.counts[path, default: 0]
                 }
-                return TreeSizeWalker.Total(bytes: Int64(count), isPartial: false)
+                return TreeSizeWalker.Total(bytes: Int64(count), files: count, isPartial: false)
             },
             volumeOf: { path throws(ListingError) in
                 let fails = self.condition.withLock {

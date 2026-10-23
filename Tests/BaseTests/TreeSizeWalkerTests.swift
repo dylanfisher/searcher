@@ -6,10 +6,11 @@ import Testing
 @testable import Base
 
 /// What `fts` makes of the tree at `path`, walked the way `TreeSizeWalker` walks: symlinks not
-/// followed, one device, every regular file's `st_size` once per link, and partial when a folder
-/// couldn't be read.
+/// followed, one device, every regular file's `st_size` once per link, every entry but a folder
+/// counted as a file, and partial when a folder couldn't be read.
 private func ftsTotal(_ path: String) throws -> TreeSizeWalker.Total {
     var bytes: Int64 = 0
+    var files = 0
     var isPartial = false
     let copy = strdup(path)
     defer { free(copy) }
@@ -20,12 +21,15 @@ private func ftsTotal(_ path: String) throws -> TreeSizeWalker.Total {
     defer { fts_close(fts) }
     while let entry = fts_read(fts) {
         switch Int32(entry.pointee.fts_info) {
-        case FTS_F: bytes += entry.pointee.fts_statp.pointee.st_size
+        case FTS_F:
+            bytes += entry.pointee.fts_statp.pointee.st_size
+            files += 1
+        case FTS_SL, FTS_SLNONE, FTS_DEFAULT: files += 1
         case FTS_DNR, FTS_ERR: isPartial = true
         default: break
         }
     }
-    return TreeSizeWalker.Total(bytes: bytes, isPartial: isPartial)
+    return TreeSizeWalker.Total(bytes: bytes, files: files, isPartial: isPartial)
 }
 
 private func makeFolder(_ path: String) throws {
@@ -77,6 +81,8 @@ private func makeTree(in root: String, outside: String) throws {
     #expect(total.isPartial)
     // Hard links count once per link, as fts sees them; the symlinks add nothing.
     #expect(total.bytes == 1_000 + 2_345 + 70_000 * 2 + 9 + (0..<200).reduce(0, +))
+    // Six files, one of them a second link, 200 more, and the two symlinks, as FileCopier counts.
+    #expect(total.files == 6 + 200 + 2)
 }
 
 @Test func aFullyReadTreeIsNotPartial() throws {

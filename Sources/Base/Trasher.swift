@@ -29,8 +29,9 @@ public struct Trasher: Sendable {
     }
 
     /// Deletes the item at `path`, and everything in it if it is a folder, without the Trash.
-    /// Call it only after the user has answered a delete-immediately question for this item.
-    /// Blocks the calling thread; call it off the main thread.
+    /// Call it only after the user has answered a delete-immediately question for this item, or
+    /// on the source of a move to another volume once its copy is complete. Blocks the calling
+    /// thread; call it off the main thread.
     public static func deletePermanently(_ path: String) throws(FileOperationError) {
         precondition(
             !Thread.isMainThread, "Trasher does file-system I/O; call it off the main thread")
