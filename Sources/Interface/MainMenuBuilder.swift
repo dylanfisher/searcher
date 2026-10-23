@@ -31,6 +31,8 @@ public enum MainMenuBuilder {
     struct Menu {
         let title: String
         let items: [Item]
+        /// The system adds this menu's items, so the bar keeps it with none of ours.
+        var isFilledBySystem = false
     }
 
     /// Why the menus couldn't be built from the registry.
@@ -106,8 +108,12 @@ public enum MainMenuBuilder {
             .command(TilingCommands.closePane.id),
         ])
 
+    /// AppKit puts its menu search field in the app's help menu and has no item of ours to add.
+    /// There is no help book, so the menu has no items of its own.
+    static let helpMenu = Menu(title: "Help", items: [], isFilledBySystem: true)
+
     /// The menus after the app menu, in menu bar order. A menu with no items is left out of the
-    /// bar until a step gives it some.
+    /// bar until a step gives it some, unless the system fills it.
     static let menus = [
         Menu(
             title: "File",
@@ -184,30 +190,37 @@ public enum MainMenuBuilder {
                 .command(SizeCommands.recalculateSizes.id),
             ]),
         windowMenu,
+        helpMenu,
     ]
 
-    /// Builds the menus and makes them `app`'s menu bar, with the Window menu as its windows menu.
+    /// Builds the menus and makes them `app`'s menu bar, with the Window menu as its windows menu
+    /// and the Help menu as its help menu.
     /// Items for commands that toggle a setting show its state from `settings`.
     public static func install(
         in app: NSApplication, appName: String, registry: CommandRegistry, settings: Settings
     ) throws(BuildError) {
         let bar = try build(appName: appName, registry: registry)
         showChecks(in: bar, settings: settings)
-        guard let windows = bar.items.first(where: { $0.title == windowMenu.title })?.submenu else {
-            preconditionFailure("the menu bar has no \(windowMenu.title) menu")
-        }
         app.mainMenu = bar
-        app.windowsMenu = windows
+        app.windowsMenu = submenu(titled: windowMenu.title, in: bar)
+        app.helpMenu = submenu(titled: helpMenu.title, in: bar)
     }
 
     static func build(appName: String, registry: CommandRegistry) throws(BuildError) -> NSMenu {
         let bar = NSMenu()
         for menu in [appMenu(appName)] + menus {
             let barItem = try submenuItem(menu, registry: registry)
-            guard barItem.submenu?.numberOfItems ?? 0 > 0 else { continue }
+            guard menu.isFilledBySystem || barItem.submenu?.numberOfItems ?? 0 > 0 else { continue }
             bar.addItem(barItem)
         }
         return bar
+    }
+
+    private static func submenu(titled title: String, in bar: NSMenu) -> NSMenu {
+        guard let submenu = bar.items.first(where: { $0.title == title })?.submenu else {
+            preconditionFailure("the menu bar has no \(title) menu")
+        }
+        return submenu
     }
 
     /// An item titled `menu.title` whose submenu holds `menu`'s items.

@@ -546,3 +546,24 @@ private func usKey(
     #expect(log.ids == [TilingCommands.splitDown.id, TilingCommands.splitDown.id])
     #expect(!table.typeSelect.isTyping)
 }
+
+@MainActor @Test func theLastMenuIsHelpWithNoItemsForTheSystemToFill() throws {
+    let menu = try buildMenu(try AppCommands.registry())
+    let help = try #require(menu.items.last)
+    #expect(help.title == "Help")
+    #expect(try #require(help.submenu).numberOfItems == 0)
+}
+
+@MainActor @Test func installMakesTheHelpMenuTheAppsHelpMenu() throws {
+    let app = NSApplication.shared
+    let (mainMenu, windowsMenu, helpMenu) = (app.mainMenu, app.windowsMenu, app.helpMenu)
+    defer { (app.mainMenu, app.windowsMenu, app.helpMenu) = (mainMenu, windowsMenu, helpMenu) }
+
+    try MainMenuBuilder.install(
+        in: app, appName: "Searcher", registry: try AppCommands.registry(),
+        settings: untouchedSettings())
+
+    let help = try #require(app.mainMenu?.items.last?.submenu)
+    #expect(help.title == "Help")
+    #expect(app.helpMenu === help)
+}
