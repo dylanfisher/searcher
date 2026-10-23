@@ -1,10 +1,10 @@
 /// Undo and Redo of file changes, app-wide, through the context's `UndoHistory`. Each runs as a
 /// queued operation, so the main actor never waits for one. Their menu items name the change:
-/// "Undo Move 3 Items", "Undo Rename", "Undo Copy", "Undo New Folder". Both are off without a
-/// history or a queue, with nothing to undo or redo, while an undo or redo runs, and while an
-/// operation is unfinished. A key press doesn't check for an entry: an operation queued before
-/// it, a copy still running included, may not be in the history yet, and the history waits for
-/// it (docs/decisions/0072-undo.md).
+/// "Undo Move 3 Items", "Undo Rename", "Undo Copy", "Undo New Folder", naming the newest
+/// finished change, as in Finder; a copy still running isn't one yet. Both are off without a
+/// history or a queue, with nothing to undo or redo, and while an undo or redo runs. A key
+/// press doesn't check for an entry: an operation that has just ended may not be in the
+/// history yet, and the history waits for it (docs/decisions/0072-undo.md).
 public enum UndoCommands: CommandSet {
     public static let undo = Command(
         id: CommandID("undo.undo"), title: "Undo",
@@ -70,21 +70,13 @@ public enum UndoCommands: CommandSet {
         }
     }
 
-    // While an operation is unfinished the items are off: a press would wait for it and undo
-    // its entry, not the one the title names.
     @MainActor
     private static func canUndo(_ context: CommandContext) -> Bool {
-        guard let queue = context.fileOperations, let history = context.undoHistory else {
-            return false
-        }
-        return history.canUndo && history.isCaughtUp(with: queue)
+        context.fileOperations != nil && context.undoHistory?.canUndo == true
     }
 
     @MainActor
     private static func canRedo(_ context: CommandContext) -> Bool {
-        guard let queue = context.fileOperations, let history = context.undoHistory else {
-            return false
-        }
-        return history.canRedo && history.isCaughtUp(with: queue)
+        context.fileOperations != nil && context.undoHistory?.canRedo == true
     }
 }

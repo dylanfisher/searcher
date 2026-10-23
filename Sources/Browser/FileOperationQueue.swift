@@ -77,8 +77,9 @@ public actor FileOperationQueue {
         }
     }
 
-    /// Reads the identity of the item at a path, or nil when there is none or it has none
-    /// that lasts. One serves one operation.
+    /// Reads the identity of the item at a path, or nil when nothing is there. Throws when it
+    /// can't be read, or the item has no birth time on a volume without persistent IDs. One
+    /// serves one operation.
     typealias Identifier =
         @Sendable (String) throws(FileOperationError) -> OperationRecord.ItemIdentity?
 
@@ -139,7 +140,7 @@ public actor FileOperationQueue {
     private nonisolated let intake = Intake()
     /// Staging and drop folders in use, which a sweep leaves alone.
     private nonisolated let liveFolders = LiveFolders()
-    /// Calls waiting for an operation to finish.
+    /// Calls waiting for an operation to finish or settle (`finishedCount`).
     private var changeWaiters: [CheckedContinuation<Void, Never>] = []
     /// Planned operations waiting for their lane, in the order queued.
     private var waiting: [ID] = []
@@ -153,15 +154,20 @@ public actor FileOperationQueue {
     private var finished = 0
 
     /// How many operations have finished, refused ones included, read once every operation
-    /// among the first `submitted` has finished. So an undo pressed right after Move to Trash,
-    /// or while a copy runs, waits for that operation and undoes it
+    /// among the first `submitted` has finished or is settled: copying, waiting in a lane,
+    /// paused or waiting for an answer, which can take minutes. So an undo pressed right after
+    /// Move to Trash waits the few milliseconds for that trash and undoes it, and one pressed
+    /// during a copy undoes the change before it at once, as in Finder. `skipped` holds the
+    /// operations among the first `submitted` that were settled and still unfinished, so the
+    /// history can tell that an entry one of them makes later came after the press
     /// (docs/decisions/0072-undo.md).
-    public func finishedCount(before submitted: Int) async -> Int {
+    public func finishedCount(before submitted: Int) async -> (finished: Int, skipped: Set<ID>) {
         takeIn()
-        while entries.contains(where: { $0.id.value < submitted && !$0.phase.isFinished }) {
+        while entries.contains(where: { $0.id.value < submitted && !$0.isSettled }) {
             await waitForChange()
         }
-        return finished
+        let skipped = entries.filter { $0.id.value < submitted && !$0.phase.isFinished }.map(\.id)
+        return (finished, Set(skipped))
     }
 
     /// How many submitted operations haven't finished, paused ones and ones waiting for an
@@ -260,7 +266,7 @@ public actor FileOperationQueue {
         }
     }
 
-    /// Waits until an operation finishes.
+    /// Waits until an operation finishes or settles.
     private func waitForChange() async {
         await withCheckedContinuation { changeWaiters.append($0) }
     }
@@ -279,6 +285,8 @@ public actor FileOperationQueue {
         entry.control.pause()
         entry.copier.pause()
         changed()
+        // A paused operation no longer holds an undo (`finishedCount`).
+        resumeChangeWaiters()
     }
 
     public func resume(_ id: ID) {
@@ -591,6 +599,7 @@ public actor FileOperationQueue {
             start(entry)
         } else {
             entry.phase = .queued
+            resumeChangeWaiters()
             // In the order queued, so a later operation whose plan finished first doesn't go
             // ahead of an earlier one already waiting.
             waiting.insert(id, at: waiting.firstIndex { $0 > id } ?? waiting.endIndex)
@@ -627,6 +636,7 @@ public actor FileOperationQueue {
             }
             entry.phase = .waitingForAnswer
             changed()
+            resumeChangeWaiters()
             let answer = await prompts.resolve(
                 ConflictRequest(
                     operation: entry.id, source: conflict.source, existing: conflict.existing,
@@ -778,7 +788,8 @@ public actor FileOperationQueue {
                 continue
             }
             var stops = false
-            entry.record.identities.merge(identities) { $1 }
+            entry.record.identities.merge(identities.read) { $1 }
+            entry.record.unidentified += identities.unread
             switch outcome {
             case .done(let changes, let copied):
                 entry.record.changes += changes
@@ -828,6 +839,7 @@ public actor FileOperationQueue {
     private func confirmWhileRunning(_ entry: Entry, _ request: ConfirmRequest) async -> Bool? {
         entry.phase = .waitingForAnswer
         changed()
+        resumeChangeWaiters()
         let prompts = prompts
         let id = entry.id
         let answer = await withCheckedContinuation {
@@ -985,24 +997,29 @@ public actor FileOperationQueue {
 
     /// The identity of the item at each place `outcome`'s changes left one, read right after
     /// them, for an undo to check against, by comparable path. Runs on a `BlockingCallThread`.
+    /// `unread` holds the error for each place whose identity couldn't be read, or where no
+    /// item was found right after the change; the operation can't be undone then.
     private static func identities(after outcome: ItemOutcome, identify: Identifier)
-        -> [String: OperationRecord.ItemIdentity]
+        -> (read: [String: OperationRecord.ItemIdentity], unread: [FileOperationError])
     {
         let changes: [OperationRecord.Change]
         switch outcome {
         case .done(let done, _), .failed(_, let done): changes = done
-        case .cancelled, .needsDelete: return [:]
+        case .cancelled, .needsDelete: return ([:], [])
         }
         var identities: [String: OperationRecord.ItemIdentity] = [:]
+        var unread: [FileOperationError] = []
         for location in changes.compactMap(\.location) {
-            do {
-                identities[FileOperation.comparable(location)] = try identify(location)
+            do throws(FileOperationError) {
+                guard let identity = try identify(location) else {
+                    throw FileOperationError(reason: .sourceGone, path: location, errno: ENOENT)
+                }
+                identities[FileOperation.comparable(location)] = identity
             } catch {
-                // Left out: the undo then checks only that an item is at the path.
-                continue
+                unread.append(error)
             }
         }
-        return identities
+        return (identities, unread)
     }
 
     /// A copy stopped by a cancel that couldn't remove what it wrote.
@@ -1358,6 +1375,18 @@ public actor FileOperationQueue {
         var volumeGone: FileOperationError?
         /// Resumes `run` while it waits for an answer; nil means it was cancelled.
         var pendingAnswer: CheckedContinuation<Bool?, Never>?
+
+        /// Finished, or doing something that can take minutes: an undo doesn't wait for it. A
+        /// copy or a duplicate always copies, so it is settled before its plan says so; a move
+        /// is once its plan puts it in a lane.
+        var isSettled: Bool {
+            if phase.isFinished || isPaused || phase == .waitingForAnswer { return true }
+            switch operation {
+            case .copy, .duplicate: return true
+            case .move, .trash, .rename, .newFolder, .deleteImmediately, .receive, .undo:
+                return plan?.lane != nil
+            }
+        }
 
         init(
             id: ID, operation: FileOperation, copier: any Copier,

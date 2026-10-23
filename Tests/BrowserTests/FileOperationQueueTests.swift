@@ -35,6 +35,8 @@ final class FakeFiles: @unchecked Sendable {
     private var progressSteps = 0
     private var contents: [String: [String]] = [:]
     private var filled: Set<String> = []
+    private var identities: [String: OperationRecord.ItemIdentity] = [:]
+    private var identityFailures: [String: FileOperationError] = [:]
 
     init(releasingAll: Bool = false) {
         allReleased = releasingAll
@@ -104,6 +106,20 @@ final class FakeFiles: @unchecked Sendable {
     /// Puts an item at `path`, so a copy or move onto it is a conflict.
     func place(_ path: String, isFolder: Bool = false) {
         condition.withLock { placed[path] = Self.item(path, isFolder: isFolder) }
+    }
+
+    /// What the identifier reads for a path without its own identity or failure: the files
+    /// don't track items as they move, so every path has the same one.
+    static let identity = OperationRecord.ItemIdentity.persistent(volume: "fake", inode: 0, born: 1)
+
+    /// The identifier reads `identity` at `path`.
+    func identify(_ path: String, as identity: OperationRecord.ItemIdentity) {
+        condition.withLock { identities[path] = identity }
+    }
+
+    /// The identifier throws `error` at `path`.
+    func failIdentity(of path: String, with error: FileOperationError) {
+        condition.withLock { identityFailures[path] = error }
     }
 
     /// Takes away an item `place` put at `path`.
@@ -212,9 +228,11 @@ final class FakeFiles: @unchecked Sendable {
             },
             makeIdentifier: {
                 { path throws(FileOperationError) in
-                    let isPlaced = self.condition.withLock { self.placed[path] != nil }
-                    return isPlaced || isPath(path, atOrUnder: "/S")
-                        ? OperationRecord.ItemIdentity(volume: "fake", inode: 0) : nil
+                    let (failure, identity) = self.condition.withLock {
+                        (self.identityFailures[path], self.identities[path])
+                    }
+                    if let failure { throw failure }
+                    return identity ?? Self.identity
                 }
             })
     }
@@ -966,30 +984,37 @@ private func cancelAllFinishesAtOnce(_ queue: FileOperationQueue) async -> Bool 
     #expect(watcher.state(of: asking)?.phase == .cancelled(leftBehind: nil))
 }
 
-/// An undo reads `finishedCount` first. A copy submitted before the press holds it until the
-/// copy ends, since the undo is for the copy; one submitted after the press doesn't.
-@Test func finishedCountWaitsForEveryOperationSubmittedBeforeIt() async throws {
+/// An undo reads `finishedCount` first. It waits for an operation queued before the press that
+/// takes milliseconds, a move still planning included, and not for one that copies, which it
+/// lists as skipped (docs/decisions/0072-undo.md).
+@Test func finishedCountWaitsOnlyForOperationsThatTakeMilliseconds() async throws {
     let files = FakeFiles()
     let watcher = Watcher()
     let queue = makeQueue(files, watcher)
-    let trash = await enqueue(queue, .trash(["/A/old"]), watcher)
-    #expect(await watcher.waitUntilFinished(trash))
     let copy = await enqueue(queue, .copy(["/S/album"], into: "/A"), watcher)
     #expect(await files.events.wait { $0.contains("copy /S/album") })
+    files.holdScan(of: "/A/far")
+    let move = await enqueue(queue, .move(["/A/far"], into: "/B"), watcher)
+    #expect(await files.events.wait { $0.contains("holding scan /A/far") })
     let pressed = queue.submittedCount
-    let later = await enqueue(queue, .copy(["/S/later"], into: "/B"), watcher)
-    #expect(await files.events.wait { $0.contains("copy /S/later") })
     let counts = EventLog<Int>()
+    let skipped = EventLog<Set<FileOperationQueue.ID>>()
 
-    Task { counts.append(await queue.finishedCount(before: pressed)) }
+    Task {
+        let (finished, skips) = await queue.finishedCount(before: pressed)
+        skipped.append(skips)
+        counts.append(finished)
+    }
 
     try await pause()
     #expect(counts.all.isEmpty)
-    files.release("/S/album")
+    files.letScanGo(of: "/A/far")
+    // Planned, the move copies to another volume and waits in its lane, so it no longer holds.
     #expect(await counts.wait { !$0.isEmpty })
-    #expect(counts.all == [2])
+    #expect(counts.all == [0])
+    #expect(skipped.all == [[copy, move]])
     files.releaseAll()
-    #expect(await watcher.waitUntilFinished(copy, later))
+    #expect(await watcher.waitUntilFinished(copy, move))
 }
 
 /// Quitting reads `unfinishedCount` the moment Cmd-Q is pressed, before any snapshot of a copy

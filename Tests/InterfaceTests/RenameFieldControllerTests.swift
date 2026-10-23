@@ -22,7 +22,7 @@ private final class Fixture {
     let controller: PaneViewController
     let queue: FileOperationQueue
     /// Follows the queue, as the app's history does.
-    let history = UndoHistory()
+    let history = UndoHistory(log: { _ in })
     /// Every snapshot the queue reported, so a test can count the operations it was given.
     let snapshots = EventLog<FileOperationQueue.Snapshot>()
 
