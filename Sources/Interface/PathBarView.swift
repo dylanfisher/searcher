@@ -97,6 +97,8 @@ final class PathBarView: NSView {
         for view in segments + separators {
             addSubview(view)
         }
+        // The highlight reaches past its segment, so removing the segment leaves part of it.
+        needsDisplay = true
         needsLayout = true
     }
 
@@ -112,6 +114,11 @@ final class PathBarView: NSView {
             natural: segments.map { ceil($0.intrinsicContentSize.width) },
             available: bounds.width - 2 * Self.inset - separatorWidths.reduce(0, +),
             minimum: Self.minimumSegmentWidth)
+        let oldFrames = segments.map(\.frame)
+        defer {
+            // A highlight drawn at a segment's old frame would stay behind.
+            if segments.map(\.frame) != oldFrames { needsDisplay = true }
+        }
         var x = Self.inset
         for (index, segment) in segments.enumerated() {
             if index > 0 {
@@ -137,9 +144,13 @@ final class PathBarView: NSView {
         }
     }
 
+    /// Where the hover highlight is drawn, if a segment is hovered.
+    var highlightFrame: NSRect? {
+        hoveredSegment.map { segments[$0].frame.insetBy(dx: 0, dy: -Self.highlightOutset) }
+    }
+
     override func draw(_ dirtyRect: NSRect) {
-        guard let hovered = hoveredSegment else { return }
-        let frame = segments[hovered].frame.insetBy(dx: 0, dy: -Self.highlightOutset)
+        guard let frame = highlightFrame else { return }
         NSColor.quaternaryLabelColor.setFill()
         NSBezierPath(roundedRect: frame, xRadius: 4, yRadius: 4).fill()
     }
