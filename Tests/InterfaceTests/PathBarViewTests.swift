@@ -147,6 +147,18 @@ private func pathBar(
     #expect(bar.hoveredSegment == nil)
 }
 
+@MainActor @Test func theHighlightSitsBehindTheHoveredSegment() throws {
+    let bar = pathBar(showing: "/Users/dylan/Projects")
+    #expect(bar.highlightFrame == nil)
+
+    bar.segments[2].mouseEntered(with: try mouseEvent(.mouseEntered))
+
+    let highlight = try #require(bar.highlightFrame)
+    let segment = bar.segments[2].frame
+    #expect(highlight.minX == segment.minX && highlight.maxX == segment.maxX)
+    #expect(highlight.minY < segment.minY && highlight.maxY > segment.maxY)
+}
+
 @MainActor @Test func showingAnotherFolderClearsTheHighlight() throws {
     let bar = pathBar(showing: "/Users/dylan/Projects")
     bar.segments[2].mouseEntered(with: try mouseEvent(.mouseEntered))
