@@ -699,3 +699,32 @@ private func usKey(
     #expect(services.title == "Services")
     #expect(services.supermenu?.title == "Searcher")
 }
+
+/// Undo and Redo send AppKit's text actions, so the rename and filter fields' field editors keep
+/// their own undo; the table answers them by running the undo commands, with the commands' titles.
+@MainActor @Test func undoAndRedoSendTheTextActionsAndTheTableRunsAndNamesTheCommands() throws {
+    let registry = try AppCommands.registry()
+    let menu = try buildMenu(registry)
+    let edit = try #require(menu.items.first { $0.title == "Edit" }?.submenu)
+    let undo = try #require(edit.items.first { $0.action == MainMenuBuilder.undo.action })
+    let redo = try #require(edit.items.first { $0.action == MainMenuBuilder.redo.action })
+    #expect(NSStringFromSelector(MainMenuBuilder.undo.action) == "undo:")
+    #expect(NSStringFromSelector(MainMenuBuilder.redo.action) == "redo:")
+    #expect(undo.keyEquivalent == "z" && undo.keyEquivalentModifierMask == .command)
+    #expect(redo.keyEquivalent == "z" && redo.keyEquivalentModifierMask == [.command, .shift])
+    let table = ListingTableView()
+    table.registry = registry
+    let log = CommandLog()
+    table.runCommand = { log.ids.append($0) }
+    table.canRunCommand = { $0 == UndoCommands.undo.id }
+    table.commandTitle = { $0 == UndoCommands.undo.id ? "Undo Move 3 Items" : nil }
+
+    #expect(table.validateMenuItem(undo))
+    #expect(undo.title == "Undo Move 3 Items")
+    #expect(!table.validateMenuItem(redo))
+    #expect(redo.title == "Redo")
+    table.undo(undo)
+    table.redo(redo)
+
+    #expect(log.ids == [UndoCommands.undo.id, UndoCommands.redo.id])
+}

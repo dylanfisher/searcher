@@ -480,3 +480,34 @@ private func failedTrash(_ id: Int) -> FileOperationQueue.Snapshot {
     sheet.cancelButton.performClick(nil)
     await settle { fixture.windows.prompter.shown == nil }
 }
+
+/// A rename that finished in one window names Undo in every window's Edit menu, and Redo once it
+/// is undone.
+@MainActor @Test func aRenameInOneWindowNamesUndoInTheEditMenuOfEvery() async throws {
+    let fixture = try await Fixture()
+    let first = try #require(fixture.windows.controllers.first)
+    let second = try await fixture.open()
+    let menu = try MainMenuBuilder.build(appName: "Searcher", registry: AppCommands.registry())
+    let edit = try #require(menu.items.first { $0.title == "Edit" }?.submenu)
+    let undo = try #require(edit.items.first { $0.action == MainMenuBuilder.undo.action })
+    let redo = try #require(edit.items.first { $0.action == MainMenuBuilder.redo.action })
+    #expect(try !fixture.keyTable(first).validateMenuItem(undo))
+    #expect(undo.title == "Undo")
+
+    fixture.windows.operationsChanged([
+        FileOperationQueue.Snapshot(
+            id: FileOperationQueue.ID(4), operation: .rename("/root/a.txt", to: "b.txt"),
+            state: OperationState(
+                phase: .done,
+                progress: OperationState.Progress(
+                    itemsDone: 1, itemCount: 1, copied: CopyProgress(bytes: 0, files: 0),
+                    total: nil),
+                errors: [],
+                record: OperationRecord(changes: [.moved(from: "/root/a.txt", to: "/root/b.txt")])))
+    ])
+
+    #expect(try fixture.keyTable(second).validateMenuItem(undo))
+    #expect(undo.title == "Undo Rename")
+    #expect(try !fixture.keyTable(first).validateMenuItem(redo))
+    #expect(redo.title == "Redo")
+}

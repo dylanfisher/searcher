@@ -10,7 +10,8 @@ import os
 /// its file commands through one `FileOperationQueue`, whose questions show as sheets on the
 /// most recently active window and whose snapshots go to every window's operations panel
 /// (docs/decisions/0067-operations-panel.md). Every window cuts, copies and pastes through one
-/// `CutState`, so a cut in one window pastes as a move in another.
+/// `CutState`, so a cut in one window pastes as a move in another. Every operation that finishes
+/// goes into one `UndoHistory`, so Undo in any window undoes the last change made in any of them.
 @MainActor
 public final class WorkspaceWindows {
     public let list = WorkspaceList()
@@ -31,6 +32,8 @@ public final class WorkspaceWindows {
     public let clipboard: CutState
     /// Every mounted volume, which every window's drops check.
     let mountTable = MountTable()
+    /// The app's undo history, fed every operation that finishes.
+    let undoHistory = UndoHistory()
     /// The unfinished operations in the queue's latest snapshots, for a window that opens while
     /// operations run.
     private var unfinished: [FileOperationQueue.Snapshot] = []
@@ -131,7 +134,7 @@ public final class WorkspaceWindows {
         }?.window
         let controller = BrowserWindowController(
             workspace: workspace, workspaces: list, fileOperations: fileOperations,
-            clipboard: clipboard, mountTable: mountTable,
+            clipboard: clipboard, mountTable: mountTable, undoHistory: undoHistory,
             takePaneController: { [weak self] id in self?.takePaneController(id) })
         controller.onCommand = { [weak self] in self?.showList() }
         controller.onClose = { [weak self] closed in self?.didClose(closed) }
@@ -168,9 +171,12 @@ public final class WorkspaceWindows {
         }?.window
     }
 
-    /// Shows the queue's snapshots in every window and closes the questions of operations that
-    /// finished.
+    /// Shows the queue's snapshots in every window, closes the questions of operations that
+    /// finished, and records what those changed for Undo.
     func operationsChanged(_ snapshots: [FileOperationQueue.Snapshot]) {
+        for snapshot in snapshots where snapshot.state.phase.isFinished {
+            undoHistory.record(snapshot.operation, snapshot.state)
+        }
         unfinished = snapshots.filter { !$0.state.phase.isFinished }
         troubled += snapshots.filter {
             $0.state.phase.isFinished && OperationRowView.isTrouble($0.state.phase)

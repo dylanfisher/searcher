@@ -524,6 +524,12 @@ public actor FileOperationQueue {
         var leftBehind: FileOperationError?
         var wasCancelled = false
         let isTrash = if case .trash = entry.operation { true } else { false }
+        let undoSteps =
+            if case .undo(let record, _) = entry.operation {
+                FileOperation.steps(undoing: record)
+            } else {
+                [FileOperation.UndoStep]()
+            }
         var index = plan.items.startIndex
         while index < plan.items.endIndex {
             if entry.control.isCancelled {
@@ -537,10 +543,12 @@ public actor FileOperationQueue {
             let control = entry.control
             let choice = entry.choices[index]
             let deletesWithoutTrash = entry.deletesWithoutTrash
+            // An undo plans one item per step, or none.
+            let undoStep = undoSteps.isEmpty ? nil : undoSteps[index]
             var outcome = await BlockingCallThread.run {
                 Self.perform(
                     item, of: operation, choice: choice, deletesWithoutTrash: deletesWithoutTrash,
-                    fileSystem: fileSystem, copier: copier, control: control
+                    undoStep: undoStep, fileSystem: fileSystem, copier: copier, control: control
                 ) { progress in
                     // The ticker reads it; a call into the actor per report would be one every
                     // 0.5 ms at full speed.
@@ -776,10 +784,12 @@ public actor FileOperationQueue {
 
     /// Runs `item` of `operation` on the calling thread, a `BlockingCallThread`. `choice`
     /// answers the item's conflict, if it has one. `deletesWithoutTrash` says the user agreed to
-    /// delete what would go to a Trash the volume doesn't have.
+    /// delete what would go to a Trash the volume doesn't have. `undoStep` is the step of an
+    /// undo the item runs.
     private static func perform(
         _ item: OperationPlan.Item, of operation: FileOperation,
-        choice: ConflictResolution.Choice?, deletesWithoutTrash: Bool, fileSystem: FileSystem,
+        choice: ConflictResolution.Choice?, deletesWithoutTrash: Bool,
+        undoStep: FileOperation.UndoStep?, fileSystem: FileSystem,
         copier: any Copier, control: Control, progress: @escaping (CopyProgress) -> Void
     ) -> ItemOutcome {
         guard control.waitWhilePaused() else { return .cancelled(leftBehind: nil) }
@@ -917,6 +927,30 @@ public actor FileOperationQueue {
                 return .done([.created(folder)], copied: CopyProgress(bytes: 0, files: 0))
             case .receive:
                 preconditionFailure("\(operation) is reported, never run")
+            case .undo:
+                guard let undoStep else {
+                    preconditionFailure("\(operation) ran \(source) without its step")
+                }
+                switch undoStep {
+                case .trash(let path):
+                    return .done(
+                        [.trashed(from: path, to: try fileSystem.trash(path))], copied: none)
+                case .putBack(let url, let path):
+                    try fileSystem.move(url.path, path)
+                    return .done([.putBack(from: url, to: path)], copied: none)
+                case .move(let from, let to):
+                    guard item.crossesVolumes else {
+                        try fileSystem.move(from, to)
+                        return .done([.moved(from: from, to: to)], copied: none)
+                    }
+                    let copied = try copy(to: to)
+                    do {
+                        try fileSystem.deletePermanently(from)
+                    } catch {
+                        return .failed(error, changes: [.created(to)])
+                    }
+                    return .done([.moved(from: from, to: to)], copied: copied)
+                }
             }
         } catch is CancellationError {
             return .cancelled(leftBehind: nil)
@@ -975,6 +1009,7 @@ public actor FileOperationQueue {
         case .trash(let paths), .duplicate(let paths), .deleteImmediately(let paths): paths
         case .rename(let path, _): [path]
         case .newFolder(let folder), .receive(_, _, let folder): [folder]
+        case .undo: operation.changes
         }
     }
 

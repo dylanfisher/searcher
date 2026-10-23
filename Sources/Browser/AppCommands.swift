@@ -12,6 +12,7 @@ public enum AppCommands {
         WindowCommands.self,
         FileCommands.self,
         ClipboardCommands.self,
+        UndoCommands.self,
     ]
 
     /// Every command in every set, with what it does.

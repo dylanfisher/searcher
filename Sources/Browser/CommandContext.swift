@@ -34,6 +34,9 @@ public struct CommandContext {
     /// The app's file clipboard and its cut, for Cut, Copy and Paste. Nil where there is none,
     /// as in a window the UI bench opens; those commands are off then.
     public let clipboard: CutState?
+    /// The app's undo history of file changes, for Undo and Redo. Nil where there is none; those
+    /// commands are off then, and without `fileOperations`, which runs them.
+    public let undoHistory: UndoHistory?
     private let givenWorkspace: Workspace?
     private let givenWorkspaces: WorkspaceList?
 
@@ -63,7 +66,8 @@ public struct CommandContext {
         folder: Location? = nil,
         fileOperations: FileOperationQueue? = nil,
         editName: (@MainActor () -> Void)? = nil,
-        clipboard: CutState? = nil
+        clipboard: CutState? = nil,
+        undoHistory: UndoHistory? = nil
     ) {
         if let workspace {
             precondition(
@@ -83,6 +87,7 @@ public struct CommandContext {
         self.fileOperations = fileOperations
         self.editName = editName
         self.clipboard = clipboard
+        self.undoHistory = undoHistory
     }
 
     /// The window's tabs. A context built for one pane, as the benches and pane tests build it,
