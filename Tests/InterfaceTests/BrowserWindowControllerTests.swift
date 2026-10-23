@@ -531,7 +531,7 @@ private func receiver(of item: NSMenuItem, in window: NSWindow) throws -> NSResp
 @MainActor @Test func movingAPaneUpThenDownSwapsBackAndTheKeysStayOnIt() async throws {
     let fixture = try await Fixture()
     let top = fixture.tab.layout.focused
-    try fixture.press(try keyEvent("T", characters: "ˇ", modifiers: [.command, .option, .shift]))
+    try fixture.press(try keyEvent("T", characters: "ˇ", modifiers: [.option, .shift]))
     let bottom = try #require(fixture.tab.layout.panes.first { $0 != top })
     let original = fixture.tab.layout.root
     #expect(fixture.tab.layout.focused == bottom)
@@ -552,7 +552,7 @@ private func receiver(of item: NSMenuItem, in window: NSWindow) throws -> NSResp
 @MainActor @Test func movingAPaneDownThenUpSwapsBackAndTheKeysStayOnIt() async throws {
     let fixture = try await Fixture()
     let top = fixture.tab.layout.focused
-    try fixture.press(try keyEvent("T", characters: "ˇ", modifiers: [.command, .option, .shift]))
+    try fixture.press(try keyEvent("T", characters: "ˇ", modifiers: [.option, .shift]))
     let bottom = try #require(fixture.tab.layout.panes.first { $0 != top })
     try fixture.press(try arrow(NSUpArrowFunctionKey, [.command, .option, .shift]))
     #expect(fixture.tab.layout.focused == top)
@@ -666,6 +666,23 @@ private func usKey(
     let view = try fixture.layoutView
     #expect(view.subviews.count == 6)
     #expect(try fixture.keyTable === fixture.paneController(first).keyView)
+}
+
+@MainActor @Test func optShiftTSplitsDownThroughTheTableAndTheWindowAsAUSKeyboardTypesIt()
+    async throws
+{
+    let fixture = try await Fixture()
+
+    // Option-Shift-T types "ˇ".
+    try fixture.press(try usKey("T", characters: "ˇ", keyCode: 17, [.option, .shift]))
+    #expect(fixture.tab.panes.count == 2 && fixture.tab.layout.rowCount == 2)
+
+    fixture.window.sendEvent(try usKey("T", characters: "ˇ", keyCode: 17, [.option, .shift]))
+    #expect(fixture.tab.panes.count == 3)
+
+    // Command is no part of the key now.
+    try fixture.press(try usKey("T", characters: "ˇ", keyCode: 17, [.command, .option, .shift]))
+    #expect(fixture.tab.panes.count == 3)
 }
 
 @MainActor @Test func ctrlTabSwitchesTabsThroughTheWindowFromTheTableAndTheFilterField()

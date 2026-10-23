@@ -1039,8 +1039,7 @@ final class UIBench {
         /// Shift applies to the letter.
         static let splitRight = Key(characters: "T", keyCode: 17, flags: [.command, .shift])
         /// The key is read without Option, so "T" as for Split Right.
-        static let splitDown = Key(
-            characters: "T", keyCode: 17, flags: [.command, .option, .shift])
+        static let splitDown = Key(characters: "T", keyCode: 17, flags: [.option, .shift])
 
         /// Cmd-Opt-Shift and an arrow: the tiling key that focuses the pane that way.
         static func focus(_ direction: Direction) -> Key {

@@ -31,9 +31,10 @@ the table's `keyDown` passed.
   list's clip view origin, after the layout view has placed it, and drops the scroll to the cursor
   that a new folder's list waits a pass to make. A list without rows yet takes the origin when its
   first rows show. Column view keeps its own scrolling.
-- **Split keys.** Split Right is Cmd-Shift-T and Split Down is Cmd-Opt-Shift-T, beside New Tab
+- **Split keys.** Split Right is Cmd-Shift-T and Split Down is Opt-Shift-T, beside New Tab
   (Cmd-T). Nothing else used them; Open Terminal is Cmd-Opt-T. Cmd-\ and Cmd-Shift-\ are unbound,
-  and a test keeps them so.
+  and so is Cmd-Opt-Shift-T; tests keep them so. Opt-Shift-T has a modifier, so its menu item
+  shows the key, and a key equivalent runs before a text field types "ˇ".
 - **Grid keys.** Cmd-Opt-1 to 4 set the columns, keeping the rows; Cmd-Opt-Shift-1 to 4 set the
   rows, keeping the columns. Both are in the Window menu, under Columns and Rows, after the
   splits. `Layout.makeGrid(columns:rows:in:)` builds the grid in the binary tree: a vertical run of

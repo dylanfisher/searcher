@@ -85,7 +85,7 @@ private func resizeKey(_ direction: Direction) -> KeyChord {
 }
 
 private let splitRight = KeyChord("t", modifiers: [.command, .shift])
-private let splitDown = KeyChord("t", modifiers: [.command, .option, .shift])
+private let splitDown = KeyChord("t", modifiers: [.option, .shift])
 
 /// Cmd-Opt and a digit: that many panes side by side in every row.
 private func columnsKey(_ count: Int) -> KeyChord {
@@ -158,6 +158,12 @@ private func expectClose(_ a: Rect?, _ b: Rect?, sourceLocation: SourceLocation 
     ] {
         #expect(registry.command(for: chord) == nil, "\(chord)")
     }
+}
+
+@Test func cmdOptShiftTIsUnbound() throws {
+    let registry = try AppCommands.registry()
+    let chord = KeyChord("t", modifiers: [.command, .option, .shift])
+    #expect(registry.command(for: chord) == nil, "\(chord)")
 }
 
 @Test func theSplitAndGridKeysAreTheTilingCommandsInTheAppRegistry() throws {

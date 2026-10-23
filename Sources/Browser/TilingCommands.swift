@@ -14,7 +14,7 @@ public enum TilingCommands: CommandSet {
         chords: [KeyChord("t", modifiers: [.command, .shift])])
     public static let splitDown = Command(
         id: CommandID("tiling.splitDown"), title: "Split Down",
-        chords: [KeyChord("t", modifiers: [.command, .option, .shift])])
+        chords: [KeyChord("t", modifiers: [.option, .shift])])
     /// What each direction's title in a family starts with, such as "Focus Pane" for "Focus
     /// Pane Left", and the title of the Window submenu that lists the family.
     public static let focusTitle = "Focus Pane"

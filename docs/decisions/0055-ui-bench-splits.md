@@ -18,7 +18,7 @@ focus while building a grid starts loads that land later.
 ## Decision
 
 - **The splits are made the way a user makes them.** The bench sends the split keys, Cmd-Shift-T
-  and Cmd-Opt-Shift-T since [0061](0061-split-keys-and-grid-layouts.md), to the window, and
+  and Opt-Shift-T since [0061](0061-split-keys-and-grid-layouts.md), to the window, and
   Cmd-Opt-Shift-arrows to move the focus, so each runs through the table, the command registry,
   `TilingCommands`, `Tab` and the window's update. Each step splits the largest pane with room,
   along its longer side; the focus keys that reach it are found by pressing them on copies of the
