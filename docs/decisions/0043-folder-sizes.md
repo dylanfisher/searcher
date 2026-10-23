@@ -104,17 +104,26 @@ saving listings uses the sizes the store already holds. Sizes count toward the c
 listings, so a volume that goes over it isn't written at all: neither its new listings nor its
 new sizes reach the disk. Both accepted for now.
 
-## Amendment: walks left running, narrower drops, a drop log (M4.21)
+## Amendment: walks left running, one walk per folder, narrower drops, a drop log (M4.21)
 
-Dylan saw sizes walked again on every return to a folder. Three causes, each changed here:
+Dylan saw sizes walked again on every return to a folder. The service changes in four ways (the
+pane's side is in [0051](0051-folder-sizes-in-list.md)'s M4.21 amendment):
 
 - **Leaving keeps running local walks.** `cancelWaitingWalks(for:)` replaces `cancelWalks(for:)`
   when a pane leaves its folder: a waiting walk never starts, a walk running on a share is
   cancelled as before, and one running on a local volume finishes and keeps its size, delivering
   nothing. A share keeps cancelling because it has one walk slot, which a walk nobody waits for
   mustn't hold. Unmounts, hidden tabs, closing, the setting going off and Recalculate Sizes still
-  cancel every walk. A walk that waited checks the cache once more when it starts, so one queued
-  behind a left walk of the same folder takes its size instead of walking again.
+  cancel every walk.
+- **One walk per folder.** A request for a folder that a running walk is walking, at the same
+  date on the same volume, left or not, waits for that walk's result instead of walking again,
+  so a quick back-and-forth costs one walk. If that walk is cancelled, the requests that joined
+  it go back in the queue and walk. A walk that waited also checks the cache when it starts, for
+  a left walk of its folder that finished meanwhile.
+- **Left walks give way.** A left walk can run for minutes (`~/Library`), and four of them would
+  hold every slot while the folder on screen waits. When every slot is taken and a walk is
+  waiting that a slot would start, the oldest running walk nobody waits for is cancelled, one per
+  such waiting walk. Left walks keep every slot nobody else wants.
 - **Lost events mark instead of drop.** A must-rescan event names the folder to read again, and
   the other events of its batch still count. Only the watched parent's children that hold that
   folder or are under it are in doubt: a folder deeper down is watched through its own parent,
@@ -136,8 +145,11 @@ Rejected: **ignoring `.DS_Store` and other noise** — sizes count every file, s
 file has to drop its folders. **Dropping on lost events, as before** — the drop is what made a
 revisit show "…" and walk everything under the parent again; a mark costs the same walk but only
 for folders that are shown, and shows the old size meanwhile. **Letting share walks finish
-too** — see above.
+too** — see above. **Capping left walks at two slots** — it holds two slots from the folder on
+screen even when only one walk waits, and it stops nothing when the cap isn't reached; giving
+way when a walk waits costs a left walk only when its slot is wanted, and loses that walk's
+progress, which a revisit then walks again.
 
 Consequences: a folder whose size is in doubt shows its old size, not "…", until its walk lands.
-Two panes asking for the same folder at once still walk it twice; a left walk and a new request
-for its folder do too when a slot is free for the new one.
+A left walk is cancelled whenever a shown folder needs its slot, so a big folder left behind
+keeps its size only if nothing else was waiting while it ran.

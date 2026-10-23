@@ -1066,7 +1066,8 @@ private func heldSettlePane() async -> (Pane, StubSystemActions, DispatchQueue) 
     #expect(!actions.openedFiles.contains { $0.lastPathComponent == "a-new" })
 }
 
-/// Folder walks of 42 bytes each that wait until the test releases them, on a local volume.
+/// Folder walks that wait until the test releases them, on a local volume: 42 bytes for the
+/// first walk, 84 for the second, and so on, so a walk again reads differently.
 private final class GatedWalks: @unchecked Sendable {
     private let condition = NSCondition()
     private var isReleased = false
@@ -1092,11 +1093,12 @@ private final class GatedWalks: @unchecked Sendable {
         condition.lock()
         defer { condition.unlock() }
         started.append(path)
+        let count = Int64(started.count)
         while !isReleased {
             if isCancelled() { throw CancellationError() }
             condition.wait(until: Date(timeIntervalSinceNow: 0.001))
         }
-        return TreeSizeWalker.Total(bytes: 42, files: 1, isPartial: false)
+        return TreeSizeWalker.Total(bytes: 42 * count, files: 1, isPartial: false)
     }
 }
 
@@ -1158,4 +1160,21 @@ private func goBackWithBatchesHeld(_ pane: Pane, to root: String) async -> Listi
     await settle { pane.location.path == root + "/big" && pane.state.isLoaded }
 
     #expect(await goBackWithBatchesHeld(pane, to: root) == .size(bytes: 42, isPartial: false))
+}
+
+@MainActor @Test func aMarkedSizeShowsOnARevisitsFirstRowsUntilItsWalkReplacesIt() async throws {
+    let temp = try TemporaryFolder("PaneTests")
+    let root = temp.url.path
+    let walks = GatedWalks()
+    walks.release()
+    let pane = sizedPane(root, walks)
+    await settle { bigSize(pane) == .size(bytes: 42, isPartial: false) }
+    pane.navigate(to: Location(path: root + "/big"))
+    await settle { pane.location.path == root + "/big" && pane.state.isLoaded }
+
+    await walks.cache.markForWalk(childrenOf: root, around: root, because: "a test")
+
+    #expect(await goBackWithBatchesHeld(pane, to: root) == .size(bytes: 42, isPartial: false))
+    await settle { bigSize(pane) == .size(bytes: 84, isPartial: false) }
+    #expect(walks.startedPaths == [root + "/big", root + "/big"])
 }

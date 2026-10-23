@@ -191,6 +191,8 @@ public final class FolderSizeService: Sendable {
         for walk in unfinished.walks(for: pane) {
             walk.leave()
         }
+        // A walk waiting for a slot may now take one from a walk nobody waits for.
+        scheduler.async { self.startWaitingWalks() }
     }
 
     /// The sizes kept in memory for `folders`, as `FolderSizeCache.keptSizes(of:)` gives them,
@@ -269,10 +271,14 @@ public final class FolderSizeService: Sendable {
 
     /// Runs on `scheduler`.
     private func startWaitingWalks() {
+        queue.joinRunning()
         while queue.running < Self.mostRunningWalks, let walk = queue.next() {
             queue.start(walk)
             walk.markRunning()
             Task(priority: .utility) { await self.run(walk) }
+        }
+        for walk in queue.leftWalksToStop() {
+            walk.cancel()
         }
     }
 
@@ -333,7 +339,14 @@ public final class FolderSizeService: Sendable {
         unfinished.remove(walk)
         scheduler.async {
             if started {
-                self.queue.finish(walk)
+                for joined in self.queue.finish(walk) {
+                    // A walk that stopped has no result to share: those that joined it walk.
+                    if let result {
+                        self.finish(joined, with: result, started: false)
+                    } else {
+                        self.queue.add(joined)
+                    }
+                }
                 self.startWaitingWalks()
             } else {
                 self.queue.remove(walk)
@@ -480,12 +493,17 @@ public final class FolderSizeService: Sendable {
         }
     }
 
-    /// Walks not yet started, in the order asked, and the running ones by volume. Only
-    /// `scheduler` touches it.
+    /// Walks not yet started, in the order asked, the running ones, and the walks waiting for a
+    /// running walk of the same folder. Only `scheduler` touches it.
     private final class Queue: @unchecked Sendable {
         private var waiting: [Walk] = []
-        private(set) var running = 0
+        /// Oldest first.
+        private var runningWalks: [Walk] = []
         private var runningOn: [VolumeIdentity: Int] = [:]
+        /// Walks waiting for the result of the running walk they are keyed by.
+        private var joined: [ObjectIdentifier: [Walk]] = [:]
+
+        var running: Int { runningWalks.count }
 
         func add(_ walk: Walk) {
             waiting.append(walk)
@@ -502,14 +520,49 @@ public final class FolderSizeService: Sendable {
             return waiting.firstIndex(where: mayStart).map { waiting.remove(at: $0) }
         }
 
+        /// Moves each waiting walk of a folder that a running walk is walking, at the same date
+        /// on the same volume, to wait for that walk's result instead of walking it again.
+        func joinRunning() {
+            waiting.removeAll { walk in
+                guard walk.volume != nil,
+                    let host = runningWalks.first(where: {
+                        $0.path == walk.path && $0.modified == walk.modified
+                            && $0.volume == walk.volume
+                    })
+                else { return false }
+                joined[ObjectIdentifier(host), default: []].append(walk)
+                return true
+            }
+        }
+
         func start(_ walk: Walk) {
-            running += 1
+            runningWalks.append(walk)
             runningOn[volume(of: walk), default: 0] += 1
         }
 
-        func finish(_ walk: Walk) {
-            running -= 1
+        /// Ends `walk` and returns the walks that joined it.
+        func finish(_ walk: Walk) -> [Walk] {
+            runningWalks.removeAll { $0 === walk }
             runningOn[volume(of: walk), default: 0] -= 1
+            return joined.removeValue(forKey: ObjectIdentifier(walk)) ?? []
+        }
+
+        /// With every slot taken, the oldest running walks whose result nobody waits for, one
+        /// for each waiting walk a slot would start, less the walks already stopping. A left walk
+        /// runs only on a local volume, so a slot it frees can go to a local walk; a walk on a
+        /// share counts only if its share has a walk to spare.
+        func leftWalksToStop() -> [Walk] {
+            guard running >= FolderSizeService.mostRunningWalks else { return [] }
+            let held = waiting.filter { walk in
+                guard let volume = walk.volume, !walk.isCancelled else { return false }
+                return volume.kind == .local || mayStart(walk)
+            }.count
+            let stopping = runningWalks.filter(\.isCancelled).count
+            let unwanted = runningWalks.filter { walk in
+                !walk.delivers && !walk.isCancelled
+                    && !(joined[ObjectIdentifier(walk)] ?? []).contains(where: \.delivers)
+            }
+            return Array(unwanted.prefix(max(0, held - stopping)))
         }
 
         private func mayStart(_ walk: Walk) -> Bool {

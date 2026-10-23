@@ -717,3 +717,76 @@ private func keep(
     #expect(change.changed == ["/var/w/b/file"])
     #expect(change.lost == ["/var/w/a/deep", "/var/w", "/var/w"])
 }
+
+@Test func aShownFoldersWalkStartsAtOnceWhenLeftWalksHoldEverySlot() async throws {
+    let folder = try TemporaryFolder("FolderSizeServiceTests")
+    // Not made: see `leavingLetsRunningLocalWalksFinish…`.
+    let left = (0..<4).map { folder.url.path + "/left-\($0)" }
+    let shown = folder.url.path + "/shown"
+    let walks = FakeWalks()
+    defer { walks.releaseAll() }
+    let sizes = service(walks) { _ in ListingService.listerVolume }
+    let log = EventLog<(String, SizeResult)>()
+    let leaving = PaneID()
+    for path in left {
+        request(sizes, path, pane: leaving, into: log)
+        // In order, so the oldest is known.
+        #expect(await walks.waitForStarts(left.firstIndex(of: path)! + 1))
+    }
+    sizes.cancelWaitingWalks(for: leaving)
+
+    request(sizes, shown, pane: PaneID(), into: log)
+
+    #expect(await walks.waitForStarts(5, timeout: 1))
+    #expect(walks.cancelled == [left[0]])
+    walks.release(shown)
+    #expect(await log.wait { $0.count == 1 })
+    #expect(log.all.map(\.0) == [shown])
+}
+
+@Test func aRequestForAFolderBeingWalkedWaitsForThatWalk() async throws {
+    let folder = try TemporaryFolder("FolderSizeServiceTests")
+    let path = folder.url.path + "/big"
+    let walks = FakeWalks(bytes: [path: 500])
+    defer { walks.releaseAll() }
+    let cache = FolderSizeCache(store: nil)
+    let sizes = service(walks, cache: cache) { _ in ListingService.listerVolume }
+    let log = EventLog<(String, SizeResult)>()
+    let leaving = PaneID()
+    request(sizes, path, pane: leaving, into: log)
+    #expect(await walks.waitForStarts(1))
+    sizes.cancelWaitingWalks(for: leaving)
+
+    // Back before the walk ends.
+    request(sizes, path, pane: PaneID(), into: log)
+    #expect(await !walks.waitForStarts(2, timeout: 0.1))
+    walks.release(path)
+
+    #expect(await log.wait { $0.count == 1 })
+    #expect(try log.all[0].1.get().bytes == 500)
+    #expect(walks.starts.count == 1)
+    #expect(
+        await cache.size(of: path, modified: firstModified, on: ListingService.listerVolume)?.bytes
+            == 500)
+}
+
+@Test func aRequestThatJoinedACancelledWalkWalksItself() async throws {
+    let path = "/searcher-no-such-folder/big"
+    let walks = FakeWalks()
+    defer { walks.releaseAll() }
+    let sizes = service(walks) { _ in ListingService.listerVolume }
+    let log = EventLog<(String, SizeResult)>()
+    let first = PaneID()
+    request(sizes, path, pane: first, into: log)
+    #expect(await walks.waitForStarts(1))
+    request(sizes, path, pane: PaneID(), into: log)
+    try await Task.sleep(for: .milliseconds(50))
+
+    sizes.cancelWalks(for: first)
+
+    #expect(await walks.waitForCancelled(path))
+    #expect(await walks.waitForStarts(2))
+    walks.release(path)
+    #expect(await log.wait { $0.count == 1 })
+    #expect(await !log.wait(timeout: 0.1) { $0.count > 1 })
+}
