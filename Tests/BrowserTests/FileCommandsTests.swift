@@ -25,12 +25,15 @@ private final class Window {
     let queue: FileOperationQueue
     private(set) var nameEdits = 0
 
-    init(at path: String) async {
+    /// The queue works on `fileSystem`, the real one unless a test holds a call.
+    init(at path: String, fileSystem: FileOperationQueue.FileSystem = .real) async {
         let pane = Pane(
             location: Location(path: path), service: ListingService(),
             systemActions: StubSystemActions(), settings: untouchedSettings())
         workspace = Workspace(tab: Tab(pane: pane))
-        queue = FileOperationQueue(prompts: prompter.prompts) { _ in }
+        queue = FileOperationQueue(
+            fileSystem: fileSystem, prompts: prompter.prompts, clock: ContinuousClock()
+        ) { _ in }
         await settle { pane.state.isLoaded }
     }
 
@@ -262,6 +265,67 @@ private func exists(_ path: String) -> Bool {
 
     await settle { window.pane.state.listing?.row(named: "untitled folder") != nil }
     #expect(selectedNames(window.pane) == ["b.txt"])
+}
+
+/// Holds the queue's New Folder call until the test opens it, and logs when the call starts.
+private final class NewFolderGate: @unchecked Sendable {
+    let started = EventLog<String>()
+    private let semaphore = DispatchSemaphore(value: 0)
+
+    var fileSystem: FileOperationQueue.FileSystem {
+        var fileSystem = FileOperationQueue.FileSystem.real
+        let make = fileSystem.makeUntitledFolder
+        fileSystem.makeUntitledFolder = { [self] folder throws(FileOperationError) in
+            started.append(folder)
+            semaphore.wait()
+            return try make(folder)
+        }
+        return fileSystem
+    }
+
+    func open() {
+        semaphore.signal()
+    }
+}
+
+@MainActor @Test func aSelectionMadeWhileTheNewFolderIsBeingMadeIsKept() async throws {
+    let folder = try TemporaryFolder("FileCommandsTests")
+    try write("a.txt", "b.txt", in: folder.url.path)
+    let gate = NewFolderGate()
+    let window = await Window(at: folder.url.path, fileSystem: gate.fileSystem)
+    window.select("a.txt")
+
+    try window.press(newFolder)
+    #expect(await gate.started.wait { $0.count == 1 })
+    window.select("b.txt")
+    gate.open()
+    await settle { exists(folder.url.path + "/untitled folder") }
+    try await Task.sleep(for: settleTime)
+    window.pane.apply(.relist, at: window.pane.location)
+
+    await settle { window.pane.state.listing?.row(named: "untitled folder") != nil }
+    #expect(selectedNames(window.pane) == ["b.txt"])
+}
+
+@MainActor @Test func aFilterChangeDropsNamesWaitingToBeSelected() async throws {
+    let folder = try TemporaryFolder("FileCommandsTests")
+    try write("a.txt", in: folder.url.path)
+    let window = await Window(at: folder.url.path)
+    window.pane.setFilter("a")
+    await settle { window.pane.state.listing?.count == 1 }
+    window.select("a.txt")
+
+    try window.press(newFolder)
+    await settle { exists(folder.url.path + "/untitled folder") }
+    try await Task.sleep(for: settleTime)
+    window.pane.apply(.relist, at: window.pane.location)
+    try await Task.sleep(for: settleTime)
+    #expect(selectedNames(window.pane) == ["a.txt"])
+    window.pane.setFilter("")
+
+    await settle { window.pane.state.listing?.row(named: "untitled folder") != nil }
+    try await Task.sleep(for: settleTime)
+    #expect(selectedNames(window.pane) == ["a.txt"])
 }
 
 // MARK: Rename

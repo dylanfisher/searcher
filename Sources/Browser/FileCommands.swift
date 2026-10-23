@@ -19,7 +19,8 @@ public enum FileCommands: CommandSet {
     public static let duplicate = Command(
         id: CommandID("file.duplicate"), title: "Duplicate",
         chords: [KeyChord("d", modifiers: .command)])
-    /// Edits the one selected entry's name in place; the view commits it with `rename(_:to:in:queue:)`.
+    /// Edits the one selected entry's name in place; the view commits it with
+    /// `rename(_:to:in:queue:)`.
     public static let rename = Command(
         id: CommandID("file.rename"), title: "Rename", chords: [KeyChord(.return)])
     public static let copyToOtherPane = Command(
