@@ -54,7 +54,9 @@ import os
         #expect(ranInPass.isEmpty, "ran before the run loop committed a frame")
         runOnePass()
         await Task.yield()
-        #expect(ranInPass.isEmpty, "ran after a pass that left the window to draw")
+        // Under load the 20 ms can hold several passes, so the second may already have drawn the
+        // frame; the warm-up may only have run if it did.
+        #expect(pass >= 2 || ranInPass.isEmpty, "ran after a pass that left the window to draw")
         await runPasses { !ranInPass.isEmpty }
         await warmup.finished()
 
