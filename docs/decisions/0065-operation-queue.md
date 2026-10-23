@@ -113,6 +113,29 @@ that didn't happen.
   lane at once, a running one as a cancel stops it, so `FileCopier` and the replace staging
   remove what was being written. What the cancel couldn't remove is a second error.
   Operations on other volumes go on.
+- **Quit.** `applicationShouldTerminate` answers `terminateLater` and calls
+  `FileOperationQueue.cancelAll(by:clock:)`, which runs `cancelAllAndWait`: every unfinished
+  operation is cancelled as `cancel` does, the copier's cancel included, and the call returns once
+  none is unfinished, so a running copy has removed its partial item and a replace its staging
+  folder. It shares one 2 s deadline with the listing cache's flush, which follows it, the way
+  the flush already waited: past the deadline the app quits anyway and logs a fault. A copy
+  blocked on a share that stopped answering is the case the deadline is for; what it leaves is
+  swept later.
+- **Leftovers are swept.** Before the queue makes a staging folder for a replace, once per
+  operation per destination folder, or a drop folder ([0071](0071-drag-and-drop.md)), it lists
+  that folder on the same `BlockingCallThread`. Each `.searcher-replace-*` or `.searcher-drop-*`
+  name the queue isn't using is removed with `rmdir` only: an empty folder goes, and one with
+  anything in it (`ENOTEMPTY`), such as an item a crash left staged, stays for the user. Nothing
+  inside is ever deleted. The names in use are a lock-guarded set the actor and the item threads
+  share, and a name joins it before its folder is made. A folder that can't be listed, such as a
+  symlink, isn't swept; the call that follows reports what is wrong with it.
+- **Intake in key order.** `submit` queues an operation without waiting for the actor: it takes
+  the next ID and adds the operation to a lock-guarded list on the calling thread, and the actor
+  takes in the whole list in order whenever it runs. The file commands submit from the key
+  press, so operations are queued in the order of the keys. `finishedCount`, which an undo reads
+  before it picks an entry ([0072](0072-undo.md)), first waits until every operation submitted
+  before the read has finished or, for one that copies, joined its lane. So Cmd-Z pressed in the
+  same turn as Cmd-Delete undoes that trash, and doesn't wait for a 20-minute copy.
 
 ## Alternatives considered
 
@@ -149,16 +172,31 @@ that didn't happen.
   keeps a question from holding the lane.
 - **Merge folders, as Finder's "Merge" does** — not now: the plan has conflicts per top-level
   item only; a merge would be a recursive conflict walk of its own.
+- **Sweep at launch** — rejected: it would list every folder an operation ever touched, which the
+  app doesn't remember, and a share listed at launch can block for minutes.
+- **Skip leftover folders younger than a minute** — rejected: it needs one more call per folder,
+  and the race it closes is rare and loud (below).
+- **Undo waits for every operation submitted before it** — rejected: Cmd-Z pressed during a long
+  copy would hold Undo off until the copy ended, then undo something the user had moved on from.
 
 ## Consequences
 
 Each operation's planning has its own thread, so a hundred queued copies plan at once with a
 hundred threads, and a cancelled plan stuck on a dead share keeps its thread until the call
-returns; nothing bounds either yet, which M4.4b (unmount) and M4.5 (commands that queue many
-operations) should weigh. A queued copy whose pre-scan is slow can start after a later one to
-the same disk. A refused operation names the path, and Interface words the message.
+returns. Nothing bounds either: an unmount makes no more of them, and each file command queues
+one operation for the whole selection. A queued copy whose pre-scan is slow can start after a
+later one to the same disk. A refused operation names the path, and Interface words the message.
 Each item runs on a thread of its own, about 50 ms of thread starts for a 1,000-item trash.
-`Trasher.deletePermanently` now has a second caller, the cross-volume move, as its doc says.
+`Trasher.deletePermanently` is called for a cross-volume move's source once it is copied, for
+Delete Immediately and a delete the user agreed to where a volume has no Trash, and for a
+replace's staged item and staging folder, which only the queue made.
+
+Two Searcher processes, such as a development build beside the installed app, each sweep only
+their own names, so one can remove the other's folder in the moment it is empty: a staging
+folder for the microseconds before its copy starts, a drop folder until the first promised byte
+lands. The replace or drop then fails with the path, and nothing is lost. A sweep costs one
+listing of the destination folder per replace operation and per drop. Cmd-Z waits for a move,
+rename or trash queued before it that is waiting for an answer.
 
 Operations on paths reached through a link aren't matched by the refusal check, as 0049's panes
 aren't, nor by will-unmount. Will-unmount fails an operation still planning, but its plan

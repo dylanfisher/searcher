@@ -135,7 +135,12 @@ public actor FileOperationQueue {
     /// Unfinished operations, and finished ones until a snapshot has shown them, in the order
     /// queued.
     private var entries: [Entry] = []
-    private var nextID = 0
+    /// Operations submitted and not yet taken in, and the next ID.
+    private nonisolated let intake = Intake()
+    /// Staging and drop folders in use, which a sweep leaves alone.
+    private nonisolated let liveFolders = LiveFolders()
+    /// Calls waiting for an operation to finish or join its lane.
+    private var changeWaiters: [CheckedContinuation<Void, Never>] = []
     /// Planned operations waiting for their lane, in the order queued.
     private var waiting: [ID] = []
     /// Lanes with an operation running.
@@ -145,8 +150,22 @@ public actor FileOperationQueue {
     private var isTicking = false
     /// Drop folders made and not yet removed.
     private var dropFolders: Set<DropFolder> = []
-    /// How many operations have finished, refused ones included.
-    public private(set) var finishedCount = 0
+    private var finished = 0
+
+    /// How many operations have finished, refused ones included, read once every operation
+    /// submitted before the read has finished or, for one that copies, joined its lane. So an
+    /// undo pressed right after Move to Trash waits for that trash, and not for a long copy
+    /// (docs/decisions/0072-undo.md).
+    public var finishedCount: Int {
+        get async {
+            takeIn()
+            let submitted = intake.nextID
+            while entries.contains(where: { $0.id.value < submitted && !$0.isSettled }) {
+                await waitForChange()
+            }
+            return finished
+        }
+    }
 
     /// A queue that works on the file system and asks its questions through `prompts`.
     /// `onChange` gets every operation's state, unfinished ones and those finished since the
@@ -187,30 +206,63 @@ public actor FileOperationQueue {
     public func enqueue(
         _ operation: FileOperation, onFinish: @escaping @Sendable (Snapshot) -> Void = { _ in }
     ) -> ID {
-        let id = ID(nextID)
-        nextID += 1
-        let inUse = pathInUse(by: operation)
-        let entry = Entry(
-            id: id, operation: operation, copier: fileSystem.makeCopier(), onFinish: onFinish)
-        entries.append(entry)
-        if let inUse {
-            finish(entry, as: .refused(.inUse(path: inUse)))
-        } else {
-            changed()
-            Task { await self.prepare(id) }
-        }
+        let id = intake.add(operation, onFinish: onFinish)
+        takeIn()
         return id
+    }
+
+    /// Queues `operation` without waiting for the actor, so operations a key queues from the
+    /// main actor are queued in the order of the keys, and an undo pressed next sees them
+    /// (`finishedCount`). The task returns the operation's state once it has finished.
+    @discardableResult
+    public nonisolated func submit(_ operation: FileOperation) -> Task<OperationState, Never> {
+        let (states, finished) = AsyncStream.makeStream(of: OperationState.self)
+        intake.add(operation) { snapshot in
+            finished.yield(snapshot.state)
+            finished.finish()
+        }
+        // Each call takes in every submission waiting, in order, so it doesn't matter which
+        // of these tasks runs first.
+        Task { await self.takeIn() }
+        return Task {
+            for await state in states { return state }
+            preconditionFailure("\(operation) ended without a state")
+        }
     }
 
     /// Queues `operation` and returns its state once it has finished.
     public func perform(_ operation: FileOperation) async -> OperationState {
-        let (states, finished) = AsyncStream.makeStream(of: OperationState.self)
-        enqueue(operation) { snapshot in
-            finished.yield(snapshot.state)
-            finished.finish()
+        let finished = submit(operation)
+        takeIn()
+        return await finished.value
+    }
+
+    /// Queues every submitted operation not yet queued, in the order submitted.
+    private func takeIn() {
+        for (id, operation, onFinish) in intake.takeAll() {
+            let inUse = pathInUse(by: operation)
+            let entry = Entry(
+                id: id, operation: operation, copier: fileSystem.makeCopier(),
+                onFinish: onFinish)
+            entries.append(entry)
+            if let inUse {
+                finish(entry, as: .refused(.inUse(path: inUse)))
+            } else {
+                changed()
+                Task { await self.prepare(id) }
+            }
         }
-        for await state in states { return state }
-        preconditionFailure("\(operation) ended without a state")
+    }
+
+    /// Waits until an operation finishes or joins its lane.
+    private func waitForChange() async {
+        await withCheckedContinuation { changeWaiters.append($0) }
+    }
+
+    private func resumeChangeWaiters() {
+        let waiting = changeWaiters
+        changeWaiters.removeAll()
+        for waiter in waiting { waiter.resume() }
     }
 
     /// Holds the operation: a copy at its next block, other work before its next item, and a
@@ -244,6 +296,47 @@ public actor FileOperationQueue {
             answer(id, nil)
         } else if isWaiting(entry) {
             finishWaiting(entry, as: .cancelled(leftBehind: nil))
+        }
+    }
+
+    /// Cancels every unfinished operation, as `cancel` does, and returns once none is left
+    /// unfinished: a running copy has removed what it wrote and a replace its staging folder.
+    /// One queued while it waits is cancelled too. For the app to call as it quits.
+    public func cancelAllAndWait() async {
+        while true {
+            takeIn()
+            let unfinished = entries.filter { !$0.phase.isFinished }
+            guard !unfinished.isEmpty else { return }
+            for entry in unfinished { cancel(entry.id) }
+            await waitForChange()
+        }
+    }
+
+    /// `cancelAllAndWait`, unless `deadline` on `clock` passes first, as when a copy is blocked
+    /// on a share that stopped answering. Returns whether every operation finished; the cancel
+    /// keeps going if not.
+    public nonisolated func cancelAll<C: Clock<Duration>>(by deadline: C.Instant, clock: C) async
+        -> Bool
+    {
+        let race = FirstToFinish()
+        return await withCheckedContinuation { continuation in
+            Task {
+                await self.cancelAllAndWait()
+                race.end(with: true)
+            }
+            race.start(
+                continuation,
+                deadline: Task {
+                    do {
+                        try await clock.sleep(until: deadline, tolerance: nil)
+                    } catch is CancellationError {
+                        // Every operation finished first.
+                        return
+                    } catch {
+                        preconditionFailure("the clock failed a wait with \(error)")
+                    }
+                    race.end(with: false)
+                })
         }
     }
 
@@ -288,11 +381,22 @@ public actor FileOperationQueue {
     /// files then move into `folder` as one queued move, so a name the folder already has is
     /// asked about as for any move, and the folder is removed with `removeDropFolder`, or with
     /// `removePendingDropFolders` when the app quits first (docs/decisions/0071-drag-and-drop.md).
+    /// First it removes the empty staging and drop folders earlier runs left in `folder`.
     public func makeDropFolder(in folder: String) async throws(FileOperationError) -> DropFolder {
-        let makeFolder = fileSystem.makeFolder
+        let fileSystem = fileSystem
+        let liveFolders = liveFolders
         let name = Self.dropFolderPrefix + UUID().uuidString
-        let path = try await BlockingCallThread.run { () throws(FileOperationError) in
-            try makeFolder(name, folder)
+        // Live before it exists, so a sweep on another thread never finds it unclaimed.
+        liveFolders.insert(name)
+        let path: String
+        do {
+            path = try await BlockingCallThread.run { () throws(FileOperationError) in
+                Self.sweep(folder, liveFolders: liveFolders, fileSystem: fileSystem)
+                return try fileSystem.makeFolder(name, folder)
+            }
+        } catch {
+            liveFolders.remove(name)
+            throw error
         }
         let dropFolder = DropFolder(path: path)
         dropFolders.insert(dropFolder)
@@ -320,22 +424,59 @@ public actor FileOperationQueue {
     }
 
     /// The bytes in `dropFolder` so far, for a drop to tell whether its files are still being
-    /// written; nil when it can't be read.
-    public func bytes(in dropFolder: DropFolder) async -> Int64? {
+    /// written.
+    ///
+    /// - Throws: `FileOperationError` when the folder can't be read.
+    public func bytes(in dropFolder: DropFolder) async throws(FileOperationError) -> Int64 {
         let measure = fileSystem.measure
-        return await BlockingCallThread.run { () -> Int64? in
+        return try await BlockingCallThread.run { () throws(FileOperationError) -> Int64 in
             do {
                 return try measure(dropFolder.path, { false }).bytes
+            } catch let error as FileOperationError {
+                throw error
             } catch {
-                return nil
+                preconditionFailure("measuring \(dropFolder.path) threw \(error)")
             }
         }
     }
 
     private func clear(_ dropFolders: [DropFolder]) async -> [FileOperationError] {
         let fileSystem = fileSystem
-        return await BlockingCallThread.run {
+        let errors = await BlockingCallThread.run {
             dropFolders.flatMap { Self.clear($0, fileSystem: fileSystem) }
+        }
+        // One left behind holds what couldn't go to the Trash, so a sweep can't remove it.
+        for dropFolder in dropFolders {
+            liveFolders.remove((dropFolder.path as NSString).lastPathComponent)
+        }
+        return errors
+    }
+
+    /// Removes the empty staging and drop folders in `folder` that this queue isn't using,
+    /// which a crash or a quit that ran out of time left (docs/decisions/0065-operation-queue.md).
+    /// Only with `removeEmptyFolder`, so a folder with anything in it, such as an item a crash
+    /// left staged or a folder another Searcher is filling, stays for the user. A folder that
+    /// can't be listed, such as a symlink, isn't swept; the call that follows the sweep reports
+    /// what is wrong with it. Runs on a `BlockingCallThread`.
+    private static func sweep(
+        _ folder: String, liveFolders: LiveFolders, fileSystem: FileSystem
+    ) {
+        let names: [String]
+        do {
+            names = try fileSystem.listNames(folder)
+        } catch {
+            return
+        }
+        for name in names
+        where (name.hasPrefix(stagingFolderPrefix) || name.hasPrefix(dropFolderPrefix))
+            && !liveFolders.contains(name)
+        {
+            do {
+                try fileSystem.removeEmptyFolder(folder + "/" + name)
+            } catch {
+                // Not empty, gone already or not a folder: left as it is.
+                continue
+            }
         }
     }
 
@@ -380,10 +521,10 @@ public actor FileOperationQueue {
         guard case .receive = operation, !errors.isEmpty else {
             preconditionFailure("only a failed drop is reported, not \(operation) with \(errors)")
         }
+        takeIn()
         let entry = Entry(
-            id: ID(nextID), operation: operation, copier: fileSystem.makeCopier(),
+            id: intake.reserveID(), operation: operation, copier: fileSystem.makeCopier(),
             onFinish: { _ in })
-        nextID += 1
         entry.errors = errors
         entry.progress.itemCount = errors.count
         entry.progress.itemsDone = errors.count
@@ -433,6 +574,8 @@ public actor FileOperationQueue {
             preconditionFailure("planning \(operation) threw \(error)")
         }
         entry.plan = plan
+        // One that copies is settled now (`finishedCount`).
+        if plan.lane != nil { resumeChangeWaiters() }
         entry.errors = plan.failures
         entry.progress = OperationState.Progress(
             itemsDone: plan.failures.count, itemCount: plan.failures.count + plan.items.count,
@@ -552,6 +695,19 @@ public actor FileOperationQueue {
             } else {
                 [FileOperation.UndoStep]()
             }
+        let replacedIn = Set(
+            plan.items.indices.filter { entry.choices[$0] == .replace }.compactMap {
+                plan.items[$0].destination.map { ($0 as NSString).deletingLastPathComponent }
+            })
+        if !replacedIn.isEmpty {
+            let fileSystem = fileSystem
+            let liveFolders = liveFolders
+            await BlockingCallThread.run {
+                for folder in replacedIn.sorted() {
+                    Self.sweep(folder, liveFolders: liveFolders, fileSystem: fileSystem)
+                }
+            }
+        }
         var index = plan.items.startIndex
         while index < plan.items.endIndex {
             if entry.control.isCancelled {
@@ -565,12 +721,14 @@ public actor FileOperationQueue {
             let control = entry.control
             let choice = entry.choices[index]
             let deletesWithoutTrash = entry.deletesWithoutTrash
+            let liveFolders = liveFolders
             // An undo plans one item per step, or none.
             let undoStep = undoSteps.isEmpty ? nil : undoSteps[index]
             var (outcome, identities) = await BlockingCallThread.run {
                 let outcome = Self.perform(
                     item, of: operation, choice: choice, deletesWithoutTrash: deletesWithoutTrash,
-                    undoStep: undoStep, fileSystem: fileSystem, copier: copier, control: control
+                    undoStep: undoStep, fileSystem: fileSystem, liveFolders: liveFolders,
+                    copier: copier, control: control
                 ) { progress in
                     // The ticker reads it; a call into the actor per report would be one every
                     // 0.5 ms at full speed.
@@ -837,7 +995,7 @@ public actor FileOperationQueue {
     private static func perform(
         _ item: OperationPlan.Item, of operation: FileOperation,
         choice: ConflictResolution.Choice?, deletesWithoutTrash: Bool,
-        undoStep: FileOperation.UndoStep?, fileSystem: FileSystem,
+        undoStep: FileOperation.UndoStep?, fileSystem: FileSystem, liveFolders: LiveFolders,
         copier: any Copier, control: Control, progress: @escaping (CopyProgress) -> Void
     ) -> ItemOutcome {
         guard control.waitWhilePaused() else { return .cancelled(leftBehind: nil) }
@@ -884,9 +1042,13 @@ public actor FileOperationQueue {
         /// under its own name: by a copy or, within one volume, a move. A cancel before it is
         /// done takes the staged item away and leaves the original. Then `finishReplace`.
         func replace(_ destination: String, isMove: Bool) throws -> ItemOutcome {
+            let name = stagingFolderPrefix + UUID().uuidString
+            // Once this returns, the folder is gone or holds the staged item, which keeps a
+            // sweep from removing it.
+            liveFolders.insert(name)
+            defer { liveFolders.remove(name) }
             let staging = try fileSystem.makeFolder(
-                stagingFolderPrefix + UUID().uuidString,
-                (destination as NSString).deletingLastPathComponent)
+                name, (destination as NSString).deletingLastPathComponent)
             let movesWithin = isMove && !item.crossesVolumes
             let staged = StagedReplace(
                 source: source, destination: destination, staging: staging, isMove: isMove,
@@ -1026,10 +1188,11 @@ public actor FileOperationQueue {
     private func finish(_ entry: Entry, as phase: OperationState.Phase) {
         entry.phase = phase
         changed()
-        finishedCount += 1
+        finished += 1
         let last = snapshot(of: entry)
         onAnyFinish(last)
         entry.onFinish(last)
+        resumeChangeWaiters()
     }
 
     // MARK: - Refusals
@@ -1149,6 +1312,9 @@ public actor FileOperationQueue {
         /// Resumes `run` while it waits for an answer; nil means it was cancelled.
         var pendingAnswer: CheckedContinuation<Bool?, Never>?
 
+        /// Finished, or planned to copy, so it waits in a lane: an undo doesn't wait for it.
+        var isSettled: Bool { phase.isFinished || plan?.lane != nil }
+
         init(
             id: ID, operation: FileOperation, copier: any Copier,
             onFinish: @escaping @Sendable (Snapshot) -> Void
@@ -1163,6 +1329,67 @@ public actor FileOperationQueue {
             progress.copied = CopyProgress(
                 bytes: progress.copied.bytes + copied.bytes,
                 files: progress.copied.files + copied.files)
+        }
+    }
+
+    /// Operations submitted from any thread, in the order submitted, until the actor takes
+    /// them in; and the IDs, given in the same order.
+    private final class Intake: @unchecked Sendable {
+        typealias Submission = (ID, FileOperation, @Sendable (Snapshot) -> Void)
+
+        // `lock` guards everything below.
+        private let lock = NSLock()
+        private var next = 0
+        private var waiting: [Submission] = []
+
+        /// The ID the next submission gets; every lower one is taken.
+        var nextID: Int { lock.withLock { next } }
+
+        @discardableResult
+        func add(_ operation: FileOperation, onFinish: @escaping @Sendable (Snapshot) -> Void)
+            -> ID
+        {
+            lock.withLock {
+                let id = ID(next)
+                next += 1
+                waiting.append((id, operation, onFinish))
+                return id
+            }
+        }
+
+        /// An ID for an entry the actor makes itself.
+        func reserveID() -> ID {
+            lock.withLock {
+                defer { next += 1 }
+                return ID(next)
+            }
+        }
+
+        func takeAll() -> [Submission] {
+            lock.withLock {
+                defer { waiting.removeAll() }
+                return waiting
+            }
+        }
+    }
+
+    /// The names of the staging and drop folders in use, read and changed from the actor and
+    /// from the threads that run items. A name holds a UUID, so it is never another folder's.
+    private final class LiveFolders: @unchecked Sendable {
+        // `lock` guards `names`.
+        private let lock = NSLock()
+        private var names: Set<String> = []
+
+        func insert(_ name: String) {
+            lock.withLock { _ = names.insert(name) }
+        }
+
+        func remove(_ name: String) {
+            lock.withLock { _ = names.remove(name) }
+        }
+
+        func contains(_ name: String) -> Bool {
+            lock.withLock { names.contains(name) }
         }
     }
 

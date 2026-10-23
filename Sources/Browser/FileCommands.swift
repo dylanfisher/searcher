@@ -50,8 +50,7 @@ public enum FileCommands: CommandSet {
                     guard canChangeSelection(context), let queue = context.fileOperations else {
                         return
                     }
-                    let operation = FileOperation.trash(selectedPaths(in: context.pane))
-                    Task { await queue.enqueue(operation) }
+                    queue.submit(.trash(selectedPaths(in: context.pane)))
                 }),
             CommandBinding(
                 newFolder, isEnabled: { $0.fileOperations != nil },
@@ -108,8 +107,9 @@ public enum FileCommands: CommandSet {
         then selected: (@MainActor () -> Void)? = nil
     ) {
         let version = pane.selectionVersion
+        let finished = queue.submit(operation)
         Task { [weak pane] in
-            let state = await queue.perform(operation)
+            let state = await finished.value
             pane?.select(
                 names(madeBy: state.record), whenListedAtSelectionVersion: version,
                 then: selected)
@@ -143,7 +143,7 @@ public enum FileCommands: CommandSet {
         let operation = operation(selectedPaths(in: context.pane), folder.path)
         Task {
             guard await queue.prompts.confirm(.otherPane(operation)) else { return }
-            await queue.enqueue(operation)
+            queue.submit(operation)
         }
     }
 

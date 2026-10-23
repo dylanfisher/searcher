@@ -9,7 +9,8 @@ import os
 /// and the moved files are selected as pasted ones are. The queue then removes the folder,
 /// trashing anything left in it. What fails, a file that didn't arrive, a source that stopped
 /// writing for `idleTimeout`, or a folder that couldn't be made or removed, shows as one failed
-/// row in the operations panel and is logged (docs/decisions/0071-drag-and-drop.md).
+/// row in the operations panel and is logged (docs/decisions/0071-drag-and-drop.md). So does a
+/// folder that can't be read while the files are on their way.
 @MainActor
 enum FilePromiseReceiver {
     /// One promised item of a drop. `NSFilePromiseReceiver` outside tests.
@@ -30,10 +31,12 @@ enum FilePromiseReceiver {
 
     private static let logger = Logger(category: "drop")
 
-    /// What the receiver waits for: a file, or `idleTimeout` with nothing new.
+    /// What the receiver waits for: a file, `idleTimeout` with nothing new, or a folder that
+    /// can't be read.
     private enum Event: Sendable {
         case file(URL, (any Error)?)
         case idle
+        case unreadable(FileOperationError)
     }
 
     /// How long the drop has gone with nothing new, which a file's arrival resets.
@@ -87,10 +90,13 @@ enum FilePromiseReceiver {
                 }
             case .idle:
                 promised = 0
+                // The folder the source stopped writing to; the row names the app.
                 errors.append(
                     FileOperationError(
-                        reason: .unreachable, path: app ?? "The app the files came from",
-                        errno: ETIMEDOUT))
+                        reason: .unreachable, path: dropFolder.path, errno: ETIMEDOUT))
+            case .unreadable(let error):
+                promised = 0
+                errors.append(error)
             }
         }
         watch.cancel()
@@ -106,8 +112,8 @@ enum FilePromiseReceiver {
     }
 
     /// Reads the bytes in `dropFolder` every `progressInterval`, off the main thread, and sends
-    /// `.idle` once `idleTimeout` has passed with no more bytes and no file arriving. A folder
-    /// that can't be read counts as no more bytes.
+    /// `.idle` once `idleTimeout` has passed with no more bytes and no file arriving, or
+    /// `.unreadable` once the folder can't be read.
     private static func watchProgress(
         of dropFolder: FileOperationQueue.DropFolder, queue: FileOperationQueue, idle: Idle,
         clock: any Clock<Duration>, feed: AsyncStream<Event>.Continuation
@@ -122,7 +128,13 @@ enum FilePromiseReceiver {
                 } catch {
                     preconditionFailure("the clock failed a wait with \(error)")
                 }
-                let now = await queue.bytes(in: dropFolder) ?? bytes
+                let now: Int64
+                do throws(FileOperationError) {
+                    now = try await queue.bytes(in: dropFolder)
+                } catch {
+                    feed.yield(.unreadable(error))
+                    return
+                }
                 if now > bytes {
                     bytes = now
                     idle.time = .zero

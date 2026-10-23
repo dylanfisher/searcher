@@ -50,14 +50,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
-    /// Writes the cache's unwritten saves before the app quits, so listings made in the last two
-    /// seconds outlive it. Quits after `quitFlushLimit` whatever the write is doing.
+    /// Cancels the running file operations, so none leaves a partial item or a staging folder,
+    /// then writes the cache's unwritten saves before the app quits, so listings made in the last
+    /// two seconds outlive it. Quits after `quitLimit` whatever either is doing.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // A bench launch has no cache and never makes the windows.
         guard let cache else { return .terminateNow }
-        let deadline = ContinuousClock.now.advanced(by: Self.quitFlushLimit)
+        let deadline = ContinuousClock.now.advanced(by: Self.quitLimit)
+        let windows = windows
         Task {
+            let limit = String(describing: Self.quitLimit)
+            if !(await windows.cancelOperationsBeforeQuit(by: deadline)) {
+                Logger(category: "operations").fault(
+                    "file operations didn't stop in \(limit, privacy: .public); quitting anyway")
+            }
             if !(await cache.flush(by: deadline, clock: .continuous)) {
-                let limit = String(describing: Self.quitFlushLimit)
                 Logger(category: "cache").fault(
                     "the listing cache didn't finish writing in \(limit, privacy: .public); quitting without it"
                 )
@@ -67,8 +74,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         return .terminateLater
     }
 
-    /// How long quitting waits for the listing cache to write.
-    private static let quitFlushLimit: Duration = .seconds(2)
+    /// How long quitting waits for file operations to stop and the listing cache to write.
+    private static let quitLimit: Duration = .seconds(2)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let bench {

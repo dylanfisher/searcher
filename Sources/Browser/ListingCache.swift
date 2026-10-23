@@ -219,9 +219,10 @@ private final class StartedInserts: @unchecked Sendable {
     }
 }
 
-/// Resumes a continuation with the result of a flush or of its deadline, whichever ends first,
-/// and cancels the deadline's wait if the flush wins. A flush that loses keeps going.
-private final class FirstToFinish: @unchecked Sendable {
+/// Resumes a continuation with the result of some work, such as a flush, or of its deadline,
+/// whichever ends first, and cancels the deadline's wait if the work wins. Work that loses
+/// keeps going.
+final class FirstToFinish: @unchecked Sendable {
     // `lock` guards everything below.
     private let lock = NSLock()
     private var continuation: CheckedContinuation<Bool, Never>?

@@ -419,6 +419,12 @@ extension Fixture {
     func contents(of url: URL) throws -> Set<String> {
         Set(try FileManager.default.contentsOfDirectory(atPath: url.path))
     }
+
+    /// The hidden folder a drop under way receives its files in.
+    func dropFolder() throws -> URL {
+        let name = try #require(try contents(of: folder).first { $0.hasPrefix(".") })
+        return folder.appending(path: name)
+    }
 }
 
 @MainActor @Test func promisedFilesLandInTheTargetFolderAndAreSelected() async throws {
@@ -571,6 +577,7 @@ private let readsToTimeOut = Int(
     defer { fixture.stop() }
     let clock = ManualClock()
     let finished = await startDrop([StubPromise("never.jpg", .hangs)], fixture, clock: clock)
+    let dropFolder = try fixture.dropFolder()
 
     for _ in 1..<readsToTimeOut { await nextRead(clock) }
     #expect(!finished.value)
@@ -583,7 +590,35 @@ private let readsToTimeOut = Int(
     await settle { !fixture.reportedFailures.isEmpty }
     let (operation, state) = try #require(fixture.reportedFailures.first)
     #expect(operation == .receive(name: nil, app: "Mail", into: fixture.folder.path))
-    #expect(state.errors.map(\.reason) == [.unreachable])
+    // The folder the files were to be written to, not the app's name.
+    #expect(
+        state.errors == [
+            FileOperationError(reason: .unreachable, path: dropFolder.path, errno: ETIMEDOUT)
+        ])
+}
+
+@MainActor @Test func aDropFolderThatCantBeReadFailsTheDropNamingTheFolder() async throws {
+    let fixture = try await Fixture()
+    defer { fixture.stop() }
+    let clock = ManualClock()
+    let finished = await startDrop([StubPromise("never.jpg", .hangs)], fixture, clock: clock)
+    let dropFolder = try fixture.dropFolder()
+    try FileManager.default.setAttributes(
+        [.posixPermissions: 0o000], ofItemAtPath: dropFolder.path)
+    defer {
+        _ = try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: dropFolder.path)
+    }
+
+    clock.advance(by: FilePromiseReceiver.progressInterval)
+    guard await waitForTheDrop(finished, "the unreadable folder didn't end it") else { return }
+
+    await settle { !fixture.reportedFailures.isEmpty }
+    let (_, state) = try #require(fixture.reportedFailures.first)
+    #expect(
+        state.errors.first
+            == FileOperationError(reason: .permissionDenied, path: dropFolder.path, errno: EACCES))
+    #expect(!state.errors.contains { $0.reason == .unreachable })
 }
 
 @MainActor @Test func aFileStillGrowingIsWaitedForPastTheIdleTimeout() async throws {
