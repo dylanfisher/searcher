@@ -4,9 +4,10 @@ import UniformTypeIdentifiers
 
 /// The apps Open With lists for a selection: those that open every selected type, the default app
 /// first and the rest by name, one per bundle ID and version. Each type's apps are listed and read
-/// once, off the main thread, and kept for the life of the cache, so a menu opened again fills
-/// from it. Each app's icon is asked for once; a type's list waits up to `iconWait` for its icons,
-/// and an icon that lands later shows the next time the menu opens
+/// off the main thread and cached, so a menu opened again fills from it; `refresh` lists them
+/// again in the background, so an app installed since shows the next time. Each app's icon is
+/// asked for once per path and version; a type's list waits up to `iconWait` for its icons, and
+/// an icon that lands later shows the next time the menu opens
 /// (docs/decisions/0073-open-with.md).
 @MainActor
 public final class OpenWith {
@@ -46,6 +47,8 @@ public final class OpenWith {
 
         /// Copies of one version of an app share it; Open With lists one of them.
         fileprivate var key: [String] { [bundleID, version ?? ""] }
+        /// An app keeps its icon while its path and version stay the same.
+        fileprivate var iconKey: [String] { [url.path, version ?? ""] }
     }
 
     public struct Choices: Equatable, Sendable {
@@ -72,13 +75,18 @@ public final class OpenWith {
     private let systemActions: any SystemActions
     private let didBuild: @Sendable (UTType, Duration) -> Void
     private var lists: [UTType: AppList] = [:]
-    /// Each type's build, started once and kept, so callers waiting on one type share it.
+    /// Each type's latest build or refresh, kept so callers waiting on one type share it.
     private var builds: [UTType: Task<AppList, Never>] = [:]
-    /// The icons that landed, by app URL; an app whose icon couldn't be made has none.
-    private var icons: [URL: CGImage] = [:]
-    /// The apps whose icons were asked for, and those whose answer landed.
-    private var iconsAsked: Set<URL> = []
-    private var iconsLanded: Set<URL> = []
+    /// The types whose build or refresh is running.
+    private var building: Set<UTType> = []
+    /// The types whose list landed less than `refreshInterval` ago, which `refresh` skips.
+    private(set) var resting: Set<UTType> = []
+    /// The icons that landed, by app path and version; an app whose icon couldn't be made has
+    /// none.
+    private var icons: [[String]: CGImage] = [:]
+    /// The apps whose icons were asked for, and those whose answer landed, by path and version.
+    private var iconsAsked: Set<[String]> = []
+    private var iconsLanded: Set<[String]> = []
     /// Builds waiting for their apps' icons, by ID.
     private var iconWaiters: [UUID: IconWaiter] = [:]
     /// Where Launch Services is asked for a type's apps and the apps are read. Tests suspend a
@@ -86,14 +94,19 @@ public final class OpenWith {
     var buildQueue = DispatchQueue.global(qos: .userInitiated)
     /// How long a type's list waits for its apps' icons before it is shown without the rest.
     var iconWait = Duration.seconds(1)
+    /// How long a type's list stays after it lands before `refresh` lists the type again, so
+    /// opening the menu over and over asks Launch Services at most this often.
+    var refreshInterval = Duration.seconds(5)
+    /// Where a list waits out `refreshInterval`. Tests pass a clock they advance.
+    var refreshClock: any Clock<Duration> = ContinuousClock()
 
     private struct IconWaiter {
-        let urls: [URL]
+        let keys: [[String]]
         let continuation: CheckedContinuation<Void, Never>
     }
 
     /// `didBuild` gets each type and how long listing and reading its apps took, off the main
-    /// thread.
+    /// thread, for each build and refresh.
     public init(
         systemActions: any SystemActions,
         didBuild: @escaping @Sendable (UTType, Duration) -> Void
@@ -119,6 +132,16 @@ public final class OpenWith {
             found.append(await task.value)
         }
         return choices(from: found)
+    }
+
+    /// Lists again, in the background, each of `types` that has a list, none running, and none
+    /// landed in the last `refreshInterval`. The cache keeps the old list until the new one
+    /// lands and replaces it.
+    public func refresh(_ types: Set<UTType>) {
+        for type in types
+        where lists[type] != nil && !building.contains(type) && !resting.contains(type) {
+            _ = startBuild(type)
+        }
     }
 
     /// The types of the entries selected in `pane`, from their kinds, so finding them reads no
@@ -155,36 +178,64 @@ public final class OpenWith {
 
     private func build(_ type: UTType) -> Task<AppList, Never> {
         if let task = builds[type] { return task }
+        return startBuild(type)
+    }
+
+    /// Lists `type`'s apps, puts the list in the cache when it lands, and keeps the type
+    /// `resting` for `refreshInterval` after.
+    private func startBuild(_ type: UTType) -> Task<AppList, Never> {
         let systemActions = systemActions
         let didBuild = didBuild
         let queue = buildQueue
+        building.insert(type)
         let task = Task {
             let list = await Self.list(
                 for: type, from: systemActions, on: queue, didBuild: didBuild)
-            await waitForIcons(of: list.apps.map(\.url))
+            await waitForIcons(of: list.apps)
             lists[type] = list
+            building.remove(type)
+            rest(type)
             return list
         }
         builds[type] = task
         return task
     }
 
-    /// Asks for the icons of `urls` not yet asked for, and returns when every one has landed or
-    /// `iconWait` has passed, so an icon that never comes holds the list back no longer than
-    /// that.
-    private func waitForIcons(of urls: [URL]) async {
+    /// Keeps `refresh` off `type` for `refreshInterval`. No list of the type lands meanwhile,
+    /// since a build starts only once a type stops resting.
+    private func rest(_ type: UTType) {
+        resting.insert(type)
+        let clock = refreshClock
+        let interval = refreshInterval
+        Task {
+            do {
+                try await clock.sleep(for: interval)
+            } catch {
+                preconditionFailure("the clock failed a wait with \(error)")
+            }
+            resting.remove(type)
+        }
+    }
+
+    /// Asks for the icons of `apps` not yet asked for at their path and version, and returns
+    /// when every one has landed or `iconWait` has passed, so an icon that never comes holds the
+    /// list back no longer than that.
+    private func waitForIcons(of apps: [App]) async {
         let systemActions = systemActions
-        for url in urls where iconsAsked.insert(url).inserted {
+        for app in apps where iconsAsked.insert(app.iconKey).inserted {
+            let url = app.url
+            let key = app.iconKey
             Task {
                 let icon = await systemActions.applicationIcon(at: url)
-                iconLanded(icon, for: url)
+                iconLanded(icon, for: key)
             }
         }
-        guard !urls.allSatisfy(iconsLanded.contains) else { return }
+        let keys = apps.map(\.iconKey)
+        guard !keys.allSatisfy(iconsLanded.contains) else { return }
         let id = UUID()
         let wait = iconWait
         await withCheckedContinuation { continuation in
-            iconWaiters[id] = IconWaiter(urls: urls, continuation: continuation)
+            iconWaiters[id] = IconWaiter(keys: keys, continuation: continuation)
             Task {
                 try? await Task.sleep(for: wait)
                 stopWaiting(id)
@@ -192,10 +243,10 @@ public final class OpenWith {
         }
     }
 
-    private func iconLanded(_ icon: CGImage?, for url: URL) {
-        iconsLanded.insert(url)
-        icons[url] = icon
-        for (id, waiter) in iconWaiters where waiter.urls.allSatisfy(iconsLanded.contains) {
+    private func iconLanded(_ icon: CGImage?, for key: [String]) {
+        iconsLanded.insert(key)
+        icons[key] = icon
+        for (id, waiter) in iconWaiters where waiter.keys.allSatisfy(iconsLanded.contains) {
             stopWaiting(id)
         }
     }
@@ -244,7 +295,7 @@ public final class OpenWith {
         let defaultKey = defaults.count == 1 ? defaults.first.flatMap { $0 } : nil
         let apps = first.apps.filter { common.contains($0.key) }.map { app in
             var app = app
-            app.icon = icons[app.url]
+            app.icon = icons[app.iconKey]
             return app
         }
         let defaultApp = defaultKey.flatMap { key in apps.first { $0.key == key } }

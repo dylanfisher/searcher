@@ -3,6 +3,7 @@ import CoreGraphics
 import Foundation
 import TestSupport
 import UniformTypeIdentifiers
+import os
 
 /// System actions that record what they were asked and open nothing.
 @MainActor
@@ -13,11 +14,10 @@ public final class StubSystemActions: SystemActions {
     public private(set) var revealed: [[URL]] = []
     public private(set) var openedInApp: [OpenedInApp] = []
     public private(set) var openedWithApp: [OpenedWithApp] = []
-    /// The apps listed for each type, and each type's default app.
-    public nonisolated let applications: [UTType: [URL]]
-    public nonisolated let defaultApplications: [UTType: URL]
-    /// The apps read for their name and version, and their icons, by URL.
-    public nonisolated let apps: [URL: OpenWith.App]
+    /// The apps listed for each type, each type's default app, and the apps read for their name
+    /// and version, by URL; `setApplications` changes them, as installing an app does.
+    private nonisolated let installed: OSAllocatedUnfairLock<Installed>
+    /// The apps' icons, by URL.
     public nonisolated let icons: [URL: CGImage]
     /// The apps whose icons are asked for and never come.
     public nonisolated let hangingIcons: Set<URL>
@@ -36,11 +36,25 @@ public final class StubSystemActions: SystemActions {
         applications: [UTType: [URL]] = [:], defaultApplications: [UTType: URL] = [:],
         apps: [OpenWith.App] = [], icons: [URL: CGImage] = [:], hangingIcons: Set<URL> = []
     ) {
-        self.applications = applications
-        self.defaultApplications = defaultApplications
-        self.apps = Dictionary(uniqueKeysWithValues: apps.map { ($0.url, $0) })
+        installed = OSAllocatedUnfairLock(
+            initialState: Installed(
+                applications: applications, defaultApplications: defaultApplications,
+                apps: Dictionary(uniqueKeysWithValues: apps.map { ($0.url, $0) })))
         self.icons = icons
         self.hangingIcons = hangingIcons
+    }
+
+    /// Lists `applications` for each type from now on, as `init` takes them, so a test can
+    /// install or remove an app between two lookups.
+    public nonisolated func setApplications(
+        _ applications: [UTType: [URL]], defaultApplications: [UTType: URL] = [:],
+        apps: [OpenWith.App] = []
+    ) {
+        installed.withLock {
+            $0 = Installed(
+                applications: applications, defaultApplications: defaultApplications,
+                apps: Dictionary(uniqueKeysWithValues: apps.map { ($0.url, $0) }))
+        }
     }
 
     public func openFile(_ url: URL) { openedFiles.append(url) }
@@ -55,14 +69,14 @@ public final class StubSystemActions: SystemActions {
     }
     public nonisolated func applicationURLs(toOpen type: UTType) -> [URL] {
         lookups.append(AppLookup(type: type, onMainThread: Thread.isMainThread))
-        return applications[type] ?? []
+        return installed.withLock { $0.applications[type] ?? [] }
     }
     public nonisolated func defaultApplicationURL(toOpen type: UTType) -> URL? {
-        defaultApplications[type]
+        installed.withLock { $0.defaultApplications[type] }
     }
     public nonisolated func application(at url: URL) -> OpenWith.App {
         appReads.append(AppRead(url: url, onMainThread: Thread.isMainThread))
-        if let app = apps[url] { return app }
+        if let app = installed.withLock({ $0.apps[url] }) { return app }
         let name = url.deletingPathExtension().lastPathComponent
         return OpenWith.App(url: url, bundleID: name, name: name, version: nil)
     }
@@ -74,5 +88,11 @@ public final class StubSystemActions: SystemActions {
             }
         }
         return icons[url] ?? appIcon
+    }
+
+    private struct Installed: Sendable {
+        var applications: [UTType: [URL]]
+        var defaultApplications: [UTType: URL]
+        var apps: [URL: OpenWith.App]
     }
 }

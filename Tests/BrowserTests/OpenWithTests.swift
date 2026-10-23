@@ -194,3 +194,106 @@ private func chromeForTesting(_ version: String, in folder: String = "chrome") -
             try #require(URL(string: "macappstore://?action=search&term=png%20txt"))
         ])
 }
+
+// MARK: Refresh
+
+@MainActor @Test func aRefreshListsTheTypeAgainOffTheMainActorAndReplacesTheCache() async {
+    let (cache, actions) = openWith([.plainText: [textEdit]], defaults: [.plainText: textEdit])
+    cache.refreshInterval = .zero
+    _ = await cache.choices(for: [.plainText])
+    await settle { !cache.resting.contains(.plainText) }
+    actions.setApplications(
+        [.plainText: [textEdit, preview]], defaultApplications: [.plainText: textEdit])
+
+    cache.refresh([.plainText])
+
+    // The cache answers at once, from the old list, until the new one lands.
+    #expect(cache.cachedChoices(for: [.plainText])?.others == [])
+    await settle { cache.cachedChoices(for: [.plainText])?.others.count == 1 }
+    #expect(names(cache.cachedChoices(for: [.plainText])?.all ?? []) == ["TextEdit", "Preview"])
+    #expect(names(await cache.choices(for: [.plainText]).others) == ["Preview"])
+    #expect(actions.lookups.all.count == 2)
+    #expect(actions.lookups.all.allSatisfy { !$0.onMainThread })
+}
+
+@MainActor @Test func aTypeIsRefreshedAtMostOnceARefreshInterval() async {
+    let (cache, actions) = openWith([.plainText: [textEdit]])
+    let clock = ManualClock()
+    cache.refreshClock = clock
+    #expect(cache.refreshInterval == .seconds(5))
+    _ = await cache.choices(for: [.plainText])
+    await settle { clock.waitingSleeps == 1 }
+
+    // The list just landed, so it stays for the interval.
+    cache.refresh([.plainText])
+    clock.advance(by: .seconds(4))
+    cache.refresh([.plainText])
+    #expect(actions.lookups.all.count == 1)
+
+    clock.advance(by: .seconds(1))
+    await settle { !cache.resting.contains(.plainText) }
+    cache.refresh([.plainText])
+    await settle { actions.lookups.all.count == 2 && cache.resting.contains(.plainText) }
+    cache.refresh([.plainText])
+    #expect(actions.lookups.all.count == 2)
+}
+
+/// Waits out `type`'s rest after its list landed, on `clock`, so `cache` refreshes it again.
+@MainActor
+private func endRest(of type: UTType, in cache: OpenWith, on clock: ManualClock) async {
+    await settle { clock.waitingSleeps == 1 }
+    clock.advance(by: cache.refreshInterval)
+    await settle { !cache.resting.contains(type) }
+}
+
+@MainActor @Test func aTypeHasOneRefreshInFlightAndNoneBeforeItsFirstList() async {
+    let (cache, actions) = openWith([.plainText: [textEdit]])
+    let clock = ManualClock()
+    cache.refreshClock = clock
+
+    // Nothing to refresh before the type's first list; the menu builds that one.
+    cache.refresh([.plainText])
+    #expect(actions.lookups.all.isEmpty)
+    _ = await cache.choices(for: [.plainText])
+    #expect(actions.lookups.all.count == 1)
+    await endRest(of: .plainText, in: cache, on: clock)
+
+    let held = DispatchQueue(label: "OpenWithTests.held")
+    held.suspend()
+    cache.buildQueue = held
+    cache.refresh([.plainText])
+    cache.refresh([.plainText])
+    cache.refresh([.plainText])
+    held.resume()
+
+    await settle { actions.lookups.all.count == 2 && cache.resting.contains(.plainText) }
+    // A second refresh would have been queued behind the first on the held queue.
+    held.sync {}
+    #expect(actions.lookups.all.count == 2)
+}
+
+@MainActor @Test func aRefreshReusesTheIconsOfUnchangedAppsAndReadsANewVersionsIcon() async {
+    let chrome = chromeForTesting("153.0.8010.12")
+    let (cache, actions) = openWith([.html: [chrome.url, textEdit]], apps: [chrome])
+    let clock = ManualClock()
+    cache.refreshClock = clock
+    _ = await cache.choices(for: [.html])
+    #expect(Set(actions.iconReads.all.map(\.url)) == [chrome.url, textEdit])
+
+    // Same paths and versions: no icon is read again.
+    await endRest(of: .html, in: cache, on: clock)
+    cache.refresh([.html])
+    await settle { actions.lookups.all.count == 2 && cache.resting.contains(.html) }
+    #expect(actions.iconReads.all.count == 2)
+
+    // Chrome updated in place: its icon is read again, TextEdit's isn't.
+    let updated = OpenWith.App(
+        url: chrome.url, bundleID: chrome.bundleID, name: chrome.name, version: "154.0.8100.2")
+    actions.setApplications([.html: [chrome.url, textEdit]], apps: [updated])
+    await endRest(of: .html, in: cache, on: clock)
+    cache.refresh([.html])
+    await settle { cache.cachedChoices(for: [.html])?.others.first?.version == "154.0.8100.2" }
+    #expect(actions.iconReads.all.count == 3)
+    #expect(actions.iconReads.all.last?.url == chrome.url)
+    #expect(cache.cachedChoices(for: [.html])?.all.allSatisfy { $0.icon != nil } == true)
+}

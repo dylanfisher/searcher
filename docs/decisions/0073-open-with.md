@@ -95,3 +95,27 @@ and the last sentence of Consequences.
   `macappstore://?action=search&term=<extensions>`, the selection's types' file extensions
   sorted and joined by spaces, through `SystemActions.openURL`. Finder's own lookup URL isn't
   public; `action=search&term=` is the form the App Store app's own links use.
+
+## Amendment: refresh (M4.19)
+
+This replaces "One build per type, kept for the life of the app" and the first sentence of
+Consequences: an app installed or updated while Searcher runs showed only after a relaunch.
+
+- **A menu shown from the cache refreshes it.** After filling the menu from the cache,
+  `OpenWithMenu` calls `OpenWith.refresh`, which lists each selected type again on the build
+  queue, as the first build does, and replaces the type's list when the new one lands. The menu
+  open now keeps what it showed; the next open shows the new list. The menu still opens from the
+  cache (B10), and a menu opened before a type's first list shows Loading… as before, with no
+  refresh.
+- **At most one build per type runs,** first or refresh, and a type isn't listed again until
+  `OpenWith.refreshInterval`, 5 s, after its list landed. Opening the menu over and over asks
+  Launch Services at most every 5 s per type; a list is at most that stale plus one build when
+  the menu next opens after an install. Shorter would only repeat lookups while the user opens
+  the menu a few times in a row; much longer would show the old list on the open after an
+  install, which is what Dylan reported.
+- **Icons are kept by path and version.** An app whose path and version are unchanged keeps the
+  icon already read; an app updated in place, with a new version at the same path, is asked for
+  its icon again.
+- **Every build is logged,** refreshes included, with its time under `openWith`.
+
+Icons of apps no longer listed stay in memory for the life of the app, a few kilobytes each.
