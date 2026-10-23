@@ -1,4 +1,4 @@
-# 0068. Inline rename: a field beside the table, cancel on focus loss, New Folder by selection
+# 0068. Inline rename: a field beside the table, cancel on focus loss, New Folder after select
 
 - **Date:** 2026-10-22
 - **Status:** accepted
@@ -28,14 +28,16 @@ once the operation ends.
 - **While the rename runs** the field stays over the old row, showing the new name and not
   editable, and the table takes the keys back. It closes once the rows no longer list the old
   name, which is when the monitor's patch brings the new one; `FileCommands.rename` then selects
-  it.
+  it. If the old name is still listed 2 s after the rename is done, the pane lists the folder
+  again and the field closes when that listing lands, or after another 2 s. Return in these
+  states does nothing: the row still shows a name that no longer exists.
 - **Keys moving elsewhere** (a click, Tab) close the field with nothing renamed. Finder commits
   then; a commit with no Return could rename a file the user only meant to look at, and a failure
   would have to take the keys back from wherever they went.
-- **New Folder** is seen through a `didRunCommand` hook on `ListingTableView`. The list notes the
-  folder, its rows and its selection; the next change of the selection either selects one name
-  the rows didn't have before, and the field opens on it through the Rename command, so it uses
-  the context's queue, or it is the user's and the wait ends.
+- **New Folder** edits the new folder's name through the context's `editName`, once the pane
+  selects it. `Pane.select(_:whenListedAtSelectionVersion:then:)` runs the closure only when it
+  selects the names, so a New Folder that makes nothing, or whose names the user's selection
+  overrides, opens nothing.
 
 ## Alternatives considered
 
@@ -45,6 +47,9 @@ once the operation ends.
 - **Commit when the keys move elsewhere, as Finder does** — rejected for now, as above.
 - **Open the field on any single new name selected after a change** — rejected: Duplicate also
   selects a new name, and Finder doesn't rename after Duplicate.
+- **Watch the selection in Interface after New Folder runs** — rejected: Interface can't see the
+  operation end, so a New Folder that failed left a watch that opened the field on a file another
+  app made later.
 - **Pass the queue to the field when the context is built** — the context's `editName` takes no
   arguments, so the pane's hook reads the queue from its own context when Rename runs.
 
@@ -54,4 +59,5 @@ The field's frame comes from the table's cell geometry (`ListingViewController.n
 change to the name cell's layout moves the field with it. Until the window passes a queue
 (M4.6), Rename and New Folder are off in the app and the field can't be reached; the tests run
 the commands with a queue of their own. If the old row vanishes while the rename runs, the field
-closes and a failure then isn't shown in the field; the operations panel shows it.
+closes and a failure then isn't shown in the field; the operations panel shows it. On a volume
+that reports no changes the field shows the new name over the old row for up to 4 s.

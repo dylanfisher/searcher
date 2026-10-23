@@ -36,9 +36,6 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
     var selectTyped: @MainActor (String) -> Bool = { query in
         preconditionFailure("ListingTableView has no type-select for \(query)")
     }
-    /// Runs after each command a key or menu item ran here. The list's rename field watches for
-    /// New Folder, to rename the folder once it shows.
-    var didRunCommand: @MainActor (CommandID) -> Void = { _ in }
     /// Signals a key that does nothing. Tests replace it.
     var beep: @MainActor () -> Void = { NSSound.beep() }
 
@@ -144,6 +141,5 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
     func run(_ id: CommandID) {
         typeSelect.reset()
         runCommand(id)
-        didRunCommand(id)
     }
 }

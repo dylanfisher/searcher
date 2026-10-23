@@ -6,7 +6,8 @@ import Foundation
 /// are off with nothing selected. Copy and Move to Other Pane put the selection in the folder of
 /// the selected tab's `Layout.otherPane`, only once the user confirms, and are off with one pane.
 /// New Folder, Duplicate and a rename select what they made once the pane lists it, unless the
-/// selection changed first (docs/decisions/0066-file-commands.md).
+/// selection changed first (docs/decisions/0066-file-commands.md). New Folder then edits the new
+/// folder's name, as Rename does (docs/decisions/0068-inline-rename.md).
 public enum FileCommands: CommandSet {
     public static let moveToTrash = Command(
         id: CommandID("file.moveToTrash"), title: "Move to Trash",
@@ -48,7 +49,10 @@ public enum FileCommands: CommandSet {
                 run: { context in
                     guard let queue = context.fileOperations else { return }
                     let pane = context.pane
-                    run(.newFolder(in: pane.location.path), selectingIn: pane, queue: queue)
+                    run(.newFolder(in: pane.location.path), selectingIn: pane, queue: queue) {
+                        guard canRename(context), let editName = context.editName else { return }
+                        editName()
+                    }
                 }),
             CommandBinding(
                 duplicate, isEnabled: { canChangeSelection($0) },
@@ -87,15 +91,19 @@ public enum FileCommands: CommandSet {
         return state
     }
 
-    /// Queues `operation` and selects what it made in `pane` once the pane lists it.
+    /// Queues `operation` and selects what it made in `pane` once the pane lists it, then runs
+    /// `selected`. Nothing runs if it made nothing or the selection changed first.
     @MainActor
     private static func run(
-        _ operation: FileOperation, selectingIn pane: Pane, queue: FileOperationQueue
+        _ operation: FileOperation, selectingIn pane: Pane, queue: FileOperationQueue,
+        then selected: (@MainActor () -> Void)? = nil
     ) {
         let version = pane.selectionVersion
         Task { [weak pane] in
             let state = await queue.perform(operation)
-            pane?.select(names(madeBy: state.record), whenListedAtSelectionVersion: version)
+            pane?.select(
+                names(madeBy: state.record), whenListedAtSelectionVersion: version,
+                then: selected)
         }
     }
 

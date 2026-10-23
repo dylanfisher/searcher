@@ -8,8 +8,10 @@ import Browser
 /// elsewhere, closes it with nothing renamed. A name `FileNameRule` refuses, or a rename the
 /// queue fails, such as onto a name already taken, keeps the field open with the reason under
 /// it. After a rename the field shows the new name over the old row until the monitor's patch
-/// drops the old name; the pane then selects the new one. After New Folder the field opens on
-/// the new folder once the pane selects it (docs/decisions/0068-inline-rename.md).
+/// drops the old name; the pane then selects the new one. If no patch comes, as on a volume that
+/// reports no changes, the pane lists the folder again after `patchTimeout` and the field closes
+/// once that listing lands. New Folder opens the field through Rename once the pane selects the
+/// new folder (docs/decisions/0068-inline-rename.md).
 ///
 /// The field sits in the table's clip view, beside the table rather than in it, so the table's
 /// commands are out of its responder chain: with the field focused, the File menu's commands
@@ -18,6 +20,19 @@ import Browser
 final class RenameFieldController: NSObject, NSTextFieldDelegate {
     /// What VoiceOver calls the field.
     static let fieldLabel = "Name"
+    /// How long the field waits after a rename for the monitor to drop the old name before the
+    /// pane lists the folder again, and then for that listing.
+    static let patchTimeout: Duration = .seconds(2)
+
+    /// Starts waits on `clock`: each call takes the deadline at once and returns the wait.
+    static func waiter<C: Clock<Duration>>(on clock: C)
+        -> @MainActor (Duration) -> @Sendable () async throws -> Void
+    {
+        { duration in
+            let deadline = clock.now.advanced(by: duration)
+            return { try await clock.sleep(until: deadline, tolerance: nil) }
+        }
+    }
 
     /// Why `FileNameRule` refuses a name, for the line under the field.
     static func message(for problem: FileNameRule.Problem) -> String {
@@ -88,11 +103,11 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
     private var state = State.idle
     /// Counts edits, so an operation that ends after its field closed changes nothing.
     private var editCount = 0
-    /// Set when New Folder ran in this list: the folder, its rows then, and what was selected.
-    /// The first change of the selection after it either selects the new folder alone, which
-    /// opens the field on it, or is the user's, which drops this.
-    private var newFolderWatch:
-        (location: Location, listing: Listing?, members: Selection.Members?)?
+    /// The wait for the old name to leave the rows after a rename.
+    private var patchWait: Task<Void, Never>?
+    /// Starts a wait of the given length, taking the deadline at once, and returns the wait.
+    /// Tests replace it with one on their own clock.
+    var startWait = waiter(on: ContinuousClock())
 
     private enum State {
         case idle
@@ -100,13 +115,15 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
         case editing(Edit)
         /// Return was pressed; the queue is renaming the entry to `newName`.
         case renaming(Edit, newName: String)
-        /// Renamed; the field shows the new name until the rows drop the old one.
-        case waitingForRow(Edit)
+        /// Renamed; the field shows the new name until the rows drop the old one. `relisted` is
+        /// the pane's state version when it was asked to list the folder again, once the
+        /// monitor's patch didn't come in time.
+        case waitingForRow(Edit, relisted: Int?)
 
         var edit: Edit? {
             switch self {
             case .idle: nil
-            case .editing(let edit), .renaming(let edit, _), .waitingForRow(let edit): edit
+            case .editing(let edit), .renaming(let edit, _), .waitingForRow(let edit, _): edit
             }
         }
     }
@@ -135,14 +152,18 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
     private var table: ListingTableView { list.tableView }
 
     /// Opens the field on the pane's one selected entry, renaming through `queue`, and gives it
-    /// the keys. Closes a field already open first.
+    /// the keys. Closes a field already open first. Does nothing while a rename runs or the
+    /// field waits for its row: the entry still listed under its old name is gone.
     func begin(queue: FileOperationQueue) {
+        switch state {
+        case .renaming, .waitingForRow: return
+        case .idle, .editing: break
+        }
         let entries = pane.selectedEntries
         guard entries.count == 1, let entry = entries.first else {
             preconditionFailure("Rename started with \(entries.count) entries selected")
         }
         close()
-        newFolderWatch = nil
         editCount += 1
         let edit = Edit(name: entry.name, location: pane.location, queue: queue, id: editCount)
         state = .editing(edit)
@@ -161,10 +182,9 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
         selectBase(of: entry.name, isFolder: entry.type == .directory)
     }
 
-    /// Follows the pane: moves the field with its row, closes it once the row is gone or the
-    /// pane left the folder, and opens it on a folder New Folder made once the pane selects it.
+    /// Follows the pane: moves the field with its row, and closes it once the row is gone, the
+    /// pane left the folder, or the listing asked for after a rename landed.
     func paneDidChange() {
-        watchForNewFolder()
         layout()
     }
 
@@ -175,15 +195,11 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
             close()
             return
         }
-    }
-
-    /// Notes New Folder running in this list, so the field opens on the folder it makes.
-    func tableDidRun(_ id: CommandID) {
-        guard id == FileCommands.newFolder.id else { return }
-        let selection = pane.selection
-        newFolderWatch = (
-            pane.location, pane.state.listing, selection.isSettled ? selection.members : nil
-        )
+        if case .waitingForRow(_, let relisted?) = state, pane.stateVersion != relisted,
+            case .loaded = pane.state
+        {
+            close()
+        }
     }
 
     // MARK: Field delegate
@@ -244,8 +260,9 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
         guard case .renaming(let current, _) = state, current.id == edit.id else { return }
         switch result.phase {
         case .done:
-            state = .waitingForRow(edit)
+            state = .waitingForRow(edit, relisted: nil)
             layout()
+            waitForPatch(edit)
         case .cancelled:
             close()
         case .failed, .refused:
@@ -314,10 +331,41 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
         editor.selectedRange = NSRange(location: 0, length: (base as NSString).length)
     }
 
+    /// Waits `patchTimeout` for the old name to leave the rows, then asks the pane to list the
+    /// folder again and waits as long for that; the field closes when the listing lands or the
+    /// second wait ends.
+    private func waitForPatch(_ edit: Edit) {
+        guard case .waitingForRow(let current, let relisted) = state, current.id == edit.id else {
+            return
+        }
+        let wait = startWait(Self.patchTimeout)
+        patchWait = Task { [weak self] in
+            do {
+                try await wait()
+            } catch is CancellationError {
+                return
+            } catch {
+                preconditionFailure("the clock failed a wait with \(error)")
+            }
+            guard let self, case .waitingForRow(let current, _) = self.state,
+                current.id == edit.id
+            else { return }
+            guard relisted == nil else {
+                self.close()
+                return
+            }
+            self.state = .waitingForRow(edit, relisted: self.pane.stateVersion)
+            self.pane.reload()
+            self.waitForPatch(edit)
+        }
+    }
+
     /// Hides the field, handing the keys back to the table first if the field has them: hiding
     /// a first responder would hand them to the next key view.
     private func close() {
         let hadKeys = isEditing && field.currentEditor() != nil
+        patchWait?.cancel()
+        patchWait = nil
         state = .idle
         message = nil
         if hadKeys {
@@ -325,34 +373,5 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
         }
         field.removeFromSuperview()
         messageView.removeFromSuperview()
-    }
-
-    // MARK: New folder
-
-    /// Opens the field on the folder New Folder made once the pane selects it alone; any other
-    /// change of the selection, or leaving the folder, ends the wait.
-    private func watchForNewFolder() {
-        guard let watch = newFolderWatch else { return }
-        guard pane.location == watch.location else {
-            newFolderWatch = nil
-            return
-        }
-        let selection = pane.selection
-        guard selection.isSettled, selection.members != watch.members else { return }
-        newFolderWatch = nil
-        guard case .only(let names) = selection.members, names.count == 1,
-            let name = names.first?.name, watch.listing?.row(named: name) == nil,
-            list.listing?.row(named: name) != nil
-        else { return }
-        // After the pass that shows the selection, through the command, so the field opens as
-        // Return would open it, with the context's queue.
-        DispatchQueue.main.async { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, !self.isShown, self.pane.location == watch.location,
-                    self.pane.selectedEntries.map(\.name) == [name]
-                else { return }
-                self.table.run(FileCommands.rename.id)
-            }
-        }
     }
 }

@@ -23,17 +23,21 @@ private final class Fixture {
     /// Every snapshot the queue reported, so a test can count the operations it was given.
     let snapshots = EventLog<FileOperationQueue.Snapshot>()
 
-    init(_ names: String...) async throws {
+    /// With `monitors` false no monitor watches the folder, as on a volume that reports no
+    /// changes.
+    /// `lister` lists the folder in place of the file system.
+    init(_ names: String..., monitors: Bool = true, lister: (any Lister)? = nil) async throws {
         folder = try TemporaryFolder("RenameFieldControllerTests")
         for name in names {
             try Data(name.utf8).write(to: folder.url.appending(path: name))
         }
         pane = Pane(
-            location: Location(path: folder.url.path), service: ListingService(),
+            location: Location(path: folder.url.path),
+            service: lister.map { ListingService(lister: $0) } ?? ListingService(),
             systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true)
         controller = PaneViewController(
             pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
-            tableView: ListingTableView(), monitorsFolders: true)
+            tableView: ListingTableView(), monitorsFolders: monitors)
         let snapshots = snapshots
         queue = FileOperationQueue(
             prompts: FileOperationQueue.Prompts(
@@ -46,7 +50,7 @@ private final class Fixture {
         controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 400)
         window.contentView?.addSubview(controller.view)
         let pane = pane
-        await settle { pane.state.isLoaded && pane.monitor != nil }
+        await settle { pane.state.isLoaded && (!monitors || pane.monitor != nil) }
         window.makeFirstResponder(controller.keyView)
         useQueue(in: controller.listingViewController.tableView)
     }
@@ -208,7 +212,8 @@ private let returnKey = "\r"
     try fixture.send(#selector(NSResponder.insertNewline(_:)))
 
     await settle { fixture.field.message != nil }
-    #expect(fixture.field.message == "The name “other.flac” is already taken. Choose another one.")
+    #expect(
+        fixture.field.message == "The name “other.flac” is already taken. Choose another one.")
     #expect(fixture.field.isEditing)
     #expect(fixture.field.field.stringValue == "other.flac")
     _ = try fixture.editor()
@@ -299,4 +304,166 @@ private let returnKey = "\r"
 
     await settle { fixture.exists("tune.flac") }
     await settle { fixture.selectedNames == ["tune.flac"] }
+}
+
+@MainActor @Test func returnOnTheUnchangedNameClosesTheFieldWithNothingQueued() async throws {
+    let fixture = try await Fixture("song.flac")
+    defer { fixture.stop() }
+    await fixture.select("song.flac")
+    try fixture.press(returnKey)
+
+    try fixture.send(#selector(NSResponder.insertNewline(_:)))
+
+    #expect(!fixture.field.isShown)
+    #expect(fixture.window.firstResponder === fixture.controller.keyView)
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(fixture.operationCount == 0)
+}
+
+/// A New Folder that makes nothing leaves nothing waiting: a name that shows up and is
+/// selected alone afterwards doesn't open the field.
+@MainActor @Test func aFailedNewFolderEntersNoRenameLater() async throws {
+    let fixture = try await Fixture("song.flac")
+    defer { fixture.stop() }
+    let path = fixture.folder.url.path
+    #expect(chmod(path, 0o555) == 0)
+    defer { chmod(path, 0o755) }
+
+    try fixture.press("N", [.command, .shift])
+    #expect(await fixture.snapshots.wait { $0.contains { $0.state.phase == .failed } })
+    #expect(chmod(path, 0o755) == 0)
+    try Data().write(to: fixture.folder.url.appending(path: "new.txt"))
+    await settle { fixture.pane.state.listing?.row(named: "new.txt") != nil }
+    await fixture.select("new.txt")
+
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(!fixture.field.isShown)
+}
+
+/// With no monitor the old name stays listed; after the timeout the pane lists the folder
+/// again, which drops it, and the field closes.
+@MainActor @Test func theFieldStopsWaitingForAPatchThatNeverComes() async throws {
+    let fixture = try await Fixture("song.flac", monitors: false)
+    defer { fixture.stop() }
+    let clock = ManualClock()
+    fixture.field.startWait = RenameFieldController.waiter(on: clock)
+    await fixture.select("song.flac")
+    try fixture.press(returnKey)
+    try fixture.type("tune")
+    try fixture.send(#selector(NSResponder.insertNewline(_:)))
+    await settle { fixture.exists("tune.flac") }
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(fixture.field.isShown)
+    #expect(fixture.pane.state.listing?.row(named: "song.flac") != nil)
+
+    clock.advance(by: RenameFieldController.patchTimeout)
+
+    await settle { !fixture.field.isShown }
+    #expect(fixture.pane.state.listing?.row(named: "tune.flac") != nil)
+}
+
+/// Lists the folder from the file system once, then holds every later call until `release`, as
+/// a volume that stopped answering after the first listing.
+private final class FirstListingOnly: Lister, @unchecked Sendable {
+    let calls = EventLog<String>()
+    private let gate = DispatchSemaphore(value: 0)
+
+    func list(_ path: String, onBatch: ([DirectoryEntry]) throws -> Void) throws {
+        calls.append(path)
+        if calls.all.count > 1 {
+            gate.wait()
+        }
+        try DirectoryLister().list(path, onBatch: onBatch)
+    }
+
+    /// Lets the held call go ahead.
+    func release() {
+        gate.signal()
+    }
+}
+
+/// After a relist the field closes when the second wait ends, even with no listing landing.
+@MainActor @Test func theFieldClosesWhenTheRelistDoesNotLand() async throws {
+    let lister = FirstListingOnly()
+    let fixture = try await Fixture("song.flac", monitors: false, lister: lister)
+    defer {
+        fixture.stop()
+        lister.release()
+    }
+    let clock = ManualClock()
+    fixture.field.startWait = RenameFieldController.waiter(on: clock)
+    await fixture.select("song.flac")
+    try fixture.press(returnKey)
+    try fixture.type("tune")
+    try fixture.send(#selector(NSResponder.insertNewline(_:)))
+    await settle { fixture.exists("tune.flac") }
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(fixture.field.isShown)
+
+    clock.advance(by: RenameFieldController.patchTimeout)
+    #expect(await lister.calls.wait { $0.count == 2 })
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(fixture.field.isShown)
+    clock.advance(by: RenameFieldController.patchTimeout)
+
+    await settle { !fixture.field.isShown }
+    #expect(fixture.pane.state.listing?.row(named: "song.flac") != nil)
+}
+
+@MainActor @Test func returnWhileTheRenameWaitsForItsRowStartsNoSecondRename() async throws {
+    let fixture = try await Fixture("song.flac", monitors: false)
+    defer { fixture.stop() }
+    fixture.field.startWait = RenameFieldController.waiter(on: ManualClock())
+    await fixture.select("song.flac")
+    try fixture.press(returnKey)
+    try fixture.type("tune")
+    try fixture.send(#selector(NSResponder.insertNewline(_:)))
+    #expect(fixture.window.firstResponder === fixture.controller.keyView)
+
+    try fixture.press(returnKey)
+    #expect(!fixture.field.isEditing)
+    await settle { fixture.exists("tune.flac") }
+    try await Task.sleep(for: .milliseconds(100))
+    try fixture.press(returnKey)
+
+    #expect(!fixture.field.isEditing)
+    #expect(fixture.field.field.stringValue == "tune.flac")
+    #expect(fixture.window.firstResponder === fixture.controller.keyView)
+    #expect(fixture.operationCount == 1)
+}
+
+/// Waits, with no monitor, until the rename of song.flac to tune.flac is done and the field
+/// shows the new name over the old row.
+@MainActor
+private func renameAndWait(_ fixture: Fixture) async throws {
+    fixture.field.startWait = RenameFieldController.waiter(on: ManualClock())
+    await fixture.select("song.flac")
+    try fixture.press(returnKey)
+    try fixture.type("tune")
+    try fixture.send(#selector(NSResponder.insertNewline(_:)))
+    await settle { fixture.exists("tune.flac") }
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(fixture.field.isShown)
+}
+
+@MainActor @Test func leavingTheFolderWhileTheFieldWaitsClosesIt() async throws {
+    let fixture = try await Fixture("song.flac", monitors: false)
+    defer { fixture.stop() }
+    try await renameAndWait(fixture)
+    let parent = try #require(fixture.pane.location.parent)
+
+    fixture.pane.navigate(to: parent)
+
+    #expect(!fixture.field.isShown)
+}
+
+@MainActor @Test func switchingToColumnsWhileTheFieldWaitsClosesIt() async throws {
+    let fixture = try await Fixture("song.flac", monitors: false)
+    defer { fixture.stop() }
+    try await renameAndWait(fixture)
+
+    try fixture.press("3", .command)
+
+    #expect(fixture.pane.viewMode == .column)
+    #expect(!fixture.field.isShown)
 }

@@ -235,6 +235,25 @@ private func exists(_ path: String) -> Bool {
     await settle { selectedNames(window.pane) == ["untitled folder"] }
     #expect(window.pane.selection.cursor == ExactName("untitled folder"))
     #expect(window.pane.state.listing?.row(named: "untitled folder") != nil)
+    await settle { window.nameEdits == 1 }
+}
+
+@MainActor @Test func aNewFolderThatFailsEditsNoName() async throws {
+    let folder = try TemporaryFolder("FileCommandsTests")
+    let window = await Window(at: folder.url.path)
+    #expect(chmod(folder.url.path, 0o555) == 0)
+    defer { chmod(folder.url.path, 0o755) }
+
+    try window.press(newFolder)
+    try await Task.sleep(for: settleTime)
+    #expect(chmod(folder.url.path, 0o755) == 0)
+    try write("new.txt", in: folder.url.path)
+    window.pane.reload()
+    await settle { window.pane.state.listing?.row(named: "new.txt") != nil }
+    window.select("new.txt")
+
+    try await Task.sleep(for: settleTime)
+    #expect(window.nameEdits == 0)
 }
 
 @MainActor @Test func duplicateSelectsTheCopiesOnceTheyAppear() async throws {

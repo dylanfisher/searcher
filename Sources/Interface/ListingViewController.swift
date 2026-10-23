@@ -286,7 +286,6 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         tableView.delegate = self
         tableView.target = self
         tableView.doubleAction = #selector(openClickedRow(_:))
-        tableView.didRunCommand = { [weak self] id in self?.renameField.tableDidRun(id) }
     }
 
     private static func tableColumn(for column: SortColumn) -> NSTableColumn {
