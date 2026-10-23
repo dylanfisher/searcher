@@ -414,7 +414,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
             "Resize Pane",
             "Zoom Pane", "Unzoom Pane", "Equalize Panes", "", "Move Pane to New Window",
             "Merge Window into Tab",
-            "", "Close Pane",
+            "", "Operations", "", "Close Pane",
         ])
     #expect(!allItems(menu).contains { $0.action == #selector(NSWindow.performClose(_:)) })
     let focusOtherPane = try #require(window.items.first { $0.title == "Focus Other Pane" })

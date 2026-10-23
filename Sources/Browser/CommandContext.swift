@@ -19,6 +19,9 @@ public struct CommandContext {
     /// Shows the pane's filter field and puts the keyboard focus in it. Only the pane's view can;
     /// a context built without it traps when Filter runs.
     public let showFilter: @MainActor () -> Void
+    /// Shows the window's operations panel, or hides it. Only the window can; a context built
+    /// without it traps when the command runs.
+    public let toggleOperations: @MainActor () -> Void
     /// The folder a click named, for Open in New Tab: a Cmd-double-clicked folder row or a
     /// Cmd-clicked path bar segment. Nil when a key or menu item runs a command.
     public let folder: Location?
@@ -51,6 +54,9 @@ public struct CommandContext {
         showFilter: @escaping @MainActor () -> Void = {
             preconditionFailure("this command context has no filter field")
         },
+        toggleOperations: @escaping @MainActor () -> Void = {
+            preconditionFailure("this command context has no operations panel")
+        },
         folder: Location? = nil,
         fileOperations: FileOperationQueue? = nil,
         editName: (@MainActor () -> Void)? = nil
@@ -68,6 +74,7 @@ public struct CommandContext {
         self.toggleQuickLook = toggleQuickLook
         self.askForFolder = askForFolder
         self.showFilter = showFilter
+        self.toggleOperations = toggleOperations
         self.folder = folder
         self.fileOperations = fileOperations
         self.editName = editName

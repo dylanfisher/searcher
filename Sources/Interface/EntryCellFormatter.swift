@@ -48,6 +48,12 @@ public struct EntryCellFormatter {
         }
     }
 
+    /// A byte count in the Size column's format, for text that isn't a row's, such as an
+    /// operation's progress.
+    public func bytes(_ count: Int64) -> String {
+        sizes.string(fromByteCount: count)
+    }
+
     public func date(_ date: Date) -> String {
         dates.string(from: date)
     }

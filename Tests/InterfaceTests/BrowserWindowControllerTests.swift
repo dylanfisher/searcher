@@ -752,3 +752,29 @@ private func usKey(
     #expect(fixture.tab.panes.count == 2)
     #expect(fixture.tab.focusedPane.copiedFrom == nil)
 }
+
+@MainActor @Test func cmdOptLShowsAndHidesTheOperationsPanel() async throws {
+    let fixture = try await Fixture()
+    let panel = fixture.controller.operations.view
+    #expect(panel.isHidden)
+    let table = try fixture.keyTable
+
+    // Option-L types "¬" on a US keyboard.
+    try fixture.press(try keyEvent("l", characters: "¬", modifiers: [.command, .option]))
+    fixture.window.contentView?.layoutSubtreeIfNeeded()
+    #expect(!panel.isHidden)
+    #expect(panel.frame.height > 0)
+    #expect(try fixture.keyTable === table)
+
+    try fixture.press(try keyEvent("l", characters: "¬", modifiers: [.command, .option]))
+    #expect(panel.isHidden)
+}
+
+@MainActor @Test func anOperationNeedingAttentionShowsThePanel() async throws {
+    let fixture = try await Fixture()
+    let panel = fixture.controller.operations.view
+
+    fixture.controller.operations.onNeedsAttention?()
+
+    #expect(!panel.isHidden)
+}
