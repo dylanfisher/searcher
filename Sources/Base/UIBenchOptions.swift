@@ -39,10 +39,14 @@ public struct UIBenchOptions: Sendable, Equatable {
     public let scenario: Scenario?
     /// The subfolders `cold` and `revisit` open, chosen by the runner; empty otherwise.
     public let folders: [String]
+    /// The W8 folder the CI run's launch that presses keys copies, and the mount point of the
+    /// disk image it copies to; nil in every other launch.
+    public let w8: String?
+    public let image: String?
 
     public init(
         output: String, w1: String, w2: String, keyPresses: Int, tempPrefix: String,
-        scenario: Scenario?, folders: [String]
+        scenario: Scenario?, folders: [String], w8: String? = nil, image: String? = nil
     ) {
         self.output = output
         self.w1 = w1
@@ -51,36 +55,41 @@ public struct UIBenchOptions: Sendable, Equatable {
         self.tempPrefix = tempPrefix
         self.scenario = scenario
         self.folders = folders
+        self.w8 = w8
+        self.image = image
     }
 
-    /// The spelling of a nil `scenario`.
-    private static let noScenario = "-"
+    /// The spelling of a nil `scenario`, `w8` or `image`.
+    private static let none = "-"
 
     /// The options in `arguments`, or nil when `flag` isn't there. Traps on a malformed set: only
     /// the runner writes them.
     public init?(arguments: [String]) {
         guard let start = arguments.firstIndex(of: Self.flag) else { return nil }
         let rest = arguments[arguments.index(after: start)...]
-        let values = Array(rest.prefix(7))
-        guard values.count == 7, let keyPresses = Int(values[3]), keyPresses >= 0,
-            values[5] == Self.noScenario || Scenario(rawValue: values[5]) != nil,
-            let folderCount = Int(values[6]), folderCount >= 0,
-            rest.count >= 7 + folderCount
+        let values = Array(rest.prefix(9))
+        guard values.count == 9, let keyPresses = Int(values[3]), keyPresses >= 0,
+            values[5] == Self.none || Scenario(rawValue: values[5]) != nil,
+            let folderCount = Int(values[8]), folderCount >= 0,
+            rest.count >= 9 + folderCount
         else {
             preconditionFailure(
                 "\(Self.flag) needs <output> <w1> <w2> <key presses> <temp prefix> <scenario> "
-                    + "<folder count> <folders…>, got \(Array(rest))")
+                    + "<w8> <image> <folder count> <folders…>, got \(Array(rest))")
         }
         self.init(
             output: values[0], w1: values[1], w2: values[2], keyPresses: keyPresses,
             tempPrefix: values[4], scenario: Scenario(rawValue: values[5]),
-            folders: Array(rest.dropFirst(7).prefix(folderCount)))
+            folders: Array(rest.dropFirst(9).prefix(folderCount)),
+            w8: values[6] == Self.none ? nil : values[6],
+            image: values[7] == Self.none ? nil : values[7])
     }
 
     public var arguments: [String] {
         [
             Self.flag, output, w1, w2, String(keyPresses), tempPrefix,
-            scenario?.rawValue ?? Self.noScenario, String(folders.count),
+            scenario?.rawValue ?? Self.none, w8 ?? Self.none, image ?? Self.none,
+            String(folders.count),
         ] + folders
     }
 }

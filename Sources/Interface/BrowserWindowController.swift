@@ -68,17 +68,18 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// Hands over the view controller another window has for a pane that moved here, or nil.
     private let takePaneController: @MainActor (PaneID) -> PaneViewController?
 
-    /// A window of one tab at `location`, in a list of its own, as the UI bench opens it.
+    /// A window of one tab at `location`, in a list of its own, as the UI bench opens it. With
+    /// `fileOperations`, its operations panel lists what `showOperations` is given.
     public convenience init(
         location: Location, service: ListingService, systemActions: any SystemActions,
-        settings: Settings
+        settings: Settings, fileOperations: FileOperationQueue? = nil
     ) {
         let pane = Pane(
             location: location, service: service, systemActions: systemActions, settings: settings)
         let workspaces = WorkspaceList()
         let workspace = Workspace(tab: Tab(pane: pane))
         workspaces.add(workspace)
-        self.init(workspace: workspace, workspaces: workspaces)
+        self.init(workspace: workspace, workspaces: workspaces, fileOperations: fileOperations)
     }
 
     /// A window showing `workspace`, one of `workspaces`. `takePaneController` hands over another
@@ -198,7 +199,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     // MARK: Operations panel
 
     /// Shows the queue's latest snapshots in the panel.
-    func showOperations(_ snapshots: [FileOperationQueue.Snapshot]) {
+    public func showOperations(_ snapshots: [FileOperationQueue.Snapshot]) {
         operations.show(snapshots)
     }
 

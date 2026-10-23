@@ -161,6 +161,58 @@ func sameSeedGivesIdenticalEntries(workload: Fixture.Workload) {
     #expect(FileManager.default.fileExists(atPath: changed.path.path))
 }
 
+@Test func w8HasItsSeededFileCountAndSize() {
+    let fixture = Fixture(.w8, root: URL(filePath: "/w8"))
+    let files = fixture.entries.filter { $0.size != nil && $0.path != Fixture.neverIndexMarker }
+    #expect(files.count == 20_004)
+    #expect(files.filter { $0.size == 2_000_000_000 }.count == 4)
+    #expect(
+        files.filter { $0.size != 2_000_000_000 }
+            .allSatisfy { (50_000...150_000).contains($0.size ?? -1) })
+    // The seeded total, about 10 GB.
+    #expect(fixture.bytes == 9_995_773_563)
+    #expect(fixture.bytes == files.reduce(0) { $0 + ($1.size ?? 0) })
+}
+
+@Test func w8ForCIIsAFifthOfW8() {
+    let fixture = Fixture(.w8CI, root: URL(filePath: "/w8"))
+    let files = fixture.entries.filter { $0.size != nil && $0.path != Fixture.neverIndexMarker }
+    #expect(files.count == 4_004)
+    #expect(files.filter { $0.size == 400_000_000 }.count == 4)
+    #expect((1_950_000_000...2_050_000_000).contains(fixture.bytes))
+}
+
+@Test func copySourceIsOneGigabyteFile() {
+    let files = Fixture(.copySource, root: URL(filePath: "/c")).entries
+        .filter { $0.path != Fixture.neverIndexMarker }
+    #expect(files.map(\.size) == [1_000_000_000])
+}
+
+@Test func copyFixturesHoldTheirBytesOnDisk() throws {
+    let folder = try TemporaryFolder("FixtureTests")
+    let fixture = Fixture(
+        .w8, seed: 7, root: folder.url,
+        entries: [
+            Fixture.Entry(path: Fixture.neverIndexMarker, size: 0, modified: 0),
+            Fixture.Entry(path: "big", size: 3_000_001, modified: 0),
+        ])
+    #expect(!fixture.isBuilt)
+    try fixture.prepare()
+    #expect(fixture.isBuilt)
+    var info = stat()
+    #expect(lstat(fixture.path.appending(path: "big").path, &info) == 0)
+    #expect(info.st_size == 3_000_001)
+    // Written, not sparse: the copy has bytes to move.
+    #expect(Int64(info.st_blocks) * 512 >= 3_000_001)
+    // Listing workloads stay sparse.
+    let sparse = Fixture(
+        .w1, seed: 7, root: folder.url,
+        entries: [Fixture.Entry(path: "big", size: 3_000_001, modified: 0)])
+    try sparse.prepare()
+    #expect(lstat(sparse.path.appending(path: "big").path, &info) == 0)
+    #expect(Int64(info.st_blocks) * 512 < 3_000_001)
+}
+
 /// Every path under `folder`, relative to it, hidden ones included, sorted.
 private func relativePaths(in folder: URL) throws -> [String] {
     let enumerator = try #require(FileManager.default.enumerator(atPath: folder.path))

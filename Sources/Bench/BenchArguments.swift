@@ -5,8 +5,9 @@ import Foundation
 enum BenchArguments: Equatable {
     /// Print one budget's number and exit, for scripts that pass it on.
     case printBudget(Budget)
-    /// Time every registered case, against `folder` when given.
-    case run(folder: String?)
+    /// Time every registered case, against `folder` when given, and the copy case to the disk
+    /// image mounted at `image`, which scripts/bench attaches.
+    case run(folder: String?, image: String? = nil)
     /// Sample the machine once and fail naming any busy process, so a caller can wait for idle.
     case checkIdle
     /// Open `folder` once and print the footprint it added in MB. The B9 case runs this in a fresh
@@ -18,8 +19,15 @@ enum BenchArguments: Equatable {
     /// `previous` file is stated, not an error.
     case compare(previous: String, current: String)
     /// Launch the app bundle at `app` in its UI bench mode, opening `folder` as both workloads
-    /// when given: the CI run, or one scenario.
-    case ui(app: String, folder: String?, scenario: UIBenchOptions.Scenario?)
+    /// when given: the CI run, or one scenario. The CI run copies `w8`, W8 or its CI variant, to
+    /// the disk image mounted at `image`, which scripts/bench attaches.
+    case ui(
+        app: String, folder: String?, scenario: UIBenchOptions.Scenario?, image: String? = nil,
+        w8: Fixture.Workload = .w8)
+    /// Check the free space the run the rest of the arguments ask for needs, and print the size
+    /// of the disk image it copies to in MB and the folder to make it in, or 0 when it copies
+    /// nothing. scripts/bench calls it before anything is written.
+    indirect case diskImageSize(BenchArguments)
     /// Print what `--scenario` takes.
     case help
     /// Print `stallArguments()` on one line, for scripts that launch the app.
@@ -72,6 +80,8 @@ enum BenchArguments: Equatable {
         var folder: String?
         var app: String?
         var scenario: UIBenchOptions.Scenario?
+        var image: String?
+        var w8: Fixture.Workload?
         var remaining = arguments[...]
         while let argument = remaining.popFirst() {
             switch argument {
@@ -96,6 +106,14 @@ enum BenchArguments: Equatable {
                 return .checkIdle
             case "--print-stall-arguments":
                 return .printStallArguments
+            case "--disk-image-size":
+                let run = try parse(Array(remaining))
+                if case .diskImageSize = run { throw Invalid("--disk-image-size is given twice") }
+                return .diskImageSize(run)
+            case "--image":
+                image = try existingFolder(remaining.popFirst(), for: argument)
+            case "--w8-2gb":
+                w8 = .w8CI
             case BenchCase.footprintArgument:
                 guard let path = remaining.popFirst() else {
                     throw Invalid("\(BenchCase.footprintArgument) needs a folder")
@@ -128,6 +146,9 @@ enum BenchArguments: Equatable {
                 throw Invalid("unknown argument \(argument)")
             }
         }
+        if w8 != nil, app == nil || scenario != nil {
+            throw Invalid("--w8-2gb is for --ui without --scenario, the run that copies W8")
+        }
         if let scenario {
             guard app != nil else { throw Invalid("--scenario \(scenario.rawValue) needs --ui") }
             // Never a default folder: these time a share, which only the caller can name.
@@ -136,8 +157,10 @@ enum BenchArguments: Equatable {
                     "\(scenario.rawValue) needs --path <dir>, the folder on the share to time")
             }
         }
-        if let app { return .ui(app: app, folder: folder, scenario: scenario) }
-        return .run(folder: folder)
+        if let app {
+            return .ui(app: app, folder: folder, scenario: scenario, image: image, w8: w8 ?? .w8)
+        }
+        return .run(folder: folder, image: image)
     }
 
     private static func existingFolder(_ path: String?, for argument: String) throws -> String {
