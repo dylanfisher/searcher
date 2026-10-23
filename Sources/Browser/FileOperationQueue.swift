@@ -77,6 +77,11 @@ public actor FileOperationQueue {
         }
     }
 
+    /// Reads the identity of the item at a path, or nil when there is none or it has none
+    /// that lasts. One serves one operation.
+    typealias Identifier =
+        @Sendable (String) throws(FileOperationError) -> OperationRecord.ItemIdentity?
+
     /// The blocking calls the queue makes, each run on a `BlockingCallThread`. Tests replace
     /// them.
     struct FileSystem: Sendable {
@@ -98,8 +103,8 @@ public actor FileOperationQueue {
         var listNames: @Sendable (String) throws(FileOperationError) -> [String]
         /// Removes a folder that has nothing in it.
         var removeEmptyFolder: @Sendable (String) throws(FileOperationError) -> Void
-        /// The identity of the item at a path, or nil if there is none.
-        var identify: @Sendable (String) throws(FileOperationError) -> OperationRecord.ItemIdentity?
+        /// Makes the identifier for one operation.
+        var makeIdentifier: @Sendable () -> Identifier
 
         static let real = FileSystem(
             volumeOf: VolumeIdentity.init(path:), measure: OperationPlan.measure,
@@ -113,7 +118,7 @@ public actor FileOperationQueue {
             removeEmptyFolder: { path throws(FileOperationError) in
                 guard rmdir(path) == 0 else { throw FileOperationError(errno: errno, path: path) }
             },
-            identify: OperationPlan.identify)
+            makeIdentifier: OperationPlan.identifier)
     }
 
     private let fileSystem: FileSystem
@@ -412,7 +417,7 @@ public actor FileOperationQueue {
             Result {
                 try OperationPlan.make(
                     for: operation, volumeOf: fileSystem.volumeOf, measure: fileSystem.measure,
-                    inspect: fileSystem.inspect, identify: fileSystem.identify,
+                    inspect: fileSystem.inspect, identify: fileSystem.makeIdentifier(),
                     isCancelled: { control.isCancelled })
             }
         }
@@ -540,6 +545,7 @@ public actor FileOperationQueue {
         var leftBehind: FileOperationError?
         var wasCancelled = false
         let isTrash = if case .trash = entry.operation { true } else { false }
+        let identify = fileSystem.makeIdentifier()
         let undoSteps =
             if case .undo(let record, _) = entry.operation {
                 FileOperation.steps(undoing: record)
@@ -570,7 +576,7 @@ public actor FileOperationQueue {
                     // 0.5 ms at full speed.
                     control.live = progress
                 }
-                return (outcome, Self.identities(after: outcome, fileSystem: fileSystem))
+                return (outcome, Self.identities(after: outcome, identify: identify))
             }
             entry.control.live = CopyProgress(bytes: 0, files: 0)
             if case .needsDelete(let staged) = outcome {
@@ -590,7 +596,7 @@ public actor FileOperationQueue {
                         ? Self.finishReplace(
                             staged, deletesWithoutTrash: true, fileSystem: fileSystem)
                         : Self.unstage(staged, fileSystem: fileSystem)
-                    return (outcome, Self.identities(after: outcome, fileSystem: fileSystem))
+                    return (outcome, Self.identities(after: outcome, identify: identify))
                 }
             } else if isTrash, case .failed(let error, _) = outcome, error.reason == .noTrash,
                 !deletesWithoutTrash
@@ -798,8 +804,8 @@ public actor FileOperationQueue {
     }
 
     /// The identity of the item at each place `outcome`'s changes left one, read right after
-    /// them, for an undo to check against. Runs on a `BlockingCallThread`.
-    private static func identities(after outcome: ItemOutcome, fileSystem: FileSystem)
+    /// them, for an undo to check against, by comparable path. Runs on a `BlockingCallThread`.
+    private static func identities(after outcome: ItemOutcome, identify: Identifier)
         -> [String: OperationRecord.ItemIdentity]
     {
         let changes: [OperationRecord.Change]
@@ -810,7 +816,7 @@ public actor FileOperationQueue {
         var identities: [String: OperationRecord.ItemIdentity] = [:]
         for location in changes.compactMap(\.location) {
             do {
-                identities[location] = try fileSystem.identify(location)
+                identities[FileOperation.comparable(location)] = try identify(location)
             } catch {
                 // Left out: the undo then checks only that an item is at the path.
                 continue

@@ -66,8 +66,9 @@ public struct OperationPlan: Equatable, Sendable {
     /// moves to another volume read the volumes involved with `volumeOf` and pre-scan each item
     /// with `measure`. Copies and moves look for each item's name in the destination folder
     /// with `inspect`, top-level items only, and inspect the source of each that is there. An
-    /// undo reads each step's source and destination with `identify` and the volumes of its
-    /// moves. Nothing else reads the file system. Blocks while it reads, so it runs on a
+    /// undo inspects each step's source and destination, reads with `identify` the identity of
+    /// each source the record has one for, and reads the volumes of its moves. Nothing else
+    /// reads the file system. Blocks while it reads, so it runs on a
     /// `BlockingCallThread`.
     ///
     /// - Throws: `OperationState.Refusal`, or `CancellationError` once `isCancelled` returns true.
@@ -76,7 +77,7 @@ public struct OperationPlan: Equatable, Sendable {
         volumeOf: (String) throws(ListingError) -> VolumeIdentity,
         measure: (String, () -> Bool) throws -> TreeSizeWalker.Total,
         inspect: (String) throws(FileOperationError) -> ConflictRequest.Item?,
-        identify: (String) throws(FileOperationError) -> OperationRecord.ItemIdentity?,
+        identify: FileOperationQueue.Identifier,
         isCancelled: @escaping () -> Bool
     ) throws -> OperationPlan {
         switch operation {
@@ -136,7 +137,7 @@ public struct OperationPlan: Equatable, Sendable {
         case .undo(let record, _):
             return try undoing(
                 FileOperation.steps(undoing: record), identities: record.identities,
-                volumeOf: volumeOf, measure: measure, identify: identify,
+                volumeOf: volumeOf, measure: measure, inspect: inspect, identify: identify,
                 isCancelled: isCancelled)
         }
     }
@@ -209,10 +210,10 @@ public struct OperationPlan: Equatable, Sendable {
         return OperationPlan(items: items, lane: copies ? destination : nil, failures: failures)
     }
 
-    /// Plans an undo's steps, one item each in order. First it checks, with `identify`, that
-    /// each step's item is at its source and its destination is free, as the steps before it
-    /// leave them, and that an item the record has an identity for is still that item, not
-    /// another put at its path since; if any isn't, it plans no items and each such path is a
+    /// Plans an undo's steps, one item each in order. First it checks, with `inspect`, that each
+    /// step's item is at its source and its destination is free, as the steps before it leave
+    /// them, and, with `identify`, that an item the record has an identity for is still that
+    /// item, not another put at its path since; if any isn't, it plans no items and each such path is a
     /// failure, so nothing is changed. A move whose two folders are on different volumes is
     /// copied, so it is pre-scanned and the undo waits in the lane of the first such
     /// destination's volume.
@@ -220,14 +221,15 @@ public struct OperationPlan: Equatable, Sendable {
         _ steps: [FileOperation.UndoStep], identities: [String: OperationRecord.ItemIdentity],
         volumeOf: (String) throws(ListingError) -> VolumeIdentity,
         measure: (String, () -> Bool) throws -> TreeSizeWalker.Total,
-        identify: (String) throws(FileOperationError) -> OperationRecord.ItemIdentity?,
+        inspect: (String) throws(FileOperationError) -> ConflictRequest.Item?,
+        identify: FileOperationQueue.Identifier,
         isCancelled: @escaping () -> Bool
     ) throws -> OperationPlan {
         // Whether a path holds an item once the earlier steps have run, by comparable path.
         var after: [String: Bool] = [:]
         func isTaken(_ path: String) throws(FileOperationError) -> Bool {
             if let taken = after[FileOperation.comparable(path)] { return taken }
-            return try identify(path) != nil
+            return try inspect(path) != nil
         }
         var failures: [FileOperationError] = []
         for step in steps {
@@ -239,14 +241,14 @@ public struct OperationPlan: Equatable, Sendable {
                         failures.append(
                             FileOperationError(reason: .sourceGone, path: source, errno: ENOENT))
                     }
-                } else if let identity = try identify(source) {
-                    if let recorded = identities[source], recorded != identity {
-                        failures.append(
-                            FileOperationError(reason: .notTheSameItem, path: source, errno: nil))
-                    }
-                } else {
+                } else if try inspect(source) == nil {
                     failures.append(
                         FileOperationError(reason: .sourceGone, path: source, errno: ENOENT))
+                } else if let recorded = identities[FileOperation.comparable(source)],
+                    try identify(source) != recorded
+                {
+                    failures.append(
+                        FileOperationError(reason: .notTheSameItem, path: source, errno: nil))
                 }
                 // A rename that changes only case finds the item itself at its destination.
                 if let destination = step.destination,
@@ -344,17 +346,45 @@ public struct OperationPlan: Equatable, Sendable {
                     modified.tv_nsec) / 1_000_000_000))
     }
 
-    /// The device and inode of the item at `path`, or nil if nothing is there. Symlinks aren't
-    /// followed. Blocks the calling thread, which must be a `BlockingCallThread`.
-    static func identify(_ path: String) throws(FileOperationError) -> OperationRecord.ItemIdentity?
-    {
-        BlockingCallThread.requireCurrent()
-        var info = stat()
-        if lstat(path, &info) != 0 {
-            if errno == ENOENT { return nil }
-            throw FileOperationError(errno: errno, path: path)
+    /// An identifier for one operation: the volume UUID and inode of the item at a path, or nil
+    /// when nothing is there or its volume's inodes don't last (no
+    /// `VOL_CAP_FMT_PERSISTENTOBJECTIDS`, as on FAT and exFAT, which make them up) or it has no
+    /// UUID. What each volume reports is read once per operation, by `st_dev`, which holds while
+    /// the operation runs. Symlinks aren't followed. Blocks the calling thread, which must be a
+    /// `BlockingCallThread`.
+    static func identifier() -> FileOperationQueue.Identifier {
+        let volumes = VolumeUUIDs()
+        return { path throws(FileOperationError) in
+            BlockingCallThread.requireCurrent()
+            var info = stat()
+            if lstat(path, &info) != 0 {
+                if errno == ENOENT { return nil }
+                throw FileOperationError(errno: errno, path: path)
+            }
+            guard let volume = try volumes.uuid(of: info.st_dev, holding: path) else { return nil }
+            return OperationRecord.ItemIdentity(volume: volume, inode: UInt64(info.st_ino))
         }
-        return OperationRecord.ItemIdentity(device: info.st_dev, inode: info.st_ino)
+    }
+
+    /// The UUID of each volume an identifier met, nil for one whose inodes don't last.
+    private final class VolumeUUIDs: @unchecked Sendable {
+        private let lock = NSLock()
+        private var uuids: [dev_t: String?] = [:]
+
+        func uuid(of device: dev_t, holding path: String) throws(FileOperationError) -> String? {
+            if let known = lock.withLock({ uuids[device] }) { return known }
+            let values: URLResourceValues
+            do {
+                values = try URL(fileURLWithPath: path).resourceValues(forKeys: [
+                    .volumeUUIDStringKey, .volumeSupportsPersistentIDsKey,
+                ])
+            } catch {
+                throw FileOperationError(reason: .other, path: path, errno: nil)
+            }
+            let uuid = values.volumeSupportsPersistentIDs == true ? values.volumeUUIDString : nil
+            lock.withLock { uuids[device] = uuid }
+            return uuid
+        }
     }
 
     /// The size of the item at `path` as `FileCopier` counts what it copies: a folder's from

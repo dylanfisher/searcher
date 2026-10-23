@@ -370,6 +370,21 @@ private func makeFolder(_ path: String) throws {
         #expect(harness.history.undoTitle == "Undo Replace")
         try await image.detach()
     }
+
+    /// exFAT makes its inodes up and they change when it is mounted again, so nothing records an
+    /// identity there, and an undo checks only that the items are where the record says.
+    @Test func onExFATAnUndoChecksPresenceOnly() async throws {
+        let image = try await DiskImage("UndoExFAT", megabytes: 40, fileSystem: "ExFAT")
+        try write("a", to: image.mountPoint + "/a.txt")
+        let harness = Harness()
+
+        let renamed = await harness.perform(.rename(image.mountPoint + "/a.txt", to: "b.txt"))
+        #expect(renamed.record.identities.isEmpty)
+
+        #expect(try await harness.undo().phase == .done)
+        #expect(try read(image.mountPoint + "/a.txt") == "a")
+        try await image.detach()
+    }
 }
 
 // MARK: Identity
@@ -502,4 +517,90 @@ private func finished(_ changes: OperationRecord.Change...) -> OperationState {
 
     #expect(history.undoCount == 100)
     #expect(history.undoTitle == "Undo Rename")
+}
+
+// MARK: Catching up
+
+/// Finished operations the queue reported, held until the test lets the history hear of them.
+private final class HeldFinishes: @unchecked Sendable {
+    private let lock = NSLock()
+    private var held: [FileOperationQueue.Snapshot] = []
+    let stream: AsyncStream<FileOperationQueue.Snapshot>
+    private let feed: AsyncStream<FileOperationQueue.Snapshot>.Continuation
+
+    init() {
+        (stream, feed) = AsyncStream.makeStream(of: FileOperationQueue.Snapshot.self)
+    }
+
+    func add(_ snapshot: FileOperationQueue.Snapshot) {
+        lock.withLock { held.append(snapshot) }
+    }
+
+    func release() {
+        let released = lock.withLock {
+            defer { held.removeAll() }
+            return held
+        }
+        for snapshot in released {
+            feed.yield(snapshot)
+        }
+    }
+
+    func end() {
+        feed.finish()
+    }
+}
+
+/// A queue over the real file system whose finished operations reach `history` only when
+/// `held` lets them.
+@MainActor
+private func heldQueue(_ history: UndoHistory, _ held: HeldFinishes) -> FileOperationQueue {
+    history.follow(held.stream)
+    return FileOperationQueue(
+        fileSystem: .real, prompts: Prompter().prompts, clock: ContinuousClock(),
+        onChange: { _ in }, onAnyFinish: { held.add($0) })
+}
+
+/// Undo pressed after an operation ends but before the history has heard of it waits for it, and
+/// undoes it rather than the one before.
+@MainActor @Test func undoWaitsForTheOperationThatJustEnded() async throws {
+    let folder = try TemporaryFolder("UndoHistoryTests")
+    let root = folder.url.path
+    try write("a", to: root + "/a.txt")
+    try write("b", to: root + "/b.txt")
+    let history = UndoHistory()
+    let held = HeldFinishes()
+    let queue = heldQueue(history, held)
+    _ = await queue.perform(.rename(root + "/a.txt", to: "a2.txt"))
+    held.release()
+    await settle { history.canUndo }
+    _ = await queue.perform(.rename(root + "/b.txt", to: "b2.txt"))
+
+    let undo = history.undo(with: queue)
+    try await Task.sleep(for: .milliseconds(50))
+    held.release()
+
+    #expect(try await value(of: undo).phase == .done)
+    #expect(exists(root + "/b.txt"))
+    #expect(exists(root + "/a2.txt"))
+}
+
+/// When the stream of finished operations ends, a waiting undo stops waiting and the history is
+/// free again.
+@MainActor @Test(.timeLimit(.minutes(1))) func undoStopsWaitingWhenTheFinishedStreamEnds()
+    async throws
+{
+    let folder = try TemporaryFolder("UndoHistoryTests")
+    let root = folder.url.path
+    try write("a", to: root + "/a.txt")
+    let history = UndoHistory()
+    let held = HeldFinishes()
+    let queue = heldQueue(history, held)
+    _ = await queue.perform(.rename(root + "/a.txt", to: "b.txt"))
+
+    let undo = try #require(history.undo(with: queue))
+    held.end()
+
+    #expect(await undo.value == nil)
+    #expect(!history.isBusy)
 }

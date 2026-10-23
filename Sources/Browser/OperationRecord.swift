@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 
 /// What an operation changed on disk, item by item in the order it ran: what Undo reads to put
@@ -32,20 +31,22 @@ public struct OperationRecord: Equatable, Sendable {
     }
 
     /// Which item is at a path: what tells an item an undo would change from another put at its
-    /// path since, such as a save that writes a new file and renames it over the old one.
+    /// path since, such as a save that writes a new file and renames it over the old one. The
+    /// volume is its UUID, not `st_dev`, which changes when the volume is mounted again.
     public struct ItemIdentity: Equatable, Sendable {
-        public let device: dev_t
-        public let inode: ino_t
+        public let volume: String
+        public let inode: UInt64
 
-        public init(device: dev_t, inode: ino_t) {
-            self.device = device
+        public init(volume: String, inode: UInt64) {
+            self.volume = volume
             self.inode = inode
         }
     }
 
     public var changes: [Change]
     /// The identity of the item at each change's `location`, read right after the change, by
-    /// path. A path whose item couldn't be read has none.
+    /// the location as `FileOperation.comparable` gives it. An item on a volume whose inodes
+    /// don't last, such as exFAT, or whose identity couldn't be read, has none.
     public var identities: [String: ItemIdentity]
 
     public init(changes: [Change] = [], identities: [String: ItemIdentity] = [:]) {

@@ -34,6 +34,8 @@ public final class UndoHistory {
     /// `finishedCount`.
     private var takenIn = 0
     private var waiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    /// Set once the stream `follow` reads ends; nothing more will be taken in.
+    private var isDeaf = false
 
     /// Whether an undo or redo is waiting or running; Undo and Redo are off until it ends.
     public private(set) var isBusy = false
@@ -41,21 +43,33 @@ public final class UndoHistory {
     public init() {}
 
     /// Takes in every operation that `finished` reports, in order: the snapshots a queue gives
-    /// its `onAnyFinish`.
+    /// its `onAnyFinish`. The history follows one queue, whose `finishedCount` `catchUp` matches.
     public func follow(_ finished: AsyncStream<FileOperationQueue.Snapshot>) {
         Task { [weak self] in
             for await snapshot in finished {
                 self?.record(snapshot.operation, snapshot.state)
             }
+            self?.stopFollowing()
         }
     }
 
     /// Waits until the history has taken in as many finished operations as `queue` has
-    /// finished, so an operation that ended just before is the one Undo sees.
+    /// finished, so an operation that ended just before is the one Undo sees, or until the
+    /// stream it follows has ended. A waiting undo holds the history, so it can't go away while
+    /// one waits.
     public func catchUp(with queue: FileOperationQueue) async {
         let count = await queue.finishedCount
-        guard takenIn < count else { return }
+        guard takenIn < count, !isDeaf else { return }
         await withCheckedContinuation { waiters.append((count, $0)) }
+    }
+
+    private func stopFollowing() {
+        isDeaf = true
+        let waiting = waiters
+        waiters.removeAll()
+        for waiter in waiting {
+            waiter.continuation.resume()
+        }
     }
 
     /// Takes in `operation`, which finished in `state`: an entry for what it changed, which
