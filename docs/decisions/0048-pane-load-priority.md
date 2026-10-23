@@ -60,7 +60,7 @@ pane whether its tab was selected.
 `didGainFocus` lists the folder again unless a load is running, so selecting a tab or moving the
 focus between panes re-lists the newly focused pane's folder, as focusing a pane already did.
 
-Nothing ages a waiting load, so a hidden tab's loads can wait for as long as four or more
+Nothing ages a waiting load, so a hidden tab's loads can wait for as long as three or more
 visible panes keep listing their folders again. Each pane has at most one load at a time, so
 the wait ends once the visible panes stop re-listing.
 
@@ -77,7 +77,8 @@ takes any free slot. The focused load starts at once behind three running loads,
 one fewer concurrent background load (three where there were four). A load whose priority is
 raised to focused while it waits asks the service to start waiting loads, since a free slot
 may already be waiting for it. Nothing preempts a running load, so a focused load asked while
-three loads and another focused one run still waits. The case
+four loads run, one of them focused, still waits, and so does one whose volume is a share with a
+read in flight. The case
 `open W2 ×10, focused asked last: focused first rows` measures this, against B2.
 
 For M3.5, which builds the window on `Workspace`:

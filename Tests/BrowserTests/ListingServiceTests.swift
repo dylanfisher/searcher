@@ -175,8 +175,27 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
 
     waiting.priority = .focused
 
-    #expect(await lister.waitForCalls(4))
+    // Well inside the 3 s after which a stalled load gives up its slot and would start this one.
+    #expect(await lister.waitForCalls(4, timeout: 0.5))
     #expect(lister.calls.map(\.path).last == raised)
+}
+
+@Test func aSecondFocusedLoadWaitsWhileThreeVisibleAndAFocusedOneRun() async {
+    let running = (0..<4).map { "/running-\($0)" }
+    let second = "/second"
+    let lister = GatedLister(
+        Dictionary(uniqueKeysWithValues: (running + [second]).map { ($0, .batches([])) }))
+    defer { lister.releaseAll() }
+    let service = ListingService(lister: lister)
+    let log = UpdateLog()
+    await runFourLoads(running, on: service, lister, into: log)
+    _ = load(service, second, priority: .focused, into: log)
+
+    #expect(await !lister.waitForCalls(5, timeout: 0.5))
+
+    lister.release(running[0])
+    #expect(await lister.waitForCalls(5))
+    #expect(lister.calls.map(\.path).last == second)
 }
 
 @Test func focusingAQueuedLoadMakesItNext() async {

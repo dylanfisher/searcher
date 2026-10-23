@@ -70,3 +70,8 @@ five or more loads can briefly run at once. `ListingService(lister:)` without `v
 every path on one local volume, `listerVolume`, since a stub lister's paths aren't on disk.
 `FolderMonitor`'s per-change `lstat` still runs on the FSEvents queue; FSEvents watches only local
 volumes.
+
+Amendment (M4.17): the last of the `mostRunningLoads` slots goes to a focused load only
+([0048](0048-pane-load-priority.md)), so three hung loads, each holding a slot until the slow timer
+fires, stop every non-focused pane from starting; a focused load still gets the last slot, and
+a local volume's reads are likewise capped at three for background loads.
