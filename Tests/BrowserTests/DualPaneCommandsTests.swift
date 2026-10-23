@@ -55,6 +55,18 @@ private func press(_ chord: KeyChord, in workspace: Workspace, tabBounds: Rect =
             tabBounds: { tabBounds }))
 }
 
+/// Whether `command`'s menu item is on for `workspace`'s selected tab.
+@MainActor
+private func isEnabled(_ command: Command, in workspace: Workspace) -> Bool {
+    guard let binding = DualPaneCommands.bindings.first(where: { $0.command == command }) else {
+        preconditionFailure("\(command.id) isn't a dual-pane command")
+    }
+    let context = CommandContext(
+        pane: workspace.selectedTab.focusedPane.commandPane, workspace: workspace,
+        tabBounds: { bounds })
+    return binding.isEnabled?(context) ?? true
+}
+
 // MARK: Chords
 
 @Test func eachDualPaneChordInTheKeyTableResolvesToItsCommand() throws {
@@ -156,18 +168,27 @@ private func press(_ chord: KeyChord, in workspace: Workspace, tabBounds: Rect =
     #expect(fixture.fixture.actions.openedFiles.isEmpty)
 }
 
-@MainActor @Test func openInOtherPaneOpensASelectedFileAsOpenDoes() async throws {
+@MainActor @Test func openInOtherPaneIsOffAndItsKeyDoesNothingWithoutOneSelectedFolder()
+    async throws
+{
     let fixture = await Fixture.make()
     let (first, second) = try fixture.splitRightKeepingFocus()
     let other = try fixture.pane(second)
-    fixture.fixture.select("a.txt")
 
-    try press(openInOtherPane, in: fixture.workspace)
+    for names in [["a.txt"], ["docs", "a.txt"], []] {
+        fixture.fixture.pane.select(
+            Selection(Set(names.map(ExactName.init)), cursor: names.last.map(ExactName.init)))
+        #expect(!isEnabled(DualPaneCommands.openInOtherPane, in: fixture.workspace), "\(names)")
 
-    #expect(fixture.fixture.actions.openedFiles == [URL(fileURLWithPath: "/root/a.txt")])
-    #expect(other.location.path == "/root")
-    #expect(!other.canGoBack)
-    #expect(fixture.tab.layout.focused == first)
+        try press(openInOtherPane, in: fixture.workspace)
+
+        #expect(fixture.fixture.actions.openedFiles.isEmpty, "\(names)")
+        #expect(other.location.path == "/root", "\(names)")
+        #expect(!other.canGoBack, "\(names)")
+        #expect(fixture.tab.layout.focused == first, "\(names)")
+    }
+    fixture.fixture.select("docs")
+    #expect(isEnabled(DualPaneCommands.openInOtherPane, in: fixture.workspace))
 }
 
 @MainActor @Test func openInOtherPaneWithOneLeafSplitsRightAndKeepsFocus() async throws {
@@ -187,21 +208,19 @@ private func press(_ chord: KeyChord, in workspace: Workspace, tabBounds: Rect =
     #expect(try fixture.pane(first).location.path == "/root")
 }
 
-@MainActor @Test func openInOtherPaneWithOneLeafSplitsRightAndOpensAFileAsOpenDoes() async throws {
+@MainActor @Test func openInOtherPaneWithOneLeafAndAFileSelectedNeitherSplitsNorOpens()
+    async throws
+{
     let fixture = await Fixture.make()
-    let first = fixture.tab.layout.focused
+    let before = fixture.tab.layout
     fixture.fixture.select("a.txt")
 
+    #expect(!isEnabled(DualPaneCommands.openInOtherPane, in: fixture.workspace))
     try press(openInOtherPane, in: fixture.workspace)
 
-    let layout = fixture.tab.layout
-    let second = try #require(layout.otherPane)
-    #expect(layout.focused == first)
-    #expect(
-        layout.root
-            == .split(axis: .horizontal, ratio: 0.5, first: .pane(first), second: .pane(second)))
-    #expect(fixture.fixture.actions.openedFiles == [URL(fileURLWithPath: "/root/a.txt")])
-    #expect(try fixture.pane(second).location.path == "/root")
+    #expect(fixture.tab.layout == before)
+    #expect(fixture.tab.panes.count == 1)
+    #expect(fixture.fixture.actions.openedFiles.isEmpty)
 }
 
 // MARK: Zoom, size and columns
