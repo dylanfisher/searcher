@@ -12,7 +12,8 @@ final class AccessDeniedView: NSView {
     static let fullDiskAccessSettings = URL(
         string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!
     static let explanation =
-        "macOS lets Searcher read this folder only with Full Disk Access. Turn on Searcher in the Full Disk Access list, then reopen Searcher."
+        "macOS lets Searcher read this folder only with Full Disk Access. "
+        + "Turn on Searcher in the Full Disk Access list, then reopen Searcher."
     static let buttonTitle = "Open Full Disk Access Settings"
 
     static func title(folderName: String) -> String {

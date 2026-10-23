@@ -3,9 +3,9 @@ import Foundation
 /// Replaces a file in one step: the data goes to a temporary file beside it, which is renamed over
 /// the old one, so a reader sees either the previous file or the new one, never a partial write.
 public enum AtomicWrite {
-    /// Writes `data` to `url`. `beforeRename` runs between the write and the rename; tests use it to
-    /// interrupt a write. If anything throws, the temporary file is removed and `url` is left as it
-    /// was. Call it off the main thread.
+    /// Writes `data` to `url`. `beforeRename` runs between the write and the rename; tests use it
+    /// to interrupt a write. If anything throws, the temporary file is removed and `url` is left
+    /// as it was. Call it off the main thread.
     public static func write(
         _ data: Data, to url: URL, beforeRename: () throws -> Void = {}
     ) throws {

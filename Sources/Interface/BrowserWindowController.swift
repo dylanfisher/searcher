@@ -351,7 +351,8 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         let controller = takePaneController(id) ?? PaneViewController(pane: pane)
         precondition(
             controller.pane === pane,
-            "the view controller handed over for pane \(id) at \(pane.location.path) shows \(controller.pane.location.path)"
+            "the view controller handed over for pane \(id) at \(pane.location.path) shows "
+                + "\(controller.pane.location.path)"
         )
         controller.windowLink = PaneViewController.WindowLink(
             workspace: workspace, workspaces: workspaces,
@@ -395,7 +396,8 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     func closeWindow() {
         precondition(
             workspace.isClosed,
-            "the window of tab \(workspace.selectedTab.id) closes this way only once its tabs moved away"
+            "the window of tab \(workspace.selectedTab.id) closes this way only once its tabs "
+                + "moved away"
         )
         isClosed = true
         window?.close()
