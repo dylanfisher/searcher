@@ -32,6 +32,7 @@ final class FakeFiles: @unchecked Sendable {
     private var finishesDespiteCancel: Set<String> = []
     private var progressSteps = 0
     private var contents: [String: [String]] = [:]
+    private var filled: Set<String> = []
 
     init(releasingAll: Bool = false) {
         allReleased = releasingAll
@@ -106,6 +107,11 @@ final class FakeFiles: @unchecked Sendable {
     /// Puts items named `names` in `folder`, for a listing of it.
     func put(_ names: [String], in folder: String) {
         condition.withLock { contents[folder] = names }
+    }
+
+    /// Removing the folder at `path` as an empty one fails with `ENOTEMPTY`.
+    func fill(_ path: String) {
+        condition.withLock { _ = filled.insert(path) }
     }
 
     /// Makes every volume one without a trash: a trash throws `noTrash`.
@@ -183,6 +189,10 @@ final class FakeFiles: @unchecked Sendable {
                 return self.condition.withLock { self.contents[folder] ?? [] }
             },
             removeEmptyFolder: { folder throws(FileOperationError) in
+                if self.condition.withLock({ self.filled.contains(folder) }) {
+                    self.events.append("not empty \(folder)")
+                    throw FileOperationError(errno: ENOTEMPTY, path: folder)
+                }
                 self.events.append("remove folder \(folder)")
             },
             makeIdentifier: {
@@ -714,7 +724,7 @@ extension FileOperationQueue.Prompts {
 
     #expect(
         files.events.all == [
-            "make folder /A/photos/\(name)", "list \(dropFolder.path)",
+            "list /A/photos", "make folder /A/photos/\(name)", "list \(dropFolder.path)",
             "remove folder \(dropFolder.path)",
         ])
 }
@@ -823,4 +833,88 @@ extension FileOperationQueue.Prompts {
 
     #expect(try listNames(real.path) == ["x"])
     #expect(throws: FileOperationError.self) { try listNames(link) }
+}
+
+@Test func makingADropFolderFirstRemovesEmptyFoldersEarlierRunsLeftBesideIt() async throws {
+    let files = FakeFiles()
+    let queue = makeQueue(files, Watcher())
+    let staging = FileOperationQueue.stagingFolderPrefix + "stale"
+    let drop = FileOperationQueue.dropFolderPrefix + "stale"
+    let full = FileOperationQueue.dropFolderPrefix + "full"
+    files.put(["photo.jpg", staging, drop, full, ".searcher-other"], in: "/A")
+    files.fill("/A/" + full)
+
+    let dropFolder = try await queue.makeDropFolder(in: "/A")
+
+    #expect(
+        files.events.all == [
+            "list /A", "remove folder /A/\(staging)", "remove folder /A/\(drop)",
+            "not empty /A/\(full)", "make folder \(dropFolder.path)",
+        ])
+}
+
+// MARK: Quitting
+
+@Test func cancelAllStopsEveryUnfinishedOperationAndReturnsOnceEachHasFinished() async throws {
+    let files = FakeFiles()
+    files.holdScan(of: "/S/planning")
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher)
+    let running = await enqueue(queue, .copy(["/S/a"], into: "/A"), watcher)
+    #expect(await files.events.wait { $0.contains("copy /S/a") })
+    let waiting = await enqueue(queue, .copy(["/S/b"], into: "/A"), watcher)
+    #expect(await watcher.waitUntil(waiting, is: .queued))
+    let planning = await enqueue(queue, .copy(["/S/planning"], into: "/B"), watcher)
+    #expect(await files.events.wait { $0.contains("holding scan /S/planning") })
+
+    await queue.cancelAllAndWait()
+
+    for id in [running, waiting, planning] {
+        #expect(watcher.state(of: id)?.phase == .cancelled(leftBehind: nil))
+    }
+    #expect(!files.events.all.contains { $0.hasPrefix("copied") })
+    files.letScanGo(of: "/S/planning")
+}
+
+/// A copier whose copy ignores a cancel until the test lets it go, as one blocked on a share
+/// that stopped answering does.
+private final class StuckCopier: FileOperationQueue.Copier, @unchecked Sendable {
+    let events: EventLog<String>
+    let gate = DispatchSemaphore(value: 0)
+
+    init(events: EventLog<String>) {
+        self.events = events
+    }
+
+    func copy(
+        _ source: String, to destination: String, progress: (CopyProgress) -> Void
+    ) throws -> CopyProgress {
+        events.append("stuck copy \(source)")
+        gate.wait()
+        throw CancellationError()
+    }
+
+    func pause() {}
+    func resume() {}
+    func cancel() {}
+}
+
+@Test func cancelAllGivesUpAtItsDeadlineWhileACopyIgnoresTheCancel() async throws {
+    let files = FakeFiles()
+    let copier = StuckCopier(events: files.events)
+    var fileSystem = files.fileSystem()
+    fileSystem.makeCopier = { copier }
+    let watcher = Watcher()
+    let queue = FileOperationQueue(
+        fileSystem: fileSystem, prompts: Prompter().prompts, clock: ContinuousClock()
+    ) { watcher.snapshots.append($0) }
+    let id = await enqueue(queue, .copy(["/S/a"], into: "/A"), watcher)
+    #expect(await files.events.wait { $0.contains("stuck copy /S/a") })
+    let clock = ContinuousClock()
+
+    #expect(await !queue.cancelAll(by: clock.now.advanced(by: .milliseconds(50)), clock: clock))
+
+    copier.gate.signal()
+    #expect(await watcher.waitUntilFinished(id))
+    #expect(await queue.cancelAll(by: clock.now.advanced(by: .seconds(5)), clock: clock))
 }

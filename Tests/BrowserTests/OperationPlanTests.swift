@@ -181,3 +181,13 @@ func intoItselfIgnoresCaseAndTrailingSlashes(source: String, into folder: String
         try await BlockingCallThread.run { try OperationPlan.measure(root + "/gone") { false } }
     }
 }
+
+@Test func aVolumeThatCantBeReadFailsWithTheSystemsErrno() async throws {
+    let path = "/no/such/folder/item"
+
+    await #expect(throws: FileOperationError(reason: .sourceGone, path: path, errno: ENOENT)) {
+        try await BlockingCallThread.run {
+            try OperationPlan.VolumeUUIDs().uuid(of: 0, holding: path)
+        }
+    }
+}

@@ -61,9 +61,11 @@ public final class WorkspaceWindows {
         openWith = OpenWith(
             systemActions: systemActions,
             didBuild: { type, elapsed in
-                openWithLogger.notice(
-                    "Open With apps for \(type.identifier, privacy: .public): \(Int((elapsed / .milliseconds(1)).rounded()), privacy: .public) ms off the main thread"
-                )
+                // Joined first: a log message can't be concatenated.
+                let text =
+                    "Open With apps for \(type.identifier): "
+                    + "\(Int((elapsed / .milliseconds(1)).rounded())) ms off the main thread"
+                openWithLogger.notice("\(text, privacy: .public)")
             })
         // A stream keeps the snapshots in the order the queue sent them on their way to the
         // main actor.
@@ -86,6 +88,13 @@ public final class WorkspaceWindows {
                 self?.operationsChanged(snapshots)
             }
         }
+    }
+
+    /// Cancels every file operation as the app quits, so a copy removes what it was writing and
+    /// a replace its staging folder, waiting until `deadline` at most. Returns whether every
+    /// operation finished in time.
+    public func cancelOperationsBeforeQuit(by deadline: ContinuousClock.Instant) async -> Bool {
+        await fileOperations.cancelAll(by: deadline, clock: .continuous)
     }
 
     /// Removes the drop folders of promises still on their way, as the app quits, waiting at

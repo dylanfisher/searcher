@@ -182,6 +182,58 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
     #expect(watcher.state(of: id)?.record.changes == [])
 }
 
+/// The app quits during the staging copy: the copier removes what it wrote, and the staging
+/// folder goes before the cancel returns.
+@Test func cancellingAllDuringAReplacesStagingCopyLeavesNoStagingFolderOrPartialItem()
+    async throws
+{
+    let files = FakeFiles()
+    files.place("/A/song.flac")
+    let prompter = Prompter()
+    prompter.answer(replace)
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher, prompter: prompter)
+    let id = await enqueue(queue, .copy(["/S/song.flac"], into: "/A"), watcher)
+    #expect(await files.events.wait { $0.contains("copy /S/song.flac") })
+
+    await queue.cancelAllAndWait()
+
+    #expect(watcher.state(of: id)?.phase == .cancelled(leftBehind: nil))
+    let staging = try stagingFolder(files)
+    #expect(
+        Array(files.events.all.drop { !$0.hasPrefix("copy ") }) == [
+            "copy /S/song.flac", "copy failed /S/song.flac", "delete \(staging)",
+        ])
+    #expect(watcher.state(of: id)?.record.changes == [])
+}
+
+/// A replace first removes the empty staging and drop folders a crash left beside its
+/// destination. A folder with something in it stays, and so does a drop folder still in use.
+@Test func aReplaceFirstRemovesEmptyFoldersEarlierRunsLeftBesideItsDestination() async throws {
+    let files = FakeFiles(releasingAll: true)
+    files.place("/A/song.flac")
+    let prompter = Prompter()
+    prompter.answer(replace)
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher, prompter: prompter)
+    let live = try await queue.makeDropFolder(in: "/A")
+    let stale = FileOperationQueue.stagingFolderPrefix + "stale"
+    let full = FileOperationQueue.stagingFolderPrefix + "full"
+    files.put(
+        ["song.flac", (live.path as NSString).lastPathComponent, stale, full], in: "/A")
+    files.fill("/A/" + full)
+
+    let id = await enqueue(queue, .copy(["/S/song.flac"], into: "/A"), watcher)
+
+    #expect(await watcher.waitUntilFinished(id))
+    #expect(watcher.state(of: id)?.phase == .done)
+    let events = files.events.all
+    let listed = try #require(events.lastIndex(of: "list /A"))
+    let sweep = Array(events[(listed + 1)...].prefix { !$0.hasPrefix("make folder") })
+    #expect(sweep == ["remove folder /A/\(stale)", "not empty /A/\(full)"])
+    #expect(!files.events.all.contains("remove folder \(live.path)"))
+}
+
 @Test func replaceTrashesTheOriginalFromItsPathThenMovesTheCopyIntoPlace() async throws {
     let files = FakeFiles(releasingAll: true)
     files.place("/A/song.flac")

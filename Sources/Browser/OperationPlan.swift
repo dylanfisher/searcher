@@ -213,9 +213,9 @@ public struct OperationPlan: Equatable, Sendable {
     /// Plans an undo's steps, one item each in order. First it checks, with `inspect`, that each
     /// step's item is at its source and its destination is free, as the steps before it leave
     /// them, and, with `identify`, that an item the record has an identity for is still that
-    /// item, not another put at its path since; if any isn't, it plans no items and each such path is a
-    /// failure, so nothing is changed. A move whose two folders are on different volumes is
-    /// copied, so it is pre-scanned and the undo waits in the lane of the first such
+    /// item, not another put at its path since; if any isn't, it plans no items and each such
+    /// path is a failure, so nothing is changed. A move whose two folders are on different
+    /// volumes is copied, so it is pre-scanned and the undo waits in the lane of the first such
     /// destination's volume.
     private static func undoing(
         _ steps: [FileOperation.UndoStep], identities: [String: OperationRecord.ItemIdentity],
@@ -367,7 +367,7 @@ public struct OperationPlan: Equatable, Sendable {
     }
 
     /// The UUID of each volume an identifier met, nil for one whose inodes don't last.
-    private final class VolumeUUIDs: @unchecked Sendable {
+    final class VolumeUUIDs: @unchecked Sendable {
         private let lock = NSLock()
         private var uuids: [dev_t: String?] = [:]
 
@@ -379,7 +379,15 @@ public struct OperationPlan: Equatable, Sendable {
                     .volumeUUIDStringKey, .volumeSupportsPersistentIDsKey,
                 ])
             } catch {
-                throw FileOperationError(reason: .other, path: path, errno: nil)
+                // `URL` throws a Cocoa error that carries the system call's errno.
+                let error = error as NSError
+                let posix =
+                    error.domain == NSPOSIXErrorDomain
+                    ? error : error.userInfo[NSUnderlyingErrorKey] as? NSError
+                guard let posix, posix.domain == NSPOSIXErrorDomain else {
+                    throw FileOperationError(reason: .other, path: path, errno: nil)
+                }
+                throw FileOperationError(errno: Int32(posix.code), path: path)
             }
             let uuid = values.volumeSupportsPersistentIDs == true ? values.volumeUUIDString : nil
             lock.withLock { uuids[device] = uuid }
