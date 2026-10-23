@@ -527,3 +527,71 @@ private func receiver(of item: NSMenuItem, in window: NSWindow) throws -> NSResp
     _ = try two.splitRight()
     #expect(!two.tab.focusedPane.isFocused)
 }
+
+@MainActor @Test func movingAPaneUpThenDownSwapsBackAndTheKeysStayOnIt() async throws {
+    let fixture = try await Fixture()
+    let top = fixture.tab.layout.focused
+    try fixture.press(try keyEvent("\\", modifiers: [.command, .shift]))
+    let bottom = try #require(fixture.tab.layout.panes.first { $0 != top })
+    let original = fixture.tab.layout.root
+    #expect(fixture.tab.layout.focused == bottom)
+
+    try fixture.press(try arrow(NSUpArrowFunctionKey, [.control, .option, .shift]))
+
+    #expect(fixture.tab.layout.root != original)
+    #expect(fixture.tab.layout.focused == bottom)
+    #expect(try fixture.keyTable === fixture.paneController(bottom).keyView)
+
+    try fixture.press(try arrow(NSDownArrowFunctionKey, [.control, .option, .shift]))
+
+    #expect(fixture.tab.layout.root == original)
+    #expect(fixture.tab.layout.focused == bottom)
+    #expect(try fixture.keyTable === fixture.paneController(bottom).keyView)
+}
+
+@MainActor @Test func movingAPaneDownThenUpSwapsBackAndTheKeysStayOnIt() async throws {
+    let fixture = try await Fixture()
+    let top = fixture.tab.layout.focused
+    try fixture.press(try keyEvent("\\", modifiers: [.command, .shift]))
+    let bottom = try #require(fixture.tab.layout.panes.first { $0 != top })
+    try fixture.press(try arrow(NSUpArrowFunctionKey, [.command, .option, .shift]))
+    #expect(fixture.tab.layout.focused == top)
+    let original = fixture.tab.layout.root
+
+    try fixture.press(try arrow(NSDownArrowFunctionKey, [.control, .option, .shift]))
+
+    #expect(fixture.tab.layout.root != original)
+    #expect(fixture.tab.layout.focused == top)
+    #expect(try fixture.keyTable === fixture.paneController(top).keyView)
+
+    try fixture.press(try arrow(NSUpArrowFunctionKey, [.control, .option, .shift]))
+
+    #expect(fixture.tab.layout.root == original)
+    #expect(fixture.tab.layout.focused == top)
+    #expect(try fixture.keyTable === fixture.paneController(top).keyView)
+
+    try fixture.press(try arrow(NSDownArrowFunctionKey, [.command, .option, .shift]))
+
+    #expect(fixture.tab.layout.focused == bottom)
+    #expect(try fixture.keyTable === fixture.paneController(bottom).keyView)
+}
+
+@MainActor @Test func movingAPaneRightThenLeftSwapsBackAndAFocusKeyStillWorks() async throws {
+    let fixture = try await Fixture()
+    let left = fixture.tab.layout.focused
+    let right = try fixture.splitRight()
+    let original = fixture.tab.layout.root
+
+    try fixture.press(try arrow(NSLeftArrowFunctionKey, [.control, .option, .shift]))
+    #expect(fixture.tab.layout.root != original)
+    try fixture.press(try arrow(NSRightArrowFunctionKey, [.control, .option, .shift]))
+
+    #expect(fixture.tab.layout.root == original)
+    #expect(fixture.tab.layout.focused == right)
+    #expect(try fixture.keyTable === fixture.paneController(right).keyView)
+
+    try fixture.press(try arrow(NSLeftArrowFunctionKey, [.command, .option, .shift]))
+
+    #expect(fixture.tab.layout.focused == left)
+    #expect(try fixture.keyTable === fixture.paneController(left).keyView)
+}
