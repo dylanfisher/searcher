@@ -1023,14 +1023,20 @@ public final class Pane {
         set(Selection(rows: rows, in: listing, cursor: cursor, anchor: anchor))
     }
 
-    /// The selected entries in row order. A provisional selection knows only the rows near the
-    /// cursor; a command right after a change that raced a load, patch or sort is rare enough to
-    /// settle it here.
-    public var selectedEntries: [DirectoryEntry] {
+    /// The selected rows of the listing shown. A provisional selection knows only the rows near
+    /// the cursor; a command right after a change that raced a load, patch or sort is rare enough
+    /// to settle it here.
+    var selectedRows: IndexSet {
         guard let listing = state.listing else { return [] }
         let selection =
             selection.isProvisional ? onMain { selection.settled(in: listing) } : selection
-        return selection.rows(in: listing).map { listing[$0] }
+        return selection.rows(in: listing)
+    }
+
+    /// The selected entries in row order.
+    public var selectedEntries: [DirectoryEntry] {
+        guard let listing = state.listing else { return [] }
+        return selectedRows.map { listing[$0] }
     }
 
     /// Selects `names`, the cursor on the last, once the rows list them all: at once if they do,

@@ -34,9 +34,7 @@ final class QuickLookController: NSObject, @preconcurrency QLPreviewPanelDataSou
         func url(at index: Int) -> URL {
             guard let listing else { preconditionFailure("item \(index) of no listing") }
             let entry = listing[row(at: index)]
-            return URL(
-                fileURLWithPath: location.child(named: entry.name).path,
-                isDirectory: entry.type == .directory)
+            return ClipboardCommands.fileURL(of: entry, in: location)
         }
 
         /// The `index`th selected row. Walks the ranges, which for Select All is one; the panel

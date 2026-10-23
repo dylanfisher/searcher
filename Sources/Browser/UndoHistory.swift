@@ -119,8 +119,8 @@ public final class UndoHistory {
         return "\(UndoCommands.redo.title) \(entry.name)"
     }
 
+    /// How many entries can be undone. For tests of the history's cap.
     var undoCount: Int { undoEntries.count }
-    var redoCount: Int { redoEntries.count }
 
     /// Undoes the last entry through `queue`, once the history has caught up with it. Returns
     /// nil, doing nothing, while another undo or redo is busy; the task ends with the undo's

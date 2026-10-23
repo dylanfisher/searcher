@@ -80,9 +80,7 @@ public final class OpenWith {
     /// file. Empty when nothing is selected.
     public static func types(in pane: Pane) -> Set<UTType> {
         guard let listing = pane.state.listing else { return [] }
-        let selection =
-            pane.selection.isProvisional ? pane.selection.settled(in: listing) : pane.selection
-        return Set(selection.rows(in: listing).map { listing.kind(atRow: $0).type })
+        return Set(pane.selectedRows.map { listing.kind(atRow: $0).type })
     }
 
     /// Opens the entries selected in `pane` in the app at `application`.
