@@ -185,10 +185,12 @@ final class FakeFiles: @unchecked Sendable {
             removeEmptyFolder: { folder throws(FileOperationError) in
                 self.events.append("remove folder \(folder)")
             },
-            identify: { path throws(FileOperationError) in
-                let isPlaced = self.condition.withLock { self.placed[path] != nil }
-                return isPlaced || isPath(path, atOrUnder: "/S")
-                    ? OperationRecord.ItemIdentity(device: 0, inode: 0) : nil
+            makeIdentifier: {
+                { path throws(FileOperationError) in
+                    let isPlaced = self.condition.withLock { self.placed[path] != nil }
+                    return isPlaced || isPath(path, atOrUnder: "/S")
+                        ? OperationRecord.ItemIdentity(volume: "fake", inode: 0) : nil
+                }
             })
     }
 
