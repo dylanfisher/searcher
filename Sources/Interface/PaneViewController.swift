@@ -58,6 +58,8 @@ public final class PaneViewController: NSViewController {
         let mountTable: MountTable?
         /// The app's undo history, for Undo and Redo; nil where there is none.
         let undoHistory: UndoHistory?
+        /// The app's Open With cache; nil where there is none, and Open With is off then.
+        let openWith: OpenWith?
         /// Runs after each command, so the window shows what it changed.
         let didRunCommand: @MainActor () -> Void
     }
@@ -287,6 +289,12 @@ public final class PaneViewController: NSViewController {
         table.commandIsCurrent = { [weak self] id in self?.isCurrent(id) }
         table.commandTitle = { [weak self] id in self?.title(of: id) }
         table.selectTyped = { [weak self] query in self?.selectTyped(query) ?? false }
+        table.openWith = { [weak self] in self?.openWithTarget() }
+    }
+
+    /// Open With acts on the pane commands act on.
+    private func openWithTarget() -> OpenWithMenu.Target? {
+        windowLink?.openWith.map { OpenWithMenu.Target(openWith: $0, pane: pane.commandPane) }
     }
 
     private func run(_ id: CommandID, folder: Location? = nil) {

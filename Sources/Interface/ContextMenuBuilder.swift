@@ -3,14 +3,17 @@ import Browser
 
 /// Builds the context menus of the list and of each column, the only place context menus are
 /// built. Each item runs a registered command on the table that was clicked, with the command's
-/// title and first chord from the registry. As in the main menu, a chord without Command, Control
-/// or Option shows no key equivalent. AppKit adds the services that take the selection when it
-/// shows the menu, through `ListingViewController`'s `NSServicesMenuRequestor`
+/// title and first chord from the registry, except Open With, whose apps `OpenWithMenu` lists.
+/// As in the main menu, a chord without Command, Control or Option shows no key equivalent.
+/// AppKit adds the services that take the selection when it shows the menu, through
+/// `ListingViewController`'s `NSServicesMenuRequestor`
 /// (docs/decisions/0070-context-menus-and-services.md).
 @MainActor
 enum ContextMenuBuilder {
     enum Item {
         case command(CommandID)
+        /// The Open With submenu for the clicked table's selection.
+        case openWith
         case separator
     }
 
@@ -28,8 +31,8 @@ enum ContextMenuBuilder {
     /// For a right-click on a row, which is selected first if it wasn't: what acts on the
     /// selection.
     static let rowItems: [Item] = [
-        .command(NavigationCommands.open.id), .command(WindowCommands.openInNewTab.id),
-        .command(DualPaneCommands.openInOtherPane.id),
+        .command(NavigationCommands.open.id), .openWith,
+        .command(WindowCommands.openInNewTab.id), .command(DualPaneCommands.openInOtherPane.id),
         .separator,
         .command(ViewCommands.toggleQuickLook.id),
         .separator,
@@ -63,6 +66,8 @@ enum ContextMenuBuilder {
             switch item {
             case .separator:
                 menu.addItem(.separator())
+            case .openWith:
+                menu.addItem(OpenWithMenu(target: { [weak target] in target?.openWith() }).item)
             case .command(let id):
                 guard let command = registry.command(for: id) else { throw .unregistered(id) }
                 let menuItem = NSMenuItem(

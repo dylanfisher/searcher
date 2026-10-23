@@ -79,7 +79,8 @@ private func selectedNames(_ pane: Pane) -> Set<String> {
         ContextMenuBuilder.rowItems, registry: registry, target: table)
 
     #expect(commandIDs(menu) == ids(ContextMenuBuilder.rowItems))
-    for item in menu.items where !item.isSeparatorItem {
+    // Open With runs no command; OpenWithMenuTests covers it.
+    for item in menu.items where !item.isSeparatorItem && item.title != OpenWithMenu.title {
         let id = try #require(item.representedObject as? CommandID)
         let command = try #require(registry.command(for: id))
         #expect(item.title == command.title, "\(id)")
@@ -112,8 +113,9 @@ private func selectedNames(_ pane: Pane) -> Set<String> {
     let menu = try ContextMenuBuilder.build(
         ContextMenuBuilder.rowItems, registry: try AppCommands.registry(), target: table)
 
+    // Open With turns itself off, with no app cache for the table.
     let enabled = menu.items.filter { item in
-        !item.isSeparatorItem && table.validateMenuItem(item)
+        (item.target as? NSMenuItemValidation)?.validateMenuItem(item) ?? false
     }
 
     #expect(enabled.map(\.title) == [FileCommands.duplicate.title])

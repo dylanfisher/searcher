@@ -1,11 +1,12 @@
 import AppKit
 import Browser
+import UniformTypeIdentifiers
 import os
 
 /// `SystemActions` through `NSWorkspace` and the general pasteboard. Opening a file reads its type
-/// and looks up its default app, which blocks on a slow share, so it runs off the main thread.
-/// Copying, revealing and opening a folder in a named app read no file's type, and run on the
-/// main thread.
+/// and looks up its default app, which blocks on a slow share, so it runs off the main thread, as
+/// listing the apps for a type does. Copying, revealing and opening files in a given app read no
+/// file's type, and run on the main thread.
 @MainActor
 public final class WorkspaceSystemActions: SystemActions {
     /// No app on the Mac has the bundle ID a setting names.
@@ -70,6 +71,25 @@ public final class WorkspaceSystemActions: SystemActions {
             guard let error else { return }
             Task { @MainActor in self.fail(error) }
         }
+    }
+
+    public func open(_ urls: [URL], withApplicationAt application: URL) {
+        NSWorkspace.shared.open(
+            urls, withApplicationAt: application, configuration: NSWorkspace.OpenConfiguration()
+        ) { _, error in
+            guard let error else { return }
+            Task { @MainActor in self.fail(error) }
+        }
+    }
+
+    public nonisolated func applicationURLs(toOpen type: UTType) -> [URL] {
+        dispatchPrecondition(condition: .notOnQueue(.main))
+        return NSWorkspace.shared.urlsForApplications(toOpen: type)
+    }
+
+    public nonisolated func defaultApplicationURL(toOpen type: UTType) -> URL? {
+        dispatchPrecondition(condition: .notOnQueue(.main))
+        return NSWorkspace.shared.urlForApplication(toOpen: type)
     }
 
     private func fail(_ error: any Error) {

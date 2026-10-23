@@ -3,6 +3,7 @@ import Darwin
 import Foundation
 import TestSupport
 import Testing
+import UniformTypeIdentifiers
 
 @testable import Browser
 
@@ -13,6 +14,17 @@ final class StubSystemActions: SystemActions {
     private(set) var copiedTexts: [String] = []
     private(set) var revealed: [[URL]] = []
     private(set) var openedInApp: [OpenedInApp] = []
+    private(set) var openedWithApp: [OpenedWithApp] = []
+    /// The apps listed for each type, and each type's default app.
+    nonisolated let applications: [UTType: [URL]]
+    nonisolated let defaultApplications: [UTType: URL]
+    /// Each type whose apps were listed, and whether that ran on the main thread.
+    nonisolated let lookups = EventLog<AppLookup>()
+
+    init(applications: [UTType: [URL]] = [:], defaultApplications: [UTType: URL] = [:]) {
+        self.applications = applications
+        self.defaultApplications = defaultApplications
+    }
 
     func openFile(_ url: URL) { openedFiles.append(url) }
     func openURL(_ url: URL) { openedURLs.append(url) }
@@ -21,6 +33,28 @@ final class StubSystemActions: SystemActions {
     func open(_ folder: URL, inAppWithBundleID bundleID: String) {
         openedInApp.append(OpenedInApp(folder: folder, bundleID: bundleID))
     }
+    func open(_ urls: [URL], withApplicationAt application: URL) {
+        openedWithApp.append(OpenedWithApp(urls: urls, application: application))
+    }
+    nonisolated func applicationURLs(toOpen type: UTType) -> [URL] {
+        lookups.append(AppLookup(type: type, onMainThread: Thread.isMainThread))
+        return applications[type] ?? []
+    }
+    nonisolated func defaultApplicationURL(toOpen type: UTType) -> URL? {
+        defaultApplications[type]
+    }
+}
+
+/// A type whose apps `StubSystemActions` listed, and whether it did on the main thread.
+struct AppLookup: Sendable {
+    let type: UTType
+    let onMainThread: Bool
+}
+
+/// Files `StubSystemActions` was asked to open in an app.
+struct OpenedWithApp: Equatable {
+    let urls: [URL]
+    let application: URL
 }
 
 final class StubMonitor: FolderMonitoring {
