@@ -42,10 +42,11 @@ other-pane confirm names nothing, and two Cmd-Shift-C presses ask two questions 
   first saw it, or finishes in trouble, and only in the most recently active window. A shorter
   operation that succeeds never shows it.
 - **Hiding when empty.** `Settings.hideEmptyOperationsPanel`, on by default, as Finder shows
-  no panel while idle: the panel hides when its last row leaves, cleared or finished, and shows
-  again by the rule above. Turning the setting on while the empty panel shows hides it. Off, the
-  empty panel stays and says "No operations". Operations still shows and hides the panel either
-  way, empty or not.
+  no panel while idle: a panel that showed itself hides when its last row leaves, cleared or
+  finished, and shows again by the rule above. A panel the user opened with Operations stays,
+  empty or not, until the user closes it, so a copy ending in another window never closes it.
+  Turning the setting on while an empty panel that showed itself is up hides it. Off, the empty
+  panel stays and says "No operations".
 - **Size.** The panel is as tall as its rows, up to 200 pt (about three rows), past which they
   scroll; with no rows it is one line saying so. Its height comes from the rows' constraints, so
   it grows and shrinks a row at a time and the panes give up only that room. A progress tick
@@ -71,6 +72,8 @@ other-pane confirm names nothing, and two Cmd-Shift-C presses ask two questions 
 - **A fixed-height panel** — rejected: one row sat in a box three rows tall.
 - **Hiding the empty panel always** — rejected: a user who wants to watch the panel, empty or
   not, can turn the setting off.
+- **Hiding every empty panel** — rejected: every window gets every snapshot, so a copy ending
+  in one window would close a panel the user opened in another.
 - **Failed rows kept per window** — rejected: a window opened later wouldn't list a failure,
   and one reported with no window open would be lost.
 

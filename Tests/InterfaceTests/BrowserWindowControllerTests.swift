@@ -827,3 +827,34 @@ private func copySnapshot(_ id: Int, _ phase: OperationState.Phase) -> FileOpera
     settings.hideEmptyOperationsPanel = true
     #expect(panel.isHidden)
 }
+
+@MainActor @Test func aPanelTheUserOpenedStaysWhenAnotherWindowsCopyEnds() async throws {
+    let copying = try await Fixture()
+    let watching = try await Fixture()
+    let panel = watching.controller.operations.view
+    try watching.press(try keyEvent("l", characters: "¬", modifiers: [.command, .option]))
+    #expect(!panel.isHidden)
+
+    for fixture in [copying, watching] {
+        fixture.controller.showOperations([copySnapshot(1, .running)])
+    }
+    copying.controller.operations.onNeedsAttention?()
+    for fixture in [copying, watching] {
+        fixture.controller.showOperations([copySnapshot(1, .done)])
+    }
+
+    #expect(!panel.isHidden)
+    #expect(copying.controller.operations.view.isHidden)
+}
+
+@MainActor @Test func aPanelTheUserOpenedStaysWhenItsOwnCopyEnds() async throws {
+    let fixture = try await Fixture()
+    let panel = fixture.controller.operations.view
+    try fixture.press(try keyEvent("l", characters: "¬", modifiers: [.command, .option]))
+
+    fixture.controller.showOperations([copySnapshot(1, .running)])
+    fixture.controller.operations.onNeedsAttention?()
+    fixture.controller.showOperations([copySnapshot(1, .done)])
+
+    #expect(!panel.isHidden)
+}

@@ -7,7 +7,8 @@ import Quartz
 /// like a Finder window, and is titled after the focused pane's folder. Under the panes, the
 /// operations panel lists the file operations; Operations shows or hides it, and it shows itself
 /// in the most recently active window when one runs past a second. With
-/// `Settings.hideEmptyOperationsPanel` on, it hides once its last row leaves
+/// `Settings.hideEmptyOperationsPanel` on, a panel that showed itself hides once its last row
+/// leaves; one the user opened stays until the user closes it
 /// (docs/decisions/0067-operations-panel.md).
 ///
 /// Commands change the workspace, and the window shows the result after each one. The window's
@@ -50,6 +51,9 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// `settings.hideEmptyOperationsPanel` as last seen, so another setting's change leaves the
     /// panel alone.
     private var hidesEmptyOperations: Bool
+    /// Whether the user opened the panel with Operations; only one that showed itself hides
+    /// when it empties.
+    private var userOpenedOperations = false
     /// Each open tab's views, shown or not.
     private var tabViews: [TabID: TabViews] = [:]
     /// Set once the workspace closed with its last tab or the window closed; the window shows
@@ -218,7 +222,8 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     }
 
     private func toggleOperations() {
-        setOperationsShown(operations.view.isHidden)
+        userOpenedOperations = operations.view.isHidden
+        setOperationsShown(userOpenedOperations)
     }
 
     /// An operation ran past `OperationsViewController.attentionDelay` or finished in trouble.
@@ -234,15 +239,16 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         hideEmptyOperations()
     }
 
-    /// Hides the panel while it has no rows, if the setting says to.
+    /// Hides the panel while it has no rows, if the setting says to and the user didn't open it.
     private func hideEmptyOperations() {
-        guard settings.hideEmptyOperationsPanel, operations.isEmpty else { return }
+        guard settings.hideEmptyOperationsPanel, operations.isEmpty, !userOpenedOperations else {
+            return
+        }
         setOperationsShown(false)
     }
 
     private func setOperationsShown(_ isShown: Bool) {
         operations.view.isHidden = !isShown
-        // The hidden panel keeps its height under the panes, out of sight.
         panesToBottom.isActive = !isShown
         panesOverOperations.isActive = isShown
     }
