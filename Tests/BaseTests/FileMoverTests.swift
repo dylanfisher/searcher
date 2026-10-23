@@ -88,4 +88,40 @@ import Testing
         #expect(FileManager.default.fileExists(atPath: source))
         try await image.detach()
     }
+
+    /// APFS swaps in one call; HFS+ and exFAT refuse `RENAME_SWAP`, so there it takes renames.
+    @Test(arguments: ["APFS", "HFS+"])
+    func swapExchangesTwoItemsAndLeavesNoOtherName(fileSystem: String) async throws {
+        let image = try await DiskImage("FileMoverTests", megabytes: 4, fileSystem: fileSystem)
+        let staging = image.mountPoint + "/staging"
+        try FileManager.default.createDirectory(atPath: staging, withIntermediateDirectories: false)
+        let new = staging + "/album"
+        let old = image.mountPoint + "/album"
+        for (folder, file) in [(new, "new.txt"), (old, "old.txt")] {
+            try FileManager.default.createDirectory(
+                atPath: folder, withIntermediateDirectories: false)
+            try Data(file.utf8).write(to: URL(fileURLWithPath: folder + "/" + file))
+        }
+
+        try FileMover.swap(new, with: old)
+
+        #expect(try FileManager.default.contentsOfDirectory(atPath: old) == ["new.txt"])
+        #expect(try FileManager.default.contentsOfDirectory(atPath: new) == ["old.txt"])
+        #expect(try FileManager.default.contentsOfDirectory(atPath: staging) == ["album"])
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: image.mountPoint)
+                .filter { !$0.hasPrefix(".") }.sorted() == ["album", "staging"])
+        try await image.detach()
+    }
+
+    @Test func swapWithAMissingItemThrowsAndChangesNothing() throws {
+        let folder = try TemporaryFolder("FileMoverTests")
+        let present = folder.url.appending(path: "present.txt").path
+        let missing = folder.url.appending(path: "missing.txt").path
+        try Data("present".utf8).write(to: URL(fileURLWithPath: present))
+
+        #expect(throws: FileOperationError.self) { try FileMover.swap(present, with: missing) }
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: folder.url.path) == ["present.txt"])
+    }
 }

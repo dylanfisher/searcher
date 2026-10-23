@@ -28,6 +28,32 @@ public struct Trasher: Sendable {
         }
     }
 
+    /// Whether the volume holding `folder` has a Trash, found by trashing an empty file made in
+    /// `folder` for the purpose and deleting it from the Trash: no API answers it, and
+    /// `FileManager`'s trash folder lookup fails on volumes that have one. The answer is the
+    /// one `trash` would give, so a caller can ask before it changes anything. Leaves nothing in
+    /// `folder` or the Trash. Blocks the calling thread; call it off the main thread.
+    public func hasTrash(in folder: String) throws(FileOperationError) -> Bool {
+        precondition(
+            !Thread.isMainThread, "Trasher does file-system I/O; call it off the main thread")
+        let probe = folder + "/.searcher-trash-probe-" + UUID().uuidString
+        let descriptor = open(probe, O_CREAT | O_EXCL | O_WRONLY, 0o600)
+        guard descriptor >= 0 else { throw FileOperationError(errno: errno, path: probe) }
+        close(descriptor)
+        let trashed: URL
+        do {
+            trashed = try trash(probe)
+        } catch let error where error.reason == .noTrash {
+            try Self.deletePermanently(probe)
+            return false
+        } catch {
+            try Self.deletePermanently(probe)
+            throw error
+        }
+        try Self.deletePermanently(trashed.path)
+        return true
+    }
+
     /// Deletes the item at `path`, and everything in it if it is a folder, without the Trash.
     /// Call it only after the user has answered a delete-immediately question for this item, or
     /// on the source of a move to another volume once its copy is complete. Blocks the calling

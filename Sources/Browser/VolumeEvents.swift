@@ -1,25 +1,37 @@
 import Base
+import Foundation
 
-/// What panes do when a volume mounts or unmounts. The app forwards the system's mount
-/// notifications here, with the volume's mount point, and every pane adds itself when it is made.
-/// A pane is on a volume when its folder is the mount point or under it, by the path's text.
-/// See docs/decisions/0049-volume-events.md.
+/// What panes and operation queues do when a volume mounts or unmounts. The app forwards the
+/// system's mount notifications here, with the volume's mount point, and every pane and queue
+/// adds itself when it is made. A pane is on a volume when its folder is the mount point or
+/// under it, by the path's text. See docs/decisions/0049-volume-events.md.
 @MainActor
 public enum VolumeEvents {
     /// Every pane made, weakly, so a released pane leaves no entry behind once it is pruned.
     private static var panes: [WeakPane] = []
+    /// Every operation queue made, weakly. Queues are made off the main actor too, so the list
+    /// has a lock of its own.
+    private nonisolated static let queues = QueueList()
 
     static func add(_ pane: Pane) {
         panes.removeAll { $0.pane == nil }
         panes.append(WeakPane(pane: pane))
     }
 
+    nonisolated static func add(_ queue: FileOperationQueue) {
+        queues.add(queue)
+    }
+
     /// The volume at `mountPoint` is about to unmount: running loads on it stop, since a folder
     /// a load has open can keep the volume from unmounting. So do folder size walks on it, those
-    /// of panes above it too, such as a pane at `/Volumes` walking a share mounted there.
+    /// of panes above it too, such as a pane at `/Volumes` walking a share mounted there, and
+    /// file operations that read or write on it, which fail.
     public static func willUnmount(at mountPoint: String) {
         for pane in panes(on: mountPoint) {
             pane.volumeWillUnmount()
+        }
+        for queue in queues.all {
+            Task { await queue.volumeWillUnmount(at: mountPoint) }
         }
         var services: [ObjectIdentifier: FolderSizeService] = [:]
         for case let service? in panes.map({ $0.pane?.folderSizes }) {
@@ -52,4 +64,25 @@ public enum VolumeEvents {
 
 private struct WeakPane {
     weak var pane: Pane?
+}
+
+private final class QueueList: @unchecked Sendable {
+    // `lock` guards `queues`.
+    private let lock = NSLock()
+    private var queues: [WeakQueue] = []
+
+    func add(_ queue: FileOperationQueue) {
+        lock.withLock {
+            queues.removeAll { $0.queue == nil }
+            queues.append(WeakQueue(queue: queue))
+        }
+    }
+
+    var all: [FileOperationQueue] {
+        lock.withLock { queues.compactMap(\.queue) }
+    }
+}
+
+private struct WeakQueue {
+    weak var queue: FileOperationQueue?
 }

@@ -66,6 +66,45 @@ that didn't happen.
   once, outside the limit. Time comes from an injected `Clock`.
 - **Pause.** A paused copy holds in `FileCopier`'s callback; other work holds before its next
   item. A paused operation keeps its lane.
+- **Questions are awaited, not blocking.** The queue asks through `Prompts`, two async calls
+  Interface answers: `resolve` for a `ConflictRequest`, `confirm` for a `ConfirmRequest`. The
+  operation shows `waitingForAnswer` and every other operation keeps running, its own lane's
+  included: conflicts are asked after the plan and before the operation joins its lane. A cancel
+  or an unmount finishes a waiting operation at once, and the late answer is dropped.
+- **Conflicts per top-level item.** The plan `lstat`s each item's name in the destination folder
+  and, when it is taken, the source, so the question shows both items' kind, size and date
+  without Interface reading the disk. Nothing inside two folders of one name is compared;
+  replace swaps the whole folder, there is no merge. Answers are replace, skip or keep both,
+  one question per conflict until an answer applies to all. Keep both takes
+  `UniqueName.keepingBoth` when the item runs ("report 3.jpg" → "report 3 2.jpg"). An item
+  onto itself, as a paste into the folder it came from, asks nothing: a copy keeps both, a move
+  does nothing.
+- **Replace by swap.** The item is staged in a new `.searcher-replace-<UUID>` folder beside the
+  destination, under its own name: copied there, or moved there within one volume. A cancel up
+  to here removes the staged item (or moves it back) and the folder, and leaves the original.
+  Then `FileMover.swap` exchanges the two, so the original is in the staging folder under its
+  own name, and goes to the Trash from there, named as it was; the record lists
+  `.replaced(path, originalTrashedTo:)` before the change that put the new item there. If the
+  trash fails, the swap is undone and the staged item removed. `swap` is `renamex_np` with
+  `RENAME_SWAP`; HFS+ and exFAT refuse it with `ENOTSUP` (checked on macOS 26.6 images; APFS and
+  FAT swap), and there it is three `rename(2)` calls through a temporary name, during which the
+  destination is missing for a moment.
+- **No Trash.** A trash asks once per operation, when its first item fails with `noTrash`; that
+  failure moved nothing. Yes deletes that item and every later one that has no Trash; no ends
+  the operation cancelled, with earlier items, if any, already trashed. A replace has to know
+  before it copies, so once a replace is chosen the queue asks `Trasher.hasTrash` of the
+  destination folder: it makes an empty file there, trashes it, and deletes it from the Trash.
+  `FileManager.url(for: .trashDirectory, appropriateFor:)` can't answer it: it threw
+  `featureUnsupported` for HFS+, APFS and exFAT images that have a Trash. Without one, one
+  `ConfirmRequest.deleteImmediately` names every item the operation would replace, and nothing
+  is copied until it is answered; yes deletes each original after its swap (`.deleted`), no
+  cancels the operation.
+- **Unmount.** Queues add themselves to `VolumeEvents`, weakly, as panes do. Will-unmount fails
+  every unfinished operation with a path at or under the mount point (comparable forms), source
+  or destination, with `unreachable` on the mount point: one planning, asking or waiting in its
+  lane at once, a running one as a cancel stops it, so `FileCopier` and the replace staging
+  remove what was being written. What the cancel couldn't remove is a second error.
+  Operations on other volumes go on.
 
 ## Alternatives considered
 
@@ -87,6 +126,18 @@ that didn't happen.
   times the updates, and the panel draws all of them anyway.
 - **Trash the source of a cross-volume move** — rejected: Finder deletes it, and the trash would
   fill with every item moved to another disk.
+- **Stage the replacing item under a temporary name beside the original, no folder** —
+  rejected: after the swap the original would carry that name into the Trash, where Finder
+  hides it as a dot file.
+- **Trash the original, then rename the staged item into place** — rejected: the destination is
+  empty between the two, and a failed rename leaves the original only in the Trash.
+- **Ask about no Trash after the swap, when the trash fails** — rejected: the new item would
+  already be in place while the question is open, and a no would have to swap back.
+- **Ask conflicts when the operation reaches its lane** — rejected: a copy queued behind a long
+  one would ask only when that one ends, perhaps after the user has left; asking first also
+  keeps a question from holding the lane.
+- **Merge folders, as Finder's "Merge" does** — not now: the plan has conflicts per top-level
+  item only; a merge would be a recursive conflict walk of its own.
 
 ## Consequences
 
@@ -98,4 +149,13 @@ the same disk. A refused operation names the path, and Interface words the messa
 Each item runs on a thread of its own, about 50 ms of thread starts for a 1,000-item trash.
 `Trasher.deletePermanently` now has a second caller, the cross-volume move, as its doc says.
 Operations on paths reached through a link aren't matched by the refusal check, as 0049's panes
-aren't. Conflicts, replace, the no-trash question and unmount are M4.4b's.
+aren't, nor by will-unmount. Will-unmount fails an operation still planning, but its plan
+thread stays stuck in a dead share's call as a cancel's does; no cap on plan threads was
+added, since nothing here makes more of them. Each copy or move into a folder costs one
+`lstat` per item, and one more per conflict, on the plan thread. A replace adds a folder, a
+swap and a trash per item, and a probe file per operation. Finder's Put Back on a replaced
+original aims at the staging folder, which is gone; Undo (M4.9) uses the record. An item
+created at a name after the plan looked fails with `exists`, as before. Whether an SMB share swaps, has a Trash, and gives
+`noTrash` for it is checked at M4.13. exFAT refuses `RENAME_EXCL` as well as `RENAME_SWAP`, so
+`FileMover.move`, and with it renames and moves within an exFAT volume, fail there with
+`other`; that is a separate fix.
