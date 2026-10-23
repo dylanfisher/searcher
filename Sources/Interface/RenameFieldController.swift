@@ -354,8 +354,8 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
                 self.close()
                 return
             }
-            self.state = .waitingForRow(edit, relisted: self.pane.stateVersion)
             self.pane.reload()
+            self.state = .waitingForRow(edit, relisted: self.pane.stateVersion)
             self.waitForPatch(edit)
         }
     }

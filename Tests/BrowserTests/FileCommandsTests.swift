@@ -238,6 +238,24 @@ private func exists(_ path: String) -> Bool {
     await settle { window.nameEdits == 1 }
 }
 
+/// New Folder's names wait in the pane with a closure that holds the command's context, which
+/// holds the pane; closing the pane drops them, so it is released.
+@MainActor @Test func aPaneClosedWithNewFolderNamesPendingIsReleased() async throws {
+    let folder = try TemporaryFolder("FileCommandsTests")
+    weak var released: Pane?
+    do {
+        // No monitor, so the new folder is never listed and its name stays pending.
+        let window = await Window(at: folder.url.path)
+        released = window.pane
+        try window.press(newFolder)
+        await settle { exists(folder.url.path + "/untitled folder") }
+        try await Task.sleep(for: settleTime)
+        window.pane.close()
+    }
+
+    await settle { released == nil }
+}
+
 @MainActor @Test func aNewFolderThatFailsEditsNoName() async throws {
     let folder = try TemporaryFolder("FileCommandsTests")
     let window = await Window(at: folder.url.path)

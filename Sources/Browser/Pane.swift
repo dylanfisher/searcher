@@ -355,6 +355,8 @@ public final class Pane {
         columnTrail = nil
         containingTrail = nil
         onChange = nil
+        // Its closure can hold a command context, which holds this pane.
+        namesToSelect = nil
     }
 
     /// Stops the load, a pending `goToFolder`, the monitor and waiting patches.
