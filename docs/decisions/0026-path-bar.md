@@ -37,6 +37,19 @@ name can't ride in the listing itself.
 - **Layout.** The list and the bar are pinned with constraints, the bar 24 points tall along the
   pane's bottom. The pane's container starts at zero size, where frames set for autoresizing
   can't hold the bar's height, and the list ended up 24 points taller than the pane.
+- **Separators.** Each is the SF Symbol `chevron.right` at the titles' point size, small scale,
+  in the tertiary label color, as in Finder's path bar. It is centered on the middle of a capital
+  letter, measured from the first segment's baseline, rather than on the bar, so it stays level
+  with the titles at any font size. Its frame is the one around its intrinsic size taken as an
+  alignment rect. The "›" text labels this replaced were given their intrinsic width, 5 points,
+  while the glyph needs 9 with the label's insets, so the glyph was clipped.
+- **Hover.** Each segment has its own tracking area (entered and exited, in the visible rect,
+  while the app is active) and keeps whether the mouse is over it. The bar draws a rounded
+  `quaternaryLabelColor` rectangle behind that segment, 2 points taller than the title above and
+  below, as Finder does; the color is darker grey in light mode and lighter in dark. Segments keep
+  their intrinsic height, because a taller button draws its title lower than its baseline offset
+  reports, which put the chevrons off center. A new path replaces the segments, which clears the
+  highlight.
 
 ## Alternatives considered
 
