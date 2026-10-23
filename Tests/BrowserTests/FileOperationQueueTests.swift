@@ -6,17 +6,22 @@ import Testing
 
 @testable import Browser
 
-private let volumeA = VolumeIdentity(device: "/dev/fakeA", mountPoint: "/A", kind: .local)
-private let volumeB = VolumeIdentity(device: "/dev/fakeB", mountPoint: "/B", kind: .local)
-private let volumeS = VolumeIdentity(device: "/dev/fakeS", mountPoint: "/S", kind: .local)
+let volumeA = VolumeIdentity(device: "/dev/fakeA", mountPoint: "/A", kind: .local)
+let volumeB = VolumeIdentity(device: "/dev/fakeB", mountPoint: "/B", kind: .local)
+let volumeS = VolumeIdentity(device: "/dev/fakeS", mountPoint: "/S", kind: .local)
 
 /// A file system for queue tests that touches no disk: paths under `/A`, `/B` and `/S` are on
 /// three volumes, and every call is logged. A copy logs its start, reports `progressSteps`
 /// changes, then waits until its source is released or the copy is cancelled. A pre-scan of a
-/// held path waits until it is let go, as one on a share that stopped answering does.
-private final class FakeFiles: @unchecked Sendable {
+/// held path waits until it is let go, as one on a share that stopped answering does. Every
+/// path under `/S` exists; elsewhere only what a test places does, so a copy or move into
+/// another volume has no conflict unless the test places one.
+final class FakeFiles: @unchecked Sendable {
     let events = EventLog<String>()
     private let condition = NSCondition()
+    private var volumes = [volumeA, volumeB, volumeS]
+    private var placed: [String: ConflictRequest.Item] = [:]
+    private var hasNoTrash = false
     private var heldScans: Set<String> = []
     private var released: Set<String> = []
     private var allReleased = false
@@ -68,11 +73,32 @@ private final class FakeFiles: @unchecked Sendable {
         condition.withLock { progressSteps = steps }
     }
 
+    /// Adds a volume, for tests that unmount one no other test uses.
+    func add(_ volume: VolumeIdentity) {
+        condition.withLock { volumes.append(volume) }
+    }
+
+    /// Puts an item at `path`, so a copy or move onto it is a conflict.
+    func place(_ path: String, isFolder: Bool = false) {
+        condition.withLock { placed[path] = Self.item(path, isFolder: isFolder) }
+    }
+
+    /// Makes every volume one without a trash: a trash throws `noTrash`.
+    func removeTrash() {
+        condition.withLock { hasNoTrash = true }
+    }
+
+    static func item(_ path: String, isFolder: Bool = false) -> ConflictRequest.Item {
+        ConflictRequest.Item(
+            path: path, isFolder: isFolder, bytes: isFolder ? nil : 10,
+            modified: Date(timeIntervalSince1970: 1_000_000))
+    }
+
     func fileSystem() -> FileOperationQueue.FileSystem {
         FileOperationQueue.FileSystem(
             volumeOf: { path throws(ListingError) in
-                for volume in [volumeA, volumeB, volumeS]
-                where isPath(path, atOrUnder: volume.mountPoint) {
+                let volumes = self.condition.withLock { self.volumes }
+                for volume in volumes where isPath(path, atOrUnder: volume.mountPoint) {
                     return volume
                 }
                 throw ListingError(path: path, code: ENOENT)
@@ -89,9 +115,16 @@ private final class FakeFiles: @unchecked Sendable {
                 self.events.append("move \(source) to \(destination)")
             },
             trash: { path throws(FileOperationError) in
+                if self.condition.withLock({ self.hasNoTrash }) {
+                    throw FileOperationError(reason: .noTrash, path: path, errno: nil)
+                }
                 self.events.append("trash \(path)")
                 return URL(
                     fileURLWithPath: "/S/.Trashes/501/" + (path as NSString).lastPathComponent)
+            },
+            hasTrash: { folder throws(FileOperationError) in
+                self.events.append("trash probe \(folder)")
+                return self.condition.withLock { !self.hasNoTrash }
             },
             deletePermanently: { path throws(FileOperationError) in
                 self.events.append("delete \(path)")
@@ -100,7 +133,21 @@ private final class FakeFiles: @unchecked Sendable {
                 self.events.append("new folder in \(folder)")
                 return folder + "/untitled folder"
             },
-            isTaken: { _, _ throws(FileOperationError) in false })
+            makeFolder: { name, folder throws(FileOperationError) in
+                self.events.append("make folder \(folder)/\(name)")
+                return folder + "/" + name
+            },
+            swap: { first, second throws(FileOperationError) in
+                self.events.append("swap \(first) with \(second)")
+            },
+            isTaken: { name, folder throws(FileOperationError) in
+                self.condition.withLock { self.placed[folder + "/" + name] != nil }
+            },
+            inspect: { path throws(FileOperationError) in
+                self.events.append("inspect \(path)")
+                if let item = self.condition.withLock({ self.placed[path] }) { return item }
+                return isPath(path, atOrUnder: "/S") ? Self.item(path) : nil
+            })
     }
 
     /// Runs on the copy's thread.
@@ -137,7 +184,7 @@ private final class FakeFiles: @unchecked Sendable {
     }
 }
 
-private final class FakeCopier: FileOperationQueue.Copier, @unchecked Sendable {
+final class FakeCopier: FileOperationQueue.Copier, @unchecked Sendable {
     private let files: FakeFiles
     private let lock = NSLock()
     private var cancelled = false
@@ -163,8 +210,54 @@ private final class FakeCopier: FileOperationQueue.Copier, @unchecked Sendable {
     }
 }
 
+/// Answers the queue's questions with the answers a test gives, in order, and logs each one.
+/// A question with no answer given waits for one.
+final class Prompter: @unchecked Sendable {
+    let conflicts = EventLog<ConflictRequest>()
+    let confirms = EventLog<ConfirmRequest>()
+    private let lock = NSLock()
+    private var resolutions: [ConflictResolution] = []
+    private var confirmations: [Bool] = []
+
+    func answer(_ resolution: ConflictResolution) {
+        lock.withLock { resolutions.append(resolution) }
+    }
+
+    func answer(confirming: Bool) {
+        lock.withLock { confirmations.append(confirming) }
+    }
+
+    var prompts: FileOperationQueue.Prompts {
+        FileOperationQueue.Prompts(
+            resolve: { request in
+                self.conflicts.append(request)
+                while true {
+                    if let answer = self.lock.withLock({ self.resolutions.popFirst() }) {
+                        return answer
+                    }
+                    try? await Task.sleep(for: .milliseconds(2))
+                }
+            },
+            confirm: { request in
+                self.confirms.append(request)
+                while true {
+                    if let answer = self.lock.withLock({ self.confirmations.popFirst() }) {
+                        return answer
+                    }
+                    try? await Task.sleep(for: .milliseconds(2))
+                }
+            })
+    }
+}
+
+extension Array {
+    fileprivate mutating func popFirst() -> Element? {
+        isEmpty ? nil : removeFirst()
+    }
+}
+
 /// What the queue told its observer and each operation's `onFinish`.
-private final class Watcher: @unchecked Sendable {
+final class Watcher: @unchecked Sendable {
     let snapshots = EventLog<[FileOperationQueue.Snapshot]>()
     let finished = EventLog<FileOperationQueue.Snapshot>()
 
@@ -184,22 +277,23 @@ private final class Watcher: @unchecked Sendable {
     }
 }
 
-private func makeQueue<C: Clock<Duration>>(
-    _ files: FakeFiles, _ watcher: Watcher, clock: C = ContinuousClock()
+func makeQueue<C: Clock<Duration>>(
+    _ files: FakeFiles, _ watcher: Watcher, prompter: Prompter = Prompter(),
+    clock: C = ContinuousClock()
 ) -> FileOperationQueue {
-    FileOperationQueue(fileSystem: files.fileSystem(), clock: clock) {
+    FileOperationQueue(fileSystem: files.fileSystem(), prompts: prompter.prompts, clock: clock) {
         watcher.snapshots.append($0)
     }
 }
 
-private func enqueue(
+func enqueue(
     _ queue: FileOperationQueue, _ operation: FileOperation, _ watcher: Watcher
 ) async -> FileOperationQueue.ID {
     await queue.enqueue(operation) { watcher.finished.append($0) }
 }
 
 /// Lets work that would break an expectation have the time to do it.
-private func pause() async throws {
+func pause() async throws {
     try await Task.sleep(for: .milliseconds(100))
 }
 
@@ -329,7 +423,7 @@ private func pause() async throws {
 
     #expect(await watcher.waitUntilFinished(id))
     #expect(
-        files.events.all == [
+        files.events.all.filter { !$0.hasPrefix("inspect") } == [
             "copy /S/a", "copied /S/a to /A/a", "delete /S/a",
             "copy /S/b", "copy failed /S/b",
             "copy /S/c", "copied /S/c to /A/c", "delete /S/c",
@@ -502,7 +596,7 @@ private func pause() async throws {
         let image = try await DiskImage("FileOperationQueueTests")
         let paths = ["one.txt", "two.txt"].map { image.mountPoint + "/" + $0 }
         for path in paths { try Data(path.utf8).write(to: URL(fileURLWithPath: path)) }
-        let queue = FileOperationQueue { _ in }
+        let queue = FileOperationQueue(prompts: .unexpected) { _ in }
 
         let state = await queue.perform(.trash(paths))
 
@@ -528,7 +622,7 @@ private func pause() async throws {
         try Data("readable".utf8).write(to: URL(fileURLWithPath: source + "/readable.txt"))
         try Data("unreadable".utf8).write(to: URL(fileURLWithPath: source + "/unreadable.txt"))
         #expect(chmod(source + "/unreadable.txt", 0) == 0)
-        let queue = FileOperationQueue { _ in }
+        let queue = FileOperationQueue(prompts: .unexpected) { _ in }
 
         let state = await queue.perform(
             .move([source + "/readable.txt", source + "/unreadable.txt"], into: image.mountPoint))
@@ -547,4 +641,17 @@ private func pause() async throws {
         #expect(!FileManager.default.fileExists(atPath: image.mountPoint + "/unreadable.txt"))
         try await image.detach()
     }
+}
+
+extension FileOperationQueue.Prompts {
+    /// For operations that ask nothing: a question fails the test.
+    static let unexpected = FileOperationQueue.Prompts(
+        resolve: { request in
+            Issue.record("unexpected conflict \(request)")
+            return ConflictResolution(choice: .skip, appliesToAll: true)
+        },
+        confirm: { request in
+            Issue.record("unexpected confirm \(request)")
+            return false
+        })
 }

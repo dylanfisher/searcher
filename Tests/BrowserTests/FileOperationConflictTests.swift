@@ -1,0 +1,401 @@
+import Base
+import Darwin
+import Foundation
+import TestSupport
+import Testing
+
+@testable import Browser
+
+private let skipAll = ConflictResolution(choice: .skip, appliesToAll: true)
+private let replace = ConflictResolution(choice: .replace, appliesToAll: false)
+private let keepBoth = ConflictResolution(choice: .keepBoth, appliesToAll: false)
+
+/// The folder a replace staged its copy in, from the fake's log.
+private func stagingFolder(_ files: FakeFiles) throws -> String {
+    let made = try #require(files.events.all.first { $0.hasPrefix("make folder ") })
+    let folder = String(made.dropFirst("make folder ".count))
+    #expect(
+        (folder as NSString).lastPathComponent.hasPrefix(FileOperationQueue.stagingFolderPrefix))
+    return folder
+}
+
+@Test func threeClashesAskOnceWhenTheFirstAnswerAppliesToAll() async throws {
+    let files = FakeFiles(releasingAll: true)
+    for name in ["a", "b", "c"] { files.place("/A/" + name) }
+    let prompter = Prompter()
+    prompter.answer(skipAll)
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher, prompter: prompter)
+
+    let id = await enqueue(queue, .copy(["/S/a", "/S/b", "/S/c", "/S/d"], into: "/A"), watcher)
+
+    #expect(await watcher.waitUntilFinished(id))
+    #expect(
+        prompter.conflicts.all == [
+            ConflictRequest(
+                operation: id, source: FakeFiles.item("/S/a"), existing: FakeFiles.item("/A/a"),
+                remaining: 2)
+        ])
+    #expect(!files.events.all.contains { $0.hasPrefix("copy /S/a") || $0.hasPrefix("copy /S/c") })
+    let state = try #require(watcher.state(of: id))
+    #expect(state.phase == .done)
+    #expect(state.record.changes == [.created("/A/d")])
+    #expect(state.progress.itemsDone == 4)
+    #expect(state.progress.total == TreeSizeWalker.Total(bytes: 10, files: 1, isPartial: false))
+}
+
+@Test func eachClashAsksWhenTheAnswerIsNotForAll() async throws {
+    let files = FakeFiles(releasingAll: true)
+    for name in ["a", "b"] { files.place("/A/" + name) }
+    let prompter = Prompter()
+    prompter.answer(ConflictResolution(choice: .skip, appliesToAll: false))
+    prompter.answer(ConflictResolution(choice: .skip, appliesToAll: false))
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher, prompter: prompter)
+
+    let id = await enqueue(queue, .copy(["/S/a", "/S/b"], into: "/A"), watcher)
+
+    #expect(await watcher.waitUntilFinished(id))
+    #expect(prompter.conflicts.all.map(\.existing.path) == ["/A/a", "/A/b"])
+    #expect(prompter.conflicts.all.map(\.remaining) == [1, 0])
+}
+
+/// A folder onto a folder of the same name is one conflict, answered for the whole folder: what
+/// is inside either one is never compared, and a replace puts the copied folder in place whole.
+@Test func aConflictIsPerTopLevelItemWithNoFolderMerge() async throws {
+    let files = FakeFiles(releasingAll: true)
+    files.place("/A/album", isFolder: true)
+    let prompter = Prompter()
+    prompter.answer(replace)
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher, prompter: prompter)
+
+    let id = await enqueue(queue, .copy(["/S/album"], into: "/A"), watcher)
+
+    #expect(await watcher.waitUntilFinished(id))
+    #expect(prompter.conflicts.all.count == 1)
+    #expect(prompter.conflicts.all.first?.existing.isFolder == true)
+    #expect(
+        files.events.all.filter { $0.hasPrefix("inspect") } == [
+            "inspect /A/album", "inspect /S/album",
+        ])
+    let staging = try stagingFolder(files)
+    #expect(files.events.all.contains("copied /S/album to \(staging)/album"))
+}
+
+@Test func keepBothGivesTheNameWithTwo() async throws {
+    let files = FakeFiles(releasingAll: true)
+    files.place("/A/report 3.jpg")
+    let prompter = Prompter()
+    prompter.answer(keepBoth)
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher, prompter: prompter)
+
+    let copy = await enqueue(queue, .copy(["/S/report 3.jpg"], into: "/A"), watcher)
+    #expect(await watcher.waitUntilFinished(copy))
+
+    #expect(files.events.all.contains("copied /S/report 3.jpg to /A/report 3 2.jpg"))
+    #expect(watcher.state(of: copy)?.record.changes == [.created("/A/report 3 2.jpg")])
+}
+
+@Test func aMoveWithinAVolumeKeepsBothUnderTheNewName() async throws {
+    let files = FakeFiles(releasingAll: true)
+    files.place("/A/in/notes.txt")
+    files.place("/A/sorted/notes.txt")
+    let prompter = Prompter()
+    prompter.answer(keepBoth)
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher, prompter: prompter)
+
+    let move = await enqueue(queue, .move(["/A/in/notes.txt"], into: "/A/sorted"), watcher)
+    #expect(await watcher.waitUntilFinished(move))
+
+    #expect(files.events.all.contains("move /A/in/notes.txt to /A/sorted/notes 2.txt"))
+    #expect(
+        watcher.state(of: move)?.record.changes == [
+            .moved(from: "/A/in/notes.txt", to: "/A/sorted/notes 2.txt")
+        ])
+}
+
+/// Pasting into the folder an item came from: a copy keeps both without asking, a move has
+/// nothing to do.
+@Test func anItemOntoItselfAsksNothing() async throws {
+    let files = FakeFiles(releasingAll: true)
+    files.place("/A/x.txt")
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher)
+
+    let copy = await enqueue(queue, .copy(["/A/x.txt"], into: "/A/"), watcher)
+    #expect(await watcher.waitUntilFinished(copy))
+    let move = await enqueue(queue, .move(["/A/x.txt"], into: "/A"), watcher)
+    #expect(await watcher.waitUntilFinished(move))
+
+    #expect(watcher.state(of: copy)?.record.changes == [.created("/A/x 2.txt")])
+    #expect(watcher.state(of: move)?.phase == .done)
+    #expect(watcher.state(of: move)?.record.changes == [])
+    #expect(!files.events.all.contains { $0.hasPrefix("move") })
+}
+
+@Test func replaceCopiesToATempNameSoCancellingBeforeTheSwapLeavesTheOriginal() async throws {
+    let files = FakeFiles()
+    files.place("/A/song.flac")
+    let prompter = Prompter()
+    prompter.answer(replace)
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher, prompter: prompter)
+    let id = await enqueue(queue, .copy(["/S/song.flac"], into: "/A"), watcher)
+    #expect(await files.events.wait { $0.contains("copy /S/song.flac") })
+
+    await queue.cancel(id)
+
+    #expect(await watcher.waitUntilFinished(id))
+    #expect(watcher.state(of: id)?.phase == .cancelled(leftBehind: nil))
+    let staging = try stagingFolder(files)
+    #expect(!files.events.all.contains { $0.hasPrefix("swap") || $0.hasPrefix("trash /") })
+    #expect(files.events.all.last == "delete \(staging)")
+    #expect(watcher.state(of: id)?.record.changes == [])
+}
+
+@Test func afterTheSwapTheOriginalGoesToTheTrashAndItsURLIsInTheRecord() async throws {
+    let files = FakeFiles(releasingAll: true)
+    files.place("/A/song.flac")
+    files.place("/A/in/cover.jpg")
+    files.place("/A/sorted/cover.jpg")
+    let prompter = Prompter()
+    prompter.answer(replace)
+    prompter.answer(replace)
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher, prompter: prompter)
+
+    let copy = await enqueue(queue, .copy(["/S/song.flac"], into: "/A"), watcher)
+    #expect(await watcher.waitUntilFinished(copy))
+    let staging = try stagingFolder(files)
+    #expect(
+        Array(files.events.all.drop { !$0.hasPrefix("make folder") }) == [
+            "make folder \(staging)", "copy /S/song.flac",
+            "copied /S/song.flac to \(staging)/song.flac",
+            "swap \(staging)/song.flac with /A/song.flac", "trash \(staging)/song.flac",
+            "delete \(staging)",
+        ])
+    let trashed = URL(fileURLWithPath: "/S/.Trashes/501/song.flac")
+    #expect(
+        watcher.state(of: copy)?.record.changes == [
+            .replaced("/A/song.flac", originalTrashedTo: trashed), .created("/A/song.flac"),
+        ])
+
+    // A move within one volume stages by moving, not copying.
+    let move = await enqueue(queue, .move(["/A/in/cover.jpg"], into: "/A/sorted"), watcher)
+    #expect(await watcher.waitUntilFinished(move))
+    #expect(watcher.state(of: move)?.phase == .done)
+    #expect(
+        watcher.state(of: move)?.record.changes == [
+            .replaced(
+                "/A/sorted/cover.jpg",
+                originalTrashedTo: URL(fileURLWithPath: "/S/.Trashes/501/cover.jpg")),
+            .moved(from: "/A/in/cover.jpg", to: "/A/sorted/cover.jpg"),
+        ])
+    #expect(!files.events.all.contains("copy /A/in/cover.jpg"))
+}
+
+@Test func withNoTrashATrashAsksOnceToDeleteAndDoesNothingUntilAnswered() async throws {
+    let files = FakeFiles(releasingAll: true)
+    files.removeTrash()
+    let prompter = Prompter()
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher, prompter: prompter)
+
+    let id = await enqueue(queue, .trash(["/S/a", "/S/b"]), watcher)
+
+    #expect(await prompter.confirms.wait { !$0.isEmpty })
+    #expect(await watcher.waitUntil(id, is: .waitingForAnswer))
+    try await pause()
+    #expect(!files.events.all.contains { $0.hasPrefix("delete") || $0.hasPrefix("trash /") })
+    prompter.answer(confirming: true)
+    #expect(await watcher.waitUntilFinished(id))
+    #expect(prompter.confirms.all == [.deleteImmediately(["/S/a", "/S/b"], operation: id)])
+    #expect(files.events.all.filter { $0.hasPrefix("delete") } == ["delete /S/a", "delete /S/b"])
+    #expect(watcher.state(of: id)?.phase == .done)
+    #expect(watcher.state(of: id)?.record.changes == [.deleted("/S/a"), .deleted("/S/b")])
+
+    let declined = await enqueue(queue, .trash(["/S/c"]), watcher)
+    #expect(await prompter.confirms.wait { $0.count == 2 })
+    prompter.answer(confirming: false)
+    #expect(await watcher.waitUntilFinished(declined))
+    #expect(watcher.state(of: declined)?.phase == .cancelled(leftBehind: nil))
+    #expect(!files.events.all.contains("delete /S/c"))
+}
+
+@Test func withNoTrashAReplaceAsksOnceToDeleteBeforeItCopiesAnything() async throws {
+    let files = FakeFiles(releasingAll: true)
+    files.removeTrash()
+    files.place("/A/a")
+    files.place("/A/b")
+    let prompter = Prompter()
+    prompter.answer(ConflictResolution(choice: .replace, appliesToAll: true))
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher, prompter: prompter)
+
+    let id = await enqueue(queue, .copy(["/S/a", "/S/b"], into: "/A"), watcher)
+
+    #expect(await prompter.confirms.wait { !$0.isEmpty })
+    #expect(prompter.confirms.all == [.deleteImmediately(["/A/a", "/A/b"], operation: id)])
+    #expect(await watcher.waitUntil(id, is: .waitingForAnswer))
+    try await pause()
+    #expect(!files.events.all.contains { $0.hasPrefix("copy") || $0.hasPrefix("make folder") })
+    prompter.answer(confirming: true)
+    #expect(await watcher.waitUntilFinished(id))
+    let staging = try stagingFolder(files)
+    #expect(files.events.all.contains("delete \(staging)/a"))
+    #expect(
+        watcher.state(of: id)?.record.changes == [
+            .deleted("/A/a"), .created("/A/a"), .deleted("/A/b"), .created("/A/b"),
+        ])
+    #expect(prompter.confirms.all.count == 1)
+}
+
+@Test func otherLanesKeepRunningWhileAnOperationWaitsForAnAnswer() async throws {
+    let files = FakeFiles(releasingAll: true)
+    files.place("/A/a")
+    let prompter = Prompter()
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher, prompter: prompter)
+
+    let asking = await enqueue(queue, .copy(["/S/a"], into: "/A"), watcher)
+    #expect(await watcher.waitUntil(asking, is: .waitingForAnswer))
+    let sameVolume = await enqueue(queue, .copy(["/S/b"], into: "/A"), watcher)
+    let otherVolume = await enqueue(queue, .copy(["/S/c"], into: "/B"), watcher)
+    let rename = await enqueue(queue, .rename("/S/d", to: "e"), watcher)
+
+    #expect(await watcher.waitUntilFinished(sameVolume, otherVolume, rename))
+    #expect(watcher.state(of: asking) == nil)
+    prompter.answer(skipAll)
+    #expect(await watcher.waitUntilFinished(asking))
+}
+
+@Test func aCancelWhileAQuestionWaitsFinishesAtOnceAndDropsTheAnswer() async throws {
+    let files = FakeFiles(releasingAll: true)
+    files.place("/A/a")
+    let prompter = Prompter()
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher, prompter: prompter)
+    let id = await enqueue(queue, .copy(["/S/a"], into: "/A"), watcher)
+    #expect(await watcher.waitUntil(id, is: .waitingForAnswer))
+
+    await queue.cancel(id)
+    #expect(await watcher.waitUntilFinished(id))
+    prompter.answer(replace)
+    try await pause()
+
+    #expect(watcher.state(of: id)?.phase == .cancelled(leftBehind: nil))
+    #expect(!files.events.all.contains { $0.hasPrefix("copy") || $0.hasPrefix("make folder") })
+    #expect(watcher.finished.all.filter { $0.id == id }.count == 1)
+}
+
+@Test func aWillUnmountFailsThatVolumesOperationsAndRemovesTheirPartialItems() async throws {
+    let mountPoint = "/FileOperationConflictTests-unmount"
+    let volume = VolumeIdentity(device: "/dev/fakeU", mountPoint: mountPoint, kind: .local)
+    let files = FakeFiles()
+    files.add(volume)
+    files.place(mountPoint + "/replaced")
+    files.place("/A/asking")
+    files.place(mountPoint + "/asking")
+    let prompter = Prompter()
+    prompter.answer(replace)
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher, prompter: prompter)
+
+    let replacing = await enqueue(queue, .copy(["/S/replaced"], into: mountPoint), watcher)
+    #expect(await files.events.wait { $0.contains("copy /S/replaced") })
+    let waiting = await enqueue(queue, .copy(["/S/waiting"], into: mountPoint), watcher)
+    #expect(await watcher.waitUntil(waiting, is: .queued))
+    let reading = await enqueue(queue, .copy([mountPoint + "/song"], into: "/B"), watcher)
+    #expect(await files.events.wait { $0.contains("copy \(mountPoint)/song") })
+    let asking = await enqueue(queue, .copy([mountPoint + "/asking"], into: "/A"), watcher)
+    #expect(await watcher.waitUntil(asking, is: .waitingForAnswer))
+    let elsewhere = await enqueue(queue, .copy(["/S/other"], into: "/A"), watcher)
+    #expect(await files.events.wait { $0.contains("copy /S/other") })
+
+    await VolumeEvents.willUnmount(at: mountPoint)
+
+    #expect(await watcher.waitUntilFinished(replacing, waiting, reading, asking))
+    let unreachable = FileOperationError(reason: .unreachable, path: mountPoint, errno: nil)
+    for id in [replacing, waiting, reading, asking] {
+        #expect(watcher.state(of: id)?.phase == .failed)
+        #expect(watcher.state(of: id)?.errors == [unreachable])
+    }
+    let staging = try stagingFolder(files)
+    #expect(files.events.all.contains("copy failed /S/replaced"))
+    #expect(files.events.all.contains("delete \(staging)"))
+    #expect(files.events.all.contains("copy failed \(mountPoint)/song"))
+    #expect(!files.events.all.contains { $0.hasPrefix("swap") || $0.contains("/S/waiting") })
+    #expect(watcher.state(of: elsewhere) == nil)
+    files.releaseAll()
+    #expect(await watcher.waitUntilFinished(elsewhere))
+    #expect(watcher.state(of: elsewhere)?.phase == .done)
+}
+
+@Test func planningFindsTopLevelConflictsOnly() throws {
+    var inspected: [String] = []
+    let plan = try OperationPlan.make(
+        for: .copy(["/S/album", "/S/new"], into: "/A"),
+        volumeOf: { _ throws(ListingError) in volumeA },
+        measure: { _, _ in TreeSizeWalker.Total(bytes: 10, files: 2, isPartial: false) },
+        inspect: { path throws(FileOperationError) in
+            inspected.append(path)
+            return path == "/A/new" ? nil : FakeFiles.item(path)
+        },
+        isCancelled: { false })
+
+    #expect(inspected == ["/A/album", "/S/album", "/A/new"])
+    #expect(
+        plan.items.map(\.conflict) == [
+            OperationPlan.Conflict(
+                source: FakeFiles.item("/S/album"), existing: FakeFiles.item("/A/album")),
+            nil,
+        ])
+}
+
+/// Real volumes: replaces only items the test makes on a disk image, and removes the replaced
+/// original from the image's trash afterwards.
+@Suite(.serialized) struct FileOperationConflictDiskTests {
+    /// The default image is HFS+, which has no `RENAME_SWAP`, so this also runs the swap by
+    /// renames.
+    @Test func replacingAFolderOnADiskImagePutsTheCopyInPlaceWholeAndTrashesTheOriginal()
+        async throws
+    {
+        let folder = try TemporaryFolder("FileOperationConflictTests")
+        let image = try await DiskImage("FileOperationConflictTests", megabytes: 4)
+        let source = folder.url.path + "/album"
+        let destination = image.mountPoint + "/album"
+        for (path, file) in [(source, "new.txt"), (destination, "old.txt")] {
+            try FileManager.default.createDirectory(
+                atPath: path, withIntermediateDirectories: false)
+            try Data(file.utf8).write(to: URL(fileURLWithPath: path + "/" + file))
+        }
+        let prompter = Prompter()
+        prompter.answer(replace)
+        let queue = FileOperationQueue(prompts: prompter.prompts) { _ in }
+
+        let state = await queue.perform(.copy([source], into: image.mountPoint))
+
+        #expect(state.phase == .done)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: destination) == ["new.txt"])
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: image.mountPoint)
+                .filter { !$0.hasPrefix(".") } == ["album"])
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: image.mountPoint)
+                .filter { $0.hasPrefix(FileOperationQueue.stagingFolderPrefix) }.isEmpty)
+        guard case .replaced(destination, let trashed) = state.record.changes.first else {
+            Issue.record("no replace in \(state.record.changes)")
+            return
+        }
+        #expect(state.record.changes.last == .created(destination))
+        #expect(trashed.path.hasPrefix(image.mountPoint + "/.Trashes/"))
+        #expect(trashed.lastPathComponent == "album")
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: trashed.path) == ["old.txt"])
+        try FileManager.default.removeItem(at: trashed)
+        try await image.detach()
+    }
+}

@@ -37,6 +37,7 @@ private final class Reads: @unchecked Sendable {
                 }
                 return TreeSizeWalker.Total(bytes: 100, files: 2, isPartial: false)
             },
+            inspect: { _ throws(FileOperationError) in nil },
             isCancelled: { false })
     }
 }
@@ -86,11 +87,11 @@ func intoItselfIgnoresCaseAndTrailingSlashes(source: String, into folder: String
             OperationPlan.Item(
                 source: "/L/a", destination: "/O/backup/a",
                 size: TreeSizeWalker.Total(bytes: 100, files: 2, isPartial: false),
-                crossesVolumes: false),
+                crossesVolumes: false, conflict: nil),
             OperationPlan.Item(
                 source: "/L/b", destination: "/O/backup/b",
                 size: TreeSizeWalker.Total(bytes: 100, files: 2, isPartial: false),
-                crossesVolumes: false),
+                crossesVolumes: false, conflict: nil),
         ])
     #expect(plan.total == TreeSizeWalker.Total(bytes: 200, files: 4, isPartial: false))
 }

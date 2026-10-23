@@ -15,15 +15,29 @@ public struct OperationPlan: Equatable, Sendable {
         public let size: TreeSizeWalker.Total?
         /// A move of this item copies it to another volume and then deletes the source.
         public let crossesVolumes: Bool
+        /// The item already at `destination`, for a copy or a move; nil when there is none.
+        public let conflict: Conflict?
 
         public init(
             source: String, destination: String?, size: TreeSizeWalker.Total?,
-            crossesVolumes: Bool
+            crossesVolumes: Bool, conflict: Conflict?
         ) {
             self.source = source
             self.destination = destination
             self.size = size
             self.crossesVolumes = crossesVolumes
+            self.conflict = conflict
+        }
+    }
+
+    /// An item copied or moved onto a name its destination folder already has.
+    public struct Conflict: Equatable, Sendable {
+        public let source: ConflictRequest.Item
+        public let existing: ConflictRequest.Item
+
+        public init(source: ConflictRequest.Item, existing: ConflictRequest.Item) {
+            self.source = source
+            self.existing = existing
         }
     }
 
@@ -36,7 +50,10 @@ public struct OperationPlan: Equatable, Sendable {
     public let failures: [FileOperationError]
 
     /// The sizes of the items that are copied, added up; nil when no item is.
-    public var total: TreeSizeWalker.Total? {
+    public var total: TreeSizeWalker.Total? { Self.total(of: items) }
+
+    /// The sizes of those of `items` that are copied, added up; nil when none is.
+    static func total(of items: [Item]) -> TreeSizeWalker.Total? {
         let sizes = items.compactMap(\.size)
         guard !sizes.isEmpty else { return nil }
         return TreeSizeWalker.Total(
@@ -45,15 +62,19 @@ public struct OperationPlan: Equatable, Sendable {
     }
 
     /// Plans `operation`. A folder copied or moved into itself is refused before anything is
-    /// read, comparing paths as `FileOperation.comparable` gives them. Copies, duplicates and moves to another volume read the volumes involved with
-    /// `volumeOf` and pre-scan each item with `measure`; nothing else reads the file system.
-    /// Blocks while it reads, so it runs on a `BlockingCallThread`.
+    /// read, comparing paths as `FileOperation.comparable` gives them. Copies, duplicates and
+    /// moves to another volume read the volumes involved with `volumeOf` and pre-scan each item
+    /// with `measure`. Copies and moves look for each item's name in the destination folder
+    /// with `inspect`, top-level items only, and inspect the source of each that is there.
+    /// Nothing else reads the file system. Blocks while it reads, so it runs on a
+    /// `BlockingCallThread`.
     ///
     /// - Throws: `OperationState.Refusal`, or `CancellationError` once `isCancelled` returns true.
     static func make(
         for operation: FileOperation,
         volumeOf: (String) throws(ListingError) -> VolumeIdentity,
         measure: (String, () -> Bool) throws -> TreeSizeWalker.Total,
+        inspect: (String) throws(FileOperationError) -> ConflictRequest.Item?,
         isCancelled: @escaping () -> Bool
     ) throws -> OperationPlan {
         switch operation {
@@ -67,7 +88,7 @@ public struct OperationPlan: Equatable, Sendable {
             let isMove = if case .move = operation { true } else { false }
             return try transfer(
                 sources, into: folder, isMove: isMove, volumeOf: volumeOf, measure: measure,
-                isCancelled: isCancelled)
+                inspect: inspect, isCancelled: isCancelled)
         case .duplicate(let sources):
             guard let first = sources.first else { return empty }
             let parent = (first as NSString).deletingLastPathComponent
@@ -83,7 +104,9 @@ public struct OperationPlan: Equatable, Sendable {
                 switch try measured(source, measure: measure, isCancelled: isCancelled) {
                 case .success(let size):
                     items.append(
-                        Item(source: source, destination: nil, size: size, crossesVolumes: false))
+                        Item(
+                            source: source, destination: nil, size: size, crossesVolumes: false,
+                            conflict: nil))
                 case .failure(let error): failures.append(error)
                 }
             }
@@ -91,19 +114,24 @@ public struct OperationPlan: Equatable, Sendable {
         case .trash(let paths), .deleteImmediately(let paths):
             return OperationPlan(
                 items: paths.map {
-                    Item(source: $0, destination: nil, size: nil, crossesVolumes: false)
+                    Item(
+                        source: $0, destination: nil, size: nil, crossesVolumes: false,
+                        conflict: nil)
                 }, lane: nil, failures: [])
         case .rename(let path, let name):
             return OperationPlan(
                 items: [
                     Item(
                         source: path, destination: FileOperation.renamed(path, to: name),
-                        size: nil, crossesVolumes: false)
+                        size: nil, crossesVolumes: false, conflict: nil)
                 ], lane: nil, failures: [])
         case .newFolder(let folder):
             return OperationPlan(
-                items: [Item(source: folder, destination: nil, size: nil, crossesVolumes: false)],
-                lane: nil, failures: [])
+                items: [
+                    Item(
+                        source: folder, destination: nil, size: nil, crossesVolumes: false,
+                        conflict: nil)
+                ], lane: nil, failures: [])
         }
     }
 
@@ -116,6 +144,7 @@ public struct OperationPlan: Equatable, Sendable {
         _ sources: [String], into folder: String, isMove: Bool,
         volumeOf: (String) throws(ListingError) -> VolumeIdentity,
         measure: (String, () -> Bool) throws -> TreeSizeWalker.Total,
+        inspect: (String) throws(FileOperationError) -> ConflictRequest.Item?,
         isCancelled: @escaping () -> Bool
     ) throws -> OperationPlan {
         let destination: VolumeIdentity
@@ -152,10 +181,23 @@ public struct OperationPlan: Equatable, Sendable {
                     continue
                 }
             }
+            let destination = FileOperation.path(of: source, in: folder)
+            var conflict: Conflict?
+            do throws(FileOperationError) {
+                if let existing = try inspect(destination) {
+                    guard let item = try inspect(source) else {
+                        throw FileOperationError(reason: .sourceGone, path: source, errno: ENOENT)
+                    }
+                    conflict = Conflict(source: item, existing: existing)
+                }
+            } catch {
+                failures.append(error)
+                continue
+            }
             items.append(
                 Item(
-                    source: source, destination: FileOperation.path(of: source, in: folder),
-                    size: size, crossesVolumes: isMove && crosses))
+                    source: source, destination: destination, size: size,
+                    crossesVolumes: isMove && crosses, conflict: conflict))
         }
         let copies = items.contains { $0.size != nil }
         return OperationPlan(items: items, lane: copies ? destination : nil, failures: failures)
@@ -175,6 +217,24 @@ public struct OperationPlan: Equatable, Sendable {
 
     private static func failure(_ error: ListingError) -> FileOperationError {
         FileOperationError(errno: error.code, path: error.path)
+    }
+
+    /// The item at `path` as a `ConflictRequest` shows it, or nil if nothing is there. Symlinks
+    /// aren't followed. Blocks the calling thread, which must be a `BlockingCallThread`.
+    static func inspect(_ path: String) throws(FileOperationError) -> ConflictRequest.Item? {
+        BlockingCallThread.requireCurrent()
+        var info = stat()
+        if lstat(path, &info) != 0 {
+            if errno == ENOENT { return nil }
+            throw FileOperationError(errno: errno, path: path)
+        }
+        let kind = info.st_mode & S_IFMT
+        let modified = info.st_mtimespec
+        return ConflictRequest.Item(
+            path: path, isFolder: kind == S_IFDIR, bytes: kind == S_IFREG ? info.st_size : nil,
+            modified: Date(
+                timeIntervalSince1970: TimeInterval(modified.tv_sec) + TimeInterval(
+                    modified.tv_nsec) / 1_000_000_000))
     }
 
     /// The size of the item at `path` as `FileCopier` counts what it copies: a folder's from

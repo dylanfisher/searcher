@@ -56,4 +56,28 @@ import Testing
             try Trasher.deletePermanently(tree.path)
         }
     }
+
+    @Test func hasTrashOnADiskImageIsTrueAndLeavesNothingBehind() async throws {
+        let image = try await DiskImage("TrasherTests")
+        let folder = image.mountPoint + "/folder"
+        try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: false)
+
+        #expect(try Trasher().hasTrash(in: folder))
+
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder).isEmpty)
+        let trash = image.mountPoint + "/.Trashes/\(getuid())"
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: trash).filter { $0 != ".DS_Store" }
+                .isEmpty)
+        try await image.detach()
+    }
+
+    @Test func hasTrashWhereTrashingIsUnsupportedIsFalseAndLeavesNothingBehind() throws {
+        let folder = try TemporaryFolder("TrasherTests")
+        let trasher = Trasher { _ in throw CocoaError(.featureUnsupported) }
+
+        #expect(try !trasher.hasTrash(in: folder.url.path))
+
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.url.path).isEmpty)
+    }
 }
