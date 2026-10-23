@@ -32,6 +32,9 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// The app's clipboard, for Cut, Copy and Paste; nil in a window the UI bench opens, where
     /// those commands are off.
     let clipboard: CutState?
+    /// The app's mount table, for drops; nil in a window the UI bench opens, where the lists
+    /// take no drop.
+    let mountTable: MountTable?
     /// The operations panel under the panes, hidden until shown.
     let operations: OperationsViewController
     private let operationsHeight: NSLayoutConstraint
@@ -76,10 +79,11 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// A window showing `workspace`, one of `workspaces`. `takePaneController` hands over another
     /// window's view controller for a pane that moved into `workspace`. `fileOperations` runs
     /// the file commands, which are off without it; the clipboard commands are off without
-    /// `clipboard`.
+    /// `clipboard`, and drops without `fileOperations` and `mountTable`.
     init(
         workspace: Workspace, workspaces: WorkspaceList,
         fileOperations: FileOperationQueue? = nil, clipboard: CutState? = nil,
+        mountTable: MountTable? = nil,
         takePaneController: @escaping @MainActor (PaneID) -> PaneViewController? = { _ in nil }
     ) {
         // The window has its own tab strip; AppKit's tabs would add a second kind of tab and
@@ -101,6 +105,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         tabStripHeight = strip.view.heightAnchor.constraint(equalToConstant: 0)
         self.fileOperations = fileOperations
         self.clipboard = clipboard
+        self.mountTable = mountTable
         operations = OperationsViewController(
             control: fileOperations.map(OperationsViewController.Control.sending(to:)) ?? .none)
         operationsHeight = operations.view.heightAnchor.constraint(equalToConstant: 0)
@@ -348,7 +353,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             },
             didClosePane: { [weak self] result in self?.didClose(result) },
             toggleOperations: { [weak self] in self?.toggleOperations() },
-            fileOperations: fileOperations, clipboard: clipboard,
+            fileOperations: fileOperations, clipboard: clipboard, mountTable: mountTable,
             didRunCommand: { [weak self] in
                 self?.onCommand?()
                 self?.showWorkspace()

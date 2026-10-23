@@ -53,6 +53,9 @@ public final class PaneViewController: NSViewController {
         let fileOperations: FileOperationQueue?
         /// The app's clipboard, for Cut, Copy and Paste; nil where there is none.
         let clipboard: CutState?
+        /// The app's mount table, for drops; nil where there is none, and the lists take no
+        /// drop then.
+        let mountTable: MountTable?
         /// Runs after each command, so the window shows what it changed.
         let didRunCommand: @MainActor () -> Void
     }
@@ -64,6 +67,10 @@ public final class PaneViewController: NSViewController {
         didSet {
             listingViewController.clipboard = windowLink?.clipboard
             columnViewController.clipboard = windowLink?.clipboard
+            listingViewController.fileOperations = windowLink?.fileOperations
+            columnViewController.fileOperations = windowLink?.fileOperations
+            listingViewController.mountTable = windowLink?.mountTable
+            columnViewController.mountTable = windowLink?.mountTable
         }
     }
 

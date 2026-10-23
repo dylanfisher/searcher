@@ -28,6 +28,8 @@ public final class WorkspaceWindows {
     let prompter: OperationPrompter
     /// The app's clipboard and its cut, shared by every window.
     public let clipboard: CutState
+    /// Every mounted volume, which every window's drops check.
+    let mountTable = MountTable()
     /// The unfinished operations in the queue's latest snapshots, for a window that opens while
     /// operations run.
     private var unfinished: [FileOperationQueue.Snapshot] = []
@@ -106,7 +108,7 @@ public final class WorkspaceWindows {
         }?.window
         let controller = BrowserWindowController(
             workspace: workspace, workspaces: list, fileOperations: fileOperations,
-            clipboard: clipboard,
+            clipboard: clipboard, mountTable: mountTable,
             takePaneController: { [weak self] id in self?.takePaneController(id) })
         controller.onCommand = { [weak self] in self?.showList() }
         controller.onClose = { [weak self] closed in self?.didClose(closed) }

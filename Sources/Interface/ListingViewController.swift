@@ -64,6 +64,11 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     }
     /// The names of the cut entries in the folder shown, read when the rows or the cut change.
     private var cutNames: Set<String> = []
+    /// Runs the copies and moves that drops make. Without it, and without `mountTable`, the list
+    /// takes no drop; its rows still drag out.
+    var fileOperations: FileOperationQueue?
+    /// Tells a drop whether its items are on the target folder's volume.
+    var mountTable: MountTable?
     /// The modifier keys held in the event being handled, read when a click changes the
     /// selection. Tests replace it.
     var currentModifierFlags: @MainActor () -> NSEvent.ModifierFlags = {
@@ -336,7 +341,19 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         tableView.target = self
         tableView.doubleAction = #selector(openClickedRow(_:))
         tableView.contextMenu = { [weak self] row in self?.contextMenu(forRow: row) }
+        let promiseTypes = NSFilePromiseReceiver.readableDraggedTypes.map {
+            NSPasteboard.PasteboardType($0)
+        }
+        tableView.registerForDraggedTypes([.fileURL] + promiseTypes)
+        // Finder, and the Dock's Trash, decide what a drop of the rows does; Command-Option makes
+        // an alias there. Without `.delete` the Trash moves the items itself.
+        for isLocal in [true, false] {
+            tableView.setDraggingSourceOperationMask(Self.dragOperations, forLocal: isLocal)
+        }
     }
+
+    /// What a drag of rows lets its destination do with them.
+    static let dragOperations: NSDragOperation = [.copy, .move, .generic, .link]
 
     private static func tableColumn(for column: SortColumn) -> NSTableColumn {
         let tableColumn = NSTableColumn(identifier: column.identifier)
@@ -415,6 +432,113 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             return
         }
         tableView.runCommand(NavigationCommands.open.id)
+    }
+
+    // MARK: Drag and drop
+
+    /// A row drags out as its file URL, a folder's ending in a slash, built from the listing
+    /// without reading the disk (docs/decisions/0071-drag-and-drop.md).
+    public func tableView(
+        _ tableView: NSTableView, pasteboardWriterForRow row: Int
+    ) -> (any NSPasteboardWriting)? {
+        guard let listing, row >= 0, row < listing.count else { return nil }
+        return PasteboardFileClipboard.item(
+            for: ClipboardCommands.fileURL(of: listing[row], in: pane.location))
+    }
+
+    /// What a drop does where it is: into the folder of a folder row it is on, else into the
+    /// pane's folder, for which the whole list is highlighted. Reads only the drag's pasteboard,
+    /// the listing and the mount table, so it makes no file-system call.
+    public func tableView(
+        _ tableView: NSTableView, validateDrop info: any NSDraggingInfo, proposedRow row: Int,
+        proposedDropOperation dropOperation: NSTableView.DropOperation
+    ) -> NSDragOperation {
+        guard let drop = drop(info, row: row, dropOperation) else { return [] }
+        if drop.pane != nil, row != -1 || dropOperation != .on {
+            tableView.setDropRow(-1, dropOperation: .on)
+        }
+        switch drop.content {
+        case .files(_, let operation):
+            return operation.dragOperation(allowed: info.draggingSourceOperationMask)
+        case .promises:
+            return .copy
+        }
+    }
+
+    /// Queues the drop's one copy or move, without asking first, as Paste does; or takes its
+    /// file promises. What lands in the pane's folder is selected once the pane lists it.
+    public func tableView(
+        _ tableView: NSTableView, acceptDrop info: any NSDraggingInfo, row: Int,
+        dropOperation: NSTableView.DropOperation
+    ) -> Bool {
+        guard let queue = fileOperations, let drop = drop(info, row: row, dropOperation) else {
+            return false
+        }
+        switch drop.content {
+        case .files(let paths, let operation):
+            let operation = operation.fileOperation(paths, into: drop.folder)
+            Task { [pane = drop.pane] in
+                _ = await FileCommands.perform(operation, selectingIn: pane, queue: queue)
+            }
+        case .promises:
+            guard
+                let promises = info.draggingPasteboard.readObjects(
+                    forClasses: [NSFilePromiseReceiver.self]) as? [NSFilePromiseReceiver],
+                !promises.isEmpty
+            else {
+                preconditionFailure("a drop that offered file promises has none to read")
+            }
+            Task { [pane = drop.pane, folder = drop.folder] in
+                await FilePromiseReceiver.receive(
+                    promises, into: folder, selectingIn: pane, queue: queue)
+            }
+        }
+        return true
+    }
+
+    /// A drop the list takes: the folder it goes into, the pane when that is the pane's folder,
+    /// and what it carries.
+    private struct Drop {
+        enum Content {
+            /// File URLs' paths, and whether they copy or move.
+            case files([String], DropOperation)
+            /// File promises, which always copy.
+            case promises
+        }
+
+        let folder: String
+        let pane: Pane?
+        let content: Content
+    }
+
+    /// The drop `info` makes at `row` with `dropOperation`, or nil when the list takes none
+    /// there. File URLs are read first; a drag with none is taken for its file promises.
+    private func drop(
+        _ info: any NSDraggingInfo, row: Int, _ dropOperation: NSTableView.DropOperation
+    ) -> Drop? {
+        guard fileOperations != nil, let mountTable else { return nil }
+        var folder = pane.location
+        var target: Pane? = pane
+        if dropOperation == .on, let listing, row >= 0, row < listing.count,
+            listing.kind(atRow: row).type == .folder
+        {
+            folder = pane.location.child(named: listing[row].name)
+            target = nil
+        }
+        let pasteboard = info.draggingPasteboard
+        let paths = PasteboardFileClipboard(pasteboard: pasteboard).fileURLs().map(\.path)
+        if !paths.isEmpty {
+            guard
+                let operation = DropOperation(
+                    dropping: paths, into: folder.path,
+                    allowed: info.draggingSourceOperationMask, mounts: mountTable)
+            else { return nil }
+            return Drop(folder: folder.path, pane: target, content: .files(paths, operation))
+        }
+        guard pasteboard.canReadObject(forClasses: [NSFilePromiseReceiver.self]),
+            info.draggingSourceOperationMask.contains(.copy)
+        else { return nil }
+        return Drop(folder: folder.path, pane: target, content: .promises)
     }
 
     /// The context menu for a right-click on `row`, or below the rows at -1. A row outside the

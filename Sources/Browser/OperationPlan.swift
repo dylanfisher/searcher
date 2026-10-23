@@ -79,10 +79,7 @@ public struct OperationPlan: Equatable, Sendable {
     ) throws -> OperationPlan {
         switch operation {
         case .copy(let sources, let folder), .move(let sources, let folder):
-            let target = FileOperation.comparable(folder)
-            if let source = sources.first(where: {
-                isPath(target, atOrUnder: FileOperation.comparable($0))
-            }) {
+            if let source = FileOperation.source(holding: folder, among: sources) {
                 throw OperationState.Refusal.intoItself(source: source)
             }
             let isMove = if case .move = operation { true } else { false }
