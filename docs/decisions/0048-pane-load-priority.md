@@ -68,10 +68,17 @@ The B9 budget for ten panes (≤ 10 × 60 MB, and within 10% of the start after 
 benched in this step. Only the release is tested: a closed pane is freed with its listing and
 its watch descriptor is closed.
 
-The focused load is asked last in the ten-pane bench case, so its volume is read last, and up to
-four visible loads whose volumes were read first can take every slot before it is in the queue.
-Its first rows can then wait about one full W2 load. That is what the case
-`open W2 ×10, focused asked last: focused first rows` measures, against B2.
+The focused load is asked last in the ten-pane bench case, so its volume is read last. With
+every slot open to every priority, four visible loads whose volumes were read first took all of
+them, and the focused load waited about one full W2 load (734 ms against the 100 ms of B2.W2).
+The service now keeps the last of its `mostRunningLoads` slots for a `.focused` load: a hidden
+or visible load starts only while fewer than `mostRunningLoads - 1` are running, a focused one
+takes any free slot. The focused load starts at once behind three running loads, at the cost of
+one fewer concurrent background load (three where there were four). A load whose priority is
+raised to focused while it waits asks the service to start waiting loads, since a free slot
+may already be waiting for it. Nothing preempts a running load, so a focused load asked while
+three loads and another focused one run still waits. The case
+`open W2 ×10, focused asked last: focused first rows` measures this, against B2.
 
 For M3.5, which builds the window on `Workspace`:
 

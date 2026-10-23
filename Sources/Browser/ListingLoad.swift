@@ -25,6 +25,8 @@ public final class ListingLoad: @unchecked Sendable {
     let handOff: @Sendable (ListingUpdate) -> @MainActor @Sendable () -> Void
     /// The waits after which the service reports the load slow and given up.
     let stall = LoadStall()
+    /// Runs when `priority` is set, so the service can start a waiting load that was raised.
+    let onPriorityChange: @Sendable () -> Void
 
     // `lock` guards `cancelled`, `storedVolume` and `storedPriority`.
     private let lock = NSLock()
@@ -35,6 +37,7 @@ public final class ListingLoad: @unchecked Sendable {
     init(
         location: Location, column: SortColumn, ascending: Bool, foldersFirst: Bool,
         showsHidden: Bool, filter: NameFilter, priority: Priority,
+        onPriorityChange: @escaping @Sendable () -> Void,
         handOff: @escaping @Sendable (ListingUpdate) -> @MainActor @Sendable () -> Void
     ) {
         self.location = location
@@ -44,6 +47,7 @@ public final class ListingLoad: @unchecked Sendable {
         self.showsHidden = showsHidden
         self.filter = filter
         storedPriority = priority
+        self.onPriorityChange = onPriorityChange
         self.handOff = handOff
     }
 
@@ -62,10 +66,14 @@ public final class ListingLoad: @unchecked Sendable {
     }
 
     /// Read each time the service picks the next load to start, so changing it moves a waiting
-    /// load in the queue. It changes nothing once the load has started.
+    /// load in the queue, and starts it at once if it is now focused and a slot is free. It
+    /// changes nothing once the load has started.
     public var priority: Priority {
         get { lock.withLock { storedPriority } }
-        set { lock.withLock { storedPriority = newValue } }
+        set {
+            lock.withLock { storedPriority = newValue }
+            onPriorityChange()
+        }
     }
 
     /// The volume the folder is on, once the service has read it; nil until then. The service
