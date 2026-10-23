@@ -25,8 +25,13 @@ public final class WorkspaceWindows {
     let fileOperations: FileOperationQueue
     /// Asks the queue's questions with sheets on the most recently active window.
     let prompter: OperationPrompter
-    /// The queue's latest snapshots, for a window that opens while operations run.
-    private var snapshots: [FileOperationQueue.Snapshot] = []
+    /// The unfinished operations in the queue's latest snapshots, for a window that opens while
+    /// operations run.
+    private var unfinished: [FileOperationQueue.Snapshot] = []
+    /// Operations that finished in trouble and that the user hasn't cleared, in the order they
+    /// finished, so a window that opens later lists them too, even one that opens after a
+    /// failure reported while no window was open.
+    private var troubled: [FileOperationQueue.Snapshot] = []
     /// Ends the snapshot stream when the windows go away.
     private nonisolated let snapshotFeed: AsyncStream<[FileOperationQueue.Snapshot]>.Continuation
 
@@ -100,7 +105,8 @@ public final class WorkspaceWindows {
             takePaneController: { [weak self] id in self?.takePaneController(id) })
         controller.onCommand = { [weak self] in self?.showList() }
         controller.onClose = { [weak self] closed in self?.didClose(closed) }
-        controller.showOperations(snapshots)
+        controller.operations.onClear = { [weak self] id in self?.clearOperation(id) }
+        controller.showOperations(troubled + unfinished)
         controllers.append(controller)
         guard let window = controller.window else {
             preconditionFailure("a browser window controller has no window")
@@ -132,12 +138,25 @@ public final class WorkspaceWindows {
         }?.window
     }
 
-    private func operationsChanged(_ snapshots: [FileOperationQueue.Snapshot]) {
-        self.snapshots = snapshots.filter { !$0.state.phase.isFinished }
+    /// Shows the queue's snapshots in every window and closes the questions of operations that
+    /// finished.
+    func operationsChanged(_ snapshots: [FileOperationQueue.Snapshot]) {
+        unfinished = snapshots.filter { !$0.state.phase.isFinished }
+        troubled += snapshots.filter {
+            $0.state.phase.isFinished && OperationRowView.isTrouble($0.state.phase)
+        }
         for controller in controllers {
             controller.showOperations(snapshots)
         }
         prompter.operationsChanged(snapshots)
+    }
+
+    /// The user cleared the finished row of `id` in one window: it goes from every window.
+    private func clearOperation(_ id: FileOperationQueue.ID) {
+        troubled.removeAll { $0.id == id }
+        for controller in controllers {
+            controller.operations.clear(id)
+        }
     }
 
     private func didClose(_ controller: BrowserWindowController) {

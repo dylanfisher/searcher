@@ -325,6 +325,51 @@ private final class SheetLog {
     #expect(try fixture.keyTable(first).validateMenuItem(trash))
 }
 
+/// A trash of `/root/a.txt` that failed: the snapshot the queue sends once, as it finishes.
+private func failedTrash(_ id: Int) -> FileOperationQueue.Snapshot {
+    FileOperationQueue.Snapshot(
+        id: FileOperationQueue.ID(id), operation: .trash(["/root/a.txt"]),
+        state: OperationState(
+            phase: .failed,
+            progress: OperationState.Progress(
+                itemsDone: 1, itemCount: 1, copied: CopyProgress(bytes: 0, files: 0),
+                total: nil),
+            errors: [FileOperationError(reason: .permissionDenied, path: "/root/a.txt", errno: 1)],
+            record: OperationRecord()))
+}
+
+@MainActor @Test func aFailureReportedWhileNoWindowIsOpenShowsInTheNextWindow() async throws {
+    let fixture = try await Fixture()
+    try #require(fixture.windows.controllers.first?.window).close()
+    #expect(fixture.windows.controllers.isEmpty)
+
+    fixture.windows.operationsChanged([failedTrash(3)])
+    fixture.windows.operationsChanged([])
+    let opened = try await fixture.open()
+
+    let row = try #require(opened.operations.row(for: FileOperationQueue.ID(3)))
+    #expect(row.detailLabel.stringValue.contains("/root/a.txt"))
+    #expect(!opened.operations.view.isHidden)
+}
+
+@MainActor @Test func clearingAFailedRowInOneWindowClearsItInEvery() async throws {
+    let fixture = try await Fixture()
+    let first = try #require(fixture.windows.controllers.first)
+    let second = try await fixture.open()
+    fixture.windows.operationsChanged([failedTrash(3)])
+    fixture.windows.operationsChanged([])
+    let id = FileOperationQueue.ID(3)
+    let row = try #require(first.operations.row(for: id))
+    #expect(second.operations.row(for: id) != nil)
+
+    row.cancelButton.performClick(nil)
+
+    #expect(first.operations.row(for: id) == nil)
+    #expect(second.operations.row(for: id) == nil)
+    let third = try await fixture.open()
+    #expect(third.operations.row(for: id) == nil)
+}
+
 @MainActor @Test func twoOtherPaneConfirmsPressedBeforeAnsweringAreQueued() async throws {
     let fixture = try await Fixture()
     let sheets = SheetLog(fixture.windows)

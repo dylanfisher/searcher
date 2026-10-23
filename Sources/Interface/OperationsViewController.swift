@@ -40,6 +40,9 @@ final class OperationsViewController: NSViewController {
 
     /// Runs when an operation has been unfinished for `attentionDelay`, or finished in trouble.
     var onNeedsAttention: (@MainActor () -> Void)?
+    /// Runs when the user clears a finished row, so every window can clear it with `clear`.
+    /// Without it the row clears here only.
+    var onClear: (@MainActor (FileOperationQueue.ID) -> Void)?
 
     private let control: Control
     private let formatter = EntryCellFormatter()
@@ -140,7 +143,10 @@ final class OperationsViewController: NSViewController {
         row.onPause = { control.pause(id) }
         row.onResume = { control.resume(id) }
         row.onCancel = { control.cancel(id) }
-        row.onClear = { [weak self] in self?.clear(id) }
+        row.onClear = { [weak self] in
+            guard let self else { return }
+            if let onClear { onClear(id) } else { clear(id) }
+        }
         rows[id] = row
         stack.addArrangedSubview(row)
         row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
@@ -151,7 +157,8 @@ final class OperationsViewController: NSViewController {
         rows.removeValue(forKey: id)?.removeFromSuperview()
     }
 
-    private func clear(_ id: FileOperationQueue.ID) {
+    /// Drops the finished row of `id`, if there is one.
+    func clear(_ id: FileOperationQueue.ID) {
         kept.remove(id)
         removeRow(id)
         emptyLabel.isHidden = !rows.isEmpty

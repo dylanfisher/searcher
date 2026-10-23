@@ -22,7 +22,8 @@ final class OperationRowView: NSView {
     var onClear: @MainActor () -> Void = {}
 
     private let formatter: EntryCellFormatter
-    private var phase: OperationState.Phase = .preparing
+    /// The phase shown; nil before the first snapshot.
+    private var phase: OperationState.Phase?
 
     init(formatter: EntryCellFormatter) {
         self.formatter = formatter
@@ -37,17 +38,25 @@ final class OperationRowView: NSView {
 
     func show(_ snapshot: FileOperationQueue.Snapshot) {
         let state = snapshot.state
+        let old = phase
         phase = state.phase
         titleLabel.stringValue = Self.title(of: snapshot.operation)
         detailLabel.stringValue = detail(of: state)
-        detailLabel.textColor = Self.isTrouble(state.phase) ? .systemRed : .secondaryLabelColor
         showBar(state)
+        guard state.phase != old else { return }
+        // A copy sends a snapshot every 100 ms; the buttons change only with the phase.
+        detailLabel.textColor = Self.isTrouble(state.phase) ? .systemRed : .secondaryLabelColor
         let isPaused = state.phase == .paused
-        pauseButton.isHidden = state.phase.isFinished
-        pauseButton.image = symbol(isPaused ? "play.fill" : "pause.fill")
-        pauseButton.setAccessibilityLabel(isPaused ? "Resume" : "Pause")
-        cancelButton.image = symbol(state.phase.isFinished ? "xmark" : "xmark.circle.fill")
-        cancelButton.setAccessibilityLabel(state.phase.isFinished ? "Clear" : "Cancel")
+        if old.map({ $0 == .paused }) != isPaused {
+            pauseButton.image = symbol(isPaused ? "play.fill" : "pause.fill")
+            pauseButton.setAccessibilityLabel(isPaused ? "Resume" : "Pause")
+        }
+        let isFinished = state.phase.isFinished
+        pauseButton.isHidden = isFinished
+        if old?.isFinished != isFinished {
+            cancelButton.image = symbol(isFinished ? "xmark" : "xmark.circle.fill")
+            cancelButton.setAccessibilityLabel(isFinished ? "Clear" : "Cancel")
+        }
     }
 
     /// A finished operation the user should read about: it failed, was refused, or was
@@ -117,8 +126,8 @@ final class OperationRowView: NSView {
         }
         let totalBytes =
             (total.isPartial ? EntryCellFormatter.partialPrefix : "") + formatter.bytes(total.bytes)
-        return
-            "\(formatter.bytes(progress.copied.bytes)) of \(totalBytes), \(progress.copied.files) of \(total.files) files"
+        let bytes = "\(formatter.bytes(progress.copied.bytes)) of \(totalBytes)"
+        return "\(bytes), \(progress.copied.files) of \(total.files) files"
     }
 
     /// The first error, and how many more there are.
@@ -195,7 +204,7 @@ final class OperationRowView: NSView {
     }
 
     @objc private func cancelClicked(_ sender: NSButton) {
-        if phase.isFinished { onClear() } else { onCancel() }
+        if phase?.isFinished == true { onClear() } else { onCancel() }
     }
 
     private func buildContent() {
