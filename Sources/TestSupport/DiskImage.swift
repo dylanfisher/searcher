@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-/// A 1 MB HFS+ disk image, attached with `-nobrowse` at a folder inside its own temporary folder,
+/// An HFS+ disk image, 1 MB unless a test asks for more, attached with `-nobrowse` at a folder inside its own temporary folder,
 /// so it shows nowhere under /Volumes or in Finder. It is detached by its own device. If a test
 /// leaves it attached, releasing it forces a detach, so no image outlives its test unless the
 /// test process dies. Creating one takes about a second, so suites that use it are `.serialized`
@@ -20,7 +20,7 @@ public final class DiskImage {
 
     /// Creates an empty image and attaches it, after detaching any that a test process which died
     /// left attached.
-    public init(_ name: String = "DiskImage") async throws {
+    public init(_ name: String = "DiskImage", megabytes: Int = 1) async throws {
         try await Self.staleImagesDetached.value
         // The process ID in the folder's name tells a later process whose image it is.
         folder = try TemporaryFolder("\(Self.folderPrefix)\(getpid())-\(name)")
@@ -29,7 +29,7 @@ public final class DiskImage {
         try FileManager.default.createDirectory(
             atPath: mountPoint, withIntermediateDirectories: false)
         try await Self.hdiutil([
-            "create", "-quiet", "-size", "1m", "-fs", "HFS+", "-layout", "NONE",
+            "create", "-quiet", "-size", "\(megabytes)m", "-fs", "HFS+", "-layout", "NONE",
             "-volname", "SearcherTest", image,
         ])
         try await attach()
