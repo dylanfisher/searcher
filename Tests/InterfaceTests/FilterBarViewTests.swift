@@ -1,6 +1,7 @@
 import AppKit
 import Base
 import Browser
+import BrowserTestSupport
 import Foundation
 import TestSupport
 import Testing

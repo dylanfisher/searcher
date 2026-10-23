@@ -1,4 +1,5 @@
 import Base
+import BrowserTestSupport
 import Darwin
 import Foundation
 import TestSupport
@@ -695,19 +696,6 @@ func pause() async throws {
         #expect(!FileManager.default.fileExists(atPath: image.mountPoint + "/unreadable.txt"))
         try await image.detach()
     }
-}
-
-extension FileOperationQueue.Prompts {
-    /// For operations that ask nothing: a question fails the test.
-    static let unexpected = FileOperationQueue.Prompts(
-        resolve: { request in
-            Issue.record("unexpected conflict \(request)")
-            return ConflictResolution(choice: .skip, appliesToAll: true)
-        },
-        confirm: { request in
-            Issue.record("unexpected confirm \(request)")
-            return false
-        })
 }
 
 // MARK: Drop folders

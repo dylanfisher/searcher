@@ -790,7 +790,7 @@ private let musicShare = VolumeIdentity(
 }
 
 @Test func aLoadThatKeepsReadingIsNotSlow() async {
-    let lister = SteppedLister(batches: [files("a", 0..<3), files("b", 0..<3), files("c", 0..<3)])
+    let lister = SteppedLister([files("a", 0..<3), files("b", 0..<3), files("c", 0..<3)])
     let clock = ManualClock()
     let service = service(lister, clock: clock)
     let log = UpdateLog()
@@ -894,32 +894,6 @@ private struct ProbeLister: Lister {
     func list(_ path: String, onBatch: ([DirectoryEntry]) throws -> Void) throws {
         probe()
         try onBatch([])
-    }
-}
-
-/// Delivers one batch each time a test calls `step`, so a test can move a clock between batches
-/// knowing the service has taken the one before.
-private final class SteppedLister: Lister, @unchecked Sendable {
-    private let batches: [[DirectoryEntry]]
-    private let steps = DispatchSemaphore(value: 0)
-    private let taken = DispatchSemaphore(value: 0)
-
-    init(batches: [[DirectoryEntry]]) {
-        self.batches = batches
-    }
-
-    func list(_ path: String, onBatch: ([DirectoryEntry]) throws -> Void) throws {
-        for batch in batches {
-            steps.wait()
-            defer { taken.signal() }
-            try onBatch(batch)
-        }
-    }
-
-    /// Lets the next batch go and returns once the service has taken it; false after 5 seconds.
-    func step() -> Bool {
-        steps.signal()
-        return taken.wait(timeout: .now() + 5) == .success
     }
 }
 

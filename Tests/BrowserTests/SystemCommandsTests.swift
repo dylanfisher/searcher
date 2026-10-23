@@ -1,4 +1,5 @@
 import Base
+import BrowserTestSupport
 import Foundation
 import TestSupport
 import Testing
@@ -138,10 +139,4 @@ private func systemPane(settings: Settings = untouchedSettings()) async -> PaneF
                 URL(fileURLWithPath: "/sys/b", isDirectory: false),
             ]
         ])
-}
-
-/// A folder `StubSystemActions` was asked to open in an app.
-struct OpenedInApp: Equatable {
-    let folder: URL
-    let bundleID: String
 }

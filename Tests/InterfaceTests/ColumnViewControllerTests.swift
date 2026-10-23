@@ -1,5 +1,6 @@
 import AppKit
 import Base
+import BrowserTestSupport
 import Foundation
 import TestSupport
 import Testing
@@ -149,9 +150,7 @@ private struct Fixture {
 @MainActor @Test func everyColumnTakesDropsIntoItsFolder() async throws {
     let fixture = await Fixture()
     let queue = FileOperationQueue(
-        prompts: FileOperationQueue.Prompts(
-            resolve: { request in preconditionFailure("a column asked \(request)") },
-            confirm: { request in preconditionFailure("a column asked \(request)") })
+        prompts: .unexpected
     ) { _ in }
     let mounts = MountTable(read: { [] })
     fixture.controller.fileOperations = queue
