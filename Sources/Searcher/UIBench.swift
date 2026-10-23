@@ -402,9 +402,13 @@ final class UIBench {
                 "\(pane.location.path) has \(rows) entries, too few for \(count) ↓ presses; "
                     + "pass a folder with at least \(count)")
         }
+        let startRow = pane.state.listing.flatMap { pane.selection.cursorRow(in: $0) }
         let samples = try await press(Array(repeating: Key.down, count: count), "key down")
-        // With nothing selected, the first ↓ selects the first row.
-        try expectCursor(atRow: count - 1, after: "\(count) ↓ presses")
+        // With nothing selected, the first ↓ selects the first row; with a cursor, each moves it
+        // one row down.
+        try expectCursor(
+            atRow: startRow.map { min($0 + count, rows - 1) } ?? count - 1,
+            after: "\(count) ↓ presses from \(startRow.map { "row \($0)" } ?? "no cursor")")
         return samples
     }
 
