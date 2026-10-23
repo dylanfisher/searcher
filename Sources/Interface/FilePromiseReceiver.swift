@@ -21,21 +21,30 @@ enum FilePromiseReceiver {
             -> Int
     }
 
-    /// How long a drop waits for the next promised file before it gives up on the rest.
-    static let idleTimeout: Duration = .seconds(60)
+    /// How long a drop waits with no new bytes in its folder and no file arriving before it
+    /// gives up on the files still promised. A large file still being written keeps it waiting.
+    nonisolated static let idleTimeout: Duration = .seconds(60)
+    /// How often a drop reads how many bytes its folder holds, to tell a source still writing
+    /// from one that stopped.
+    nonisolated static let progressInterval: Duration = .seconds(5)
 
     private static let logger = Logger(category: "drop")
 
-    /// What the receiver waits for: a file, or the end of a wait for one.
+    /// What the receiver waits for: a file, or `idleTimeout` with nothing new.
     private enum Event: Sendable {
         case file(URL, (any Error)?)
-        case idle(wait: Int)
+        case idle
+    }
+
+    /// How long the drop has gone with nothing new, which a file's arrival resets.
+    private final class Idle {
+        var time: Duration = .zero
     }
 
     /// Receives `promises` into `folder` through `queue`, and returns once the move has finished
     /// and the queue's folder is removed. With a `pane`, the moved files are selected there.
-    /// `app` names the app the drop came from, for a failure's row. `clock` times the wait for
-    /// each file.
+    /// `app` names the app the drop came from, for a failure's row. `clock` times the reads of
+    /// the folder's size and the wait with nothing new.
     static func receive(
         _ promises: [any Promise], into folder: String, from app: String?,
         selectingIn pane: Pane?, queue: FileOperationQueue,
@@ -59,17 +68,16 @@ enum FilePromiseReceiver {
                 feed.yield(.file(url, error))
             }
         }
-        var wait = 0
-        var timer = startWait(wait, clock: clock, feed: feed)
+        let idle = Idle()
+        let watch = watchProgress(
+            of: dropFolder, queue: queue, idle: idle, clock: clock, feed: feed)
         var received: [String] = []
         var events = stream.makeAsyncIterator()
         while promised > 0, let event = await events.next() {
             switch event {
             case .file(let url, let error):
                 promised -= 1
-                wait += 1
-                timer.cancel()
-                timer = startWait(wait, clock: clock, feed: feed)
+                idle.time = .zero
                 if let error {
                     let name = url.lastPathComponent
                     failedNames.append(name)
@@ -77,17 +85,15 @@ enum FilePromiseReceiver {
                 } else {
                     received.append(url.path)
                 }
-            case .idle(let ended) where ended == wait:
+            case .idle:
                 promised = 0
                 errors.append(
                     FileOperationError(
                         reason: .unreachable, path: app ?? "The app the files came from",
                         errno: ETIMEDOUT))
-            case .idle:
-                continue
             }
         }
-        timer.cancel()
+        watch.cancel()
         feed.finish()
         if !received.isEmpty {
             _ = await FileCommands.perform(
@@ -99,19 +105,35 @@ enum FilePromiseReceiver {
         }
     }
 
-    /// Starts a wait of `idleTimeout` that ends with `.idle(wait:)` unless cancelled first.
-    private static func startWait(
-        _ wait: Int, clock: any Clock<Duration>, feed: AsyncStream<Event>.Continuation
+    /// Reads the bytes in `dropFolder` every `progressInterval`, off the main thread, and sends
+    /// `.idle` once `idleTimeout` has passed with no more bytes and no file arriving. A folder
+    /// that can't be read counts as no more bytes.
+    private static func watchProgress(
+        of dropFolder: FileOperationQueue.DropFolder, queue: FileOperationQueue, idle: Idle,
+        clock: any Clock<Duration>, feed: AsyncStream<Event>.Continuation
     ) -> Task<Void, Never> {
         Task {
-            do {
-                try await clock.sleep(for: idleTimeout)
-            } catch is CancellationError {
-                return
-            } catch {
-                preconditionFailure("the clock failed a wait with \(error)")
+            var bytes: Int64 = 0
+            while true {
+                do {
+                    try await clock.sleep(for: progressInterval)
+                } catch is CancellationError {
+                    return
+                } catch {
+                    preconditionFailure("the clock failed a wait with \(error)")
+                }
+                let now = await queue.bytes(in: dropFolder) ?? bytes
+                if now > bytes {
+                    bytes = now
+                    idle.time = .zero
+                } else {
+                    idle.time += progressInterval
+                }
+                if idle.time >= idleTimeout {
+                    feed.yield(.idle)
+                    return
+                }
             }
-            feed.yield(.idle(wait: wait))
         }
     }
 

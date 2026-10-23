@@ -107,17 +107,7 @@ public actor FileOperationQueue {
             makeUntitledFolder: FolderMaker.makeUntitledFolder,
             makeFolder: FolderMaker.makeFolder(named:in:),
             isTaken: UniqueName.isTaken, inspect: OperationPlan.inspect,
-            listNames: { path throws(FileOperationError) in
-                var names: [String] = []
-                do {
-                    try DirectoryLister().list(path) { names += $0.map(\.name) }
-                } catch let error as ListingError {
-                    throw FileOperationError(errno: error.code, path: path)
-                } catch {
-                    preconditionFailure("listing \(path) threw \(error)")
-                }
-                return names
-            },
+            listNames: names(inFolderAt:),
             removeEmptyFolder: { path throws(FileOperationError) in
                 guard rmdir(path) == 0 else { throw FileOperationError(errno: errno, path: path) }
             })
@@ -292,21 +282,62 @@ public actor FileOperationQueue {
     /// Removes a folder `makeDropFolder` made. Anything still in it, such as a file the user
     /// skipped in a conflict, goes to the Trash first: a promise may not be made again. Returns
     /// what failed; a failure, such as a volume with no Trash, leaves the folder where it is.
+    /// A folder already removed, by this or by `removePendingDropFolders`, is left alone and
+    /// returns no failure.
     public func removeDropFolder(_ dropFolder: DropFolder) async -> [FileOperationError] {
-        precondition(
-            dropFolders.remove(dropFolder) != nil, "\(dropFolder.path) isn't a pending drop folder")
-        let fileSystem = fileSystem
-        return await BlockingCallThread.run { Self.clear(dropFolder, fileSystem: fileSystem) }
+        // Taken out of the set before the first wait, so a second removal finds it gone.
+        guard dropFolders.remove(dropFolder) != nil else { return [] }
+        return await clear([dropFolder])
     }
 
     /// Removes every drop folder not yet removed, as `removeDropFolder` does, for the app to
-    /// call as it quits while promised files are still on their way.
+    /// call as it quits while promised files are still on their way. The drops still waiting
+    /// for them are abandoned.
     public func removePendingDropFolders() async -> [FileOperationError] {
-        var errors: [FileOperationError] = []
-        for dropFolder in dropFolders {
-            errors += await removeDropFolder(dropFolder)
+        let pending = dropFolders
+        dropFolders.removeAll()
+        return await clear(Array(pending))
+    }
+
+    /// The bytes in `dropFolder` so far, for a drop to tell whether its files are still being
+    /// written; nil when it can't be read.
+    public func bytes(in dropFolder: DropFolder) async -> Int64? {
+        let measure = fileSystem.measure
+        return await BlockingCallThread.run { () -> Int64? in
+            do {
+                return try measure(dropFolder.path, { false }).bytes
+            } catch {
+                return nil
+            }
         }
-        return errors
+    }
+
+    private func clear(_ dropFolders: [DropFolder]) async -> [FileOperationError] {
+        let fileSystem = fileSystem
+        return await BlockingCallThread.run {
+            dropFolders.flatMap { Self.clear($0, fileSystem: fileSystem) }
+        }
+    }
+
+    /// The names in the folder at `path`, which is opened without following a symlink, so a
+    /// link put in a drop folder's place can't point the trash at another folder.
+    private static func names(inFolderAt path: String) throws(FileOperationError) -> [String] {
+        let descriptor = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        guard descriptor >= 0 else { throw FileOperationError(errno: errno, path: path) }
+        guard let folder = fdopendir(descriptor) else {
+            let code = errno
+            close(descriptor)
+            throw FileOperationError(errno: code, path: path)
+        }
+        defer { closedir(folder) }
+        var names: [String] = []
+        while let entry = readdir(folder) {
+            let name = withUnsafeBytes(of: entry.pointee.d_name) { bytes in
+                String(decoding: bytes.prefix { $0 != 0 }, as: UTF8.self)
+            }
+            if name != "." && name != ".." { names.append(name) }
+        }
+        return names
     }
 
     private static func clear(_ dropFolder: DropFolder, fileSystem: FileSystem)
