@@ -117,7 +117,7 @@ private func shiftedBracket(_ typed: String, keyCode: UInt16) throws -> NSEvent 
     let otherPane = try #require(menuItem(DualPaneCommands.focusOtherPane.id, in: menu))
     #expect(try fixture.keyTable.validateMenuItem(otherPane))
 
-    try fixture.press(try arrow(NSRightArrowFunctionKey, [.command, .option]))
+    try fixture.press(try arrow(NSRightArrowFunctionKey, [.command, .option, .shift]))
 
     #expect(fixture.tab.layout.focused == right)
     #expect(try fixture.keyTable === fixture.paneController(right).keyView)
@@ -232,7 +232,7 @@ private func shiftedBracket(_ typed: String, keyCode: UInt16) throws -> NSEvent 
     let left = first.layout.focused
     let right = try fixture.splitRight()
     try fixture.press(try arrow(NSLeftArrowFunctionKey, [.control, .command]))
-    try fixture.press(try arrow(NSLeftArrowFunctionKey, [.command, .option]))
+    try fixture.press(try arrow(NSLeftArrowFunctionKey, [.command, .option, .shift]))
     try fixture.press(try keyEvent("\r", modifiers: [.command, .shift]))
     let kept = first.layout
     #expect(kept.isZoomed && kept.focused == left)
@@ -301,7 +301,7 @@ private func shiftedBracket(_ typed: String, keyCode: UInt16) throws -> NSEvent 
     await settle { rightPane.state.isLoaded }
     #expect(fixture.window.title == "docs")
 
-    try fixture.press(try arrow(NSLeftArrowFunctionKey, [.command, .option]))
+    try fixture.press(try arrow(NSLeftArrowFunctionKey, [.command, .option, .shift]))
     #expect(fixture.window.title == "root")
 
     try fixture.press(try keyEvent("t", modifiers: .command))

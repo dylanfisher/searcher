@@ -13,12 +13,18 @@ public enum TilingCommands: CommandSet {
     public static let splitDown = Command(
         id: CommandID("tiling.splitDown"), title: "Split Down",
         chords: [KeyChord("\\", modifiers: [.command, .shift])])
+    /// What each direction's title in a family starts with, such as "Focus Pane" for "Focus
+    /// Pane Left", and the title of the Window submenu that lists the family.
+    public static let focusTitle = "Focus Pane"
+    public static let moveTitle = "Move Pane"
+    public static let resizeTitle = "Resize Pane"
+
     public static let focus = commands(
-        "focus", title: "Focus Pane", modifiers: [.command, .option])
+        "focus", title: focusTitle, modifiers: [.command, .option, .shift])
     public static let move = commands(
-        "move", title: "Move Pane", modifiers: [.command, .option, .shift])
+        "move", title: moveTitle, modifiers: [.control, .option, .shift])
     public static let resize = commands(
-        "resize", title: "Resize Pane", modifiers: [.control, .command])
+        "resize", title: resizeTitle, modifiers: [.control, .command])
     public static let zoom = Command(
         id: CommandID("tiling.zoom"), title: "Zoom Pane",
         chords: [KeyChord(.return, modifiers: [.command, .shift])])

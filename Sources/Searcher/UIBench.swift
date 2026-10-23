@@ -1040,9 +1040,11 @@ final class UIBench {
         /// Shift applies to the character: a US keyboard types "|".
         static let splitDown = Key(characters: "|", keyCode: 42, flags: [.command, .shift])
 
-        /// Cmd-Opt and an arrow: the tiling key that focuses the pane that way.
+        /// Cmd-Opt-Shift and an arrow: the tiling key that focuses the pane that way.
         static func focus(_ direction: Direction) -> Key {
-            let flags: NSEvent.ModifierFlags = [.numericPad, .function, .command, .option]
+            let flags: NSEvent.ModifierFlags = [
+                .numericPad, .function, .command, .option, .shift,
+            ]
             return switch direction {
             case .left:
                 Key(characters: function(NSLeftArrowFunctionKey), keyCode: 123, flags: flags)

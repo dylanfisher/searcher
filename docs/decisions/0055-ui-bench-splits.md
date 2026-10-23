@@ -18,9 +18,9 @@ focus while building a grid starts loads that land later.
 ## Decision
 
 - **The splits are made the way a user makes them.** The bench sends Cmd-\ and Cmd-Shift-\ to
-  the window, and Cmd-Opt-arrows to move the focus, so each runs through the table, the command
-  registry, `TilingCommands`, `Tab` and the window's update. Each step splits the largest pane
-  with room, along its longer side; the focus keys that reach it are found by pressing them on
+  the window, and Cmd-Opt-Shift-arrows to move the focus, so each runs through the table, the
+  command registry, `TilingCommands`, `Tab` and the window's update. Each step splits the largest
+  pane with room, along its longer side; the focus keys that reach it are found by pressing them on
   copies of the tab's `Layout`. Two panes, then a 2 × 2 grid, then ten panes (a 4 × 2 grid
   with two of its panes split again) fit the 900 × 600 window at `Layout.minimumPaneSize`.
 - **No load is left running before a timed run.** After each split the bench waits for every
