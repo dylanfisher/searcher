@@ -26,6 +26,9 @@ private final class CountedWalks: @unchecked Sendable {
         condition.withLock { holdsNextRead = true }
     }
 
+    /// Whether a volume read is waiting for `releaseRead`.
+    var isHoldingRead: Bool { condition.withLock { readIsHeld } }
+
     func releaseRead() {
         condition.withLock {
             readIsHeld = false
@@ -100,6 +103,8 @@ private func albumsSize(_ pane: Pane) -> Listing.FolderSizeValue? {
     walks.holdNextRead()
 
     try binding(SizeCommands.recalculateSizes).run(CommandContext(pane: pane))
+    // The drop's own read is the one held; a reload that got there first would take the hold.
+    await settle { walks.isHoldingRead }
     let version = pane.stateVersion
     pane.reload()
     await settle { pane.stateVersion != version && pane.state.isLoaded }

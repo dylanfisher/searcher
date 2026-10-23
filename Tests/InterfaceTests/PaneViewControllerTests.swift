@@ -85,6 +85,8 @@ private struct Fixture {
     let spinner = fixture.controller.status.spinner
 
     #expect(spinner.isHidden)
+    // The delay reads the clock when its task starts, which can be after an advance made now.
+    await settle { clock.waitingSleeps >= 1 }
     clock.advance(by: LoadTimeouts.spinnerDelay)
     await settle { !spinner.isHidden }
     #expect(spinner.accessibilityLabel() == "Loading root")
