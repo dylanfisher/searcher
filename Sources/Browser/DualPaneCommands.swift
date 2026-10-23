@@ -1,3 +1,5 @@
+import Base
+
 /// The dual-pane keys: focus the other pane, show the focused pane's folder there, and open the
 /// selection there. The other pane is the selected tab's `Layout.otherPane`. With one pane, the
 /// two that act on the other pane split right first and keep the focus where it was; focusing
@@ -10,7 +12,8 @@ public enum DualPaneCommands: CommandSet {
     public static let sameFolderInOtherPane = Command(
         id: CommandID("dualPane.sameFolderInOtherPane"), title: "Same Folder in Other Pane",
         chords: [KeyChord("=", modifiers: [.command, .option])])
-    /// Opens the one selected folder, or package, in the other pane. Off for any other
+    /// Opens the one selected folder, package or link in the other pane. A link opens there
+    /// only once it lists as a folder; a link to a file opens nothing. Off for any other
     /// selection, as Open in New Tab is for a file, so a file never goes to its app from here.
     public static let openInOtherPane = Command(
         id: CommandID("dualPane.openInOtherPane"), title: "Open in Other Pane",
@@ -31,23 +34,37 @@ public enum DualPaneCommands: CommandSet {
             },
             // The key runs the binding without asking `isEnabled`, so `run` checks too.
             CommandBinding(
-                openInOtherPane, isEnabled: { selectsOneFolder($0.pane) },
+                openInOtherPane, isEnabled: { selectedFolderOrLink(in: $0.pane) != nil },
                 run: { context in
-                    guard selectsOneFolder(context.pane), let other = otherPane(in: context)
-                    else { return }
-                    context.pane.openSelection(in: other)
+                    switch selectedFolderOrLink(in: context.pane) {
+                    case .directory:
+                        if let other = otherPane(in: context) {
+                            context.pane.openSelection(in: other)
+                        }
+                    case .symbolicLink:
+                        // The split waits for the link to list as a folder, so a link to a file
+                        // leaves the tab as it was. A tab switched away from meanwhile is left.
+                        let tab = context.tab
+                        context.pane.openSelectedLink(asFolderIn: {
+                            context.tab === tab ? otherPane(in: context) : nil
+                        })
+                    default:
+                        return
+                    }
                 }),
         ]
     }
 
-    /// Whether `pane`'s selection is one folder, which a package is as the pane lists it.
+    /// The type of `pane`'s one selected entry when it is a folder, which a package is as the
+    /// pane lists it, or a link; nil for any other selection.
     @MainActor
-    private static func selectsOneFolder(_ pane: Pane) -> Bool {
+    private static func selectedFolderOrLink(in pane: Pane) -> DirectoryEntry.FileType? {
         let rows = pane.selectedRows
         guard rows.count == 1, let row = rows.first, let listing = pane.state.listing else {
-            return false
+            return nil
         }
-        return listing[row].type == .directory
+        let type = listing[row].type
+        return type == .directory || type == .symbolicLink ? type : nil
     }
 
     /// The other pane, after ending a zoom so it shows. With one pane, splits right and focuses
