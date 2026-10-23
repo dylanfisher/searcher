@@ -1066,3 +1066,35 @@ private func cancelAllFinishesAtOnce(_ queue: FileOperationQueue) async -> Bool 
     _ = await trash.value
     #expect(queue.unfinishedCount == 0)
 }
+
+/// An operation leaves the intake before `onAnyFinish` hears of it, so an undo press that finds
+/// it unfinished always hears of its end after the press.
+@Test(.timeLimit(.minutes(1))) func anOperationLeavesTheIntakeBeforeOnAnyFinishHearsOfIt()
+    async throws
+{
+    let files = FakeFiles()
+    let unfinished = EventLog<Int>()
+    let box = QueueBox()
+    let queue = FileOperationQueue(
+        fileSystem: files.fileSystem(), prompts: Prompter().prompts, clock: ContinuousClock(),
+        onChange: { _ in },
+        onAnyFinish: { _ in unfinished.append(box.queue?.unfinishedCount ?? -1) })
+    box.queue = queue
+
+    _ = await queue.perform(.rename("/A/a", to: "b"))
+
+    #expect(await unfinished.wait { !$0.isEmpty })
+    #expect(unfinished.all == [0])
+}
+
+/// The queue a callback made before it reads, set once it is made.
+private final class QueueBox: @unchecked Sendable {
+    // `lock` guards `stored`.
+    private let lock = NSLock()
+    private var stored: FileOperationQueue?
+
+    var queue: FileOperationQueue? {
+        get { lock.withLock { stored } }
+        set { lock.withLock { stored = newValue } }
+    }
+}

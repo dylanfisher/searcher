@@ -120,7 +120,7 @@ final class OperationRowView: NSView {
         case .done: "Done"
         case .failed where FileOperation.dropsUndoEntry(snapshot.operation, after: state):
             // An undo that can't clear by trying again is dropped from the Edit menu.
-            String(Self.failure(state.errors).dropLast()) + ", so this undo is dropped."
+            Self.failure(state.errors) + " This undo is dropped."
         case .failed: Self.failure(state.errors)
         case .refused(.inUse(let path)):
             "Not started: another operation is using “\(path)”."

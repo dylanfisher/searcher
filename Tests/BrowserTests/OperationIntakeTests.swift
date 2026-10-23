@@ -34,7 +34,7 @@ import Testing
 
         trash.run(context)
         let undo = history.undo(with: queue)
-        let undone = try #require(await undo.value)
+        let undone = try #require(await bounded(undo) ?? nil)
 
         #expect(
             undone.record.changes.compactMap(\.location) == [image.mountPoint + "/pressed.txt"])
