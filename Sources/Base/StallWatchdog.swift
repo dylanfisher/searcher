@@ -32,8 +32,8 @@ public final class StallWatchdog: @unchecked Sendable {
     ///   - runLoop: the run loop to time.
     ///   - thread: the thread that runs `runLoop`. It must keep running until `stop()` returns.
     ///     Leaving a run loop doesn't end the pass, because AppKit dispatches each event between
-    ///     two runs of the run loop, so a thread that exits leaves its last pass open, and capturing
-    ///     an exited thread stops the program.
+    ///     two runs of the run loop, so a thread that exits leaves its last pass open, and
+    ///     capturing an exited thread stops the program.
     ///   - threshold: a pass longer than this is a stall.
     ///   - onStall: called on the watchdog thread once per stall, after the pass ends.
     public init(

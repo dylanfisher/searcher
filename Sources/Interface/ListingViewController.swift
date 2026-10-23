@@ -4,9 +4,10 @@ import Quartz
 
 /// A pane's entries in a view-based table: name with its type's icon, and a cloud badge when the
 /// entry isn't downloaded; size, date modified and kind. A header click sorts the pane by that
-/// column and a second click reverses it; the user can resize and reorder the columns. The pane owns the sort and the selection; the table shows them
-/// and reports the user's changes back (0017-list-view-columns.md). In column view each column is
-/// one of these showing names only, with no header (`showsNamesOnly`).
+/// column and a second click reverses it; the user can resize and reorder the columns. The pane
+/// owns the sort and the selection; the table shows them and reports the user's changes back
+/// (0017-list-view-columns.md). In column view each column is one of these showing names only,
+/// with no header (`showsNamesOnly`).
 ///
 /// Everything it shows comes from the pane's `Listing` and the icon cache, so it makes no
 /// file-system call (0004-listing-view.md).

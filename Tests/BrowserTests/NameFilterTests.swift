@@ -296,8 +296,8 @@ private func heldQueue() -> DispatchQueue {
             #expect(NameFilter.mainThreadMatches - before >= 1_000)
         }
 
-        /// Typing a query on 100k entries with every row selected matches every name and resolves the
-        /// selection off the main thread; the main thread only swaps the result in.
+        /// Typing a query on 100k entries with every row selected matches every name and resolves
+        /// the selection off the main thread; the main thread only swaps the result in.
         @MainActor @Test func filteringOneHundredThousandEntriesDoesNoPerEntryWorkOnTheMainThread()
             async
         {
