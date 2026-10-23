@@ -134,7 +134,7 @@ public enum FileCommands: CommandSet {
     }
 
     @MainActor
-    static func selectedPaths(in pane: Pane) -> [String] {
+    private static func selectedPaths(in pane: Pane) -> [String] {
         pane.selectedEntries.map { pane.location.child(named: $0.name).path }
     }
 

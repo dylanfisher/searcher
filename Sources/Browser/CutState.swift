@@ -20,16 +20,16 @@ public final class CutState {
         self.clipboard = clipboard
     }
 
-    /// Puts `paths` on the clipboard for a copy, ending any cut.
-    func copy(_ paths: [String]) {
-        clipboard.write(paths.map { URL(fileURLWithPath: $0) })
+    /// Puts `urls` on the clipboard for a copy, ending any cut.
+    func copy(_ urls: [URL]) {
+        clipboard.write(urls)
         set(nil)
     }
 
-    /// Puts `paths` on the clipboard and marks them cut.
-    func cut(_ paths: [String]) {
-        clipboard.write(paths.map { URL(fileURLWithPath: $0) })
-        set((paths, clipboard.changeCount))
+    /// Puts `urls` on the clipboard and marks them cut.
+    func cut(_ urls: [URL]) {
+        clipboard.write(urls)
+        set((urls.map(\.path), clipboard.changeCount))
     }
 
     /// The cut paths while the clipboard still holds what the cut wrote; nil otherwise.

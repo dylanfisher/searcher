@@ -125,6 +125,27 @@ private struct Fixture {
     #expect(scrollView.documentVisibleRect.contains(first.frame))
 }
 
+@MainActor @Test func aCutEntryDrawsDimmedInAColumnOpenedAfterTheCut() async throws {
+    let pasteboard = NSPasteboard(name: NSPasteboard.Name("searcher-test-\(UUID().uuidString)"))
+    defer { pasteboard.releaseGlobally() }
+    let clipboard = CutState(clipboard: PasteboardFileClipboard(pasteboard: pasteboard))
+    let fixture = await Fixture()
+    fixture.controller.clipboard = clipboard
+    clipboard.cut([URL(fileURLWithPath: "/r/docs/x.txt", isDirectory: false)])
+
+    await fixture.select("docs", inColumn: 0)
+
+    let column = try #require(fixture.controller.columnControllers.last)
+    let listing = try #require(column.listing)
+    let table = column.tableView
+    let alphas = try (0..<listing.count).map { row in
+        let cell = column.tableView(table, viewFor: table.tableColumns[0], row: row)
+        return (listing[row].name, try #require(cell).alphaValue)
+    }
+    #expect(alphas.map(\.0) == ["sub", "x.txt"])
+    #expect(alphas.map(\.1) == [1, ListingViewController.cutAlpha])
+}
+
 @MainActor @Test func twoFlacFilesInAColumnShareOneIcon() async throws {
     let maker = IconMaker()
     let fixture = await Fixture(iconCache: TypeIconCache(makeIcon: maker.icon(for:)))
