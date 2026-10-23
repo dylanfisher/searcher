@@ -396,7 +396,8 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
             "Minimize", "Zoom", "", "Show Previous Tab", "Show Next Tab", "", "Split Right",
             "Split Down", "Columns", "Rows", "", "Focus Other Pane", "Focus Pane", "Move Pane",
             "Resize Pane",
-            "Zoom Pane", "Equalize Panes", "", "Move Pane to New Window", "Merge Window into Tab",
+            "Zoom Pane", "Unzoom Pane", "Equalize Panes", "", "Move Pane to New Window",
+            "Merge Window into Tab",
             "", "Close Pane",
         ])
     #expect(!allItems(menu).contains { $0.action == #selector(NSWindow.performClose(_:)) })

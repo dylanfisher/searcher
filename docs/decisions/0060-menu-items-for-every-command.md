@@ -27,7 +27,7 @@ Sublime Text.
   - Go: Open in New Tab and Open in Other Pane after Open; Into Selected Folder and To Parent
     Column (column view); Same Folder in Other Pane before Go to Folder.
   - Window: Split Right and Split Down; then Focus Other Pane, Focus Pane, Move Pane and Resize
-    Pane (submenus, one item per arrow), Zoom Pane and Equalize Panes. iTerm keeps its split
+    Pane (submenus, one item per arrow), Zoom Pane, Unzoom Pane and Equalize Panes. iTerm keeps its split
     pane selection and resizing in the Window menu, and Window already held Focus Other Pane,
     Close Pane and the window moves.
   - `MainMenuBuilder.Item` gets a `submenu` case, which builds a nested `Menu` the same way.
