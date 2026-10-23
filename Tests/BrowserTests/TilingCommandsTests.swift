@@ -86,7 +86,7 @@ private func resizeKey(_ direction: Direction) -> KeyChord {
 
 private let splitRight = KeyChord("\\", modifiers: .command)
 private let splitDown = KeyChord("\\", modifiers: [.command, .shift])
-private let zoom = KeyChord(.return, modifiers: [.command, .shift])
+private let zoom = KeyChord("z", modifiers: [.command, .option, .shift])
 private let equalize = KeyChord("0", modifiers: [.command, .option])
 private let closePane = KeyChord("w", modifiers: .command)
 
@@ -134,6 +134,15 @@ private func expectClose(_ a: Rect?, _ b: Rect?, sourceLocation: SourceLocation 
         let chord = KeyChord(arrow(direction), modifiers: [.command, .option])
         #expect(registry.command(for: chord) == nil, "\(chord)")
     }
+}
+
+@Test func zoomIsOnCmdOptShiftZAndNotOnCmdShiftReturn() throws {
+    let registry = try AppCommands.registry()
+    let old = KeyChord(.return, modifiers: [.command, .shift])
+    #expect(registry.command(for: old) == nil, "\(old)")
+    #expect(registry.command(for: zoom)?.id == TilingCommands.zoom.id)
+    let redo = KeyChord("z", modifiers: [.command, .shift])
+    #expect(registry.command(for: redo) == nil, "\(redo)")
 }
 
 @Test func resizeStepIsFortyPoints() {

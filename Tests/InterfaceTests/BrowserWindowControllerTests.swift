@@ -132,13 +132,13 @@ private func shiftedBracket(_ typed: String, keyCode: UInt16) throws -> NSEvent 
     let leftView = try fixture.paneController(left).view
     let rightView = try fixture.paneController(right).view
 
-    try fixture.press(try keyEvent("\r", modifiers: [.command, .shift]))
+    try fixture.press(try keyEvent("z", modifiers: [.command, .option, .shift]))
 
     #expect(fixture.tab.layout.isZoomed)
     #expect(leftView.isHidden)
     #expect(!rightView.isHidden && rightView.frame == view.bounds)
 
-    try fixture.press(try keyEvent("\r", modifiers: [.command, .shift]))
+    try fixture.press(try keyEvent("z", modifiers: [.command, .option, .shift]))
 
     let frames = fixture.tab.layout.frames(in: Rect(view.bounds))
     let leftFrame = try #require(frames[left])
@@ -233,7 +233,7 @@ private func shiftedBracket(_ typed: String, keyCode: UInt16) throws -> NSEvent 
     let right = try fixture.splitRight()
     try fixture.press(try arrow(NSLeftArrowFunctionKey, [.control, .command]))
     try fixture.press(try arrow(NSLeftArrowFunctionKey, [.command, .option, .shift]))
-    try fixture.press(try keyEvent("\r", modifiers: [.command, .shift]))
+    try fixture.press(try keyEvent("z", modifiers: [.command, .option, .shift]))
     let kept = first.layout
     #expect(kept.isZoomed && kept.focused == left)
     try fixture.press(try keyEvent("t", modifiers: .command))
@@ -359,7 +359,7 @@ private func shiftedBracket(_ typed: String, keyCode: UInt16) throws -> NSEvent 
     #expect(try fixture.paneController(right).showsFocus)
     #expect(try !fixture.paneController(left).showsFocus)
 
-    try fixture.press(try keyEvent("\r", modifiers: [.command, .shift]))
+    try fixture.press(try keyEvent("z", modifiers: [.command, .option, .shift]))
     #expect(try !fixture.paneController(right).showsFocus)
 }
 
