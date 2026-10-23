@@ -13,8 +13,8 @@ public final class FolderSizeService: Sendable {
     /// Walks running at once, across every volume (docs/decisions/0006-concurrency-shape.md).
     public static let mostRunningWalks = 4
     /// Parent folders watched for changes at once. Past it, the least recently walked parent's
-    /// watch stops and the local sizes under it are dropped, since their changes can no longer be
-    /// seen.
+    /// watch stops and the local sizes of its children are walked again when next asked for,
+    /// since their changes can no longer be seen.
     public static let mostWatchedFolders = 64
 
     /// Walks running at once on one volume. A share serves one blocking read at a time
@@ -36,9 +36,12 @@ public final class FolderSizeService: Sendable {
         public let pane: PaneID
         let onResult: @MainActor @Sendable (Result<FolderSize, ListingError>) -> Void
 
-        // `lock` guards `cancelled` and `storedVolume`.
+        // `lock` guards everything below.
         private let lock = NSLock()
         private var cancelled = false
+        private var running = false
+        /// Left running by `leave()`: it finishes and keeps its size, delivering nothing.
+        private var left = false
         private var storedVolume: VolumeIdentity?
 
         init(
@@ -59,6 +62,29 @@ public final class FolderSizeService: Sendable {
 
         public var isCancelled: Bool {
             lock.withLock { cancelled }
+        }
+
+        /// Whether its result goes to the caller: it wasn't cancelled or left.
+        var delivers: Bool {
+            lock.withLock { !cancelled && !left }
+        }
+
+        /// Notes that the walk started reading.
+        func markRunning() {
+            lock.withLock { running = true }
+        }
+
+        /// The caller no longer wants the result. A walk running on a local volume goes on, so its
+        /// size is kept for the next request; any other is cancelled. A share has one walk slot,
+        /// which a walk nobody waits for mustn't hold.
+        func leave() {
+            lock.withLock {
+                if running, storedVolume?.kind == .local {
+                    left = true
+                } else {
+                    cancelled = true
+                }
+            }
         }
 
         /// The volume the folder is on, once read; nil until then.
@@ -158,6 +184,22 @@ public final class FolderSizeService: Sendable {
         }
     }
 
+    /// Stops `pane`'s walks as it leaves their folder: a waiting walk never starts, and one
+    /// running on a share stops before its next buffer, but one running on a local volume
+    /// finishes and keeps its size, so a return to the folder finds it. None delivers a result.
+    public func cancelWaitingWalks(for pane: PaneID) {
+        for walk in unfinished.walks(for: pane) {
+            walk.leave()
+        }
+    }
+
+    /// The sizes kept in memory for `folders`, as `FolderSizeCache.keptSizes(of:)` gives them,
+    /// without reading anything or waiting: a listing's load shows them before the folders are
+    /// asked for.
+    public func keptSizes(of folders: [(path: String, modified: Date)]) -> [FolderSize?] {
+        cache.keptSizes(of: folders)
+    }
+
     /// Cancels every walk of the folder at `mountPoint` or under it, waiting or running, for every
     /// pane: a running walk holds a folder open, which can keep the volume from unmounting.
     public func cancelWalks(under mountPoint: String) {
@@ -229,6 +271,7 @@ public final class FolderSizeService: Sendable {
     private func startWaitingWalks() {
         while queue.running < Self.mostRunningWalks, let walk = queue.next() {
             queue.start(walk)
+            walk.markRunning()
             Task(priority: .utility) { await self.run(walk) }
         }
     }
@@ -236,6 +279,12 @@ public final class FolderSizeService: Sendable {
     private func run(_ walk: Walk) async {
         guard let volume = walk.volume else {
             preconditionFailure("walk of \(walk.path) started before its volume was read")
+        }
+        // A walk of the same folder, left running by a pane, may have kept its size while this
+        // one waited.
+        if let size = await cache.size(of: walk.path, modified: walk.modified, on: volume) {
+            finish(walk, with: .success(size), started: true)
+            return
         }
         // Noted before the walk reads anything, so a change during the walk keeps its result
         // from being kept.
@@ -290,10 +339,10 @@ public final class FolderSizeService: Sendable {
                 self.queue.remove(walk)
             }
         }
-        guard let result, !walk.isCancelled else { return }
+        guard let result, walk.delivers else { return }
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
-                if !walk.isCancelled { walk.onResult(result) }
+                if walk.delivers { walk.onResult(result) }
             }
         }
     }
@@ -307,16 +356,22 @@ public final class FolderSizeService: Sendable {
         do {
             let evicted = try watches.watch(parent) { change in
                 Task(priority: .utility) {
-                    switch change {
-                    case .under(let paths):
-                        for path in paths { await cache.dropSizes(affectedBy: path) }
-                    case .lost:
-                        await cache.dropLocalSizes(under: parent)
+                    for path in change.changed { await cache.dropSizes(affectedBy: path) }
+                    for root in change.lost {
+                        await cache.markForWalk(
+                            childrenOf: parent, around: root,
+                            because: "since FSEvents lost events at \(root)")
                     }
                 }
             }
             for folder in evicted {
-                Task(priority: .utility) { await cache.dropLocalSizes(under: folder) }
+                Task(priority: .utility) {
+                    await cache.markForWalk(
+                        childrenOf: folder, around: folder,
+                        because:
+                            "since \(folder) is no longer watched, past \(Self.mostWatchedFolders) watched folders"
+                    )
+                }
             }
             return true
         } catch {
@@ -325,12 +380,38 @@ public final class FolderSizeService: Sendable {
         }
     }
 
-    /// What a watched parent folder reported.
-    private enum Change: Sendable {
-        /// Paths changed, given under the parent's path as walks name it.
-        case under([String])
-        /// Events were lost, or the parent itself moved: nothing under it can be trusted.
-        case lost
+    /// What a watched parent folder reported, with paths given under the parent's path as walks
+    /// name it.
+    struct Change: Equatable, Sendable {
+        /// Paths changed.
+        var changed: [String] = []
+        /// Folders whose events were lost, to be read again with everything under them: the
+        /// parent itself when it moved or the path is outside it.
+        var lost: [String] = []
+    }
+
+    /// The change `events` from the stream on `watched` report, named under `parent`. A
+    /// must-rescan event names the folder to read again, so only that folder's sizes are in
+    /// doubt; the other events of its batch still name what changed.
+    static func change(for events: [FileEvent], watched: String, as parent: String) -> Change {
+        let prefix = watched.hasSuffix("/") ? watched : watched + "/"
+        let named = parent.hasSuffix("/") ? parent : parent + "/"
+        func name(_ path: String) -> String? {
+            if path == watched { return parent }
+            guard path.utf8.starts(with: prefix.utf8) else { return nil }
+            return named + String(Substring(path.utf8.dropFirst(prefix.utf8.count)))
+        }
+        var change = Change()
+        for event in events {
+            if event.flags.contains(.rootChanged) {
+                change.lost.append(parent)
+            } else if event.flags.contains(.mustRescan) {
+                change.lost.append(name(event.path) ?? parent)
+            } else if let path = name(event.path) {
+                change.changed.append(path)
+            }
+        }
+        return change
     }
 
     /// FSEvents streams on the parents of walked local folders, the least recently walked first.
@@ -359,7 +440,8 @@ public final class FolderSizeService: Sendable {
                 free(resolved)
                 do {
                     streams[parent] = try FileEventStream(path: watched) { events in
-                        onChange(Self.change(for: events, watched: watched, as: parent))
+                        onChange(
+                            FolderSizeService.change(for: events, watched: watched, as: parent))
                     }
                 } catch {
                     recency.removeLast()
@@ -373,22 +455,6 @@ public final class FolderSizeService: Sendable {
                 }
                 return evicted
             }
-        }
-
-        private static func change(for events: [FileEvent], watched: String, as parent: String)
-            -> Change
-        {
-            if events.contains(where: { !$0.flags.isDisjoint(with: [.mustRescan, .rootChanged]) }) {
-                return .lost
-            }
-            let prefix = watched.hasSuffix("/") ? watched : watched + "/"
-            let named = parent.hasSuffix("/") ? parent : parent + "/"
-            return .under(
-                events.compactMap { event in
-                    if event.path == watched { return parent }
-                    guard event.path.utf8.starts(with: prefix.utf8) else { return nil }
-                    return named + String(Substring(event.path.utf8.dropFirst(prefix.utf8.count)))
-                })
         }
     }
 
