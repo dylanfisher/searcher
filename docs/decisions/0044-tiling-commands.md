@@ -27,7 +27,8 @@ the menu build ([0027](0027-key-dispatch.md)).
 - **Zoom.** Split, focus and move end a zoom before they act, even when they then do nothing
   (no neighbor, or a split refused for size). Equalize and close end it in `Layout`, and so does
   resize when it moves a divider. Resize leaves the pane zoomed when no split on the arrow's axis
-  holds the pane, since it then changes nothing.
+  holds the pane, since it then changes nothing. Unzoom Pane (Cmd-Opt-Shift-A) only ends a zoom,
+  keeps the focus, and is off while the tab isn't zoomed; Zoom Pane stays the toggle.
 - **Resize** moves the divider on the focused pane's right edge, or bottom edge for ↑ and ↓,
   by `TilingCommands.resizeStep` (40 pt) the way the arrow points. Only when the pane has no
   divider on that edge does it move the one on its left or top edge. `Layout.resize` picked the

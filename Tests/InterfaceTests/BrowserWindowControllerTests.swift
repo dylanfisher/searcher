@@ -491,6 +491,22 @@ private func receiver(of item: NSMenuItem, in window: NSWindow) throws -> NSResp
     #expect(fixture.tab === second)
 }
 
+@MainActor @Test func unzoomPaneIsOffUntilTheTabIsZoomed() async throws {
+    let fixture = try await Fixture()
+    let menu = try MainMenuBuilder.build(appName: "Searcher", registry: AppCommands.registry())
+    let item = try #require(menuItem(TilingCommands.unzoom.id, in: menu))
+    #expect(item.title == "Unzoom Pane")
+    #expect(try !fixture.keyTable.validateMenuItem(item))
+
+    try fixture.press(try keyEvent("z", modifiers: [.command, .option, .shift]))
+    #expect(fixture.tab.layout.isZoomed)
+    #expect(try fixture.keyTable.validateMenuItem(item))
+
+    try fixture.press(try keyEvent("a", modifiers: [.command, .option, .shift]))
+    #expect(!fixture.tab.layout.isZoomed)
+    #expect(try !fixture.keyTable.validateMenuItem(item))
+}
+
 @MainActor @Test func nextAndPreviousTabAreOffWithOneTab() async throws {
     let fixture = try await Fixture()
     let menu = try MainMenuBuilder.build(appName: "Searcher", registry: AppCommands.registry())

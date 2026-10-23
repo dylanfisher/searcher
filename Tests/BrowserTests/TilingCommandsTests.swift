@@ -97,6 +97,7 @@ private func rowsKey(_ count: Int) -> KeyChord {
     KeyChord(.character(Character("\(count)")), modifiers: [.command, .option, .shift])
 }
 private let zoom = KeyChord("z", modifiers: [.command, .option, .shift])
+private let unzoom = KeyChord("a", modifiers: [.command, .option, .shift])
 private let equalize = KeyChord("0", modifiers: [.command, .option])
 private let closePane = KeyChord("w", modifiers: .command)
 
@@ -123,6 +124,7 @@ private func expectClose(_ a: Rect?, _ b: Rect?, sourceLocation: SourceLocation 
         (splitRight, TilingCommands.splitRight),
         (splitDown, TilingCommands.splitDown),
         (zoom, TilingCommands.zoom),
+        (unzoom, TilingCommands.unzoom),
         (equalize, TilingCommands.equalize),
         (closePane, TilingCommands.closePane),
     ]
@@ -267,6 +269,37 @@ private func expectClose(_ a: Rect?, _ b: Rect?, sourceLocation: SourceLocation 
     try press(zoom, in: grid.workspace)
     #expect(!grid.tab.layout.isZoomed)
     #expect(grid.frames.count == 4)
+}
+
+@MainActor @Test func unzoomKeyEndsAZoomKeepsTheFocusAndDoesNothingOtherwise() throws {
+    let grid = try Grid()
+    let binding = try #require(
+        TilingCommands.bindings.first { $0.command == TilingCommands.unzoom })
+    let isEnabled = try #require(binding.isEnabled)
+    func enabled() -> Bool {
+        isEnabled(
+            CommandContext(
+                pane: grid.tab.focusedPane.commandPane, workspace: grid.workspace,
+                tabBounds: { bounds }, didClosePane: { _ in }))
+    }
+
+    try press(unzoom, in: grid.workspace)
+    #expect(!grid.tab.layout.isZoomed)
+    #expect(!enabled())
+    #expect(grid.frames.count == 4)
+
+    try press(zoom, in: grid.workspace)
+    #expect(enabled())
+    try press(unzoom, in: grid.workspace)
+    #expect(!grid.tab.layout.isZoomed)
+    #expect(grid.tab.layout.focused == grid.d)
+    #expect(grid.frames.count == 4)
+    #expect(!enabled())
+}
+
+@Test func cmdOptShiftAIsOnlyUnzoom() throws {
+    let registry = try AppCommands.registry()
+    #expect(registry.command(for: unzoom) == TilingCommands.unzoom)
 }
 
 @MainActor @Test func equalizeKeyGivesEveryPaneTheSameSize() throws {

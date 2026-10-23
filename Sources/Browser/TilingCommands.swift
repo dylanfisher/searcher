@@ -41,6 +41,11 @@ public enum TilingCommands: CommandSet {
     public static let zoom = Command(
         id: CommandID("tiling.zoom"), title: "Zoom Pane",
         chords: [KeyChord("z", modifiers: [.command, .option, .shift])])
+    /// Only ends a zoom, so a key can show every pane again without toggling one into view. Off
+    /// while the tab isn't zoomed.
+    public static let unzoom = Command(
+        id: CommandID("tiling.unzoom"), title: "Unzoom Pane",
+        chords: [KeyChord("a", modifiers: [.command, .option, .shift])])
     public static let equalize = Command(
         id: CommandID("tiling.equalize"), title: "Equalize Panes",
         chords: [KeyChord("0", modifiers: [.command, .option])])
@@ -78,6 +83,9 @@ public enum TilingCommands: CommandSet {
             }
             + [
                 CommandBinding(zoom) { $0.tab.toggleZoom() },
+                CommandBinding(
+                    unzoom, isEnabled: { $0.tab.layout.isZoomed },
+                    run: { _ = unzoomed($0.tab) }),
                 CommandBinding(equalize) { $0.tab.equalize(in: $0.tabBounds()) },
                 CommandBinding(closePane) { $0.didClosePane($0.workspace.closePane()) },
             ]
