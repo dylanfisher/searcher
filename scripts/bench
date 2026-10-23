@@ -3,7 +3,13 @@
 # in docs/performance.md. Builds any missing W1–W3 fixture under
 # $TMPDIR/searcher-bench, records the top CPU processes, warns when another
 # process is busy, writes .build/bench.json and exits non-zero on a budget
-# miss. Arguments pass through to the runner:
+# miss. The harness copies a 1 GB file to a disk image through FileCopier,
+# judged in MB/s against spike S7, and the --ui run copies W8 to one. For
+# those two runs this script first checks that $TMPDIR's volume has room for
+# the source fixture and the image, failing with the bytes needed and free
+# before anything is written, then creates a sparse APFS image there,
+# attaches it outside /Volumes, and detaches and removes it when the run ends,
+# failed or not. Arguments pass through to the runner:
 #   --path <dir>          point the cases at a real folder
 #   --print-budget <id>   print one budget's number, for other scripts
 #   --print-stall-arguments
@@ -24,13 +30,18 @@
 #                         non-zero when an enforced case is over budget or the record
 #                         is missing or doesn't hold one run's 20 launches
 #   --ui                  build the release Searcher.app and time its UI in 20 new
-#                         processes (B1, B2, B6, B7, B8, B10; B6 in column view and
-#                         in splits, B2 in ten panes too) instead of the harness
-#                         cases; writes .build/bench-ui.json. With
+#                         processes (B1, B2, B6, B7, B8, B10; B6 in column view, in
+#                         splits and while the queue copies W8 to a disk image with
+#                         the operations panel open, B10 over that copy, B2 in ten
+#                         panes too) instead of the harness cases; writes
+#                         .build/bench-ui.json. W8 is 10 GB and needs about 20.5 GB
+#                         free in $TMPDIR the first time, 10.5 GB once built. With
 #                         --path, the folder is opened as both W1 and W2. The window opens
 #                         in the background on the second display if there is one and
 #                         never takes focus; a run whose window is covered fails saying
 #                         so. The bundle is built at .build/bench/Searcher.app.
+#   --ui --w8-2gb         copy W8's 2 GB variant instead, as CI does; about 4.5 GB
+#                         free the first time
 #   --ui --scenario <name>
 #                         one launch that times one scenario instead, and writes
 #                         .build/bench-ui-<name>.json. cold, revisit and column-walk time
@@ -61,4 +72,51 @@ fi
 
 # Build output goes to stderr so `--print-budget` leaves only the number on stdout.
 swift build -c release --product Bench >&2
-exec "$(swift build -c release --show-bin-path)/Bench" ${args[@]+"${args[@]}"}
+bench="$(swift build -c release --show-bin-path)/Bench"
+
+# "<megabytes> <folder>" for a run that copies to a disk image, after the free
+# space check; "0" for any other. A short check fails here, naming the bytes.
+plan=$("$bench" --disk-image-size ${args[@]+"${args[@]}"})
+read -r image_megabytes image_parent <<<"$plan"
+if [ "$image_megabytes" = 0 ]; then
+  exec "$bench" ${args[@]+"${args[@]}"}
+fi
+
+image_root=$(mktemp -d "$image_parent/searcher-bench-image.XXXXXX")
+image_device=
+# Detaches and removes the image however the run ends. The folder is removed
+# only once the image is detached: removing it while mounted would delete
+# through the mount point.
+cleanup() {
+  # Attached even when attach printed no device, so the image is looked up too.
+  if [ -n "$image_device" ] ||
+    hdiutil info | grep -qF "$(basename "$image_root")/image.sparseimage"; then
+    if ! hdiutil detach -quiet -force "${image_device:-$image_root/mount}"; then
+      echo "scripts/bench: could not detach the image in $image_root; it is left" >&2
+      return
+    fi
+  fi
+  rm -rf "$image_root"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# Sparse, so it takes only what is copied into it; APFS, so the copy crosses
+# volumes and clones nothing.
+hdiutil create -quiet -type SPARSE -size "${image_megabytes}m" -fs APFS \
+  -volname SearcherBench "$image_root/image"
+mkdir "$image_root/mount"
+# The first line names the image's own device, which detaches the whole image.
+image_device=$(hdiutil attach -nobrowse -noverify -noautoopen \
+  -mountpoint "$image_root/mount" "$image_root/image.sparseimage" | awk 'NR == 1 { print $1 }')
+if [ -z "$image_device" ]; then
+  echo "scripts/bench: hdiutil attach named no device for $image_root/image.sparseimage" >&2
+  exit 1
+fi
+# Keeps Spotlight from indexing what the run copies while it is timed.
+touch "$image_root/mount/.metadata_never_index"
+
+status=0
+"$bench" ${args[@]+"${args[@]}"} --image "$image_root/mount" || status=$?
+exit "$status"

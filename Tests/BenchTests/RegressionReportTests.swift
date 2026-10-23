@@ -132,7 +132,8 @@ private func uiRun(keyDown: Double, launches: Int = UIBenchReport.launches) -> U
         columnRight: Array(repeating: 5, count: 100), columnLeft: Array(repeating: 5, count: 100),
         splitDown: Array(repeating: 5, count: UIBenchReport.keyPresses),
         gridDown: Array(repeating: 5, count: UIBenchReport.keyPresses),
-        tenPaneOpen: Array(repeating: 70, count: launches))
+        tenPaneOpen: Array(repeating: 70, count: launches),
+        queueKeyDown: Array(repeating: 5, count: UIBenchReport.keyPresses))
 }
 
 /// Judges one CI run per ↓ p95 in order, each against the history the one before it kept, and
