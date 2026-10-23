@@ -73,11 +73,11 @@ private func arrow(_ direction: Direction) -> KeyChord.Key {
 }
 
 private func focusKey(_ direction: Direction) -> KeyChord {
-    KeyChord(arrow(direction), modifiers: [.command, .option])
+    KeyChord(arrow(direction), modifiers: [.command, .option, .shift])
 }
 
 private func moveKey(_ direction: Direction) -> KeyChord {
-    KeyChord(arrow(direction), modifiers: [.command, .option, .shift])
+    KeyChord(arrow(direction), modifiers: [.control, .option, .shift])
 }
 
 private func resizeKey(_ direction: Direction) -> KeyChord {
@@ -126,6 +126,14 @@ private func expectClose(_ a: Rect?, _ b: Rect?, sourceLocation: SourceLocation 
         #expect(registry.command(for: chord) == command, "\(chord)")
     }
     #expect(TilingCommands.bindings.count == expected.count)
+}
+
+@Test func cmdOptArrowsAreUnbound() throws {
+    let registry = try AppCommands.registry()
+    for direction in Direction.allCases {
+        let chord = KeyChord(arrow(direction), modifiers: [.command, .option])
+        #expect(registry.command(for: chord) == nil, "\(chord)")
+    }
 }
 
 @Test func resizeStepIsFortyPoints() {

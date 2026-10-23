@@ -57,7 +57,8 @@ main thread must not do per-entry work for it (B10). iCloud files can be datales
   for Cmd-A, of which the panel shows one.
 - **A View menu item with Space as its key equivalent** — not added: a menu item takes its key
   before the first responder's `keyDown`, so Space could stop reaching text fields and
-  type-to-select. That is unchecked. A menu item without a key equivalent is left for the step that wants one.
+  type-to-select. That is unchecked. File now has a Quick Look item without one
+  ([0060](0060-menu-items-for-every-command.md)).
 
 ## Consequences
 

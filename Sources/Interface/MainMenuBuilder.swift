@@ -4,7 +4,8 @@ import Browser
 /// Builds the menu bar, the only place main menus are built. An item either runs a registered
 /// command, with the command's first chord as its key equivalent unless a text field needs that
 /// key, or sends one of AppKit's own actions (Quit, Copy, Minimize) to the first responder that
-/// implements it. Every key equivalent is spelled as a `KeyChord`.
+/// implements it. Every key equivalent is spelled as a `KeyChord`. Every registered command has
+/// an item (docs/decisions/0060-menu-items-for-every-command.md).
 @MainActor
 public enum MainMenuBuilder {
     /// An action AppKit implements, sent up the responder chain with no target.
@@ -23,6 +24,7 @@ public enum MainMenuBuilder {
         /// menu would take it before the field did. The key reaches the command from the table.
         case commandWithoutKey(CommandID)
         case standard(StandardAction)
+        case submenu(Menu)
         case separator
     }
 
@@ -52,6 +54,25 @@ public enum MainMenuBuilder {
         title: "Select All", action: #selector(NSResponder.selectAll(_:)),
         chord: KeyChord("a", modifiers: .command), isTextEditing: true)
 
+    /// The row keys, which all reach the table from `keyDown`: a key equivalent would take
+    /// ↑, ↓, Shift-, Opt- and Ctrl-Shift-arrows and the page keys from text fields.
+    static let selectionMenu = Menu(
+        title: "Selection",
+        items: [
+            .commandWithoutKey(SelectionCommands.selectNext.id),
+            .commandWithoutKey(SelectionCommands.selectPrevious.id),
+            .commandWithoutKey(SelectionCommands.selectFirst.id),
+            .commandWithoutKey(SelectionCommands.selectLast.id),
+            .separator,
+            .commandWithoutKey(SelectionCommands.tenRowsDown.id),
+            .commandWithoutKey(SelectionCommands.tenRowsUp.id),
+            .commandWithoutKey(SelectionCommands.pageDown.id),
+            .commandWithoutKey(SelectionCommands.pageUp.id),
+            .separator,
+            .commandWithoutKey(SelectionCommands.extendDown.id),
+            .commandWithoutKey(SelectionCommands.extendUp.id),
+        ])
+
     static let windowMenu = Menu(
         title: "Window",
         items: [
@@ -65,11 +86,17 @@ public enum MainMenuBuilder {
             .separator,
             .command(WindowCommands.previousTab.id), .command(WindowCommands.nextTab.id),
             .separator,
-            .command(WindowCommands.movePaneToNewWindow.id),
-            .command(WindowCommands.mergeWindowIntoTab.id),
+            .command(TilingCommands.splitRight.id), .command(TilingCommands.splitDown.id),
             .separator,
             // Tab is its key.
             .commandWithoutKey(DualPaneCommands.focusOtherPane.id),
+            directions(TilingCommands.focusTitle, TilingCommands.focus),
+            directions(TilingCommands.moveTitle, TilingCommands.move),
+            directions(TilingCommands.resizeTitle, TilingCommands.resize),
+            .command(TilingCommands.zoom.id), .command(TilingCommands.equalize.id),
+            .separator,
+            .command(WindowCommands.movePaneToNewWindow.id),
+            .command(WindowCommands.mergeWindowIntoTab.id),
             .separator,
             // Cmd-W closes the pane, then the tab with its last pane, then the window with its
             // last tab.
@@ -85,6 +112,8 @@ public enum MainMenuBuilder {
                 .command(WindowCommands.newWindow.id), .command(WindowCommands.newTab.id),
                 .command(WindowCommands.closeTab.id),
                 .separator,
+                // Space is its key.
+                .commandWithoutKey(ViewCommands.toggleQuickLook.id),
                 .command(SystemCommands.revealInFinder.id),
                 .command(SystemCommands.openTerminal.id),
                 .separator,
@@ -116,15 +145,25 @@ public enum MainMenuBuilder {
                     StandardAction(
                         title: "Paste", action: #selector(NSText.paste(_:)),
                         chord: KeyChord("v", modifiers: .command), isTextEditing: true)),
+                // Runs Select All's command when the table has the keys.
                 .standard(selectAll),
+                .separator,
+                .submenu(selectionMenu),
             ]),
         Menu(
             title: "Go",
             items: [
                 .command(NavigationCommands.back.id), .command(NavigationCommands.forward.id),
                 .separator,
-                .command(NavigationCommands.open.id), .command(NavigationCommands.goToParent.id),
+                .command(NavigationCommands.open.id), .command(WindowCommands.openInNewTab.id),
+                .command(DualPaneCommands.openInOtherPane.id),
+                .command(NavigationCommands.goToParent.id),
                 .separator,
+                // → and ← are their keys, in column view.
+                .commandWithoutKey(ColumnCommands.intoFolder.id),
+                .commandWithoutKey(ColumnCommands.toParent.id),
+                .separator,
+                .command(DualPaneCommands.sameFolderInOtherPane.id),
                 .command(NavigationCommands.goToFolder.id),
             ]
         ),
@@ -161,16 +200,37 @@ public enum MainMenuBuilder {
     static func build(appName: String, registry: CommandRegistry) throws(BuildError) -> NSMenu {
         let bar = NSMenu()
         for menu in [appMenu(appName)] + menus {
-            let submenu = NSMenu(title: menu.title)
-            for item in menu.items {
-                submenu.addItem(try menuItem(item, in: menu, registry: registry))
-            }
-            guard submenu.numberOfItems > 0 else { continue }
-            let barItem = NSMenuItem(title: menu.title, action: nil, keyEquivalent: "")
-            barItem.submenu = submenu
+            let barItem = try submenuItem(menu, registry: registry)
+            guard barItem.submenu?.numberOfItems ?? 0 > 0 else { continue }
             bar.addItem(barItem)
         }
         return bar
+    }
+
+    /// An item titled `menu.title` whose submenu holds `menu`'s items.
+    private static func submenuItem(_ menu: Menu, registry: CommandRegistry) throws(BuildError)
+        -> NSMenuItem
+    {
+        let submenu = NSMenu(title: menu.title)
+        for item in menu.items {
+            submenu.addItem(try menuItem(item, in: menu, registry: registry))
+        }
+        let item = NSMenuItem(title: menu.title, action: nil, keyEquivalent: "")
+        item.submenu = submenu
+        return item
+    }
+
+    /// A submenu titled `title` with one item per direction, in `Direction.allCases` order.
+    private static func directions(_ title: String, _ commands: [Direction: Command]) -> Item {
+        .submenu(
+            Menu(
+                title: title,
+                items: Direction.allCases.map { direction in
+                    guard let command = commands[direction] else {
+                        preconditionFailure("\(title) has no command for \(direction)")
+                    }
+                    return .command(command.id)
+                }))
     }
 
     /// Gives each item of a command that turns a setting on and off (`CommandBinding.isChecked`)
@@ -239,6 +299,8 @@ public enum MainMenuBuilder {
         switch item {
         case .separator:
             return .separator()
+        case .submenu(let submenu):
+            return try submenuItem(submenu, registry: registry)
         case .command(let id), .commandWithoutKey(let id):
             guard let command = registry.command(for: id) else {
                 throw .unregistered(id, menu: menu.title)

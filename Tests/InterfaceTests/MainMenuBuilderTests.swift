@@ -62,15 +62,38 @@ private func buildMenu(_ registry: CommandRegistry) throws -> NSMenu {
     for item in commandItems {
         let id = try #require(item.representedObject as? CommandID)
         let command = try #require(registry.command(for: id))
-        // A command with no chord, such as Folders First, has no key equivalent, and neither
-        // has Focus Other Pane, whose Tab would take the key from text fields.
-        guard let chord = command.chords.first, id != DualPaneCommands.focusOtherPane.id else {
+        // A command with no chord, such as Folders First, has no key equivalent.
+        guard let chord = command.chords.first else {
             #expect(item.keyEquivalent.isEmpty, "\(id)")
+            continue
+        }
+        if item.keyEquivalent.isEmpty {
+            // Only a key without Command may be left off, such as Tab or Opt-↑, which text
+            // fields also use.
+            #expect(!chord.modifiers.contains(.command), "\(id)")
             continue
         }
         #expect(item.keyEquivalent == chord.keyEquivalent, "\(id)")
         #expect(item.keyEquivalentModifierMask == chord.keyEquivalentModifierMask, "\(id)")
+        // The menu would take a plain or Shift-only key from text fields and type-to-select.
+        #expect(!chord.modifiers.isDisjoint(with: [.command, .control, .option]), "\(id)")
     }
+}
+
+@MainActor @Test func everyRegisteredCommandHasAMenuItem() throws {
+    let registry = try AppCommands.registry()
+    let menu = try buildMenu(registry)
+    var listed = Set(allItems(menu).compactMap { $0.representedObject as? CommandID })
+    // Edit's Select All runs the command bound to its chord when the table has the keys.
+    if let chord = MainMenuBuilder.selectAll.chord, let selectAll = registry.command(for: chord) {
+        listed.insert(selectAll.id)
+    }
+
+    let missing = AppCommands.bindings.map(\.command).filter { !listed.contains($0.id) }
+
+    #expect(
+        missing.isEmpty,
+        "no menu item for \(missing.map { "\($0.id) (\"\($0.title)\")" }.joined(separator: ", "))")
 }
 
 @MainActor @Test func goMenuRunsOpenAndGoToParentWithTheirChords() throws {
@@ -267,7 +290,9 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     let go = try #require(menu.items.first { $0.title == "Go" }?.submenu)
     #expect(
         go.items.map(\.title) == [
-            "Back", "Forward", "", "Open", "Go to Parent", "", "Go to Folder…",
+            "Back", "Forward", "", "Open", "Open in New Tab", "Open in Other Pane",
+            "Go to Parent", "", "Into Selected Folder", "To Parent Column", "",
+            "Same Folder in Other Pane", "Go to Folder…",
         ])
     let table = ListingTableView()
     let log = CommandLog()
@@ -326,11 +351,13 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     let file = try #require(menu.items.first { $0.title == "File" }?.submenu)
     #expect(
         file.items.map(\.title) == [
-            "New Window", "New Tab", "Close Tab", "", "Reveal in Finder", "Open Terminal Here",
-            "", "Filter",
+            "New Window", "New Tab", "Close Tab", "", "Quick Look", "Reveal in Finder",
+            "Open Terminal Here", "", "Filter",
         ])
     let edit = try #require(menu.items.first { $0.title == "Edit" }?.submenu)
     #expect(edit.items.map(\.title).contains("Copy Path"))
+    let quickLook = try #require(file.items.first { $0.title == "Quick Look" })
+    #expect(quickLook.keyEquivalent.isEmpty)
     let table = ListingTableView()
     let log = CommandLog()
     table.runCommand = { log.ids.append($0) }
@@ -366,9 +393,10 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     let window = try #require(menu.items.first { $0.title == "Window" }?.submenu)
     #expect(
         window.items.map(\.title) == [
-            "Minimize", "Zoom", "", "Show Previous Tab", "Show Next Tab", "",
-            "Move Pane to New Window", "Merge Window into Tab", "", "Focus Other Pane", "",
-            "Close Pane",
+            "Minimize", "Zoom", "", "Show Previous Tab", "Show Next Tab", "", "Split Right",
+            "Split Down", "", "Focus Other Pane", "Focus Pane", "Move Pane", "Resize Pane",
+            "Zoom Pane", "Equalize Panes", "", "Move Pane to New Window", "Merge Window into Tab",
+            "", "Close Pane",
         ])
     #expect(!allItems(menu).contains { $0.action == #selector(NSWindow.performClose(_:)) })
     let focusOtherPane = try #require(window.items.first { $0.title == "Focus Other Pane" })
@@ -390,5 +418,54 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(
         log.ids == [
             TilingCommands.closePane.id, WindowCommands.closeTab.id, WindowCommands.newTab.id,
+        ])
+}
+
+@MainActor @Test func editMenuHasTheRowKeysInASelectionSubmenuWithNoKeyEquivalents() throws {
+    let menu = try buildMenu(try AppCommands.registry())
+    let edit = try #require(menu.items.first { $0.title == "Edit" }?.submenu)
+    let selection = try #require(edit.items.first { $0.title == "Selection" }?.submenu)
+
+    #expect(
+        selection.items.map(\.title) == [
+            "Select Next Row", "Select Previous Row", "Select First Row", "Select Last Row", "",
+            "Move Down 10 Rows", "Move Up 10 Rows", "Page Down", "Page Up", "",
+            "Extend Selection Down", "Extend Selection Up",
+        ])
+    #expect(selection.items.allSatisfy { $0.keyEquivalent.isEmpty })
+}
+
+@MainActor @Test func windowMenuRunsTheDirectionalPaneKeysFromItsSubmenus() throws {
+    let menu = try buildMenu(try AppCommands.registry())
+    let window = try #require(menu.items.first { $0.title == "Window" }?.submenu)
+    for family in ["Focus Pane", "Move Pane", "Resize Pane"] {
+        let submenu = try #require(window.items.first { $0.title == family }?.submenu, "\(family)")
+        #expect(
+            submenu.items.map(\.title) == ["Left", "Right", "Up", "Down"].map { "\(family) \($0)" })
+    }
+    let table = ListingTableView()
+    let log = CommandLog()
+    table.runCommand = { log.ids.append($0) }
+
+    let presses = [
+        try keyEvent(
+            functionKey(NSLeftArrowFunctionKey),
+            modifiers: arrowFlags.union([.command, .option, .shift])),
+        try keyEvent(
+            functionKey(NSLeftArrowFunctionKey),
+            modifiers: arrowFlags.union([.control, .option, .shift])),
+        try keyEvent(
+            functionKey(NSLeftArrowFunctionKey), modifiers: arrowFlags.union([.control, .command])),
+    ]
+    for press in presses {
+        let item = try item(for: press, in: menu)
+        #expect(table.tryToPerform(try #require(item.action), with: item))
+    }
+
+    #expect(
+        log.ids == [
+            try #require(TilingCommands.focus[.left]).id,
+            try #require(TilingCommands.move[.left]).id,
+            try #require(TilingCommands.resize[.left]).id,
         ])
 }
