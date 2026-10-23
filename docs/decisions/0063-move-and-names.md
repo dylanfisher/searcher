@@ -57,8 +57,8 @@ over `fnfErr`, a folder without write access is code 513 over `afpAccessDenied`.
 - **No trash** is `CocoaError.featureUnsupported` from `trashItem`. Other trash errors map by
   their Cocoa code, or by the POSIX error underneath when there is one.
 - **Permanent delete** is `Trasher.deletePermanently`, `FileManager.removeItem` on the path. It
-  is the only permanent delete in Base, and nothing but tests calls it until the queue asks the
-  delete-immediately question (M4.4b).
+  is the only permanent delete in Base. The operation queue calls it for delete immediately
+  ([0065](0065-operation-queue.md)).
 - **`:` is refused** in new names, as Finder refuses it.
 
 ## Alternatives considered

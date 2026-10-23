@@ -7,9 +7,10 @@
 
 M4.5 makes trash, new folder, duplicate, rename, and copy and move to the other pane into
 registered commands on the keys in `tmp/behavior.md`, run through the operation queue
-([0065](0065-operation-queue.md)). The queue takes its `Prompts` when it is made, and nothing
-answers them until the operations panel and its sheets (M4.6), so the app has no queue yet. The
-inline rename field is M4.7. New folder and duplicate pick their names when they run, so a
+([0065](0065-operation-queue.md)). The queue takes its `Prompts` when it is made;
+`WorkspaceWindows` makes the app's one queue with the operations panel's prompts
+([0067](0067-operations-panel.md)). The inline rename field is
+[0068](0068-inline-rename.md). New folder and duplicate pick their names when they run, so a
 command learns them only from the operation's record, and the pane lists them only once its
 monitor reports them.
 
@@ -57,8 +58,8 @@ monitor reports them.
 
 ## Alternatives considered
 
-- **A context that traps without a queue**, as the other view hooks do — rejected: the app has
-  no queue until M4.6, and Cmd-Delete in the list would crash it.
+- **A context that traps without a queue**, as the other view hooks do — rejected: a pane's
+  context in a test or preview has no queue, and Cmd-Delete in the list would crash it.
 - **Make the queue in the app now with prompts that always answer no** — rejected: every
   replace and other-pane copy would silently do nothing.
 - **A separate confirm hook in the context** — rejected: a second way to ask the user what the
