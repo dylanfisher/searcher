@@ -78,8 +78,7 @@ public actor FileOperationQueue {
     }
 
     /// Reads the identity of the item at a path, or nil when nothing is there. Throws when it
-    /// can't be read, or the item has no birth time on a volume without persistent IDs. One
-    /// serves one operation.
+    /// can't be read. One serves one operation.
     typealias Identifier =
         @Sendable (String) throws(FileOperationError) -> OperationRecord.ItemIdentity?
 
@@ -153,21 +152,39 @@ public actor FileOperationQueue {
     private var dropFolders: Set<DropFolder> = []
     private var finished = 0
 
-    /// How many operations have finished, refused ones included, read once every operation
-    /// among the first `submitted` has finished or is settled: copying, waiting in a lane,
-    /// paused or waiting for an answer, which can take minutes. So an undo pressed right after
-    /// Move to Trash waits the few milliseconds for that trash and undoes it, and one pressed
-    /// during a copy undoes the change before it at once, as in Finder. `skipped` holds the
-    /// operations among the first `submitted` that were settled and still unfinished, so the
-    /// history can tell that an entry one of them makes later came after the press
-    /// (docs/decisions/0072-undo.md).
-    public func finishedCount(before submitted: Int) async -> (finished: Int, skipped: Set<ID>) {
+    /// The longest an undo waits for an operation still being planned or run that it would
+    /// otherwise wait for, such as a move whose volume is on a share that stopped answering:
+    /// past it, the operation counts as settled (docs/decisions/0072-undo.md).
+    public static let pressWait: Duration = .milliseconds(250)
+
+    /// The queue as a press of Undo or Redo found it, read without waiting for the actor.
+    public struct PressMark: Sendable {
+        /// `submittedCount` at the press: operations with a lower ID were queued before it.
+        public let submitted: Int
+        /// Operations unfinished at the press that take milliseconds, which the press waits for.
+        public let awaited: Set<ID>
+        /// Operations unfinished at the press that are settled: a copy or duplicate, a move to
+        /// another volume, one paused or waiting for an answer, or one past `pressWait`. The
+        /// press doesn't wait for them.
+        public let skipped: Set<ID>
+    }
+
+    /// Notes the queue for a press: what it waits for and what it doesn't.
+    public nonisolated func markPress() -> PressMark { intake.mark() }
+
+    /// How many operations have finished, refused ones included, read once every one of
+    /// `awaited` has finished or settled. So an undo pressed right after Move to Trash waits the
+    /// few milliseconds for that trash and undoes it, and one pressed during a copy undoes the
+    /// change before it at once, as in Finder. `settled` holds those of `awaited` that settled
+    /// instead of finishing, so the history can tell that an entry one of them makes later came
+    /// after the press (docs/decisions/0072-undo.md).
+    public func finishedCount(awaiting awaited: Set<ID>) async -> (finished: Int, settled: Set<ID>)
+    {
         takeIn()
-        while entries.contains(where: { $0.id.value < submitted && !$0.isSettled }) {
+        while awaited.contains(where: { intake.isAwaitable($0) }) {
             await waitForChange()
         }
-        let skipped = entries.filter { $0.id.value < submitted && !$0.phase.isFinished }.map(\.id)
-        return (finished, Set(skipped))
+        return (finished, awaited.filter { intake.isUnfinished($0) })
     }
 
     /// How many submitted operations haven't finished, paused ones and ones waiting for an
@@ -261,9 +278,31 @@ public actor FileOperationQueue {
                 finish(entry, as: .refused(.inUse(path: inUse)))
             } else {
                 changed()
+                settleAfterPressWait(id)
                 Task { await self.prepare(id) }
             }
         }
+    }
+
+    /// Counts the operation as settled once `pressWait` has passed, if it hasn't finished.
+    private func settleAfterPressWait(_ id: ID) {
+        let deadline = elapsed() + Self.pressWait
+        let sleepUntil = sleepUntil
+        Task {
+            do {
+                try await sleepUntil(deadline)
+            } catch {
+                preconditionFailure("the press wait was cancelled: \(error)")
+            }
+            self.settle(id)
+        }
+    }
+
+    /// Counts the operation as settled: an undo pressed from now on doesn't wait for it, and
+    /// one waiting for it goes ahead.
+    private func settle(_ id: ID) {
+        intake.settle(id)
+        resumeChangeWaiters()
     }
 
     /// Waits until an operation finishes or settles.
@@ -286,7 +325,7 @@ public actor FileOperationQueue {
         entry.copier.pause()
         changed()
         // A paused operation no longer holds an undo (`finishedCount`).
-        resumeChangeWaiters()
+        settle(id)
     }
 
     public func resume(_ id: ID) {
@@ -570,12 +609,18 @@ public actor FileOperationQueue {
         let operation = entry.operation
         let control = entry.control
         let fileSystem = fileSystem
+        let intake = intake
         let planned = await BlockingCallThread.run {
             Result {
                 try OperationPlan.make(
                     for: operation, volumeOf: fileSystem.volumeOf, measure: fileSystem.measure,
                     inspect: fileSystem.inspect, identify: fileSystem.makeIdentifier(),
-                    isCancelled: { control.isCancelled })
+                    isCancelled: { control.isCancelled },
+                    // Known to copy before its pre-scan, which can take minutes.
+                    copies: {
+                        intake.settle(id)
+                        Task { await self.resumeChangeWaiters() }
+                    })
             }
         }
         // A cancel while the plan ran finished the operation already.
@@ -599,7 +644,7 @@ public actor FileOperationQueue {
             start(entry)
         } else {
             entry.phase = .queued
-            resumeChangeWaiters()
+            settle(id)
             // In the order queued, so a later operation whose plan finished first doesn't go
             // ahead of an earlier one already waiting.
             waiting.insert(id, at: waiting.firstIndex { $0 > id } ?? waiting.endIndex)
@@ -636,7 +681,7 @@ public actor FileOperationQueue {
             }
             entry.phase = .waitingForAnswer
             changed()
-            resumeChangeWaiters()
+            settle(entry.id)
             let answer = await prompts.resolve(
                 ConflictRequest(
                     operation: entry.id, source: conflict.source, existing: conflict.existing,
@@ -706,7 +751,7 @@ public actor FileOperationQueue {
         let isTrash = if case .trash = entry.operation { true } else { false }
         let identify = fileSystem.makeIdentifier()
         let undoSteps =
-            if case .undo(let record, _) = entry.operation {
+            if case .undo(let record, _, _) = entry.operation {
                 FileOperation.steps(undoing: record)
             } else {
                 [FileOperation.UndoStep]()
@@ -839,7 +884,7 @@ public actor FileOperationQueue {
     private func confirmWhileRunning(_ entry: Entry, _ request: ConfirmRequest) async -> Bool? {
         entry.phase = .waitingForAnswer
         changed()
-        resumeChangeWaiters()
+        settle(entry.id)
         let prompts = prompts
         let id = entry.id
         let answer = await withCheckedContinuation {
@@ -1254,8 +1299,10 @@ public actor FileOperationQueue {
         changed()
         finished += 1
         let last = snapshot(of: entry)
-        onAnyFinish(last)
+        // `onFinish` first: it takes the operation out of the intake, so a press that still
+        // finds it unfinished there takes in its end after the press.
         entry.onFinish(last)
+        onAnyFinish(last)
         resumeChangeWaiters()
     }
 
@@ -1376,18 +1423,6 @@ public actor FileOperationQueue {
         /// Resumes `run` while it waits for an answer; nil means it was cancelled.
         var pendingAnswer: CheckedContinuation<Bool?, Never>?
 
-        /// Finished, or doing something that can take minutes: an undo doesn't wait for it. A
-        /// copy or a duplicate always copies, so it is settled before its plan says so; a move
-        /// is once its plan puts it in a lane.
-        var isSettled: Bool {
-            if phase.isFinished || isPaused || phase == .waitingForAnswer { return true }
-            switch operation {
-            case .copy, .duplicate: return true
-            case .move, .trash, .rename, .newFolder, .deleteImmediately, .receive, .undo:
-                return plan?.lane != nil
-            }
-        }
-
         init(
             id: ID, operation: FileOperation, copier: any Copier,
             onFinish: @escaping @Sendable (Snapshot) -> Void
@@ -1414,29 +1449,58 @@ public actor FileOperationQueue {
         private let lock = NSLock()
         private var next = 0
         private var waiting: [Submission] = []
-        /// Submissions not yet finished. IDs `reserveID` gives aren't counted: those entries
-        /// finish as they are made.
-        private var open = 0
+        /// Submissions not yet finished, by ID, and whether each is settled (`PressMark`). IDs
+        /// `reserveID` gives aren't here: those entries finish as they are made.
+        private var open: [ID: Bool] = [:]
 
         /// The ID the next submission gets; every lower one is taken.
         var nextID: Int { lock.withLock { next } }
 
-        var unfinishedCount: Int { lock.withLock { open } }
+        var unfinishedCount: Int { lock.withLock { open.count } }
 
         @discardableResult
         func add(_ operation: FileOperation, onFinish: @escaping @Sendable (Snapshot) -> Void)
             -> ID
         {
-            let counted: @Sendable (Snapshot) -> Void = { [self] snapshot in
-                lock.withLock { open -= 1 }
-                onFinish(snapshot)
-            }
-            return lock.withLock {
+            lock.withLock {
                 let id = ID(next)
                 next += 1
-                open += 1
-                waiting.append((id, operation, counted))
+                // A copy or a duplicate always copies, so it is settled from the start.
+                open[id] =
+                    switch operation {
+                    case .copy, .duplicate: true
+                    case .move, .trash, .rename, .newFolder, .deleteImmediately, .receive, .undo:
+                        false
+                    }
+                waiting.append(
+                    (
+                        id, operation,
+                        { [self] snapshot in
+                            lock.withLock { _ = open.removeValue(forKey: id) }
+                            onFinish(snapshot)
+                        }
+                    ))
                 return id
+            }
+        }
+
+        /// Counts an unfinished submission as settled.
+        func settle(_ id: ID) {
+            lock.withLock {
+                if open[id] != nil { open[id] = true }
+            }
+        }
+
+        /// Unfinished and not settled: a press waits for it.
+        func isAwaitable(_ id: ID) -> Bool { lock.withLock { open[id] == false } }
+
+        func isUnfinished(_ id: ID) -> Bool { lock.withLock { open[id] != nil } }
+
+        func mark() -> PressMark {
+            lock.withLock {
+                PressMark(
+                    submitted: next, awaited: Set(open.filter { !$0.value }.keys),
+                    skipped: Set(open.filter { $0.value }.keys))
             }
         }
 

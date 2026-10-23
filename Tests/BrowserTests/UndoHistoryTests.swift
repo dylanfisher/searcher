@@ -13,14 +13,14 @@ private let redoChord = KeyChord("z", modifiers: [.command, .shift])
 /// A queue on `fileSystem` whose finished operations `history` follows, as the app's windows
 /// make theirs. `watcher` gets its snapshots.
 @MainActor
-private func followedQueue(
+private func followedQueue<C: Clock<Duration>>(
     _ history: UndoHistory, fileSystem: FileOperationQueue.FileSystem = .real,
-    prompter: Prompter = Prompter(), watcher: Watcher = Watcher()
+    prompter: Prompter = Prompter(), watcher: Watcher = Watcher(), clock: C = ContinuousClock()
 ) -> FileOperationQueue {
     let (finished, feed) = AsyncStream.makeStream(of: FileOperationQueue.Snapshot.self)
     history.follow(finished)
     return FileOperationQueue(
-        fileSystem: fileSystem, prompts: prompter.prompts, clock: ContinuousClock(),
+        fileSystem: fileSystem, prompts: prompter.prompts, clock: clock,
         onChange: { watcher.snapshots.append($0) }, onAnyFinish: { feed.yield($0) })
 }
 
@@ -284,11 +284,8 @@ private func tree(_ root: String) throws -> [String] {
     )
     #expect(try read(root + "/a.txt") == "new")
     #expect(try read(root + "/b.txt") == "a")
-    // Moving the item in the way clears the failure, so the entry stays to try again.
-    #expect(harness.history.undoTitle == "Undo Rename")
-    try FileManager.default.removeItem(atPath: root + "/a.txt")
-    #expect(try await harness.undo().phase == .done)
-    #expect(try read(root + "/a.txt") == "a")
+    // Only a missing folder keeps an entry; this one would block every older undo.
+    #expect(!harness.history.canUndo)
 }
 
 /// An item whose folder is gone too, as on a drive that isn't mounted, fails the undo naming
@@ -315,6 +312,35 @@ private func tree(_ root: String) throws -> [String] {
     #expect(files.events.all.contains("move /A/drive/in/x to /A/x"))
 }
 
+/// A kept entry whose undo finds the folder missing again is dropped, and the operation says so.
+@MainActor @Test func aKeptEntryFailingAgainIsDropped() async throws {
+    let files = FakeFiles()
+    let watcher = Watcher()
+    let history = UndoHistory(log: { _ in })
+    let queue = followedQueue(history, fileSystem: files.fileSystem(), watcher: watcher)
+    recordEarlier(
+        history, .rename("/A/a", to: "b"), finished(.moved(from: "/A/a", to: "/A/b")))
+    recordEarlier(
+        history, .move(["/A/x"], into: "/A/drive/in"),
+        finished(.moved(from: "/A/x", to: "/A/drive/in/x")))
+
+    let first = try await value(of: history.undo(with: queue))
+    #expect(history.undoTitle == "Undo Move 1 Item")
+    let operation = FileOperation.undo(
+        OperationRecord(changes: [.moved(from: "/A/x", to: "/A/drive/in/x")]),
+        title: "Undo Move 1 Item", isRetry: false)
+    #expect(!FileOperation.dropsUndoEntry(operation, after: first))
+
+    let second = try await value(of: history.undo(with: queue))
+
+    #expect(second.errors == first.errors)
+    #expect(history.undoTitle == "Undo Rename")
+    let retry = FileOperation.undo(
+        OperationRecord(changes: [.moved(from: "/A/x", to: "/A/drive/in/x")]),
+        title: "Undo Move 1 Item", isRetry: true)
+    #expect(FileOperation.dropsUndoEntry(retry, after: second))
+}
+
 /// An undo is one more queued operation, so the main actor never waits on it.
 @MainActor @Test func anUndoRunsAsAQueuedOperation() async throws {
     let files = FakeFiles()
@@ -336,10 +362,11 @@ private func tree(_ root: String) throws -> [String] {
 /// A queue on fake files whose finished operations `history` follows, with a rename of `/A/a`
 /// to `/A/b` already taken in.
 @MainActor
-private func queueAfterARename(_ files: FakeFiles, _ history: UndoHistory, _ watcher: Watcher)
-    async -> FileOperationQueue
-{
-    let queue = followedQueue(history, fileSystem: files.fileSystem(), watcher: watcher)
+private func queueAfterARename<C: Clock<Duration>>(
+    _ files: FakeFiles, _ history: UndoHistory, _ watcher: Watcher, clock: C = ContinuousClock()
+) async -> FileOperationQueue {
+    let queue = followedQueue(
+        history, fileSystem: files.fileSystem(), watcher: watcher, clock: clock)
     _ = await queue.perform(.rename("/A/a", to: "b"))
     await history.catchUp(with: queue)
     files.place("/A/b")
@@ -348,7 +375,9 @@ private func queueAfterARename(_ files: FakeFiles, _ history: UndoHistory, _ wat
 
 /// Cmd-Z during a large copy undoes the newest finished change at once, as in Finder: the
 /// copy's entry comes only once it ends.
-@MainActor @Test func cmdZOnARenameDuringALargeCopyRunsAtOnce() async throws {
+@MainActor @Test(.timeLimit(.minutes(1))) func cmdZOnARenameDuringALargeCopyRunsAtOnce()
+    async throws
+{
     let files = FakeFiles()
     let watcher = Watcher()
     let history = UndoHistory(log: { _ in })
@@ -369,7 +398,9 @@ private func queueAfterARename(_ files: FakeFiles, _ history: UndoHistory, _ wat
 }
 
 /// Neither a paused operation nor one waiting for an answer holds a press.
-@MainActor @Test func aPressDoesntWaitForAPausedOrAskingOperation() async throws {
+@MainActor @Test(.timeLimit(.minutes(1))) func aPressDoesntWaitForAPausedOrAskingOperation()
+    async throws
+{
     let files = FakeFiles()
     let watcher = Watcher()
     let prompter = Prompter()
@@ -403,7 +434,8 @@ private func queueAfterARename(_ files: FakeFiles, _ history: UndoHistory, _ wat
 
 /// The Undo item stays on while a copy runs and names the newest finished change; once the copy
 /// ends, it names the copy.
-@MainActor @Test func theUndoItemNamesTheNewestFinishedChangeWhileACopyRuns() async throws {
+@MainActor @Test(.timeLimit(.minutes(1)))
+func theUndoItemNamesTheNewestFinishedChangeWhileACopyRuns() async throws {
     let files = FakeFiles()
     let watcher = Watcher()
     let history = UndoHistory(log: { _ in })
@@ -424,7 +456,7 @@ private func queueAfterARename(_ files: FakeFiles, _ history: UndoHistory, _ wat
 }
 
 /// Cmd-Shift-Z during a copy redoes at once too.
-@MainActor @Test func aRedoDuringACopyRunsAtOnce() async throws {
+@MainActor @Test(.timeLimit(.minutes(1))) func aRedoDuringACopyRunsAtOnce() async throws {
     let files = FakeFiles()
     let watcher = Watcher()
     let history = UndoHistory(log: { _ in })
@@ -448,6 +480,7 @@ private func queueAfterARename(_ files: FakeFiles, _ history: UndoHistory, _ wat
 /// to do.
 @MainActor
 @Test(
+    .timeLimit(.minutes(1)),
     arguments: [
         "failed", "refused", "skipped", "nothing to do",
     ])
@@ -499,30 +532,132 @@ func aPressForAnOperationThatChangedNothingDoesNothing(_ ending: String) async t
 }
 
 /// The user cancelling the operation a press waits for is the same: the press does nothing.
-@MainActor @Test func aPressForAnOperationCancelledBeforeItChangedAnythingDoesNothing()
+@MainActor @Test(.timeLimit(.minutes(1)))
+func aPressForAnOperationCancelledBeforeItChangedAnythingDoesNothing()
     async throws
 {
     let files = FakeFiles()
     let watcher = Watcher()
     let history = UndoHistory(log: { _ in })
-    let queue = await queueAfterARename(files, history, watcher)
-    files.holdScan(of: "/A/far")
+    // A clock that doesn't move, so the move never passes the press wait.
+    let queue = await queueAfterARename(files, history, watcher, clock: ManualClock())
+    files.holdVolume(of: "/A/in")
     let moveID = FileOperationQueue.ID(queue.submittedCount)
-    let move = queue.submit(.move(["/A/far"], into: "/B"))
+    let move = queue.submit(.move(["/A/near"], into: "/A/in"))
     let undo = history.undo(with: queue)
-    #expect(await files.events.wait { $0.contains("holding scan /A/far") })
+    #expect(await files.events.wait { $0.contains("holding volume /A/in") })
 
     await queue.cancel(moveID)
 
     #expect(await move.value.phase == .cancelled(leftBehind: nil))
     #expect(await undo.value == nil)
     #expect(!files.events.all.contains("move /A/b to /A/a"))
-    files.letScanGo(of: "/A/far")
+    files.letVolumeGo(of: "/A/in")
+}
+
+/// A move to another volume says so before its pre-scan, so like a copy or a duplicate still
+/// being planned it never holds a press.
+@MainActor @Test(.timeLimit(.minutes(1)))
+func aPressDoesntWaitForACopyDuplicateOrMoveAcrossVolumesStillPlanning() async throws {
+    let files = FakeFiles()
+    let watcher = Watcher()
+    let history = UndoHistory(log: { _ in })
+    let queue = await queueAfterARename(files, history, watcher, clock: ManualClock())
+    for path in ["/A/far", "/S/big", "/A/dup"] { files.holdScan(of: path) }
+    _ = queue.submit(.move(["/A/far"], into: "/B"))
+    _ = queue.submit(.copy(["/S/big"], into: "/A"))
+    _ = queue.submit(.duplicate(["/A/dup"]))
+    #expect(
+        await files.events.wait { events in
+            ["/A/far", "/S/big", "/A/dup"].allSatisfy { events.contains("holding scan \($0)") }
+        })
+
+    let undo = history.undo(with: queue)
+
+    // Waited for with a timeout, then let go, so a press that waits fails rather than hangs.
+    #expect(await files.events.wait { $0.contains("move /A/b to /A/a") })
+    for path in ["/A/far", "/S/big", "/A/dup"] { files.letScanGo(of: path) }
+    files.releaseAll()
+    #expect(await undo.value?.phase == .done)
+}
+
+/// A move whose volume read hangs, as on a share that stopped answering, holds a press for no
+/// more than `pressWait`.
+@MainActor @Test(.timeLimit(.minutes(1))) func aPressWaitsAtMostThePressWait() async throws {
+    let files = FakeFiles()
+    let watcher = Watcher()
+    let history = UndoHistory(log: { _ in })
+    let clock = ManualClock()
+    let queue = await queueAfterARename(files, history, watcher, clock: clock)
+    files.holdVolume(of: "/A/in")
+    _ = queue.submit(.move(["/A/near"], into: "/A/in"))
+    #expect(await files.events.wait { $0.contains("holding volume /A/in") })
+
+    let undo = history.undo(with: queue)
+    try await pause()
+    #expect(!files.events.all.contains("move /A/b to /A/a"))
+    clock.advance(by: FileOperationQueue.pressWait)
+
+    #expect(await files.events.wait { $0.contains("move /A/b to /A/a") })
+    files.letVolumeGo(of: "/A/in")
+    #expect(await undo.value?.phase == .done)
+}
+
+/// Pausing the operation a press waits for lets the press go ahead.
+@MainActor @Test(.timeLimit(.minutes(1))) func pausingTheOperationAPressWaitsForLetsItGo()
+    async throws
+{
+    let files = FakeFiles()
+    let watcher = Watcher()
+    let history = UndoHistory(log: { _ in })
+    let queue = await queueAfterARename(files, history, watcher, clock: ManualClock())
+    files.holdVolume(of: "/A/in")
+    let moveID = FileOperationQueue.ID(queue.submittedCount)
+    _ = queue.submit(.move(["/A/near"], into: "/A/in"))
+    #expect(await files.events.wait { $0.contains("holding volume /A/in") })
+    let undo = history.undo(with: queue)
+    try await pause()
+    #expect(!files.events.all.contains("move /A/b to /A/a"))
+
+    await queue.pause(moveID)
+
+    #expect(await files.events.wait { $0.contains("move /A/b to /A/a") })
+    await queue.cancel(moveID)
+    files.letVolumeGo(of: "/A/in")
+    #expect(await undo.value?.phase == .done)
+}
+
+/// An operation that finished before the press counts for nothing, however late the history
+/// hears of it: an empty one doesn't stop the press, and neither does a reported failure.
+@MainActor @Test(.timeLimit(.minutes(1)))
+func anOperationFinishedBeforeThePressCountsForNothing() async throws {
+    let folder = try TemporaryFolder("UndoHistoryTests")
+    let root = folder.url.path
+    try write("a", to: root + "/a.txt")
+    let history = UndoHistory(log: { _ in })
+    let held = HeldFinishes()
+    let queue = heldQueue(history, held)
+    _ = await queue.perform(.rename(root + "/a.txt", to: "b.txt"))
+    held.release()
+    await settle { history.canUndo }
+    _ = await queue.perform(.trash([]))
+    await queue.report(
+        .receive(name: "mail.eml", app: nil, into: root),
+        errors: [FileOperationError(reason: .unreachable, path: root, errno: ETIMEDOUT)])
+
+    let undo = history.undo(with: queue)
+    try await Task.sleep(for: .milliseconds(50))
+    held.release()
+
+    #expect(try await value(of: undo).phase == .done)
+    #expect(exists(root + "/a.txt"))
 }
 
 /// Presses run one at a time in the order made: two quick presses of Undo undo two entries,
 /// and two of Redo redo them again.
-@MainActor @Test func twoQuickPressesUndoTwoEntriesAndRedoThem() async throws {
+@MainActor @Test(.timeLimit(.minutes(1))) func twoQuickPressesUndoTwoEntriesAndRedoThem()
+    async throws
+{
     let files = FakeFiles()
     let watcher = Watcher()
     let history = UndoHistory(log: { _ in })
@@ -555,7 +690,8 @@ func aPressForAnOperationThatChangedNothingDoesNothing(_ ending: String) async t
 
 /// A press waiting its turn behind a running undo does nothing if a new change is made
 /// meanwhile: the press named the change before it.
-@MainActor @Test func aPressWaitingItsTurnWhileANewChangeIsMadeDoesNothing() async throws {
+@MainActor @Test(.timeLimit(.minutes(1)))
+func aPressWaitingItsTurnWhileANewChangeIsMadeDoesNothing() async throws {
     let files = FakeFiles()
     let watcher = Watcher()
     let history = UndoHistory(log: { _ in })
@@ -1057,8 +1193,8 @@ func aPressForAnOperationThatChangedNothingDoesNothing(_ ending: String) async t
     }
 
     /// exFAT makes its inodes up and they change when it is mounted again, so an item there is
-    /// known by a fingerprint: type, birth time, modification time and size. Another file put
-    /// at the path fails the undo.
+    /// known by a fingerprint: its type and birth time. Editing it in place keeps it the same
+    /// item; another file saved at the path fails the undo.
     @Test func onExFATAnUndoChecksAFingerprint() async throws {
         let image = try await DiskImage("UndoExFAT", megabytes: 40, fileSystem: "ExFAT")
         let root = image.mountPoint
@@ -1070,10 +1206,17 @@ func aPressForAnOperationThatChangedNothingDoesNothing(_ ending: String) async t
             Issue.record("the rename recorded \(renamed.record.identities)")
             return
         }
+        // Edited in place since, as in Finder, it is still the item the rename moved.
+        let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: root + "/b.txt"))
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("+".utf8))
+        try handle.close()
         #expect(try await harness.undo().phase == .done)
-        #expect(try read(root + "/a.txt") == "a")
+        #expect(try read(root + "/a.txt") == "a+")
 
         await harness.perform(.rename(root + "/a.txt", to: "b.txt"))
+        // exFAT keeps birth times to 10 ms.
+        try await Task.sleep(for: .milliseconds(50))
         try write("saved", to: root + "/c.txt")
         try FileManager.default.removeItem(atPath: root + "/b.txt")
         #expect(rename(root + "/c.txt", root + "/b.txt") == 0)
@@ -1122,7 +1265,7 @@ private func finished(_ changes: OperationRecord.Change...) -> OperationState {
 
 /// An undo whose paths a running operation uses is refused at once, and its entry stays where
 /// it was (0072 edge case 20). A second press waits its turn and is refused the same way.
-@MainActor @Test func aRefusedUndoKeepsItsEntry() async throws {
+@MainActor @Test(.timeLimit(.minutes(1))) func aRefusedUndoKeepsItsEntry() async throws {
     let files = FakeFiles()
     let watcher = Watcher()
     let history = UndoHistory(log: { _ in })
@@ -1185,8 +1328,8 @@ private func finished(_ changes: OperationRecord.Change...) -> OperationState {
 }
 
 /// A move between volumes undone whose copy back is made but whose item can't be deleted where
-/// it was: the copy back is in no entry, so there is no Redo, and the move stays to undo; its
-/// check then names the copy in the way.
+/// it was: the copy back is in no entry, so there is no Redo, and the move stays to undo. Its
+/// check then names the copy in the way, which drops it: both copies are kept.
 @MainActor @Test func anUndoThatCopiesBackButCantDeleteOffersNoRedo() async throws {
     let files = FakeFiles(releasingAll: true)
     let watcher = Watcher()
@@ -1206,7 +1349,7 @@ private func finished(_ changes: OperationRecord.Change...) -> OperationState {
     files.place("/A/x")
     let again = try await value(of: history.undo(with: queue))
     #expect(again.errors == [FileOperationError(reason: .exists, path: "/A/x", errno: EEXIST)])
-    #expect(history.undoTitle == "Undo Move 1 Item")
+    #expect(!history.canUndo)
 }
 
 /// An undo that fails part way, its check passed, keeps what it couldn't undo as the entry to
@@ -1307,14 +1450,14 @@ private func finished(_ changes: OperationRecord.Change...) -> OperationState {
 
 // MARK: Identity of items
 
-/// An inode used again by a new item after the recorded one is gone: the birth time tells them
-/// apart, and the undo fails.
-@MainActor @Test func aReusedInodeWithAnotherBirthTimeFailsTheUndo() async throws {
+/// Another inode at the recorded path, on a volume whose IDs persist, is another item, and the
+/// undo fails.
+@MainActor @Test func anotherInodeAtTheRecordedPathFailsTheUndo() async throws {
     let files = FakeFiles()
     let watcher = Watcher()
     let history = UndoHistory(log: { _ in })
     let queue = await queueAfterARename(files, history, watcher)
-    files.identify("/A/b", as: .persistent(volume: "fake", inode: 0, born: 2))
+    files.identify("/A/b", as: .persistent(volume: "fake", inode: 7))
 
     let undone = try await value(of: history.undo(with: queue))
 
@@ -1345,6 +1488,74 @@ private func finished(_ changes: OperationRecord.Change...) -> OperationState {
     #expect(!files.events.all.contains("move /A/b to /A/a"))
     #expect(logged.all.count == 1)
     #expect(logged.all.first?.contains("/A/d") == true)
+}
+
+/// An undo whose result can't be identified offers no Redo, and Redo can't reach older entries
+/// past it, so they go too.
+@MainActor @Test func anUnidentifiedUndoClearsOlderRedoEntries() async throws {
+    let files = FakeFiles()
+    let watcher = Watcher()
+    let history = UndoHistory(log: { _ in })
+    let queue = await queueAfterARename(files, history, watcher)
+    _ = await queue.perform(.rename("/A/c", to: "d"))
+    await history.catchUp(with: queue)
+    files.place("/A/d")
+    #expect(try await value(of: history.undo(with: queue)).phase == .done)
+    #expect(history.canRedo)
+    files.failIdentity(
+        of: "/A/a", with: FileOperationError(reason: .other, path: "/A/a", errno: nil))
+
+    #expect(try await value(of: history.undo(with: queue)).record.unidentified.count == 1)
+
+    #expect(!history.canRedo)
+}
+
+/// A redo whose result can't be identified goes on Undo as Can’t Undo, and the older entries
+/// under it go, as for a delete.
+@MainActor @Test func anUnidentifiedRedoIsCantUndoAndClearsOlderEntries() async throws {
+    let files = FakeFiles()
+    let watcher = Watcher()
+    let history = UndoHistory(log: { _ in })
+    let queue = await queueAfterARename(files, history, watcher)
+    _ = await queue.perform(.rename("/A/c", to: "d"))
+    await history.catchUp(with: queue)
+    files.place("/A/d")
+    #expect(try await value(of: history.undo(with: queue)).phase == .done)
+    files.remove("/A/d")
+    files.place("/A/c")
+    files.failIdentity(
+        of: "/A/d", with: FileOperationError(reason: .other, path: "/A/d", errno: nil))
+
+    #expect(try await value(of: history.redo(with: queue)).record.unidentified.count == 1)
+
+    #expect(history.undoTitle == "Can’t Undo Rename")
+    #expect(history.undoCount == 1)
+}
+
+/// A Can’t Undo entry clears the entries under it and then counts toward the 100 like any.
+@MainActor @Test func aCantUndoEntryCountsTowardTheHundred() {
+    let history = UndoHistory(log: { _ in })
+    for number in 1...5 {
+        recordEarlier(
+            history, .rename("/A/\(number)", to: "n\(number)"),
+            finished(.moved(from: "/A/\(number)", to: "/A/n\(number)")))
+    }
+    var unidentified = finished(.moved(from: "/A/u", to: "/A/v"))
+    unidentified.record.unidentified = [
+        FileOperationError(reason: .other, path: "/A/v", errno: nil)
+    ]
+    recordEarlier(history, .rename("/A/u", to: "v"), unidentified)
+    #expect(history.undoCount == 1)
+    #expect(history.undoTitle == "Can’t Undo Rename")
+
+    for number in 1...UndoHistory.limit {
+        recordEarlier(
+            history, .rename("/B/\(number)", to: "n\(number)"),
+            finished(.moved(from: "/B/\(number)", to: "/B/n\(number)")))
+    }
+
+    #expect(history.undoCount == 100)
+    #expect(history.canUndo)
 }
 
 // MARK: Limit

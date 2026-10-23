@@ -186,3 +186,22 @@ private func snapshot(
 
     await settle { fixture.log.attention == 1 }
 }
+
+/// An undo whose entry is dropped says so; one kept to try again once its drive is back doesn't.
+@MainActor @Test func aDroppedUndoSaysSoInItsRow() throws {
+    let fixture = Fixture()
+    let record = OperationRecord(changes: [.moved(from: "/A/x", to: "/V/in/x")])
+    let gone = FileOperationError(reason: .sourceGone, path: "/V", errno: ENOENT)
+
+    fixture.controller.show([
+        snapshot(
+            1, .failed, operation: .undo(record, title: "Undo Move", isRetry: false), errors: [gone]
+        ),
+        snapshot(
+            2, .failed, operation: .undo(record, title: "Undo Move", isRetry: true), errors: [gone]),
+    ])
+
+    #expect(try fixture.row(1).detailLabel.stringValue == "“/V” is gone.")
+    #expect(
+        try fixture.row(2).detailLabel.stringValue == "“/V” is gone, so this undo is dropped.")
+}

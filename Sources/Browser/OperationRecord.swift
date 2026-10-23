@@ -52,23 +52,24 @@ public struct OperationRecord: Equatable, Sendable {
     /// Times are nanoseconds since 1970.
     public enum ItemIdentity: Equatable, Sendable {
         /// On a volume with persistent object IDs: its UUID, not `st_dev`, which changes when
-        /// the volume is mounted again; the inode; and the birth time, since an inode is used
-        /// again once its item is gone.
-        case persistent(volume: String, inode: UInt64, born: Int64)
+        /// the volume is mounted again, and the inode, which APFS never gives another item.
+        case persistent(volume: String, inode: UInt64)
         /// Elsewhere, as on FAT, exFAT and shares without a volume UUID, where inodes don't
-        /// last: the type (`st_mode & S_IFMT`), the birth time, and for anything but a folder
-        /// the modification time and the size. A folder's modification time changes with what
-        /// is in it, so it isn't kept.
-        case fingerprint(type: UInt16, born: Int64, modified: Int64?, size: Int64?)
+        /// last: the type (`st_mode & S_IFMT`) and the birth time, which an edit in place
+        /// keeps, so an item edited since is still undone, as in Finder.
+        case fingerprint(type: UInt16, born: Int64)
+        /// The same where the file system gives no birth time (zero): the type, the
+        /// modification time and the size, so an edit in place since fails the undo.
+        case fingerprintWithoutBirthTime(type: UInt16, modified: Int64, size: Int64)
     }
 
     public var changes: [Change]
     /// The identity of the item at each change's `location`, read right after the change, by
     /// the location as `FileOperation.comparable` gives it.
     public var identities: [String: ItemIdentity]
-    /// Why the identity of an item a change left couldn't be read: an error, or no birth time
-    /// on a volume without persistent IDs. An operation with any can't be undone, since its
-    /// undo couldn't tell its items from others put at their paths since.
+    /// Why the identity of an item a change left couldn't be read, or that nothing was there
+    /// right after the change. An operation with any can't be undone, since its undo couldn't
+    /// tell its items from others put at their paths since.
     public var unidentified: [FileOperationError]
 
     public init(

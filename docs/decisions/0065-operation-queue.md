@@ -134,13 +134,15 @@ that didn't happen.
 - **Intake in key order.** `submit` queues an operation without waiting for the actor: it takes
   the next ID and adds the operation to a lock-guarded list on the calling thread, and the actor
   takes in the whole list in order whenever it runs. The file commands submit from the key
-  press, so operations are queued in the order of the keys. `finishedCount(before:)`, which an
-  undo reads before it picks an entry ([0072](0072-undo.md)), first waits until every operation
-  submitted before the press (`submittedCount`, read without the actor) has finished or settled:
-  a copy or duplicate, a move planned into a lane, a paused operation and one waiting for an
-  answer are settled, since each can take minutes. It returns the settled ones still unfinished
-  (`skipped`). So Cmd-Z pressed in the same turn as Cmd-Delete undoes that trash, and Cmd-Z
-  pressed during a 20-minute copy undoes the change before it at once, as in Finder.
+  press, so operations are queued in the order of the keys. The intake also keeps each
+  unfinished submission with whether it is settled: a copy or duplicate from the start, a move
+  once its plan finds it crosses volumes (before its pre-scan), and any operation once paused,
+  waiting for an answer, in a lane, or `pressWait` (250 ms) past its submission. An undo press
+  reads that without the actor (`markPress`), and `finishedCount(awaiting:)` waits for the
+  unsettled ones to finish or settle ([0072](0072-undo.md)). So Cmd-Z pressed in the same turn
+  as Cmd-Delete undoes that trash, and Cmd-Z pressed during a 20-minute copy undoes the change
+  before it at once, as in Finder. An operation leaves the intake before `onAnyFinish` hears of
+  it, so a press that finds it unfinished hears of its end after the press.
 
 ## Alternatives considered
 
@@ -202,10 +204,10 @@ Two Searcher processes, such as a development build beside the installed app, ea
 their own names, so one can remove the other's folder in the moment it is empty: a staging
 folder for the microseconds before its copy starts, a drop folder until the first promised byte
 lands. The replace or drop then fails with the path, and nothing is lost. A sweep costs one
-listing of the destination folder per replace operation and per drop. Cmd-Z waits for a move,
-rename or trash queued before it that is still planning, as on a slow share, since whether it
-copies isn't known until the plan is done. Cancelling that operation in the operations panel
-ends the undo too, doing nothing ([0072](0072-undo.md)).
+listing of the destination folder per replace operation and per drop. Cmd-Z waits up to 250 ms
+for a move, rename or trash queued before it whose volume read or item is slow, as on a share
+that stopped answering. Cancelling that operation in the operations panel ends the undo too,
+doing nothing ([0072](0072-undo.md)). Each operation keeps one sleeping task for its 250 ms.
 
 Operations on paths reached through a link aren't matched by the refusal check, as 0049's panes
 aren't, nor by will-unmount. Will-unmount fails an operation still planning, but its plan

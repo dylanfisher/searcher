@@ -26,6 +26,8 @@ public final class UndoHistory {
         /// False for a change that deleted an item, which nothing can bring back, or whose
         /// items' identities couldn't be read.
         let canUndo: Bool
+        /// Kept once after its undo's check found a folder missing; failing again drops it.
+        var isRetry = false
     }
 
     private enum Side {
@@ -34,20 +36,25 @@ public final class UndoHistory {
 
     /// A press of Undo or Redo not yet past its wait, and what the history took in since.
     private struct Press {
-        /// The queue's `submittedCount` at the press: operations with a lower ID were queued
-        /// before it.
-        let submitted: Int
+        /// The queue as the press found it.
+        let mark: FileOperationQueue.PressMark
         /// Each operation taken in since the press, other than undos, and whether it made an
         /// entry.
         var takenIn: [(id: FileOperationQueue.ID, madeEntry: Bool)] = []
 
-        /// Whether the press still names the newest entry once `skipped`, the operations
-        /// queued before it that it didn't wait for, are known: none it waited for changed
-        /// nothing, and none queued after it or skipped made an entry.
-        func stillHolds(skipping skipped: Set<FileOperationQueue.ID>) -> Bool {
+        /// Whether the press still names the newest entry once `settled`, those it waited for
+        /// that settled instead of finishing, are known: none it waited for changed nothing,
+        /// and none queued after it, skipped or settled made an entry. An operation that had
+        /// finished before the press counts for neither, however late the history hears of it.
+        func stillHolds(settled: Set<FileOperationQueue.ID>) -> Bool {
             takenIn.allSatisfy { operation in
-                let isAwaited = operation.id.value < submitted && !skipped.contains(operation.id)
-                return isAwaited == operation.madeEntry
+                let isAwaited =
+                    mark.awaited.contains(operation.id) && !settled.contains(operation.id)
+                if isAwaited { return operation.madeEntry }
+                let isLater =
+                    operation.id.value >= mark.submitted || mark.skipped.contains(operation.id)
+                    || settled.contains(operation.id)
+                return !(isLater && operation.madeEntry)
             }
         }
     }
@@ -98,7 +105,7 @@ public final class UndoHistory {
     /// `FileOperationQueue.finishedCount` says, and the history has taken in each that
     /// finished, or until the stream it follows has ended.
     public func catchUp(with queue: FileOperationQueue) async {
-        await catchUp(to: queue.finishedCount(before: queue.submittedCount).finished)
+        await catchUp(to: queue.finishedCount(awaiting: queue.markPress().awaited).finished)
     }
 
     /// Waits until the history has taken in `count` finished operations, or the stream it
@@ -136,12 +143,7 @@ public final class UndoHistory {
         }
         let name = UndoCommands.name(of: operation, record: record)
         if !record.unidentified.isEmpty { logUnidentified(name, record) }
-        let canUndo = !deletes && record.unidentified.isEmpty
-        if !canUndo {
-            // Nothing before it can be reached once it is last.
-            undoEntries.removeAll()
-        }
-        push(entry(name, record, canUndo: canUndo), to: .undo)
+        push(entry(name, record, canUndo: !deletes && record.unidentified.isEmpty), to: .undo)
         redoEntries.removeAll()
         changeCount += 1
     }
@@ -190,22 +192,21 @@ public final class UndoHistory {
     private func start(_ side: Side, with queue: FileOperationQueue)
         -> Task<OperationState?, Never>
     {
-        let submitted = queue.submittedCount
+        let mark = queue.markPress()
         nextPress += 1
         let key = nextPress
-        presses[key] = Press(submitted: submitted)
+        presses[key] = Press(mark: mark)
         pending += 1
-        // Read at once, not at the press's turn, so what it skipped is what was running when
-        // the key was pressed.
-        let settled = Task { await queue.finishedCount(before: submitted) }
+        // Waited for from the press, not from its turn.
+        let waited = Task { await queue.finishedCount(awaiting: mark.awaited) }
         let previous = lastPress
         let task = Task { () -> OperationState? in
             _ = await previous?.value
-            let (finished, skipped) = await settled.value
+            let (finished, settled) = await waited.value
             await catchUp(to: finished)
             defer { pending -= 1 }
             let press = presses.removeValue(forKey: key)
-            guard press?.stillHolds(skipping: skipped) == true else { return nil }
+            guard press?.stillHolds(settled: settled) == true else { return nil }
             switch side {
             case .undo:
                 guard let entry = undoEntries.last, entry.canUndo else { return nil }
@@ -225,9 +226,10 @@ public final class UndoHistory {
 
     /// Runs the reversal of `entry`, which stays on `side` while it runs.
     ///
-    /// - Refused, cancelled before it changed anything, or failed its check for a reason that
-    ///   can clear, such as a volume that isn't mounted, the entry stays, to try again.
-    /// - Failed its check for a reason that can't clear (`isPermanent`), the entry is dropped.
+    /// - Refused, or cancelled before it changed anything, the entry stays.
+    /// - Failed and changed nothing: the entry stays, once, only when the check found an outer
+    ///   folder missing, as a drive that isn't mounted; otherwise, or on its second try, it is
+    ///   dropped (`FileOperation.dropsUndoEntry`), and the operations panel says so.
     /// - Otherwise what it changed goes on the other side under the same name, unless a new
     ///   change cleared Redo while an undo ran, and what it couldn't change stays in the
     ///   entry's place, so nothing is left that can't be undone. An item copied back between
@@ -237,7 +239,8 @@ public final class UndoHistory {
         _ entry: Entry, from side: Side, title: String, queue: FileOperationQueue
     ) async -> OperationState {
         let changesBefore = changeCount
-        let state = await queue.perform(.undo(entry.record, title: title))
+        let operation = FileOperation.undo(entry.record, title: title, isRetry: entry.isRetry)
+        let state = await queue.perform(operation)
         let done = state.record.changes
         switch state.phase {
         case .refused:
@@ -248,8 +251,12 @@ public final class UndoHistory {
             preconditionFailure("an undo ended while \(state.phase)")
         }
         if done.isEmpty {
-            if state.errors.contains(where: { Self.isPermanent($0, undoing: entry.record) }) {
+            if FileOperation.dropsUndoEntry(operation, after: state) {
                 remove(entry)
+            } else if case .failed = state.phase {
+                var kept = entry
+                kept.isRetry = true
+                replace(entry, with: kept)
             }
             return state
         }
@@ -272,38 +279,21 @@ public final class UndoHistory {
         let record = OperationRecord(
             changes: reversed, identities: state.record.identities,
             unidentified: state.record.unidentified)
-        if !record.unidentified.isEmpty { logUnidentified(entry.name, record) }
+        let identified = record.unidentified.isEmpty
+        if !identified { logUnidentified(entry.name, record) }
         switch side {
+        case .undo where !identified:
+            // Redo can't tell these items from others, and nothing older on Redo can be
+            // reached past them.
+            redoEntries.removeAll()
         case .undo:
-            if changeCount == changesBefore, record.unidentified.isEmpty {
+            if changeCount == changesBefore {
                 push(self.entry(entry.name, record, canUndo: true), to: .redo)
             }
         case .redo:
-            push(
-                self.entry(entry.name, record, canUndo: record.unidentified.isEmpty), to: .undo)
+            push(self.entry(entry.name, record, canUndo: identified), to: .undo)
         }
         return state
-    }
-
-    /// Whether `error`, from an undo of `record` that changed nothing, can't clear by trying
-    /// again: another item is at a recorded path, the volume has no Trash, a put back crosses
-    /// volumes, or an item the undo would change or copy is gone from a folder that is still
-    /// there. The check names the folder instead when the folder is gone too, as when a drive
-    /// isn't mounted, which can clear.
-    private static func isPermanent(_ error: FileOperationError, undoing record: OperationRecord)
-        -> Bool
-    {
-        switch error.reason {
-        case .notTheSameItem, .noTrash, .crossVolume:
-            return true
-        case .sourceGone:
-            let path = FileOperation.comparable(error.path)
-            return FileOperation.steps(undoing: record).contains {
-                $0.source.map(FileOperation.comparable) == path
-            }
-        case .noSpace, .permissionDenied, .unreachable, .exists, .invalidName, .other:
-            return false
-        }
     }
 
     /// Whether `done`, the changes an undo made, hold the reversal of `change`.
@@ -357,6 +347,8 @@ public final class UndoHistory {
     private func push(_ entry: Entry, to side: Side) {
         switch side {
         case .undo:
+            // An entry that can't be undone is last, so nothing before it can be reached.
+            if !entry.canUndo { undoEntries.removeAll() }
             undoEntries.append(entry)
             if undoEntries.count > Self.limit { undoEntries.removeFirst() }
         case .redo:

@@ -64,7 +64,7 @@ public enum UndoCommands: CommandSet {
         case .deleteImmediately: return "Delete"
         case .newFolder: return FileCommands.newFolder.title
         case .duplicate: return FileCommands.duplicate.title
-        case .undo(_, let title): return title
+        case .undo(_, let title, _): return title
         // Never run, so its record is empty and it makes no entry.
         case .receive: return "Drop"
         }

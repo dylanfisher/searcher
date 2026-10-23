@@ -25,9 +25,40 @@ public enum FileOperation: Equatable, Sendable {
     case receive(name: String?, app: String?, into: String)
     /// Reverses `record`'s changes, last first (`UndoStep`), after checking that every item is
     /// where the record left it; if one isn't, nothing is changed. Redo is the undo of an
-    /// undo's record. `title` names it in the operations panel, as the Edit menu did
-    /// (docs/decisions/0072-undo.md).
-    case undo(OperationRecord, title: String)
+    /// undo's record. `title` names it in the operations panel, as the Edit menu did.
+    /// `isRetry` says its entry was kept once after a check that found a folder missing, so
+    /// failing again drops it (`dropsUndoEntry`, docs/decisions/0072-undo.md).
+    case undo(OperationRecord, title: String, isRetry: Bool)
+
+    /// Whether the history drops the entry `operation`, an undo, reversed once it ended in
+    /// `state`: it failed and changed nothing, and either this was the entry's second try or
+    /// the check named something other than a missing outer folder, such as a drive that isn't
+    /// mounted. Only that kind of failure can clear without the user losing the item.
+    public static func dropsUndoEntry(_ operation: FileOperation, after state: OperationState)
+        -> Bool
+    {
+        guard case .undo(let record, _, let isRetry) = operation, state.phase == .failed,
+            state.record.changes.isEmpty
+        else { return false }
+        return isRetry || !onlyFoldersAreMissing(state.errors, undoing: record)
+    }
+
+    /// Whether every error in `errors`, from an undo of `record`, names a folder that is gone,
+    /// not an item the undo would change, copy or put somewhere: the check names the outermost
+    /// missing folder when an item's folder is gone too.
+    static func onlyFoldersAreMissing(
+        _ errors: [FileOperationError], undoing record: OperationRecord
+    )
+        -> Bool
+    {
+        let items = Set(
+            steps(undoing: record).flatMap { [$0.source, $0.destination].compactMap { $0 } }
+                .map(comparable))
+        return !errors.isEmpty
+            && errors.allSatisfy {
+                $0.reason == .sourceGone && !items.contains(comparable($0.path))
+            }
+    }
 
     /// One change an undo reverses.
     enum UndoStep: Equatable, Sendable {
@@ -94,7 +125,7 @@ public enum FileOperation: Equatable, Sendable {
     var reads: [String] {
         switch self {
         case .copy(let sources, _), .duplicate(let sources): sources
-        case .undo(let record, _):
+        case .undo(let record, _, _):
             Self.steps(undoing: record).compactMap { $0.readsSource ? $0.source : nil }
         case .move, .trash, .rename, .newFolder, .deleteImmediately, .receive: []
         }
@@ -114,7 +145,7 @@ public enum FileOperation: Equatable, Sendable {
             [path, Self.renamed(path, to: name)]
         case .newFolder, .duplicate, .receive:
             []
-        case .undo(let record, _):
+        case .undo(let record, _, _):
             Self.steps(undoing: record).flatMap { step in
                 let changed = step.readsSource ? nil : step.source
                 return [changed, step.destination].compactMap { $0 }
