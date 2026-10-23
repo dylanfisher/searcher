@@ -1,7 +1,8 @@
-import Base
 import Foundation
 import TestSupport
 import Testing
+
+@testable import Base
 
 @Suite(.serialized) struct FileMoverTests {
     @Test func moveRenamesAndMovesWithinAVolume() throws {
@@ -73,7 +74,8 @@ import Testing
         try await image.detach()
     }
 
-    /// exFAT refuses `RENAME_EXCL`, so the move checks the destination itself there.
+    /// exFAT answers `RENAME_EXCL` with `EEXIST` when the destination is another item, and
+    /// with `ENOTSUP` when it is free; the move then renames without it.
     @Test func moveOnExFATMovesAndRefusesAnExistingName() async throws {
         let image = try await DiskImage("FileMoverTests", megabytes: 40, fileSystem: "ExFAT")
         let source = image.mountPoint + "/a.txt"
@@ -91,6 +93,40 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: source))
         #expect(try String(contentsOfFile: moved, encoding: .utf8) == "a")
         try await image.detach()
+    }
+
+    /// exFAT answers `RENAME_EXCL` with `ENOTSUP` for a case-only rename, whose destination
+    /// names the source itself.
+    @Test func caseOnlyRenameWorksOnExFAT() async throws {
+        let image = try await DiskImage("FileMoverTests", megabytes: 40, fileSystem: "ExFAT")
+        let source = image.mountPoint + "/c.txt"
+        try Data("c".utf8).write(to: URL(fileURLWithPath: source))
+
+        try FileMover.move(source, to: image.mountPoint + "/C.txt")
+
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: image.mountPoint)
+                .filter { !$0.hasPrefix(".") } == ["C.txt"])
+        #expect(
+            try String(contentsOfFile: image.mountPoint + "/C.txt", encoding: .utf8) == "c")
+        try await image.detach()
+    }
+
+    /// The check the exFAT path makes before its plain rename. The kernel refuses another item
+    /// at the destination itself, so only one created between the two calls reaches it, and
+    /// this checks it directly.
+    @Test func isOtherItemTellsAnotherItemFromTheSourceItself() throws {
+        let folder = try TemporaryFolder("FileMoverTests")
+        let source = folder.url.appending(path: "a.txt").path
+        let other = folder.url.appending(path: "b.txt").path
+        try Data("a".utf8).write(to: URL(fileURLWithPath: source))
+        try Data("b".utf8).write(to: URL(fileURLWithPath: other))
+        let missing = folder.url.appending(path: "missing.txt").path
+
+        #expect(FileMover.isOtherItem(at: other, than: source))
+        #expect(!FileMover.isOtherItem(at: source, than: source))
+        #expect(!FileMover.isOtherItem(at: missing, than: source))
+        #expect(FileMover.isOtherItem(at: other, than: missing))
     }
 
     /// The boot volume can be case-sensitive, so this runs on an image that isn't.
