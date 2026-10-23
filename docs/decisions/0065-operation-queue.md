@@ -128,7 +128,9 @@ that didn't happen.
   anything in it (`ENOTEMPTY`), such as an item a crash left staged, stays for the user. Nothing
   inside is ever deleted. The names in use are a lock-guarded set the actor and the item threads
   share, and a name joins it before its folder is made. A folder that can't be listed, such as a
-  symlink, isn't swept; the call that follows reports what is wrong with it.
+  symlink, isn't swept; the call that follows reports what is wrong with it. The sweep matches
+  by name prefix alone, so an empty hidden folder a user made with one of those prefixes is
+  removed too.
 - **Intake in key order.** `submit` queues an operation without waiting for the actor: it takes
   the next ID and adds the operation to a lock-guarded list on the calling thread, and the actor
   takes in the whole list in order whenever it runs. The file commands submit from the key
@@ -196,7 +198,9 @@ their own names, so one can remove the other's folder in the moment it is empty:
 folder for the microseconds before its copy starts, a drop folder until the first promised byte
 lands. The replace or drop then fails with the path, and nothing is lost. A sweep costs one
 listing of the destination folder per replace operation and per drop. Cmd-Z waits for a move,
-rename or trash queued before it that is waiting for an answer.
+rename or trash queued before it that is waiting for an answer, and for a copy queued before it
+that is still planning, as on a slow share, since its lane isn't known until the plan is done.
+Cancelling that operation in the operations panel lets the undo go ahead.
 
 Operations on paths reached through a link aren't matched by the refusal check, as 0049's panes
 aren't, nor by will-unmount. Will-unmount fails an operation still planning, but its plan

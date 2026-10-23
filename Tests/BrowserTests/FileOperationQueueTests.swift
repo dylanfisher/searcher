@@ -918,3 +918,61 @@ private final class StuckCopier: FileOperationQueue.Copier, @unchecked Sendable 
     #expect(await watcher.waitUntilFinished(id))
     #expect(await queue.cancelAll(by: clock.now.advanced(by: .seconds(5)), clock: clock))
 }
+
+/// Cancels everything with a 2 s deadline and says whether it finished well inside it.
+private func cancelAllFinishesAtOnce(_ queue: FileOperationQueue) async -> Bool {
+    let clock = ContinuousClock()
+    let start = clock.now
+    let finished = await queue.cancelAll(by: start.advanced(by: .seconds(2)), clock: clock)
+    return finished && start.duration(to: clock.now) < .milliseconds(500)
+}
+
+/// A cancel finishes an operation still planning at once, before cancel-all waits for it.
+@Test func cancelAllReturnsAtOnceWhenOnlyAPlanningCopyIsLeft() async throws {
+    let files = FakeFiles()
+    files.holdScan(of: "/S/planning")
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher)
+    let planning = await enqueue(queue, .copy(["/S/planning"], into: "/B"), watcher)
+    #expect(await files.events.wait { $0.contains("holding scan /S/planning") })
+
+    #expect(await cancelAllFinishesAtOnce(queue))
+
+    #expect(watcher.state(of: planning)?.phase == .cancelled(leftBehind: nil))
+    files.letScanGo(of: "/S/planning")
+}
+
+/// A cancel finishes an operation waiting for an answer at once, as it does one queued in its
+/// lane. A queued one always has a running one ahead of it, whose end would wake the wait, so
+/// this is the case where nothing else does.
+@Test func cancelAllReturnsAtOnceWhenOnlyAnOperationWaitingForAnAnswerIsLeft() async throws {
+    let files = FakeFiles()
+    files.place("/A/a")
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher)
+    let asking = await enqueue(queue, .copy(["/S/a"], into: "/A"), watcher)
+    #expect(await watcher.waitUntil(asking, is: .waitingForAnswer))
+
+    #expect(await cancelAllFinishesAtOnce(queue))
+
+    #expect(watcher.state(of: asking)?.phase == .cancelled(leftBehind: nil))
+}
+
+/// An undo reads `finishedCount` first; a copy already in its lane doesn't hold it.
+@Test func finishedCountDoesNotWaitForACopyInItsLane() async throws {
+    let files = FakeFiles()
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher)
+    let trash = await enqueue(queue, .trash(["/A/old"]), watcher)
+    #expect(await watcher.waitUntilFinished(trash))
+    let copy = await enqueue(queue, .copy(["/S/album"], into: "/A"), watcher)
+    #expect(await files.events.wait { $0.contains("copy /S/album") })
+    let counts = EventLog<Int>()
+
+    Task { counts.append(await queue.finishedCount) }
+
+    #expect(await counts.wait { !$0.isEmpty })
+    #expect(counts.all == [1])
+    files.releaseAll()
+    #expect(await watcher.waitUntilFinished(copy))
+}
