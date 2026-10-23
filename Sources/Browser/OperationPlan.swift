@@ -66,8 +66,9 @@ public struct OperationPlan: Equatable, Sendable {
     /// moves to another volume read the volumes involved with `volumeOf` and pre-scan each item
     /// with `measure`. Copies and moves look for each item's name in the destination folder
     /// with `inspect`, top-level items only, and inspect the source of each that is there. An
-    /// undo inspects each step's source and destination, reads with `identify` the identity of
-    /// each source the record has one for, and reads the volumes of its moves. Nothing else
+    /// undo inspects each step's source, destination and destination folder, reads with
+    /// `identify` the identity of each source the record has one for, reads the volumes of its
+    /// moves and of the copies it makes again, and pre-scans what it copies. Nothing else
     /// reads the file system. Blocks while it reads, so it runs on a
     /// `BlockingCallThread`.
     ///
@@ -211,12 +212,13 @@ public struct OperationPlan: Equatable, Sendable {
     }
 
     /// Plans an undo's steps, one item each in order. First it checks, with `inspect`, that each
-    /// step's item is at its source and its destination is free, as the steps before it leave
-    /// them, and, with `identify`, that an item the record has an identity for is still that
-    /// item, not another put at its path since; if any isn't, it plans no items and each such
-    /// path is a failure, so nothing is changed. A move whose two folders are on different
-    /// volumes is copied, so it is pre-scanned and the undo waits in the lane of the first such
-    /// destination's volume.
+    /// step's item is at its source, its destination is free and the folder it goes in is
+    /// there, as the steps before it leave them, and, with `identify`, that an item the record
+    /// has an identity for is still that item, not another put at its path since; if any isn't,
+    /// it plans no items and each such path is a failure, so nothing is changed. A copy made
+    /// again only reads its source, so its identity isn't checked. A move whose two folders are
+    /// on different volumes is copied, as is a copy made again, so each is pre-scanned and the
+    /// undo waits in the lane of the first such destination's volume.
     private static func undoing(
         _ steps: [FileOperation.UndoStep], identities: [String: OperationRecord.ItemIdentity],
         volumeOf: (String) throws(ListingError) -> VolumeIdentity,
@@ -232,36 +234,47 @@ public struct OperationPlan: Equatable, Sendable {
             return try inspect(path) != nil
         }
         var failures: [FileOperationError] = []
+        func gone(_ path: String) {
+            let error = FileOperationError(reason: .sourceGone, path: path, errno: ENOENT)
+            if !failures.contains(error) { failures.append(error) }
+        }
         for step in steps {
             if isCancelled() { throw CancellationError() }
             let source = step.source
             do throws(FileOperationError) {
-                if let taken = after[FileOperation.comparable(source)] {
-                    if !taken {
+                if let source {
+                    if let taken = after[FileOperation.comparable(source)] {
+                        if !taken { gone(source) }
+                    } else if try inspect(source) == nil {
+                        gone(source)
+                    } else if !step.readsSource,
+                        let recorded = identities[FileOperation.comparable(source)],
+                        try identify(source) != recorded
+                    {
+                        // A copy made again copies whatever is at its source now, as a copy
+                        // does, so only an item it would change is checked.
                         failures.append(
-                            FileOperationError(reason: .sourceGone, path: source, errno: ENOENT))
+                            FileOperationError(reason: .notTheSameItem, path: source, errno: nil))
                     }
-                } else if try inspect(source) == nil {
-                    failures.append(
-                        FileOperationError(reason: .sourceGone, path: source, errno: ENOENT))
-                } else if let recorded = identities[FileOperation.comparable(source)],
-                    try identify(source) != recorded
-                {
-                    failures.append(
-                        FileOperationError(reason: .notTheSameItem, path: source, errno: nil))
                 }
-                // A rename that changes only case finds the item itself at its destination.
-                if let destination = step.destination,
-                    FileOperation.comparable(destination) != FileOperation.comparable(source),
-                    try isTaken(destination)
-                {
-                    failures.append(
-                        FileOperationError(reason: .exists, path: destination, errno: EEXIST))
+                if let destination = step.destination {
+                    // A rename that changes only case finds the item itself at its destination.
+                    if source.map(FileOperation.comparable)
+                        != FileOperation.comparable(destination),
+                        try isTaken(destination)
+                    {
+                        failures.append(
+                            FileOperationError(reason: .exists, path: destination, errno: EEXIST))
+                    }
+                    let folder = (destination as NSString).deletingLastPathComponent
+                    if try !isTaken(folder) { gone(folder) }
                 }
             } catch {
                 failures.append(error)
             }
-            after[FileOperation.comparable(source)] = false
+            if let source, !step.readsSource {
+                after[FileOperation.comparable(source)] = false
+            }
             if let destination = step.destination {
                 after[FileOperation.comparable(destination)] = true
             }
@@ -283,7 +296,10 @@ public struct OperationPlan: Equatable, Sendable {
             if isCancelled() { throw CancellationError() }
             var crosses = false
             var size: TreeSizeWalker.Total?
-            if case .move(let from, let to) = step {
+            // The path the step copies from, if it copies.
+            var copied: String?
+            switch step {
+            case .move(let from, let to):
                 do throws(ListingError) {
                     let destination = try volume(of: to)
                     crosses = try volume(of: from) != destination
@@ -292,18 +308,33 @@ public struct OperationPlan: Equatable, Sendable {
                     failures.append(failure(error))
                     continue
                 }
-                if crosses {
-                    switch try measured(from, measure: measure, isCancelled: isCancelled) {
-                    case .success(let measured): size = measured
-                    case .failure(let error):
-                        failures.append(error)
-                        continue
-                    }
+                if crosses { copied = from }
+            case .make(let path, .copy(let source)):
+                do throws(ListingError) {
+                    let destination = try volume(of: path)
+                    if lane == nil { lane = destination }
+                } catch {
+                    failures.append(failure(error))
+                    continue
                 }
+                copied = source
+            case .putBack, .trash, .unmake, .make:
+                break
+            }
+            if let copied {
+                switch try measured(copied, measure: measure, isCancelled: isCancelled) {
+                case .success(let measured): size = measured
+                case .failure(let error):
+                    failures.append(error)
+                    continue
+                }
+            }
+            guard let source = step.source ?? step.destination else {
+                preconditionFailure("\(step) has neither a source nor a destination")
             }
             items.append(
                 Item(
-                    source: step.source, destination: step.destination, size: size,
+                    source: source, destination: step.destination, size: size,
                     crossesVolumes: crosses, conflict: nil))
         }
         guard failures.isEmpty else {

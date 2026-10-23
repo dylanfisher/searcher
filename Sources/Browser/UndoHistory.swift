@@ -1,11 +1,13 @@
 /// The app's one undo and redo history of file changes, built from each finished operation's
-/// `OperationRecord`. Moves, renames, trashes and replaces make an entry; copies, new folders
-/// and duplicates, which only make items, don't. Undo first waits until the history has heard
-/// of every operation the queue has finished, then queues a `FileOperation.undo` of the last
-/// entry; once that ends, what it changed is the entry Redo reverses. One undo or redo runs at a
-/// time, and its entry stays where it is until it ends. A delete that skipped the Trash can't be
-/// undone: its entry stays last and keeps Undo off. Each side keeps the last `limit` entries
-/// (docs/decisions/0072-undo.md).
+/// `OperationRecord`. Every operation that changed something makes an entry: moves, renames,
+/// trashes and replaces, and copies, duplicates and new folders, whose undo trashes what they
+/// made. Undo first waits until every operation queued before the press has finished and the
+/// history has heard of it, then queues a `FileOperation.undo` of the last entry; once that
+/// ends, what it changed is the entry Redo reverses. If, while it waited, the user cancelled an
+/// operation it waited for or a later operation made an entry, it does nothing: the press no
+/// longer names the last change. One undo or redo runs at a time, and its entry stays where it
+/// is until it ends. A delete that skipped the Trash can't be undone: its entry stays last and
+/// keeps Undo off. Each side keeps the last `limit` entries (docs/decisions/0072-undo.md).
 @MainActor
 public final class UndoHistory {
     /// The most entries each side keeps; the oldest goes first.
@@ -37,6 +39,19 @@ public final class UndoHistory {
     /// Set once the stream `follow` reads ends; nothing more will be taken in.
     private var isDeaf = false
 
+    /// An undo or redo pressed and still waiting for the operations queued before it.
+    private struct Press {
+        /// The queue's `submittedCount` at the press: operations with a lower ID were queued
+        /// before it.
+        let submitted: Int
+        /// An operation queued before the press ended cancelled without an entry.
+        var sawCancel = false
+        /// An operation queued after the press made an entry.
+        var sawLaterChange = false
+    }
+
+    private var press: Press?
+
     /// Whether an undo or redo is waiting or running; Undo and Redo are off until it ends.
     public private(set) var isBusy = false
 
@@ -47,20 +62,32 @@ public final class UndoHistory {
     public func follow(_ finished: AsyncStream<FileOperationQueue.Snapshot>) {
         Task { [weak self] in
             for await snapshot in finished {
-                self?.record(snapshot.operation, snapshot.state)
+                self?.record(snapshot.operation, snapshot.state, id: snapshot.id)
             }
             self?.stopFollowing()
         }
     }
 
-    /// Waits until the history has taken in as many finished operations as `queue` has
-    /// finished, so an operation that ended just before is the one Undo sees, or until the
-    /// stream it follows has ended. A waiting undo holds the history, so it can't go away while
-    /// one waits.
+    /// Waits until every operation queued on `queue` so far has finished and the history has
+    /// taken it in, so an operation that ended just before is the one Undo sees, or until the
+    /// stream it follows has ended.
     public func catchUp(with queue: FileOperationQueue) async {
-        let count = await queue.finishedCount
+        await catchUp(with: queue, before: queue.submittedCount)
+    }
+
+    /// `catchUp` for the operations among the first `submitted` queued. A waiting undo holds
+    /// the history, so it can't go away while one waits.
+    private func catchUp(with queue: FileOperationQueue, before submitted: Int) async {
+        let count = await queue.finishedCount(before: submitted)
         guard takenIn < count, !isDeaf else { return }
         await withCheckedContinuation { waiters.append((count, $0)) }
+    }
+
+    /// Whether the history has taken in every operation queued on `queue`, so the last entry
+    /// is the one a press of Undo would undo. False while an operation runs, such as a copy
+    /// whose entry would go on top.
+    public func isCaughtUp(with queue: FileOperationQueue) -> Bool {
+        isDeaf || takenIn >= queue.submittedCount
     }
 
     private func stopFollowing() {
@@ -72,19 +99,21 @@ public final class UndoHistory {
         }
     }
 
-    /// Takes in `operation`, which finished in `state`: an entry for what it changed, which
-    /// clears Redo. An operation that only made items, or changed nothing, adds nothing, and an
+    /// Takes in `operation`, queued as `id`, which finished in `state`: an entry for what it
+    /// changed, which clears Redo. An operation that changed nothing adds nothing, and an
     /// undo's own end is taken in by `undo` and `redo`.
-    func record(_ operation: FileOperation, _ state: OperationState) {
+    func record(_ operation: FileOperation, _ state: OperationState, id: FileOperationQueue.ID) {
         precondition(state.phase.isFinished, "\(operation) is recorded before it finished")
         takenIn += 1
         defer { resumeWaiters() }
         if case .undo = operation { return }
         let changes = state.record.changes
-        let changesExisting = changes.contains { change in
-            if case .created = change { false } else { true }
+        let isBeforePress = press.map { id.value < $0.submitted }
+        guard !changes.isEmpty else {
+            if isBeforePress == true, case .cancelled = state.phase { press?.sawCancel = true }
+            return
         }
-        guard changesExisting else { return }
+        if isBeforePress == false { press?.sawLaterChange = true }
         let deletes = changes.contains { change in
             if case .deleted = change { true } else { false }
         }
@@ -141,9 +170,15 @@ public final class UndoHistory {
     {
         guard !isBusy else { return nil }
         isBusy = true
+        let submitted = queue.submittedCount
+        press = Press(submitted: submitted)
         return Task {
-            await catchUp(with: queue)
+            await catchUp(with: queue, before: submitted)
             defer { isBusy = false }
+            let waited = press
+            press = nil
+            // The user stopped what the press was for, or made a change after it.
+            if waited?.sawCancel == true || waited?.sawLaterChange == true { return nil }
             switch side {
             case .undo:
                 guard let entry = undoEntries.last, entry.canUndo else { return nil }
@@ -182,8 +217,11 @@ public final class UndoHistory {
         }
         undoEntries.removeAll { $0.id == entry.id }
         redoEntries.removeAll { $0.id == entry.id }
+        // A move between volumes undone: the item was copied back from where the move left it,
+        // and that copy couldn't be deleted.
         let copiedBack = changes.contains { change in
-            if case .created = change { true } else { false }
+            guard case .created(let path, .copy(let source)) = change else { return false }
+            return entry.record.changes.contains(.moved(from: path, to: source))
         }
         guard !changes.isEmpty, !copiedBack else { return state }
         let reversal = self.entry(entry.name, state.record, canUndo: true)

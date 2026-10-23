@@ -39,7 +39,7 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
     #expect(!files.events.all.contains { $0.hasPrefix("copy /S/a") || $0.hasPrefix("copy /S/c") })
     let state = try #require(watcher.state(of: id))
     #expect(state.phase == .done)
-    #expect(state.record.changes == [.created("/A/d")])
+    #expect(state.record.changes == [.created("/A/d", from: .copy(of: "/S/d"))])
     #expect(state.progress.itemsDone == 4)
     #expect(state.progress.total == TreeSizeWalker.Total(bytes: 10, files: 1, isPartial: false))
 }
@@ -95,7 +95,10 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
     #expect(await watcher.waitUntilFinished(copy))
 
     #expect(files.events.all.contains("copied /S/report 3.jpg to /A/report 3 2.jpg"))
-    #expect(watcher.state(of: copy)?.record.changes == [.created("/A/report 3 2.jpg")])
+    #expect(
+        watcher.state(of: copy)?.record.changes == [
+            .created("/A/report 3 2.jpg", from: .copy(of: "/S/report 3.jpg"))
+        ])
 }
 
 @Test func aMoveWithinAVolumeKeepsBothUnderTheNewName() async throws {
@@ -131,7 +134,10 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
     let move = await enqueue(queue, .move(["/A/x.txt"], into: "/A"), watcher)
     #expect(await watcher.waitUntilFinished(move))
 
-    #expect(watcher.state(of: copy)?.record.changes == [.created("/A/x copy 2.txt")])
+    #expect(
+        watcher.state(of: copy)?.record.changes == [
+            .created("/A/x copy 2.txt", from: .copy(of: "/A/x.txt"))
+        ])
     #expect(watcher.state(of: move)?.phase == .done)
     #expect(watcher.state(of: move)?.record.changes == [])
     #expect(!files.events.all.contains { $0.hasPrefix("move") })
@@ -257,7 +263,8 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
     let trashed = URL(fileURLWithPath: "/S/.Trashes/501/song.flac")
     #expect(
         watcher.state(of: copy)?.record.changes == [
-            .replaced("/A/song.flac", originalTrashedTo: trashed), .created("/A/song.flac"),
+            .replaced("/A/song.flac", originalTrashedTo: trashed),
+            .created("/A/song.flac", from: .copy(of: "/S/song.flac")),
         ])
 
     // A move within one volume stages by moving, not copying.
@@ -352,7 +359,8 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
     #expect(files.events.all.contains("move \(staging)/a to /A/a"))
     #expect(
         watcher.state(of: id)?.record.changes == [
-            .deleted("/A/a"), .created("/A/a"), .deleted("/A/b"), .created("/A/b"),
+            .deleted("/A/a"), .created("/A/a", from: .copy(of: "/S/a")), .deleted("/A/b"),
+            .created("/A/b", from: .copy(of: "/S/b")),
         ])
     #expect(prompter.confirms.all.count == 1)
 }
@@ -537,7 +545,7 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
             Issue.record("no replace in \(state.record.changes)")
             return
         }
-        #expect(state.record.changes.last == .created(destination))
+        #expect(state.record.changes.last == .created(destination, from: .copy(of: source)))
         #expect(trashed.path.hasPrefix(image.mountPoint + "/.Trashes/"))
         #expect(trashed.lastPathComponent == "album")
         #expect(

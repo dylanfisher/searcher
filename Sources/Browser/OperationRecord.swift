@@ -3,9 +3,21 @@ import Foundation
 /// What an operation changed on disk, item by item in the order it ran: what Undo reads to put
 /// things back, and where commands find the names a new folder or a duplicate was given.
 public struct OperationRecord: Equatable, Sendable {
+    /// How a change made an item, which tells Redo how to make it again.
+    public enum Origin: Equatable, Sendable {
+        /// Copied from the item at the path: by a copy, a duplicate, a replace, or a move to
+        /// another volume whose source couldn't be deleted. Redo copies from the path again.
+        case copy(of: String)
+        /// Made empty by New Folder. Redo makes an empty folder at the path again.
+        case newFolder
+        /// A file a drop promised, moved into place from the queue's drop folder. The app it
+        /// came from can't be asked again, so Redo puts it back from the Trash.
+        case drop
+    }
+
     public enum Change: Equatable, Sendable {
-        /// A copy, a duplicate or a new folder made this item.
-        case created(String)
+        /// A copy, a duplicate, a new folder or a drop made this item.
+        case created(String, from: Origin)
         /// A move or a rename; across volumes, the source was deleted once its copy was done.
         case moved(from: String, to: String)
         /// The item is in its volume's Trash at `to`.
@@ -19,12 +31,16 @@ public struct OperationRecord: Equatable, Sendable {
         case replaced(String, originalTrashedTo: URL)
         /// An undo moved the item back from its volume's Trash at the URL to the path.
         case putBack(from: URL, to: String)
+        /// An undo moved an item a change `created` to its volume's Trash at the URL. Redo
+        /// makes it again from its origin rather than from the Trash, as Finder does.
+        case uncreated(String, from: Origin, trashedTo: URL)
 
         /// Where the item the change is about is once it is done; nil for a delete.
         var location: String? {
             switch self {
-            case .created(let path), .moved(_, let path), .putBack(_, let path): path
-            case .trashed(_, let url), .replaced(_, let url): url.path
+            case .created(let path, _), .moved(_, let path), .putBack(_, let path): path
+            case .trashed(_, let url), .replaced(_, let url), .uncreated(_, _, let url):
+                url.path
             case .deleted: nil
             }
         }

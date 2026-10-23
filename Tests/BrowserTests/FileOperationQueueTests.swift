@@ -12,7 +12,8 @@ let volumeB = VolumeIdentity(device: "/dev/fakeB", mountPoint: "/B", kind: .loca
 let volumeS = VolumeIdentity(device: "/dev/fakeS", mountPoint: "/S", kind: .local)
 
 /// A file system for queue tests that touches no disk: paths under `/A`, `/B` and `/S` are on
-/// three volumes, and every call is logged. A copy logs its start, reports `progressSteps`
+/// three volumes, and every call is logged. A volume's mount point and a folder holding a placed
+/// item are folders that exist. A copy logs its start, reports `progressSteps`
 /// changes, then waits until its source is released or the copy is cancelled. A pre-scan of a
 /// held path waits until it is let go, as one on a share that stopped answering does. Every
 /// path under `/S` exists; elsewhere only what a test places does, so a copy or move into
@@ -105,6 +106,11 @@ final class FakeFiles: @unchecked Sendable {
         condition.withLock { placed[path] = Self.item(path, isFolder: isFolder) }
     }
 
+    /// Takes away an item `place` put at `path`.
+    func remove(_ path: String) {
+        condition.withLock { _ = placed.removeValue(forKey: path) }
+    }
+
     /// Puts items named `names` in `folder`, for a listing of it.
     func put(_ names: [String], in folder: String) {
         condition.withLock { contents[folder] = names }
@@ -182,7 +188,15 @@ final class FakeFiles: @unchecked Sendable {
             },
             inspect: { path throws(FileOperationError) in
                 self.events.append("inspect \(path)")
-                if let item = self.condition.withLock({ self.placed[path] }) { return item }
+                let (item, isFolder) = self.condition.withLock {
+                    (
+                        self.placed[path],
+                        self.volumes.contains { $0.mountPoint == path }
+                            || self.placed.keys.contains { $0.hasPrefix(path + "/") }
+                    )
+                }
+                if let item { return item }
+                if isFolder { return Self.item(path, isFolder: true) }
                 return isPath(path, atOrUnder: "/S") ? Self.item(path) : nil
             },
             listNames: { folder throws(FileOperationError) in
@@ -413,12 +427,18 @@ func pause() async throws {
         watcher.state(of: trash)?.record.changes == [
             .trashed(from: "/A/old", to: URL(fileURLWithPath: "/S/.Trashes/501/old"))
         ])
-    #expect(watcher.state(of: newFolder)?.record.changes == [.created("/A/untitled folder")])
+    #expect(
+        watcher.state(of: newFolder)?.record.changes == [
+            .created("/A/untitled folder", from: .newFolder)
+        ])
     #expect(!files.events.all.contains { $0.hasPrefix("copy failed") })
 
     files.releaseAll()
     #expect(await watcher.waitUntilFinished(copy))
-    #expect(watcher.state(of: copy)?.record.changes == [.created("/A/album")])
+    #expect(
+        watcher.state(of: copy)?.record.changes == [
+            .created("/A/album", from: .copy(of: "/S/album"))
+        ])
 }
 
 @Test func anOperationTouchingAnItemACopyReadsOrWritesIsRefusedNamingIt() async throws {
@@ -946,8 +966,9 @@ private func cancelAllFinishesAtOnce(_ queue: FileOperationQueue) async -> Bool 
     #expect(watcher.state(of: asking)?.phase == .cancelled(leftBehind: nil))
 }
 
-/// An undo reads `finishedCount` first; a copy already in its lane doesn't hold it.
-@Test func finishedCountDoesNotWaitForACopyInItsLane() async throws {
+/// An undo reads `finishedCount` first. A copy submitted before the press holds it until the
+/// copy ends, since the undo is for the copy; one submitted after the press doesn't.
+@Test func finishedCountWaitsForEveryOperationSubmittedBeforeIt() async throws {
     let files = FakeFiles()
     let watcher = Watcher()
     let queue = makeQueue(files, watcher)
@@ -955,14 +976,20 @@ private func cancelAllFinishesAtOnce(_ queue: FileOperationQueue) async -> Bool 
     #expect(await watcher.waitUntilFinished(trash))
     let copy = await enqueue(queue, .copy(["/S/album"], into: "/A"), watcher)
     #expect(await files.events.wait { $0.contains("copy /S/album") })
+    let pressed = queue.submittedCount
+    let later = await enqueue(queue, .copy(["/S/later"], into: "/B"), watcher)
+    #expect(await files.events.wait { $0.contains("copy /S/later") })
     let counts = EventLog<Int>()
 
-    Task { counts.append(await queue.finishedCount) }
+    Task { counts.append(await queue.finishedCount(before: pressed)) }
 
+    try await pause()
+    #expect(counts.all.isEmpty)
+    files.release("/S/album")
     #expect(await counts.wait { !$0.isEmpty })
-    #expect(counts.all == [1])
+    #expect(counts.all == [2])
     files.releaseAll()
-    #expect(await watcher.waitUntilFinished(copy))
+    #expect(await watcher.waitUntilFinished(copy, later))
 }
 
 /// Quitting reads `unfinishedCount` the moment Cmd-Q is pressed, before any snapshot of a copy

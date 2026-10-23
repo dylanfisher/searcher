@@ -624,7 +624,8 @@ private func stopEverything(_ windows: WorkspaceWindows) async {
             progress: OperationState.Progress(
                 itemsDone: 1, itemCount: 1, copied: CopyProgress(bytes: 0, files: 0), total: nil),
             errors: [],
-            record: OperationRecord(changes: [.moved(from: "/root/a.txt", to: "/root/b.txt")])))
+            record: OperationRecord(changes: [.moved(from: "/root/a.txt", to: "/root/b.txt")])),
+        id: FileOperationQueue.ID(-1))
 
     #expect(try fixture.keyTable(second).validateMenuItem(undo))
     #expect(undo.title == "Undo Rename")

@@ -139,7 +139,7 @@ public actor FileOperationQueue {
     private nonisolated let intake = Intake()
     /// Staging and drop folders in use, which a sweep leaves alone.
     private nonisolated let liveFolders = LiveFolders()
-    /// Calls waiting for an operation to finish or join its lane.
+    /// Calls waiting for an operation to finish.
     private var changeWaiters: [CheckedContinuation<Void, Never>] = []
     /// Planned operations waiting for their lane, in the order queued.
     private var waiting: [ID] = []
@@ -153,24 +153,25 @@ public actor FileOperationQueue {
     private var finished = 0
 
     /// How many operations have finished, refused ones included, read once every operation
-    /// submitted before the read has finished or, for one that copies, joined its lane. So an
-    /// undo pressed right after Move to Trash waits for that trash, and not for a long copy
+    /// among the first `submitted` has finished. So an undo pressed right after Move to Trash,
+    /// or while a copy runs, waits for that operation and undoes it
     /// (docs/decisions/0072-undo.md).
-    public var finishedCount: Int {
-        get async {
-            takeIn()
-            let submitted = intake.nextID
-            while entries.contains(where: { $0.id.value < submitted && !$0.isSettled }) {
-                await waitForChange()
-            }
-            return finished
+    public func finishedCount(before submitted: Int) async -> Int {
+        takeIn()
+        while entries.contains(where: { $0.id.value < submitted && !$0.phase.isFinished }) {
+            await waitForChange()
         }
+        return finished
     }
 
     /// How many submitted operations haven't finished, paused ones and ones waiting for an
     /// answer included. Read without waiting for the actor, so it counts an operation from the
     /// moment `submit` or `enqueue` returns; the app asks before quitting while it isn't zero.
     public nonisolated var unfinishedCount: Int { intake.unfinishedCount }
+
+    /// How many operations have been submitted, reported failures included; each of them
+    /// finishes once. Read without waiting for the actor, so a key press can note it.
+    public nonisolated var submittedCount: Int { intake.nextID }
 
     /// A queue that works on the file system and asks its questions through `prompts`.
     /// `onChange` gets every operation's state, unfinished ones and those finished since the
@@ -259,7 +260,7 @@ public actor FileOperationQueue {
         }
     }
 
-    /// Waits until an operation finishes or joins its lane.
+    /// Waits until an operation finishes.
     private func waitForChange() async {
         await withCheckedContinuation { changeWaiters.append($0) }
     }
@@ -581,8 +582,6 @@ public actor FileOperationQueue {
             preconditionFailure("planning \(operation) threw \(error)")
         }
         entry.plan = plan
-        // One that copies is settled now (`finishedCount`).
-        if plan.lane != nil { resumeChangeWaiters() }
         entry.errors = plan.failures
         entry.progress = OperationState.Progress(
             itemsDone: plan.failures.count, itemCount: plan.failures.count + plan.items.count,
@@ -731,11 +730,12 @@ public actor FileOperationQueue {
             let liveFolders = liveFolders
             // An undo plans one item per step, or none.
             let undoStep = undoSteps.isEmpty ? nil : undoSteps[index]
+            let isFromDrop = isInDropFolder(item.source)
             var (outcome, identities) = await BlockingCallThread.run {
                 let outcome = Self.perform(
                     item, of: operation, choice: choice, deletesWithoutTrash: deletesWithoutTrash,
-                    undoStep: undoStep, fileSystem: fileSystem, liveFolders: liveFolders,
-                    copier: copier, control: control
+                    undoStep: undoStep, isFromDrop: isFromDrop, fileSystem: fileSystem,
+                    liveFolders: liveFolders, copier: copier, control: control
                 ) { progress in
                     // The ticker reads it; a call into the actor per report would be one every
                     // 0.5 ms at full speed.
@@ -813,6 +813,15 @@ public actor FileOperationQueue {
         release(plan.lane)
     }
 
+    /// Whether `path` is in a drop folder this queue made and hasn't removed: a file a drop
+    /// promised. Matched by the folder's name, which holds a UUID, so a path spelled through
+    /// another link to the same folder still matches.
+    private func isInDropFolder(_ path: String) -> Bool {
+        let folder = ((path as NSString).deletingLastPathComponent as NSString).lastPathComponent
+        return folder.hasPrefix(Self.dropFolderPrefix)
+            && dropFolders.contains { ($0.path as NSString).lastPathComponent == folder }
+    }
+
     /// Asks `request` for an operation that is running an item, which may have something
     /// staged to clean up, so a cancel or an unmount answers it at once with nil, and `run`
     /// finishes the operation once it has cleaned up. The user's later answer is dropped.
@@ -868,6 +877,8 @@ public actor FileOperationQueue {
         /// A move within one volume: the item was moved, not copied, into `staging`.
         let movesWithin: Bool
         let crossesVolumes: Bool
+        /// A file a drop promised, moved in from the queue's drop folder.
+        let isFromDrop: Bool
         let copied: CopyProgress
 
         var stagedItem: String {
@@ -877,7 +888,8 @@ public actor FileOperationQueue {
         func with(copied: CopyProgress) -> StagedReplace {
             StagedReplace(
                 source: source, destination: destination, staging: staging, isMove: isMove,
-                movesWithin: movesWithin, crossesVolumes: crossesVolumes, copied: copied)
+                movesWithin: movesWithin, crossesVolumes: crossesVolumes, isFromDrop: isFromDrop,
+                copied: copied)
         }
     }
 
@@ -952,17 +964,20 @@ public actor FileOperationQueue {
             }
             return failed(error, changes: [])
         }
+        let copy = OperationRecord.Change.created(destination, from: .copy(of: staged.source))
         let placed: OperationRecord.Change =
-            staged.isMove
-            ? .moved(from: staged.source, to: destination) : .created(destination)
+            switch (staged.isMove, staged.isFromDrop) {
+            case (true, true): .created(destination, from: .drop)
+            case (true, false): .moved(from: staged.source, to: destination)
+            case (false, _): copy
+            }
         do {
             try fileSystem.deletePermanently(staged.staging)
             if staged.isMove, staged.crossesVolumes {
                 try fileSystem.deletePermanently(staged.source)
             }
         } catch {
-            let kept: OperationRecord.Change =
-                staged.isMove && staged.crossesVolumes ? .created(destination) : placed
+            let kept = staged.isMove && staged.crossesVolumes ? copy : placed
             return .failed(error, changes: [original, kept])
         }
         return .done([original, placed], copied: staged.copied)
@@ -998,12 +1013,14 @@ public actor FileOperationQueue {
     /// Runs `item` of `operation` on the calling thread, a `BlockingCallThread`. `choice`
     /// answers the item's conflict, if it has one. `deletesWithoutTrash` says the user agreed to
     /// delete what would go to a Trash the volume doesn't have. `undoStep` is the step of an
-    /// undo the item runs.
+    /// undo the item runs. `isFromDrop` says the item is a file a drop promised, in the queue's
+    /// drop folder: a move records it as made, since that folder is removed once the drop ends.
     private static func perform(
         _ item: OperationPlan.Item, of operation: FileOperation,
         choice: ConflictResolution.Choice?, deletesWithoutTrash: Bool,
-        undoStep: FileOperation.UndoStep?, fileSystem: FileSystem, liveFolders: LiveFolders,
-        copier: any Copier, control: Control, progress: @escaping (CopyProgress) -> Void
+        undoStep: FileOperation.UndoStep?, isFromDrop: Bool, fileSystem: FileSystem,
+        liveFolders: LiveFolders, copier: any Copier, control: Control,
+        progress: @escaping (CopyProgress) -> Void
     ) -> ItemOutcome {
         guard control.waitWhilePaused() else { return .cancelled(leftBehind: nil) }
         let source = item.source
@@ -1059,7 +1076,8 @@ public actor FileOperationQueue {
             let movesWithin = isMove && !item.crossesVolumes
             let staged = StagedReplace(
                 source: source, destination: destination, staging: staging, isMove: isMove,
-                movesWithin: movesWithin, crossesVolumes: item.crossesVolumes, copied: none)
+                movesWithin: movesWithin, crossesVolumes: item.crossesVolumes,
+                isFromDrop: isFromDrop, copied: none)
             let copied: CopyProgress
             do {
                 if movesWithin {
@@ -1092,14 +1110,18 @@ public actor FileOperationQueue {
                     return .done([], copied: none)
                 }
                 if choice == .replace { return try replace(destination, isMove: false) }
-                return .done([.created(destination)], copied: try copy(to: destination))
+                return .done(
+                    [.created(destination, from: .copy(of: source))],
+                    copied: try copy(to: destination))
             case .duplicate:
                 let parent = (source as NSString).deletingLastPathComponent
                 let name = try UniqueName.duplicate(of: (source as NSString).lastPathComponent) {
                     name throws(FileOperationError) in try fileSystem.isTaken(name, parent)
                 }
                 let destination = parent + "/" + name
-                return .done([.created(destination)], copied: try copy(to: destination))
+                return .done(
+                    [.created(destination, from: .copy(of: source))],
+                    copied: try copy(to: destination))
             case .move:
                 guard let destination = try resolvedDestination() else {
                     return .done([], copied: none)
@@ -1108,14 +1130,18 @@ public actor FileOperationQueue {
                 guard item.crossesVolumes else {
                     try fileSystem.move(source, destination)
                     return .done(
-                        [.moved(from: source, to: destination)],
+                        [
+                            isFromDrop
+                                ? .created(destination, from: .drop)
+                                : .moved(from: source, to: destination)
+                        ],
                         copied: CopyProgress(bytes: 0, files: 0))
                 }
                 let copied = try copy(to: destination)
                 do {
                     try fileSystem.deletePermanently(source)
                 } catch {
-                    return .failed(error, changes: [.created(destination)])
+                    return .failed(error, changes: [.created(destination, from: .copy(of: source))])
                 }
                 return .done([.moved(from: source, to: destination)], copied: copied)
             case .rename(_, let name):
@@ -1141,7 +1167,8 @@ public actor FileOperationQueue {
                 return .done([.deleted(source)], copied: CopyProgress(bytes: 0, files: 0))
             case .newFolder:
                 let folder = try fileSystem.makeUntitledFolder(source)
-                return .done([.created(folder)], copied: CopyProgress(bytes: 0, files: 0))
+                return .done(
+                    [.created(folder, from: .newFolder)], copied: CopyProgress(bytes: 0, files: 0))
             case .receive:
                 preconditionFailure("\(operation) is reported, never run")
             case .undo:
@@ -1152,6 +1179,19 @@ public actor FileOperationQueue {
                 case .trash(let path):
                     return .done(
                         [.trashed(from: path, to: try fileSystem.trash(path))], copied: none)
+                case .unmake(let path, let origin):
+                    let url = try fileSystem.trash(path)
+                    return .done([.uncreated(path, from: origin, trashedTo: url)], copied: none)
+                case .make(let path, .copy(let from)):
+                    return .done(
+                        [.created(path, from: .copy(of: from))], copied: try copy(to: path))
+                case .make(let path, .newFolder):
+                    let made = try fileSystem.makeFolder(
+                        (path as NSString).lastPathComponent,
+                        (path as NSString).deletingLastPathComponent)
+                    return .done([.created(made, from: .newFolder)], copied: none)
+                case .make(let path, .drop):
+                    preconditionFailure("\(path) is put back from the Trash, not made again")
                 case .putBack(let url, let path):
                     try fileSystem.move(url.path, path)
                     return .done([.putBack(from: url, to: path)], copied: none)
@@ -1164,7 +1204,7 @@ public actor FileOperationQueue {
                     do {
                         try fileSystem.deletePermanently(from)
                     } catch {
-                        return .failed(error, changes: [.created(to)])
+                        return .failed(error, changes: [.created(to, from: .copy(of: from))])
                     }
                     return .done([.moved(from: from, to: to)], copied: copied)
                 }
@@ -1231,7 +1271,7 @@ public actor FileOperationQueue {
         case .trash(let paths), .duplicate(let paths), .deleteImmediately(let paths): paths
         case .rename(let path, _): [path]
         case .newFolder(let folder), .receive(_, _, let folder): [folder]
-        case .undo: operation.changes
+        case .undo: operation.changes + operation.reads
         }
     }
 
@@ -1318,9 +1358,6 @@ public actor FileOperationQueue {
         var volumeGone: FileOperationError?
         /// Resumes `run` while it waits for an answer; nil means it was cancelled.
         var pendingAnswer: CheckedContinuation<Bool?, Never>?
-
-        /// Finished, or planned to copy, so it waits in a lane: an undo doesn't wait for it.
-        var isSettled: Bool { phase.isFinished || plan?.lane != nil }
 
         init(
             id: ID, operation: FileOperation, copier: any Copier,

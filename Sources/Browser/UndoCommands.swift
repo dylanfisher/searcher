@@ -1,9 +1,10 @@
 /// Undo and Redo of file changes, app-wide, through the context's `UndoHistory`. Each runs as a
-/// queued operation, so neither waits for a copy that is running. Their menu items name the
-/// change: "Undo Move 3 Items", "Undo Rename", "Undo Replace". Both are off without a history or
-/// a queue, with nothing to undo or redo, and while an undo or redo runs. A key press doesn't
-/// check for an entry: an operation that has just ended may not be in the history yet, and the
-/// history waits for it (docs/decisions/0072-undo.md).
+/// queued operation, so the main actor never waits for one. Their menu items name the change:
+/// "Undo Move 3 Items", "Undo Rename", "Undo Copy", "Undo New Folder". Both are off without a
+/// history or a queue, with nothing to undo or redo, while an undo or redo runs, and while an
+/// operation is unfinished. A key press doesn't check for an entry: an operation queued before
+/// it, a copy still running included, may not be in the history yet, and the history waits for
+/// it (docs/decisions/0072-undo.md).
 public enum UndoCommands: CommandSet {
     public static let undo = Command(
         id: CommandID("undo.undo"), title: "Undo",
@@ -35,9 +36,9 @@ public enum UndoCommands: CommandSet {
         ]
     }
 
-    /// What `operation` did, by its `record`, as the Undo and Redo items name it: "Move 3
-    /// Items", "Rename", "Move to Trash", "Replace" for a copy, whose only change to undo is a
-    /// replace, and "Delete" for an operation that deleted an item.
+    /// What `operation` did, by its `record`, as the Undo and Redo items name it, after Finder:
+    /// "Move 3 Items", "Rename", "Move to Trash", "Copy", or "Replace" for a copy that replaced
+    /// an item, "Duplicate", "New Folder", and "Delete" for an operation that deleted an item.
     static func name(of operation: FileOperation, record: OperationRecord) -> String {
         let deletes = record.changes.contains { change in
             if case .deleted = change { true } else { false }
@@ -49,13 +50,17 @@ public enum UndoCommands: CommandSet {
             let placed = record.changes.filter { change in
                 switch change {
                 case .moved, .created: true
-                case .trashed, .deleted, .replaced, .putBack: false
+                case .trashed, .deleted, .replaced, .putBack, .uncreated: false
                 }
             }
             return placed.count == 1 ? "Move 1 Item" : "Move \(placed.count) Items"
         case .rename: return "Rename"
         case .trash: return FileCommands.moveToTrash.title
-        case .copy: return "Replace"
+        case .copy:
+            let replaces = record.changes.contains { change in
+                if case .replaced = change { true } else { false }
+            }
+            return replaces ? "Replace" : "Copy"
         case .deleteImmediately: return "Delete"
         case .newFolder: return FileCommands.newFolder.title
         case .duplicate: return FileCommands.duplicate.title
@@ -65,13 +70,21 @@ public enum UndoCommands: CommandSet {
         }
     }
 
+    // While an operation is unfinished the items are off: a press would wait for it and undo
+    // its entry, not the one the title names.
     @MainActor
     private static func canUndo(_ context: CommandContext) -> Bool {
-        context.fileOperations != nil && context.undoHistory?.canUndo == true
+        guard let queue = context.fileOperations, let history = context.undoHistory else {
+            return false
+        }
+        return history.canUndo && history.isCaughtUp(with: queue)
     }
 
     @MainActor
     private static func canRedo(_ context: CommandContext) -> Bool {
-        context.fileOperations != nil && context.undoHistory?.canRedo == true
+        guard let queue = context.fileOperations, let history = context.undoHistory else {
+            return false
+        }
+        return history.canRedo && history.isCaughtUp(with: queue)
     }
 }
