@@ -1,45 +1,13 @@
 import AppKit
 import Base
 import Browser
+import BrowserTestSupport
 import Foundation
 import TestSupport
 import Testing
 import UniformTypeIdentifiers
 
 @testable import Interface
-
-@MainActor
-final class StubSystemActions: SystemActions {
-    private(set) var openedFiles: [URL] = []
-    private(set) var openedURLs: [URL] = []
-    private(set) var copiedTexts: [String] = []
-    private(set) var revealed: [[URL]] = []
-    private(set) var openedInApp: [(folder: URL, bundleID: String)] = []
-    private(set) var openedWithApp: [(urls: [URL], application: URL)] = []
-    /// The apps listed for each type, and each type's default app.
-    nonisolated let applications: [UTType: [URL]]
-    nonisolated let defaultApplications: [UTType: URL]
-
-    init(applications: [UTType: [URL]] = [:], defaultApplications: [UTType: URL] = [:]) {
-        self.applications = applications
-        self.defaultApplications = defaultApplications
-    }
-
-    func openFile(_ url: URL) { openedFiles.append(url) }
-    func openURL(_ url: URL) { openedURLs.append(url) }
-    func copyToPasteboard(_ text: String) { copiedTexts.append(text) }
-    func revealInFinder(_ urls: [URL]) { revealed.append(urls) }
-    func open(_ folder: URL, inAppWithBundleID bundleID: String) {
-        openedInApp.append((folder, bundleID))
-    }
-    func open(_ urls: [URL], withApplicationAt application: URL) {
-        openedWithApp.append((urls, application))
-    }
-    nonisolated func applicationURLs(toOpen type: UTType) -> [URL] { applications[type] ?? [] }
-    nonisolated func defaultApplicationURL(toOpen type: UTType) -> URL? {
-        defaultApplications[type]
-    }
-}
 
 extension ListingState {
     var isLoaded: Bool { if case .loaded = self { true } else { false } }

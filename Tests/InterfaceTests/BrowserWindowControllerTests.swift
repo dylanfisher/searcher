@@ -1,4 +1,5 @@
 import AppKit
+import BrowserTestSupport
 import Foundation
 import TestSupport
 import Testing

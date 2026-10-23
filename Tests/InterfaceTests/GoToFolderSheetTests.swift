@@ -1,6 +1,7 @@
 import AppKit
 import Base
 import Browser
+import BrowserTestSupport
 import Darwin
 import Foundation
 import TestSupport

@@ -1,6 +1,7 @@
 import AppKit
 import Base
 import Browser
+import BrowserTestSupport
 import Foundation
 import TestSupport
 import Testing
@@ -43,9 +44,7 @@ private final class Fixture {
         let snapshots = snapshots
         let (finished, feed) = AsyncStream.makeStream(of: FileOperationQueue.Snapshot.self)
         queue = FileOperationQueue(
-            prompts: FileOperationQueue.Prompts(
-                resolve: { request in preconditionFailure("a rename asked \(request)") },
-                confirm: { request in preconditionFailure("a rename asked \(request)") }),
+            prompts: .unexpected,
             onChange: { reported in
                 for snapshot in reported { snapshots.append(snapshot) }
             }, onAnyFinish: { feed.yield($0) })

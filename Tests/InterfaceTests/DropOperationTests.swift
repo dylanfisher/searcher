@@ -1,6 +1,7 @@
 import AppKit
 import Base
 import Browser
+import BrowserTestSupport
 import Foundation
 import TestSupport
 import Testing
@@ -166,9 +167,7 @@ private final class Fixture {
             tableView: ListingTableView(), monitorsFolders: true)
         let snapshots = snapshots
         queue = FileOperationQueue(
-            prompts: FileOperationQueue.Prompts(
-                resolve: { request in preconditionFailure("a drop asked \(request)") },
-                confirm: { request in preconditionFailure("a drop asked \(request)") })
+            prompts: .unexpected
         ) { reported in
             for snapshot in reported { snapshots.append(snapshot) }
         }

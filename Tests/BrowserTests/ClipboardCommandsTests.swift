@@ -1,4 +1,5 @@
 import Base
+import BrowserTestSupport
 import Foundation
 import TestSupport
 import Testing
@@ -12,24 +13,6 @@ private let moveHere = KeyChord("v", modifiers: [.command, .option])
 
 /// Long enough for a command that wrongly went ahead to have queued its operation and finished it.
 private let settleTime: Duration = .milliseconds(300)
-
-/// A clipboard in memory. `otherAppWrites` stands for any write Searcher didn't make.
-@MainActor
-private final class MemoryClipboard: FileClipboard {
-    private(set) var changeCount = 0
-    private var urls: [URL] = []
-
-    func write(_ urls: [URL]) {
-        self.urls = urls
-        changeCount += 1
-    }
-
-    func fileURLs() -> [URL] { urls }
-
-    func otherAppWrites(_ urls: [URL] = []) {
-        write(urls)
-    }
-}
 
 /// A window of one tab over a real folder, with a queue whose questions `prompter` answers and a
 /// clipboard that other windows can share.

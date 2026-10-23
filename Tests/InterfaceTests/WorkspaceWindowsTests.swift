@@ -1,5 +1,6 @@
 import AppKit
 import Base
+import BrowserTestSupport
 import Foundation
 import TestSupport
 import Testing
@@ -26,27 +27,6 @@ private final class CountingLister: Lister, @unchecked Sendable {
         if path == "/held" { return try gate.list(path, onBatch: onBatch) }
         try lister.list(path, onBatch: onBatch)
     }
-}
-
-/// A monitor that only counts stops.
-private final class StubMonitor: FolderMonitoring {
-    private(set) var stopCount = 0
-
-    func stop() { stopCount += 1 }
-}
-
-/// A clipboard in memory, so no test writes a pasteboard.
-@MainActor
-private final class MemoryClipboard: FileClipboard {
-    private(set) var changeCount = 0
-    private var urls: [URL] = []
-
-    func write(_ urls: [URL]) {
-        self.urls = urls
-        changeCount += 1
-    }
-
-    func fileURLs() -> [URL] { urls }
 }
 
 /// Browser windows that are never shown, the first one open at `/root` with its pane loaded.
