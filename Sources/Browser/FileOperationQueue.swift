@@ -167,6 +167,11 @@ public actor FileOperationQueue {
         }
     }
 
+    /// How many submitted operations haven't finished, paused ones and ones waiting for an
+    /// answer included. Read without waiting for the actor, so it counts an operation from the
+    /// moment `submit` or `enqueue` returns; the app asks before quitting while it isn't zero.
+    public nonisolated var unfinishedCount: Int { intake.unfinishedCount }
+
     /// A queue that works on the file system and asks its questions through `prompts`.
     /// `onChange` gets every operation's state, unfinished ones and those finished since the
     /// last call, at most once per `snapshotInterval`, on no particular thread. `onAnyFinish`
@@ -1343,18 +1348,28 @@ public actor FileOperationQueue {
         private let lock = NSLock()
         private var next = 0
         private var waiting: [Submission] = []
+        /// Submissions not yet finished. IDs `reserveID` gives aren't counted: those entries
+        /// finish as they are made.
+        private var open = 0
 
         /// The ID the next submission gets; every lower one is taken.
         var nextID: Int { lock.withLock { next } }
+
+        var unfinishedCount: Int { lock.withLock { open } }
 
         @discardableResult
         func add(_ operation: FileOperation, onFinish: @escaping @Sendable (Snapshot) -> Void)
             -> ID
         {
-            lock.withLock {
+            let counted: @Sendable (Snapshot) -> Void = { [self] snapshot in
+                lock.withLock { open -= 1 }
+                onFinish(snapshot)
+            }
+            return lock.withLock {
                 let id = ID(next)
                 next += 1
-                waiting.append((id, operation, onFinish))
+                open += 1
+                waiting.append((id, operation, counted))
                 return id
             }
         }

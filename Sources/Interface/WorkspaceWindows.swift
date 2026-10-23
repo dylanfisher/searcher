@@ -108,9 +108,10 @@ public final class WorkspaceWindows {
 
     /// The question quitting asks while file operations are unfinished or a question about one
     /// waits, its first button Quit and its second Cancel; nil when there is nothing to stop.
-    /// Counts the operations in the queue's latest snapshots.
+    /// Counts the queue's operations by `unfinishedCount`, so a copy queued just before the quit
+    /// counts though no snapshot has shown it yet.
     func quitAlert() -> NSAlert? {
-        let count = unfinished.count
+        let count = fileOperations.unfinishedCount
         let message: String
         let information: String
         switch count {

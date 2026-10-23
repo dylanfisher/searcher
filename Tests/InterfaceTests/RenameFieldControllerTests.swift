@@ -436,6 +436,69 @@ extension Fixture {
     var fieldHasKeys: Bool {
         (window.firstResponder as? NSTextView)?.delegate === field.field
     }
+
+    /// Tells the field its editing ended, as the window does at the moment the keys leave it:
+    /// the field's editor still has them and the view they go to hasn't taken them yet. A move
+    /// to the table here shows, where a full hand-off to another view would replace it.
+    func endEditingAsTheKeysLeave() {
+        field.controlTextDidEndEditing(
+            Notification(name: NSControl.textDidEndEditingNotification, object: field.field))
+    }
+
+    var tableHasKeys: Bool { window.firstResponder is ListingTableView }
+}
+
+@MainActor @Test func aRenameOnFocusLossLeavesTheKeysForTheViewTakingThem() async throws {
+    let fixture = try await Fixture("song.flac")
+    defer { fixture.stop() }
+    await fixture.select("song.flac")
+    try fixture.press(returnKey)
+    try fixture.type("tune")
+
+    fixture.endEditingAsTheKeysLeave()
+
+    #expect(!fixture.tableHasKeys)
+    #expect(fixture.fieldHasKeys)
+    await settle { fixture.exists("tune.flac") && !fixture.exists("song.flac") }
+}
+
+@MainActor @Test func anEmptiedNameOnFocusLossLeavesTheKeysForTheViewTakingThem() async throws {
+    let fixture = try await Fixture("song.flac")
+    defer { fixture.stop() }
+    await fixture.select("song.flac")
+    try fixture.press(returnKey)
+    let editor = try fixture.editor()
+    editor.selectAll(nil)
+    editor.deleteBackward(nil)
+
+    fixture.endEditingAsTheKeysLeave()
+
+    #expect(!fixture.field.isShown)
+    #expect(!fixture.tableHasKeys)
+}
+
+/// The click that moves the keys can also take the pane to another folder before the rename
+/// starts; the entry of that name there must not be renamed.
+@MainActor @Test func aClickThatAlsoChangesFolderRenamesNothing() async throws {
+    let fixture = try await Fixture("song.flac")
+    defer { fixture.stop() }
+    let sub = fixture.folder.url.appending(path: "sub")
+    try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: false)
+    try Data().write(to: sub.appending(path: "song.flac"))
+    await settle { fixture.pane.state.listing?.row(named: "sub") != nil }
+    await fixture.select("song.flac")
+    try fixture.press(returnKey)
+    try fixture.type("tune")
+
+    fixture.clickElsewhere()
+    fixture.pane.navigate(to: fixture.pane.location.child(named: "sub"))
+
+    try await Task.sleep(for: .milliseconds(200))
+    #expect(fixture.exists("song.flac"))
+    #expect(fixture.exists("sub/song.flac"))
+    #expect(!fixture.exists("sub/tune.flac"))
+    #expect(!fixture.exists("tune.flac"))
+    #expect(fixture.operationCount == 0)
 }
 
 @MainActor @Test func clickingElsewhereRenamesAndLeavesTheKeysWhereTheyWent() async throws {

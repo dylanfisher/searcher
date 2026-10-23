@@ -8,11 +8,12 @@ import Browser
 /// `FileCommands.rename`, as Finder does, and Esc closes it with nothing renamed. A name
 /// `FileNameRule` refuses, or a rename the queue fails, such as onto a name already taken, keeps
 /// the field open with the reason under it, taking the keys back if they had moved; a name
-/// emptied before the keys moved puts the old one back, as in Finder. After a rename the field shows the new name over the old row until the monitor's patch
-/// drops the old name; the pane then selects the new one. If no patch comes, as on a volume that
-/// reports no changes, the pane lists the folder again after `patchTimeout` and the field closes
-/// once that listing lands. New Folder opens the field through Rename once the pane selects the
-/// new folder (docs/decisions/0068-inline-rename.md).
+/// emptied before the keys moved puts the old one back, as in Finder. After a rename the field
+/// shows the new name over the old row until the monitor's patch drops the old name; the pane
+/// then selects the new one. If no patch comes, as on a volume that reports no changes, the pane
+/// lists the folder again after `patchTimeout` and the field closes once that listing lands. New
+/// Folder opens the field through Rename once the pane selects the new folder
+/// (docs/decisions/0068-inline-rename.md).
 ///
 /// The field sits in the table's clip view, beside the table rather than in it, so the table's
 /// commands are out of its responder chain: with the field focused, the File menu's commands
@@ -343,7 +344,7 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
                 return
             }
             guard self.place() != nil, let window = self.table.window else {
-                self.close(keysMoved: true)
+                self.close()
                 return
             }
             window.makeFirstResponder(self.field)

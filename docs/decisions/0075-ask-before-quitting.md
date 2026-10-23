@@ -12,9 +12,13 @@ which asks before it stops a copy. The question must be testable without showing
 
 ## Decision
 
-- **When it asks:** while the queue's latest snapshots hold an unfinished operation, paused and
+- **When it asks:** while the queue has an unfinished operation, paused and
   waiting-for-an-answer ones included, or a question sheet shows or waits, such as the
   other-pane confirm asked before anything is queued. With none of these it quits as before.
+  The count is `FileOperationQueue.unfinishedCount`, kept under the lock that takes in
+  submissions: up by one as an operation is submitted, down by one as it finishes. It is read
+  without waiting for the actor, so a copy queued a moment before Cmd-Q counts though no
+  snapshot has shown it yet.
 - **What it asks:** "Quit while a file operation is running?" ("while 3 file operations are
   running?"), saying that quitting stops them and removes what they were partway through
   writing; "Quit while a file operation waits for an answer?" when only a question waits.
@@ -28,10 +32,11 @@ which asks before it stops a copy. The question must be testable without showing
 
 ## Alternatives considered
 
-- **Ask the queue for its unfinished operations** — rejected: it is an actor, so the answer
-  would come after `applicationShouldTerminate` returned, and the count would need a new public
-  read in Browser. The snapshots come at most every 100 ms (`snapshotInterval`), so an operation
-  queued in the last 100 ms before the quit may not be counted.
+- **Count the operations in the queue's latest snapshots** — rejected: they come at most every
+  100 ms (`snapshotInterval`), so a copy queued in the last 100 ms before the quit would be
+  cancelled without asking.
+- **Ask the actor for its unfinished entries** — rejected: the answer would come after
+  `applicationShouldTerminate` returned, and the actor takes in submissions only when it runs.
 - **A sheet on the front window** — rejected: with no window open there is nowhere to put it,
   and a sheet already showing a question would have to close first.
 - **Cancel as the default button** — rejected: Return confirming the quit the user asked for

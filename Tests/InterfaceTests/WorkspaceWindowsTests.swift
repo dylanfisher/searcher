@@ -392,16 +392,32 @@ private func failedTrash(_ id: Int) -> FileOperationQueue.Snapshot {
             record: OperationRecord()))
 }
 
-/// A trash of `/root/a.txt` in `phase`, unfinished.
-private func trash(_ id: Int, _ phase: OperationState.Phase) -> FileOperationQueue.Snapshot {
-    FileOperationQueue.Snapshot(
-        id: FileOperationQueue.ID(id), operation: .trash(["/root/a.txt"]),
-        state: OperationState(
-            phase: phase,
-            progress: OperationState.Progress(
-                itemsDone: 0, itemCount: 1, copied: CopyProgress(bytes: 0, files: 0),
-                total: nil),
-            errors: [], record: OperationRecord()))
+/// A copy of `a.txt` into a folder that has one, which holds on its name question until the
+/// test cancels it. The question's sheet is logged, not shown.
+@MainActor
+private struct HeldCopy {
+    let folder: TemporaryFolder
+    let operation: FileOperation
+
+    init() throws {
+        folder = try TemporaryFolder("WorkspaceWindowsTests")
+        let into = folder.url.appending(path: "into")
+        try FileManager.default.createDirectory(at: into, withIntermediateDirectories: false)
+        for url in [folder.url.appending(path: "a.txt"), into.appending(path: "a.txt")] {
+            try Data("a".utf8).write(to: url)
+        }
+        operation = .copy([folder.url.appending(path: "a.txt").path], into: into.path)
+    }
+}
+
+/// Cancels every operation and waits for the question sheets to close.
+@MainActor
+private func stopEverything(_ windows: WorkspaceWindows) async {
+    let clock = ContinuousClock()
+    #expect(
+        await windows.fileOperations.cancelAll(
+            by: clock.now.advanced(by: .seconds(5)), clock: clock))
+    await settle { windows.prompter.shown == nil && windows.prompter.waitingCount == 0 }
 }
 
 @MainActor @Test func quittingWithNothingRunningDoesNotAsk() async throws {
@@ -416,9 +432,14 @@ private func trash(_ id: Int, _ phase: OperationState.Phase) -> FileOperationQue
         }))
 }
 
-@MainActor @Test func quittingWithAPausedOperationAsksAndCancelKeepsItRunning() async throws {
+/// The copy is counted the moment it is queued, before any snapshot shows it.
+@MainActor @Test func quittingRightAfterQueuingACopyAsks() async throws {
     let fixture = try await Fixture()
-    fixture.windows.operationsChanged([trash(1, .paused)])
+    let sheets = SheetLog(fixture.windows)
+    defer { withExtendedLifetime(sheets) {} }
+    let copy = try HeldCopy()
+
+    fixture.windows.fileOperations.submit(copy.operation)
 
     let alert = try #require(fixture.windows.quitAlert())
     #expect(alert.messageText == "Quit while a file operation is running?")
@@ -426,25 +447,44 @@ private func trash(_ id: Int, _ phase: OperationState.Phase) -> FileOperationQue
         alert.informativeText
             == "Quitting stops it, and removes anything it was partway through writing.")
     #expect(alert.buttons.map(\.title) == ["Quit", "Cancel"])
-    #expect(!fixture.windows.shouldQuit(asking: { _ in false }))
-    #expect(fixture.windows.quitAlert() != nil)
-    #expect(fixture.windows.shouldQuit(asking: { _ in true }))
-
-    fixture.windows.operationsChanged([])
+    await stopEverything(fixture.windows)
     #expect(fixture.windows.quitAlert() == nil)
+}
+
+@MainActor @Test func quittingWithAPausedOperationAsksAndCancelKeepsItRunning() async throws {
+    let fixture = try await Fixture()
+    let sheets = SheetLog(fixture.windows)
+    let copy = try HeldCopy()
+    let queue = fixture.windows.fileOperations
+    let id = await queue.enqueue(copy.operation)
+    await settle { sheets.presented.count == 1 }
+    await queue.pause(id)
+
+    #expect(!fixture.windows.shouldQuit(asking: { _ in false }))
+
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(queue.unfinishedCount == 1)
+    #expect(fixture.windows.prompter.shown != nil)
+    #expect(fixture.windows.shouldQuit(asking: { _ in true }))
+    await stopEverything(fixture.windows)
 }
 
 @MainActor @Test func quittingCountsEveryUnfinishedOperation() async throws {
     let fixture = try await Fixture()
-    fixture.windows.operationsChanged([
-        trash(1, .running), trash(2, .waitingForAnswer), trash(3, .queued), failedTrash(4),
-    ])
+    let sheets = SheetLog(fixture.windows)
+    defer { withExtendedLifetime(sheets) {} }
+    let copies = try (0..<3).map { _ in try HeldCopy() }
+
+    for copy in copies {
+        fixture.windows.fileOperations.submit(copy.operation)
+    }
 
     let alert = try #require(fixture.windows.quitAlert())
     #expect(alert.messageText == "Quit while 3 file operations are running?")
     #expect(
         alert.informativeText
             == "Quitting stops them, and removes anything they were partway through writing.")
+    await stopEverything(fixture.windows)
 }
 
 /// The other-pane confirm is asked before anything is queued, so only the sheet shows it.
