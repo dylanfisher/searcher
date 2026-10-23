@@ -13,7 +13,8 @@ import Foundation
 /// docs/decisions/0048-pane-load-priority.md.
 public final class ListingService: Sendable {
     /// Ten 100k-entry folders loading together dropped frames with no limit (spike S4). The last
-    /// slot is the focused load's alone, so it never waits behind a full background listing.
+    /// slot is the focused load's alone, so it doesn't wait behind background listings. It still
+    /// waits behind other focused loads and behind a read in flight on its own network volume.
     public static let mostRunningLoads = 4
     /// Entries in a first batch. Sorting 200 put first rows on screen in 7–9 ms for a 100k-entry
     /// folder, against 163 ms for the whole listing (spike S4).
