@@ -19,10 +19,11 @@ import os
 /// the focused pane of a two-pane split and of a 4-pane grid (B6). Every launch ends by opening
 /// W2 in ten panes at once (B2), timed to the first frame after which the whole window, not only
 /// the focused pane, has nothing left to draw: the other panes' drawing can fall inside the
-/// sample, so it is the longest a user could wait for the focused pane's rows. The stall watchdog's stalls
-/// (B10) are collected for the whole launch. It starts the launch warm-up where a normal launch
-/// does and waits for it to end before the first span after launch. It writes the samples to the
-/// runner's output file and exits; any failure is printed to standard error and exits 1.
+/// sample, so it is the longest a user could wait for the focused pane's rows. The stall
+/// watchdog's stalls (B10) are collected for the whole launch. It starts the launch warm-up where
+/// a normal launch does and waits for it to end before the first span after launch. It writes the
+/// samples to the runner's output file and exits; any failure is printed to standard error and
+/// exits 1.
 ///
 /// A launch for a scenario (`UIBenchOptions.Scenario`) times only that scenario's spans after
 /// the launch: column view on W2, the split cases on W2, or on a share's folder the runner names,
@@ -320,7 +321,8 @@ final class UIBench {
     /// Opens the operations panel with its key, queues a copy of W8 to the disk image, and once
     /// the copy runs presses ↓ `count` times on W2, each timed from the event's timestamp to the
     /// frame with the moved selection (B6). Keeps the presses whose frame came before the main
-    /// thread learned the copy finished. The copy is a span from the call that queues it until
+    /// thread learned the copy finished, and stops pressing then, so no later stall is filed under
+    /// a press; fewer than `UIBenchRecord.minimumQueueKeyDown(of:)` fails. The copy is a span from the call that queues it until
     /// then, so its stalls are judged (B10). Checks the copy copied all of W8, then closes the
     /// panel, so the cases after it have the window's full height.
     private func pressDownWhileCopyingW8(_ count: Int) async throws -> [Double] {
@@ -332,7 +334,8 @@ final class UIBench {
         let pane = try requirePane()
         guard let listing = pane.state.listing, listing.count > count else {
             throw Failure(
-                "\(pane.location.path) has too few entries for \(count) ↓ presses during the copy")
+                "\(pane.location.path) has too few entries for \(count) ↓ presses during "
+                    + "the copy")
         }
         let height = try tabBounds().height
         _ = try await press([.toggleOperations], "operations key")
@@ -349,13 +352,17 @@ final class UIBench {
             try await Task.sleep(for: .milliseconds(5))
         }
         var samples: [Double] = []
-        for _ in 0..<count {
+        var pressed = 0
+        while pressed < count, copyFinish == nil {
             let sample = try await press([.down], UIBenchRecord.queueKeySpan)
+            pressed += 1
             if copyFinish == nil { samples += sample }
         }
-        try expectCursor(
-            atRow: startRow.map { min($0 + count, listing.count - 1) } ?? count - 1,
-            after: "\(count) ↓ presses during the copy")
+        if pressed > 0 {
+            try expectCursor(
+                atRow: startRow.map { min($0 + pressed, listing.count - 1) } ?? pressed - 1,
+                after: "\(pressed) ↓ presses during the copy")
+        }
         // No deadline of its own: the runner stops a launch that runs past its timeout.
         while copyFinish == nil {
             try await Task.sleep(for: .milliseconds(5))
@@ -376,10 +383,7 @@ final class UIBench {
         print(
             "bench-ui: W8 copy of \(copied) bytes in \(String(format: "%.1f", seconds)) s; "
                 + "\(samples.count) of \(count) ↓ presses during it")
-        guard !samples.isEmpty else {
-            throw Failure(
-                "the W8 copy finished before the first ↓ press's frame, so none was timed")
-        }
+        try UIBenchRecord.checkQueueKeyDown(kept: samples.count, of: count)
         _ = try await press([.toggleOperations], "operations key")
         guard try tabBounds().height == height else {
             throw Failure("Cmd-Opt-L didn't close the operations panel")

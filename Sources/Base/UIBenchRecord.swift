@@ -121,6 +121,29 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
     /// The span name of the rest of the W8 copy, from the call that queues it until the main
     /// thread learns it finished, outside its ↓ presses.
     public static let queueCopySpan: StaticString = "W8 copy"
+    /// The fewest ↓ presses during the W8 copy a run may keep, of `count` asked for: a tenth.
+    /// A copy that ends sooner times too little of B6 under a copy to judge.
+    public static func minimumQueueKeyDown(of count: Int) -> Int { count / 10 }
+
+    /// Throws unless `kept` of the `count` ↓ presses asked for during the W8 copy reach
+    /// `minimumQueueKeyDown(of:)`.
+    public static func checkQueueKeyDown(kept: Int, of count: Int) throws(TooFewQueueKeys) {
+        let minimum = minimumQueueKeyDown(of: count)
+        guard kept >= minimum else {
+            throw TooFewQueueKeys(kept: kept, count: count, minimum: minimum)
+        }
+    }
+
+    public struct TooFewQueueKeys: Error, CustomStringConvertible {
+        public let kept: Int
+        public let count: Int
+        public let minimum: Int
+
+        public var description: String {
+            "\(kept) of \(count) ↓ presses landed before the copy finished; need \(minimum)"
+        }
+    }
+
     /// The spans of the W8 copy, whose stalls are judged against B10.
     public static var queueCopySpans: Set<String> { ["\(queueKeySpan)", "\(queueCopySpan)"] }
 

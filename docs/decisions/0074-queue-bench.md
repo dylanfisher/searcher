@@ -19,8 +19,10 @@ table's numbers alone, in ms and MB, and the UI bench reports stalls without jud
 - **The image belongs to scripts/bench.** For the harness run and the `--ui` CI run, it asks the
   runner (`--disk-image-size`) how large an image the run needs, then creates a sparse APFS image
   in `$TMPDIR`, attaches it with `-nobrowse` at a folder beside it, never under /Volumes, and
-  passes the mount point as `--image`. An EXIT trap, reached from INT and TERM too, detaches it
-  and removes its folder, failed run or not.
+  passes the mount point as `--image`. An EXIT trap, reached from INT and TERM too, detaches it,
+  trying five times a second apart, and removes its folder, failed run or not, but never while
+  the mount table lists anything under the folder. A run first removes earlier runs' image
+  folders whose image is detached and names those still attached, with the command to detach.
 - **Free space first.** `DiskImagePlan` counts the source fixture's bytes, 0 when it is built,
   plus the image's: the bytes copied and 512 MB for APFS. Both sit on `$TMPDIR`'s volume, so the
   sum is checked against its free bytes, and a shortfall exits before the image is made or the
@@ -30,15 +32,19 @@ table's numbers alone, in ms and MB, and the UI bench reports stalls without jud
   source are filled with a 1 MiB block made from the seed, and are built only by the runs that
   copy them.
 - **In the CI run's first launch, after the filter keys.** The panel opens with Cmd-Opt-L, the
-  copy is queued, and the presses start once a snapshot shows it running. The presses whose frame
-  came before the main thread learned the copy finished are the B6 case. The copy is a span from
-  the call that queues it to then, and its presses are spans inside it, so a stall in either is
+  copy is queued, and the presses start once a snapshot shows it running. They stop when the main
+  thread learns the copy finished, so no later stall is filed under a press, and the presses
+  whose frame came before that are the B6 case. Fewer than a tenth of the 500, 50, fails the
+  run. The copy is a span from the call that queues it to then, and its presses are spans inside it, so a stall in either is
   filed under the copy. The copy's longest stall, or 0, is one B10 case, so it is judged like the
   other UI cases, `compare-ui` included, and passes only with no stall. The panel closes after, so
   the column and split cases keep the window's full height.
 - **The copy case is held to a floor.** `CopyFloor.s7` is S7's lower rate for `copyfile` with
   the engine's flags on a 2 GiB file to an image, 792 MB/s. The case's samples are milliseconds
-  per 1 GB; it fails when the rate at its p95 time is under the floor. Ten runs.
+  per 1 GB; it fails when the rate at its p95 time is under the floor. Ten runs. On CI (`CI`
+  set) the rate and the floor are printed and the case is reported only: the hosted runners copy
+  to virtualised disks at a rate no run has shown yet. Enforce it on CI once a few runs show
+  the real rate there.
 
 ## Alternatives considered
 
@@ -47,7 +53,8 @@ table's numbers alone, in ms and MB, and the UI bench reports stalls without jud
 - **The runner or the app makes the image** — rejected: the plan puts it in scripts/bench, and a
   trap there still detaches it when the runner crashes.
 - **Keep all 500 presses whatever the copy does** — rejected: presses after the copy ends don't
-  time B6 under a copy. The count kept is printed.
+  time B6 under a copy, and their stalls would be filed under the copy. The count kept is
+  printed.
 - **A budget unit in MB/s** — not possible without editing `Budget.swift`, which holds only the
   table's budgets.
 - **The floor at S7's 3-run rate, 1197 MB/s** — rejected: runs to an image swing about 2×, and the
@@ -60,6 +67,7 @@ image), and `--ui` about 20.5 GB for W8 (10 GB source, 10.5 GB image), 10.5 GB o
 `--ui --w8-2gb` about 4.5 GB. W8 takes 10 GB of `$TMPDIR` until removed by hand. The first UI
 launch now includes the whole copy, which must fit in its 120 s launch timeout. On a machine whose
 copy finishes before many of the 500 presses, as the 2 GB variant may in CI, the B6 case has fewer
-samples, and a copy that ends before the first press's frame fails the run. A killed bench
-(SIGKILL) leaves its image attached; `hdiutil info` lists it. The floor may prove tight on CI's
+samples, and one that leaves fewer than 50 fails the run. A killed bench (SIGKILL) leaves its
+image attached; the next run names it. A run that starts while another is between making its
+image folder and attaching the image can remove that folder. The floor may prove tight on CI's
 disks; lowering it is a change to `CopyFloor.s7`.

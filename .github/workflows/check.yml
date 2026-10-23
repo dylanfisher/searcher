@@ -15,9 +15,9 @@ jobs:
       - run: ./scripts/check
 
   # Times the harness cases on the runner. The bench exits non-zero when a
-  # budgeted p95 is over budget, or the 1 GB copy to a disk image is slower
-  # than S7, which fails the job. Cases more than 10% slower than the previous
-  # run are reported and never fail it.
+  # budgeted p95 is over budget, which fails the job. The 1 GB copy to a disk
+  # image is printed against S7 and reported only here. Cases more than 10%
+  # slower than the previous run are reported and never fail it.
   bench:
     needs: check
     runs-on: macos-latest
