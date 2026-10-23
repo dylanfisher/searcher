@@ -65,13 +65,30 @@ func openWithListsTheAppsLaunchServicesListsForAFileDefaultFirst(pathExtension: 
     let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app", isDirectory: true)
     let actions = WorkspaceSystemActions(applicationURL: { _ in nil }, presentError: { _ in })
 
-    let app = await actions.application(at: textEdit)
+    let app = await Task.detached { actions.application(at: textEdit) }.value
+    let icon = await actions.applicationIcon(at: textEdit)
 
     let bundle = try #require(Bundle(url: textEdit))
     #expect(app.url == textEdit)
     #expect(app.name == FileManager.default.displayName(atPath: textEdit.path))
     #expect(app.bundleID == bundle.bundleIdentifier)
     #expect(app.version == bundle.infoDictionary?["CFBundleShortVersionString"] as? String)
-    #expect(app.icon?.width == 32)
-    #expect(app.icon?.height == 32)
+    #expect(icon?.width == 32)
+    #expect(icon?.height == 32)
+}
+
+/// An app path with no bundle there is listed by its path, with no version, and reported.
+@MainActor @Test func anAppWithNoBundleIsListedByItsPath() async throws {
+    let folder = try TemporaryFolder("OpenWithNoBundle")
+    let url = folder.url.appending(path: "Empty.app", directoryHint: .isDirectory)
+    let actions = WorkspaceSystemActions(applicationURL: { _ in nil }, presentError: { _ in })
+    var missing: [URL] = []
+
+    let app = OpenWith.App(readingBundleAt: url) { missing.append($0) }
+    let logged = await Task.detached { actions.application(at: url) }.value
+
+    #expect(missing == [url])
+    #expect(app.bundleID == url.path)
+    #expect(app.version == nil)
+    #expect(logged.bundleID == url.path)
 }

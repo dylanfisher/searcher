@@ -1,5 +1,6 @@
 import Base
 import Browser
+import CoreGraphics
 import Foundation
 import UniformTypeIdentifiers
 
@@ -159,8 +160,12 @@ extension BenchCase {
             preconditionFailure("the bench asked for the app that opens \(type.identifier)")
         }
 
-        nonisolated func application(at url: URL) async -> OpenWith.App {
+        nonisolated func application(at url: URL) -> OpenWith.App {
             preconditionFailure("the bench asked to read the app at \(url.path)")
+        }
+
+        nonisolated func applicationIcon(at url: URL) async -> CGImage? {
+            preconditionFailure("the bench asked for the icon of the app at \(url.path)")
         }
     }
 }

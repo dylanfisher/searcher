@@ -93,10 +93,18 @@ public final class WorkspaceSystemActions: SystemActions {
         return NSWorkspace.shared.urlForApplication(toOpen: type)
     }
 
-    /// Reads the app's bundle through Browser, and asks Quick Look, which draws in its own
-    /// process, for the icon Finder shows, at 16 points, 2x. An icon Quick Look can't make is
-    /// logged and left out.
-    public nonisolated func application(at url: URL) async -> OpenWith.App {
+    /// Reads the app's bundle through Browser, logging an app with no readable bundle.
+    public nonisolated func application(at url: URL) -> OpenWith.App {
+        dispatchPrecondition(condition: .notOnQueue(.main))
+        return OpenWith.App(readingBundleAt: url) { url in
+            Logger(category: "openWith").error(
+                "no readable bundle at \(url.path, privacy: .public); listed by its path")
+        }
+    }
+
+    /// Asks Quick Look, which draws in its own process, for the icon Finder shows. An icon Quick
+    /// Look can't make is logged and left out.
+    public nonisolated func applicationIcon(at url: URL) async -> CGImage? {
         let request = QLThumbnailGenerator.Request(
             fileAt: url, size: CGSize(width: 16, height: 16), scale: 2,
             representationTypes: .icon)
@@ -109,7 +117,7 @@ public final class WorkspaceSystemActions: SystemActions {
                 "no icon for \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)"
             )
         }
-        return OpenWith.App(readingBundleAt: url, icon: icon)
+        return icon
     }
 
     private func fail(_ error: any Error) {

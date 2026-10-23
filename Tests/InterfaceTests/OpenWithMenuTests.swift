@@ -277,7 +277,7 @@ private func choose(_ item: NSMenuItem) throws {
         OpenWith.App(
             url: URL(fileURLWithPath: path, isDirectory: true),
             bundleID: "com.google.chrome.for.testing", name: "Google Chrome for Testing.app",
-            version: version, icon: stubAppIcon())
+            version: version)
     }
     let fixture = await Fixture(apps: apps)
     fixture.select("a.txt")

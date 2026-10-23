@@ -1,5 +1,6 @@
 import Base
 import BrowserTestSupport
+import CoreGraphics
 import Foundation
 import TestSupport
 import Testing
@@ -23,10 +24,11 @@ private func names(_ apps: [OpenWith.App]) -> [String] {
 @MainActor
 private func openWith(
     _ applications: [UTType: [URL]], defaults: [UTType: URL] = [:], apps: [OpenWith.App] = [],
-    built: EventLog<UTType> = EventLog()
+    icons: [URL: CGImage] = [:], hangingIcons: Set<URL> = [], built: EventLog<UTType> = EventLog()
 ) -> (OpenWith, StubSystemActions) {
     let actions = StubSystemActions(
-        applications: applications, defaultApplications: defaults, apps: apps)
+        applications: applications, defaultApplications: defaults, apps: apps, icons: icons,
+        hangingIcons: hangingIcons)
     return (OpenWith(systemActions: actions, didBuild: { type, _ in built.append(type) }), actions)
 }
 
@@ -124,14 +126,16 @@ private func chromeForTesting(_ version: String, in folder: String = "chrome") -
         isDirectory: true)
     return OpenWith.App(
         url: url, bundleID: "com.google.chrome.for.testing",
-        name: "Google Chrome for Testing.app", version: version, icon: stubAppIcon())
+        name: "Google Chrome for Testing.app", version: version)
 }
 
 @MainActor @Test func eachAppCarriesTheNameVersionAndIconItWasReadWithOffTheMainActorOnce()
     async throws
 {
     let chrome = chromeForTesting("153.0.8010.12")
-    let (cache, actions) = openWith([.html: [chrome.url]], apps: [chrome])
+    let icon = stubAppIcon()
+    let (cache, actions) = openWith(
+        [.html: [chrome.url]], apps: [chrome], icons: [chrome.url: icon])
 
     let first = await cache.choices(for: [.html])
     _ = await cache.choices(for: [.html])
@@ -139,10 +143,25 @@ private func chromeForTesting(_ version: String, in folder: String = "chrome") -
     let app = try #require(first.others.first)
     #expect(app.name == "Google Chrome for Testing.app")
     #expect(app.version == "153.0.8010.12")
-    #expect(app.icon === chrome.icon)
-    #expect(cache.cachedChoices(for: [.html])?.others.first?.icon === chrome.icon)
-    #expect(actions.appReads.all.map(\.url) == [chrome.url])
-    #expect(actions.appReads.all.allSatisfy { !$0.onMainThread })
+    #expect(app.icon === icon)
+    #expect(cache.cachedChoices(for: [.html])?.others.first?.icon === icon)
+    for reads in [actions.appReads.all, actions.iconReads.all] {
+        #expect(reads.map(\.url) == [chrome.url])
+        #expect(reads.allSatisfy { !$0.onMainThread })
+    }
+}
+
+@MainActor @Test func anIconThatNeverComesHoldsTheListBackOnlyForTheIconWait() async throws {
+    let chrome = chromeForTesting("153.0.8010.12")
+    let (cache, _) = openWith(
+        [.html: [chrome.url, textEdit]], apps: [chrome], hangingIcons: [chrome.url])
+    cache.iconWait = .milliseconds(50)
+
+    let choices = await cache.choices(for: [.html])
+
+    #expect(names(choices.others) == ["Google Chrome for Testing.app", "TextEdit"])
+    #expect(choices.others.map { $0.icon == nil } == [true, false])
+    #expect(cache.cachedChoices(for: [.html]) == choices)
 }
 
 @MainActor @Test func copiesOfAnAppAtDifferentVersionsAreEachListedAndShowTheirVersions() async {
