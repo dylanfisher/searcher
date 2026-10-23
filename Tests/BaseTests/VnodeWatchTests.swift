@@ -50,7 +50,9 @@ import Testing
 
         try await image.detach(force: true)
 
-        #expect(await revoked.wait { !$0.isEmpty })
+        // The revoke arrives on the watch's utility queue, which a loaded machine can delay; the
+        // timeout only ends a hang.
+        #expect(await revoked.wait(timeout: 60) { !$0.isEmpty })
         #expect(descriptorIsClosed(descriptor, wasAt: image.mountPoint))
         #expect(changed.all.isEmpty)
     }

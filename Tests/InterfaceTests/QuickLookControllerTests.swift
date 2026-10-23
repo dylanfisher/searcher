@@ -243,6 +243,7 @@ private let downArrow = functionKey(NSDownArrowFunctionKey)
     let names = (0..<2_000).map { String(format: "e%04d", $0) }
     let fixture = await Fixture(names.map { file($0) })
     fixture.pane.selectAll()
+    await settle { fixture.pane.selection.isSettled }
     fixture.quickLook.begin(fixture.panel)
 
     #expect(fixture.quickLook.itemCount == 2_000)

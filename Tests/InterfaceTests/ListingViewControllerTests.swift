@@ -299,7 +299,7 @@ private func shownNames(_ controller: ListingViewController) -> [String] {
 
     copy.scroll(like: source)
     lister.releaseAll()
-    await settle { pane.state.isLoaded }
+    await settle { pane.state.isLoaded && copy.listing != nil }
     // Past the pass a scroll to the cursor after a reload waits for.
     await withCheckedContinuation { continuation in
         DispatchQueue.main.async { continuation.resume() }
