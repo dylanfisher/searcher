@@ -56,8 +56,9 @@ once the operation ends.
 ## Consequences
 
 The field's frame comes from the table's cell geometry (`ListingViewController.nameFrame`), so a
-change to the name cell's layout moves the field with it. Until the window passes a queue
-(M4.6), Rename and New Folder are off in the app and the field can't be reached; the tests run
-the commands with a queue of their own. If the old row vanishes while the rename runs, the field
-closes and a failure then isn't shown in the field; the operations panel shows it. On a volume
-that reports no changes the field shows the new name over the old row for up to 4 s.
+change to the name cell's layout moves the field with it. The window passes the app's queue
+([0067](0067-operations-panel.md)); a pane without one has Rename and New Folder off, so the
+field can't be reached, and the tests run the commands with a queue of their own. If the old
+row vanishes while the rename runs, the field closes and a failure then isn't shown in the
+field; the operations panel shows it. On a volume that reports no changes the field shows the
+new name over the old row for up to 4 s.
