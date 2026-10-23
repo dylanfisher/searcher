@@ -34,10 +34,15 @@ public final class Pane {
     /// it too, so a command can tell whether the user has changed the selection since it ran.
     private(set) var selectionVersion = 0
     /// Names to select once the rows list them all, the selection version they were asked for
-    /// at, and whether hidden entries showed then. Dropped once the user selects anything, the
-    /// pane leaves the folder, the filter changes or hidden entries show or hide, since a name
-    /// the filter or the setting hid would otherwise be selected whenever it showed later.
-    private var namesToSelect: (names: [ExactName], selectionVersion: Int, showsHidden: Bool)?
+    /// at, whether hidden entries showed then, and what runs once they are selected. Dropped
+    /// once the user selects anything, the pane leaves the folder, the filter changes or hidden
+    /// entries show or hide, since a name the filter or the setting hid would otherwise be
+    /// selected whenever it showed later.
+    private var namesToSelect:
+        (
+            names: [ExactName], selectionVersion: Int, showsHidden: Bool,
+            selected: (@MainActor () -> Void)?
+        )?
     /// A copy of the selection is being settled off the main thread.
     private var settleIsRunning = false
     /// Where selections settle. Tests suspend a queue of their own here to hold one unsettled.
@@ -1030,9 +1035,13 @@ public final class Pane {
     /// otherwise when the load or folder change that brings the last of them lands. Does nothing
     /// if the selection has changed since `selectionVersion` was read, as it does when the user
     /// selects something else or the pane leaves the folder, before or after this call.
-    func select(_ names: [String], whenListedAtSelectionVersion version: Int) {
+    /// `selected` runs once they are selected, and never if they aren't.
+    func select(
+        _ names: [String], whenListedAtSelectionVersion version: Int,
+        then selected: (@MainActor () -> Void)? = nil
+    ) {
         guard version == selectionVersion, !names.isEmpty else { return }
-        namesToSelect = (names.map(ExactName.init), version, settings.showHidden)
+        namesToSelect = (names.map(ExactName.init), version, settings.showHidden, selected)
         selectNamesIfListed()
     }
 
@@ -1049,6 +1058,7 @@ public final class Pane {
         else { return }
         namesToSelect = nil
         select(Selection(Set(wanted.names), cursor: wanted.names.last))
+        wanted.selected?()
     }
 
     /// Takes a selection already resolved against the listing shown.
