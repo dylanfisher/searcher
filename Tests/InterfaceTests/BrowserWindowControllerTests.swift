@@ -696,3 +696,26 @@ private func usKey(
     fixture.window.sendEvent(try shiftedBracket("{", keyCode: 33))
     #expect(fixture.tab === first)
 }
+
+@MainActor @Test func ctrlTabWithOneTabMovesTheKeyViewLikeAppKitDoes() async throws {
+    let fixture = try await Fixture()
+    // A second pane gives the key view loop somewhere to go.
+    try fixture.press(try keyEvent("T", modifiers: [.command, .shift]))
+    let only = fixture.tab
+    try #require(only.panes.count == 2)
+    fixture.window.recalculateKeyViewLoop()
+    let before = try #require(fixture.window.firstResponder)
+
+    fixture.window.sendEvent(try usKey("\t", characters: "\t", keyCode: 48, .control))
+
+    #expect(fixture.tab === only)
+    #expect(fixture.window.firstResponder !== before)
+}
+
+@MainActor @Test func aSplitsCopyForgetsItsSourceOnceItIsScrolledLikeIt() async throws {
+    let fixture = try await Fixture()
+    try fixture.press(try keyEvent("T", modifiers: [.command, .shift]))
+
+    #expect(fixture.tab.panes.count == 2)
+    #expect(fixture.tab.focusedPane.copiedFrom == nil)
+}
