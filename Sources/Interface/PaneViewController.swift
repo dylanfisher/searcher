@@ -296,7 +296,8 @@ public final class PaneViewController: NSViewController {
                 pane: pane.commandPane,
                 toggleQuickLook: { [weak self] in self?.keyListing.quickLook.toggle() },
                 askForFolder: { [weak self] in self?.askForFolder() },
-                showFilter: { [weak self] in self?.showFilter() }, folder: folder)
+                showFilter: { [weak self] in self?.showFilter() }, folder: folder,
+                editName: { [weak self] in self?.editName() })
         }
         return CommandContext(
             pane: pane.commandPane, workspace: link.workspace, workspaces: link.workspaces,
@@ -306,7 +307,22 @@ public final class PaneViewController: NSViewController {
             askForFolder: { [weak self] in self?.askForFolder() },
             showFilter: { [weak self] in self?.showFilter() },
             toggleOperations: link.toggleOperations, folder: folder,
-            fileOperations: link.fileOperations)
+            fileOperations: link.fileOperations,
+            editName: { [weak self] in self?.editName() })
+    }
+
+    /// Rename's hook. Rename is on only with a queue in the context, and the field renames
+    /// through it.
+    private func editName() {
+        guard let queue = context().fileOperations else {
+            preconditionFailure("Rename ran with no file operation queue")
+        }
+        editName(queue: queue)
+    }
+
+    /// Starts the name field on the one selected entry of the list or the focused column.
+    func editName(queue: FileOperationQueue) {
+        keyListing.renameField.begin(queue: queue)
     }
 
     /// Shows the filter field and focuses it, its text selected. Typing then narrows the rows.
