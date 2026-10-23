@@ -363,6 +363,19 @@ private final class SheetLog {
     #expect(try fixture.keyTable(first).validateMenuItem(trash))
 }
 
+@MainActor @Test func everyWindowsListTakesDropsThroughTheOneQueueAndMountTable() async throws {
+    let fixture = try await Fixture()
+    let first = try #require(fixture.windows.controllers.first)
+    let second = try await fixture.open()
+
+    for controller in [first, second] {
+        let list = try #require(
+            try fixture.keyTable(controller).dataSource as? ListingViewController)
+        #expect(list.fileOperations === fixture.windows.fileOperations)
+        #expect(list.mountTable === fixture.windows.mountTable)
+    }
+}
+
 /// A trash of `/root/a.txt` that failed: the snapshot the queue sends once, as it finishes.
 private func failedTrash(_ id: Int) -> FileOperationQueue.Snapshot {
     FileOperationQueue.Snapshot(

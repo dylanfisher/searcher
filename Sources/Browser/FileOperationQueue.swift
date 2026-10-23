@@ -23,6 +23,9 @@ public actor FileOperationQueue {
     /// How the folder a replace stages its item in starts its name; the rest is a UUID. The
     /// leading dot keeps it out of panes and Finder.
     static let stagingFolderPrefix = ".searcher-replace-"
+    /// How the folder a drop's promised files are written to starts its name; the rest is a
+    /// UUID.
+    static let dropFolderPrefix = ".searcher-drop-"
 
     public struct ID: Hashable, Comparable, Sendable, CustomStringConvertible {
         let value: Int
@@ -238,6 +241,30 @@ public actor FileOperationQueue {
                 entry.errors.append(gone)
                 finishWaiting(entry, as: .failed)
             }
+        }
+    }
+
+    /// Makes a hidden folder in `folder` for a drop's promised files to be written to, and
+    /// returns its path. The files then move into `folder` as one queued move, so a name the
+    /// folder already has is asked about as for any move, and the folder is removed with
+    /// `removeDropFolder` (docs/decisions/0071-drag-and-drop.md).
+    public func makeDropFolder(in folder: String) async throws(FileOperationError) -> String {
+        let makeFolder = fileSystem.makeFolder
+        let name = Self.dropFolderPrefix + UUID().uuidString
+        return try await BlockingCallThread.run { () throws(FileOperationError) in
+            try makeFolder(name, folder)
+        }
+    }
+
+    /// Deletes a folder `makeDropFolder` made, with whatever is still in it: files the move
+    /// skipped or that failed to arrive. Their source app still has them.
+    public func removeDropFolder(_ path: String) async throws(FileOperationError) {
+        precondition(
+            (path as NSString).lastPathComponent.hasPrefix(Self.dropFolderPrefix),
+            "\(path) isn't a drop folder")
+        let deletePermanently = fileSystem.deletePermanently
+        try await BlockingCallThread.run { () throws(FileOperationError) in
+            try deletePermanently(path)
         }
     }
 

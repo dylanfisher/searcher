@@ -116,6 +116,21 @@ public enum FileCommands: CommandSet {
         }
     }
 
+    /// Queues `operation`, waits for it to finish and returns its last state. With a `pane`,
+    /// what it made is selected there once the pane lists it, unless the selection changed
+    /// first, as `run` selects. A drop passes no pane when its target isn't the pane's folder.
+    @MainActor
+    public static func perform(
+        _ operation: FileOperation, selectingIn pane: Pane?, queue: FileOperationQueue
+    ) async -> OperationState {
+        let version = pane?.selectionVersion
+        let state = await queue.perform(operation)
+        if let pane, let version {
+            pane.select(names(madeBy: state.record), whenListedAtSelectionVersion: version)
+        }
+        return state
+    }
+
     /// Asks the user to confirm putting the selection in the other pane's folder, and queues it
     /// only on yes.
     @MainActor

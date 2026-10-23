@@ -1,3 +1,4 @@
+import Base
 import Foundation
 
 /// Cut, Copy and Paste of files, through the context's `CutState`. Copy and Cut put the focused
@@ -74,11 +75,15 @@ public enum ClipboardCommands: CommandSet {
     /// The list's services take these too.
     @MainActor
     public static func selectedURLs(in pane: Pane) -> [URL] {
-        pane.selectedEntries.map { entry in
-            URL(
-                fileURLWithPath: pane.location.child(named: entry.name).path,
-                isDirectory: entry.type == .directory)
-        }
+        pane.selectedEntries.map { fileURL(of: $0, in: pane.location) }
+    }
+
+    /// The file URL of `entry` in `folder`, built as `selectedURLs` builds each one. A row
+    /// dragged from a list takes it too.
+    public static func fileURL(of entry: DirectoryEntry, in folder: Location) -> URL {
+        URL(
+            fileURLWithPath: folder.child(named: entry.name).path,
+            isDirectory: entry.type == .directory)
     }
 
     /// Whether Copy and Cut can run: there is a clipboard and a selection.

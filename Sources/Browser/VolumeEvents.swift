@@ -1,9 +1,9 @@
 import Base
 import Foundation
 
-/// What panes and operation queues do when a volume mounts or unmounts. The app forwards the
-/// system's mount notifications here, with the volume's mount point, and every pane and queue
-/// adds itself when it is made. A pane is on a volume when its folder is the mount point or
+/// What panes, operation queues and mount tables do when a volume mounts or unmounts. The app
+/// forwards the system's mount notifications here, with the volume's mount point, and every
+/// pane, queue and mount table adds itself when it is made. A pane is on a volume when its folder is the mount point or
 /// under it, by the path's text. See docs/decisions/0049-volume-events.md.
 @MainActor
 public enum VolumeEvents {
@@ -12,6 +12,8 @@ public enum VolumeEvents {
     /// Every operation queue made, weakly. Queues are made off the main actor too, so the list
     /// has a lock of its own.
     private nonisolated static let queues = QueueList()
+    /// Every mount table made, weakly.
+    private static var mountTables: [WeakMountTable] = []
 
     static func add(_ pane: Pane) {
         panes.removeAll { $0.pane == nil }
@@ -20,6 +22,11 @@ public enum VolumeEvents {
 
     nonisolated static func add(_ queue: FileOperationQueue) {
         queues.add(queue)
+    }
+
+    static func add(_ table: MountTable) {
+        mountTables.removeAll { $0.table == nil }
+        mountTables.append(WeakMountTable(table: table))
     }
 
     /// The volume at `mountPoint` is about to unmount: running loads on it stop, since a folder
@@ -42,18 +49,27 @@ public enum VolumeEvents {
         }
     }
 
-    /// The volume at `mountPoint` is gone: panes on it go offline with the rows they show.
+    /// The volume at `mountPoint` is gone: panes on it go offline with the rows they show, and
+    /// mount tables read the mounts again.
     public static func didUnmount(at mountPoint: String) {
         for pane in panes(on: mountPoint) {
             pane.volumeDidUnmount(at: mountPoint)
         }
+        refreshMountTables()
     }
 
     /// A volume mounted at `mountPoint`: panes on it list their folders again and are watched
-    /// again.
+    /// again, and mount tables read the mounts again.
     public static func didMount(at mountPoint: String) {
         for pane in panes(on: mountPoint) {
             pane.volumeDidMount()
+        }
+        refreshMountTables()
+    }
+
+    private static func refreshMountTables() {
+        for table in mountTables.compactMap(\.table) {
+            table.refresh()
         }
     }
 
@@ -64,6 +80,10 @@ public enum VolumeEvents {
 
 private struct WeakPane {
     weak var pane: Pane?
+}
+
+private struct WeakMountTable {
+    weak var table: MountTable?
 }
 
 private final class QueueList: @unchecked Sendable {

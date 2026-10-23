@@ -146,6 +146,26 @@ private struct Fixture {
     #expect(alphas.map(\.1) == [1, ListingViewController.cutAlpha])
 }
 
+@MainActor @Test func everyColumnTakesDropsIntoItsFolder() async throws {
+    let fixture = await Fixture()
+    let queue = FileOperationQueue(
+        prompts: FileOperationQueue.Prompts(
+            resolve: { request in preconditionFailure("a column asked \(request)") },
+            confirm: { request in preconditionFailure("a column asked \(request)") })
+    ) { _ in }
+    let mounts = MountTable(read: { [] })
+    fixture.controller.fileOperations = queue
+    fixture.controller.mountTable = mounts
+
+    await fixture.openThreeColumns()
+
+    #expect(fixture.controller.columnControllers.count == 3)
+    for column in fixture.controller.columnControllers {
+        #expect(column.fileOperations === queue)
+        #expect(column.mountTable === mounts)
+    }
+}
+
 @MainActor @Test func twoFlacFilesInAColumnShareOneIcon() async throws {
     let maker = IconMaker()
     let fixture = await Fixture(iconCache: TypeIconCache(makeIcon: maker.icon(for:)))

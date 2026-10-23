@@ -47,11 +47,18 @@ public enum FileOperation: Equatable, Sendable {
     /// `path` as the refusal checks compare it: without case and with Unicode normalized, as
     /// APFS compares names by default, and without trailing slashes. On a case-sensitive volume
     /// two different items can compare equal, which only refuses more.
-    static func comparable(_ path: String) -> String {
+    public static func comparable(_ path: String) -> String {
         var path = path.folding(options: .caseInsensitive, locale: nil)
             .precomposedStringWithCanonicalMapping
         while path.utf8.count > 1, path.hasSuffix("/") { path.removeLast() }
         return path
+    }
+
+    /// The first of `sources` that `folder` is or is inside, compared as `comparable` gives
+    /// them: a copy or move of it into `folder` would go into itself. Nil when there is none.
+    public static func source(holding folder: String, among sources: [String]) -> String? {
+        let target = comparable(folder)
+        return sources.first { isPath(target, atOrUnder: comparable($0)) }
     }
 
     /// Where `source` goes when it moves or is copied into `folder`.
