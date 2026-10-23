@@ -151,9 +151,9 @@ public enum FileCommands: CommandSet {
     private static func names(madeBy record: OperationRecord) -> [String] {
         record.changes.compactMap { change in
             switch change {
-            case .created(let path), .moved(_, let path), .putBack(_, let path):
+            case .created(let path, _), .moved(_, let path), .putBack(_, let path):
                 (path as NSString).lastPathComponent
-            case .trashed, .deleted, .replaced: nil
+            case .trashed, .deleted, .replaced, .uncreated: nil
             }
         }
     }

@@ -134,10 +134,11 @@ that didn't happen.
 - **Intake in key order.** `submit` queues an operation without waiting for the actor: it takes
   the next ID and adds the operation to a lock-guarded list on the calling thread, and the actor
   takes in the whole list in order whenever it runs. The file commands submit from the key
-  press, so operations are queued in the order of the keys. `finishedCount`, which an undo reads
-  before it picks an entry ([0072](0072-undo.md)), first waits until every operation submitted
-  before the read has finished or, for one that copies, joined its lane. So Cmd-Z pressed in the
-  same turn as Cmd-Delete undoes that trash, and doesn't wait for a 20-minute copy.
+  press, so operations are queued in the order of the keys. `finishedCount(before:)`, which an
+  undo reads before it picks an entry ([0072](0072-undo.md)), first waits until every operation
+  submitted before the press (`submittedCount`, read without the actor) has finished. So Cmd-Z
+  pressed in the same turn as Cmd-Delete undoes that trash, and Cmd-Z pressed during a copy
+  undoes the copy once it ends.
 
 ## Alternatives considered
 
@@ -178,8 +179,9 @@ that didn't happen.
   app doesn't remember, and a share listed at launch can block for minutes.
 - **Skip leftover folders younger than a minute** — rejected: it needs one more call per folder,
   and the race it closes is rare and loud (below).
-- **Undo waits for every operation submitted before it** — rejected: Cmd-Z pressed during a long
-  copy would hold Undo off until the copy ended, then undo something the user had moved on from.
+- **Undo doesn't wait for a copy in its lane** — dropped at M4.15: once copies make entries, an
+  undo that skipped a running copy undid the change before it while the copy's entry went on top.
+  How an undo that waits avoids undoing what the user moved on from is in 0072.
 
 ## Consequences
 
@@ -197,10 +199,10 @@ Two Searcher processes, such as a development build beside the installed app, ea
 their own names, so one can remove the other's folder in the moment it is empty: a staging
 folder for the microseconds before its copy starts, a drop folder until the first promised byte
 lands. The replace or drop then fails with the path, and nothing is lost. A sweep costs one
-listing of the destination folder per replace operation and per drop. Cmd-Z waits for a move,
-rename or trash queued before it that is waiting for an answer, and for a copy queued before it
-that is still planning, as on a slow share, since its lane isn't known until the plan is done.
-Cancelling that operation in the operations panel lets the undo go ahead.
+listing of the destination folder per replace operation and per drop. Cmd-Z waits for every
+operation queued before it, one waiting for an answer, planning on a slow share or copying for
+minutes included. Cancelling that operation in the operations panel ends the undo too
+([0072](0072-undo.md)).
 
 Operations on paths reached through a link aren't matched by the refusal check, as 0049's panes
 aren't, nor by will-unmount. Will-unmount fails an operation still planning, but its plan

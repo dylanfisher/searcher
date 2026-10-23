@@ -35,33 +35,53 @@ public enum FileOperation: Equatable, Sendable {
         case move(from: String, to: String)
         /// Moves the item in the Trash at the URL back to the path, which must be free.
         case putBack(URL, to: String)
-        /// Moves the item at the path to its volume's Trash.
+        /// Moves the item at the path, which an undo put back, to its volume's Trash.
         case trash(String)
+        /// Moves the item at the path, which the origin made, to its volume's Trash.
+        case unmake(String, from: OperationRecord.Origin)
+        /// Makes the item at the path, which must be free, again: copies the origin's source
+        /// to it, or makes an empty folder there.
+        case make(String, from: OperationRecord.Origin)
 
-        var source: String {
+        /// The item the step changes or, for a copy it makes again, reads; nil for a new
+        /// folder it makes again.
+        var source: String? {
             switch self {
             case .move(let from, _): from
             case .putBack(let url, _): url.path
-            case .trash(let path): path
+            case .trash(let path), .unmake(let path, _): path
+            case .make(_, .copy(let source)): source
+            case .make(_, .newFolder), .make(_, .drop): nil
             }
+        }
+
+        /// Whether the step only reads its source: a copy made again.
+        var readsSource: Bool {
+            if case .make = self { true } else { false }
         }
 
         var destination: String? {
             switch self {
-            case .move(_, let to), .putBack(_, let to): to
-            case .trash: nil
+            case .move(_, let to), .putBack(_, let to), .make(let to, _): to
+            case .trash, .unmake: nil
             }
         }
     }
 
     /// The steps that reverse `record`, last change first: a moved item moves back, a trashed
-    /// or replaced one comes back from the Trash, and an item a copy made or an undo put back
-    /// goes to the Trash. A replace is listed before the change that put the new item at its
-    /// path, so the new item leaves before the original comes back.
+    /// or replaced one comes back from the Trash, and an item a copy, a new folder or a drop
+    /// made, or an undo put back, goes to the Trash. An item an undo took away is made again
+    /// as it was made the first time, a copy from its source and a new folder empty; a drop's
+    /// file comes back from the Trash, since its app can't be asked again. A replace is listed
+    /// before the change that put the new item at its path, so the new item leaves before the
+    /// original comes back.
     static func steps(undoing record: OperationRecord) -> [UndoStep] {
         record.changes.reversed().map { change in
             switch change {
-            case .created(let path), .putBack(_, let path): .trash(path)
+            case .created(let path, let origin): .unmake(path, from: origin)
+            case .putBack(_, let path): .trash(path)
+            case .uncreated(let path, .drop, let url): .putBack(url, to: path)
+            case .uncreated(let path, let origin, _): .make(path, from: origin)
             case .moved(let from, let to): .move(from: to, to: from)
             case .trashed(let path, let url), .replaced(let path, let url): .putBack(url, to: path)
             case .deleted(let path):
@@ -74,7 +94,9 @@ public enum FileOperation: Equatable, Sendable {
     var reads: [String] {
         switch self {
         case .copy(let sources, _), .duplicate(let sources): sources
-        case .move, .trash, .rename, .newFolder, .deleteImmediately, .receive, .undo: []
+        case .undo(let record, _):
+            Self.steps(undoing: record).compactMap { $0.readsSource ? $0.source : nil }
+        case .move, .trash, .rename, .newFolder, .deleteImmediately, .receive: []
         }
     }
 
@@ -93,8 +115,9 @@ public enum FileOperation: Equatable, Sendable {
         case .newFolder, .duplicate, .receive:
             []
         case .undo(let record, _):
-            Self.steps(undoing: record).flatMap {
-                [$0.source] + ($0.destination.map { [$0] } ?? [])
+            Self.steps(undoing: record).flatMap { step in
+                let changed = step.readsSource ? nil : step.source
+                return [changed, step.destination].compactMap { $0 }
             }
         }
     }
