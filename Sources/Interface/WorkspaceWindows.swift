@@ -33,7 +33,9 @@ public final class WorkspaceWindows {
     /// Every mounted volume, which every window's drops check.
     let mountTable = MountTable()
     /// The app's undo history, fed every operation as it finishes.
-    let undoHistory = UndoHistory()
+    let undoHistory = UndoHistory(log: { message in
+        Logger(category: "undo").error("\(message, privacy: .public)")
+    })
     /// The apps Open With lists for each file type, shared by every window.
     let openWith: OpenWith
     /// The unfinished operations in the queue's latest snapshots, for a window that opens while

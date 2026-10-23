@@ -234,8 +234,17 @@ public struct OperationPlan: Equatable, Sendable {
             return try inspect(path) != nil
         }
         var failures: [FileOperationError] = []
-        func gone(_ path: String) {
-            let error = FileOperationError(reason: .sourceGone, path: path, errno: ENOENT)
+        /// Records `path` as gone or, when its folder is gone too, the outermost folder that
+        /// is, as a drive that isn't mounted: the history keeps an entry whose folder may come
+        /// back, and drops one whose item left a folder that is still there.
+        func gone(_ path: String) throws(FileOperationError) {
+            var missing = path
+            while true {
+                let folder = (missing as NSString).deletingLastPathComponent
+                guard folder != missing, try !isTaken(folder) else { break }
+                missing = folder
+            }
+            let error = FileOperationError(reason: .sourceGone, path: missing, errno: ENOENT)
             if !failures.contains(error) { failures.append(error) }
         }
         for step in steps {
@@ -244,9 +253,9 @@ public struct OperationPlan: Equatable, Sendable {
             do throws(FileOperationError) {
                 if let source {
                     if let taken = after[FileOperation.comparable(source)] {
-                        if !taken { gone(source) }
+                        if !taken { try gone(source) }
                     } else if try inspect(source) == nil {
-                        gone(source)
+                        try gone(source)
                     } else if !step.readsSource,
                         let recorded = identities[FileOperation.comparable(source)],
                         try identify(source) != recorded
@@ -267,7 +276,7 @@ public struct OperationPlan: Equatable, Sendable {
                             FileOperationError(reason: .exists, path: destination, errno: EEXIST))
                     }
                     let folder = (destination as NSString).deletingLastPathComponent
-                    if try !isTaken(folder) { gone(folder) }
+                    if try !isTaken(folder) { try gone(folder) }
                 }
             } catch {
                 failures.append(error)
@@ -377,12 +386,13 @@ public struct OperationPlan: Equatable, Sendable {
                     modified.tv_nsec) / 1_000_000_000))
     }
 
-    /// An identifier for one operation: the volume UUID and inode of the item at a path, or nil
-    /// when nothing is there or its volume's inodes don't last (no
-    /// `VOL_CAP_FMT_PERSISTENTOBJECTIDS`, as on FAT and exFAT, which make them up) or it has no
-    /// UUID. What each volume reports is read once per operation, by `st_dev`, which holds while
-    /// the operation runs. Symlinks aren't followed. Blocks the calling thread, which must be a
-    /// `BlockingCallThread`.
+    /// An identifier for one operation, or nil when nothing is at the path. On a volume with
+    /// `VOL_CAP_FMT_PERSISTENTOBJECTIDS` and a UUID: the UUID, the inode and the birth time.
+    /// Elsewhere, as on FAT and exFAT, which make inodes up, and shares without a UUID: a
+    /// fingerprint from the same `lstat`; an item there without a birth time throws, so its
+    /// operation can't be undone. What each volume reports is read once per operation, by
+    /// `st_dev`, which holds while the operation runs. Symlinks aren't followed. Blocks the
+    /// calling thread, which must be a `BlockingCallThread`.
     static func identifier() -> FileOperationQueue.Identifier {
         let volumes = VolumeUUIDs()
         return { path throws(FileOperationError) in
@@ -392,9 +402,25 @@ public struct OperationPlan: Equatable, Sendable {
                 if errno == ENOENT { return nil }
                 throw FileOperationError(errno: errno, path: path)
             }
-            guard let volume = try volumes.uuid(of: info.st_dev, holding: path) else { return nil }
-            return OperationRecord.ItemIdentity(volume: volume, inode: UInt64(info.st_ino))
+            let born = nanoseconds(info.st_birthtimespec)
+            if let volume = try volumes.uuid(of: info.st_dev, holding: path) {
+                return .persistent(volume: volume, inode: UInt64(info.st_ino), born: born)
+            }
+            // Zero is what a file system without birth times reports.
+            guard born > 0 else {
+                throw FileOperationError(reason: .other, path: path, errno: nil)
+            }
+            let type = info.st_mode & S_IFMT
+            let isFolder = type == S_IFDIR
+            return .fingerprint(
+                type: type, born: born,
+                modified: isFolder ? nil : nanoseconds(info.st_mtimespec),
+                size: isFolder ? nil : Int64(info.st_size))
         }
+    }
+
+    private static func nanoseconds(_ time: timespec) -> Int64 {
+        Int64(time.tv_sec) * 1_000_000_000 + Int64(time.tv_nsec)
     }
 
     /// The UUID of each volume an identifier met, nil for one whose inodes don't last.

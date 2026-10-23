@@ -1,3 +1,4 @@
+import Base
 import Foundation
 
 /// What an operation changed on disk, item by item in the order it ran: what Undo reads to put
@@ -47,26 +48,35 @@ public struct OperationRecord: Equatable, Sendable {
     }
 
     /// Which item is at a path: what tells an item an undo would change from another put at its
-    /// path since, such as a save that writes a new file and renames it over the old one. The
-    /// volume is its UUID, not `st_dev`, which changes when the volume is mounted again.
-    public struct ItemIdentity: Equatable, Sendable {
-        public let volume: String
-        public let inode: UInt64
-
-        public init(volume: String, inode: UInt64) {
-            self.volume = volume
-            self.inode = inode
-        }
+    /// path since, such as a save that writes a new file and renames it over the old one.
+    /// Times are nanoseconds since 1970.
+    public enum ItemIdentity: Equatable, Sendable {
+        /// On a volume with persistent object IDs: its UUID, not `st_dev`, which changes when
+        /// the volume is mounted again; the inode; and the birth time, since an inode is used
+        /// again once its item is gone.
+        case persistent(volume: String, inode: UInt64, born: Int64)
+        /// Elsewhere, as on FAT, exFAT and shares without a volume UUID, where inodes don't
+        /// last: the type (`st_mode & S_IFMT`), the birth time, and for anything but a folder
+        /// the modification time and the size. A folder's modification time changes with what
+        /// is in it, so it isn't kept.
+        case fingerprint(type: UInt16, born: Int64, modified: Int64?, size: Int64?)
     }
 
     public var changes: [Change]
     /// The identity of the item at each change's `location`, read right after the change, by
-    /// the location as `FileOperation.comparable` gives it. An item on a volume whose inodes
-    /// don't last, such as exFAT, or whose identity couldn't be read, has none.
+    /// the location as `FileOperation.comparable` gives it.
     public var identities: [String: ItemIdentity]
+    /// Why the identity of an item a change left couldn't be read: an error, or no birth time
+    /// on a volume without persistent IDs. An operation with any can't be undone, since its
+    /// undo couldn't tell its items from others put at their paths since.
+    public var unidentified: [FileOperationError]
 
-    public init(changes: [Change] = [], identities: [String: ItemIdentity] = [:]) {
+    public init(
+        changes: [Change] = [], identities: [String: ItemIdentity] = [:],
+        unidentified: [FileOperationError] = []
+    ) {
         self.changes = changes
         self.identities = identities
+        self.unidentified = unidentified
     }
 }

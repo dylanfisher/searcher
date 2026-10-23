@@ -18,7 +18,7 @@ import Testing
             location: Location(path: image.mountPoint), service: ListingService(),
             systemActions: StubSystemActions(), settings: untouchedSettings())
         let workspace = Workspace(tab: Tab(pane: pane))
-        let history = UndoHistory()
+        let history = UndoHistory(log: { _ in })
         let (finished, feed) = AsyncStream.makeStream(of: FileOperationQueue.Snapshot.self)
         history.follow(finished)
         let queue = FileOperationQueue(
@@ -33,7 +33,7 @@ import Testing
             FileCommands.bindings.first { $0.command == FileCommands.moveToTrash })
 
         trash.run(context)
-        let undo = try #require(history.undo(with: queue))
+        let undo = history.undo(with: queue)
         let undone = try #require(await undo.value)
 
         #expect(
