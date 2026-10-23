@@ -68,16 +68,21 @@ links, not for its target. The menu shows no app icons: reading them is file-sys
 The menu now matches Finder's on macOS 26. This replaces the "Order" point's dedupe and names,
 and the last sentence of Consequences.
 
-- **Each app is read through `SystemActions.application(at:)`,** so tests describe apps without
-  reading the disk. The real one reads the bundle ID, `CFBundleShortVersionString` and
-  `FileManager.displayName` in Browser (`OpenWith.App(readingBundleAt:icon:)`), and asks Quick
-  Look (`QLThumbnailGenerator`, `.icon`) for the icon at 16 points, 2x, as a `CGImage`, which
-  crosses to the main actor where an `NSImage` can't. `NSWorkspace.icon(forFile:)` is the usual
-  call, but it reads the bundle from Interface, which `scripts/arch` denies; Quick Look draws
-  the icon in its own process, 20–40 ms per app. The apps of a type are read at once in a task
-  group after Launch Services lists them, and the result is cached with the list, so the menu
-  still opens from the cache (B10). The `openWith` log time now covers the reads and icons. An
-  icon Quick Look can't make is logged and the item shows none.
+- **Each app is read through `SystemActions.application(at:)`** on the build queue, after
+  Launch Services lists the type's apps, so tests describe apps without reading the disk. The
+  real one reads the bundle ID, `CFBundleShortVersionString` and `FileManager.displayName` in
+  Browser (`OpenWith.App(readingBundleAt:missingBundle:)`). An app with no readable bundle is
+  still listed, by its path with no version, and logged under `openWith`. The `openWith` log
+  time covers listing and reading the apps.
+- **Icons come from `SystemActions.applicationIcon(at:)`,** asked once per app. The real one
+  asks Quick Look (`QLThumbnailGenerator`, `.icon`) for the icon at 16 points, 2x, as a
+  `CGImage`, which crosses to the main actor where an `NSImage` can't.
+  `NSWorkspace.icon(forFile:)` is the usual call, but it reads the bundle from Interface, which
+  `scripts/arch` denies; Quick Look draws the icon in its own process, 20–40 ms per app. A
+  type's list waits for its icons at most `OpenWith.iconWait` (1 s) before it is cached and
+  shown, so an icon Quick Look never answers can't hold the menu on Loading…; an icon that lands
+  later shows the next time the menu opens. The menu still opens from the cache (B10). An icon
+  Quick Look can't make is logged and the item shows none.
 - **One entry per bundle ID and version,** not per bundle ID: Finder lists each version of
   Google Chrome for Testing that `@puppeteer/browsers` installs. Copies of one version keep the
   first, the default's copy first. URLs that differ only in spelling are read once.
