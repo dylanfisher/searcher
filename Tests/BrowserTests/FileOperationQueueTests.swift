@@ -765,3 +765,43 @@ extension FileOperationQueue.Prompts {
             }
         })
 }
+
+@Test func aDropFolderRemovedAtQuitIsLeftAloneByItsDropLater() async throws {
+    let files = FakeFiles()
+    let queue = makeQueue(files, Watcher())
+    let dropFolder = try await queue.makeDropFolder(in: "/A")
+
+    #expect(await queue.removePendingDropFolders().isEmpty)
+    #expect(await queue.removeDropFolder(dropFolder).isEmpty)
+
+    #expect(files.events.all.filter { $0.hasPrefix("remove folder") }.count == 1)
+}
+
+@Test func aDropFolderItsDropRemovedIsLeftAloneAtQuit() async throws {
+    let files = FakeFiles()
+    let queue = makeQueue(files, Watcher())
+    let first = try await queue.makeDropFolder(in: "/A")
+    let second = try await queue.makeDropFolder(in: "/B")
+
+    // Both at once: the quit's removal and the drop's, in either order.
+    async let atQuit = queue.removePendingDropFolders()
+    async let byDrop = queue.removeDropFolder(second)
+    #expect(await atQuit.isEmpty)
+    #expect(await byDrop.isEmpty)
+
+    let removals = files.events.all.filter { $0.hasPrefix("remove folder") }
+    #expect(removals.sorted() == ["remove folder \(first.path)", "remove folder \(second.path)"])
+}
+
+@Test func aDropFolderIsListedWithoutFollowingASymlinkInItsPlace() throws {
+    let root = try TemporaryFolder("FileOperationQueueTests")
+    let real = root.url.appending(path: "real")
+    try FileManager.default.createDirectory(at: real, withIntermediateDirectories: false)
+    try Data("x".utf8).write(to: real.appending(path: "x"))
+    let link = root.url.appending(path: "link").path
+    try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: real.path)
+    let listNames = FileOperationQueue.FileSystem.real.listNames
+
+    #expect(try listNames(real.path) == ["x"])
+    #expect(throws: FileOperationError.self) { try listNames(link) }
+}

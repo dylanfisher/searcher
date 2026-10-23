@@ -476,22 +476,107 @@ extension Fixture {
     #expect(try fixture.contents(of: sub).isEmpty)
 }
 
+/// A promise whose file the test writes a piece at a time, then finishes or abandons.
+private final class GrowingPromise: FilePromiseReceiver.Promise, @unchecked Sendable {
+    let name: String
+    private let lock = NSLock()
+    private var call: (url: URL, reader: @Sendable (URL, (any Error)?) -> Void)?
+
+    init(_ name: String) {
+        self.name = name
+    }
+
+    var isCalledIn: Bool { lock.withLock { call != nil } }
+
+    func receive(
+        into folder: URL, reader: @escaping @Sendable (URL, (any Error)?) -> Void
+    ) -> Int {
+        lock.withLock { call = (folder.appending(path: name), reader) }
+        return 1
+    }
+
+    /// Adds a kilobyte to the file.
+    func grow() throws {
+        let url = try #require(lock.withLock { call?.url })
+        if !FileManager.default.fileExists(atPath: url.path) {
+            try Data().write(to: url)
+        }
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(count: 1024))
+    }
+
+    func finish() throws {
+        let call = try #require(lock.withLock { self.call })
+        call.reader(call.url, nil)
+    }
+
+    /// Removes what was written, so the drop's cleanup has nothing to put in the Trash.
+    func abandon() throws {
+        let url = try #require(lock.withLock { call?.url })
+        try FileManager.default.removeItem(at: url)
+    }
+}
+
+/// Whether a drop running in a task has returned.
+@MainActor
+private final class Finished {
+    var value = false
+}
+
+/// Starts `promises`' drop into the fixture's folder on `clock`, and waits for its first read
+/// of the folder's size to be due.
+@MainActor
+private func startDrop(
+    _ promises: [any FilePromiseReceiver.Promise], _ fixture: Fixture, clock: ManualClock
+) async -> Finished {
+    let finished = Finished()
+    Task {
+        await FilePromiseReceiver.receive(
+            promises, into: fixture.folder.path, from: "Mail", selectingIn: nil,
+            queue: fixture.queue, clock: clock)
+        finished.value = true
+    }
+    await settle { clock.waitingSleeps == 1 }
+    return finished
+}
+
+/// Moves the clock to the drop's next read of its folder's size, and waits until it has read
+/// it and waits for the next one.
+@MainActor
+private func nextRead(_ clock: ManualClock) async {
+    clock.advance(by: FilePromiseReceiver.progressInterval)
+    await settle { clock.waitingSleeps == 1 }
+}
+
+/// Waits for the drop to return, failing the test with a message rather than hanging when it
+/// doesn't.
+@MainActor
+private func waitForTheDrop(_ finished: Finished, _ what: String) async -> Bool {
+    let deadline = Date(timeIntervalSinceNow: 5)
+    while !finished.value, Date() < deadline {
+        try? await Task.sleep(for: .milliseconds(2))
+    }
+    if !finished.value { Issue.record("the drop never returned: \(what)") }
+    return finished.value
+}
+
+/// The reads of the folder's size that make up the idle timeout.
+private let readsToTimeOut = Int(
+    FilePromiseReceiver.idleTimeout / FilePromiseReceiver.progressInterval)
+
 @MainActor @Test func aSourceThatStopsAnsweringTimesOutAndTheDropIsCleanedUp() async throws {
     let fixture = try await Fixture()
     defer { fixture.stop() }
     let clock = ManualClock()
+    let finished = await startDrop([StubPromise("never.jpg", .hangs)], fixture, clock: clock)
 
-    let drop = Task {
-        await FilePromiseReceiver.receive(
-            [StubPromise("never.jpg", .hangs)], into: fixture.folder.path, from: "Mail",
-            selectingIn: nil, queue: fixture.queue, clock: clock)
-    }
-    await settle { clock.waitingSleeps == 1 }
-    clock.advance(by: FilePromiseReceiver.idleTimeout - .seconds(1))
-    try await Task.sleep(for: .milliseconds(50))
+    for _ in 1..<readsToTimeOut { await nextRead(clock) }
+    #expect(!finished.value)
     #expect(fixture.reportedFailures.isEmpty)
-    clock.advance(by: .seconds(1))
-    await drop.value
+    clock.advance(by: FilePromiseReceiver.progressInterval)
+    guard await waitForTheDrop(finished, "the idle timeout didn't end it") else { return }
 
     // The hidden folder is gone.
     #expect(try fixture.contents(of: fixture.folder) == ["a.txt", "sub"])
@@ -499,6 +584,51 @@ extension Fixture {
     let (operation, state) = try #require(fixture.reportedFailures.first)
     #expect(operation == .receive(name: nil, app: "Mail", into: fixture.folder.path))
     #expect(state.errors.map(\.reason) == [.unreachable])
+}
+
+@MainActor @Test func aFileStillGrowingIsWaitedForPastTheIdleTimeout() async throws {
+    let fixture = try await Fixture()
+    defer { fixture.stop() }
+    let clock = ManualClock()
+    let promise = GrowingPromise("big.mov")
+    let finished = await startDrop([promise], fixture, clock: clock)
+    #expect(promise.isCalledIn)
+
+    for _ in 0..<(readsToTimeOut * 3) {
+        try promise.grow()
+        await nextRead(clock)
+    }
+    #expect(!finished.value)
+    try promise.finish()
+    guard await waitForTheDrop(finished, "the finished file didn't end it") else { return }
+
+    let size =
+        try FileManager.default.attributesOfItem(
+            atPath: fixture.folder.appending(path: "big.mov").path)[.size] as? Int
+    #expect(size == readsToTimeOut * 3 * 1024)
+    #expect(fixture.reportedFailures.isEmpty)
+}
+
+@MainActor @Test func aFileThatStopsGrowingTimesOut() async throws {
+    let fixture = try await Fixture()
+    defer { fixture.stop() }
+    let clock = ManualClock()
+    let promise = GrowingPromise("big.mov")
+    let finished = await startDrop([promise], fixture, clock: clock)
+
+    for _ in 0..<3 {
+        try promise.grow()
+        await nextRead(clock)
+    }
+    for _ in 1..<readsToTimeOut { await nextRead(clock) }
+    #expect(!finished.value)
+    try promise.abandon()
+    clock.advance(by: FilePromiseReceiver.progressInterval)
+    guard await waitForTheDrop(finished, "the idle timeout didn't end it") else { return }
+
+    #expect(try fixture.contents(of: fixture.folder) == ["a.txt", "sub"])
+    await settle { !fixture.reportedFailures.isEmpty }
+    #expect(fixture.reportedFailures.first?.1.errors.map(\.reason) == [.unreachable])
 }
 
 @MainActor @Test func promisedFilesDroppedOnAFolderRowLandInIt() async throws {

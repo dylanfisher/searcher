@@ -46,17 +46,24 @@ to a folder the receiver names. Cut and paste already read and write Finder's pa
   folder, calls the promises in to it (readers on an `OperationQueue`, off the main thread), and
   once every promised file has arrived or failed, moves the ones that arrived into the target as
   one queued move. Promises always copy.
-- **A source that stops answering.** The receiver waits at most `FilePromiseReceiver.idleTimeout`,
-  60 s, for each next file, timed on an injected clock. When the wait ends, the files still
-  promised count as failed and the drop goes on with what arrived.
+- **A source that stops answering.** Every `FilePromiseReceiver.progressInterval`, 5 s, the
+  receiver has the queue read how many bytes the drop folder holds, off the main thread. Once
+  `idleTimeout`, 60 s, passes with no new bytes and no file arriving, the files still promised
+  count as failed and the drop goes on with what arrived. A 4 GB export still being written keeps
+  the drop waiting however long it takes. Both are timed on an injected clock.
 - **Removing the folder.** The folder is an opaque `FileOperationQueue.DropFolder` that only
   `makeDropFolder` makes, and the queue keeps the ones not yet removed, so `removeDropFolder` can't
   be handed another path. An empty folder is removed. Anything left in it, a file the user
   skipped in a conflict or one that arrived after the wait ended, goes to the Trash first, since
   a promise, such as a file a browser made on demand, may not be made again. A failed trash,
-  such as on a volume with no Trash, leaves the folder where it is and is reported. When the app
-  quits, `applicationWillTerminate` removes the folders still pending the same way, off the main
-  thread, waiting at most 1 s.
+  such as on a volume with no Trash, leaves the folder where it is and is reported. The folder
+  is listed through a descriptor opened with `O_NOFOLLOW | O_DIRECTORY`, so a symlink put in its
+  place can't point the trash at another folder. A folder is taken out of the queue's set before
+  anything else, so removing it twice, by its drop and by the quit, removes it once.
+- **Quit.** `applicationWillTerminate` removes the folders still pending the same way, off the
+  main thread, waiting at most 1 s. That trashes whatever is in them, half-written files a source
+  app is still writing included, and abandons the drops still waiting: nothing they were
+  receiving is moved into its target.
 - **Failures show in the operations panel.** A folder the queue couldn't make (a read-only
   target), a promised file that failed or never came, and a folder that couldn't be removed are
   reported with `FileOperationQueue.report` as one failed `FileOperation.receive` row per drop,
@@ -99,6 +106,7 @@ Finder would move. Two mount points that differ only by case, such as `/Volumes/
 them moves where Finder would copy; the queue still reads each item's real volume, so the move
 is done as a copy and a delete. A drop made in the moment between a mount and the table's next
 read copies from the new volume until the read lands. A promise that never answers holds its
-drop for 60 s; a file written after that lands in the hidden folder and goes to the Trash with
+drop for 60 s after the last byte; a source that stalls for longer mid-file is cut off, and a
+file written after that lands in the hidden folder and goes to the Trash with
 it. A folder left by a crash, or by a quit that took longer than 1 s to remove it, isn't cleaned
 up at the next launch. Undo of a drop is whatever undoes a queued copy or move.
