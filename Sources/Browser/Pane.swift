@@ -33,9 +33,11 @@ public final class Pane {
     /// selection provisionally and settles it off the main thread too. Leaving the folder moves
     /// it too, so a command can tell whether the user has changed the selection since it ran.
     private(set) var selectionVersion = 0
-    /// Names to select once the rows list them all, and the selection version they were asked
-    /// for at: dropped once the selection changes.
-    private var namesToSelect: (names: [ExactName], selectionVersion: Int)?
+    /// Names to select once the rows list them all, the selection version they were asked for
+    /// at, and whether hidden entries showed then. Dropped once the user selects anything, the
+    /// pane leaves the folder, the filter changes or hidden entries show or hide, since a name
+    /// the filter or the setting hid would otherwise be selected whenever it showed later.
+    private var namesToSelect: (names: [ExactName], selectionVersion: Int, showsHidden: Bool)?
     /// A copy of the selection is being settled off the main thread.
     private var settleIsRunning = false
     /// Where selections settle. Tests suspend a queue of their own here to hold one unsettled.
@@ -712,6 +714,7 @@ public final class Pane {
     public func setFilter(_ text: String) {
         guard text != filter.text else { return }
         filter = NameFilter(text)
+        namesToSelect = nil
         startSortIfNeeded()
         onChange?()
     }
@@ -722,6 +725,9 @@ public final class Pane {
     private func settingsDidChange() {
         // Followed in column mode too, so the list the pane switches back to has it.
         followSizeSetting()
+        if namesToSelect?.showsHidden != settings.showHidden {
+            namesToSelect = nil
+        }
         guard columnTrail == nil, !isClosed else { return }
         startSortIfNeeded()
         onChange?()
@@ -1026,7 +1032,7 @@ public final class Pane {
     /// selects something else or the pane leaves the folder, before or after this call.
     func select(_ names: [String], whenListedAtSelectionVersion version: Int) {
         guard version == selectionVersion, !names.isEmpty else { return }
-        namesToSelect = (names.map(ExactName.init), version)
+        namesToSelect = (names.map(ExactName.init), version, settings.showHidden)
         selectNamesIfListed()
     }
 
@@ -1047,6 +1053,9 @@ public final class Pane {
 
     /// Takes a selection already resolved against the listing shown.
     private func set(_ selection: Selection) {
+        // Selecting the rows already selected doesn't move the version, but is still the user's
+        // choice over names a command is waiting to select.
+        namesToSelect = nil
         guard selection != self.selection else { return }
         self.selection = selection
         selectionVersion += 1

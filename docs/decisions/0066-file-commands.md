@@ -1,4 +1,4 @@
-# 0066. File commands: the queue through the context, confirms through its prompts, selection by version
+# 0066. File commands: queue in the context, confirm through its prompts, select by version
 
 - **Date:** 2026-10-22
 - **Status:** accepted
@@ -40,7 +40,13 @@ monitor reports them.
   the names its record created or moved to. The pane selects them, the cursor on the last, as
   soon as its rows list them all: at once, or when the load or patch that brings the last one
   lands. If the selection version has moved, by the user selecting something else or the pane
-  leaving the folder, before or after the operation ends, the names are dropped.
+  leaving the folder, before or after the operation ends, the names are dropped. They are also
+  dropped when the user selects anything, even the rows already selected, when the filter
+  changes, and when hidden entries show or hide: a name the filter or the setting hides would
+  otherwise be selected whenever it showed later.
+- **Names compare exactly.** A name the volume lists in another Unicode normalization than the
+  record's, which can happen on HFS+ and exFAT, is never found, so it isn't selected; nothing
+  else follows from it.
 - **Rename** is two parts: the command starts the view's field, and the field commits with
   `FileCommands.rename(_:to:in:queue:)`, which returns the operation's last state so the field
   can show why a rename failed.
@@ -57,9 +63,9 @@ monitor reports them.
   replace and other-pane copy would silently do nothing.
 - **A separate confirm hook in the context** — rejected: a second way to ask the user what the
   queue's prompts already ask, which Interface would have to wire twice.
-- **Drop the pending names on any selection change** — rejected: the names are known only once
-  the operation ends, so a click made before that would still be overridden. Comparing the
-  selection version from when the command ran catches both orders.
+- **Only drop the pending names when the selection changes** — rejected: the names are known
+  only once the operation ends, so a click made before that would still be overridden.
+  Comparing the selection version from when the command ran catches both orders.
 - **Select the moved items in the other pane** — not now: the key table doesn't ask for it.
 
 ## Consequences
