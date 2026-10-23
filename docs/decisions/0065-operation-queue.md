@@ -134,14 +134,15 @@ that didn't happen.
   times the updates, and the panel draws all of them anyway.
 - **Trash the source of a cross-volume move** — rejected: Finder deletes it, and the trash would
   fill with every item moved to another disk.
-- **Swap the staged item into place (`renamex_np` with `RENAME_SWAP`), then trash the original
-  from the staging folder** — the first version, rejected: the trashed original's Put Back
-  pointed at the staging folder, which was gone; knowing before the swap whether the volume has
-  a Trash took a probe (trash an empty file made for the purpose, then delete it from the
-  Trash), since `FileManager.url(for: .trashDirectory, appropriateFor:)` threw
-  `featureUnsupported` on HFS+, APFS and exFAT images that have one; and HFS+ and exFAT refuse
-  `RENAME_SWAP` with `ENOTSUP`, so there the swap was three renames and not atomic anyway.
-- **Ask about no Trash before staging** — rejected: it needs the probe above; asking with the
+- **Swap the staged item into place with `renamex_np` and `RENAME_SWAP`, then trash the
+  original from the staging folder** — rejected, for three reasons. Finder's Put Back would
+  point at the staging folder, which is removed. The trash would come after the swap, so the
+  queue would have to know beforehand whether the volume has a Trash, and only a probe could
+  tell: trashing an empty file made for the purpose. `FileManager.url(for: .trashDirectory,
+  appropriateFor:)` threw `featureUnsupported` on HFS+, APFS and exFAT images that have a
+  Trash. And HFS+ and exFAT refuse `RENAME_SWAP` with `ENOTSUP`, so there the swap would be
+  three renames, no more atomic than trash-first.
+- **Ask about no Trash before staging** — rejected: it would need that probe; asking with the
   new item staged costs only the copy when the answer is no.
 - **Ask conflicts when the operation reaches its lane** — rejected: a copy queued behind a long
   one would ask only when that one ends, perhaps after the user has left; asking first also
