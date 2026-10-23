@@ -76,11 +76,14 @@ private func selectedNames(_ pane: Pane) -> Set<String> {
     let table = ListingTableView()
 
     let menu = try ContextMenuBuilder.build(
-        ContextMenuBuilder.rowItems, registry: registry, target: table)
+        ContextMenuBuilder.rowItems, registry: registry, target: table, selection: [])
 
     #expect(commandIDs(menu) == ids(ContextMenuBuilder.rowItems))
-    // Open With runs no command; OpenWithMenuTests covers it.
-    for item in menu.items where !item.isSeparatorItem && item.title != OpenWithMenu.title {
+    // Open With and Share… run no command; OpenWithMenuTests and the Share… test cover them.
+    for item in menu.items
+    where !item.isSeparatorItem && item.title != OpenWithMenu.title
+        && !(item.representedObject is NSSharingServicePicker)
+    {
         let id = try #require(item.representedObject as? CommandID)
         let command = try #require(registry.command(for: id))
         #expect(item.title == command.title, "\(id)")
@@ -102,7 +105,7 @@ private func selectedNames(_ pane: Pane) -> Set<String> {
     let error = #expect(throws: ContextMenuBuilder.BuildError.self) {
         try ContextMenuBuilder.build(
             [.command(FileCommands.duplicate.id)], registry: CommandRegistry(),
-            target: ListingTableView())
+            target: ListingTableView(), selection: [])
     }
     #expect(error?.description.contains(FileCommands.duplicate.id.rawValue) == true)
 }
@@ -111,11 +114,14 @@ private func selectedNames(_ pane: Pane) -> Set<String> {
     let table = ListingTableView()
     table.canRunCommand = { $0 == FileCommands.duplicate.id }
     let menu = try ContextMenuBuilder.build(
-        ContextMenuBuilder.rowItems, registry: try AppCommands.registry(), target: table)
+        ContextMenuBuilder.rowItems, registry: try AppCommands.registry(), target: table,
+        selection: [])
 
-    // Open With turns itself off, with no app cache for the table.
+    // Open With turns itself off, with no app cache for the table. Share… is left out: its
+    // picker turns it on.
     let enabled = menu.items.filter { item in
-        (item.target as? NSMenuItemValidation)?.validateMenuItem(item) ?? false
+        !(item.representedObject is NSSharingServicePicker)
+            && (item.target as? NSMenuItemValidation)?.validateMenuItem(item) ?? false
     }
 
     #expect(enabled.map(\.title) == [FileCommands.duplicate.title])
@@ -126,7 +132,8 @@ private func selectedNames(_ pane: Pane) -> Set<String> {
     var ran: [CommandID] = []
     table.runCommand = { ran.append($0) }
     let menu = try ContextMenuBuilder.build(
-        ContextMenuBuilder.rowItems, registry: try AppCommands.registry(), target: table)
+        ContextMenuBuilder.rowItems, registry: try AppCommands.registry(), target: table,
+        selection: [])
     let duplicate = try #require(menu.items.first { $0.title == FileCommands.duplicate.title })
 
     #expect(table.tryToPerform(try #require(duplicate.action), with: duplicate))
@@ -167,4 +174,41 @@ private func selectedNames(_ pane: Pane) -> Set<String> {
 
     #expect(selectedNames(pane) == ["a.txt"])
     #expect(commandIDs(menu) == ids(ContextMenuBuilder.folderItems))
+}
+
+@MainActor @Test func itemsCarryTheSymbolsFinderShowsOnTheSameItems() throws {
+    // Finder's context menu on macOS 26 shows these symbols on its items of the same names.
+    #expect(ContextMenuBuilder.symbols[NavigationCommands.open.id] == "arrow.up.forward.app")
+    #expect(ContextMenuBuilder.symbols[ViewCommands.toggleQuickLook.id] == "eye")
+    #expect(ContextMenuBuilder.symbols[FileCommands.rename.id] == "pencil")
+    #expect(ContextMenuBuilder.symbols[FileCommands.duplicate.id] == "plus.square.on.square")
+    #expect(ContextMenuBuilder.symbols[ClipboardCommands.copy.id] == "doc.on.doc")
+    #expect(ContextMenuBuilder.symbols[FileCommands.moveToTrash.id] == "trash")
+    #expect(ContextMenuBuilder.symbols[FileCommands.newFolder.id] == "folder.badge.plus")
+    #expect(ContextMenuBuilder.symbols[ClipboardCommands.paste.id] == "doc.on.clipboard")
+    let registry = try AppCommands.registry()
+
+    for items in [ContextMenuBuilder.rowItems, ContextMenuBuilder.folderItems] {
+        let menu = try ContextMenuBuilder.build(
+            items, registry: registry, target: ListingTableView(), selection: [])
+        for item in menu.items {
+            guard let id = item.representedObject as? CommandID else { continue }
+            #expect((item.image != nil) == (ContextMenuBuilder.symbols[id] != nil), "\(id)")
+        }
+    }
+}
+
+@MainActor @Test func theRowMenuSharesTheSelectionAfterTheClipboardItems() async throws {
+    let setup = try await ListWindow(showing: [file("a.txt"), file("b.txt")])
+
+    let menu = try #require(try setup.rightClick(row: 1))
+
+    let index = try #require(
+        menu.items.firstIndex { $0.representedObject is NSSharingServicePicker })
+    #expect(menu.items[index].title == "Share…")
+    #expect(menu.items[index].image != nil)
+    #expect(
+        menu.items[index - 1].representedObject as? CommandID == SystemCommands.copyPath.id)
+    let folderMenu = try #require(try setup.rightClickBelowTheRows())
+    #expect(!folderMenu.items.contains { $0.representedObject is NSSharingServicePicker })
 }

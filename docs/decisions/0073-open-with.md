@@ -62,3 +62,31 @@ An app installed while Searcher runs shows in Open With after a relaunch, since 
 the cache. Symbolic links have the symbolic link type, so Open With on a link lists the apps for
 links, not for its target. The menu shows no app icons: reading them is file-system work, and an
 `NSImage` can't cross from the build queue to the main actor in Swift 6 without a copy.
+
+## Amendment: icons, versions and App Store… (M4.16)
+
+The menu now matches Finder's on macOS 26. This replaces the "Order" point's dedupe and names,
+and the last sentence of Consequences.
+
+- **Each app is read through `SystemActions.application(at:)`,** so tests describe apps without
+  reading the disk. The real one reads the bundle ID, `CFBundleShortVersionString` and
+  `FileManager.displayName` in Browser (`OpenWith.App(readingBundleAt:icon:)`), and asks Quick
+  Look (`QLThumbnailGenerator`, `.icon`) for the icon at 16 points, 2x, as a `CGImage`, which
+  crosses to the main actor where an `NSImage` can't. `NSWorkspace.icon(forFile:)` is the usual
+  call, but it reads the bundle from Interface, which `scripts/arch` denies; Quick Look draws
+  the icon in its own process, 20–40 ms per app. The apps of a type are read at once in a task
+  group after Launch Services lists them, and the result is cached with the list, so the menu
+  still opens from the cache (B10). The `openWith` log time now covers the reads and icons. An
+  icon Quick Look can't make is logged and the item shows none.
+- **One entry per bundle ID and version,** not per bundle ID: Finder lists each version of
+  Google Chrome for Testing that `@puppeteer/browsers` installs. Copies of one version keep the
+  first, the default's copy first. URLs that differ only in spelling are read once.
+- **Names are the display name as is,** ".app" included when Finder shows every extension, as
+  Finder's menu shows them.
+- **Secondary text.** When two listed apps share a name, each shows its version after the name,
+  and the default shows "(default)", both in `secondaryLabelColor` through the item's
+  attributed title. The rest sort by name, then version (`localizedStandardCompare`).
+- **App Store…** sits above Other… after a separator, as in Finder. It opens
+  `macappstore://?action=search&term=<extensions>`, the selection's types' file extensions
+  sorted and joined by spaces, through `SystemActions.openURL`. Finder's own lookup URL isn't
+  public; `action=search&term=` is the form the App Store app's own links use.

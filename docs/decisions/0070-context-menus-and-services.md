@@ -69,3 +69,34 @@ Any later context menu (the path bar, the tab strip) goes through `ContextMenuBu
 services AppKit adds depend on what the user has installed and turned on in System Settings, so no
 test can list them; the requestor is tested instead. A drag's pasteboard and a service's use the
 same writer, so a change to Copy's pasteboard shape changes all three.
+
+## Amendment: symbols, Share… and Quick Actions (M4.16)
+
+- **Symbols.** `ContextMenuBuilder.symbols` gives an SF Symbol to each command whose Finder
+  item of the same name shows one on macOS 26: Open, Quick Look, Rename, Duplicate, Cut, Copy,
+  Paste, Move to Trash, New Folder, and Open Terminal Here, after Finder's New Terminal at
+  Folder service. Names are the ones that exist on macOS 14 (`doc.on.doc` is
+  `document.on.document` under its older name). A name with no symbol fails the build of the
+  menu. Commands Finder has no item for (Open in Other Pane, Copy Path, Reveal in Finder and
+  the rest) show none. The main menu's items get none.
+- **Share…** follows Copy Path in the row menu: `NSSharingServicePicker.standardShareMenuItem`
+  over the selection's file URLs, which `ListingViewController` passes to the builder when the
+  menu is built, after the clicked row is selected. AppKit fills its submenu with the share
+  extensions the user has turned on, and adds its icon.
+- **Quick Actions: not built; no public API lists them.** Finder's Quick Actions submenu comes
+  from three sources, and none has a public way for another app to list them or run them on a
+  selection:
+  - Action extensions that opt into Finder (`com.apple.ui-services` with
+    `NSExtensionServiceAllowsFinderPreviewItem`, such as Markup). Hosting them needs
+    `NSExtension`, which is SPI on macOS. ExtensionFoundation's `AppExtensionPoint` and
+    `AppExtensionIdentity` find only ExtensionKit extensions of points the host app declares.
+  - Automator Quick Action workflows in `~/Library/Services`. They are Services, but the ones
+    Automator saves for Finder carry `NSRequiredContext` `NSApplicationIdentifier` =
+    `com.apple.finder`, so AppKit offers them to Finder only. Listing them means parsing the
+    workflow bundles' private format, and running one outside Finder means `NSPerformService`
+    against that context.
+  - Shortcuts marked "Use as Quick Action". Shortcuts offers no API to list them; those also
+    marked for the Services menu already show in Services.
+
+  Services that take files and aren't limited to Finder already show in the context menu
+  (above). A Quick Actions submenu waits for a public API.

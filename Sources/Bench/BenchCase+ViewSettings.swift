@@ -158,5 +158,9 @@ extension BenchCase {
         nonisolated func defaultApplicationURL(toOpen type: UTType) -> URL? {
             preconditionFailure("the bench asked for the app that opens \(type.identifier)")
         }
+
+        nonisolated func application(at url: URL) async -> OpenWith.App {
+            preconditionFailure("the bench asked to read the app at \(url.path)")
+        }
     }
 }

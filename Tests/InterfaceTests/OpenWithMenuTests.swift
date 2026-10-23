@@ -24,10 +24,10 @@ private struct Fixture {
     /// What each Other… was answered with.
     let chooser = Chooser()
 
-    init(hasTarget: Bool = true) async {
+    init(hasTarget: Bool = true, apps: [OpenWith.App] = []) async {
         actions = StubSystemActions(
-            applications: [.plainText: [textEdit, quickTime, preview]],
-            defaultApplications: [.plainText: textEdit])
+            applications: [.plainText: [textEdit, quickTime, preview] + apps.map(\.url)],
+            defaultApplications: [.plainText: textEdit], apps: apps)
         pane = Pane(
             location: Location(path: "/folder"),
             service: ListingService(
@@ -85,6 +85,22 @@ private func validate(_ menu: NSMenu) {
     menu.update()
 }
 
+/// The parts of `item`'s title drawn in the secondary label color, as Finder draws "(default)"
+/// and an app's version.
+@MainActor
+private func secondaryText(_ item: NSMenuItem) -> [String] {
+    guard let title = item.attributedTitle else { return [] }
+    var parts: [String] = []
+    title.enumerateAttribute(
+        .foregroundColor, in: NSRange(location: 0, length: title.length)
+    ) { value, range, _ in
+        if value as? NSColor == .secondaryLabelColor {
+            parts.append((title.string as NSString).substring(with: range))
+        }
+    }
+    return parts
+}
+
 /// Sends `item`'s action to its target, as choosing it in the menu does.
 @MainActor
 private func choose(_ item: NSMenuItem) throws {
@@ -102,11 +118,12 @@ private func choose(_ item: NSMenuItem) throws {
 
     #expect(
         titles(menu) == [
-            "TextEdit (default)", "-", "Preview", "QuickTime Player", "-", OpenWithMenu.otherTitle,
+            "TextEdit (default)", "-", "Preview", "QuickTime Player", "-",
+            OpenWithMenu.appStoreTitle, OpenWithMenu.otherTitle,
         ])
     validate(menu)
     let enabled = menu.items.filter { !$0.isSeparatorItem }.map(\.isEnabled)
-    #expect(enabled == [true, true, true, true])
+    #expect(enabled == [true, true, true, true, true])
 }
 
 @MainActor @Test func aMenuOpenedBeforeTheListIsBuiltShowsLoadingThenTheApps() async throws {
@@ -118,15 +135,19 @@ private func choose(_ item: NSMenuItem) throws {
 
     let menu = try fixture.open()
 
-    #expect(titles(menu) == [OpenWithMenu.loadingTitle, "-", OpenWithMenu.otherTitle])
+    #expect(
+        titles(menu) == [
+            OpenWithMenu.loadingTitle, "-", OpenWithMenu.appStoreTitle, OpenWithMenu.otherTitle,
+        ])
     validate(menu)
     #expect(menu.items.first?.isEnabled == false)
 
     held.resume()
-    await settle { menu.items.count == 6 }
+    await settle { menu.items.count == 7 }
     #expect(
         titles(menu) == [
-            "TextEdit (default)", "-", "Preview", "QuickTime Player", "-", OpenWithMenu.otherTitle,
+            "TextEdit (default)", "-", "Preview", "QuickTime Player", "-",
+            OpenWithMenu.appStoreTitle, OpenWithMenu.otherTitle,
         ])
 }
 
@@ -188,9 +209,11 @@ private func choose(_ item: NSMenuItem) throws {
 @MainActor @Test func theRowMenuAndTheFileMenuHaveOpenWith() throws {
     let registry = try AppCommands.registry()
     let rowMenu = try ContextMenuBuilder.build(
-        ContextMenuBuilder.rowItems, registry: registry, target: ListingTableView())
+        ContextMenuBuilder.rowItems, registry: registry, target: ListingTableView(),
+        selection: [])
     let folderMenu = try ContextMenuBuilder.build(
-        ContextMenuBuilder.folderItems, registry: registry, target: ListingTableView())
+        ContextMenuBuilder.folderItems, registry: registry, target: ListingTableView(),
+        selection: [])
     NSMenuItem.usesUserKeyEquivalents = false
     let bar = try MainMenuBuilder.build(appName: "Searcher", registry: registry)
     let fileMenu = try #require(bar.items.first { $0.title == "File" }?.submenu)
@@ -225,4 +248,64 @@ private func choose(_ item: NSMenuItem) throws {
 
     #expect(target.openWith === cache)
     #expect(target.pane === pane)
+}
+
+@MainActor @Test func eachAppShowsItsIconAndTheDefaultIsMarkedInSecondaryText() async throws {
+    let fixture = await Fixture()
+    fixture.select("a.txt")
+    _ = await fixture.cache.choices(for: [.plainText])
+
+    let menu = try fixture.open()
+
+    let defaultItem = try #require(menu.items.first)
+    #expect(defaultItem.title == "TextEdit (default)")
+    #expect(secondaryText(defaultItem) == [" (default)"])
+    let apps = menu.items.filter { $0.representedObject is URL }
+    #expect(apps.count == 3)
+    for item in apps {
+        let image = try #require(item.image, "\(item.title)")
+        #expect(image.size == NSSize(width: 16, height: 16), "\(item.title)")
+        #expect(
+            image.cgImage(forProposedRect: nil, context: nil, hints: nil)?.width == 1,
+            "\(item.title)")
+    }
+}
+
+@MainActor @Test func twoAppsWithOneNameShowTheirVersionsInSecondaryText() async throws {
+    let paths = ["/a/Google Chrome for Testing.app", "/b/Google Chrome for Testing.app"]
+    let apps = zip(paths, ["152.0.7500.4", "153.0.8010.12"]).map { path, version in
+        OpenWith.App(
+            url: URL(fileURLWithPath: path, isDirectory: true),
+            bundleID: "com.google.chrome.for.testing", name: "Google Chrome for Testing.app",
+            version: version, icon: stubAppIcon())
+    }
+    let fixture = await Fixture(apps: apps)
+    fixture.select("a.txt")
+    _ = await fixture.cache.choices(for: [.plainText])
+
+    let menu = try fixture.open()
+
+    let chrome = menu.items.filter { $0.title.hasPrefix("Google Chrome for Testing.app") }
+    #expect(
+        chrome.map(\.title) == [
+            "Google Chrome for Testing.app (152.0.7500.4)",
+            "Google Chrome for Testing.app (153.0.8010.12)",
+        ])
+    #expect(chrome.map(secondaryText) == [[" (152.0.7500.4)"], [" (153.0.8010.12)"]])
+    let preview = try #require(menu.items.first { $0.title == "Preview" })
+    #expect(secondaryText(preview).isEmpty)
+}
+
+@MainActor @Test func appStoreSearchesTheStoreForTheSelectionsType() async throws {
+    let fixture = await Fixture()
+    fixture.select("a.txt")
+    _ = await fixture.cache.choices(for: [.plainText])
+    let menu = try fixture.open()
+
+    try choose(try #require(menu.items.first { $0.title == OpenWithMenu.appStoreTitle }))
+
+    #expect(
+        fixture.actions.openedURLs == [
+            try #require(URL(string: "macappstore://?action=search&term=txt"))
+        ])
 }
