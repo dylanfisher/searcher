@@ -16,6 +16,12 @@ public struct FileOperationError: Error, Equatable, Sendable {
     public let reason: Reason
     public let path: String
     public let errno: Int32?
+
+    public init(reason: Reason, path: String, errno: Int32?) {
+        self.reason = reason
+        self.path = path
+        self.errno = errno
+    }
 }
 
 extension FileOperationError {

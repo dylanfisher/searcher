@@ -1,11 +1,11 @@
 import Foundation
 import Testing
 
-/// An HFS+ disk image, 1 MB unless a test asks for more, attached with `-nobrowse` at a folder inside its own temporary folder,
-/// so it shows nowhere under /Volumes or in Finder. It is detached by its own device. If a test
-/// leaves it attached, releasing it forces a detach, so no image outlives its test unless the
-/// test process dies. Creating one takes about a second, so suites that use it are `.serialized`
-/// and keep to a few images.
+/// A disk image, 1 MB of HFS+ unless the test asks for another size or file system, attached with
+/// `-nobrowse` at a folder inside its own temporary folder, so it shows nowhere under /Volumes or
+/// in Finder. It is detached by its own device. If a test leaves it attached, releasing it forces a
+/// detach, so no image outlives its test unless the test process dies. Creating one takes about a
+/// second, so suites that use it are `.serialized` and keep to a few images.
 ///
 /// `hdiutil` runs in its own process and the calls wait for it without blocking a thread, so a
 /// test on the main actor doesn't hold up the other tests' main-queue work while it runs.
@@ -18,9 +18,12 @@ public final class DiskImage {
     private let folder: TemporaryFolder
     private let image: String
 
-    /// Creates an empty image and attaches it, after detaching any that a test process which died
-    /// left attached.
-    public init(_ name: String = "DiskImage", megabytes: Int = 1) async throws {
+    /// Creates an empty image of `megabytes` formatted as `fileSystem`, an `hdiutil create -fs`
+    /// name such as "APFS", and attaches it, after detaching any that a test process which died
+    /// left attached. A 1 MB APFS image has no room for a file; 2 MB has.
+    public init(_ name: String = "DiskImage", megabytes: Int = 1, fileSystem: String = "HFS+")
+        async throws
+    {
         try await Self.staleImagesDetached.value
         // The process ID in the folder's name tells a later process whose image it is.
         folder = try TemporaryFolder("\(Self.folderPrefix)\(getpid())-\(name)")
@@ -29,7 +32,7 @@ public final class DiskImage {
         try FileManager.default.createDirectory(
             atPath: mountPoint, withIntermediateDirectories: false)
         try await Self.hdiutil([
-            "create", "-quiet", "-size", "\(megabytes)m", "-fs", "HFS+", "-layout", "NONE",
+            "create", "-quiet", "-size", "\(megabytes)m", "-fs", fileSystem, "-layout", "NONE",
             "-volname", "SearcherTest", image,
         ])
         try await attach()
