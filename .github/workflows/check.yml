@@ -15,7 +15,8 @@ jobs:
       - run: ./scripts/check
 
   # Times the harness cases on the runner. The bench exits non-zero when a
-  # budgeted p95 is over budget, which fails the job. Cases more than 10%
+  # budgeted p95 is over budget, which fails the job. The 1 GB copy to a disk
+  # image is printed against S7 and reported only here. Cases more than 10%
   # slower than the previous run are reported and never fail it.
   bench:
     needs: check
@@ -72,7 +73,8 @@ jobs:
           sed 's/^/- /' .build/compare.txt >> "$GITHUB_STEP_SUMMARY"
           exit $status
 
-  # Times the app's UI on the runner (B1, B2, B6, B8, stalls). Its own job, so a
+  # Times the app's UI on the runner (B1, B2, B6, B8, stalls), with W8's 2 GB
+  # variant copied to a disk image for the queue cases. Its own job, so a
   # UI run that can't finish doesn't hide the harness results. A UI case is
   # report-only until its p95 stays within 10% across three consecutive runs on
   # one branch; from then on its p95 over budget fails the job. The history that
@@ -117,8 +119,8 @@ jobs:
       - name: UI bench
         run: |
           status=0
-          ./scripts/bench --ui || status=$?
-          echo "scripts/bench --ui exited with status $status"
+          ./scripts/bench --ui --w8-2gb || status=$?
+          echo "scripts/bench --ui --w8-2gb exited with status $status"
 
       - name: Judge the UI bench against the history
         if: always()

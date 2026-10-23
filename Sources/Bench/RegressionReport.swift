@@ -75,9 +75,8 @@ struct RegressionReport {
         lines += missingCases.map { "not in this run: \($0)" }
         lines += unitChanged.map { "unit changed: \($0), not compared" }
         for miss in overBudget {
-            let budget = miss.budget.map(describe) ?? "none"
             lines.append(
-                "over budget: \(miss.name) p95 \(format(miss.p95)) \(miss.unit.rawValue), budget \(budget)"
+                "over budget: \(miss.name) p95 \(format(miss.p95)) \(miss.unit.rawValue), \(miss.limit)"
             )
         }
         return lines.joined(separator: "\n")

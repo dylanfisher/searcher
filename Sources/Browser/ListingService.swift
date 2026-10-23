@@ -12,7 +12,9 @@ import Foundation
 /// docs/decisions/0038-slow-volumes.md, docs/decisions/0045-cached-rows-first.md and
 /// docs/decisions/0048-pane-load-priority.md.
 public final class ListingService: Sendable {
-    /// Ten 100k-entry folders loading together dropped frames with no limit (spike S4).
+    /// Ten 100k-entry folders loading together dropped frames with no limit (spike S4). The last
+    /// slot is the focused load's alone, so it doesn't wait behind background listings. It still
+    /// waits behind other focused loads and behind a read in flight on its own network volume.
     public static let mostRunningLoads = 4
     /// Entries in a first batch. Sorting 200 put first rows on screen in 7–9 ms for a 100k-entry
     /// folder, against 163 ms for the whole listing (spike S4).
@@ -129,6 +131,9 @@ public final class ListingService: Sendable {
             location: location, column: column, ascending: ascending,
             foldersFirst: foldersFirst, showsHidden: showsHidden, filter: filter,
             priority: priority,
+            onPriorityChange: { [weak self] in
+                self?.scheduler.async { self?.startWaitingLoads() }
+            },
             handOff: { update in
                 let prepared = prepare(update)
                 return { onUpdate(prepared) }
@@ -271,7 +276,7 @@ public final class ListingService: Sendable {
 
     /// Runs on `scheduler`.
     private func startWaitingLoads() {
-        while queue.running < Self.mostRunningLoads, let load = queue.next() {
+        while let load = queue.next(slotsFree: Self.mostRunningLoads - queue.running) {
             queue.start(load)
             BlockingCallThread.start {
                 self.run(load)
@@ -510,11 +515,14 @@ public final class ListingService: Sendable {
         /// The next load that may start: the highest priority first, then in the order asked,
         /// among loads whose volume is known and has a read to spare. Priorities are read here,
         /// so one changed while its load waits counts. Cancelled loads are dropped.
-        func next() -> ListingLoad? {
+        /// With one slot free only a focused load may take it.
+        func next(slotsFree: Int) -> ListingLoad? {
+            guard slotsFree > 0 else { return nil }
             waiting.removeAll { $0.isCancelled }
             var best: (index: Int, priority: ListingLoad.Priority)?
             for (index, load) in waiting.enumerated() where mayStart(load) {
                 let priority = load.priority
+                if slotsFree == 1 && priority != .focused { continue }
                 if best.map({ priority > $0.priority }) ?? true { best = (index, priority) }
             }
             return best.map { waiting.remove(at: $0.index) }

@@ -13,6 +13,8 @@ struct BenchCase: Sendable {
     let name: String
     /// The budget the p95 is checked against; nil for a case that is only reported.
     let budget: Budget?
+    /// The copy rate the p95 is checked against, for a copy case; nil for every other case.
+    let floor: CopyFloor?
     /// What each sample is in: the budget's unit when there is a budget.
     let unit: Budget.Unit
     /// One run, returning its sample in `unit`. A run measures its own span, so it can stop the
@@ -24,7 +26,8 @@ struct BenchCase: Sendable {
     let runs: Int
 
     init(
-        name: String, budget: Budget?, unit: Budget.Unit, runs: Int = BenchCase.runs,
+        name: String, budget: Budget?, floor: CopyFloor? = nil, unit: Budget.Unit,
+        runs: Int = BenchCase.runs,
         run: @escaping @Sendable (_ folder: String?) async throws -> Double
     ) {
         if let budget {
@@ -34,6 +37,7 @@ struct BenchCase: Sendable {
         }
         self.name = name
         self.budget = budget
+        self.floor = floor
         self.unit = unit
         self.run = run
         self.runs = runs

@@ -20,13 +20,19 @@ let package = Package(
         .executableTarget(name: "Bench", dependencies: ["Browser", "Base"], swiftSettings: strict),
         // Stubs that tests share. Only test targets depend on it.
         .target(name: "TestSupport", dependencies: ["Base"], swiftSettings: strict),
+        // Browser-type stubs that tests share: clipboard, monitor, system actions, prompts.
+        .target(
+            name: "BrowserTestSupport", dependencies: ["Browser", "TestSupport"],
+            swiftSettings: strict),
         .testTarget(
             name: "BaseTests", dependencies: ["Base", "TestSupport"], swiftSettings: strict),
         .testTarget(
-            name: "BrowserTests", dependencies: ["Browser", "Base", "TestSupport"],
+            name: "BrowserTests",
+            dependencies: ["Browser", "Base", "TestSupport", "BrowserTestSupport"],
             swiftSettings: strict),
         .testTarget(
-            name: "InterfaceTests", dependencies: ["Interface", "Browser", "TestSupport"],
+            name: "InterfaceTests",
+            dependencies: ["Interface", "Browser", "TestSupport", "BrowserTestSupport"],
             swiftSettings: strict),
         .testTarget(
             name: "BenchTests", dependencies: ["Bench", "Base", "TestSupport"],

@@ -36,17 +36,7 @@ public enum SystemCommands: CommandSet {
     /// the folder has no rows yet. Built from the names, with no file-system call.
     @MainActor
     private static func selectedURLs(in pane: Pane) -> [URL] {
-        guard let listing = pane.state.listing else { return [folderURL(of: pane)] }
-        // A provisional selection knows only the rows near the cursor. A command right after a
-        // change that raced a load, patch or sort is rare enough to settle it here, as Open does.
-        let selection =
-            pane.selection.isProvisional ? pane.selection.settled(in: listing) : pane.selection
-        let urls = selection.rows(in: listing).map { row in
-            let entry = listing[row]
-            return URL(
-                fileURLWithPath: pane.location.child(named: entry.name).path,
-                isDirectory: entry.type == .directory)
-        }
+        let urls = ClipboardCommands.selectedURLs(in: pane)
         return urls.isEmpty ? [folderURL(of: pane)] : urls
     }
 

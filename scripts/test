@@ -11,4 +11,14 @@ plugins="$(dirname "$(xcrun --find swift)")/../lib/swift/host/plugins/testing"
 flags=()
 [ -d "$plugins" ] && flags=(-Xswiftc -plugin-path -Xswiftc "$plugins")
 
-exec swift test "${flags[@]}" "$@"
+# The interface tests run one at a time, everything else in parallel. Reason and
+# measurements: docs/decisions/0064-serial-interface-tests.md. A focused run (any
+# args) is a single swift test call; it picks its own tests, so there is no split.
+serial="InterfaceTests"
+
+if [ $# -gt 0 ]; then exec swift test "${flags[@]}" "$@"; fi
+
+status=0
+swift test "${flags[@]}" --skip "$serial" || status=1
+swift test "${flags[@]}" --filter "$serial" --no-parallel || status=1
+exit "$status"

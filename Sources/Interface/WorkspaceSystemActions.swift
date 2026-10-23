@@ -1,11 +1,13 @@
 import AppKit
 import Browser
+import QuickLookThumbnailing
+import UniformTypeIdentifiers
 import os
 
 /// `SystemActions` through `NSWorkspace` and the general pasteboard. Opening a file reads its type
-/// and looks up its default app, which blocks on a slow share, so it runs off the main thread.
-/// Copying, revealing and opening a folder in a named app read no file's type, and run on the
-/// main thread.
+/// and looks up its default app, which blocks on a slow share, so it runs off the main thread, as
+/// listing the apps for a type does. Copying, revealing and opening files in a given app read no
+/// file's type, and run on the main thread.
 @MainActor
 public final class WorkspaceSystemActions: SystemActions {
     /// No app on the Mac has the bundle ID a setting names.
@@ -70,6 +72,52 @@ public final class WorkspaceSystemActions: SystemActions {
             guard let error else { return }
             Task { @MainActor in self.fail(error) }
         }
+    }
+
+    public func open(_ urls: [URL], withApplicationAt application: URL) {
+        NSWorkspace.shared.open(
+            urls, withApplicationAt: application, configuration: NSWorkspace.OpenConfiguration()
+        ) { _, error in
+            guard let error else { return }
+            Task { @MainActor in self.fail(error) }
+        }
+    }
+
+    public nonisolated func applicationURLs(toOpen type: UTType) -> [URL] {
+        dispatchPrecondition(condition: .notOnQueue(.main))
+        return NSWorkspace.shared.urlsForApplications(toOpen: type)
+    }
+
+    public nonisolated func defaultApplicationURL(toOpen type: UTType) -> URL? {
+        dispatchPrecondition(condition: .notOnQueue(.main))
+        return NSWorkspace.shared.urlForApplication(toOpen: type)
+    }
+
+    /// Reads the app's bundle through Browser, logging an app with no readable bundle.
+    public nonisolated func application(at url: URL) -> OpenWith.App {
+        dispatchPrecondition(condition: .notOnQueue(.main))
+        return OpenWith.App(readingBundleAt: url) { url in
+            Logger(category: "openWith").error(
+                "no readable bundle at \(url.path, privacy: .public); listed by its path")
+        }
+    }
+
+    /// Asks Quick Look, which draws in its own process, for the icon Finder shows. An icon Quick
+    /// Look can't make is logged and left out.
+    public nonisolated func applicationIcon(at url: URL) async -> CGImage? {
+        let request = QLThumbnailGenerator.Request(
+            fileAt: url, size: CGSize(width: 16, height: 16), scale: 2,
+            representationTypes: .icon)
+        var icon: CGImage?
+        do {
+            icon = try await QLThumbnailGenerator.shared.generateBestRepresentation(for: request)
+                .cgImage
+        } catch {
+            Logger(category: "openWith").error(
+                "no icon for \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)"
+            )
+        }
+        return icon
     }
 
     private func fail(_ error: any Error) {

@@ -60,7 +60,8 @@ struct KeptMismatch {
     let pairs: [[String]]
 }
 
-/// Every kept mismatch in the corpus and among `tableNames`. M0.11 copies these into `docs/decisions/0004-listing-view.md`.
+/// Every kept mismatch in the corpus and among `tableNames`. M0.11 copies these into
+/// `docs/decisions/0004-listing-view.md`.
 let keptMismatches: [KeptMismatch] = [
     KeptMismatch(
         reason: """

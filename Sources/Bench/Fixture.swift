@@ -1,8 +1,9 @@
 import Foundation
 
-/// A generated workload folder from the W1–W3 rows of docs/performance.md, built once from a seed
-/// and reused by later runs. Files are sparse: they report their size but take almost no disk.
-struct Fixture: Sendable {
+/// A generated workload folder from the W1–W3 and W8 rows of docs/performance.md, built once from
+/// a seed and reused by later runs. The listing workloads' files are sparse: they report their size
+/// but take almost no disk. The copy workloads' files hold their bytes, so a copy has data to move.
+struct Fixture: Sendable, Equatable {
     enum Workload: String, CaseIterable, Sendable {
         /// ~300 entries, Desktop/Downloads shape.
         case w1 = "W1"
@@ -10,6 +11,19 @@ struct Fixture: Sendable {
         case w2 = "W2"
         /// node_modules shape, ~60k files in ~8k folders.
         case w3 = "W3"
+        /// Copy load, 10 GB: 4 × 2 GB files plus 20,000 files of 50–150 KB in 20 folders.
+        case w8 = "W8"
+        /// W8 at a fifth of the size, about 2 GB, for CI: 4 × 400 MB plus 4,000 small files.
+        case w8CI = "W8-2GB"
+        /// One 1 GB file, the source of the harness's copy case.
+        case copySource = "copy-1GB"
+
+        /// The workloads every run lists, built before any case runs. The copy workloads are
+        /// built only by the runs that copy them, after scripts/bench checked the free space.
+        static let listing: [Workload] = [.w1, .w2, .w3]
+
+        /// Whether its files hold their bytes rather than being sparse.
+        var writesData: Bool { !Self.listing.contains(self) }
     }
 
     /// One item to create, relative to the fixture folder; parents come before their children.
@@ -23,6 +37,8 @@ struct Fixture: Sendable {
 
     /// The seed the runner builds with. Changing it builds a new set of fixtures beside the old.
     static let seed: UInt64 = 42
+    /// The one file in the `copySource` fixture.
+    static let copySourceFile = "source.bin"
     /// Keeps Spotlight from indexing a fixture while it's built and timed.
     static let neverIndexMarker = ".metadata_never_index"
     /// `$TMPDIR/searcher-bench`, the only place the runner writes fixtures.
@@ -58,6 +74,12 @@ struct Fixture: Sendable {
     /// The finished fixture. Only a complete build is ever at this path.
     var path: URL { root.appending(path: name) }
 
+    /// Whether a finished build is at `path`.
+    var isBuilt: Bool { FileManager.default.fileExists(atPath: path.path) }
+
+    /// The size of every file, in bytes.
+    var bytes: Int64 { entries.reduce(0) { $0 + ($1.size ?? 0) } }
+
     /// Builds the fixture unless a finished one is already at `path`, and returns whether it
     /// built. Any other build of this workload and seed (one with an older entry list, or a
     /// partial folder a crash left) is removed first. The build goes into a partial folder beside
@@ -76,8 +98,9 @@ struct Fixture: Sendable {
         let partial = root.appending(path: ".\(name).partial-\(UUID().uuidString)")
         try files.createDirectory(at: partial, withIntermediateDirectories: false)
         do {
+            let block = workload.writesData ? Self.dataBlock(seed: seed) : nil
             for entry in entries {
-                try Self.create(entry, in: partial.path)
+                try Self.create(entry, in: partial.path, writing: block)
             }
             // A separate pass after everything exists: creating an entry moves its folder's date,
             // but setting an entry's date doesn't.
@@ -159,11 +182,41 @@ struct Fixture: Sendable {
                         size: Int64(generator.int(in: 0...40_000)))
                 }
             }
+        case .w8, .w8CI:
+            let (largeSize, smallFolders): (Int64, Int) =
+                workload == .w8 ? (2_000_000_000, 20) : (400_000_000, 4)
+            for index in 0..<4 {
+                add("large-\(index)." + generator.element(of: extensions), size: largeSize)
+            }
+            for folder in 0..<smallFolders {
+                add("small-\(folder)", size: nil)
+                for index in 0..<1_000 {
+                    add(
+                        "small-\(folder)/" + uniqueName(index, &generator) + "."
+                            + generator.element(of: extensions),
+                        size: Int64(generator.int(in: 50_000...150_000)))
+                }
+            }
+        case .copySource:
+            add(copySourceFile, size: 1_000_000_000)
         }
         return entries
     }
 
-    private static func create(_ entry: Entry, in folder: String) throws {
+    /// The bytes every data file repeats: 1 MiB from the seed, so a build is the same each time.
+    private static func dataBlock(seed: UInt64) -> [UInt8] {
+        var generator = SeededGenerator(seed: seed)
+        var block: [UInt8] = []
+        block.reserveCapacity(1 << 20)
+        for _ in 0..<(1 << 17) {
+            withUnsafeBytes(of: generator.next()) { block += $0 }
+        }
+        return block
+    }
+
+    /// Creates the entry: a sparse file of its size when `block` is nil, else one filled with
+    /// `block` repeated.
+    private static func create(_ entry: Entry, in folder: String, writing block: [UInt8]?) throws {
         let path = folder + "/" + entry.path
         guard let size = entry.size else {
             guard mkdir(path, 0o755) == 0 else { throw failure("mkdir", path) }
@@ -172,7 +225,19 @@ struct Fixture: Sendable {
         let descriptor = open(path, O_CREAT | O_WRONLY | O_EXCL, 0o644)
         guard descriptor >= 0 else { throw failure("create", path) }
         defer { close(descriptor) }
-        guard ftruncate(descriptor, size) == 0 else { throw failure("ftruncate", path) }
+        guard let block else {
+            guard ftruncate(descriptor, size) == 0 else { throw failure("ftruncate", path) }
+            return
+        }
+        var written: Int64 = 0
+        try block.withUnsafeBytes { buffer in
+            while written < size {
+                let count = Int(min(Int64(buffer.count), size - written))
+                let result = write(descriptor, buffer.baseAddress, count)
+                guard result > 0 else { throw failure("write", path) }
+                written += Int64(result)
+            }
+        }
     }
 
     private static func setModified(_ entry: Entry, in folder: String) throws {

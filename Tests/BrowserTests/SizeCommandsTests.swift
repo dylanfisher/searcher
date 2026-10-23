@@ -26,6 +26,9 @@ private final class CountedWalks: @unchecked Sendable {
         condition.withLock { holdsNextRead = true }
     }
 
+    /// Whether a volume read is waiting for `releaseRead`.
+    var isHoldingRead: Bool { condition.withLock { readIsHeld } }
+
     func releaseRead() {
         condition.withLock {
             readIsHeld = false
@@ -45,7 +48,7 @@ private final class CountedWalks: @unchecked Sendable {
                     self.counts[path, default: 0] += 1
                     return self.counts[path, default: 0]
                 }
-                return TreeSizeWalker.Total(bytes: Int64(count), isPartial: false)
+                return TreeSizeWalker.Total(bytes: Int64(count), files: count, isPartial: false)
             },
             volumeOf: { path throws(ListingError) in
                 let fails = self.condition.withLock {
@@ -100,6 +103,8 @@ private func albumsSize(_ pane: Pane) -> Listing.FolderSizeValue? {
     walks.holdNextRead()
 
     try binding(SizeCommands.recalculateSizes).run(CommandContext(pane: pane))
+    // The drop's own read is the one held; a reload that got there first would take the hold.
+    await settle { walks.isHoldingRead }
     let version = pane.stateVersion
     pane.reload()
     await settle { pane.stateVersion != version && pane.state.isLoaded }

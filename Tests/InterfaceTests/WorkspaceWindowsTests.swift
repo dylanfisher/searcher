@@ -1,5 +1,6 @@
 import AppKit
 import Base
+import BrowserTestSupport
 import Foundation
 import TestSupport
 import Testing
@@ -28,13 +29,6 @@ private final class CountingLister: Lister, @unchecked Sendable {
     }
 }
 
-/// A monitor that only counts stops.
-private final class StubMonitor: FolderMonitoring {
-    private(set) var stopCount = 0
-
-    func stop() { stopCount += 1 }
-}
-
 /// Browser windows that are never shown, the first one open at `/root` with its pane loaded.
 @MainActor
 private struct Fixture {
@@ -44,7 +38,8 @@ private struct Fixture {
     init() async throws {
         windows = WorkspaceWindows(
             service: ListingService(lister: lister) { "Test Disk" },
-            systemActions: StubSystemActions(), settings: untouchedSettings(), folderSizes: nil)
+            systemActions: StubSystemActions(), settings: untouchedSettings(), folderSizes: nil,
+            clipboard: MemoryClipboard())
         windows.showsWindows = false
         try await open()
     }
@@ -290,4 +285,409 @@ private func receiver(of item: NSMenuItem, in window: NSWindow) throws -> NSResp
     // Closed by the window, not freed: the panes are still here.
     #expect(monitors.map(\.stopCount) == [1, 1])
     #expect(load.isCancelled)
+}
+
+/// Records the sheets `windows`' prompter would show, on which window, instead of showing them.
+@MainActor
+private final class SheetLog {
+    var presented: [(sheet: NSWindow, over: NSWindow)] = []
+
+    init(_ windows: WorkspaceWindows) {
+        windows.prompter.present = { [unowned self] sheet, window in
+            presented.append((sheet, window))
+        }
+        windows.prompter.dismiss = { _ in }
+    }
+}
+
+@MainActor @Test func aCutInOneWindowDimsTheRowInAnotherShowingTheFolder() async throws {
+    let fixture = try await Fixture()
+    let first = try #require(fixture.windows.controllers.first)
+    let second = try await fixture.open()
+    let menu = try MainMenuBuilder.build(appName: "Searcher", registry: AppCommands.registry())
+    let cut = try #require(
+        menu.items.first { $0.title == "Edit" }?.submenu?.items.first { $0.title == "Cut" })
+    first.workspace.selectedTab.focusedPane.select(
+        Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+    let table = try fixture.keyTable(first)
+    #expect(table.validateMenuItem(cut))
+
+    #expect(table.tryToPerform(try #require(cut.action), with: cut))
+
+    #expect(first.clipboard === fixture.windows.clipboard)
+    #expect(second.clipboard === fixture.windows.clipboard)
+    let list = try fixture.keyTable(second)
+    let row = try #require(
+        second.workspace.selectedTab.focusedPane.state.listing?.row(named: "a.txt"))
+    let view = list.delegate?.tableView?(list, viewFor: list.tableColumns[0], row: row)
+    #expect(view?.alphaValue == ListingViewController.cutAlpha)
+}
+
+@MainActor @Test func theWindowsShareOneQueueAndItsFileCommandsAreOnWithASelection() async throws {
+    let fixture = try await Fixture()
+    let first = try #require(fixture.windows.controllers.first)
+    let second = try await fixture.open()
+    let menu = try MainMenuBuilder.build(appName: "Searcher", registry: AppCommands.registry())
+    let duplicate = try #require(menuItem(FileCommands.duplicate.id, in: menu))
+    let trash = try #require(menuItem(FileCommands.moveToTrash.id, in: menu))
+    let newFolder = try #require(menuItem(FileCommands.newFolder.id, in: menu))
+
+    #expect(first.fileOperations === fixture.windows.fileOperations)
+    #expect(second.fileOperations === fixture.windows.fileOperations)
+    #expect(try fixture.keyTable(first).validateMenuItem(newFolder))
+    #expect(try !fixture.keyTable(first).validateMenuItem(duplicate))
+    first.workspace.selectedTab.focusedPane.select(
+        Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+
+    #expect(try fixture.keyTable(first).validateMenuItem(duplicate))
+    #expect(try fixture.keyTable(first).validateMenuItem(trash))
+}
+
+@MainActor @Test func everyWindowsListTakesDropsThroughTheOneQueueAndMountTable() async throws {
+    let fixture = try await Fixture()
+    let first = try #require(fixture.windows.controllers.first)
+    let second = try await fixture.open()
+
+    for controller in [first, second] {
+        let list = try #require(
+            try fixture.keyTable(controller).dataSource as? ListingViewController)
+        #expect(list.fileOperations === fixture.windows.fileOperations)
+        #expect(list.mountTable === fixture.windows.mountTable)
+    }
+}
+
+@MainActor @Test func returnOnOneSelectedFileOpensTheRenameFieldOnItsRowAndOnTwoOpensNothing()
+    async throws
+{
+    let fixture = try await Fixture()
+    let controller = try #require(fixture.windows.controllers.first)
+    let table = try fixture.keyTable(controller)
+    let field = try #require(table.dataSource as? ListingViewController).renameField
+    let pane = controller.workspace.selectedTab.focusedPane
+    let returnKey = try keyEvent("\r")
+
+    pane.select(
+        Selection([ExactName("a.txt"), ExactName("b.txt")], cursor: ExactName("b.txt")))
+    try fixture.press(returnKey, in: controller)
+    #expect(!field.isShown)
+
+    pane.select(Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+    try fixture.press(returnKey, in: controller)
+    #expect(field.isEditing)
+    #expect(field.field.stringValue == "a.txt")
+    let row = try #require(pane.state.listing?.row(named: "a.txt"))
+    #expect(field.field.frame.midY == table.rect(ofRow: row).midY)
+}
+
+/// A trash of `/root/a.txt` that failed: the snapshot the queue sends once, as it finishes.
+private func failedTrash(_ id: Int) -> FileOperationQueue.Snapshot {
+    FileOperationQueue.Snapshot(
+        id: FileOperationQueue.ID(id), operation: .trash(["/root/a.txt"]),
+        state: OperationState(
+            phase: .failed,
+            progress: OperationState.Progress(
+                itemsDone: 1, itemCount: 1, copied: CopyProgress(bytes: 0, files: 0),
+                total: nil),
+            errors: [FileOperationError(reason: .permissionDenied, path: "/root/a.txt", errno: 1)],
+            record: OperationRecord()))
+}
+
+/// A copy of `a.txt` into a folder that has one, which holds on its name question until the
+/// test cancels it. The question's sheet is logged, not shown.
+@MainActor
+private struct HeldCopy {
+    let folder: TemporaryFolder
+    let operation: FileOperation
+
+    init() throws {
+        folder = try TemporaryFolder("WorkspaceWindowsTests")
+        let into = folder.url.appending(path: "into")
+        try FileManager.default.createDirectory(at: into, withIntermediateDirectories: false)
+        for url in [folder.url.appending(path: "a.txt"), into.appending(path: "a.txt")] {
+            try Data("a".utf8).write(to: url)
+        }
+        operation = .copy([folder.url.appending(path: "a.txt").path], into: into.path)
+    }
+}
+
+/// Cancels every operation and waits for the question sheets to close.
+@MainActor
+private func stopEverything(_ windows: WorkspaceWindows) async {
+    let clock = ContinuousClock()
+    #expect(
+        await windows.fileOperations.cancelAll(
+            by: clock.now.advanced(by: .seconds(5)), clock: clock))
+    await settle { windows.prompter.shown == nil && windows.prompter.waitingCount == 0 }
+}
+
+@MainActor @Test func quittingWithNothingRunningDoesNotAsk() async throws {
+    let fixture = try await Fixture()
+    fixture.windows.operationsChanged([failedTrash(3)])
+
+    #expect(fixture.windows.quitAlert() == nil)
+    #expect(
+        fixture.windows.shouldQuit(asking: { _ in
+            Issue.record("quitting asked with nothing running")
+            return false
+        }))
+}
+
+/// The copy is counted the moment it is queued, before any snapshot shows it.
+@MainActor @Test func quittingRightAfterQueuingACopyAsks() async throws {
+    let fixture = try await Fixture()
+    let sheets = SheetLog(fixture.windows)
+    defer { withExtendedLifetime(sheets) {} }
+    let copy = try HeldCopy()
+
+    fixture.windows.fileOperations.submit(copy.operation)
+
+    let alert = try #require(fixture.windows.quitAlert())
+    #expect(alert.messageText == "Quit while a file operation is running?")
+    #expect(
+        alert.informativeText
+            == "Quitting stops it, and removes anything it was partway through writing.")
+    #expect(alert.buttons.map(\.title) == ["Quit", "Cancel"])
+    await stopEverything(fixture.windows)
+    #expect(fixture.windows.quitAlert() == nil)
+}
+
+@MainActor @Test func quittingWithAPausedOperationAsksAndCancelKeepsItRunning() async throws {
+    let fixture = try await Fixture()
+    let sheets = SheetLog(fixture.windows)
+    let copy = try HeldCopy()
+    let queue = fixture.windows.fileOperations
+    let id = await queue.enqueue(copy.operation)
+    await settle { sheets.presented.count == 1 }
+    await queue.pause(id)
+
+    #expect(!fixture.windows.shouldQuit(asking: { _ in false }))
+
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(queue.unfinishedCount == 1)
+    #expect(fixture.windows.prompter.shown != nil)
+    #expect(fixture.windows.shouldQuit(asking: { _ in true }))
+    await stopEverything(fixture.windows)
+}
+
+@MainActor @Test func quittingCountsEveryUnfinishedOperation() async throws {
+    let fixture = try await Fixture()
+    let sheets = SheetLog(fixture.windows)
+    defer { withExtendedLifetime(sheets) {} }
+    let copies = try (0..<3).map { _ in try HeldCopy() }
+
+    for copy in copies {
+        fixture.windows.fileOperations.submit(copy.operation)
+    }
+
+    let alert = try #require(fixture.windows.quitAlert())
+    #expect(alert.messageText == "Quit while 3 file operations are running?")
+    #expect(
+        alert.informativeText
+            == "Quitting stops them, and removes anything they were partway through writing.")
+    await stopEverything(fixture.windows)
+}
+
+/// A press of Undo queues its operation only at its turn, so quitting asks while one is pending.
+@MainActor @Test func quittingRightAfterCmdZAsks() async throws {
+    let fixture = try await Fixture()
+    let history = fixture.windows.undoHistory
+    history.record(
+        .rename("/root/a.txt", to: "b.txt"),
+        OperationState(
+            phase: .done,
+            progress: OperationState.Progress(
+                itemsDone: 1, itemCount: 1, copied: CopyProgress(bytes: 0, files: 0), total: nil),
+            errors: [],
+            record: OperationRecord(changes: [.moved(from: "/root/a.txt", to: "/root/b.txt")])),
+        id: FileOperationQueue.ID(-1))
+
+    let undo = history.undo(with: fixture.windows.fileOperations)
+
+    let alert = try #require(fixture.windows.quitAlert())
+    #expect(alert.messageText == "Quit while an undo is waiting to run?")
+    #expect(await bounded(undo) != nil)
+    await stopEverything(fixture.windows)
+}
+
+/// The other-pane confirm is asked before anything is queued, so only the sheet shows it.
+@MainActor @Test func quittingWithAQuestionShowingAsksAndCancelLeavesItShowing() async throws {
+    let fixture = try await Fixture()
+    let sheets = SheetLog(fixture.windows)
+    let controller = try #require(fixture.windows.controllers.first)
+    try fixture.press(try keyEvent("T", modifiers: [.command, .shift]), in: controller)
+    let pane = controller.workspace.selectedTab.focusedPane
+    await settle { pane.state.isLoaded }
+    pane.select(Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+    try fixture.press(try keyEvent("C", modifiers: [.command, .shift]), in: controller)
+    await settle { sheets.presented.count == 1 }
+
+    let alert = try #require(fixture.windows.quitAlert())
+    #expect(alert.messageText == "Quit while a file operation waits for an answer?")
+    #expect(!fixture.windows.shouldQuit(asking: { _ in false }))
+
+    guard case .confirm(let sheet) = fixture.windows.prompter.shown else {
+        Issue.record("the confirm sheet closed")
+        return
+    }
+    sheet.cancelButton.performClick(nil)
+    await settle { fixture.windows.prompter.shown == nil }
+    #expect(fixture.windows.quitAlert() == nil)
+}
+
+@MainActor @Test func aFailureReportedWhileNoWindowIsOpenShowsInTheNextWindow() async throws {
+    let fixture = try await Fixture()
+    try #require(fixture.windows.controllers.first?.window).close()
+    #expect(fixture.windows.controllers.isEmpty)
+
+    fixture.windows.operationsChanged([failedTrash(3)])
+    fixture.windows.operationsChanged([])
+    let opened = try await fixture.open()
+
+    let row = try #require(opened.operations.row(for: FileOperationQueue.ID(3)))
+    #expect(row.detailLabel.stringValue.contains("/root/a.txt"))
+    #expect(!opened.operations.view.isHidden)
+}
+
+@MainActor @Test func clearingAFailedRowInOneWindowClearsItInEvery() async throws {
+    let fixture = try await Fixture()
+    let first = try #require(fixture.windows.controllers.first)
+    let second = try await fixture.open()
+    fixture.windows.operationsChanged([failedTrash(3)])
+    fixture.windows.operationsChanged([])
+    let id = FileOperationQueue.ID(3)
+    let row = try #require(first.operations.row(for: id))
+    #expect(second.operations.row(for: id) != nil)
+
+    row.cancelButton.performClick(nil)
+
+    #expect(first.operations.row(for: id) == nil)
+    #expect(second.operations.row(for: id) == nil)
+    let third = try await fixture.open()
+    #expect(third.operations.row(for: id) == nil)
+}
+
+@MainActor @Test func twoOtherPaneConfirmsPressedBeforeAnsweringAreQueued() async throws {
+    let fixture = try await Fixture()
+    let sheets = SheetLog(fixture.windows)
+    let controller = try #require(fixture.windows.controllers.first)
+    let tab = controller.workspace.selectedTab
+    try fixture.press(try keyEvent("T", modifiers: [.command, .shift]), in: controller)
+    let pane = tab.focusedPane
+    await settle { pane.state.isLoaded }
+    pane.select(Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+    let prompter = fixture.windows.prompter
+
+    try fixture.press(try keyEvent("C", modifiers: [.command, .shift]), in: controller)
+    try fixture.press(try keyEvent("C", modifiers: [.command, .shift]), in: controller)
+    await settle { prompter.waitingCount == 1 }
+
+    #expect(sheets.presented.count == 1)
+    #expect(sheets.presented.first?.over === controller.window)
+    guard case .confirm(let first) = prompter.shown else {
+        Issue.record("no confirm sheet is shown")
+        return
+    }
+    first.cancelButton.performClick(nil)
+    await settle { sheets.presented.count == 2 }
+    #expect(prompter.waitingCount == 0)
+    guard case .confirm(let second) = prompter.shown else {
+        Issue.record("the second confirm isn't shown")
+        return
+    }
+    #expect(second !== first)
+    second.cancelButton.performClick(nil)
+    await settle { prompter.shown == nil }
+}
+
+@MainActor @Test func whileASheetIsOpenOnOneWindowAnotherTakesKeys() async throws {
+    let fixture = try await Fixture()
+    let sheets = SheetLog(fixture.windows)
+    let back = try #require(fixture.windows.controllers.first)
+    let front = try await fixture.open()
+    try fixture.press(try keyEvent("T", modifiers: [.command, .shift]), in: front)
+    let frontPane = front.workspace.selectedTab.focusedPane
+    await settle { frontPane.state.isLoaded }
+    frontPane.select(Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+    try fixture.press(try keyEvent("M", modifiers: [.command, .shift]), in: front)
+    await settle { sheets.presented.count == 1 }
+    #expect(sheets.presented.first?.over === front.window)
+    let backPane = back.workspace.selectedTab.focusedPane
+    let before = backPane.selection
+
+    try fixture.press(
+        try keyEvent(functionKey(NSDownArrowFunctionKey), modifiers: arrowFlags), in: back)
+
+    #expect(backPane.selection != before)
+    guard case .confirm(let sheet) = fixture.windows.prompter.shown else {
+        Issue.record("no confirm sheet is shown")
+        return
+    }
+    sheet.cancelButton.performClick(nil)
+    await settle { fixture.windows.prompter.shown == nil }
+}
+
+/// A rename the history took in names Undo in every window's Edit menu, and Redo once it
+/// is undone.
+@MainActor @Test func aRenameInOneWindowNamesUndoInTheEditMenuOfEvery() async throws {
+    let fixture = try await Fixture()
+    let first = try #require(fixture.windows.controllers.first)
+    let second = try await fixture.open()
+    let menu = try MainMenuBuilder.build(appName: "Searcher", registry: AppCommands.registry())
+    let edit = try #require(menu.items.first { $0.title == "Edit" }?.submenu)
+    let undo = try #require(edit.items.first { $0.action == MainMenuBuilder.undo.action })
+    let redo = try #require(edit.items.first { $0.action == MainMenuBuilder.redo.action })
+    #expect(try !fixture.keyTable(first).validateMenuItem(undo))
+    #expect(undo.title == "Undo")
+
+    fixture.windows.undoHistory.record(
+        .rename("/root/a.txt", to: "b.txt"),
+        OperationState(
+            phase: .done,
+            progress: OperationState.Progress(
+                itemsDone: 1, itemCount: 1, copied: CopyProgress(bytes: 0, files: 0), total: nil),
+            errors: [],
+            record: OperationRecord(changes: [.moved(from: "/root/a.txt", to: "/root/b.txt")])),
+        id: FileOperationQueue.ID(-1))
+
+    #expect(try fixture.keyTable(second).validateMenuItem(undo))
+    #expect(undo.title == "Undo Rename")
+    #expect(try !fixture.keyTable(first).validateMenuItem(redo))
+    #expect(redo.title == "Redo")
+}
+
+/// Cmd-Z pressed as an operation finishes undoes that operation, not the one before it, though
+/// the operations panel hears of it up to a snapshot interval later.
+@MainActor @Test func cmdZRightAfterAnOperationEndsUndoesThatOperation() async throws {
+    let folder = try TemporaryFolder("WorkspaceWindowsTests")
+    let root = folder.url.path
+    for name in ["a.txt", "b.txt"] {
+        try Data(name.utf8).write(to: URL(fileURLWithPath: root + "/" + name))
+    }
+    let windows = WorkspaceWindows(
+        service: ListingService(), systemActions: StubSystemActions(),
+        settings: untouchedSettings(), folderSizes: nil, clipboard: MemoryClipboard())
+    windows.showsWindows = false
+    let controller = windows.open(at: Location(path: root))
+    let window = try #require(controller.window)
+    window.contentView?.layoutSubtreeIfNeeded()
+    let pane = controller.workspace.selectedTab.focusedPane
+    await settle { pane.state.isLoaded }
+    let table = try #require(window.firstResponder as? ListingTableView)
+    let menu = try MainMenuBuilder.build(appName: "Searcher", registry: AppCommands.registry())
+    let edit = try #require(menu.items.first { $0.title == "Edit" }?.submenu)
+    let undo = try #require(edit.items.first { $0.action == MainMenuBuilder.undo.action })
+    let queue = windows.fileOperations
+    _ = await queue.perform(.rename(root + "/a.txt", to: "a2.txt"))
+    await settle { table.validateMenuItem(undo) }
+
+    _ = await queue.perform(.rename(root + "/b.txt", to: "b2.txt"))
+    table.undo(nil)
+
+    let manager = FileManager.default
+    await settle {
+        manager.fileExists(atPath: root + "/b.txt") || manager.fileExists(atPath: root + "/a.txt")
+    }
+    #expect(manager.fileExists(atPath: root + "/b.txt"))
+    #expect(manager.fileExists(atPath: root + "/a2.txt"))
+    pane.monitor?.stop()
 }

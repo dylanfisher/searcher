@@ -16,8 +16,8 @@ ui_rules=(
   'ui-import|^[ \t]*(@[A-Za-z_]+\s+)*import\s+(AppKit|SwiftUI|Cocoa)\b'
 )
 # Interface and the app reach the file system only through Browser and Base,
-# which run each call off the main thread. Bare stat and lstat aren't listed:
-# the words are too common to deny. FileHandle's standard streams are the
+# which run each call off the main thread. Bare stat isn't listed: the
+# word is too common to deny. FileHandle's standard streams are the
 # process's own pipes, not the file system, so the UI bench may report on them.
 fs_rules=(
   'file-manager|\bFileManager\b'
@@ -37,6 +37,12 @@ fs_rules=(
   'image-contents-of-file|\bNSImage\(\s*contentsOfFile:'
   'file-handle|\bFileHandle\b(?!\.standard(Error|Output|Input)\b)'
   'check-reachable|\bcheckResourceIsReachable\b'
+  'lstat-family|\b(lstat|realpath|opendir|fopen)\('
+  'resolving-symlinks|\bresolvingSymlinksInPath\b'
+  'bundle-at-path|\bBundle\(\s*(url|path):'
+  # URL(fileURLWithPath:) without isDirectory: stats the path to find out. The lookahead walks
+  # the call's own arguments, two levels of parentheses deep, looking for the label.
+  'url-without-directory|\bURL\(\s*fileURLWithPath:(?!(?:[^()]|\((?:[^()]|\([^()]*\))*\))*?isDirectory:)'
 )
 
 # hits <pattern> <path...>: each match in the Swift files at or under <path...>,

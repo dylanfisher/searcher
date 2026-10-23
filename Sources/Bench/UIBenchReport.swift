@@ -4,7 +4,9 @@ import Foundation
 /// The UI bench's raw samples checked against their budgets: the p95 of each span. In the CI run
 /// and every scenario but `column-walk`, stalls are reported, not budgeted: B10 is about a share
 /// that is slow or gone (W6), which those runs don't open, and the plan asks only for the stall
-/// count there. `column-walk` walks a share, so a stall outside the launch fails it.
+/// count there. `column-walk` walks a share, so a stall outside the launch fails it. The CI run's
+/// W8 copy is the exception: its longest stall is a B10 case of its own, from the copy's start to
+/// its end, so it passes only with no stall at all.
 struct UIBenchReport {
     /// Relative to the repository root, where `scripts/bench` runs the binary.
     static let path = ".build/bench-ui.json"
@@ -35,8 +37,10 @@ struct UIBenchReport {
         return launch == 0 && pressesKeys ? keyPresses : 0
     }
 
-    /// One case per span, in the order the app times them.
+    /// One case per span, in the order the app times them, then in the CI run the W8 copy's
+    /// longest stall.
     let cases: [BenchReport.Case]
+    static let copyStallCase = "longest stall while a W8 copy runs"
     /// Longest first.
     let stalls: [UIBenchRecord.Stall]
     /// B10 when stalls fail the run, nil when they are reported only.
@@ -85,6 +89,7 @@ struct UIBenchReport {
                     ("W2 folders first → frame", "B8", record.foldersFirstToggle),
                     ("W2 sort key → frame", "B8", record.sortKey),
                     ("W2 filter key → frame", "B7", record.filterKey),
+                    ("W2 ↓ key while a W8 copy runs → frame", "B6", record.queueKeyDown),
                 ] + columnKeys + splits
         case .columnKeys:
             spans = columnKeys
@@ -97,12 +102,23 @@ struct UIBenchReport {
         case .columnWalk:
             spans = [("column walk key → frame", "B6", record.columnWalkKey)]
         }
-        cases = try spans.map { span in
+        var cases = try spans.map { span in
             guard !span.samples.isEmpty else { throw NoSamples(span: span.name) }
             return BenchReport.Case(
                 name: span.name, budget: try Budget.named(span.budget), unit: .milliseconds,
                 samples: Samples(span.samples))
         }
+        if scenario == nil {
+            // Every stall is over B10's 50 ms, the watchdog's threshold, so none passes and 0
+            // stands for none.
+            let longest = record.stalls.filter { UIBenchRecord.queueCopySpans.contains($0.span) }
+                .map(\.milliseconds).max()
+            cases.append(
+                BenchReport.Case(
+                    name: Self.copyStallCase, budget: try Budget.named("B10"), unit: .milliseconds,
+                    samples: Samples([longest ?? 0])))
+        }
+        self.cases = cases
         stalls = record.stalls.sorted { $0.milliseconds > $1.milliseconds }
         stallBudget = scenario == .columnWalk ? try Budget.named("B10") : nil
         timesTenPanes = scenario == nil || scenario == .splits

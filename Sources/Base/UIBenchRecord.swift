@@ -82,6 +82,9 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
     public var revisit: [Double]
     /// `column-walk` scenario: each arrow key walking `--path` in column view → frame (B6).
     public var columnWalkKey: [Double]
+    /// ↓ key → frame on W2, with the operations panel open, while the queue copies W8 to a disk
+    /// image (B6). Only presses whose frame came before the copy finished.
+    public var queueKeyDown: [Double]
     /// Every run loop pass over the stall threshold (B10), all launches together.
     public var stalls: [Stall]
 
@@ -113,6 +116,36 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
     public static let tenPaneRestSpan = "ten-pane load"
     /// The spans of the ten-pane load, whose stalls the report counts on their own.
     public static var tenPaneSpans: Set<String> { ["\(tenPaneOpenSpan)", tenPaneRestSpan] }
+    /// The span name of a ↓ press while the queue copies W8.
+    public static let queueKeySpan: StaticString = "key down while copying"
+    /// The span name of the rest of the W8 copy, from the call that queues it until the main
+    /// thread learns it finished, outside its ↓ presses.
+    public static let queueCopySpan: StaticString = "W8 copy"
+    /// The fewest ↓ presses during the W8 copy a run may keep, of `count` asked for: a tenth.
+    /// A copy that ends sooner times too little of B6 under a copy to judge.
+    public static func minimumQueueKeyDown(of count: Int) -> Int { count / 10 }
+
+    /// Throws unless `kept` of the `count` ↓ presses asked for during the W8 copy reach
+    /// `minimumQueueKeyDown(of:)`.
+    public static func checkQueueKeyDown(kept: Int, of count: Int) throws(TooFewQueueKeys) {
+        let minimum = minimumQueueKeyDown(of: count)
+        guard kept >= minimum else {
+            throw TooFewQueueKeys(kept: kept, count: count, minimum: minimum)
+        }
+    }
+
+    public struct TooFewQueueKeys: Error, CustomStringConvertible {
+        public let kept: Int
+        public let count: Int
+        public let minimum: Int
+
+        public var description: String {
+            "\(kept) of \(count) ↓ presses landed before the copy finished; need \(minimum)"
+        }
+    }
+
+    /// The spans of the W8 copy, whose stalls are judged against B10.
+    public static var queueCopySpans: Set<String> { ["\(queueKeySpan)", "\(queueCopySpan)"] }
 
     public init(
         launch: [Double] = [], openW1: [Double] = [], openW2: [Double] = [],
@@ -126,7 +159,7 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         columnDown: [Double] = [], columnRight: [Double] = [], columnLeft: [Double] = [],
         splitDown: [Double] = [], gridDown: [Double] = [], tenPaneOpen: [Double] = [],
         coldOpen: [Double] = [], revisit: [Double] = [], columnWalkKey: [Double] = [],
-        stalls: [Stall] = []
+        queueKeyDown: [Double] = [], stalls: [Stall] = []
     ) {
         self.launch = launch
         self.openW1 = openW1
@@ -158,6 +191,7 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         self.coldOpen = coldOpen
         self.revisit = revisit
         self.columnWalkKey = columnWalkKey
+        self.queueKeyDown = queueKeyDown
         self.stalls = stalls
     }
 
@@ -193,6 +227,7 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         coldOpen += other.coldOpen
         revisit += other.revisit
         columnWalkKey += other.columnWalkKey
+        queueKeyDown += other.queueKeyDown
         stalls += other.stalls
     }
 

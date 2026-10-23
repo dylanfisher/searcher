@@ -60,6 +60,19 @@ private func load(
     service.load(Location(path: path), priority: priority) { log.append($0) }
 }
 
+/// Runs three visible loads and then a focused one, so all four slots are held: the focused load
+/// asked first could take the third slot and leave the last visible one waiting.
+private func runFourLoads(
+    _ paths: [String], on service: ListingService, _ lister: GatedLister, into log: UpdateLog
+) async {
+    for path in paths.dropLast() {
+        _ = load(service, path, into: log)
+    }
+    #expect(await lister.waitForCalls(3))
+    _ = load(service, paths[3], priority: .focused, into: log)
+    #expect(await lister.waitForCalls(4))
+}
+
 /// The paths `waitUntilLoadFinishes` holds in the other slots and queues behind them.
 private let holdPaths = ["/hold-1", "/hold-2", "/hold-3"]
 private let sentinelPath = "/sentinel"
@@ -67,20 +80,25 @@ private let holdOutcomes: [String: GatedLister.Outcome] = Dictionary(
     uniqueKeysWithValues: (holdPaths + [sentinelPath]).map { ($0, .batches([])) })
 
 /// Returns once the one running load has finished and anything it handed off has run: the other
-/// three slots are held, so the sentinel load behind them starts only when that load's slot
-/// frees, which is after its last hand-off was queued.
+/// three slots are held, so the focused sentinel load behind them starts only when that load's
+/// slot frees, which is after its last hand-off was queued.
 private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLister) async {
     let ignored = UpdateLog()
-    for path in holdPaths {
+    // The last slot goes to a focused load, so the holds are two visible loads and a focused one,
+    // asked once the visible ones run.
+    for path in holdPaths.dropLast() {
         _ = load(service, path, into: ignored)
+        #expect(await lister.waitForCall(path))
     }
-    _ = load(service, sentinelPath, into: ignored)
+    _ = load(service, holdPaths[2], priority: .focused, into: ignored)
+    #expect(await lister.waitForCall(holdPaths[2]))
+    _ = load(service, sentinelPath, priority: .focused, into: ignored)
     lister.release(sentinelPath)
     #expect(await lister.waitForCall(sentinelPath))
     await drainMainQueue()
 }
 
-@Test func atMostFourLoadsRunAtOnce() async {
+@Test func atMostThreeVisibleLoadsRunAtOnce() async {
     let paths = (0..<10).map { "/folder-\($0)" }
     let lister = GatedLister(
         Dictionary(uniqueKeysWithValues: paths.map { ($0, .batches([files("f", 0..<3)])) }))
@@ -91,42 +109,93 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
         _ = load(service, path, into: log)
     }
 
-    #expect(await lister.waitForCalls(4))
-    // A fifth load would start within this wait if the service didn't hold it back.
-    #expect(await !lister.waitForCalls(5, timeout: 0.2))
-    #expect(lister.calls.count == ListingService.mostRunningLoads)
+    #expect(await lister.waitForCalls(3))
+    // A fourth load would start within this wait if the service didn't keep the slot back.
+    #expect(await !lister.waitForCalls(4, timeout: 0.2))
+    #expect(lister.calls.count == ListingService.mostRunningLoads - 1)
 
     for path in paths {
         lister.release(path)
     }
     #expect(await log.wait(for: paths.count))
-    #expect(lister.mostAtOnce == 4)
+    #expect(lister.mostAtOnce == 3)
     #expect(Set(lister.calls.map(\.path)) == Set(paths))
 }
 
-@Test func focusedLoadQueuedBehindFourOthersStartsNext() async {
-    let running = (0..<4).map { "/running-\($0)" }
-    let waiting = (0..<3).map { "/waiting-\($0)" }
+@Test func focusedLoadAskedLastStartsAtOnceWhileThreeVisibleRun() async {
+    let visible = (0..<3).map { "/visible-\($0)" }
     let focused = "/focused"
     let lister = GatedLister(
-        Dictionary(
-            uniqueKeysWithValues: (running + waiting + [focused]).map { ($0, .batches([])) }))
+        Dictionary(uniqueKeysWithValues: (visible + [focused]).map { ($0, .batches([])) }))
+    defer { lister.releaseAll() }
+    let service = ListingService(lister: lister)
+    let log = UpdateLog()
+    for path in visible {
+        _ = load(service, path, into: log)
+    }
+    #expect(await lister.waitForCalls(3))
+    _ = load(service, focused, priority: .focused, into: log)
+
+    #expect(await lister.waitForCalls(4))
+    #expect(lister.calls.map(\.path).last == focused)
+}
+
+@Test func aFourthVisibleLoadWaitsForTheFocusedSlot() async {
+    let paths = (0..<4).map { "/visible-\($0)" }
+    let lister = GatedLister(Dictionary(uniqueKeysWithValues: paths.map { ($0, .batches([])) }))
+    defer { lister.releaseAll() }
+    let service = ListingService(lister: lister)
+    let log = UpdateLog()
+    for path in paths {
+        _ = load(service, path, into: log)
+    }
+
+    #expect(await lister.waitForCalls(3))
+    #expect(await !lister.waitForCalls(4, timeout: 0.2))
+
+    lister.release(paths[0])
+    #expect(await lister.waitForCalls(4))
+}
+
+@Test func aWaitingLoadRaisedToFocusedStartsAtOnce() async {
+    let running = (0..<3).map { "/running-\($0)" }
+    let raised = "/raised"
+    let lister = GatedLister(
+        Dictionary(uniqueKeysWithValues: (running + [raised]).map { ($0, .batches([])) }))
     defer { lister.releaseAll() }
     let service = ListingService(lister: lister)
     let log = UpdateLog()
     for path in running {
         _ = load(service, path, into: log)
     }
-    #expect(await lister.waitForCalls(4))
-    let queued =
-        waiting.map { load(service, $0, into: log) }
-        + [load(service, focused, priority: .focused, into: log)]
-    // Each load's volume is read on a thread of its own, so wait until every one is known.
-    await settle { queued.allSatisfy { $0.volume != nil } }
+    #expect(await lister.waitForCalls(3))
+    let waiting = load(service, raised, into: log)
+    await settle { waiting.volume != nil }
+    #expect(await !lister.waitForCalls(4, timeout: 0.2))
+
+    waiting.priority = .focused
+
+    // Well inside the 3 s after which a stalled load gives up its slot and would start this one.
+    #expect(await lister.waitForCalls(4, timeout: 0.5))
+    #expect(lister.calls.map(\.path).last == raised)
+}
+
+@Test func aSecondFocusedLoadWaitsWhileThreeVisibleAndAFocusedOneRun() async {
+    let running = (0..<4).map { "/running-\($0)" }
+    let second = "/second"
+    let lister = GatedLister(
+        Dictionary(uniqueKeysWithValues: (running + [second]).map { ($0, .batches([])) }))
+    defer { lister.releaseAll() }
+    let service = ListingService(lister: lister)
+    let log = UpdateLog()
+    await runFourLoads(running, on: service, lister, into: log)
+    _ = load(service, second, priority: .focused, into: log)
+
+    #expect(await !lister.waitForCalls(5, timeout: 0.5))
 
     lister.release(running[0])
     #expect(await lister.waitForCalls(5))
-    #expect(lister.calls.map(\.path).dropFirst(4).first == focused)
+    #expect(lister.calls.map(\.path).last == second)
 }
 
 @Test func focusingAQueuedLoadMakesItNext() async {
@@ -137,10 +206,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     defer { lister.releaseAll() }
     let service = ListingService(lister: lister)
     let log = UpdateLog()
-    for path in running {
-        _ = load(service, path, into: log)
-    }
-    #expect(await lister.waitForCalls(4))
+    await runFourLoads(running, on: service, lister, into: log)
     let loads = paths.map { load(service, $0, into: log) }
     await settle { loads.allSatisfy { $0.volume != nil } }
 
@@ -161,20 +227,23 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     defer { lister.releaseAll() }
     let service = ListingService(lister: lister)
     let log = UpdateLog()
-    for path in running {
-        _ = load(service, path, into: log)
-    }
-    #expect(await lister.waitForCalls(4))
+    await runFourLoads(running, on: service, lister, into: log)
     // Asked first, so the order asked alone would start them first.
     let queued =
         hidden.map { load(service, $0, priority: .hidden, into: log) }
         + visible.map { load(service, $0, into: log) }
     await settle { queued.allSatisfy { $0.volume != nil } }
 
-    // One slot frees at a time, so each start is the queue's next pick.
-    for (index, path) in running.enumerated() {
+    // The last slot is the focused load's, so a background load starts once two are free. Each
+    // start below is the queue's next pick.
+    lister.release(running[0])
+    lister.release(running[1])
+    #expect(await lister.waitForCalls(5))
+    var started = 5
+    for path in [running[2], running[3], visible[0]] {
         lister.release(path)
-        #expect(await lister.waitForCalls(5 + index))
+        started += 1
+        #expect(await lister.waitForCalls(started))
     }
 
     #expect(Array(lister.calls.map(\.path).dropFirst(4)) == visible + hidden)
@@ -289,7 +358,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
 }
 
 @Test func cancelledWaitingLoadNeverStarts() async {
-    let running = (0..<4).map { "/running-\($0)" }
+    let running = (0..<3).map { "/running-\($0)" }
     let lister = GatedLister(
         Dictionary(uniqueKeysWithValues: (running + ["/later"]).map { ($0, .batches([])) }))
     defer { lister.releaseAll() }
@@ -298,15 +367,15 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     for path in running {
         _ = load(service, path, into: log)
     }
-    #expect(await lister.waitForCalls(4))
+    #expect(await lister.waitForCalls(3))
     load(service, "/later", into: log).cancel()
 
     for path in running {
         lister.release(path)
     }
-    #expect(await log.wait(for: 4))
-    #expect(await lister.waitForFinished(4))
-    #expect(await !lister.waitForCalls(5, timeout: 0.2))
+    #expect(await log.wait(for: 3))
+    #expect(await lister.waitForFinished(3))
+    #expect(await !lister.waitForCalls(4, timeout: 0.2))
 }
 
 @Test @MainActor func cancellingOnTheFirstBatchDropsTheFullListing() async {
@@ -742,7 +811,7 @@ private let musicShare = VolumeIdentity(
 }
 
 @Test func slowLoadsGiveUpTheirSlots() async {
-    let stuck = (1...ListingService.mostRunningLoads).map { "/net-\($0)/stuck" }
+    let stuck = (1..<ListingService.mostRunningLoads).map { "/net-\($0)/stuck" }
     let lister = GatedLister(
         Dictionary(uniqueKeysWithValues: stuck.map { ($0, GatedLister.Outcome.blockForever) })
             .merging(["/local": .batches([files("e", 0..<3)])]) { $1 })
@@ -771,7 +840,7 @@ private let musicShare = VolumeIdentity(
     #expect(await ignored.updates.allSatisfy(isSlow))
 }
 
-@Test func fourLoadsOnOneLocalVolumeRunAtOnce() async {
+@Test func threeVisibleLoadsOnOneLocalVolumeRunAtOnce() async {
     let paths = (0..<6).map { "/local-\($0)" }
     let lister = GatedLister(
         Dictionary(uniqueKeysWithValues: paths.map { ($0, .batches([files("f", 0..<3)])) }))
@@ -782,15 +851,15 @@ private let musicShare = VolumeIdentity(
         _ = load(service, path, into: log)
     }
 
-    #expect(await lister.waitForCalls(4))
-    #expect(await !lister.waitForCalls(5, timeout: 0.2))
+    #expect(await lister.waitForCalls(3))
+    #expect(await !lister.waitForCalls(4, timeout: 0.2))
     lister.releaseAll()
     #expect(await log.wait(for: paths.count))
-    #expect(lister.mostAtOnce == 4)
+    #expect(lister.mostAtOnce == 3)
 }
 
 @Test func aLoadThatKeepsReadingIsNotSlow() async {
-    let lister = SteppedLister(batches: [files("a", 0..<3), files("b", 0..<3), files("c", 0..<3)])
+    let lister = SteppedLister([files("a", 0..<3), files("b", 0..<3), files("c", 0..<3)])
     let clock = ManualClock()
     let service = service(lister, clock: clock)
     let log = UpdateLog()
@@ -894,32 +963,6 @@ private struct ProbeLister: Lister {
     func list(_ path: String, onBatch: ([DirectoryEntry]) throws -> Void) throws {
         probe()
         try onBatch([])
-    }
-}
-
-/// Delivers one batch each time a test calls `step`, so a test can move a clock between batches
-/// knowing the service has taken the one before.
-private final class SteppedLister: Lister, @unchecked Sendable {
-    private let batches: [[DirectoryEntry]]
-    private let steps = DispatchSemaphore(value: 0)
-    private let taken = DispatchSemaphore(value: 0)
-
-    init(batches: [[DirectoryEntry]]) {
-        self.batches = batches
-    }
-
-    func list(_ path: String, onBatch: ([DirectoryEntry]) throws -> Void) throws {
-        for batch in batches {
-            steps.wait()
-            defer { taken.signal() }
-            try onBatch(batch)
-        }
-    }
-
-    /// Lets the next batch go and returns once the service has taken it; false after 5 seconds.
-    func step() -> Bool {
-        steps.signal()
-        return taken.wait(timeout: .now() + 5) == .success
     }
 }
 

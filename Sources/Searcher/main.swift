@@ -20,7 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// never makes them.
     private lazy var windows = WorkspaceWindows(
         service: service, systemActions: systemActions, settings: settings,
-        folderSizes: folderSizes)
+        folderSizes: folderSizes, clipboard: PasteboardFileClipboard(pasteboard: .general))
     private let bench: UIBench?
 
     init(bench: UIBench?) {
@@ -50,14 +50,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
-    /// Writes the cache's unwritten saves before the app quits, so listings made in the last two
-    /// seconds outlive it. Quits after `quitFlushLimit` whatever the write is doing.
+    /// Asks first while file operations are unfinished, and stays open on Cancel. Then cancels
+    /// the running file operations, so none leaves a partial item or a staging folder, and
+    /// writes the cache's unwritten saves before the app quits, so listings made in the last two
+    /// seconds outlive it. Quits after `quitLimit` whatever either is doing.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // A bench launch has no cache and never makes the windows.
         guard let cache else { return .terminateNow }
-        let deadline = ContinuousClock.now.advanced(by: Self.quitFlushLimit)
+        guard windows.shouldQuit(asking: { $0.runModal() == .alertFirstButtonReturn }) else {
+            return .terminateCancel
+        }
+        let deadline = ContinuousClock.now.advanced(by: Self.quitLimit)
+        let windows = windows
         Task {
+            let limit = String(describing: Self.quitLimit)
+            if !(await windows.cancelOperationsBeforeQuit(by: deadline)) {
+                Logger(category: "operations").fault(
+                    "file operations didn't stop in \(limit, privacy: .public); quitting anyway")
+            }
             if !(await cache.flush(by: deadline, clock: .continuous)) {
-                let limit = String(describing: Self.quitFlushLimit)
                 Logger(category: "cache").fault(
                     "the listing cache didn't finish writing in \(limit, privacy: .public); quitting without it"
                 )
@@ -67,8 +78,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         return .terminateLater
     }
 
-    /// How long quitting waits for the listing cache to write.
-    private static let quitFlushLimit: Duration = .seconds(2)
+    /// How long quitting waits for file operations to stop and the listing cache to write.
+    private static let quitLimit: Duration = .seconds(2)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let bench {
@@ -81,6 +92,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let window = openHomeWindow()
         NSApp.activate()
         LaunchWarmup.shared.start(after: window)
+    }
+
+    /// Promised files still on their way when the app quits leave their hidden drop folders;
+    /// those are removed now.
+    func applicationWillTerminate(_ notification: Notification) {
+        guard bench == nil else { return }
+        windows.removeDropFoldersBeforeQuit()
+    }
+
+    /// Another app may have written the clipboard while the user was in it, which ends a cut,
+    /// so the cut rows stop looking dimmed.
+    func applicationDidBecomeActive(_ notification: Notification) {
+        guard bench == nil else { return }
+        windows.clipboard.clipboardMayHaveChanged()
     }
 
     /// A Dock click with no browser window open opens one. With a window open, even a minimized

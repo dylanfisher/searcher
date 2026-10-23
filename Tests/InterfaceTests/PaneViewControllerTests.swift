@@ -1,28 +1,13 @@
 import AppKit
 import Base
 import Browser
+import BrowserTestSupport
 import Foundation
 import TestSupport
 import Testing
+import UniformTypeIdentifiers
 
 @testable import Interface
-
-@MainActor
-final class StubSystemActions: SystemActions {
-    private(set) var openedFiles: [URL] = []
-    private(set) var openedURLs: [URL] = []
-    private(set) var copiedTexts: [String] = []
-    private(set) var revealed: [[URL]] = []
-    private(set) var openedInApp: [(folder: URL, bundleID: String)] = []
-
-    func openFile(_ url: URL) { openedFiles.append(url) }
-    func openURL(_ url: URL) { openedURLs.append(url) }
-    func copyToPasteboard(_ text: String) { copiedTexts.append(text) }
-    func revealInFinder(_ urls: [URL]) { revealed.append(urls) }
-    func open(_ folder: URL, inAppWithBundleID bundleID: String) {
-        openedInApp.append((folder, bundleID))
-    }
-}
 
 extension ListingState {
     var isLoaded: Bool { if case .loaded = self { true } else { false } }
@@ -85,6 +70,8 @@ private struct Fixture {
     let spinner = fixture.controller.status.spinner
 
     #expect(spinner.isHidden)
+    // The delay reads the clock when its task starts, which can be after an advance made now.
+    await settle { clock.waitingSleeps >= 1 }
     clock.advance(by: LoadTimeouts.spinnerDelay)
     await settle { !spinner.isHidden }
     #expect(spinner.accessibilityLabel() == "Loading root")
@@ -812,4 +799,26 @@ private final class WindowFixture {
     #expect(setup.window.firstResponder === setup.fixture.table)
     await settle { setup.pane.state.isLoaded }
     #expect(rowNames(setup.fixture.table) == ["inside.txt"])
+}
+
+@MainActor @Test func theTablesKeysFollowTheCommanderFKeySetting() throws {
+    let folder = try TemporaryFolder("PaneViewControllerTests")
+    let settings = storedSettings(in: folder)
+    let pane = Pane(
+        location: Location(path: "/root"),
+        service: ListingService(lister: StubLister(Fixture.folders)),
+        systemActions: StubSystemActions(), settings: settings)
+    let table = ListingTableView()
+    let controller = PaneViewController(
+        pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
+        tableView: table, monitorsFolders: false)
+    let f5 = KeyChord(.function(5))
+    #expect(table.registry.command(for: f5) == nil)
+
+    settings.commanderFKeys = true
+    #expect(table.registry.command(for: f5)?.id == FileCommands.copyToOtherPane.id)
+
+    settings.commanderFKeys = false
+    #expect(table.registry.command(for: f5) == nil)
+    withExtendedLifetime(controller) {}
 }

@@ -66,6 +66,18 @@ let arrowFlags: NSEvent.ModifierFlags = [.numericPad, .function]
     #expect(pageDown?.description == "Page Down")
 }
 
+/// F5 arrives the same with Fn held, as a laptop sends it while the system's standard function
+/// keys setting is off, and without, as it sends it while the setting is on.
+@MainActor @Test func fKeysMapToFunctionKeysWithOrWithoutFn() throws {
+    for flags: NSEvent.ModifierFlags in [.function, []] {
+        let f5 = try KeyChord(event: keyEvent(functionKey(NSF5FunctionKey), modifiers: flags))
+        let f8 = try KeyChord(event: keyEvent(functionKey(NSF8FunctionKey), modifiers: flags))
+        #expect(f5 == KeyChord(.function(5)), "\(flags)")
+        #expect(f8 == KeyChord(.function(8)), "\(flags)")
+    }
+    #expect(KeyChord(.function(5)).description == "F5")
+}
+
 @MainActor @Test func shiftedLetterIsTheLowercaseLetterWithShift() throws {
     let chord = try KeyChord(event: keyEvent("G", modifiers: [.command, .shift]))
     #expect(chord == KeyChord("g", modifiers: [.command, .shift]))
@@ -121,10 +133,8 @@ let arrowFlags: NSEvent.ModifierFlags = [.numericPad, .function]
 }
 
 @MainActor @Test func keysWithoutAChordSpellingGiveNil() throws {
-    // Keypad Enter, backspace, F1, forward delete, and a dead key that typed nothing.
-    let unmapped = [
-        "\u{03}", "\u{08}", functionKey(NSF1FunctionKey), functionKey(NSDeleteFunctionKey), "",
-    ]
+    // Keypad Enter, backspace, forward delete, and a dead key that typed nothing.
+    let unmapped = ["\u{03}", "\u{08}", functionKey(NSDeleteFunctionKey), ""]
     for characters in unmapped {
         #expect(
             try KeyChord(event: keyEvent(characters)) == nil,
@@ -140,6 +150,7 @@ let arrowFlags: NSEvent.ModifierFlags = [.numericPad, .function]
         KeyChord("1", modifiers: [.control, .option, .command]),
         KeyChord(.return, modifiers: .command), KeyChord(.tab), KeyChord(.space),
         KeyChord(.escape), KeyChord(.pageDown), KeyChord(.pageUp, modifiers: .shift),
+        KeyChord(.function(5)), KeyChord(.function(12), modifiers: .command),
     ]
     for chord in chords {
         let event = try keyEvent(

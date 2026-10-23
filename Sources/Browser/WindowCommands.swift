@@ -2,7 +2,8 @@
 /// workspace, and Open in New Tab for a clicked folder; and the window commands: open a window,
 /// move a pane to a new one, and merge one into another. They change the model only; the windows
 /// show the result (docs/decisions/0054-tabs-in-window.md,
-/// docs/decisions/0057-windows-and-tear-out.md).
+/// docs/decisions/0057-windows-and-tear-out.md). Operations shows or hides the window's
+/// operations panel through the context.
 public enum WindowCommands: CommandSet {
     /// Adds a tab after the selected one at the focused pane's folder, in its view mode and sort,
     /// and selects it.
@@ -45,9 +46,15 @@ public enum WindowCommands: CommandSet {
     /// window's strip and closes this one. Off with one window.
     public static let mergeWindowIntoTab = Command(
         id: CommandID("window.mergeWindowIntoTab"), title: "Merge Window into Tab", chords: [])
+    /// Shows the window's operations panel, which lists the running and queued file operations,
+    /// or hides it.
+    public static let toggleOperations = Command(
+        id: CommandID("window.toggleOperations"), title: "Operations",
+        chords: [KeyChord("l", modifiers: [.command, .option])])
 
     public static var bindings: [CommandBinding] {
         [
+            CommandBinding(toggleOperations) { $0.toggleOperations() },
             CommandBinding(newWindow) { context in
                 let focused = context.tab.focusedPane
                 context.workspaces.add(

@@ -4,7 +4,10 @@ import Quartz
 
 /// One browser window, showing one workspace: a strip of its tabs over the selected tab's panes,
 /// placed by the tab's layout, one `PaneViewController` per pane. Each window owns its own panes,
-/// like a Finder window, and is titled after the focused pane's folder.
+/// like a Finder window, and is titled after the focused pane's folder. Under the panes, the
+/// operations panel lists the file operations; Operations shows or hides it, and it shows itself
+/// in the most recently active window when one runs past a second
+/// (docs/decisions/0067-operations-panel.md).
 ///
 /// Commands change the workspace, and the window shows the result after each one. The window's
 /// first responder stays in the selected tab's focused pane: a command that moves the focus moves
@@ -23,6 +26,23 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// Holds the selected tab's layout view, under the tab strip.
     private let tabHost = NSView()
     private let tabStripHeight: NSLayoutConstraint
+    /// Runs the file commands' operations; nil in a window whose questions nothing answers, as
+    /// the UI bench opens it, where the file commands are off.
+    let fileOperations: FileOperationQueue?
+    /// The app's clipboard, for Cut, Copy and Paste; nil in a window the UI bench opens, where
+    /// those commands are off.
+    let clipboard: CutState?
+    /// The app's mount table, for drops; nil in a window the UI bench opens, where the lists
+    /// take no drop.
+    let mountTable: MountTable?
+    /// The app's undo history, for Undo and Redo; nil in a window the UI bench opens, where
+    /// those commands are off.
+    let undoHistory: UndoHistory?
+    /// The app's Open With cache; nil in a window the UI bench opens, where Open With is off.
+    let openWith: OpenWith?
+    /// The operations panel under the panes, hidden until shown.
+    let operations: OperationsViewController
+    private let operationsHeight: NSLayoutConstraint
     /// Each open tab's views, shown or not.
     private var tabViews: [TabID: TabViews] = [:]
     /// Set once the workspace closed with its last tab or the window closed; the window shows
@@ -48,23 +68,29 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// Hands over the view controller another window has for a pane that moved here, or nil.
     private let takePaneController: @MainActor (PaneID) -> PaneViewController?
 
-    /// A window of one tab at `location`, in a list of its own, as the UI bench opens it.
+    /// A window of one tab at `location`, in a list of its own, as the UI bench opens it. With
+    /// `fileOperations`, its operations panel lists what `showOperations` is given.
     public convenience init(
         location: Location, service: ListingService, systemActions: any SystemActions,
-        settings: Settings
+        settings: Settings, fileOperations: FileOperationQueue? = nil
     ) {
         let pane = Pane(
             location: location, service: service, systemActions: systemActions, settings: settings)
         let workspaces = WorkspaceList()
         let workspace = Workspace(tab: Tab(pane: pane))
         workspaces.add(workspace)
-        self.init(workspace: workspace, workspaces: workspaces)
+        self.init(workspace: workspace, workspaces: workspaces, fileOperations: fileOperations)
     }
 
     /// A window showing `workspace`, one of `workspaces`. `takePaneController` hands over another
-    /// window's view controller for a pane that moved into `workspace`.
+    /// window's view controller for a pane that moved into `workspace`. `fileOperations` runs
+    /// the file commands, which are off without it; the clipboard commands are off without
+    /// `clipboard`, drops without `fileOperations` and `mountTable`, Undo and Redo without
+    /// `undoHistory`, and Open With without `openWith`.
     init(
         workspace: Workspace, workspaces: WorkspaceList,
+        fileOperations: FileOperationQueue? = nil, clipboard: CutState? = nil,
+        mountTable: MountTable? = nil, undoHistory: UndoHistory? = nil, openWith: OpenWith? = nil,
         takePaneController: @escaping @MainActor (PaneID) -> PaneViewController? = { _ in nil }
     ) {
         // The window has its own tab strip; AppKit's tabs would add a second kind of tab and
@@ -84,9 +110,18 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         let strip = TabStripViewController(workspace: workspace)
         tabStrip = strip
         tabStripHeight = strip.view.heightAnchor.constraint(equalToConstant: 0)
+        self.fileOperations = fileOperations
+        self.clipboard = clipboard
+        self.mountTable = mountTable
+        self.undoHistory = undoHistory
+        self.openWith = openWith
+        operations = OperationsViewController(
+            control: fileOperations.map(OperationsViewController.Control.sending(to:)) ?? .none)
+        operationsHeight = operations.view.heightAnchor.constraint(equalToConstant: 0)
+        operations.view.isHidden = true
         super.init(window: window)
         let content = NSView()
-        for view in [tabStrip.view, tabHost] {
+        for view in [tabStrip.view, tabHost, operations.view] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
         }
@@ -98,10 +133,15 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             tabHost.topAnchor.constraint(equalTo: tabStrip.view.bottomAnchor),
             tabHost.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             tabHost.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            tabHost.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            tabHost.bottomAnchor.constraint(equalTo: operations.view.topAnchor),
+            operations.view.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            operations.view.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            operations.view.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            operationsHeight,
         ])
         window.contentView = content
         window.center()
+        operations.onNeedsAttention = { [weak self] in self?.operationNeedsAttention() }
         tabStrip.didSelectTab = { [weak self] in self?.showWorkspace() }
         window.didChangeFirstResponder = { [weak self] in self?.firstResponderDidChange() }
         window.takeKey = { [weak self] event in self?.runControlTab(event) ?? false }
@@ -156,6 +196,29 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         onClose?(self)
     }
 
+    // MARK: Operations panel
+
+    /// Shows the queue's latest snapshots in the panel.
+    public func showOperations(_ snapshots: [FileOperationQueue.Snapshot]) {
+        operations.show(snapshots)
+    }
+
+    private func toggleOperations() {
+        setOperationsShown(operations.view.isHidden)
+    }
+
+    /// An operation ran past `OperationsViewController.attentionDelay` or finished in trouble.
+    /// Only the most recently active window shows its panel for it; every window lists it.
+    private func operationNeedsAttention() {
+        guard !isClosed, workspaces.workspaces.first === workspace else { return }
+        setOperationsShown(true)
+    }
+
+    private func setOperationsShown(_ isShown: Bool) {
+        operations.view.isHidden = !isShown
+        operationsHeight.constant = isShown ? OperationsViewController.height : 0
+    }
+
     // MARK: Menu items from outside the panes' tables
 
     /// The commands whose menu items work while the keys are outside every pane's table, as in
@@ -165,6 +228,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         TilingCommands.closePane.id, WindowCommands.closeTab.id, WindowCommands.newTab.id,
         WindowCommands.nextTab.id, WindowCommands.previousTab.id, WindowCommands.newWindow.id,
         WindowCommands.movePaneToNewWindow.id, WindowCommands.mergeWindowIntoTab.id,
+        WindowCommands.toggleOperations.id,
     ]
 
     /// Runs a window or tab command's menu item on the focused pane's table. A table with the
@@ -288,7 +352,8 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         let controller = takePaneController(id) ?? PaneViewController(pane: pane)
         precondition(
             controller.pane === pane,
-            "the view controller handed over for pane \(id) at \(pane.location.path) shows \(controller.pane.location.path)"
+            "the view controller handed over for pane \(id) at \(pane.location.path) shows "
+                + "\(controller.pane.location.path)"
         )
         controller.windowLink = PaneViewController.WindowLink(
             workspace: workspace, workspaces: workspaces,
@@ -297,6 +362,9 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
                 return tabBounds()
             },
             didClosePane: { [weak self] result in self?.didClose(result) },
+            toggleOperations: { [weak self] in self?.toggleOperations() },
+            fileOperations: fileOperations, clipboard: clipboard, mountTable: mountTable,
+            undoHistory: undoHistory, openWith: openWith,
             didRunCommand: { [weak self] in
                 self?.onCommand?()
                 self?.showWorkspace()
@@ -329,7 +397,8 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     func closeWindow() {
         precondition(
             workspace.isClosed,
-            "the window of tab \(workspace.selectedTab.id) closes this way only once its tabs moved away"
+            "the window of tab \(workspace.selectedTab.id) closes this way only once its tabs "
+                + "moved away"
         )
         isClosed = true
         window?.close()

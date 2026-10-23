@@ -73,7 +73,7 @@ private final class FakeWalks: @unchecked Sendable {
             Thread.sleep(forTimeInterval: 0.001)
         }
         if let error = errors[path] { throw error }
-        return TreeSizeWalker.Total(bytes: bytes[path] ?? 100, isPartial: false)
+        return TreeSizeWalker.Total(bytes: bytes[path] ?? 100, files: 1, isPartial: false)
     }
 
     func release(_ path: String) {

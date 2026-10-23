@@ -22,7 +22,8 @@ private func underBudget() -> UIBenchRecord {
         filterKey: Array(repeating: 20, count: 24), columnDown: Array(repeating: 6, count: 500),
         columnRight: Array(repeating: 6, count: 100), columnLeft: Array(repeating: 6, count: 100),
         splitDown: Array(repeating: 5, count: 500), gridDown: Array(repeating: 5, count: 500),
-        tenPaneOpen: Array(repeating: 70, count: 20), stalls: [])
+        tenPaneOpen: Array(repeating: 70, count: 20),
+        queueKeyDown: Array(repeating: 5, count: 500), stalls: [])
 }
 
 @Test func filterKeysAreTheirOwnB7Case() throws {
@@ -52,7 +53,7 @@ private func underBudget() -> UIBenchRecord {
     var record = underBudget()
     record.pageDown = Array(repeating: 25, count: 200)
     let report = try UIBenchReport(record: record, scenario: nil)
-    #expect(report.cases.filter { $0.budget?.id == "B6" }.count == 18)
+    #expect(report.cases.filter { $0.budget?.id == "B6" }.count == 19)
     #expect(report.overBudget.map(\.name) == ["W2 Fn-↓ key → frame"])
 }
 
@@ -144,4 +145,47 @@ private func underBudget() -> UIBenchRecord {
     #expect(
         report.text.contains("stalls during the ten-pane load: 0 (B10, reported only)"),
         "\(report.text)")
+}
+
+@Test func keysWhileTheW8CopyRunsUnderB6Pass() throws {
+    let report = try UIBenchReport(record: underBudget(), scenario: nil)
+    #expect(report.passed, "\(report.text)")
+    let keys = try #require(
+        report.cases.first { $0.name == "W2 ↓ key while a W8 copy runs → frame" })
+    #expect(keys.budget?.id == "B6")
+    #expect(keys.samples.count == 500)
+}
+
+@Test func keysWhileTheW8CopyRunsOverB6FailNamingThem() throws {
+    var record = underBudget()
+    // 30 of 500 over 16 ms puts the p95 over.
+    record.queueKeyDown = Array(repeating: 4, count: 470) + Array(repeating: 25, count: 30)
+    let report = try UIBenchReport(record: record, scenario: nil)
+    #expect(!report.passed)
+    #expect(report.overBudget.map(\.name) == ["W2 ↓ key while a W8 copy runs → frame"])
+    #expect(report.overBudget.map { $0.budget?.id } == ["B6"])
+}
+
+@Test(arguments: ["\(UIBenchRecord.queueCopySpan)", "\(UIBenchRecord.queueKeySpan)"])
+func aStallWhileTheW8CopyRunsFailsAgainstB10(span: String) throws {
+    var record = underBudget()
+    record.stalls = [UIBenchRecord.Stall(milliseconds: 51, span: span)]
+    let report = try UIBenchReport(record: record, scenario: nil)
+    #expect(!report.passed)
+    #expect(report.overBudget.map(\.name) == ["longest stall while a W8 copy runs"])
+    #expect(report.overBudget.map { $0.budget?.id } == ["B10"])
+    #expect(report.overBudget.first?.p95 == 51)
+}
+
+@Test func stallsOutsideTheW8CopyDontFailIt() throws {
+    var record = underBudget()
+    record.stalls = [
+        UIBenchRecord.Stall(milliseconds: 90, span: "open W2"),
+        UIBenchRecord.Stall(milliseconds: 70, span: UIBenchRecord.tenPaneRestSpan),
+    ]
+    let report = try UIBenchReport(record: record, scenario: nil)
+    #expect(report.passed, "\(report.text)")
+    let stall = try #require(
+        report.cases.first { $0.name == "longest stall while a W8 copy runs" })
+    #expect(stall.samples == [0])
 }

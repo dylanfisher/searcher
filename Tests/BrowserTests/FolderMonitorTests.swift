@@ -1,4 +1,5 @@
 import Base
+import BrowserTestSupport
 import Darwin
 import Foundation
 import TestSupport

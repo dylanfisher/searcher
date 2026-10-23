@@ -1,6 +1,8 @@
 import Base
 import Browser
+import CoreGraphics
 import Foundation
+import UniformTypeIdentifiers
 
 extension BenchCase {
     /// The view commands on a loaded pane with one row selected, each timed from running the
@@ -144,6 +146,26 @@ extension BenchCase {
 
         func open(_ folder: URL, inAppWithBundleID bundleID: String) {
             preconditionFailure("the bench asked to open \(folder.path) in \(bundleID)")
+        }
+
+        func open(_ urls: [URL], withApplicationAt application: URL) {
+            preconditionFailure("the bench asked to open \(urls) with \(application.path)")
+        }
+
+        nonisolated func applicationURLs(toOpen type: UTType) -> [URL] {
+            preconditionFailure("the bench asked for the apps that open \(type.identifier)")
+        }
+
+        nonisolated func defaultApplicationURL(toOpen type: UTType) -> URL? {
+            preconditionFailure("the bench asked for the app that opens \(type.identifier)")
+        }
+
+        nonisolated func application(at url: URL) -> OpenWith.App {
+            preconditionFailure("the bench asked to read the app at \(url.path)")
+        }
+
+        nonisolated func applicationIcon(at url: URL) async -> CGImage? {
+            preconditionFailure("the bench asked for the icon of the app at \(url.path)")
         }
     }
 }

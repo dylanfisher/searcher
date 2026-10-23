@@ -47,6 +47,19 @@ public final class PaneViewController: NSViewController {
         let tabBounds: @MainActor () -> Rect
         /// Takes what Close Pane or Close Tab closed.
         let didClosePane: @MainActor (CloseResult) -> Void
+        /// Shows or hides the window's operations panel.
+        let toggleOperations: @MainActor () -> Void
+        /// Runs the file commands; nil where nothing answers its questions.
+        let fileOperations: FileOperationQueue?
+        /// The app's clipboard, for Cut, Copy and Paste; nil where there is none.
+        let clipboard: CutState?
+        /// The app's mount table, for drops; nil where there is none, and the lists take no
+        /// drop then.
+        let mountTable: MountTable?
+        /// The app's undo history, for Undo and Redo; nil where there is none.
+        let undoHistory: UndoHistory?
+        /// The app's Open With cache; nil where there is none, and Open With is off then.
+        let openWith: OpenWith?
         /// Runs after each command, so the window shows what it changed.
         let didRunCommand: @MainActor () -> Void
     }
@@ -54,7 +67,16 @@ public final class PaneViewController: NSViewController {
     /// Set by the window showing the pane, and again by the window it moves to. Without it, as
     /// tests show a pane on its own, commands get a context with no workspace, which traps on a
     /// tiling, other-pane, tab or window command.
-    var windowLink: WindowLink?
+    var windowLink: WindowLink? {
+        didSet {
+            listingViewController.clipboard = windowLink?.clipboard
+            columnViewController.clipboard = windowLink?.clipboard
+            listingViewController.fileOperations = windowLink?.fileOperations
+            columnViewController.fileOperations = windowLink?.fileOperations
+            listingViewController.mountTable = windowLink?.mountTable
+            columnViewController.mountTable = windowLink?.mountTable
+        }
+    }
 
     /// Draws a ring around the pane, for the pane with the keys while another pane shows.
     var showsFocus = false {
@@ -89,13 +111,25 @@ public final class PaneViewController: NSViewController {
         columnViewController.focusedController ?? listingViewController
     }
 
-    private static let registry: CommandRegistry = {
+    /// The app's commands without and with the Commander F-key preset, made once each.
+    private static let registries: [Bool: CommandRegistry] = {
         do {
-            return try AppCommands.registry()
+            return [
+                false: try AppCommands.registry(commanderFKeys: false),
+                true: try AppCommands.registry(commanderFKeys: true),
+            ]
         } catch {
             preconditionFailure("the app's commands clash: \(error)")
         }
     }()
+
+    /// The commands the keys run, with the F-key preset while the setting has it on.
+    private var registry: CommandRegistry {
+        guard let registry = Self.registries[pane.settings.commanderFKeys] else {
+            preconditionFailure("no registry for commanderFKeys \(pane.settings.commanderFKeys)")
+        }
+        return registry
+    }
     private static let bindings = Dictionary(
         uniqueKeysWithValues: AppCommands.bindings.map { ($0.command.id, $0) })
 
@@ -151,7 +185,7 @@ public final class PaneViewController: NSViewController {
         filterBar.onChange = { [weak pane] text in pane?.commandPane.setFilter(text) }
         filterBar.onArrow = { [weak self] chord in
             guard let table = self?.keyListing.tableView,
-                let command = Self.registry.command(for: chord)
+                let command = self?.registry.command(for: chord)
             else {
                 preconditionFailure("no command is bound to \(chord) for the filter field")
             }
@@ -160,15 +194,15 @@ public final class PaneViewController: NSViewController {
         // Tab in the field does what it does in the list: with two panes or more, the other
         // pane takes the keys.
         filterBar.onTab = { [weak self] in
-            guard let self, let command = Self.registry.command(for: KeyChord(.tab)),
+            guard let self, let command = registry.command(for: KeyChord(.tab)),
                 canRun(command.id)
             else { return false }
             keyListing.tableView.run(command.id)
             return true
         }
         filterBar.onCancel = { [weak self] in self?.closeFilter() }
-        filterBar.isFilterChord = { chord in
-            Self.registry.command(for: chord)?.id == ViewCommands.filter.id
+        filterBar.isFilterChord = { [weak self] chord in
+            self?.registry.command(for: chord)?.id == ViewCommands.filter.id
         }
         configureOverlays()
         paneDidChange()
@@ -243,12 +277,24 @@ public final class PaneViewController: NSViewController {
 
     /// Connects `table`, the list's or a column's, to the pane's commands.
     private func prepare(_ table: ListingTableView) {
-        table.registry = Self.registry
+        table.registry = registry
+        // The F-key preset can change while the table lives.
+        pane.settings.observe(for: table) { [weak self, weak table] in
+            guard let self, let table else { return }
+            table.registry = registry
+        }
         table.runCommand = { [weak self] id in self?.run(id) }
         table.openInNewTab = { [weak self] folder in self?.openInNewTab(folder) }
         table.canRunCommand = { [weak self] id in self?.canRun(id) ?? false }
         table.commandIsCurrent = { [weak self] id in self?.isCurrent(id) }
+        table.commandTitle = { [weak self] id in self?.title(of: id) }
         table.selectTyped = { [weak self] query in self?.selectTyped(query) ?? false }
+        table.openWith = { [weak self] in self?.openWithTarget() }
+    }
+
+    /// Open With acts on the pane commands act on.
+    private func openWithTarget() -> OpenWithMenu.Target? {
+        windowLink?.openWith.map { OpenWithMenu.Target(openWith: $0, pane: pane.commandPane) }
     }
 
     private func run(_ id: CommandID, folder: Location? = nil) {
@@ -276,6 +322,10 @@ public final class PaneViewController: NSViewController {
         binding(for: id).isCurrent?(context())
     }
 
+    private func title(of id: CommandID) -> String? {
+        binding(for: id).title?(context())
+    }
+
     private func binding(for id: CommandID) -> CommandBinding {
         guard let binding = Self.bindings[id] else {
             preconditionFailure("no command is bound to \(id)")
@@ -292,7 +342,8 @@ public final class PaneViewController: NSViewController {
                 pane: pane.commandPane,
                 toggleQuickLook: { [weak self] in self?.keyListing.quickLook.toggle() },
                 askForFolder: { [weak self] in self?.askForFolder() },
-                showFilter: { [weak self] in self?.showFilter() }, folder: folder)
+                showFilter: { [weak self] in self?.showFilter() }, folder: folder,
+                editName: { [weak self] in self?.editName() })
         }
         return CommandContext(
             pane: pane.commandPane, workspace: link.workspace, workspaces: link.workspaces,
@@ -300,7 +351,25 @@ public final class PaneViewController: NSViewController {
             didClosePane: link.didClosePane,
             toggleQuickLook: { [weak self] in self?.keyListing.quickLook.toggle() },
             askForFolder: { [weak self] in self?.askForFolder() },
-            showFilter: { [weak self] in self?.showFilter() }, folder: folder)
+            showFilter: { [weak self] in self?.showFilter() },
+            toggleOperations: link.toggleOperations, folder: folder,
+            fileOperations: link.fileOperations,
+            editName: { [weak self] in self?.editName() }, clipboard: link.clipboard,
+            undoHistory: link.undoHistory)
+    }
+
+    /// Rename's hook. Rename is on only with a queue in the context, and the field renames
+    /// through it.
+    private func editName() {
+        guard let queue = context().fileOperations else {
+            preconditionFailure("Rename ran with no file operation queue")
+        }
+        editName(queue: queue)
+    }
+
+    /// Starts the name field on the one selected entry of the list or the focused column.
+    func editName(queue: FileOperationQueue) {
+        keyListing.renameField.begin(queue: queue)
     }
 
     /// Shows the filter field and focuses it, its text selected. Typing then narrows the rows.
@@ -517,7 +586,10 @@ public final class PaneViewController: NSViewController {
                 }
             } catch {
                 logger.error(
-                    "can't watch \(location.path, privacy: .public): \(String(describing: error), privacy: .public)"
+                    """
+                    can't watch \(location.path, privacy: .public): \
+                    \(String(describing: error), privacy: .public)
+                    """
                 )
                 return
             }

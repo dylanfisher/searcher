@@ -25,6 +25,30 @@ final class ColumnViewController: NSViewController {
     }
     /// Connects a new column's table to the pane's commands. Set before the first column shows.
     var prepareTable: @MainActor (ListingTableView) -> Void = { _ in }
+    /// The app's clipboard, whose cut entries every column dims.
+    var clipboard: CutState? {
+        didSet {
+            for controller in columnControllers {
+                controller.clipboard = clipboard
+            }
+        }
+    }
+    /// Runs every column's drops; nil takes none.
+    var fileOperations: FileOperationQueue? {
+        didSet {
+            for controller in columnControllers {
+                controller.fileOperations = fileOperations
+            }
+        }
+    }
+    /// Tells every column's drops which volume each item is on.
+    var mountTable: MountTable? {
+        didSet {
+            for controller in columnControllers {
+                controller.mountTable = mountTable
+            }
+        }
+    }
     /// Starts a folder monitor for a new column's pane. Set before the first column shows.
     var startMonitor: @MainActor (Pane) -> Void = { pane in
         preconditionFailure("no monitor starter for the column at \(pane.location.path)")
@@ -158,6 +182,9 @@ final class ColumnViewController: NSViewController {
         let controller = ListingViewController(
             pane: column.pane, iconCache: iconCache, formatter: formatter, tableView: table,
             showsNamesOnly: true)
+        controller.clipboard = clipboard
+        controller.fileOperations = fileOperations
+        controller.mountTable = mountTable
         prepareTable(table)
         table.setAccessibilityLabel(column.pane.location.name)
         controller.view.setAccessibilityLabel(column.pane.location.name)

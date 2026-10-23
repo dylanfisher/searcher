@@ -26,6 +26,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(!settings.foldersFirst)
     #expect(settings.folderSizes)
     #expect(settings.terminalBundleID == "com.apple.Terminal")
+    #expect(!settings.commanderFKeys)
 }
 
 @MainActor @Test func aWrongTypedValueIsDiscardedNotCoerced() throws {
@@ -58,12 +59,14 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     first.foldersFirst = true
     first.folderSizes = false
     first.terminalBundleID = "com.googlecode.iterm2"
+    first.commanderFKeys = true
 
     let relaunched = Settings(defaults: try #require(UserDefaults(suiteName: name)))
     #expect(relaunched.showHidden)
     #expect(relaunched.foldersFirst)
     #expect(!relaunched.folderSizes)
     #expect(relaunched.terminalBundleID == "com.googlecode.iterm2")
+    #expect(relaunched.commanderFKeys)
 }
 
 @MainActor @Test func aChangeReachesEveryPane() async throws {
@@ -81,4 +84,8 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     await settle {
         left.pane.state.names.contains(".hidden") && right.pane.state.names.contains(".hidden")
     }
+}
+
+@MainActor @Test func theCommanderPresetsHelpSaysTheFKeysNeedFn() {
+    #expect(Settings.commanderFKeysHelp.contains("Fn"))
 }

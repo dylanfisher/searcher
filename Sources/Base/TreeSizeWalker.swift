@@ -1,19 +1,23 @@
 import Darwin
 
-/// Adds up the logical sizes of the regular files under a folder, reading each folder with
-/// `DirectoryLister`. Symlinks aren't followed, folders on another volume or that another volume
-/// is mounted on aren't entered, and a file with several hard links counts once per link, as
-/// `fts` counts them. A subfolder that can't be read for lack of permission, whose path is too
-/// long, or whose listing isn't downloaded leaves the total partial. Blocks the calling thread;
-/// see docs/decisions/0043-folder-sizes.md.
+/// Adds up the logical sizes of the regular files under a folder, and counts its entries other
+/// than folders, reading each folder with `DirectoryLister`. Symlinks aren't followed, folders
+/// on another volume or that another volume is mounted on aren't entered, and a file with
+/// several hard links counts once per link, as `fts` counts them. A subfolder that can't be read
+/// for lack of permission, whose path is too long, or whose listing isn't downloaded leaves the
+/// total partial. Blocks the calling thread; see docs/decisions/0043-folder-sizes.md.
 public struct TreeSizeWalker: Sendable {
     public struct Total: Equatable, Sendable {
         public let bytes: Int64
-        /// Some subfolder wasn't read, so `bytes` is a lower bound.
+        /// Entries other than folders: files, symlinks and the rest, as `FileCopier` counts what
+        /// it copies, so a copy's file count ends at this one.
+        public let files: Int
+        /// Some subfolder wasn't read, so `bytes` and `files` are lower bounds.
         public let isPartial: Bool
 
-        public init(bytes: Int64, isPartial: Bool) {
+        public init(bytes: Int64, files: Int, isPartial: Bool) {
             self.bytes = bytes
+            self.files = files
             self.isPartial = isPartial
         }
     }
@@ -31,6 +35,7 @@ public struct TreeSizeWalker: Sendable {
     /// The running total, counted one batch at a time.
     struct Tally {
         private(set) var bytes: Int64 = 0
+        private(set) var files = 0
         var isPartial = false
 
         /// Adds the regular files in `batch`, a batch of `folder`'s entries, and returns the
@@ -45,12 +50,13 @@ public struct TreeSizeWalker: Sendable {
                         preconditionFailure("the lister gave the file \(entry.name) no size")
                     }
                     bytes += size
+                    files += 1
                 case .directory where entry.isDataless:
                     isPartial = true
                 case .directory:
                     subfolders.append(folder + "/" + entry.name)
                 case .symbolicLink, .other:
-                    break
+                    files += 1
                 }
             }
             return subfolders
@@ -87,7 +93,7 @@ public struct TreeSizeWalker: Sendable {
                 }
             }
         }
-        return Total(bytes: tally.bytes, isPartial: tally.isPartial)
+        return Total(bytes: tally.bytes, files: tally.files, isPartial: tally.isPartial)
     }
 
     static func failure(for error: ListingError) -> SubfolderFailure {

@@ -4,9 +4,10 @@ import Quartz
 
 /// A pane's entries in a view-based table: name with its type's icon, and a cloud badge when the
 /// entry isn't downloaded; size, date modified and kind. A header click sorts the pane by that
-/// column and a second click reverses it; the user can resize and reorder the columns. The pane owns the sort and the selection; the table shows them
-/// and reports the user's changes back (0017-list-view-columns.md). In column view each column is
-/// one of these showing names only, with no header (`showsNamesOnly`).
+/// column and a second click reverses it; the user can resize and reorder the columns. The pane
+/// owns the sort and the selection; the table shows them and reports the user's changes back
+/// (0017-list-view-columns.md). In column view each column is one of these showing names only,
+/// with no header (`showsNamesOnly`).
 ///
 /// Everything it shows comes from the pane's `Listing` and the icon cache, so it makes no
 /// file-system call (0004-listing-view.md).
@@ -18,11 +19,15 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     static let notDownloadedLabel = "Not downloaded"
     /// The name cell's badge view, shown only for an entry that isn't downloaded.
     static let notDownloadedBadgeIdentifier = NSUserInterfaceItemIdentifier("notDownloadedBadge")
+    /// The opacity of a cut entry's cells.
+    static let cutAlpha: CGFloat = 0.5
 
     let tableView: ListingTableView
     /// Fills the Quick Look panel while this list controls it.
     let quickLook: QuickLookController
     public let pane: Pane
+    /// Edits the selected entry's name over its row, for Rename.
+    private(set) lazy var renameField = RenameFieldController(list: self)
 
     /// The rows on screen: the pane's listing when `paneDidChange` last ran; nil while it has none.
     public private(set) var listing: Listing?
@@ -50,6 +55,21 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// Goes up each time the view takes another list's scroll position, which drops a scroll to
     /// the cursor still waiting for the next pass.
     private var scrollGeneration = 0
+    /// The app's clipboard, whose cut entries in this folder draw dimmed. Nil shows none.
+    var clipboard: CutState? {
+        didSet {
+            guard clipboard !== oldValue else { return }
+            clipboard?.observe(for: self) { [weak self] in self?.cutDidChange() }
+            cutDidChange()
+        }
+    }
+    /// The names of the cut entries in the folder shown, read when the rows or the cut change.
+    private var cutNames: Set<String> = []
+    /// Runs the copies and moves that drops make. Without it, and without `mountTable`, the list
+    /// takes no drop; its rows still drag out.
+    var fileOperations: FileOperationQueue?
+    /// Tells a drop whether its items are on the target folder's volume.
+    var mountTable: MountTable?
     /// The modifier keys held in the event being handled, read when a click changes the
     /// selection. Tests replace it.
     var currentModifierFlags: @MainActor () -> NSEvent.ModifierFlags = {
@@ -103,6 +123,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         defer {
             isShowingPane = false
             quickLook.paneDidChange()
+            renameField.paneDidChange()
         }
         if tableSort != (pane.sortColumn, pane.sortAscending) {
             tableView.sortDescriptors = [
@@ -112,6 +133,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         var reloaded = false
         if shownVersion != pane.stateVersion {
             shownVersion = pane.stateVersion
+            readCutNames()
             let shown = listing
             listing = pane.state.listing
             if shown != nil, listing != nil, pane.location == shownLocation {
@@ -175,6 +197,18 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         }
     }
 
+    private func readCutNames() {
+        cutNames = clipboard?.cutNames(in: pane.location) ?? []
+    }
+
+    /// Dims the rows on screen that the new cut holds, and undims the ones it left.
+    private func cutDidChange() {
+        let shown = cutNames
+        readCutNames()
+        guard cutNames != shown, listing != nil else { return }
+        refreshRows()
+    }
+
     /// Scrolls to the cursor's row once this run loop pass ends. In the pass that reloads 100k
     /// rows, scrolling made the table lay out a screen of row views on the spot, 15–18 ms in a
     /// release build on top of the reload and the drawing; a pass later it takes about 4 ms. The
@@ -230,6 +264,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         }
         let height = scrollView.documentVisibleRect.height - (header ?? 0)
         pane.visibleRowCount = max(Int(height / pitch), 0)
+        renameField.layout()
     }
 
     // MARK: Quick Look
@@ -252,6 +287,30 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
 
     public override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
         MainActor.assumeIsolated { quickLook.end() }
+    }
+
+    // MARK: Services
+
+    /// What the list gives a service: the selection's file URLs, and their names as text. A
+    /// service that takes files may be asked for with the older file names type, which the
+    /// pasteboard reads from the file URLs.
+    public static let serviceSendTypes: [NSPasteboard.PasteboardType] = [
+        .fileURL, NSPasteboard.PasteboardType("NSFilenamesPboardType"), .string,
+    ]
+
+    /// Offers the selection to services that take files or text and return nothing, such as
+    /// New Terminal at Folder. AppKit asks this when it shows the Services menu or a context
+    /// menu, so it reads only whether anything is selected.
+    public override func validRequestor(
+        forSendType sendType: NSPasteboard.PasteboardType?,
+        returnType: NSPasteboard.PasteboardType?
+    ) -> Any? {
+        if returnType == nil, let sendType, Self.serviceSendTypes.contains(sendType),
+            pane.state.listing != nil, !pane.selection.isEmpty
+        {
+            return self
+        }
+        return super.validRequestor(forSendType: sendType, returnType: returnType)
     }
 
     // MARK: Columns
@@ -282,7 +341,20 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         tableView.delegate = self
         tableView.target = self
         tableView.doubleAction = #selector(openClickedRow(_:))
+        tableView.contextMenu = { [weak self] row in self?.contextMenu(forRow: row) }
+        let promiseTypes = NSFilePromiseReceiver.readableDraggedTypes.map {
+            NSPasteboard.PasteboardType($0)
+        }
+        tableView.registerForDraggedTypes([.fileURL] + promiseTypes)
+        // Finder, and the Dock's Trash, decide what a drop of the rows does; Command-Option makes
+        // an alias there. Without `.delete` the Trash moves the items itself.
+        for isLocal in [true, false] {
+            tableView.setDraggingSourceOperationMask(Self.dragOperations, forLocal: isLocal)
+        }
     }
+
+    /// What a drag of rows lets its destination do with them.
+    static let dragOperations: NSDragOperation = [.copy, .move, .generic, .link]
 
     private static func tableColumn(for column: SortColumn) -> NSTableColumn {
         let tableColumn = NSTableColumn(identifier: column.identifier)
@@ -363,6 +435,137 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         tableView.runCommand(NavigationCommands.open.id)
     }
 
+    // MARK: Drag and drop
+
+    /// A row drags out as its file URL, a folder's ending in a slash, built from the listing
+    /// without reading the disk (docs/decisions/0071-drag-and-drop.md).
+    public func tableView(
+        _ tableView: NSTableView, pasteboardWriterForRow row: Int
+    ) -> (any NSPasteboardWriting)? {
+        guard let listing, row >= 0, row < listing.count else { return nil }
+        return PasteboardFileClipboard.item(
+            for: ClipboardCommands.fileURL(of: listing[row], in: pane.location))
+    }
+
+    /// What a drop does where it is: into the folder of a folder row it is on, else into the
+    /// pane's folder, for which the whole list is highlighted. Reads only the drag's pasteboard,
+    /// the listing and the mount table, so it makes no file-system call.
+    public func tableView(
+        _ tableView: NSTableView, validateDrop info: any NSDraggingInfo, proposedRow row: Int,
+        proposedDropOperation dropOperation: NSTableView.DropOperation
+    ) -> NSDragOperation {
+        guard let drop = drop(info, row: row, dropOperation) else { return [] }
+        if drop.pane != nil, row != -1 || dropOperation != .on {
+            tableView.setDropRow(-1, dropOperation: .on)
+        }
+        switch drop.content {
+        case .files(_, let operation):
+            return operation.dragOperation(allowed: info.draggingSourceOperationMask)
+        case .promises:
+            return .copy
+        }
+    }
+
+    /// Queues the drop's one copy, move or duplicate, without asking first, as Paste does; or
+    /// takes its file promises. What lands in the pane's folder is selected once the pane lists
+    /// it.
+    public func tableView(
+        _ tableView: NSTableView, acceptDrop info: any NSDraggingInfo, row: Int,
+        dropOperation: NSTableView.DropOperation
+    ) -> Bool {
+        guard let queue = fileOperations, let drop = drop(info, row: row, dropOperation) else {
+            return false
+        }
+        switch drop.content {
+        case .files(let paths, let operation):
+            let operation = operation.fileOperation(paths, into: drop.folder)
+            Task { [pane = drop.pane] in
+                _ = await FileCommands.perform(operation, selectingIn: pane, queue: queue)
+            }
+        case .promises:
+            guard
+                let promises = info.draggingPasteboard.readObjects(
+                    forClasses: [NSFilePromiseReceiver.self]) as? [NSFilePromiseReceiver],
+                !promises.isEmpty
+            else {
+                preconditionFailure("a drop that offered file promises has none to read")
+            }
+            // A drag leaves the app it came from active, so that names the source.
+            let app = NSWorkspace.shared.frontmostApplication?.localizedName
+            Task { [pane = drop.pane, folder = drop.folder] in
+                await FilePromiseReceiver.receive(
+                    promises, into: folder, from: app, selectingIn: pane, queue: queue)
+            }
+        }
+        return true
+    }
+
+    /// A drop the list takes: the folder it goes into, the pane when that is the pane's folder,
+    /// and what it carries.
+    private struct Drop {
+        enum Content {
+            /// File URLs' paths, and whether they copy or move.
+            case files([String], DropOperation)
+            /// File promises, which always copy.
+            case promises
+        }
+
+        let folder: String
+        let pane: Pane?
+        let content: Content
+    }
+
+    /// The drop `info` makes at `row` with `dropOperation`, or nil when the list takes none
+    /// there. File URLs are read first; a drag with none is taken for its file promises.
+    private func drop(
+        _ info: any NSDraggingInfo, row: Int, _ dropOperation: NSTableView.DropOperation
+    ) -> Drop? {
+        guard fileOperations != nil, let mountTable else { return nil }
+        var folder = pane.location
+        var target: Pane? = pane
+        if dropOperation == .on, let listing, row >= 0, row < listing.count,
+            listing.kind(atRow: row).type == .folder
+        {
+            folder = pane.location.child(named: listing[row].name)
+            target = nil
+        }
+        let pasteboard = info.draggingPasteboard
+        let paths = PasteboardFileClipboard(pasteboard: pasteboard).fileURLs().map(\.path)
+        if !paths.isEmpty {
+            guard
+                let operation = DropOperation(
+                    dropping: paths, into: folder.path,
+                    allowed: info.draggingSourceOperationMask, mounts: mountTable)
+            else { return nil }
+            return Drop(folder: folder.path, pane: target, content: .files(paths, operation))
+        }
+        guard pasteboard.canReadObject(forClasses: [NSFilePromiseReceiver.self]),
+            info.draggingSourceOperationMask.contains(.copy)
+        else { return nil }
+        return Drop(folder: folder.path, pane: target, content: .promises)
+    }
+
+    /// The context menu for a right-click on `row`, or below the rows at -1. A row outside the
+    /// selection is selected first, as Finder does, so the menu acts on the row clicked; a row in
+    /// it keeps the selection.
+    func contextMenu(forRow row: Int) -> NSMenu {
+        var items = ContextMenuBuilder.folderItems
+        if let listing, row >= 0, row < listing.count {
+            let name = ExactName(listing[row].name)
+            if !pane.selection.contains(name) {
+                pane.select(Selection([name], cursor: name))
+            }
+            items = ContextMenuBuilder.rowItems
+        }
+        do {
+            return try ContextMenuBuilder.build(
+                items, registry: tableView.registry, target: tableView,
+                selection: ClipboardCommands.selectedURLs(in: pane))
+        } catch {
+            preconditionFailure("\(error)")
+        }
+    }
+
     public func tableView(
         _ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int
     ) -> NSView? {
@@ -387,6 +590,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             showNotDownloadedBadge(listing[row].isDataless, in: cell)
         }
         cell.textField?.stringValue = text(column, row: row, in: listing)
+        cell.alphaValue = cutNames.contains(listing[row].name) ? Self.cutAlpha : 1
     }
 
     /// What `column`'s cell shows for `row` of `listing`.
@@ -497,7 +701,22 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             guard let cell = rowView.view(atColumn: index) as? NSTableCellView else { return }
             Self.fitName(in: cell)
         }
+        renameField.layout()
     }
+
+    /// Where `row`'s name is drawn, in the table's coordinates: the Name column after the icon.
+    func nameFrame(atRow row: Int) -> NSRect {
+        let column = tableView.column(withIdentifier: SortColumn.name.identifier)
+        precondition(column >= 0, "the table has no Name column")
+        let cell = tableView.frameOfCell(atColumn: column, row: row)
+        return NSRect(
+            x: cell.minX + Self.nameX, y: cell.minY,
+            width: max(cell.width - Self.nameX - 2, 0), height: cell.height)
+    }
+
+    /// The icon's side in the Name column, and where the name starts after it.
+    private static let iconSize = 16.0
+    private static let nameX = 2 + iconSize + 4
 
     /// The space between a name and its badge.
     private static let badgeGap = 4.0
@@ -509,7 +728,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         cell.identifier = column.identifier
         var textX = 2.0
         if column == .name {
-            let iconSize = 16.0
+            let iconSize = Self.iconSize
             let imageView = NSImageView(
                 frame: NSRect(x: 2, y: (height - iconSize) / 2, width: iconSize, height: iconSize))
             imageView.imageScaling = .scaleProportionallyUpOrDown
@@ -518,7 +737,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             imageView.setAccessibilityElement(false)
             cell.addSubview(imageView)
             cell.imageView = imageView
-            textX = imageView.frame.maxX + 4
+            textX = Self.nameX
         }
         let textField = NSTextField(labelWithString: "")
         textField.lineBreakMode = column == .name ? .byTruncatingMiddle : .byTruncatingTail
@@ -547,6 +766,21 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             cell.addSubview(badge)
         }
         return cell
+    }
+}
+
+// AppKit calls the requestor on the main thread; `@preconcurrency` checks that it does.
+extension ListingViewController: @preconcurrency NSServicesMenuRequestor {
+    /// Writes the selection for a service in the shape Copy writes it
+    /// (docs/decisions/0069-cut-and-paste.md). Writes nothing and returns false with nothing
+    /// selected.
+    public func writeSelection(
+        to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]
+    ) -> Bool {
+        let urls = ClipboardCommands.selectedURLs(in: pane)
+        guard !urls.isEmpty else { return false }
+        PasteboardFileClipboard(pasteboard: pboard).write(urls)
+        return true
     }
 }
 

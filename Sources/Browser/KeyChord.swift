@@ -9,6 +9,9 @@ public struct KeyChord: Hashable, Sendable, CustomStringConvertible {
         /// The Page Up and Page Down keys, which Fn-↑ and Fn-↓ type on a laptop keyboard.
         case pageUp, pageDown
         case tab, `return`, delete, space, escape
+        /// F1 to F35. A laptop keyboard sends them with Fn held, unless the system's standard
+        /// function keys setting is on; Fn isn't part of the chord.
+        case function(Int)
 
         public init(extendedGraphemeClusterLiteral value: Character) {
             self = .character(value)
@@ -41,9 +44,15 @@ public struct KeyChord: Hashable, Sendable, CustomStringConvertible {
                 !Self.isWhitespaceOrControl(character),
                 "use a named key for \(character.unicodeScalars.map { $0.escaped(asASCII: true) })")
         }
+        if case .function(let number) = key {
+            precondition(Self.functionKeys.contains(number), "there is no F\(number) key")
+        }
         self.key = key
         self.modifiers = modifiers
     }
+
+    /// The numbers of the F-keys AppKit names, F1 to F35.
+    public static let functionKeys = 1...35
 
     /// Whether `init` takes `character` as a `.character` key.
     public static func accepts(_ character: Character) -> Bool {
@@ -79,6 +88,7 @@ public struct KeyChord: Hashable, Sendable, CustomStringConvertible {
         case .delete: "Delete"
         case .space: "Space"
         case .escape: "Esc"
+        case .function(let number): "F\(number)"
         }
     }
 }

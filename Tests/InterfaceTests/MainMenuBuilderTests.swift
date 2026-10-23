@@ -1,5 +1,6 @@
 import AppKit
 import Browser
+import BrowserTestSupport
 import Foundation
 import TestSupport
 import Testing
@@ -84,9 +85,12 @@ private func buildMenu(_ registry: CommandRegistry) throws -> NSMenu {
     let registry = try AppCommands.registry()
     let menu = try buildMenu(registry)
     var listed = Set(allItems(menu).compactMap { $0.representedObject as? CommandID })
-    // Edit's Select All runs the command bound to its chord when the table has the keys.
-    if let chord = MainMenuBuilder.selectAll.chord, let selectAll = registry.command(for: chord) {
-        listed.insert(selectAll.id)
+    // Edit's Cut, Copy, Paste and Select All run the commands bound to their chords when the
+    // table has the keys.
+    for action in MainMenuBuilder.actionsRunningCommands {
+        if let chord = action.chord, let command = registry.command(for: chord) {
+            listed.insert(command.id)
+        }
     }
 
     let missing = AppCommands.bindings.map(\.command).filter { !listed.contains($0.id) }
@@ -157,8 +161,7 @@ private func buildMenu(_ registry: CommandRegistry) throws -> NSMenu {
     #expect(titles.contains("Zoom"))
 }
 
-/// An unshown window holding a pane's table, whose Cmd-A (Select All), Cmd-C and Cmd-V are bound
-/// to commands that only record, and a text field.
+/// An unshown window holding a pane's table, whose commands only record, and a text field.
 @MainActor
 private struct TextFieldWindow {
     let window = NSWindow(
@@ -170,14 +173,7 @@ private struct TextFieldWindow {
 
     init() throws {
         window.isReleasedWhenClosed = false
-        var registry = try AppCommands.registry()
-        for key: Character in ["c", "v"] {
-            try registry.register(
-                Command(
-                    id: CommandID("file.\(key)"), title: "File \(key)",
-                    chords: [KeyChord(.character(key), modifiers: .command)]))
-        }
-        table.registry = registry
+        table.registry = try AppCommands.registry()
         table.runCommand = { [log] in log.ids.append($0) }
         table.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name")))
         table.frame = NSRect(x: 0, y: 100, width: 400, height: 200)
@@ -194,7 +190,7 @@ private struct TextFieldWindow {
     let editor = try #require(setup.window.firstResponder as? NSTextView)
     #expect(editor.isFieldEditor)
 
-    for key in ["a", "c", "v"] {
+    for key in ["a", "x", "c", "v"] {
         let press = try keyEvent(key, modifiers: .command)
         let item = try item(for: press, in: menu)
         #expect(try receiver(of: item, in: setup.window) === editor, "Cmd-\(key)")
@@ -205,6 +201,67 @@ private struct TextFieldWindow {
 
     #expect(editor.selectedRange() == NSRange(location: 0, length: 5))
     #expect(setup.log.ids.isEmpty)
+}
+
+/// Cmd-Delete deletes to the start of the line in a text field, so Move to Trash has no receiver
+/// there and its item is off.
+@MainActor @Test func moveToTrashHasNoReceiverWhileATextFieldHasTheKeys() throws {
+    let setup = try TextFieldWindow()
+    let menu = try buildMenu(setup.table.registry)
+    #expect(setup.window.makeFirstResponder(setup.field))
+
+    let trash = try item(for: try keyEvent("\u{7F}", modifiers: .command), in: menu)
+
+    #expect(trash.representedObject as? CommandID == FileCommands.moveToTrash.id)
+    #expect(try receiver(of: trash, in: setup.window) == nil)
+    #expect(setup.window.makeFirstResponder(setup.table))
+    #expect(try receiver(of: trash, in: setup.window) === setup.table)
+}
+
+/// Move Items Here has no text-editing meaning, so its item is off while a text field has the
+/// keys and the field gets Cmd-Opt-V.
+@MainActor @Test func moveItemsHereHasNoReceiverWhileATextFieldHasTheKeys() throws {
+    let setup = try TextFieldWindow()
+    let menu = try buildMenu(setup.table.registry)
+    #expect(setup.window.makeFirstResponder(setup.field))
+
+    let moveHere = try item(for: try keyEvent("v", modifiers: [.command, .option]), in: menu)
+
+    #expect(moveHere.representedObject as? CommandID == ClipboardCommands.moveHere.id)
+    #expect(try receiver(of: moveHere, in: setup.window) == nil)
+    #expect(setup.window.makeFirstResponder(setup.table))
+    #expect(try receiver(of: moveHere, in: setup.window) === setup.table)
+}
+
+@MainActor @Test func cutCopyAndPasteInTheTableRunTheCommandsOnTheirChords() throws {
+    let setup = try TextFieldWindow()
+    let menu = try buildMenu(setup.table.registry)
+    #expect(setup.window.makeFirstResponder(setup.table))
+
+    for key in ["x", "c", "v"] {
+        let item = try item(for: try keyEvent(key, modifiers: .command), in: menu)
+        #expect(try receiver(of: item, in: setup.window) === setup.table, "Cmd-\(key)")
+        #expect(setup.table.tryToPerform(try #require(item.action), with: item), "Cmd-\(key)")
+    }
+
+    #expect(
+        setup.log.ids == [
+            ClipboardCommands.cut.id, ClipboardCommands.copy.id, ClipboardCommands.paste.id,
+        ])
+}
+
+@MainActor @Test func cutCopyAndPasteAreOffWhileTheirCommandsWouldDoNothing() throws {
+    let setup = try TextFieldWindow()
+    let menu = try buildMenu(setup.table.registry)
+    let on: Set<CommandID> = [ClipboardCommands.copy.id]
+    setup.table.canRunCommand = { on.contains($0) }
+
+    let enabled = try ["x", "c", "v"].map { key in
+        setup.table.validateMenuItem(
+            try item(for: try keyEvent(key, modifiers: .command), in: menu))
+    }
+
+    #expect(enabled == [false, true, false])
 }
 
 @MainActor @Test func selectAllInTheTableRunsTheCommandOnItsChord() throws {
@@ -351,8 +408,10 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     let file = try #require(menu.items.first { $0.title == "File" }?.submenu)
     #expect(
         file.items.map(\.title) == [
-            "New Window", "New Tab", "Close Tab", "", "Quick Look", "Reveal in Finder",
-            "Open Terminal Here", "", "Filter",
+            "New Window", "New Folder", "New Tab", "Close Tab", "", "Rename", "Duplicate",
+            "Copy to Other Pane", "Move to Other Pane", "", "Open With", "Quick Look",
+            "Reveal in Finder",
+            "Open Terminal Here", "", "Move to Trash", "", "Filter",
         ])
     let edit = try #require(menu.items.first { $0.title == "Edit" }?.submenu)
     #expect(edit.items.map(\.title).contains("Copy Path"))
@@ -398,7 +457,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
             "Resize Pane",
             "Zoom Pane", "Unzoom Pane", "Equalize Panes", "", "Move Pane to New Window",
             "Merge Window into Tab",
-            "", "Close Pane",
+            "", "Operations", "", "Close Pane",
         ])
     #expect(!allItems(menu).contains { $0.action == #selector(NSWindow.performClose(_:)) })
     let focusOtherPane = try #require(window.items.first { $0.title == "Focus Other Pane" })
@@ -545,4 +604,129 @@ private func usKey(
 
     #expect(log.ids == [TilingCommands.splitDown.id, TilingCommands.splitDown.id])
     #expect(!table.typeSelect.isTyping)
+}
+
+@MainActor @Test func theLastMenuIsHelpWithNoItemsForTheSystemToFill() throws {
+    let menu = try buildMenu(try AppCommands.registry())
+    let help = try #require(menu.items.last)
+    #expect(help.title == "Help")
+    #expect(try #require(help.submenu).numberOfItems == 0)
+}
+
+@MainActor @Test func installMakesTheHelpMenuTheAppsHelpMenu() throws {
+    let app = NSApplication.shared
+    let (mainMenu, windowsMenu, helpMenu) = (app.mainMenu, app.windowsMenu, app.helpMenu)
+    defer { (app.mainMenu, app.windowsMenu, app.helpMenu) = (mainMenu, windowsMenu, helpMenu) }
+
+    try MainMenuBuilder.install(
+        in: app, appName: "Searcher", registry: try AppCommands.registry(),
+        settings: untouchedSettings())
+
+    let help = try #require(app.mainMenu?.items.last?.submenu)
+    #expect(help.title == "Help")
+    #expect(app.helpMenu === help)
+}
+
+/// Each file and clipboard command has one item in File or Edit: its own, or for Cut, Copy and
+/// Paste the text-editing item on its chord, which the table answers by running it.
+@MainActor @Test func everyFileAndClipboardCommandIsInFileOrEditOnceWithItsTitleAndChord()
+    throws
+{
+    let registry = try AppCommands.registry()
+    let menu = try buildMenu(registry)
+    let items = try ["File", "Edit"].flatMap { title in
+        try #require(menu.items.first { $0.title == title }?.submenu).items
+    }
+
+    for command in (FileCommands.bindings + ClipboardCommands.bindings).map(\.command) {
+        let matching = items.filter { item in
+            if let id = item.representedObject as? CommandID { return id == command.id }
+            return MainMenuBuilder.actionsRunningCommands.contains {
+                $0.action == item.action && $0.chord.flatMap(registry.command(for:)) == command
+            }
+        }
+        #expect(matching.count == 1, "\(command.id)")
+        let item = try #require(matching.first)
+        #expect(item.title == command.title, "\(command.id)")
+        let chord = try #require(command.chords.first)
+        if chord.modifiers.isDisjoint(with: [.command, .control, .option]) {
+            // Return, Rename's key, is a text field's key too.
+            #expect(item.keyEquivalent.isEmpty, "\(command.id)")
+        } else {
+            #expect(item.keyEquivalent == chord.keyEquivalent, "\(command.id)")
+            #expect(item.keyEquivalentModifierMask == chord.keyEquivalentModifierMask)
+        }
+    }
+}
+
+@MainActor @Test func fileAndClipboardItemsDisableWithTheirCommands() throws {
+    let registry = try AppCommands.registry()
+    let menu = try buildMenu(registry)
+    let table = ListingTableView()
+    table.registry = registry
+    table.canRunCommand = { _ in false }
+    let ids = Set((FileCommands.bindings + ClipboardCommands.bindings).map(\.command.id))
+    let clipboardActions = [MainMenuBuilder.cut, MainMenuBuilder.copy, MainMenuBuilder.paste]
+    let items = allItems(menu).filter { item in
+        if let id = item.representedObject as? CommandID { return ids.contains(id) }
+        return clipboardActions.contains { $0.action == item.action }
+    }
+
+    #expect(items.count == ids.count)
+    for item in items {
+        #expect(!table.validateMenuItem(item), "\(item.title)")
+    }
+}
+
+@MainActor @Test func theAppMenuHasAnEmptyServicesMenuForTheSystemToFill() throws {
+    let menu = try buildMenu(try AppCommands.registry())
+
+    let appMenu = try #require(menu.items.first?.submenu)
+    let services = try #require(appMenu.items.first { $0.title == "Services" }?.submenu)
+    #expect(services.numberOfItems == 0)
+}
+
+/// AppKit keeps the first services menu a process is given and ignores later ones, so this checks
+/// that the app's is an installed app menu's Services, whichever test installed first.
+@MainActor @Test func installGivesTheAppTheAppMenusServicesMenu() throws {
+    let app = NSApplication.shared
+    let (mainMenu, windowsMenu, helpMenu) = (app.mainMenu, app.windowsMenu, app.helpMenu)
+    defer { (app.mainMenu, app.windowsMenu, app.helpMenu) = (mainMenu, windowsMenu, helpMenu) }
+
+    try MainMenuBuilder.install(
+        in: app, appName: "Searcher", registry: try AppCommands.registry(),
+        settings: untouchedSettings())
+
+    let services = try #require(app.servicesMenu)
+    #expect(services.title == "Services")
+    #expect(services.supermenu?.title == "Searcher")
+}
+
+/// Undo and Redo send AppKit's text actions, so the rename and filter fields' field editors keep
+/// their own undo; the table answers them by running the undo commands, with the commands' titles.
+@MainActor @Test func undoAndRedoSendTheTextActionsAndTheTableRunsAndNamesTheCommands() throws {
+    let registry = try AppCommands.registry()
+    let menu = try buildMenu(registry)
+    let edit = try #require(menu.items.first { $0.title == "Edit" }?.submenu)
+    let undo = try #require(edit.items.first { $0.action == MainMenuBuilder.undo.action })
+    let redo = try #require(edit.items.first { $0.action == MainMenuBuilder.redo.action })
+    #expect(NSStringFromSelector(MainMenuBuilder.undo.action) == "undo:")
+    #expect(NSStringFromSelector(MainMenuBuilder.redo.action) == "redo:")
+    #expect(undo.keyEquivalent == "z" && undo.keyEquivalentModifierMask == .command)
+    #expect(redo.keyEquivalent == "z" && redo.keyEquivalentModifierMask == [.command, .shift])
+    let table = ListingTableView()
+    table.registry = registry
+    let log = CommandLog()
+    table.runCommand = { log.ids.append($0) }
+    table.canRunCommand = { $0 == UndoCommands.undo.id }
+    table.commandTitle = { $0 == UndoCommands.undo.id ? "Undo Move 3 Items" : nil }
+
+    #expect(table.validateMenuItem(undo))
+    #expect(undo.title == "Undo Move 3 Items")
+    #expect(!table.validateMenuItem(redo))
+    #expect(redo.title == "Redo")
+    table.undo(undo)
+    table.redo(redo)
+
+    #expect(log.ids == [UndoCommands.undo.id, UndoCommands.redo.id])
 }

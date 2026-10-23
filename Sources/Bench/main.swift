@@ -1,19 +1,21 @@
 import Base
 import Foundation
 
-/// Builds any missing fixture, samples the machine, times every registered case, prints median and
-/// p95 for each, writes the report, and returns whether every budgeted p95 is within its budget.
-/// A busy machine is warned about and recorded, not a failure.
-func runCases(folder: String?) async throws -> Bool {
+/// Builds any missing fixture, samples the machine, times every registered case and the copy case
+/// to the disk image mounted at `image`, prints median and p95 for each, writes the report, and
+/// returns whether every budgeted p95 is within its budget. A busy machine is warned about and
+/// recorded, not a failure.
+func runCases(folder: String?, image: String?) async throws -> Bool {
+    guard let image else { throw ImageMissing(run: "the harness's copy case") }
     try prepareFixtures()
+    try prepare(Fixture(.copySource))
     let machine = try MachineLoad.sample()
     if let warning = machine.warning { printError(warning) }
-    if BenchCase.registered.isEmpty { print("no cases registered") }
     var results: [BenchReport.Case] = []
-    for benchCase in BenchCase.registered {
+    for benchCase in BenchCase.registered + [BenchCase.copy(to: image)] {
         let result = BenchReport.Case(
-            name: benchCase.name, budget: benchCase.budget, unit: benchCase.unit,
-            samples: try await benchCase.measure(folder: folder))
+            name: benchCase.name, budget: benchCase.budget, floor: benchCase.floor,
+            unit: benchCase.unit, samples: try await benchCase.measure(folder: folder))
         print(line(for: result))
         results.append(result)
     }
@@ -96,14 +98,20 @@ func runCompareUI(previous: String, current: String, branch: String) throws -> B
 
 /// Launches the app bundle at `app` in its UI bench mode `UIBenchReport.launches(for:)` times,
 /// each a new process, so every launch is a cold launch (B1) with a warm file-system cache. The
-/// first launch also presses ↓ `UIBenchReport.keyPresses` times, in the list, in column view and
-/// in two split layouts.
+/// first launch also presses ↓ `UIBenchReport.keyPresses` times, in the list, while the queue
+/// copies `w8` to the disk image mounted at `image`, in column view and in two split layouts.
 /// A scenario is one launch that times only its own spans, on `folder` when it needs a real one.
 /// Each launch writes its samples to `UIBenchReport.path(for:)`; the runner reads them after it
 /// exits and writes all of them back there. Returns whether every span is within budget, and for
 /// `column-walk` whether no stall came after the launch; other runs report stalls only.
-func runUI(app: String, folder: String?, scenario: UIBenchOptions.Scenario?) throws -> Bool {
+func runUI(
+    app: String, folder: String?, scenario: UIBenchOptions.Scenario?, image: String?,
+    w8 workload: Fixture.Workload
+) throws -> Bool {
+    if scenario == nil, image == nil { throw ImageMissing(run: "the UI bench's W8 copy") }
     if scenario?.needsPath != true { try prepareFixtures() }
+    let w8 = Fixture(workload)
+    if scenario == nil { try prepare(w8) }
     let machine = try MachineLoad.sample()
     if let warning = machine.warning { printError(warning) }
     guard let executable = Bundle(path: app)?.executableURL else {
@@ -127,7 +135,8 @@ func runUI(app: String, folder: String?, scenario: UIBenchOptions.Scenario?) thr
             w2: folder ?? Fixture(.w2).path.path,
             keyPresses: UIBenchReport.keyPresses(launch: launch, scenario: scenario),
             tempPrefix: tempPrefix,
-            scenario: scenario, folders: folders)
+            scenario: scenario, folders: folders,
+            w8: scenario == nil ? w8.path.path : nil, image: scenario == nil ? image : nil)
         // A launch that fails before writing must not leave the last one's samples to be read.
         if FileManager.default.fileExists(atPath: output.path) {
             try FileManager.default.removeItem(at: output)
@@ -193,12 +202,39 @@ struct UILaunchFailed: Error, CustomStringConvertible {
     let description: String
 }
 
+struct ImageMissing: Error, CustomStringConvertible {
+    let run: String
+    var description: String {
+        "\(run) needs --image <mount point> of an attached disk image; scripts/bench makes one"
+    }
+}
+
+/// Checks the free space `run` needs before anything is written and prints what scripts/bench
+/// reads: the disk image's size in MB and the folder to make it in, or 0 when `run` copies
+/// nothing. Throws, naming the bytes, when the space is short.
+func printDiskImageSize(for run: BenchArguments) throws {
+    guard let plan = DiskImagePlan(for: run) else {
+        print("0")
+        return
+    }
+    let folder = FileManager.default.temporaryDirectory.path
+    try plan.check(free: try DiskImagePlan.freeBytes(in: folder), in: folder)
+    print("\(plan.imageMegabytes) \(folder)")
+}
+
 func line(for result: BenchReport.Case) -> String {
     let unit = result.unit.rawValue
     var line =
         "\(result.name)  median \(format(result.median)) \(unit)  p95 \(format(result.p95)) \(unit)"
     if let budget = result.budget { line += "  budget \(describe(budget))" }
+    if let floor = result.floor {
+        // The p95 time is the slow end, so it gives the low rate.
+        line +=
+            "  median \(format(floor.rate(milliseconds: result.median))) MB/s"
+            + "  p95 \(format(floor.rate(milliseconds: result.p95))) MB/s  \(result.limit)"
+    }
     if result.overBudget { line += "  OVER BUDGET" }
+    if result.underFloorReportedOnly { line += "  UNDER FLOOR (reported only)" }
     return line
 }
 
@@ -207,23 +243,25 @@ func finish(_ report: BenchReport) throws -> Bool {
     try report.write(to: BenchReport.path)
     print("wrote \(BenchReport.path)")
     for miss in report.overBudget {
-        // Only budgeted cases can be over budget, so `budget` is never nil here.
-        let budget = miss.budget.map(describe) ?? "none"
         printError(
-            "over budget: \(miss.name) p95 \(format(miss.p95)) \(miss.unit.rawValue), budget \(budget)"
+            "over budget: \(miss.name) p95 \(format(miss.p95)) \(miss.unit.rawValue), "
+                + miss.limit
         )
     }
     return report.passed
 }
 
+/// Builds any missing listing workload.
 func prepareFixtures() throws {
-    let clock = ContinuousClock()
-    for workload in Fixture.Workload.allCases {
-        let fixture = Fixture(workload)
-        var built = false
-        let elapsed = try clock.measure { built = try fixture.prepare() }
-        print(built ? "built \(fixture.path.path) in \(elapsed)" : "reusing \(fixture.path.path)")
+    for workload in Fixture.Workload.listing {
+        try prepare(Fixture(workload))
     }
+}
+
+func prepare(_ fixture: Fixture) throws {
+    var built = false
+    let elapsed = try ContinuousClock().measure { built = try fixture.prepare() }
+    print(built ? "built \(fixture.path.path) in \(elapsed)" : "reusing \(fixture.path.path)")
 }
 
 /// Prints the top processes and returns false, naming each busy one, when the machine is busy.
@@ -271,12 +309,17 @@ Task.detached {
             exit(try runColdChildren(folder: folder) ? 0 : 1)
         case .compare(let previous, let current):
             exit(try runCompare(previous: previous, current: current) ? 0 : 1)
-        case .run(let folder):
-            exit(try await runCases(folder: folder) ? 0 : 1)
+        case .run(let folder, let image):
+            exit(try await runCases(folder: folder, image: image) ? 0 : 1)
+        case .diskImageSize(let run):
+            try printDiskImageSize(for: run)
+            exit(0)
         case .compareUI(let previous, let current, let branch):
             exit(try runCompareUI(previous: previous, current: current, branch: branch) ? 0 : 1)
-        case .ui(let app, let folder, let scenario):
-            exit(try runUI(app: app, folder: folder, scenario: scenario) ? 0 : 1)
+        case .ui(let app, let folder, let scenario, let image, let w8):
+            exit(
+                try runUI(app: app, folder: folder, scenario: scenario, image: image, w8: w8)
+                    ? 0 : 1)
         case .help:
             print(BenchArguments.scenarioHelp)
             exit(0)

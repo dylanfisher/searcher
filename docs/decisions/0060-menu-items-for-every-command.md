@@ -31,6 +31,10 @@ Sublime Text.
     pane selection and resizing in the Window menu, and Window already held Focus Other Pane,
     Close Pane and the window moves.
   - `MainMenuBuilder.Item` gets a `submenu` case, which builds a nested `Menu` the same way.
+- **Help.** The last menu is Help, with no items: AppKit adds its menu search field to the app's
+  help menu, so `install` sets `NSApp.helpMenu`. There is no help book, so there is no Searcher
+  Help item. The bar keeps this one empty menu (`isFilledBySystem`); every other empty menu is
+  left out.
 - **No key equivalent for keys text fields use.** A command whose key has no Command, Control or
   Option (Tab, Space, the arrows, Shift-arrows, the page keys) is listed with
   `commandWithoutKey`; `eachCommandItemsKeyEquivalentIsItsCommandsFirstChord` fails if one of

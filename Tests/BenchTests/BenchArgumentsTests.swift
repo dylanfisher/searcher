@@ -59,3 +59,26 @@ import Testing
         try BenchArguments.parse(["--ui", "/b/Searcher.app"])
             == .ui(app: "/b/Searcher.app", folder: nil, scenario: nil))
 }
+
+@Test func imageIsPassedToTheRun() throws {
+    let folder = FileManager.default.temporaryDirectory.path
+    #expect(try BenchArguments.parse(["--image", folder]) == .run(folder: nil, image: folder))
+    #expect(
+        try BenchArguments.parse(["--ui", "/b/Searcher.app", "--image", folder])
+            == .ui(app: "/b/Searcher.app", folder: nil, scenario: nil, image: folder))
+}
+
+@Test func theCIVariantOfW8IsAUIRunsChoice() throws {
+    #expect(
+        try BenchArguments.parse(["--ui", "/b/Searcher.app", "--w8-2gb"])
+            == .ui(app: "/b/Searcher.app", folder: nil, scenario: nil, w8: .w8CI))
+    #expect(throws: BenchArguments.Invalid.self) { try BenchArguments.parse(["--w8-2gb"]) }
+}
+
+@Test func diskImageSizeReadsTheRunAfterIt() throws {
+    #expect(
+        try BenchArguments.parse(["--disk-image-size", "--ui", "/b/Searcher.app", "--w8-2gb"])
+            == .diskImageSize(
+                .ui(app: "/b/Searcher.app", folder: nil, scenario: nil, w8: .w8CI)))
+    #expect(try BenchArguments.parse(["--disk-image-size"]) == .diskImageSize(.run(folder: nil)))
+}

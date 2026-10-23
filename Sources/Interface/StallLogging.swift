@@ -47,7 +47,10 @@ public enum StallLogging {
         guard let threshold = threshold(in: arguments) else {
             #if DEBUG
                 logger.notice(
-                    "stall watchdog is off: launched without \(StallWatchdog.thresholdArgument, privacy: .public)"
+                    """
+                    stall watchdog is off: launched without \
+                    \(StallWatchdog.thresholdArgument, privacy: .public)
+                    """
                 )
             #endif
             return nil

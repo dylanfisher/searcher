@@ -26,6 +26,9 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
     /// For a command that puts this table's pane in a mode: whether the pane is in it, for its
     /// menu item's check mark. Nil for other commands. Set with `runCommand`.
     var commandIsCurrent: @MainActor (CommandID) -> Bool? = { _ in nil }
+    /// For a command whose menu item names what it would do, such as Undo: the item's title now.
+    /// Nil for other commands. Set with `runCommand`.
+    var commandTitle: @MainActor (CommandID) -> String? = { _ in nil }
     /// Runs when the table takes the keys, by a click or from code. A column's table moves the
     /// trail's focus to its column here.
     var didBecomeFirstResponder: @MainActor () -> Void = {}
@@ -36,6 +39,12 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
     var selectTyped: @MainActor (String) -> Bool = { query in
         preconditionFailure("ListingTableView has no type-select for \(query)")
     }
+    /// What Open With acts on: this table's pane and the app's Open With cache; nil in a window
+    /// without the cache, as the UI bench opens it. Set with `runCommand`.
+    var openWith: @MainActor () -> OpenWithMenu.Target? = { nil }
+    /// Builds the context menu for a right-click on a row, or below the rows at -1. Set by the
+    /// list's controller.
+    var contextMenu: @MainActor (_ row: Int) -> NSMenu? = { _ in nil }
     /// Signals a key that does nothing. Tests replace it.
     var beep: @MainActor () -> Void = { NSSound.beep() }
 
@@ -103,10 +112,19 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
     }
 
     /// Disables a command's menu item while the command would do nothing, such as Back at the
-    /// start of the pane's history. Its key still reaches `keyDown`, where the command does
-    /// nothing. Other items sent here, such as Select All, stay enabled. Checks the item of the
-    /// pane's current mode, such as "as Columns".
+    /// start of the pane's history, and so Undo, Redo, Cut, Copy and Paste. Its key still
+    /// reaches `keyDown`, where the command does nothing. Other items sent here, such as Select
+    /// All, stay enabled. Checks the item of the pane's current mode, such as "as Columns", and
+    /// gives Undo and Redo the titles that name the change.
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if let action = [
+            MainMenuBuilder.undo, MainMenuBuilder.redo, MainMenuBuilder.cut,
+            MainMenuBuilder.copy, MainMenuBuilder.paste,
+        ].first(where: { $0.action == item.action }) {
+            guard let command = command(on: action) else { return false }
+            item.title = commandTitle(command.id) ?? action.title
+            return canRunCommand(command.id)
+        }
         guard item.action == #selector(runMenuCommand(_:)) else { return true }
         guard let id = item.representedObject as? CommandID else {
             preconditionFailure("menu item \"\(item.title)\" holds no command ID")
@@ -115,6 +133,13 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
             item.state = isCurrent ? .on : .off
         }
         return canRunCommand(id)
+    }
+
+    /// The context menu for a right-click or Control-click. The table takes the keys first, as a
+    /// left click gives them, so its pane is focused and the menu's commands act on it.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        window?.makeFirstResponder(self)
+        return contextMenu(row(at: convert(event.locationInWindow, from: nil)))
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -126,9 +151,40 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
     /// Select All from the Edit menu runs the command bound to its chord, as the key would. The
     /// pane owns the selection, so `NSTableView`'s own select-all never runs.
     override func selectAll(_ sender: Any?) {
-        guard let chord = MainMenuBuilder.selectAll.chord,
-            let command = registry.command(for: chord)
-        else {
+        runCommand(on: MainMenuBuilder.selectAll)
+    }
+
+    /// Undo and Redo from the Edit menu run the undo commands on their chords. A text field's
+    /// field editor answers these actions itself, so it keeps its own undo.
+    @objc func undo(_ sender: Any?) {
+        runCommand(on: MainMenuBuilder.undo)
+    }
+
+    @objc func redo(_ sender: Any?) {
+        runCommand(on: MainMenuBuilder.redo)
+    }
+
+    /// Cut, Copy and Paste from the Edit menu run the clipboard commands on their chords. Text
+    /// fields answer these actions themselves, so they keep the keys.
+    @objc func cut(_ sender: Any?) {
+        runCommand(on: MainMenuBuilder.cut)
+    }
+
+    @objc func copy(_ sender: Any?) {
+        runCommand(on: MainMenuBuilder.copy)
+    }
+
+    @objc func paste(_ sender: Any?) {
+        runCommand(on: MainMenuBuilder.paste)
+    }
+
+    private func command(on action: MainMenuBuilder.StandardAction) -> Command? {
+        action.chord.flatMap(registry.command(for:))
+    }
+
+    /// Runs the command bound to `action`'s chord, or beeps when none is.
+    private func runCommand(on action: MainMenuBuilder.StandardAction) {
+        guard let command = command(on: action) else {
             beep()
             return
         }

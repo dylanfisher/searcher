@@ -1,5 +1,6 @@
 import AppKit
 import Base
+import BrowserTestSupport
 import Foundation
 import TestSupport
 import Testing
@@ -24,7 +25,7 @@ private func kindText(_ type: DirectoryEntry.FileType, _ pathExtension: Substrin
 /// system locale, which `ByteCountFormatter` gives no way to change: the tests use sizes without a
 /// decimal part, so the region doesn't change them, but the unit words assume an English language.
 @MainActor
-private func controller(
+func controller(
     showing entries: [DirectoryEntry], lister: StubLister = StubLister([:]),
     iconCache: TypeIconCache = TypeIconCache(), tableView: ListingTableView = ListingTableView()
 ) async -> ListingViewController {
@@ -299,7 +300,7 @@ private func shownNames(_ controller: ListingViewController) -> [String] {
 
     copy.scroll(like: source)
     lister.releaseAll()
-    await settle { pane.state.isLoaded }
+    await settle { pane.state.isLoaded && copy.listing != nil }
     // Past the pass a scroll to the cursor after a reload waits for.
     await withCheckedContinuation { continuation in
         DispatchQueue.main.async { continuation.resume() }
@@ -403,6 +404,25 @@ private func shownNames(_ controller: ListingViewController) -> [String] {
     let controller = await controller(showing: [])
 
     #expect(controller.tableView.style == .fullWidth)
+}
+
+@MainActor @Test func cutRowsDrawDimmedUntilTheCutEnds() async throws {
+    let pasteboard = NSPasteboard(name: NSPasteboard.Name("searcher-test-\(UUID().uuidString)"))
+    defer { pasteboard.releaseGlobally() }
+    let clipboard = CutState(clipboard: PasteboardFileClipboard(pasteboard: pasteboard))
+    let controller = await controller(showing: [file("a"), file("b")])
+    controller.clipboard = clipboard
+    func alphas() throws -> [CGFloat] {
+        try (0..<2).map { try cell(controller, row: $0, column: 0).alphaValue }
+    }
+    #expect(try alphas() == [1, 1])
+
+    clipboard.cut([URL(fileURLWithPath: "/folder/a", isDirectory: false)])
+    #expect(try alphas() == [ListingViewController.cutAlpha, 1])
+
+    pasteboard.clearContents()
+    clipboard.clipboardMayHaveChanged()
+    #expect(try alphas() == [1, 1])
 }
 
 @MainActor @Test func aClickThatSelectsMostRowsNamesTheRowsLeftOut() async throws {
@@ -713,7 +733,8 @@ private final class HeldWalks: @unchecked Sendable {
     func release(_ path: String, bytes: Int64, isPartial: Bool = false) {
         condition.withLock {
             failures.remove(Array(path.utf8))
-            totals[Array(path.utf8)] = TreeSizeWalker.Total(bytes: bytes, isPartial: isPartial)
+            totals[Array(path.utf8)] = TreeSizeWalker.Total(
+                bytes: bytes, files: 1, isPartial: isPartial)
             condition.broadcast()
         }
     }
