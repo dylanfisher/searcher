@@ -56,6 +56,14 @@ public enum MainMenuBuilder {
         title: "Select All", action: #selector(NSResponder.selectAll(_:)),
         chord: KeyChord("a", modifiers: .command), isTextEditing: true)
 
+    static let undo = StandardAction(
+        title: "Undo", action: #selector(ListingTableView.undo(_:)),
+        chord: KeyChord("z", modifiers: .command),
+        isTextEditing: true)
+    static let redo = StandardAction(
+        title: "Redo", action: #selector(ListingTableView.redo(_:)),
+        chord: KeyChord("z", modifiers: [.command, .shift]), isTextEditing: true)
+
     static let cut = StandardAction(
         title: "Cut", action: #selector(NSText.cut(_:)), chord: KeyChord("x", modifiers: .command),
         isTextEditing: true)
@@ -67,9 +75,9 @@ public enum MainMenuBuilder {
         chord: KeyChord("v", modifiers: .command), isTextEditing: true)
 
     /// The text-editing actions the table answers by running the command on the action's chord,
-    /// so a text field with the keys still cuts, copies, pastes and selects its text
+    /// so a text field with the keys still undoes, cuts, copies, pastes and selects its text
     /// (docs/decisions/0068-inline-rename.md).
-    static let actionsRunningCommands = [cut, copy, paste, selectAll]
+    static let actionsRunningCommands = [undo, redo, cut, copy, paste, selectAll]
 
     /// The row keys, which all reach the table from `keyDown`: a key equivalent would take
     /// ↑, ↓, Shift-, Opt- and Ctrl-Shift-arrows and the page keys from text fields.
@@ -162,17 +170,11 @@ public enum MainMenuBuilder {
         Menu(
             title: "Edit",
             items: [
-                .standard(
-                    StandardAction(
-                        title: "Undo", action: Selector(("undo:")),
-                        chord: KeyChord("z", modifiers: .command), isTextEditing: true)),
-                .standard(
-                    StandardAction(
-                        title: "Redo", action: Selector(("redo:")),
-                        chord: KeyChord("z", modifiers: [.command, .shift]), isTextEditing: true)),
+                // Undo, Redo, Cut, Copy, Paste and Select All run their commands when the table
+                // has the keys; Undo and Redo then name the change they would undo or redo.
+                .standard(undo),
+                .standard(redo),
                 .separator,
-                // Cut, Copy, Paste and Select All run their commands when the table has the
-                // keys.
                 .standard(cut),
                 .standard(copy),
                 .command(SystemCommands.copyPath.id),

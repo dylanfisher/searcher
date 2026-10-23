@@ -65,7 +65,8 @@ public struct OperationPlan: Equatable, Sendable {
     /// read, comparing paths as `FileOperation.comparable` gives them. Copies, duplicates and
     /// moves to another volume read the volumes involved with `volumeOf` and pre-scan each item
     /// with `measure`. Copies and moves look for each item's name in the destination folder
-    /// with `inspect`, top-level items only, and inspect the source of each that is there.
+    /// with `inspect`, top-level items only, and inspect the source of each that is there. An
+    /// undo inspects each step's source and destination and reads the volumes of its moves.
     /// Nothing else reads the file system. Blocks while it reads, so it runs on a
     /// `BlockingCallThread`.
     ///
@@ -131,6 +132,10 @@ public struct OperationPlan: Equatable, Sendable {
                         source: folder, destination: nil, size: nil, crossesVolumes: false,
                         conflict: nil)
                 ], lane: nil, failures: [])
+        case .undo(let record, _):
+            return try undoing(
+                FileOperation.steps(undoing: record), volumeOf: volumeOf, measure: measure,
+                inspect: inspect, isCancelled: isCancelled)
         }
     }
 
@@ -200,6 +205,95 @@ public struct OperationPlan: Equatable, Sendable {
         }
         let copies = items.contains { $0.size != nil }
         return OperationPlan(items: items, lane: copies ? destination : nil, failures: failures)
+    }
+
+    /// Plans an undo's steps, one item each in order. First it checks, with `inspect`, that each
+    /// step's item is at its source and its destination is free, as the steps before it leave
+    /// them; if any isn't, it plans no items and each such path is a failure, so nothing is
+    /// changed. A move whose two folders are on different volumes is copied, so it is
+    /// pre-scanned and the undo waits in the lane of the first such destination's volume.
+    private static func undoing(
+        _ steps: [FileOperation.UndoStep],
+        volumeOf: (String) throws(ListingError) -> VolumeIdentity,
+        measure: (String, () -> Bool) throws -> TreeSizeWalker.Total,
+        inspect: (String) throws(FileOperationError) -> ConflictRequest.Item?,
+        isCancelled: @escaping () -> Bool
+    ) throws -> OperationPlan {
+        // Whether a path holds an item once the earlier steps have run, by comparable path.
+        var after: [String: Bool] = [:]
+        func isTaken(_ path: String) throws(FileOperationError) -> Bool {
+            if let taken = after[FileOperation.comparable(path)] { return taken }
+            return try inspect(path) != nil
+        }
+        var failures: [FileOperationError] = []
+        for step in steps {
+            if isCancelled() { throw CancellationError() }
+            let source = step.source
+            do throws(FileOperationError) {
+                if !(try isTaken(source)) {
+                    failures.append(
+                        FileOperationError(reason: .sourceGone, path: source, errno: ENOENT))
+                }
+                // A rename that changes only case finds the item itself at its destination.
+                if let destination = step.destination,
+                    FileOperation.comparable(destination) != FileOperation.comparable(source),
+                    try isTaken(destination)
+                {
+                    failures.append(
+                        FileOperationError(reason: .exists, path: destination, errno: EEXIST))
+                }
+            } catch {
+                failures.append(error)
+            }
+            after[FileOperation.comparable(source)] = false
+            if let destination = step.destination {
+                after[FileOperation.comparable(destination)] = true
+            }
+        }
+        guard failures.isEmpty else {
+            return OperationPlan(items: [], lane: nil, failures: failures)
+        }
+        var folderVolumes: [String: Result<VolumeIdentity, ListingError>] = [:]
+        func volume(of path: String) throws(ListingError) -> VolumeIdentity {
+            let folder = (path as NSString).deletingLastPathComponent
+            let volume =
+                folderVolumes[folder] ?? Result { () throws(ListingError) in try volumeOf(folder) }
+            folderVolumes[folder] = volume
+            return try volume.get()
+        }
+        var items: [Item] = []
+        var lane: VolumeIdentity?
+        for step in steps {
+            if isCancelled() { throw CancellationError() }
+            var crosses = false
+            var size: TreeSizeWalker.Total?
+            if case .move(let from, let to) = step {
+                do throws(ListingError) {
+                    let destination = try volume(of: to)
+                    crosses = try volume(of: from) != destination
+                    if crosses, lane == nil { lane = destination }
+                } catch {
+                    failures.append(failure(error))
+                    continue
+                }
+                if crosses {
+                    switch try measured(from, measure: measure, isCancelled: isCancelled) {
+                    case .success(let measured): size = measured
+                    case .failure(let error):
+                        failures.append(error)
+                        continue
+                    }
+                }
+            }
+            items.append(
+                Item(
+                    source: step.source, destination: step.destination, size: size,
+                    crossesVolumes: crosses, conflict: nil))
+        }
+        guard failures.isEmpty else {
+            return OperationPlan(items: [], lane: nil, failures: failures)
+        }
+        return OperationPlan(items: items, lane: lane, failures: [])
     }
 
     /// The pre-scan of `source`, or the error that kept it from being read; a cancel throws.

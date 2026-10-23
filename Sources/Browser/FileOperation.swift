@@ -23,12 +23,58 @@ public enum FileOperation: Equatable, Sendable {
     /// from when known. The queue never runs it; it only shows one that failed
     /// (`FileOperationQueue.report`).
     case receive(name: String?, app: String?, into: String)
+    /// Reverses `record`'s changes, last first (`UndoStep`), after checking that every item is
+    /// where the record left it; if one isn't, nothing is changed. Redo is the undo of an
+    /// undo's record. `title` names it in the operations panel, as the Edit menu did
+    /// (docs/decisions/0072-undo.md).
+    case undo(OperationRecord, title: String)
+
+    /// One change an undo reverses.
+    enum UndoStep: Equatable, Sendable {
+        /// Moves the item at `from` to the path `to`, which must be free.
+        case move(from: String, to: String)
+        /// Moves the item in the Trash at the URL back to the path, which must be free.
+        case putBack(URL, to: String)
+        /// Moves the item at the path to its volume's Trash.
+        case trash(String)
+
+        var source: String {
+            switch self {
+            case .move(let from, _): from
+            case .putBack(let url, _): url.path
+            case .trash(let path): path
+            }
+        }
+
+        var destination: String? {
+            switch self {
+            case .move(_, let to), .putBack(_, let to): to
+            case .trash: nil
+            }
+        }
+    }
+
+    /// The steps that reverse `record`, last change first: a moved item moves back, a trashed
+    /// or replaced one comes back from the Trash, and an item a copy made or an undo put back
+    /// goes to the Trash. A replace is listed before the change that put the new item at its
+    /// path, so the new item leaves before the original comes back.
+    static func steps(undoing record: OperationRecord) -> [UndoStep] {
+        record.changes.reversed().map { change in
+            switch change {
+            case .created(let path), .putBack(_, let path): .trash(path)
+            case .moved(let from, let to): .move(from: to, to: from)
+            case .trashed(let path, let url), .replaced(let path, let url): .putBack(url, to: path)
+            case .deleted(let path):
+                preconditionFailure("an undo can't bring back \(path), which was deleted")
+            }
+        }
+    }
 
     /// The paths it reads without changing, as known before it runs.
     var reads: [String] {
         switch self {
         case .copy(let sources, _), .duplicate(let sources): sources
-        case .move, .trash, .rename, .newFolder, .deleteImmediately, .receive: []
+        case .move, .trash, .rename, .newFolder, .deleteImmediately, .receive, .undo: []
         }
     }
 
@@ -46,6 +92,10 @@ public enum FileOperation: Equatable, Sendable {
             [path, Self.renamed(path, to: name)]
         case .newFolder, .duplicate, .receive:
             []
+        case .undo(let record, _):
+            Self.steps(undoing: record).flatMap {
+                [$0.source] + ($0.destination.map { [$0] } ?? [])
+            }
         }
     }
 

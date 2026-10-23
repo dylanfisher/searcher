@@ -17,6 +17,8 @@ public struct OperationRecord: Equatable, Sendable {
         /// before the change that put the new item there, so undoing in reverse order takes
         /// the new item away before the original comes back.
         case replaced(String, originalTrashedTo: URL)
+        /// An undo moved the item back from its volume's Trash at the URL to the path.
+        case putBack(from: URL, to: String)
     }
 
     public var changes: [Change]

@@ -26,6 +26,9 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
     /// For a command that puts this table's pane in a mode: whether the pane is in it, for its
     /// menu item's check mark. Nil for other commands. Set with `runCommand`.
     var commandIsCurrent: @MainActor (CommandID) -> Bool? = { _ in nil }
+    /// For a command whose menu item names what it would do, such as Undo: the item's title now.
+    /// Nil for other commands. Set with `runCommand`.
+    var commandTitle: @MainActor (CommandID) -> String? = { _ in nil }
     /// Runs when the table takes the keys, by a click or from code. A column's table moves the
     /// trail's focus to its column here.
     var didBecomeFirstResponder: @MainActor () -> Void = {}
@@ -106,14 +109,18 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
     }
 
     /// Disables a command's menu item while the command would do nothing, such as Back at the
-    /// start of the pane's history, and so Cut, Copy and Paste. Its key still reaches `keyDown`,
-    /// where the command does nothing. Other items sent here, such as Select All, stay enabled.
-    /// Checks the item of the pane's current mode, such as "as Columns".
+    /// start of the pane's history, and so Undo, Redo, Cut, Copy and Paste. Its key still
+    /// reaches `keyDown`, where the command does nothing. Other items sent here, such as Select
+    /// All, stay enabled. Checks the item of the pane's current mode, such as "as Columns", and
+    /// gives Undo and Redo the titles that name the change.
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
-        if let clipboardAction = [MainMenuBuilder.cut, MainMenuBuilder.copy, MainMenuBuilder.paste]
-            .first(where: { $0.action == item.action })
-        {
-            return command(on: clipboardAction).map { canRunCommand($0.id) } ?? false
+        if let action = [
+            MainMenuBuilder.undo, MainMenuBuilder.redo, MainMenuBuilder.cut,
+            MainMenuBuilder.copy, MainMenuBuilder.paste,
+        ].first(where: { $0.action == item.action }) {
+            guard let command = command(on: action) else { return false }
+            item.title = commandTitle(command.id) ?? action.title
+            return canRunCommand(command.id)
         }
         guard item.action == #selector(runMenuCommand(_:)) else { return true }
         guard let id = item.representedObject as? CommandID else {
@@ -142,6 +149,16 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
     /// pane owns the selection, so `NSTableView`'s own select-all never runs.
     override func selectAll(_ sender: Any?) {
         runCommand(on: MainMenuBuilder.selectAll)
+    }
+
+    /// Undo and Redo from the Edit menu run the undo commands on their chords. A text field's
+    /// field editor answers these actions itself, so it keeps its own undo.
+    @objc func undo(_ sender: Any?) {
+        runCommand(on: MainMenuBuilder.undo)
+    }
+
+    @objc func redo(_ sender: Any?) {
+        runCommand(on: MainMenuBuilder.redo)
     }
 
     /// Cut, Copy and Paste from the Edit menu run the clipboard commands on their chords. Text

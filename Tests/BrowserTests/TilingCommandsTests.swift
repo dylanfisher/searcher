@@ -184,7 +184,8 @@ private func expectClose(_ a: Rect?, _ b: Rect?, sourceLocation: SourceLocation 
     #expect(registry.command(for: old) == nil, "\(old)")
     #expect(registry.command(for: zoom)?.id == TilingCommands.zoom.id)
     let redo = KeyChord("z", modifiers: [.command, .shift])
-    #expect(registry.command(for: redo) == nil, "\(redo)")
+    // Edit's Redo has it.
+    #expect(registry.command(for: redo) == UndoCommands.redo, "\(redo)")
 }
 
 @Test func resizeStepIsFortyPoints() {

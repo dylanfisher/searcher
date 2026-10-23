@@ -94,6 +94,8 @@ final class OperationRowView: NSView {
             "Drop from \(app) into \(quoted(folder))"
         case .receive(nil, nil, let folder):
             "Drop into \(quoted(folder))"
+        case .undo(_, let title):
+            title
         }
     }
 

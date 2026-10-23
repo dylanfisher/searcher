@@ -56,6 +56,8 @@ public final class PaneViewController: NSViewController {
         /// The app's mount table, for drops; nil where there is none, and the lists take no
         /// drop then.
         let mountTable: MountTable?
+        /// The app's undo history, for Undo and Redo; nil where there is none.
+        let undoHistory: UndoHistory?
         /// Runs after each command, so the window shows what it changed.
         let didRunCommand: @MainActor () -> Void
     }
@@ -283,6 +285,7 @@ public final class PaneViewController: NSViewController {
         table.openInNewTab = { [weak self] folder in self?.openInNewTab(folder) }
         table.canRunCommand = { [weak self] id in self?.canRun(id) ?? false }
         table.commandIsCurrent = { [weak self] id in self?.isCurrent(id) }
+        table.commandTitle = { [weak self] id in self?.title(of: id) }
         table.selectTyped = { [weak self] query in self?.selectTyped(query) ?? false }
     }
 
@@ -309,6 +312,10 @@ public final class PaneViewController: NSViewController {
 
     private func isCurrent(_ id: CommandID) -> Bool? {
         binding(for: id).isCurrent?(context())
+    }
+
+    private func title(of id: CommandID) -> String? {
+        binding(for: id).title?(context())
     }
 
     private func binding(for id: CommandID) -> CommandBinding {
@@ -339,7 +346,8 @@ public final class PaneViewController: NSViewController {
             showFilter: { [weak self] in self?.showFilter() },
             toggleOperations: link.toggleOperations, folder: folder,
             fileOperations: link.fileOperations,
-            editName: { [weak self] in self?.editName() }, clipboard: link.clipboard)
+            editName: { [weak self] in self?.editName() }, clipboard: link.clipboard,
+            undoHistory: link.undoHistory)
     }
 
     /// Rename's hook. Rename is on only with a queue in the context, and the field renames

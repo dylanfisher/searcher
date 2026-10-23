@@ -1,0 +1,77 @@
+/// Undo and Redo of file changes, app-wide, through the context's `UndoHistory`. Each runs as a
+/// queued operation, so neither waits for a copy that is running. Their menu items name the
+/// change: "Undo Move 3 Items", "Undo Rename", "Undo Replace". Both are off without a history or
+/// a queue, and with nothing to undo or redo (docs/decisions/0072-undo.md).
+public enum UndoCommands: CommandSet {
+    public static let undo = Command(
+        id: CommandID("undo.undo"), title: "Undo",
+        chords: [KeyChord("z", modifiers: .command)])
+    public static let redo = Command(
+        id: CommandID("undo.redo"), title: "Redo",
+        chords: [KeyChord("z", modifiers: [.command, .shift])])
+
+    // A key runs its command whether or not it is enabled, so each one checks again and does
+    // nothing when it is off.
+    public static var bindings: [CommandBinding] {
+        [
+            CommandBinding(
+                undo, isEnabled: { canUndo($0) },
+                title: { $0.undoHistory?.undoTitle ?? undo.title },
+                run: { context in
+                    guard canUndo(context), let history = context.undoHistory,
+                        let queue = context.fileOperations
+                    else { return }
+                    history.undo(with: queue)
+                }),
+            CommandBinding(
+                redo, isEnabled: { canRedo($0) },
+                title: { $0.undoHistory?.redoTitle ?? redo.title },
+                run: { context in
+                    guard canRedo(context), let history = context.undoHistory,
+                        let queue = context.fileOperations
+                    else { return }
+                    history.redo(with: queue)
+                }),
+        ]
+    }
+
+    /// What `operation` did, by its `record`, as the Undo and Redo items name it: "Move 3
+    /// Items", "Rename", "Move to Trash", "Replace" for a copy, whose only change to undo is a
+    /// replace, and "Delete" for an operation that deleted an item.
+    static func name(of operation: FileOperation, record: OperationRecord) -> String {
+        let deletes = record.changes.contains { change in
+            if case .deleted = change { true } else { false }
+        }
+        if deletes { return "Delete" }
+        switch operation {
+        case .move:
+            // Every item that ended up in the folder, replacing or not.
+            let placed = record.changes.filter { change in
+                switch change {
+                case .moved, .created: true
+                case .trashed, .deleted, .replaced, .putBack: false
+                }
+            }
+            return placed.count == 1 ? "Move 1 Item" : "Move \(placed.count) Items"
+        case .rename: return "Rename"
+        case .trash: return FileCommands.moveToTrash.title
+        case .copy: return "Replace"
+        case .deleteImmediately: return "Delete"
+        case .newFolder: return FileCommands.newFolder.title
+        case .duplicate: return FileCommands.duplicate.title
+        case .undo(_, let title): return title
+        // Never run, so its record is empty and it makes no entry.
+        case .receive: return "Drop"
+        }
+    }
+
+    @MainActor
+    private static func canUndo(_ context: CommandContext) -> Bool {
+        context.fileOperations != nil && context.undoHistory?.canUndo == true
+    }
+
+    @MainActor
+    private static func canRedo(_ context: CommandContext) -> Bool {
+        context.fileOperations != nil && context.undoHistory?.canRedo == true
+    }
+}
