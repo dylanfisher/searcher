@@ -100,13 +100,25 @@ public final class PaneViewController: NSViewController {
         columnViewController.focusedController ?? listingViewController
     }
 
-    private static let registry: CommandRegistry = {
+    /// The app's commands without and with the Commander F-key preset, made once each.
+    private static let registries: [Bool: CommandRegistry] = {
         do {
-            return try AppCommands.registry()
+            return [
+                false: try AppCommands.registry(commanderFKeys: false),
+                true: try AppCommands.registry(commanderFKeys: true),
+            ]
         } catch {
             preconditionFailure("the app's commands clash: \(error)")
         }
     }()
+
+    /// The commands the keys run, with the F-key preset while the setting has it on.
+    private var registry: CommandRegistry {
+        guard let registry = Self.registries[pane.settings.commanderFKeys] else {
+            preconditionFailure("no registry for commanderFKeys \(pane.settings.commanderFKeys)")
+        }
+        return registry
+    }
     private static let bindings = Dictionary(
         uniqueKeysWithValues: AppCommands.bindings.map { ($0.command.id, $0) })
 
@@ -162,7 +174,7 @@ public final class PaneViewController: NSViewController {
         filterBar.onChange = { [weak pane] text in pane?.commandPane.setFilter(text) }
         filterBar.onArrow = { [weak self] chord in
             guard let table = self?.keyListing.tableView,
-                let command = Self.registry.command(for: chord)
+                let command = self?.registry.command(for: chord)
             else {
                 preconditionFailure("no command is bound to \(chord) for the filter field")
             }
@@ -171,15 +183,15 @@ public final class PaneViewController: NSViewController {
         // Tab in the field does what it does in the list: with two panes or more, the other
         // pane takes the keys.
         filterBar.onTab = { [weak self] in
-            guard let self, let command = Self.registry.command(for: KeyChord(.tab)),
+            guard let self, let command = registry.command(for: KeyChord(.tab)),
                 canRun(command.id)
             else { return false }
             keyListing.tableView.run(command.id)
             return true
         }
         filterBar.onCancel = { [weak self] in self?.closeFilter() }
-        filterBar.isFilterChord = { chord in
-            Self.registry.command(for: chord)?.id == ViewCommands.filter.id
+        filterBar.isFilterChord = { [weak self] chord in
+            self?.registry.command(for: chord)?.id == ViewCommands.filter.id
         }
         configureOverlays()
         paneDidChange()
@@ -254,7 +266,12 @@ public final class PaneViewController: NSViewController {
 
     /// Connects `table`, the list's or a column's, to the pane's commands.
     private func prepare(_ table: ListingTableView) {
-        table.registry = Self.registry
+        table.registry = registry
+        // The F-key preset can change while the table lives.
+        pane.settings.observe(for: table) { [weak self, weak table] in
+            guard let self, let table else { return }
+            table.registry = registry
+        }
         table.runCommand = { [weak self] id in self?.run(id) }
         table.openInNewTab = { [weak self] folder in self?.openInNewTab(folder) }
         table.canRunCommand = { [weak self] id in self?.canRun(id) ?? false }

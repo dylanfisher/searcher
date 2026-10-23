@@ -813,3 +813,25 @@ private final class WindowFixture {
     await settle { setup.pane.state.isLoaded }
     #expect(rowNames(setup.fixture.table) == ["inside.txt"])
 }
+
+@MainActor @Test func theTablesKeysFollowTheCommanderFKeySetting() throws {
+    let folder = try TemporaryFolder("PaneViewControllerTests")
+    let settings = storedSettings(in: folder)
+    let pane = Pane(
+        location: Location(path: "/root"),
+        service: ListingService(lister: StubLister(Fixture.folders)),
+        systemActions: StubSystemActions(), settings: settings)
+    let table = ListingTableView()
+    let controller = PaneViewController(
+        pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
+        tableView: table, monitorsFolders: false)
+    let f5 = KeyChord(.function(5))
+    #expect(table.registry.command(for: f5) == nil)
+
+    settings.commanderFKeys = true
+    #expect(table.registry.command(for: f5)?.id == FileCommands.copyToOtherPane.id)
+
+    settings.commanderFKeys = false
+    #expect(table.registry.command(for: f5) == nil)
+    withExtendedLifetime(controller) {}
+}

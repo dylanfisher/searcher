@@ -14,7 +14,14 @@ public final class Settings {
         case foldersFirst
         case folderSizes
         case terminalBundleID
+        case commanderFKeys
     }
+
+    /// What the Settings window says about `commanderFKeys`.
+    public static let commanderFKeysHelp =
+        "F5 copies and F6 moves the selection to the other pane, F7 makes a new folder and F8 "
+        + "moves the selection to the Trash. Hold Fn with them unless “Use F1, F2, etc. keys as "
+        + "standard function keys” is on in System Settings ▸ Keyboard."
 
     /// Whether panes list hidden entries: names starting with a dot, and entries with the hidden
     /// flag (`chflags hidden`). Off by default.
@@ -38,6 +45,13 @@ public final class Settings {
                 changed: terminalBundleID != oldValue)
         }
     }
+    /// Whether the Commander F-key preset is on: F5 to F8 run the file commands in
+    /// `FileCommands.commanderFKeys`, beside their own keys. Off by default.
+    public var commanderFKeys: Bool {
+        didSet {
+            store(commanderFKeys, for: .commanderFKeys, changed: commanderFKeys != oldValue)
+        }
+    }
 
     private let defaults: UserDefaults
     private var observers: [Observer] = []
@@ -53,6 +67,7 @@ public final class Settings {
         foldersFirst = Self.bool(.foldersFirst, in: defaults) ?? false
         folderSizes = Self.bool(.folderSizes, in: defaults) ?? true
         terminalBundleID = Self.string(.terminalBundleID, in: defaults) ?? "com.apple.Terminal"
+        commanderFKeys = Self.bool(.commanderFKeys, in: defaults) ?? false
     }
 
     /// Runs `handler` after each change of a setting, for as long as `owner` exists.

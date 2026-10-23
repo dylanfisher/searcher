@@ -125,6 +125,10 @@ public enum MainMenuBuilder {
             .command(TilingCommands.closePane.id),
         ])
 
+    /// AppKit lists the services that take the selection here, once `install` makes it the app's
+    /// services menu.
+    static let servicesMenu = Menu(title: "Services", items: [], isFilledBySystem: true)
+
     /// AppKit puts its menu search field in the app's help menu and has no item of ours to add.
     /// There is no help book, so the menu has no items of its own.
     static let helpMenu = Menu(title: "Help", items: [], isFilledBySystem: true)
@@ -212,8 +216,10 @@ public enum MainMenuBuilder {
         helpMenu,
     ]
 
-    /// Builds the menus and makes them `app`'s menu bar, with the Window menu as its windows menu
-    /// and the Help menu as its help menu.
+    /// Builds the menus and makes them `app`'s menu bar, with the Window menu as its windows menu,
+    /// the Help menu as its help menu, and the app menu's Services as its services menu, which
+    /// lists the services that take the list's selection
+    /// (`ListingViewController.serviceSendTypes`).
     /// Items for commands that toggle a setting show its state from `settings`.
     public static func install(
         in app: NSApplication, appName: String, registry: CommandRegistry, settings: Settings
@@ -223,6 +229,11 @@ public enum MainMenuBuilder {
         app.mainMenu = bar
         app.windowsMenu = submenu(titled: windowMenu.title, in: bar)
         app.helpMenu = submenu(titled: helpMenu.title, in: bar)
+        guard let appMenu = bar.items.first?.submenu else {
+            preconditionFailure("the menu bar has no app menu")
+        }
+        app.servicesMenu = submenu(titled: servicesMenu.title, in: appMenu)
+        app.registerServicesMenuSendTypes(ListingViewController.serviceSendTypes, returnTypes: [])
     }
 
     static func build(appName: String, registry: CommandRegistry) throws(BuildError) -> NSMenu {
@@ -235,9 +246,9 @@ public enum MainMenuBuilder {
         return bar
     }
 
-    private static func submenu(titled title: String, in bar: NSMenu) -> NSMenu {
-        guard let submenu = bar.items.first(where: { $0.title == title })?.submenu else {
-            preconditionFailure("the menu bar has no \(title) menu")
+    private static func submenu(titled title: String, in menu: NSMenu) -> NSMenu {
+        guard let submenu = menu.items.first(where: { $0.title == title })?.submenu else {
+            preconditionFailure("the menu \"\(menu.title)\" has no \(title) menu")
         }
         return submenu
     }
@@ -321,6 +332,8 @@ public enum MainMenuBuilder {
                         action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
                         chord: nil)),
                 .separator,
+                .submenu(servicesMenu),
+                .separator,
                 .standard(
                     StandardAction(
                         title: "Hide \(appName)", action: #selector(NSApplication.hide(_:)),
@@ -372,7 +385,8 @@ public enum MainMenuBuilder {
         }
     }
 
-    private static func set(_ chord: KeyChord, on item: NSMenuItem) {
+    /// Shows `chord` as `item`'s key equivalent; the context menus use it too.
+    static func set(_ chord: KeyChord, on item: NSMenuItem) {
         item.keyEquivalent = chord.keyEquivalent
         item.keyEquivalentModifierMask = chord.keyEquivalentModifierMask
     }

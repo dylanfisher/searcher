@@ -137,6 +137,61 @@ private func exists(_ path: String) -> Bool {
     #expect(FileCommands.bindings.count == expected.count)
 }
 
+// MARK: Commander F-key preset
+
+private let f5 = KeyChord(.function(5))
+private let f6 = KeyChord(.function(6))
+private let f7 = KeyChord(.function(7))
+private let f8 = KeyChord(.function(8))
+
+@Test func withTheCommanderPresetF5ToF8ResolveToTheirFileCommands() throws {
+    let registry = try AppCommands.registry(commanderFKeys: true)
+    let expected: [(KeyChord, CommandID)] = [
+        (f5, FileCommands.copyToOtherPane.id),
+        (f6, FileCommands.moveToOtherPane.id),
+        (f7, FileCommands.newFolder.id),
+        (f8, FileCommands.moveToTrash.id),
+        (copyToOtherPane, FileCommands.copyToOtherPane.id),
+        (moveToOtherPane, FileCommands.moveToOtherPane.id),
+    ]
+
+    for (chord, id) in expected {
+        #expect(registry.command(for: chord)?.id == id, "\(chord)")
+    }
+    // The menu shows the first chord, so it stays the Command one.
+    #expect(registry.command(for: f5)?.chords.first == copyToOtherPane)
+}
+
+@Test func withoutTheCommanderPresetF5ToF8AreUnboundAndCmdShiftCAndMStayBound() throws {
+    let registry = try AppCommands.registry(commanderFKeys: false)
+
+    for chord in [f5, f6, f7, f8] {
+        #expect(registry.command(for: chord) == nil, "\(chord)")
+    }
+    #expect(registry.command(for: copyToOtherPane)?.id == FileCommands.copyToOtherPane.id)
+    #expect(registry.command(for: moveToOtherPane)?.id == FileCommands.moveToOtherPane.id)
+}
+
+@MainActor @Test func f5AsksBeforeCopyingToTheOtherPaneAsCmdShiftCDoes() async throws {
+    let source = try TemporaryFolder("FileCommandsTests")
+    let destination = try TemporaryFolder("FileCommandsTests")
+    try write("a.txt", in: source.url.path)
+    let window = await Window(at: source.url.path)
+    _ = try await window.splitRight(showing: destination.url.path)
+    window.select("a.txt")
+    let id = try #require(try AppCommands.registry(commanderFKeys: true).command(for: f5)?.id)
+    let binding = try #require(FileCommands.bindings.first { $0.command.id == id })
+
+    binding.run(window.context())
+
+    #expect(await window.prompter.confirms.wait { $0.count == 1 })
+    #expect(
+        window.prompter.confirms.all == [
+            .otherPane(.copy([source.url.path + "/a.txt"], into: destination.url.path))
+        ])
+    window.prompter.answer(confirming: false)
+}
+
 // MARK: Copy and move to the other pane
 
 @MainActor @Test func copyToOtherPaneAsksNamingTheOtherPanesFolderAndCopiesOnlyOnceConfirmed()

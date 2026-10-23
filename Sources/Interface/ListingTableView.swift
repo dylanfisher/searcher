@@ -36,6 +36,9 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
     var selectTyped: @MainActor (String) -> Bool = { query in
         preconditionFailure("ListingTableView has no type-select for \(query)")
     }
+    /// Builds the context menu for a right-click on a row, or below the rows at -1. Set by the
+    /// list's controller.
+    var contextMenu: @MainActor (_ row: Int) -> NSMenu? = { _ in nil }
     /// Signals a key that does nothing. Tests replace it.
     var beep: @MainActor () -> Void = { NSSound.beep() }
 
@@ -120,6 +123,13 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
             item.state = isCurrent ? .on : .off
         }
         return canRunCommand(id)
+    }
+
+    /// The context menu for a right-click or Control-click. The table takes the keys first, as a
+    /// left click gives them, so its pane is focused and the menu's commands act on it.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        window?.makeFirstResponder(self)
+        return contextMenu(row(at: convert(event.locationInWindow, from: nil)))
     }
 
     override func becomeFirstResponder() -> Bool {

@@ -283,6 +283,30 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         MainActor.assumeIsolated { quickLook.end() }
     }
 
+    // MARK: Services
+
+    /// What the list gives a service: the selection's file URLs, and their names as text. A
+    /// service that takes files may be asked for with the older file names type, which the
+    /// pasteboard reads from the file URLs.
+    public static let serviceSendTypes: [NSPasteboard.PasteboardType] = [
+        .fileURL, NSPasteboard.PasteboardType("NSFilenamesPboardType"), .string,
+    ]
+
+    /// Offers the selection to services that take files or text and return nothing, such as
+    /// New Terminal at Folder. AppKit asks this when it shows the Services menu or a context
+    /// menu, so it reads only whether anything is selected.
+    public override func validRequestor(
+        forSendType sendType: NSPasteboard.PasteboardType?,
+        returnType: NSPasteboard.PasteboardType?
+    ) -> Any? {
+        if returnType == nil, let sendType, Self.serviceSendTypes.contains(sendType),
+            pane.state.listing != nil, !pane.selection.isEmpty
+        {
+            return self
+        }
+        return super.validRequestor(forSendType: sendType, returnType: returnType)
+    }
+
     // MARK: Columns
 
     private func configureTable() {
@@ -311,6 +335,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         tableView.delegate = self
         tableView.target = self
         tableView.doubleAction = #selector(openClickedRow(_:))
+        tableView.contextMenu = { [weak self] row in self?.contextMenu(forRow: row) }
     }
 
     private static func tableColumn(for column: SortColumn) -> NSTableColumn {
@@ -390,6 +415,26 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             return
         }
         tableView.runCommand(NavigationCommands.open.id)
+    }
+
+    /// The context menu for a right-click on `row`, or below the rows at -1. A row outside the
+    /// selection is selected first, as Finder does, so the menu acts on the row clicked; a row in
+    /// it keeps the selection.
+    func contextMenu(forRow row: Int) -> NSMenu {
+        var items = ContextMenuBuilder.folderItems
+        if let listing, row >= 0, row < listing.count {
+            let name = ExactName(listing[row].name)
+            if !pane.selection.contains(name) {
+                pane.select(Selection([name], cursor: name))
+            }
+            items = ContextMenuBuilder.rowItems
+        }
+        do {
+            return try ContextMenuBuilder.build(
+                items, registry: tableView.registry, target: tableView)
+        } catch {
+            preconditionFailure("\(error)")
+        }
     }
 
     public func tableView(
@@ -592,6 +637,21 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             cell.addSubview(badge)
         }
         return cell
+    }
+}
+
+// AppKit calls the requestor on the main thread; `@preconcurrency` checks that it does.
+extension ListingViewController: @preconcurrency NSServicesMenuRequestor {
+    /// Writes the selection for a service in the shape Copy writes it
+    /// (docs/decisions/0069-cut-and-paste.md). Writes nothing and returns false with nothing
+    /// selected.
+    public func writeSelection(
+        to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]
+    ) -> Bool {
+        let urls = ClipboardCommands.selectedURLs(in: pane)
+        guard !urls.isEmpty else { return false }
+        PasteboardFileClipboard(pasteboard: pboard).write(urls)
+        return true
     }
 }
 

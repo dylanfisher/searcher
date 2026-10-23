@@ -24,7 +24,7 @@ private func kindText(_ type: DirectoryEntry.FileType, _ pathExtension: Substrin
 /// system locale, which `ByteCountFormatter` gives no way to change: the tests use sizes without a
 /// decimal part, so the region doesn't change them, but the unit words assume an English language.
 @MainActor
-private func controller(
+func controller(
     showing entries: [DirectoryEntry], lister: StubLister = StubLister([:]),
     iconCache: TypeIconCache = TypeIconCache(), tableView: ListingTableView = ListingTableView()
 ) async -> ListingViewController {
