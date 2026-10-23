@@ -150,6 +150,8 @@ public final class Pane {
     /// were resolved from the selection it started with then.
     private var goSelectionVersion = 0
     /// The cached rows of a `goToFolder` that hasn't moved the pane yet, shown when it moves.
+    /// The listing of a link `openSelectedLink(asFolderIn:)` checks before it asks for a pane.
+    private var linkCheck: ListingLoad?
     private var pendingGoCached: (update: ListingUpdate, resolved: Selection?)?
     /// When the rows of the `loaded` state were listed, for the slow and offline states that keep
     /// them.
@@ -402,8 +404,11 @@ public final class Pane {
         pendingGo = (load, request)
     }
 
-    /// Stops a `goToFolder` that hasn't moved the pane yet; its `finish` never runs.
+    /// Stops a `goToFolder` that hasn't moved the pane yet, and an
+    /// `openSelectedLink(asFolderIn:)` that hasn't asked for its pane; its `finish` never runs.
     public func cancelGoToFolder() {
+        linkCheck?.cancel()
+        linkCheck = nil
         pendingGo?.load.cancel()
         pendingGo = nil
         pendingGoCached = nil
@@ -515,10 +520,52 @@ public final class Pane {
         openSelection(foldersIn: nil)
     }
 
-    /// Opens the selection as `openSelection` does, except that a single selected folder, or link
-    /// to one, opens in `other`, which must not be a column. Files still go to the system.
+    /// Opens a single selected folder in `other`, which must not be a column. Any other
+    /// selection opens as `openSelection` opens it, so a file goes to the system; Open in Other
+    /// Pane calls this for a folder only, and `openSelectedLink(asFolderIn:)` for a link.
     public func openSelection(in other: Pane) {
         openSelection(foldersIn: other)
+    }
+
+    /// Opens the one selected link as a folder in the pane `other` returns, as Open opens a link
+    /// to a folder. The link is listed first, off the main thread, and `other` is called only
+    /// once it lists, so a link to a file or a broken link opens nothing and makes no pane.
+    /// The pane then goes to the link with `goToFolder`, which shows any other failure there.
+    /// A later navigation or Go to folder in this pane cancels the open.
+    public func openSelectedLink(asFolderIn other: @escaping @MainActor () -> Pane?) {
+        let entries = selectedEntries
+        precondition(
+            entries.count == 1 && entries[0].type == .symbolicLink,
+            "openSelectedLink(asFolderIn:) ran without one selected link")
+        let link = location.child(named: entries[0].name)
+        cancelGoToFolder()
+        linkCheck = service.load(link, priority: loadPriority) { [weak self] update in
+            // Nil once cancelled or decided; a cancelled load sends nothing more.
+            guard let self, linkCheck != nil else { return }
+            switch update {
+            // A stalled or cached read hasn't said whether the link is a folder.
+            case .cached, .slow, .gaveUp:
+                return
+            case .failed(let error, _, _)
+            where error.reason == .notFound || error.reason == .notADirectory:
+                linkCheck = nil
+                return
+            case .firstBatch, .full, .failed, .volumeGone:
+                break
+            }
+            linkCheck?.cancel()
+            linkCheck = nil
+            other()?.goToFolder(link) { error in
+                guard let error else { return }
+                switch error.reason {
+                // The link changed since it was listed; it still opens nothing.
+                case .notADirectory, .notFound:
+                    return
+                case .privacyProtected, .permissionDenied, .unreachable, .other:
+                    preconditionFailure("goToFolder moved the pane for \(error) but reported it")
+                }
+            }
+        }
     }
 
     private func openSelection(foldersIn other: Pane?) {
