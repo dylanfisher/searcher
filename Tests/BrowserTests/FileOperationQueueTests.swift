@@ -12,10 +12,12 @@ private let volumeS = VolumeIdentity(device: "/dev/fakeS", mountPoint: "/S", kin
 
 /// A file system for queue tests that touches no disk: paths under `/A`, `/B` and `/S` are on
 /// three volumes, and every call is logged. A copy logs its start, reports `progressSteps`
-/// changes, then waits until its source is released or the copy is cancelled.
+/// changes, then waits until its source is released or the copy is cancelled. A pre-scan of a
+/// held path waits until it is let go, as one on a share that stopped answering does.
 private final class FakeFiles: @unchecked Sendable {
     let events = EventLog<String>()
     private let condition = NSCondition()
+    private var heldScans: Set<String> = []
     private var released: Set<String> = []
     private var allReleased = false
     private var copyFailures: [String: FileOperationError] = [:]
@@ -51,6 +53,17 @@ private final class FakeFiles: @unchecked Sendable {
         condition.withLock { cancelFailures[source] = error }
     }
 
+    func holdScan(of path: String) {
+        condition.withLock { _ = heldScans.insert(path) }
+    }
+
+    func letScanGo(of path: String) {
+        condition.withLock {
+            heldScans.remove(path)
+            condition.broadcast()
+        }
+    }
+
     func reportProgress(steps: Int) {
         condition.withLock { progressSteps = steps }
     }
@@ -64,7 +77,13 @@ private final class FakeFiles: @unchecked Sendable {
                 }
                 throw ListingError(path: path, code: ENOENT)
             },
-            measure: { _, _ in TreeSizeWalker.Total(bytes: 10, files: 1, isPartial: false) },
+            measure: { path, _ in
+                self.condition.withLock {
+                    if self.heldScans.contains(path) { self.events.append("holding scan \(path)") }
+                    while self.heldScans.contains(path) { self.condition.wait() }
+                }
+                return TreeSizeWalker.Total(bytes: 10, files: 1, isPartial: false)
+            },
             makeCopier: { FakeCopier(files: self) },
             move: { source, destination throws(FileOperationError) in
                 self.events.append("move \(source) to \(destination)")
@@ -156,6 +175,13 @@ private final class Watcher: @unchecked Sendable {
     func waitUntilFinished(_ ids: FileOperationQueue.ID...) async -> Bool {
         await finished.wait { done in ids.allSatisfy { id in done.contains { $0.id == id } } }
     }
+
+    /// Waits until a snapshot has shown the operation in `phase`.
+    func waitUntil(_ id: FileOperationQueue.ID, is phase: OperationState.Phase) async -> Bool {
+        await snapshots.wait { sent in
+            sent.contains { $0.contains { $0.id == id && $0.state.phase == phase } }
+        }
+    }
 }
 
 private func makeQueue<C: Clock<Duration>>(
@@ -187,7 +213,7 @@ private func pause() async throws {
     let move = await enqueue(queue, .move(["/S/c"], into: "/A"), watcher)
     let otherVolume = await enqueue(queue, .copy(["/S/d"], into: "/B"), watcher)
 
-    // The lane takes its operations in the order their plans finish, so any of the three on
+    // An operation still being planned can be overtaken by a later one, so any of the three on
     // `/A` may go first; one at a time does.
     let onA = ["/S/a", "/S/b", "/S/c"]
     var released: Set<String> = []
@@ -221,11 +247,13 @@ private func pause() async throws {
     #expect(await files.events.wait { $0.contains("copy /S/album") })
 
     let rename = await enqueue(queue, .rename("/S/notes.txt", to: "todo.txt"), watcher)
+    let renameOnTheCopysVolume = await enqueue(queue, .rename("/A/notes.txt", to: "b.txt"), watcher)
     let move = await enqueue(queue, .move(["/A/x"], into: "/A/sorted"), watcher)
     let trash = await enqueue(queue, .trash(["/A/old"]), watcher)
     let newFolder = await enqueue(queue, .newFolder(in: "/A"), watcher)
 
-    #expect(await watcher.waitUntilFinished(rename, move, trash, newFolder))
+    #expect(await watcher.waitUntilFinished(rename, renameOnTheCopysVolume, move, trash, newFolder))
+    #expect(watcher.state(of: renameOnTheCopysVolume)?.phase == .done)
     #expect(watcher.state(of: copy) == nil)
     #expect(
         watcher.state(of: rename)?.record.changes == [
@@ -257,6 +285,9 @@ private func pause() async throws {
         (.move(["/S"], into: "/B"), "/S"),
         (.rename("/A/album", to: "Album"), "/A/album"),
         (.copy(["/B/album"], into: "/A"), "/A/album"),
+        // APFS compares names without case, so these name the same items.
+        (.rename("/s/ALBUM/01.flac", to: "one.flac"), "/s/ALBUM/01.flac"),
+        (.trash(["/S/Album/"]), "/S/Album/"),
     ]
     for (operation, path) in refused {
         let id = await enqueue(queue, operation, watcher)
@@ -336,10 +367,11 @@ private func pause() async throws {
     let watcher = Watcher()
     let queue = makeQueue(files, watcher)
     let clean = await enqueue(queue, .copy(["/S/clean"], into: "/A"), watcher)
+    #expect(await files.events.wait { $0.contains("copy /S/clean") })
     let partial = await enqueue(queue, .copy(["/S/locked"], into: "/B"), watcher)
+    #expect(await files.events.wait { $0.contains("copy /S/locked") })
     let waiting = await enqueue(queue, .copy(["/S/waiting"], into: "/A"), watcher)
-    #expect(
-        await files.events.wait { $0.contains("copy /S/clean") && $0.contains("copy /S/locked") })
+    #expect(await watcher.waitUntil(waiting, is: .queued))
 
     await queue.cancel(waiting)
     await queue.cancel(clean)
@@ -350,6 +382,50 @@ private func pause() async throws {
     #expect(watcher.state(of: partial)?.phase == .cancelled(leftBehind: locked))
     #expect(watcher.state(of: waiting)?.phase == .cancelled(leftBehind: nil))
     #expect(!files.events.all.contains("copy /S/waiting"))
+}
+
+@Test func aLaneStartsItsWaitingOperationsInTheOrderQueued() async throws {
+    let files = FakeFiles()
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher)
+    let first = await enqueue(queue, .copy(["/S/a"], into: "/A"), watcher)
+    #expect(await files.events.wait { $0.contains("copy /S/a") })
+    files.holdScan(of: "/S/b")
+    let second = await enqueue(queue, .copy(["/S/b"], into: "/A"), watcher)
+    let third = await enqueue(queue, .copy(["/S/c"], into: "/A"), watcher)
+    // The third's plan finishes first; the second is planned before the lane frees.
+    #expect(await watcher.waitUntil(third, is: .queued))
+    files.letScanGo(of: "/S/b")
+    #expect(await watcher.waitUntil(second, is: .queued))
+
+    files.release("/S/a")
+
+    #expect(await files.events.wait { $0.contains("copy /S/b") })
+    try await pause()
+    #expect(!files.events.all.contains("copy /S/c"))
+    files.releaseAll()
+    #expect(await watcher.waitUntilFinished(first, second, third))
+}
+
+@Test func cancelFinishesAnOperationWhosePlanIsStuckAtOnce() async throws {
+    let files = FakeFiles(releasingAll: true)
+    files.holdScan(of: "/S/stuck")
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher)
+    let stuck = await enqueue(queue, .copy(["/S/stuck"], into: "/A"), watcher)
+    #expect(await files.events.wait { $0.contains("holding scan /S/stuck") })
+
+    await queue.cancel(stuck)
+
+    #expect(await watcher.waitUntilFinished(stuck))
+    #expect(watcher.state(of: stuck)?.phase == .cancelled(leftBehind: nil))
+    // The lane was never taken, and the plan's late result is dropped.
+    let next = await enqueue(queue, .copy(["/S/next"], into: "/A"), watcher)
+    #expect(await watcher.waitUntilFinished(next))
+    files.letScanGo(of: "/S/stuck")
+    try await pause()
+    #expect(!files.events.all.contains("copy /S/stuck"))
+    #expect(watcher.finished.all.filter { $0.id == stuck }.count == 1)
 }
 
 @Test func pauseAndResumeReachTheCopierAndShowInTheState() async throws {
@@ -406,6 +482,11 @@ private func pause() async throws {
     #expect(last.map(\.id) == [id])
     #expect(last.first?.state.phase == .done)
     #expect(last.first?.state.progress.copied == CopyProgress(bytes: 10, files: 1))
+    // Nothing is running, so nothing more is sent, not even an empty list.
+    clock.advance(by: FileOperationQueue.snapshotInterval)
+    clock.advance(by: FileOperationQueue.snapshotInterval)
+    try await pause()
+    #expect(watcher.snapshots.all.count == 3)
     // A finished operation is in one snapshot, then leaves the list.
     await queue.enqueue(.newFolder(in: "/A"))
     clock.advance(by: FileOperationQueue.snapshotInterval)

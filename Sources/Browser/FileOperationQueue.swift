@@ -9,7 +9,7 @@ import Foundation
 /// operation that would change an item another unfinished operation reads or changes is
 /// refused. Every blocking call runs on a `BlockingCallThread`. The observer gets the state of
 /// every operation, at most once per `snapshotInterval`. See
-/// docs/decisions/00XX-operation-queue.md.
+/// docs/decisions/0065-operation-queue.md.
 public actor FileOperationQueue {
     /// The shortest time between two snapshots.
     public static let snapshotInterval: Duration = .milliseconds(100)
@@ -84,6 +84,7 @@ public actor FileOperationQueue {
     private var busyLanes: Set<VolumeIdentity> = []
     private var lastSnapshot: Duration?
     private var snapshotIsDue = false
+    private var isTicking = false
 
     /// A queue that works on the file system. `onChange` gets every operation's state, unfinished
     /// ones and those finished since the last call, at most once per `snapshotInterval`, on no
@@ -154,15 +155,19 @@ public actor FileOperationQueue {
         changed()
     }
 
-    /// Stops the operation: one waiting in its lane never starts, and a running one stops at its
-    /// copy's next block or before its next item. Items finished stay. Does nothing to an
-    /// operation that has finished.
+    /// Stops the operation: one still being planned or waiting in its lane finishes at once and
+    /// never starts, and a running one stops at its copy's next block or before its next item.
+    /// Items finished stay. Does nothing to an operation that has finished.
     public func cancel(_ id: ID) {
         guard let entry = unfinished(id), !entry.control.isCancelled else { return }
         entry.control.cancel()
         entry.copier.cancel()
         if let index = waiting.firstIndex(of: id) {
             waiting.remove(at: index)
+            finish(entry, as: .cancelled(leftBehind: nil))
+        } else if entry.phase == .preparing {
+            // Its plan may be stuck in a read on a share that stopped answering; whatever it
+            // returns later is dropped.
             finish(entry, as: .cancelled(leftBehind: nil))
         }
     }
@@ -174,25 +179,23 @@ public actor FileOperationQueue {
         let operation = entry.operation
         let control = entry.control
         let fileSystem = fileSystem
-        let plan: OperationPlan
-        do {
-            plan = try await BlockingCallThread.run {
+        let planned = await BlockingCallThread.run {
+            Result {
                 try OperationPlan.make(
                     for: operation, volumeOf: fileSystem.volumeOf, measure: fileSystem.measure,
                     isCancelled: { control.isCancelled })
             }
+        }
+        // A cancel while the plan ran finished the operation already.
+        guard !entry.phase.isFinished else { return }
+        let plan: OperationPlan
+        do {
+            plan = try planned.get()
         } catch let refusal as OperationState.Refusal {
             finish(entry, as: .refused(refusal))
             return
-        } catch is CancellationError {
-            finish(entry, as: .cancelled(leftBehind: nil))
-            return
         } catch {
             preconditionFailure("planning \(operation) threw \(error)")
-        }
-        if control.isCancelled {
-            finish(entry, as: .cancelled(leftBehind: nil))
-            return
         }
         entry.plan = plan
         entry.errors = plan.failures
@@ -203,13 +206,16 @@ public actor FileOperationQueue {
             start(entry)
         } else {
             entry.phase = .queued
-            waiting.append(id)
+            // In the order queued, so a later operation whose plan finished first doesn't go
+            // ahead of an earlier one already waiting.
+            waiting.insert(id, at: waiting.firstIndex { $0 > id } ?? waiting.endIndex)
             changed()
             startWaiting()
         }
     }
 
-    /// Starts each waiting operation whose lane is free, in the order queued.
+    /// Starts each waiting operation whose lane is free, in the order queued. An operation
+    /// still being planned isn't waiting yet, so one queued after it can start first.
     private func startWaiting() {
         for id in waiting {
             guard let entry = unfinished(id), let lane = entry.plan?.lane else {
@@ -225,8 +231,33 @@ public actor FileOperationQueue {
     private func start(_ entry: Entry) {
         entry.phase = .running
         changed()
+        startTicking()
         let id = entry.id
         Task { await self.run(id) }
+    }
+
+    /// While an operation runs, checks once per `snapshotInterval` whether a copy moved and
+    /// sends a snapshot if one did. Stops when nothing is running.
+    private func startTicking() {
+        guard !isTicking else { return }
+        isTicking = true
+        let sleepUntil = sleepUntil
+        var next = elapsed() + Self.snapshotInterval
+        Task {
+            while true {
+                do {
+                    try await sleepUntil(next)
+                } catch {
+                    preconditionFailure("the progress ticker was cancelled: \(error)")
+                }
+                next += Self.snapshotInterval
+                guard self.entries.contains(where: { $0.phase == .running }) else {
+                    self.isTicking = false
+                    return
+                }
+                if self.entries.contains(where: { $0.control.hasMoved }) { self.changed() }
+            }
+        }
     }
 
     private func run(_ id: ID) async {
@@ -248,8 +279,9 @@ public actor FileOperationQueue {
                 Self.perform(
                     item, of: operation, fileSystem: fileSystem, copier: copier, control: control
                 ) { progress in
+                    // The ticker reads it; a call into the actor per report would be one every
+                    // 0.5 ms at full speed.
                     control.live = progress
-                    Task { await self.changed() }
                 }
             }
             entry.control.live = CopyProgress(bytes: 0, files: 0)
@@ -394,19 +426,25 @@ public actor FileOperationQueue {
 
     /// A path `operation` would change that an unfinished operation reads or changes, or one
     /// it reads that an unfinished operation changes. Paths overlap when one is at or under the
-    /// other.
+    /// other, compared as `FileOperation.comparable` gives them.
     private func pathInUse(by operation: FileOperation) -> String? {
-        let reads = operation.reads
-        let changes = operation.changes
+        let reads = operation.reads.map { ($0, FileOperation.comparable($0)) }
+        let changes = operation.changes.map { ($0, FileOperation.comparable($0)) }
         for other in entries where !other.phase.isFinished {
-            let theirChanges = other.operation.changes
-            let theirUses = other.operation.reads + theirChanges
-            if let path = changes.first(where: { Self.overlap($0, theirUses) }) { return path }
-            if let path = reads.first(where: { Self.overlap($0, theirChanges) }) { return path }
+            let theirChanges = other.operation.changes.map(FileOperation.comparable)
+            let theirUses = other.operation.reads.map(FileOperation.comparable) + theirChanges
+            if let path = changes.first(where: { Self.overlap($0.1, theirUses) }) {
+                return path.0
+            }
+            if let path = reads.first(where: { Self.overlap($0.1, theirChanges) }) {
+                return path.0
+            }
         }
         return nil
     }
 
+    /// Whether `path` is at or under one of `others`, or one of them is under it. All are
+    /// comparable forms.
     private static func overlap(_ path: String, _ others: [String]) -> Bool {
         others.contains { isPath(path, atOrUnder: $0) || isPath($0, atOrUnder: path) }
     }
@@ -437,6 +475,8 @@ public actor FileOperationQueue {
     private func sendSnapshot() {
         snapshotIsDue = false
         lastSnapshot = elapsed()
+        // Cleared before the read, so a report after it is sent on the next tick.
+        for entry in entries { entry.control.markSent() }
         let snapshots = entries.map(snapshot(of:))
         entries.removeAll { $0.phase.isFinished }
         onChange(snapshots)
@@ -504,12 +544,25 @@ public actor FileOperationQueue {
         private var paused = false
         private var cancelled = false
         private var current = CopyProgress(bytes: 0, files: 0)
+        private var moved = false
 
         var isCancelled: Bool { condition.withLock { cancelled } }
 
         var live: CopyProgress {
             get { condition.withLock { current } }
-            set { condition.withLock { current = newValue } }
+            set {
+                condition.withLock {
+                    current = newValue
+                    moved = true
+                }
+            }
+        }
+
+        /// `live` changed since the last snapshot.
+        var hasMoved: Bool { condition.withLock { moved } }
+
+        func markSent() {
+            condition.withLock { moved = false }
         }
 
         func pause() {

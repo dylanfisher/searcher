@@ -1,4 +1,4 @@
-# 00XX. Operation queue: a lane per destination volume, refusals by path, snapshots every 100 ms
+# 0065. Operation queue: a lane per destination volume, refusals by path, snapshots every 100 ms
 
 - **Date:** 2026-10-22
 - **Status:** accepted
@@ -28,11 +28,17 @@ that didn't happen.
   lane of the volume it copies to, keyed by `VolumeIdentity`, and a lane runs one operation at a
   time. Lanes run in parallel. A move is judged per item by the volume of the item's parent
   folder, read once per folder: one `statfs` per folder, not per item, on a share.
+- **Lane order.** A lane starts its waiting operations in the order queued. An operation joins
+  the lane only once its plan is done, so one still planning, such as a slow pre-scan or a read
+  stuck on a share, can be overtaken by one queued after it.
 - **Beside the lanes.** Rename, new folder, trash, delete immediately, and a move within one
   volume run as soon as they are planned, since each is one quick call per item.
 - **Refusal by path.** An operation is refused at once, with the path, if it would change a path
   that an unfinished operation reads or changes, or read one an unfinished operation changes.
-  Paths clash when one is at or under the other. Copies read their sources and change their
+  Paths clash when one is at or under the other, compared without case, with Unicode
+  normalized and without trailing slashes (`FileOperation.comparable`), as APFS compares names
+  by default. The into-itself check compares the same way. On a case-sensitive volume this can
+  refuse two different items, which is the safe side. Copies read their sources and change their
   destinations; moves, renames, trashes and deletes change both ends. Two copies of one item to
   two places both only read it, so they run together. A duplicate's and a new folder's names
   are picked when they run, so those names are not checked.
@@ -45,13 +51,18 @@ that didn't happen.
 - **Cancel says what it left.** `cancelled(leftBehind:)` carries the error `FileCopier` threw
   when it couldn't remove a cancelled partial item, with that item's path; nil means nothing of
   it is left. A cancel after an item's copy has finished lets that item's source delete finish.
+- **Cancel while planning.** A cancel finishes an operation still being planned at once: it
+  never takes a lane, and whatever its plan thread returns later, perhaps minutes later from a
+  `statfs` on a share that stopped answering, is dropped.
 - **File totals.** `TreeSizeWalker.Total.files` counts every entry that isn't a folder:
   files, symlinks and the rest. That is what `FileCopier` counts, so "N of M files" ends at M.
   `OperationPlan.measure` counts a single file or symlink as one.
 - **Snapshots.** The observer gets every operation's state at most once per 100 ms
   (`snapshotInterval`): the first change at once, later ones when the interval is up, so the last
-  state always arrives. A finished operation is in one snapshot and then leaves the list. The
-  copied bytes include the item being copied. Each operation's `onFinish` gets its final state at
+  state always arrives. A finished operation is in one snapshot and then leaves the list, and
+  nothing is sent once nothing is left. The copied bytes include the item being copied: the copy
+  thread only stores its latest progress, and while anything runs the queue checks it once per
+  interval, so `copyfile`'s report every 0.5 ms never calls into the actor. Each operation's `onFinish` gets its final state at
   once, outside the limit. Time comes from an injected `Clock`.
 - **Pause.** A paused copy holds in `FileCopier`'s callback; other work holds before its next
   item. A paused operation keeps its lane.
@@ -61,9 +72,13 @@ that didn't happen.
 - **Count only regular files in the copier** — rejected: a symlink is an item the copy makes and
   Finder counts it, and the copier's count already included it; the walker counted no files,
   so it changed either way.
-- **Lanes in the order queued** — rejected for now: an operation's lane is known only once its
-  volume is read, so keeping queue order means a plan stuck on a hung share holds back copies to
-  every other volume. Operations join their lane in the order their plans finish.
+- **Strict queue order, plans included** — rejected: an operation's lane is known only once its
+  volume is read, so waiting for every earlier plan means a plan stuck on a hung share holds back
+  copies to every other volume.
+- **Lanes in the order plans finish** — rejected: two copies queued one after the other to one
+  disk would start in either order.
+- **Case-sensitive path checks** — rejected: on APFS `/A/Album` and `/a/album` are one folder,
+  so a rename or a copy into itself spelled with other case would slip through.
 - **Every operation in a lane** — rejected: a rename would wait behind a 20-minute copy to the
   same disk, and it takes one call.
 - **Refuse by lane, not by path** — rejected: it refuses a rename anywhere on a busy disk and
@@ -76,8 +91,10 @@ that didn't happen.
 ## Consequences
 
 Each operation's planning has its own thread, so a hundred queued copies plan at once with a
-hundred threads; nothing bounds that yet. A queued copy whose pre-scan is slow can start after a
-later one to the same disk. A refused operation names the path, and Interface words the message.
+hundred threads, and a cancelled plan stuck on a dead share keeps its thread until the call
+returns; nothing bounds either yet, which M4.4b (unmount) and M4.5 (commands that queue many
+operations) should weigh. A queued copy whose pre-scan is slow can start after a later one to
+the same disk. A refused operation names the path, and Interface words the message.
 Each item runs on a thread of its own, about 50 ms of thread starts for a 1,000-item trash.
 `Trasher.deletePermanently` now has a second caller, the cross-volume move, as its doc says.
 Operations on paths reached through a link aren't matched by the refusal check, as 0049's panes
