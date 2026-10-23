@@ -308,6 +308,8 @@ public actor FileOperationQueue {
             let unfinished = entries.filter { !$0.phase.isFinished }
             guard !unfinished.isEmpty else { return }
             for entry in unfinished { cancel(entry.id) }
+            // A cancel finishes one not yet running at once, before a waiter is there to wake.
+            guard entries.contains(where: { !$0.phase.isFinished }) else { return }
             await waitForChange()
         }
     }
