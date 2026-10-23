@@ -23,6 +23,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// Fills the Quick Look panel while this list controls it.
     let quickLook: QuickLookController
     public let pane: Pane
+    /// Edits the selected entry's name over its row, for Rename.
+    private(set) lazy var renameField = RenameFieldController(list: self)
 
     /// The rows on screen: the pane's listing when `paneDidChange` last ran; nil while it has none.
     public private(set) var listing: Listing?
@@ -103,6 +105,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         defer {
             isShowingPane = false
             quickLook.paneDidChange()
+            renameField.paneDidChange()
         }
         if tableSort != (pane.sortColumn, pane.sortAscending) {
             tableView.sortDescriptors = [
@@ -230,6 +233,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         }
         let height = scrollView.documentVisibleRect.height - (header ?? 0)
         pane.visibleRowCount = max(Int(height / pitch), 0)
+        renameField.layout()
     }
 
     // MARK: Quick Look
@@ -282,6 +286,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         tableView.delegate = self
         tableView.target = self
         tableView.doubleAction = #selector(openClickedRow(_:))
+        tableView.didRunCommand = { [weak self] id in self?.renameField.tableDidRun(id) }
     }
 
     private static func tableColumn(for column: SortColumn) -> NSTableColumn {
@@ -497,7 +502,22 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             guard let cell = rowView.view(atColumn: index) as? NSTableCellView else { return }
             Self.fitName(in: cell)
         }
+        renameField.layout()
     }
+
+    /// Where `row`'s name is drawn, in the table's coordinates: the Name column after the icon.
+    func nameFrame(atRow row: Int) -> NSRect {
+        let column = tableView.column(withIdentifier: SortColumn.name.identifier)
+        precondition(column >= 0, "the table has no Name column")
+        let cell = tableView.frameOfCell(atColumn: column, row: row)
+        return NSRect(
+            x: cell.minX + Self.nameX, y: cell.minY,
+            width: max(cell.width - Self.nameX - 2, 0), height: cell.height)
+    }
+
+    /// The icon's side in the Name column, and where the name starts after it.
+    private static let iconSize = 16.0
+    private static let nameX = 2 + iconSize + 4
 
     /// The space between a name and its badge.
     private static let badgeGap = 4.0
@@ -509,7 +529,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         cell.identifier = column.identifier
         var textX = 2.0
         if column == .name {
-            let iconSize = 16.0
+            let iconSize = Self.iconSize
             let imageView = NSImageView(
                 frame: NSRect(x: 2, y: (height - iconSize) / 2, width: iconSize, height: iconSize))
             imageView.imageScaling = .scaleProportionallyUpOrDown
@@ -518,7 +538,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             imageView.setAccessibilityElement(false)
             cell.addSubview(imageView)
             cell.imageView = imageView
-            textX = imageView.frame.maxX + 4
+            textX = Self.nameX
         }
         let textField = NSTextField(labelWithString: "")
         textField.lineBreakMode = column == .name ? .byTruncatingMiddle : .byTruncatingTail

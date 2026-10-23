@@ -66,7 +66,7 @@ public enum UniqueName {
     }
 
     /// The name's base and its extension, if a declared type has that extension.
-    private static func split(_ name: String) -> (base: String, pathExtension: String?) {
+    public static func split(_ name: String) -> (base: String, pathExtension: String?) {
         let pathExtension = (name as NSString).pathExtension
         guard !pathExtension.isEmpty,
             UTType(filenameExtension: pathExtension, conformingTo: .item)?.isDeclared == true
