@@ -41,7 +41,7 @@ final class OperationRowView: NSView {
         let old = phase
         phase = state.phase
         titleLabel.stringValue = Self.title(of: snapshot.operation)
-        detailLabel.stringValue = detail(of: state)
+        detailLabel.stringValue = detail(of: snapshot)
         showBar(state)
         guard state.phase != old else { return }
         // A copy sends a snapshot every 100 ms; the buttons change only with the phase.
@@ -94,7 +94,7 @@ final class OperationRowView: NSView {
             "Drop from \(app) into \(quoted(folder))"
         case .receive(nil, nil, let folder):
             "Drop into \(quoted(folder))"
-        case .undo(_, let title):
+        case .undo(_, let title, _):
             title
         }
     }
@@ -109,14 +109,18 @@ final class OperationRowView: NSView {
         "“\(Location(path: path).name)”"
     }
 
-    private func detail(of state: OperationState) -> String {
-        switch state.phase {
+    private func detail(of snapshot: FileOperationQueue.Snapshot) -> String {
+        let state = snapshot.state
+        return switch state.phase {
         case .queued: "Waiting for other copies to this disk"
         case .preparing: "Preparing…"
         case .waitingForAnswer: "Waiting for an answer"
         case .running: progress(state.progress)
         case .paused: "Paused, \(progress(state.progress))"
         case .done: "Done"
+        case .failed where FileOperation.dropsUndoEntry(snapshot.operation, after: state):
+            // An undo that can't clear by trying again is dropped from the Edit menu.
+            String(Self.failure(state.errors).dropLast()) + ", so this undo is dropped."
         case .failed: Self.failure(state.errors)
         case .refused(.inUse(let path)):
             "Not started: another operation is using “\(path)”."

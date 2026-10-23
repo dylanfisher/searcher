@@ -487,6 +487,28 @@ private func stopEverything(_ windows: WorkspaceWindows) async {
     await stopEverything(fixture.windows)
 }
 
+/// A press of Undo queues its operation only at its turn, so quitting asks while one is pending.
+@MainActor @Test func quittingRightAfterCmdZAsks() async throws {
+    let fixture = try await Fixture()
+    let history = fixture.windows.undoHistory
+    history.record(
+        .rename("/root/a.txt", to: "b.txt"),
+        OperationState(
+            phase: .done,
+            progress: OperationState.Progress(
+                itemsDone: 1, itemCount: 1, copied: CopyProgress(bytes: 0, files: 0), total: nil),
+            errors: [],
+            record: OperationRecord(changes: [.moved(from: "/root/a.txt", to: "/root/b.txt")])),
+        id: FileOperationQueue.ID(-1))
+
+    let undo = history.undo(with: fixture.windows.fileOperations)
+
+    let alert = try #require(fixture.windows.quitAlert())
+    #expect(alert.messageText == "Quit while an undo is waiting to run?")
+    _ = await undo.value
+    await stopEverything(fixture.windows)
+}
+
 /// The other-pane confirm is asked before anything is queued, so only the sheet shows it.
 @MainActor @Test func quittingWithAQuestionShowingAsksAndCancelLeavesItShowing() async throws {
     let fixture = try await Fixture()

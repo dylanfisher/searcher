@@ -117,6 +117,10 @@ public final class WorkspaceWindows {
         let message: String
         let information: String
         switch count {
+        case 0 where undoHistory.isBusy:
+            // A press of Undo or Redo queues its operation only at its turn.
+            message = "Quit while an undo is waiting to run?"
+            information = "Quitting cancels it."
         case 0:
             guard prompter.shown != nil || prompter.waitingCount > 0 else { return nil }
             message = "Quit while a file operation waits for an answer?"

@@ -72,6 +72,9 @@ public struct OperationPlan: Equatable, Sendable {
     /// reads the file system. Blocks while it reads, so it runs on a
     /// `BlockingCallThread`.
     ///
+    /// `copies` is called once the volumes show the operation copies, before any pre-scan, so
+    /// an undo pressed meanwhile doesn't wait for it.
+    ///
     /// - Throws: `OperationState.Refusal`, or `CancellationError` once `isCancelled` returns true.
     static func make(
         for operation: FileOperation,
@@ -79,7 +82,8 @@ public struct OperationPlan: Equatable, Sendable {
         measure: (String, () -> Bool) throws -> TreeSizeWalker.Total,
         inspect: (String) throws(FileOperationError) -> ConflictRequest.Item?,
         identify: FileOperationQueue.Identifier,
-        isCancelled: @escaping () -> Bool
+        isCancelled: @escaping () -> Bool,
+        copies: () -> Void
     ) throws -> OperationPlan {
         switch operation {
         case .copy(let sources, let folder), .move(let sources, let folder):
@@ -89,7 +93,7 @@ public struct OperationPlan: Equatable, Sendable {
             let isMove = if case .move = operation { true } else { false }
             return try transfer(
                 sources, into: folder, isMove: isMove, volumeOf: volumeOf, measure: measure,
-                inspect: inspect, isCancelled: isCancelled)
+                inspect: inspect, isCancelled: isCancelled, copies: copies)
         case .duplicate(let sources):
             guard let first = sources.first else { return empty }
             let parent = (first as NSString).deletingLastPathComponent
@@ -135,11 +139,11 @@ public struct OperationPlan: Equatable, Sendable {
                         source: folder, destination: nil, size: nil, crossesVolumes: false,
                         conflict: nil)
                 ], lane: nil, failures: [])
-        case .undo(let record, _):
+        case .undo(let record, _, _):
             return try undoing(
                 FileOperation.steps(undoing: record), identities: record.identities,
                 volumeOf: volumeOf, measure: measure, inspect: inspect, identify: identify,
-                isCancelled: isCancelled)
+                isCancelled: isCancelled, copies: copies)
         }
     }
 
@@ -153,7 +157,7 @@ public struct OperationPlan: Equatable, Sendable {
         volumeOf: (String) throws(ListingError) -> VolumeIdentity,
         measure: (String, () -> Bool) throws -> TreeSizeWalker.Total,
         inspect: (String) throws(FileOperationError) -> ConflictRequest.Item?,
-        isCancelled: @escaping () -> Bool
+        isCancelled: @escaping () -> Bool, copies: () -> Void
     ) throws -> OperationPlan {
         let destination: VolumeIdentity
         do {
@@ -182,6 +186,7 @@ public struct OperationPlan: Equatable, Sendable {
             }
             var size: TreeSizeWalker.Total?
             if crosses || !isMove {
+                copies()
                 switch try measured(source, measure: measure, isCancelled: isCancelled) {
                 case .success(let measured): size = measured
                 case .failure(let error):
@@ -225,7 +230,7 @@ public struct OperationPlan: Equatable, Sendable {
         measure: (String, () -> Bool) throws -> TreeSizeWalker.Total,
         inspect: (String) throws(FileOperationError) -> ConflictRequest.Item?,
         identify: FileOperationQueue.Identifier,
-        isCancelled: @escaping () -> Bool
+        isCancelled: @escaping () -> Bool, copies: () -> Void
     ) throws -> OperationPlan {
         // Whether a path holds an item once the earlier steps have run, by comparable path.
         var after: [String: Bool] = [:]
@@ -331,6 +336,7 @@ public struct OperationPlan: Equatable, Sendable {
                 break
             }
             if let copied {
+                copies()
                 switch try measured(copied, measure: measure, isCancelled: isCancelled) {
                 case .success(let measured): size = measured
                 case .failure(let error):
@@ -387,12 +393,11 @@ public struct OperationPlan: Equatable, Sendable {
     }
 
     /// An identifier for one operation, or nil when nothing is at the path. On a volume with
-    /// `VOL_CAP_FMT_PERSISTENTOBJECTIDS` and a UUID: the UUID, the inode and the birth time.
-    /// Elsewhere, as on FAT and exFAT, which make inodes up, and shares without a UUID: a
-    /// fingerprint from the same `lstat`; an item there without a birth time throws, so its
-    /// operation can't be undone. What each volume reports is read once per operation, by
-    /// `st_dev`, which holds while the operation runs. Symlinks aren't followed. Blocks the
-    /// calling thread, which must be a `BlockingCallThread`.
+    /// `VOL_CAP_FMT_PERSISTENTOBJECTIDS` and a UUID: the UUID and the inode. Elsewhere, as on
+    /// FAT and exFAT, which make inodes up, and shares without a UUID: a fingerprint from the
+    /// same `lstat` (`identity(of:volume:)`). What each volume reports is read once per
+    /// operation, by `st_dev`, which holds while the operation runs. Symlinks aren't followed.
+    /// Blocks the calling thread, which must be a `BlockingCallThread`.
     static func identifier() -> FileOperationQueue.Identifier {
         let volumes = VolumeUUIDs()
         return { path throws(FileOperationError) in
@@ -402,21 +407,20 @@ public struct OperationPlan: Equatable, Sendable {
                 if errno == ENOENT { return nil }
                 throw FileOperationError(errno: errno, path: path)
             }
-            let born = nanoseconds(info.st_birthtimespec)
-            if let volume = try volumes.uuid(of: info.st_dev, holding: path) {
-                return .persistent(volume: volume, inode: UInt64(info.st_ino), born: born)
-            }
-            // Zero is what a file system without birth times reports.
-            guard born > 0 else {
-                throw FileOperationError(reason: .other, path: path, errno: nil)
-            }
-            let type = info.st_mode & S_IFMT
-            let isFolder = type == S_IFDIR
-            return .fingerprint(
-                type: type, born: born,
-                modified: isFolder ? nil : nanoseconds(info.st_mtimespec),
-                size: isFolder ? nil : Int64(info.st_size))
+            return identity(of: info, volume: try volumes.uuid(of: info.st_dev, holding: path))
         }
+    }
+
+    /// The identity `info`, an `lstat` of an item, gives on `volume`, the UUID of a volume
+    /// whose IDs persist, or nil for one whose don't.
+    static func identity(of info: stat, volume: String?) -> OperationRecord.ItemIdentity {
+        if let volume { return .persistent(volume: volume, inode: UInt64(info.st_ino)) }
+        let type = UInt16(info.st_mode & S_IFMT)
+        let born = nanoseconds(info.st_birthtimespec)
+        // Zero is what a file system without birth times reports.
+        guard born == 0 else { return .fingerprint(type: type, born: born) }
+        return .fingerprintWithoutBirthTime(
+            type: type, modified: nanoseconds(info.st_mtimespec), size: Int64(info.st_size))
     }
 
     private static func nanoseconds(_ time: timespec) -> Int64 {

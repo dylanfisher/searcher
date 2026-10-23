@@ -19,7 +19,10 @@ private final class Reads: @unchecked Sendable {
     private let lock = NSLock()
     private var volumes: [String] = []
     private var measured: [String] = []
+    private var copied: [Int] = []
 
+    /// For each call of the plan's `copies`, how many pre-scans had run.
+    var copiesAfter: [Int] { lock.withLock { copied } }
     var volumeReads: [String] { lock.withLock { volumes } }
     var measures: [String] { lock.withLock { measured } }
 
@@ -39,7 +42,8 @@ private final class Reads: @unchecked Sendable {
             },
             inspect: { _ throws(FileOperationError) in nil },
             identify: { _ throws(FileOperationError) in nil },
-            isCancelled: { false })
+            isCancelled: { false },
+            copies: { self.lock.withLock { self.copied.append(self.measured.count) } })
     }
 }
 
@@ -190,4 +194,62 @@ func intoItselfIgnoresCaseAndTrailingSlashes(source: String, into folder: String
             try OperationPlan.VolumeUUIDs().uuid(of: 0, holding: path)
         }
     }
+}
+
+/// A move to another volume says it copies once the volumes are read and before its pre-scan,
+/// which can take minutes, so an undo pressed meanwhile doesn't wait for it; a move within one
+/// volume never says so.
+@Test func aMoveToAnotherVolumeSaysItCopiesBeforeItsPreScan() throws {
+    let across = Reads()
+    _ = try across.plan(.move(["/L/a", "/L/b"], into: "/O/in"))
+    #expect(across.copiesAfter.first == 0)
+    #expect(across.measures == ["/L/a", "/L/b"])
+
+    let within = Reads()
+    _ = try within.plan(.move(["/L/a"], into: "/L/in"))
+    #expect(within.copiesAfter.isEmpty)
+}
+
+/// On APFS, which keeps object IDs, an item is known by its volume's UUID and its inode, read
+/// with `lstat` and the volume's resource values; nothing at the path reads nil.
+@Test func theIdentifierReadsTheVolumeUUIDAndInodeWhereIDsPersist() async throws {
+    let folder = try TemporaryFolder("OperationPlanTests")
+    let path = folder.url.path + "/a.txt"
+    try Data("a".utf8).write(to: URL(fileURLWithPath: path))
+    var info = stat()
+    #expect(lstat(path, &info) == 0)
+    let uuid = try #require(
+        URL(fileURLWithPath: path).resourceValues(forKeys: [.volumeUUIDStringKey])
+            .volumeUUIDString)
+
+    let (identity, missing) = try await BlockingCallThread.run {
+        () throws(FileOperationError) in
+        let identify = OperationPlan.identifier()
+        return (try identify(path), try identify(path + ".missing"))
+    }
+
+    #expect(identity == .persistent(volume: uuid, inode: UInt64(info.st_ino)))
+    #expect(missing == nil)
+}
+
+/// Where IDs don't persist, an item is known by its type and birth time, so editing it in
+/// place keeps it the same item; with no birth time, by its type, modification time and size.
+@Test func aFingerprintIsTheTypeAndBirthTimeOrWithoutOneTheTimeAndSize() {
+    var info = stat()
+    info.st_mode = S_IFREG | 0o644
+    info.st_birthtimespec = timespec(tv_sec: 1_000, tv_nsec: 5)
+    info.st_mtimespec = timespec(tv_sec: 2_000, tv_nsec: 7)
+    info.st_size = 42
+
+    #expect(
+        OperationPlan.identity(of: info, volume: nil)
+            == .fingerprint(type: UInt16(S_IFREG), born: 1_000_000_000_005))
+    #expect(
+        OperationPlan.identity(of: info, volume: "V")
+            == .persistent(volume: "V", inode: UInt64(info.st_ino)))
+    info.st_birthtimespec = timespec(tv_sec: 0, tv_nsec: 0)
+    #expect(
+        OperationPlan.identity(of: info, volume: nil)
+            == .fingerprintWithoutBirthTime(
+                type: UInt16(S_IFREG), modified: 2_000_000_000_007, size: 42))
 }

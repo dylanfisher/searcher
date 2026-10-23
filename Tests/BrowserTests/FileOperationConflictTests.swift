@@ -501,7 +501,7 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
             return path == "/A/new" ? nil : FakeFiles.item(path)
         },
         identify: { _ throws(FileOperationError) in nil },
-        isCancelled: { false })
+        isCancelled: { false }, copies: {})
 
     #expect(inspected == ["/A/album", "/S/album", "/A/new"])
     #expect(

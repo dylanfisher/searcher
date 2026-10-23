@@ -25,6 +25,7 @@ final class FakeFiles: @unchecked Sendable {
     private var placed: [String: ConflictRequest.Item] = [:]
     private var hasNoTrash = false
     private var heldScans: Set<String> = []
+    private var heldVolumes: Set<String> = []
     private var released: Set<String> = []
     private var allReleased = false
     private var copyFailures: [String: FileOperationError] = [:]
@@ -83,6 +84,19 @@ final class FakeFiles: @unchecked Sendable {
         condition.withLock { _ = finishesDespiteCancel.insert(source) }
     }
 
+    /// Reading the volume of `path` waits until it is let go, as on a share that stopped
+    /// answering.
+    func holdVolume(of path: String) {
+        condition.withLock { _ = heldVolumes.insert(path) }
+    }
+
+    func letVolumeGo(of path: String) {
+        condition.withLock {
+            heldVolumes.remove(path)
+            condition.broadcast()
+        }
+    }
+
     func holdScan(of path: String) {
         condition.withLock { _ = heldScans.insert(path) }
     }
@@ -110,7 +124,7 @@ final class FakeFiles: @unchecked Sendable {
 
     /// What the identifier reads for a path without its own identity or failure: the files
     /// don't track items as they move, so every path has the same one.
-    static let identity = OperationRecord.ItemIdentity.persistent(volume: "fake", inode: 0, born: 1)
+    static let identity = OperationRecord.ItemIdentity.persistent(volume: "fake", inode: 0)
 
     /// The identifier reads `identity` at `path`.
     func identify(_ path: String, as identity: OperationRecord.ItemIdentity) {
@@ -151,7 +165,13 @@ final class FakeFiles: @unchecked Sendable {
     func fileSystem() -> FileOperationQueue.FileSystem {
         FileOperationQueue.FileSystem(
             volumeOf: { path throws(ListingError) in
-                let volumes = self.condition.withLock { self.volumes }
+                let volumes = self.condition.withLock {
+                    if self.heldVolumes.contains(path) {
+                        self.events.append("holding volume \(path)")
+                    }
+                    while self.heldVolumes.contains(path) { self.condition.wait() }
+                    return self.volumes
+                }
                 for volume in volumes where isPath(path, atOrUnder: volume.mountPoint) {
                     return volume
                 }
@@ -984,37 +1004,38 @@ private func cancelAllFinishesAtOnce(_ queue: FileOperationQueue) async -> Bool 
     #expect(watcher.state(of: asking)?.phase == .cancelled(leftBehind: nil))
 }
 
-/// An undo reads `finishedCount` first. It waits for an operation queued before the press that
-/// takes milliseconds, a move still planning included, and not for one that copies, which it
-/// lists as skipped (docs/decisions/0072-undo.md).
-@Test func finishedCountWaitsOnlyForOperationsThatTakeMilliseconds() async throws {
+/// A press marks the queue: a copy, and a move to another volume still in its pre-scan, are
+/// skipped; a move within a volume still being planned is awaited, and `finishedCount` waits
+/// for it until it finishes or `pressWait` passes on the queue's clock.
+@Test(.timeLimit(.minutes(1))) func aPressWaitsOnlyForOperationsThatTakeMilliseconds()
+    async throws
+{
     let files = FakeFiles()
     let watcher = Watcher()
-    let queue = makeQueue(files, watcher)
+    let clock = ManualClock()
+    let queue = makeQueue(files, watcher, clock: clock)
     let copy = await enqueue(queue, .copy(["/S/album"], into: "/A"), watcher)
-    #expect(await files.events.wait { $0.contains("copy /S/album") })
     files.holdScan(of: "/A/far")
-    let move = await enqueue(queue, .move(["/A/far"], into: "/B"), watcher)
+    let across = await enqueue(queue, .move(["/A/far"], into: "/B"), watcher)
     #expect(await files.events.wait { $0.contains("holding scan /A/far") })
-    let pressed = queue.submittedCount
-    let counts = EventLog<Int>()
-    let skipped = EventLog<Set<FileOperationQueue.ID>>()
+    files.holdVolume(of: "/A/in")
+    let within = await enqueue(queue, .move(["/A/near"], into: "/A/in"), watcher)
+    #expect(await files.events.wait { $0.contains("holding volume /A/in") })
 
-    Task {
-        let (finished, skips) = await queue.finishedCount(before: pressed)
-        skipped.append(skips)
-        counts.append(finished)
-    }
+    let mark = queue.markPress()
 
+    #expect(mark.skipped == [copy, across])
+    #expect(mark.awaited == [within])
+    let counts = EventLog<Set<FileOperationQueue.ID>>()
+    Task { counts.append(await queue.finishedCount(awaiting: mark.awaited).settled) }
     try await pause()
     #expect(counts.all.isEmpty)
+    clock.advance(by: FileOperationQueue.pressWait)
+    #expect(await counts.wait { $0 == [[within]] })
     files.letScanGo(of: "/A/far")
-    // Planned, the move copies to another volume and waits in its lane, so it no longer holds.
-    #expect(await counts.wait { !$0.isEmpty })
-    #expect(counts.all == [0])
-    #expect(skipped.all == [[copy, move]])
+    files.letVolumeGo(of: "/A/in")
     files.releaseAll()
-    #expect(await watcher.waitUntilFinished(copy, move))
+    #expect(await watcher.waitUntilFinished(copy, across, within))
 }
 
 /// Quitting reads `unfinishedCount` the moment Cmd-Q is pressed, before any snapshot of a copy
