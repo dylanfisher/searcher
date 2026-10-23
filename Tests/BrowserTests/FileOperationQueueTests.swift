@@ -30,6 +30,7 @@ final class FakeFiles: @unchecked Sendable {
     private var moveFailures: [String: FileOperationError] = [:]
     private var finishesDespiteCancel: Set<String> = []
     private var progressSteps = 0
+    private var contents: [String: [String]] = [:]
 
     init(releasingAll: Bool = false) {
         allReleased = releasingAll
@@ -96,6 +97,11 @@ final class FakeFiles: @unchecked Sendable {
         condition.withLock { placed[path] = Self.item(path, isFolder: isFolder) }
     }
 
+    /// Puts items named `names` in `folder`, for a listing of it.
+    func put(_ names: [String], in folder: String) {
+        condition.withLock { contents[folder] = names }
+    }
+
     /// Makes every volume one without a trash: a trash throws `noTrash`.
     func removeTrash() {
         condition.withLock { hasNoTrash = true }
@@ -159,6 +165,13 @@ final class FakeFiles: @unchecked Sendable {
                 self.events.append("inspect \(path)")
                 if let item = self.condition.withLock({ self.placed[path] }) { return item }
                 return isPath(path, atOrUnder: "/S") ? Self.item(path) : nil
+            },
+            listNames: { folder throws(FileOperationError) in
+                self.events.append("list \(folder)")
+                return self.condition.withLock { self.contents[folder] ?? [] }
+            },
+            removeEmptyFolder: { folder throws(FileOperationError) in
+                self.events.append("remove folder \(folder)")
             })
     }
 
@@ -665,5 +678,90 @@ extension FileOperationQueue.Prompts {
         confirm: { request in
             Issue.record("unexpected confirm \(request)")
             return false
+        })
+}
+
+// MARK: Drop folders
+
+@Test func aDropFolderIsMadeHiddenInTheTargetAndRemovedWhenEmpty() async throws {
+    let files = FakeFiles()
+    let queue = makeQueue(files, Watcher())
+
+    let dropFolder = try await queue.makeDropFolder(in: "/A/photos")
+    let name = (dropFolder.path as NSString).lastPathComponent
+    #expect(dropFolder.path == "/A/photos/" + name)
+    #expect(name.hasPrefix(FileOperationQueue.dropFolderPrefix))
+    #expect(await queue.removeDropFolder(dropFolder).isEmpty)
+
+    #expect(
+        files.events.all == [
+            "make folder /A/photos/\(name)", "list \(dropFolder.path)",
+            "remove folder \(dropFolder.path)",
+        ])
+}
+
+@Test func whatADropLeftInItsFolderGoesToTheTrashNotAway() async throws {
+    let files = FakeFiles()
+    let queue = makeQueue(files, Watcher())
+    let dropFolder = try await queue.makeDropFolder(in: "/A")
+    files.put(["skipped.jpg"], in: dropFolder.path)
+
+    #expect(await queue.removeDropFolder(dropFolder).isEmpty)
+
+    #expect(files.events.all.contains("trash \(dropFolder.path)/skipped.jpg"))
+    #expect(files.events.all.last == "remove folder \(dropFolder.path)")
+    #expect(!files.events.all.contains { $0.hasPrefix("delete ") })
+}
+
+@Test func withNoTrashADropFolderIsLeftAndTheFailureReturned() async throws {
+    let files = FakeFiles()
+    let queue = makeQueue(files, Watcher())
+    let dropFolder = try await queue.makeDropFolder(in: "/A")
+    files.put(["skipped.jpg"], in: dropFolder.path)
+    files.removeTrash()
+
+    let errors = await queue.removeDropFolder(dropFolder)
+
+    #expect(
+        errors == [
+            FileOperationError(
+                reason: .noTrash, path: dropFolder.path + "/skipped.jpg", errno: nil)
+        ])
+    #expect(!files.events.all.contains { $0.hasPrefix("remove folder") || $0.hasPrefix("delete ") })
+}
+
+@Test func pendingDropFoldersAreRemovedTogetherOnce() async throws {
+    let files = FakeFiles()
+    let queue = makeQueue(files, Watcher())
+    let first = try await queue.makeDropFolder(in: "/A")
+    let second = try await queue.makeDropFolder(in: "/B")
+    let removed = try await queue.makeDropFolder(in: "/A")
+    _ = await queue.removeDropFolder(removed)
+
+    #expect(await queue.removePendingDropFolders().isEmpty)
+    #expect(await queue.removePendingDropFolders().isEmpty)
+
+    let removals = files.events.all.filter { $0.hasPrefix("remove folder") }
+    #expect(
+        Set(removals) == Set([first, second, removed].map { "remove folder \($0.path)" }))
+    #expect(removals.count == 3)
+}
+
+@Test func aReportedFailureShowsAsAFinishedFailedOperation() async throws {
+    let watcher = Watcher()
+    let queue = makeQueue(FakeFiles(), watcher)
+    let error = FileOperationError(reason: .permissionDenied, path: "/A", errno: EACCES)
+    let operation = FileOperation.receive(name: nil, app: "Mail", into: "/A")
+
+    await queue.report(operation, errors: [error])
+
+    #expect(
+        await watcher.snapshots.wait { sent in
+            sent.contains { snapshots in
+                snapshots.contains {
+                    $0.operation == operation && $0.state.phase == .failed
+                        && $0.state.errors == [error]
+                }
+            }
         })
 }

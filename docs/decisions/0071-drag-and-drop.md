@@ -45,9 +45,24 @@ to a folder the receiver names. Cut and paste already read and write Finder's pa
   `FilePromiseReceiver` asks the queue for a hidden `.searcher-drop-<UUID>` folder in the target
   folder, calls the promises in to it (readers on an `OperationQueue`, off the main thread), and
   once every promised file has arrived or failed, moves the ones that arrived into the target as
-  one queued move, then has the queue delete the folder with anything left in it. Promises
-  always copy. A file that fails to arrive, and a failure to make or delete the folder, is
-  logged under the `drop` category.
+  one queued move. Promises always copy.
+- **A source that stops answering.** The receiver waits at most `FilePromiseReceiver.idleTimeout`,
+  60 s, for each next file, timed on an injected clock. When the wait ends, the files still
+  promised count as failed and the drop goes on with what arrived.
+- **Removing the folder.** The folder is an opaque `FileOperationQueue.DropFolder` that only
+  `makeDropFolder` makes, and the queue keeps the ones not yet removed, so `removeDropFolder` can't
+  be handed another path. An empty folder is removed. Anything left in it, a file the user
+  skipped in a conflict or one that arrived after the wait ended, goes to the Trash first, since
+  a promise, such as a file a browser made on demand, may not be made again. A failed trash,
+  such as on a volume with no Trash, leaves the folder where it is and is reported. When the app
+  quits, `applicationWillTerminate` removes the folders still pending the same way, off the main
+  thread, waiting at most 1 s.
+- **Failures show in the operations panel.** A folder the queue couldn't make (a read-only
+  target), a promised file that failed or never came, and a folder that couldn't be removed are
+  reported with `FileOperationQueue.report` as one failed `FileOperation.receive` row per drop,
+  with each error and its path, and logged under the `drop` category. The row is named after the
+  file when one file failed, else "Drop from <app>", the app active during the drop, which is the
+  one the drag came from. A source that stopped answering reads as "“<app>” stopped answering."
 - **Dragging out.** A row drags as one pasteboard item holding its file URL, a folder's ending in
   a slash, built from the listing (`ClipboardCommands.fileURL(of:in:)`,
   `PasteboardFileClipboard.item(for:)`), so starting a drag reads nothing from the disk. Unlike
@@ -70,14 +85,20 @@ to a folder the receiver names. Cut and paste already read and write Finder's pa
   item once per row.
 - **Make an alias for Command-Option, or copy instead** — rejected: aliases are not in the plan,
   and a copy would do something the keys didn't ask for.
+- **Delete what is left in the drop folder** — rejected: it would lose a file the user skipped,
+  and a source may not be able to make it again.
+- **Only log a failed promise** — rejected: AGENTS.md asks to fail loudly, and the log is out of
+  the user's sight.
 
 ## Consequences
 
 Paths are placed by their text: a path through a symlink or a firmlink takes the volume its text
 names, so a drag between `/Users/someone` and `/System/Volumes/Data/Users/someone` copies where
-Finder would move. A drop made in the moment between a mount and the table's next read copies
-from the new volume until the read lands. A promised file whose source never calls the reader
-leaves the drop waiting and its hidden folder in place until Searcher quits; the folder is not
-cleaned up at the next launch. Files a promise skipped, or the user answered skip for, are
-deleted with the hidden folder; the source app still has them. Undo of a drop is whatever undoes a
-queued copy or move.
+Finder would move. Two mount points that differ only by case, such as `/Volumes/Backup` and
+`/Volumes/backup`, compare equal, so a path on one can be placed on the other and a drop between
+them moves where Finder would copy; the queue still reads each item's real volume, so the move
+is done as a copy and a delete. A drop made in the moment between a mount and the table's next
+read copies from the new volume until the read lands. A promise that never answers holds its
+drop for 60 s; a file written after that lands in the hidden folder and goes to the Trash with
+it. A folder left by a crash, or by a quit that took longer than 1 s to remove it, isn't cleaned
+up at the next launch. Undo of a drop is whatever undoes a queued copy or move.

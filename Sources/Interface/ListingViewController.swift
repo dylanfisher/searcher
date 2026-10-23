@@ -488,9 +488,11 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             else {
                 preconditionFailure("a drop that offered file promises has none to read")
             }
+            // A drag leaves the app it came from active, so that names the source.
+            let app = NSWorkspace.shared.frontmostApplication?.localizedName
             Task { [pane = drop.pane, folder = drop.folder] in
                 await FilePromiseReceiver.receive(
-                    promises, into: folder, selectingIn: pane, queue: queue)
+                    promises, into: folder, from: app, selectingIn: pane, queue: queue)
             }
         }
         return true

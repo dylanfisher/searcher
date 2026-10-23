@@ -18,12 +18,17 @@ public enum FileOperation: Equatable, Sendable {
     /// Deletes each item without the Trash. Issued only after the user answered a
     /// delete-immediately question.
     case deleteImmediately([String])
+    /// Files a drop promised into the folder: the source app writes them and a `move` puts them
+    /// in place. `name` is the file's when one file is meant, and `app` the app the drop came
+    /// from when known. The queue never runs it; it only shows one that failed
+    /// (`FileOperationQueue.report`).
+    case receive(name: String?, app: String?, into: String)
 
     /// The paths it reads without changing, as known before it runs.
     var reads: [String] {
         switch self {
         case .copy(let sources, _), .duplicate(let sources): sources
-        case .move, .trash, .rename, .newFolder, .deleteImmediately: []
+        case .move, .trash, .rename, .newFolder, .deleteImmediately, .receive: []
         }
     }
 
@@ -39,7 +44,7 @@ public enum FileOperation: Equatable, Sendable {
             paths
         case .rename(let path, let name):
             [path, Self.renamed(path, to: name)]
-        case .newFolder, .duplicate:
+        case .newFolder, .duplicate, .receive:
             []
         }
     }

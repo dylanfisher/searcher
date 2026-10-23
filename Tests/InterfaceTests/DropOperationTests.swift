@@ -366,34 +366,58 @@ private final class PhotoPromiser: NSObject, NSFilePromiseProviderDelegate {
 }
 
 /// A promise that writes `name` into the folder it is called into from another thread, as a
-/// source app does, or fails.
+/// source app does, fails, or never answers.
 private final class StubPromise: FilePromiseReceiver.Promise, @unchecked Sendable {
-    let name: String
-    let fails: Bool
+    enum Outcome {
+        case writes, fails, hangs
+    }
 
-    init(_ name: String, fails: Bool = false) {
+    let name: String
+    let outcome: Outcome
+
+    init(_ name: String, _ outcome: Outcome = .writes) {
         self.name = name
-        self.fails = fails
+        self.outcome = outcome
     }
 
     func receive(
         into folder: URL, reader: @escaping @Sendable (URL, (any Error)?) -> Void
     ) -> Int {
         let url = folder.appending(path: name)
-        let fails = fails
-        DispatchQueue.global().async {
-            if fails {
-                reader(url, CocoaError(.userCancelled))
-                return
+        switch outcome {
+        case .hangs:
+            break
+        case .fails:
+            DispatchQueue.global().async {
+                reader(url, NSError(domain: NSPOSIXErrorDomain, code: Int(EIO)))
             }
-            do {
-                try Data("promised".utf8).write(to: url)
-                reader(url, nil)
-            } catch {
-                reader(url, error)
+        case .writes:
+            DispatchQueue.global().async {
+                do {
+                    try Data("promised".utf8).write(to: url)
+                    reader(url, nil)
+                } catch {
+                    reader(url, error)
+                }
             }
         }
         return 1
+    }
+}
+
+extension Fixture {
+    /// The last state of each drop failure the queue reported.
+    var reportedFailures: [(FileOperation, OperationState)] {
+        var seen: [FileOperationQueue.ID: (FileOperation, OperationState)] = [:]
+        for snapshot in snapshots.all {
+            guard case .receive = snapshot.operation else { continue }
+            seen[snapshot.id] = (snapshot.operation, snapshot.state)
+        }
+        return seen.keys.sorted().compactMap { seen[$0] }
+    }
+
+    func contents(of url: URL) throws -> Set<String> {
+        Set(try FileManager.default.contentsOfDirectory(atPath: url.path))
     }
 }
 
@@ -402,16 +426,79 @@ private final class StubPromise: FilePromiseReceiver.Promise, @unchecked Sendabl
     defer { fixture.stop() }
 
     await FilePromiseReceiver.receive(
-        [StubPromise("photo.jpg"), StubPromise("lost.jpg", fails: true), StubPromise("mail.eml")],
-        into: fixture.folder.path, selectingIn: fixture.pane, queue: fixture.queue)
+        [StubPromise("photo.jpg"), StubPromise("mail.eml")], into: fixture.folder.path,
+        from: "Photos", selectingIn: fixture.pane, queue: fixture.queue)
 
-    #expect(fixture.exists(fixture.folder.appending(path: "photo.jpg")))
-    #expect(fixture.exists(fixture.folder.appending(path: "mail.eml")))
-    #expect(!fixture.exists(fixture.folder.appending(path: "lost.jpg")))
-    let names = try FileManager.default.contentsOfDirectory(atPath: fixture.folder.path)
-    #expect(Set(names) == ["a.txt", "sub", "photo.jpg", "mail.eml"])
+    #expect(try fixture.contents(of: fixture.folder) == ["a.txt", "sub", "photo.jpg", "mail.eml"])
     await settle { fixture.selectedNames == ["photo.jpg", "mail.eml"] }
     #expect(fixture.operations.count == 1)
+    #expect(fixture.reportedFailures.isEmpty)
+}
+
+@MainActor @Test func aPromisedFileThatFailsShowsAsAFailedDropNamedAfterIt() async throws {
+    let fixture = try await Fixture()
+    defer { fixture.stop() }
+
+    await FilePromiseReceiver.receive(
+        [StubPromise("photo.jpg"), StubPromise("lost.jpg", .fails)], into: fixture.folder.path,
+        from: "Photos", selectingIn: fixture.pane, queue: fixture.queue)
+
+    #expect(try fixture.contents(of: fixture.folder) == ["a.txt", "sub", "photo.jpg"])
+    await settle { !fixture.reportedFailures.isEmpty }
+    let (operation, state) = try #require(fixture.reportedFailures.first)
+    #expect(operation == .receive(name: "lost.jpg", app: "Photos", into: fixture.folder.path))
+    #expect(state.phase == .failed)
+    #expect(
+        state.errors == [
+            FileOperationError(errno: EIO, path: fixture.folder.appending(path: "lost.jpg").path)
+        ])
+}
+
+@MainActor @Test func aDropIntoAReadOnlyFolderShowsAsAFailedDrop() async throws {
+    let fixture = try await Fixture()
+    defer { fixture.stop() }
+    let sub = fixture.folder.appending(path: "sub")
+    try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: sub.path)
+    defer {
+        _ = try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: sub.path)
+    }
+
+    await FilePromiseReceiver.receive(
+        [StubPromise("photo.jpg")], into: sub.path, from: "Mail", selectingIn: nil,
+        queue: fixture.queue)
+
+    await settle { !fixture.reportedFailures.isEmpty }
+    let (operation, state) = try #require(fixture.reportedFailures.first)
+    #expect(operation == .receive(name: nil, app: "Mail", into: sub.path))
+    #expect(state.phase == .failed)
+    #expect(state.errors.map(\.reason) == [.permissionDenied])
+    #expect(try fixture.contents(of: sub).isEmpty)
+}
+
+@MainActor @Test func aSourceThatStopsAnsweringTimesOutAndTheDropIsCleanedUp() async throws {
+    let fixture = try await Fixture()
+    defer { fixture.stop() }
+    let clock = ManualClock()
+
+    let drop = Task {
+        await FilePromiseReceiver.receive(
+            [StubPromise("never.jpg", .hangs)], into: fixture.folder.path, from: "Mail",
+            selectingIn: nil, queue: fixture.queue, clock: clock)
+    }
+    await settle { clock.waitingSleeps == 1 }
+    clock.advance(by: FilePromiseReceiver.idleTimeout - .seconds(1))
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(fixture.reportedFailures.isEmpty)
+    clock.advance(by: .seconds(1))
+    await drop.value
+
+    // The hidden folder is gone.
+    #expect(try fixture.contents(of: fixture.folder) == ["a.txt", "sub"])
+    await settle { !fixture.reportedFailures.isEmpty }
+    let (operation, state) = try #require(fixture.reportedFailures.first)
+    #expect(operation == .receive(name: nil, app: "Mail", into: fixture.folder.path))
+    #expect(state.errors.map(\.reason) == [.unreachable])
 }
 
 @MainActor @Test func promisedFilesDroppedOnAFolderRowLandInIt() async throws {
@@ -420,9 +507,10 @@ private final class StubPromise: FilePromiseReceiver.Promise, @unchecked Sendabl
     let sub = fixture.folder.appending(path: "sub")
 
     await FilePromiseReceiver.receive(
-        [StubPromise("photo.jpg")], into: sub.path, selectingIn: nil, queue: fixture.queue)
+        [StubPromise("photo.jpg")], into: sub.path, from: nil, selectingIn: nil,
+        queue: fixture.queue)
 
-    #expect(try FileManager.default.contentsOfDirectory(atPath: sub.path) == ["photo.jpg"])
+    #expect(try fixture.contents(of: sub) == ["photo.jpg"])
 }
 
 // MARK: Dragging from the list

@@ -88,6 +88,12 @@ final class OperationRowView: NSView {
             "Duplicating \(items(paths))"
         case .deleteImmediately(let paths):
             "Deleting \(items(paths))"
+        case .receive(let name?, _, let folder):
+            "Drop of “\(name)” into \(quoted(folder))"
+        case .receive(nil, let app?, let folder):
+            "Drop from \(app) into \(quoted(folder))"
+        case .receive(nil, nil, let folder):
+            "Drop into \(quoted(folder))"
         }
     }
 

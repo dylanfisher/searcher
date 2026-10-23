@@ -94,6 +94,10 @@ public actor FileOperationQueue {
         var isTaken: @Sendable (String, String) throws(FileOperationError) -> Bool
         /// The item at a path, or nil if there is none.
         var inspect: @Sendable (String) throws(FileOperationError) -> ConflictRequest.Item?
+        /// The names of the items in a folder.
+        var listNames: @Sendable (String) throws(FileOperationError) -> [String]
+        /// Removes a folder that has nothing in it.
+        var removeEmptyFolder: @Sendable (String) throws(FileOperationError) -> Void
 
         static let real = FileSystem(
             volumeOf: VolumeIdentity.init(path:), measure: OperationPlan.measure,
@@ -102,7 +106,21 @@ public actor FileOperationQueue {
             deletePermanently: Trasher.deletePermanently,
             makeUntitledFolder: FolderMaker.makeUntitledFolder,
             makeFolder: FolderMaker.makeFolder(named:in:),
-            isTaken: UniqueName.isTaken, inspect: OperationPlan.inspect)
+            isTaken: UniqueName.isTaken, inspect: OperationPlan.inspect,
+            listNames: { path throws(FileOperationError) in
+                var names: [String] = []
+                do {
+                    try DirectoryLister().list(path) { names += $0.map(\.name) }
+                } catch let error as ListingError {
+                    throw FileOperationError(errno: error.code, path: path)
+                } catch {
+                    preconditionFailure("listing \(path) threw \(error)")
+                }
+                return names
+            },
+            removeEmptyFolder: { path throws(FileOperationError) in
+                guard rmdir(path) == 0 else { throw FileOperationError(errno: errno, path: path) }
+            })
     }
 
     private let fileSystem: FileSystem
@@ -126,6 +144,8 @@ public actor FileOperationQueue {
     private var lastSnapshot: Duration?
     private var snapshotIsDue = false
     private var isTicking = false
+    /// Drop folders made and not yet removed.
+    private var dropFolders: Set<DropFolder> = []
 
     /// A queue that works on the file system and asks its questions through `prompts`.
     /// `onChange` gets every operation's state, unfinished ones and those finished since the
@@ -244,28 +264,80 @@ public actor FileOperationQueue {
         }
     }
 
-    /// Makes a hidden folder in `folder` for a drop's promised files to be written to, and
-    /// returns its path. The files then move into `folder` as one queued move, so a name the
-    /// folder already has is asked about as for any move, and the folder is removed with
-    /// `removeDropFolder` (docs/decisions/0071-drag-and-drop.md).
-    public func makeDropFolder(in folder: String) async throws(FileOperationError) -> String {
-        let makeFolder = fileSystem.makeFolder
-        let name = Self.dropFolderPrefix + UUID().uuidString
-        return try await BlockingCallThread.run { () throws(FileOperationError) in
-            try makeFolder(name, folder)
+    /// A folder `makeDropFolder` made for a drop's promised files. Only the queue makes one, so
+    /// `removeDropFolder` can't be handed any other path.
+    public struct DropFolder: Hashable, Sendable {
+        public let path: String
+
+        fileprivate init(path: String) {
+            self.path = path
         }
     }
 
-    /// Deletes a folder `makeDropFolder` made, with whatever is still in it: files the move
-    /// skipped or that failed to arrive. Their source app still has them.
-    public func removeDropFolder(_ path: String) async throws(FileOperationError) {
-        precondition(
-            (path as NSString).lastPathComponent.hasPrefix(Self.dropFolderPrefix),
-            "\(path) isn't a drop folder")
-        let deletePermanently = fileSystem.deletePermanently
-        try await BlockingCallThread.run { () throws(FileOperationError) in
-            try deletePermanently(path)
+    /// Makes a hidden folder in `folder` for a drop's promised files to be written to. The
+    /// files then move into `folder` as one queued move, so a name the folder already has is
+    /// asked about as for any move, and the folder is removed with `removeDropFolder`, or with
+    /// `removePendingDropFolders` when the app quits first (docs/decisions/0071-drag-and-drop.md).
+    public func makeDropFolder(in folder: String) async throws(FileOperationError) -> DropFolder {
+        let makeFolder = fileSystem.makeFolder
+        let name = Self.dropFolderPrefix + UUID().uuidString
+        let path = try await BlockingCallThread.run { () throws(FileOperationError) in
+            try makeFolder(name, folder)
         }
+        let dropFolder = DropFolder(path: path)
+        dropFolders.insert(dropFolder)
+        return dropFolder
+    }
+
+    /// Removes a folder `makeDropFolder` made. Anything still in it, such as a file the user
+    /// skipped in a conflict, goes to the Trash first: a promise may not be made again. Returns
+    /// what failed; a failure, such as a volume with no Trash, leaves the folder where it is.
+    public func removeDropFolder(_ dropFolder: DropFolder) async -> [FileOperationError] {
+        precondition(
+            dropFolders.remove(dropFolder) != nil, "\(dropFolder.path) isn't a pending drop folder")
+        let fileSystem = fileSystem
+        return await BlockingCallThread.run { Self.clear(dropFolder, fileSystem: fileSystem) }
+    }
+
+    /// Removes every drop folder not yet removed, as `removeDropFolder` does, for the app to
+    /// call as it quits while promised files are still on their way.
+    public func removePendingDropFolders() async -> [FileOperationError] {
+        var errors: [FileOperationError] = []
+        for dropFolder in dropFolders {
+            errors += await removeDropFolder(dropFolder)
+        }
+        return errors
+    }
+
+    private static func clear(_ dropFolder: DropFolder, fileSystem: FileSystem)
+        -> [FileOperationError]
+    {
+        do {
+            for name in try fileSystem.listNames(dropFolder.path) {
+                _ = try fileSystem.trash(dropFolder.path + "/" + name)
+            }
+            try fileSystem.removeEmptyFolder(dropFolder.path)
+            return []
+        } catch {
+            return [error]
+        }
+    }
+
+    /// Shows `operation` as failed with `errors`, for work done outside the queue that the
+    /// operations panel should still report: a drop whose promised files didn't all arrive.
+    public func report(_ operation: FileOperation, errors: [FileOperationError]) {
+        guard case .receive = operation, !errors.isEmpty else {
+            preconditionFailure("only a failed drop is reported, not \(operation) with \(errors)")
+        }
+        let entry = Entry(
+            id: ID(nextID), operation: operation, copier: fileSystem.makeCopier(),
+            onFinish: { _ in })
+        nextID += 1
+        entry.errors = errors
+        entry.progress.itemCount = errors.count
+        entry.progress.itemsDone = errors.count
+        entries.append(entry)
+        finish(entry, as: .failed)
     }
 
     /// Whether the operation is being planned, waiting for an answer, or waiting in its lane:
@@ -812,6 +884,8 @@ public actor FileOperationQueue {
             case .newFolder:
                 let folder = try fileSystem.makeUntitledFolder(source)
                 return .done([.created(folder)], copied: CopyProgress(bytes: 0, files: 0))
+            case .receive:
+                preconditionFailure("\(operation) is reported, never run")
             }
         } catch is CancellationError {
             return .cancelled(leftBehind: nil)
@@ -869,7 +943,7 @@ public actor FileOperationQueue {
         case .copy(let sources, let folder), .move(let sources, let folder): sources + [folder]
         case .trash(let paths), .duplicate(let paths), .deleteImmediately(let paths): paths
         case .rename(let path, _): [path]
-        case .newFolder(let folder): [folder]
+        case .newFolder(let folder), .receive(_, _, let folder): [folder]
         }
     }
 
