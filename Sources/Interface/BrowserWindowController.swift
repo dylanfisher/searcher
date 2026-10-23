@@ -6,7 +6,8 @@ import Quartz
 /// placed by the tab's layout, one `PaneViewController` per pane. Each window owns its own panes,
 /// like a Finder window, and is titled after the focused pane's folder. Under the panes, the
 /// operations panel lists the file operations; Operations shows or hides it, and it shows itself
-/// in the most recently active window when one runs past a second
+/// in the most recently active window when one runs past a second. With
+/// `Settings.hideEmptyOperationsPanel` on, it hides once its last row leaves
 /// (docs/decisions/0067-operations-panel.md).
 ///
 /// Commands change the workspace, and the window shows the result after each one. The window's
@@ -42,7 +43,13 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     let openWith: OpenWith?
     /// The operations panel under the panes, hidden until shown.
     let operations: OperationsViewController
-    private let operationsHeight: NSLayoutConstraint
+    /// Ends the panes at the panel while it shows, and at the window's bottom while it doesn't.
+    private let panesOverOperations: NSLayoutConstraint
+    private let panesToBottom: NSLayoutConstraint
+    private let settings: Settings
+    /// `settings.hideEmptyOperationsPanel` as last seen, so another setting's change leaves the
+    /// panel alone.
+    private var hidesEmptyOperations: Bool
     /// Each open tab's views, shown or not.
     private var tabViews: [TabID: TabViews] = [:]
     /// Set once the workspace closed with its last tab or the window closed; the window shows
@@ -79,16 +86,19 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         let workspaces = WorkspaceList()
         let workspace = Workspace(tab: Tab(pane: pane))
         workspaces.add(workspace)
-        self.init(workspace: workspace, workspaces: workspaces, fileOperations: fileOperations)
+        self.init(
+            workspace: workspace, workspaces: workspaces, settings: settings,
+            fileOperations: fileOperations)
     }
 
-    /// A window showing `workspace`, one of `workspaces`. `takePaneController` hands over another
+    /// A window showing `workspace`, one of `workspaces`, under the app's `settings`.
+    /// `takePaneController` hands over another
     /// window's view controller for a pane that moved into `workspace`. `fileOperations` runs
     /// the file commands, which are off without it; the clipboard commands are off without
     /// `clipboard`, drops without `fileOperations` and `mountTable`, Undo and Redo without
     /// `undoHistory`, and Open With without `openWith`.
     init(
-        workspace: Workspace, workspaces: WorkspaceList,
+        workspace: Workspace, workspaces: WorkspaceList, settings: Settings,
         fileOperations: FileOperationQueue? = nil, clipboard: CutState? = nil,
         mountTable: MountTable? = nil, undoHistory: UndoHistory? = nil, openWith: OpenWith? = nil,
         takePaneController: @escaping @MainActor (PaneID) -> PaneViewController? = { _ in nil }
@@ -115,12 +125,15 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         self.mountTable = mountTable
         self.undoHistory = undoHistory
         self.openWith = openWith
+        self.settings = settings
+        hidesEmptyOperations = settings.hideEmptyOperationsPanel
         operations = OperationsViewController(
             control: fileOperations.map(OperationsViewController.Control.sending(to:)) ?? .none)
-        operationsHeight = operations.view.heightAnchor.constraint(equalToConstant: 0)
         operations.view.isHidden = true
-        super.init(window: window)
         let content = NSView()
+        panesOverOperations = tabHost.bottomAnchor.constraint(equalTo: operations.view.topAnchor)
+        panesToBottom = tabHost.bottomAnchor.constraint(equalTo: content.bottomAnchor)
+        super.init(window: window)
         for view in [tabStrip.view, tabHost, operations.view] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
@@ -133,15 +146,16 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             tabHost.topAnchor.constraint(equalTo: tabStrip.view.bottomAnchor),
             tabHost.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             tabHost.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            tabHost.bottomAnchor.constraint(equalTo: operations.view.topAnchor),
+            panesToBottom,
             operations.view.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             operations.view.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             operations.view.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            operationsHeight,
         ])
         window.contentView = content
         window.center()
         operations.onNeedsAttention = { [weak self] in self?.operationNeedsAttention() }
+        operations.onEmptied = { [weak self] in self?.hideEmptyOperations() }
+        settings.observe(for: self) { [weak self] in self?.settingsChanged() }
         tabStrip.didSelectTab = { [weak self] in self?.showWorkspace() }
         window.didChangeFirstResponder = { [weak self] in self?.firstResponderDidChange() }
         window.takeKey = { [weak self] event in self?.runControlTab(event) ?? false }
@@ -214,9 +228,23 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         setOperationsShown(true)
     }
 
+    private func settingsChanged() {
+        guard settings.hideEmptyOperationsPanel != hidesEmptyOperations else { return }
+        hidesEmptyOperations = settings.hideEmptyOperationsPanel
+        hideEmptyOperations()
+    }
+
+    /// Hides the panel while it has no rows, if the setting says to.
+    private func hideEmptyOperations() {
+        guard settings.hideEmptyOperationsPanel, operations.isEmpty else { return }
+        setOperationsShown(false)
+    }
+
     private func setOperationsShown(_ isShown: Bool) {
         operations.view.isHidden = !isShown
-        operationsHeight.constant = isShown ? OperationsViewController.height : 0
+        // The hidden panel keeps its height under the panes, out of sight.
+        panesToBottom.isActive = !isShown
+        panesOverOperations.isActive = isShown
     }
 
     // MARK: Menu items from outside the panes' tables

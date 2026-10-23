@@ -14,8 +14,10 @@ import Browser
 final class OperationsViewController: NSViewController {
     /// How long an operation runs before the panel asks to be shown.
     static let attentionDelay: Duration = .seconds(1)
-    /// The panel's height while it shows.
-    static let height: CGFloat = 132
+    /// The tallest the panel grows, about three rows; past it the rows scroll.
+    static let maxHeight: CGFloat = 200
+    /// The height of the line saying there are no operations.
+    private static let emptyHeight: CGFloat = 32
 
     /// What the row buttons send for an operation.
     struct Control {
@@ -49,7 +51,11 @@ final class OperationsViewController: NSViewController {
     /// Starts a wait of the given length on the clock, taking the deadline at once.
     private let startWait: @MainActor (Duration) -> @Sendable () async throws -> Void
     private let stack = NSStackView()
-    private let emptyLabel = NSTextField(labelWithString: "No operations")
+    /// Holds `emptyLabel` as the panel's only row while there are no others.
+    private let emptyRow = NSView()
+    /// Runs when the last row leaves the panel.
+    var onEmptied: (@MainActor () -> Void)?
+    let emptyLabel = NSTextField(labelWithString: "No operations")
     private var rows: [FileOperationQueue.ID: OperationRowView] = [:]
     /// The unfinished operations' waits for `attentionDelay`.
     private var waits: [FileOperationQueue.ID: Task<Void, Never>] = [:]
@@ -74,10 +80,14 @@ final class OperationsViewController: NSViewController {
         rows[id]
     }
 
+    /// Whether the panel has no rows.
+    var isEmpty: Bool { rows.isEmpty }
+
     /// Shows the queue's latest snapshots: every unfinished operation, and those finished since
     /// the last ones.
     func show(_ snapshots: [FileOperationQueue.Snapshot]) {
         _ = view
+        let wasEmpty = rows.isEmpty
         let listed = Set(snapshots.map(\.id))
         for snapshot in snapshots {
             let id = snapshot.id
@@ -99,7 +109,7 @@ final class OperationsViewController: NSViewController {
             waits.removeValue(forKey: id)?.cancel()
             removeRow(id)
         }
-        emptyLabel.isHidden = !rows.isEmpty
+        showEmpty(wasEmpty: wasEmpty)
     }
 
     override func loadView() {
@@ -116,14 +126,20 @@ final class OperationsViewController: NSViewController {
         scroll.documentView = document
         emptyLabel.textColor = .secondaryLabelColor
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
+        emptyRow.addSubview(emptyLabel)
+        stack.addArrangedSubview(emptyRow)
         let separator = NSBox()
         separator.boxType = .separator
         let root = NSStackView(views: [separator, scroll])
         root.orientation = .vertical
         root.spacing = 0
         root.setAccessibilityLabel("Operations")
-        root.addSubview(emptyLabel)
+        // As tall as the rows, up to `maxHeight`; the panes above give up the room.
+        let fitsRows = scroll.heightAnchor.constraint(equalTo: document.heightAnchor)
+        fitsRows.priority = .defaultHigh
         NSLayoutConstraint.activate([
+            fitsRows,
+            root.heightAnchor.constraint(lessThanOrEqualToConstant: Self.maxHeight),
             document.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
             document.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
             document.trailingAnchor.constraint(equalTo: scroll.contentView.trailingAnchor),
@@ -131,8 +147,10 @@ final class OperationsViewController: NSViewController {
             stack.leadingAnchor.constraint(equalTo: document.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: document.trailingAnchor),
             stack.bottomAnchor.constraint(equalTo: document.bottomAnchor),
-            emptyLabel.centerXAnchor.constraint(equalTo: root.centerXAnchor),
-            emptyLabel.centerYAnchor.constraint(equalTo: root.centerYAnchor),
+            emptyRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            emptyRow.heightAnchor.constraint(equalToConstant: Self.emptyHeight),
+            emptyLabel.centerXAnchor.constraint(equalTo: emptyRow.centerXAnchor),
+            emptyLabel.centerYAnchor.constraint(equalTo: emptyRow.centerYAnchor),
         ])
         view = root
     }
@@ -159,9 +177,16 @@ final class OperationsViewController: NSViewController {
 
     /// Drops the finished row of `id`, if there is one.
     func clear(_ id: FileOperationQueue.ID) {
+        let wasEmpty = rows.isEmpty
         kept.remove(id)
         removeRow(id)
-        emptyLabel.isHidden = !rows.isEmpty
+        showEmpty(wasEmpty: wasEmpty)
+    }
+
+    /// Shows the empty line while there are no rows, and says so when the last one left.
+    private func showEmpty(wasEmpty: Bool) {
+        emptyRow.isHidden = !rows.isEmpty
+        if rows.isEmpty, !wasEmpty { onEmptied?() }
     }
 
     /// Asks to be shown if `id` is still unfinished once `attentionDelay` has passed.

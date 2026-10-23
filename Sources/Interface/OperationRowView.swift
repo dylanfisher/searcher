@@ -243,8 +243,11 @@ final class OperationRowView: NSView {
         text.orientation = .vertical
         text.alignment = .leading
         text.spacing = 2
+        // The text, and its bar, take the width the buttons leave.
+        text.setHuggingPriority(.init(1), for: .horizontal)
         let row = NSStackView(views: [text, pauseButton, cancelButton])
         row.orientation = .horizontal
+        row.distribution = .fill
         row.alignment = .centerY
         row.spacing = 8
         row.edgeInsets = NSEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)

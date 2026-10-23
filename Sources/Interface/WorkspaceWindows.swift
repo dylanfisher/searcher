@@ -206,7 +206,8 @@ public final class WorkspaceWindows {
             controllers.first { $0.workspace === other }
         }?.window
         let controller = BrowserWindowController(
-            workspace: workspace, workspaces: list, fileOperations: fileOperations,
+            workspace: workspace, workspaces: list, settings: settings,
+            fileOperations: fileOperations,
             clipboard: clipboard, mountTable: mountTable, undoHistory: undoHistory,
             openWith: openWith,
             takePaneController: { [weak self] id in self?.takePaneController(id) })
