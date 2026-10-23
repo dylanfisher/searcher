@@ -27,6 +27,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(settings.folderSizes)
     #expect(settings.terminalBundleID == "com.apple.Terminal")
     #expect(!settings.commanderFKeys)
+    #expect(settings.hideEmptyOperationsPanel)
 }
 
 @MainActor @Test func aWrongTypedValueIsDiscardedNotCoerced() throws {
@@ -60,6 +61,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     first.folderSizes = false
     first.terminalBundleID = "com.googlecode.iterm2"
     first.commanderFKeys = true
+    first.hideEmptyOperationsPanel = false
 
     let relaunched = Settings(defaults: try #require(UserDefaults(suiteName: name)))
     #expect(relaunched.showHidden)
@@ -67,6 +69,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(!relaunched.folderSizes)
     #expect(relaunched.terminalBundleID == "com.googlecode.iterm2")
     #expect(relaunched.commanderFKeys)
+    #expect(!relaunched.hideEmptyOperationsPanel)
 }
 
 @MainActor @Test func aChangeReachesEveryPane() async throws {
@@ -88,4 +91,8 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
 
 @MainActor @Test func theCommanderPresetsHelpSaysTheFKeysNeedFn() {
     #expect(Settings.commanderFKeysHelp.contains("Fn"))
+}
+
+@MainActor @Test func theEmptyPanelsHelpNamesTheMenuItemThatStillShowsIt() {
+    #expect(Settings.hideEmptyOperationsPanelHelp.contains("Window ▸ Operations"))
 }

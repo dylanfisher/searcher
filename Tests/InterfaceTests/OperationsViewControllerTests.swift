@@ -205,3 +205,122 @@ private func snapshot(
     #expect(
         try fixture.row(2).detailLabel.stringValue == "“/V” is gone. This undo is dropped.")
 }
+
+/// Puts the panel at the bottom of a view `width` wide, with nothing setting its height, as the
+/// window does.
+@MainActor
+private func host(_ fixture: Fixture, width: CGFloat) -> NSView {
+    let container = NSView(frame: NSRect(x: 0, y: 0, width: width, height: 600))
+    let panel = fixture.controller.view
+    panel.translatesAutoresizingMaskIntoConstraints = false
+    container.addSubview(panel)
+    NSLayoutConstraint.activate([
+        panel.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+        panel.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+        panel.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+    ])
+    container.layoutSubtreeIfNeeded()
+    return container
+}
+
+@MainActor @Test func thePanelIsAsTallAsItsRowsUpToTheCapThenScrolls() throws {
+    let fixture = Fixture()
+    let container = host(fixture, width: 600)
+    let panel = fixture.controller.view
+
+    fixture.controller.show([snapshot(1, .running)])
+    container.layoutSubtreeIfNeeded()
+    let rowHeight = try fixture.row(1).frame.height
+    let oneRow = panel.frame.height
+    #expect(rowHeight > 0)
+    // The separator over the rows, and nothing under the last row.
+    #expect(oneRow > rowHeight && oneRow <= rowHeight + 2)
+
+    fixture.controller.show([snapshot(1, .running), snapshot(2, .running)])
+    container.layoutSubtreeIfNeeded()
+    #expect(panel.frame.height == oneRow + rowHeight)
+
+    fixture.controller.show((1...20).map { snapshot($0, .running) })
+    container.layoutSubtreeIfNeeded()
+    #expect(panel.frame.height == OperationsViewController.maxHeight)
+    let scroll = try #require(try fixture.row(1).enclosingScrollView)
+    let document = try #require(scroll.documentView)
+    #expect(document.frame.height > scroll.contentView.bounds.height)
+
+    fixture.controller.show([snapshot(1, .running)])
+    container.layoutSubtreeIfNeeded()
+    #expect(panel.frame.height == oneRow)
+}
+
+@MainActor @Test func theEmptyPanelIsOneLineSayingSo() throws {
+    let fixture = Fixture()
+    let container = host(fixture, width: 600)
+    let panel = fixture.controller.view
+
+    #expect(!fixture.controller.emptyLabel.isHiddenOrHasHiddenAncestor)
+    #expect(panel.frame.height > 0 && panel.frame.height < OperationsViewController.maxHeight)
+
+    fixture.controller.show([snapshot(1, .running)])
+    container.layoutSubtreeIfNeeded()
+    #expect(fixture.controller.emptyLabel.isHiddenOrHasHiddenAncestor)
+}
+
+@MainActor @Test func aRowsBarFillsTheWidthBesideItsButtonsAndTracksResizes() throws {
+    let fixture = Fixture()
+    let container = host(fixture, width: 600)
+    fixture.controller.show([snapshot(1, .running)])
+    container.layoutSubtreeIfNeeded()
+    let row = try fixture.row(1)
+
+    func gap() -> CGFloat {
+        let bar = row.convert(row.bar.bounds, from: row.bar)
+        let pause = row.convert(row.pauseButton.bounds, from: row.pauseButton)
+        return pause.minX - bar.maxX
+    }
+    let wide = row.bar.frame.width
+    #expect(gap() <= 8)
+
+    container.setFrameSize(NSSize(width: 400, height: 600))
+    container.layoutSubtreeIfNeeded()
+    #expect(row.bar.frame.width == wide - 200)
+    #expect(gap() <= 8)
+}
+
+@MainActor @Test func aProgressTickLaysOutNothingAboveTheRow() throws {
+    let fixture = Fixture()
+    let container = host(fixture, width: 600)
+    let total = TreeSizeWalker.Total(bytes: 2_000_000, files: 4, isPartial: false)
+    fixture.controller.show([snapshot(1, .running, total: total)])
+    container.layoutSubtreeIfNeeded()
+    let panel = fixture.controller.view
+    let height = panel.frame.height
+
+    fixture.controller.show([
+        snapshot(1, .running, copied: CopyProgress(bytes: 1_000_000, files: 2), total: total)
+    ])
+
+    #expect(!panel.needsLayout)
+    #expect(!container.needsLayout)
+    container.layoutSubtreeIfNeeded()
+    #expect(panel.frame.height == height)
+}
+
+@MainActor @Test func thePanelSaysWhenItsLastRowLeavesAndNotBefore() throws {
+    let fixture = Fixture()
+    var emptied = 0
+    fixture.controller.onEmptied = { emptied += 1 }
+    fixture.controller.show([])
+    #expect(emptied == 0)
+
+    fixture.controller.show([snapshot(1, .running), snapshot(2, .running)])
+    fixture.controller.show([snapshot(1, .done), snapshot(2, .running)])
+    #expect(emptied == 0)
+    fixture.controller.show([snapshot(2, .done)])
+    #expect(emptied == 1)
+
+    let denied = FileOperationError(reason: .permissionDenied, path: "/dst/b.mov", errno: 13)
+    fixture.controller.show([snapshot(3, .failed, errors: [denied])])
+    #expect(emptied == 1)
+    fixture.controller.clear(FileOperationQueue.ID(3))
+    #expect(emptied == 2)
+}
