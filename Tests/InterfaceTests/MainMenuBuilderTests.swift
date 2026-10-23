@@ -499,7 +499,7 @@ private func usKey(
     // Option and Shift-Option type other characters; Shift-4 types "$".
     let presses = [
         try usKey("T", characters: "T", keyCode: 17, [.command, .shift]),
-        try usKey("T", characters: "ˇ", keyCode: 17, [.command, .option, .shift]),
+        try usKey("T", characters: "ˇ", keyCode: 17, [.option, .shift]),
         try usKey("1", characters: "¡", keyCode: 18, [.command, .option]),
         try usKey("$", characters: "›", keyCode: 21, [.command, .option, .shift]),
     ]
@@ -529,4 +529,19 @@ private func usKey(
     }
 
     #expect(log.ids == (1...4).compactMap { TilingCommands.rows[$0]?.id })
+}
+
+@MainActor @Test func theTableRunsOptShiftTWhateverTheKeyTypesAndTypeSelectDoesNotTakeIt() throws {
+    let table = ListingTableView()
+    table.registry = try AppCommands.registry()
+    let log = CommandLog()
+    table.runCommand = { log.ids.append($0) }
+    table.beep = { Issue.record("beeped") }
+
+    // Option-Shift-T types "ˇ" on a US keyboard; the key is read without Option, so "T".
+    table.keyDown(with: try usKey("T", characters: "ˇ", keyCode: 17, [.option, .shift]))
+    table.keyDown(with: try usKey("t", characters: "ˇ", keyCode: 17, [.option, .shift]))
+
+    #expect(log.ids == [TilingCommands.splitDown.id, TilingCommands.splitDown.id])
+    #expect(!table.typeSelect.isTyping)
 }
