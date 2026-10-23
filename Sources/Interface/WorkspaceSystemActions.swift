@@ -1,5 +1,6 @@
 import AppKit
 import Browser
+import QuickLookThumbnailing
 import UniformTypeIdentifiers
 import os
 
@@ -90,6 +91,25 @@ public final class WorkspaceSystemActions: SystemActions {
     public nonisolated func defaultApplicationURL(toOpen type: UTType) -> URL? {
         dispatchPrecondition(condition: .notOnQueue(.main))
         return NSWorkspace.shared.urlForApplication(toOpen: type)
+    }
+
+    /// Reads the app's bundle through Browser, and asks Quick Look, which draws in its own
+    /// process, for the icon Finder shows, at 16 points, 2x. An icon Quick Look can't make is
+    /// logged and left out.
+    public nonisolated func application(at url: URL) async -> OpenWith.App {
+        let request = QLThumbnailGenerator.Request(
+            fileAt: url, size: CGSize(width: 16, height: 16), scale: 2,
+            representationTypes: .icon)
+        var icon: CGImage?
+        do {
+            icon = try await QLThumbnailGenerator.shared.generateBestRepresentation(for: request)
+                .cgImage
+        } catch {
+            Logger(category: "openWith").error(
+                "no icon for \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)"
+            )
+        }
+        return OpenWith.App(readingBundleAt: url, icon: icon)
     }
 
     private func fail(_ error: any Error) {

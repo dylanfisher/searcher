@@ -558,7 +558,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         }
         do {
             return try ContextMenuBuilder.build(
-                items, registry: tableView.registry, target: tableView)
+                items, registry: tableView.registry, target: tableView,
+                selection: ClipboardCommands.selectedURLs(in: pane))
         } catch {
             preconditionFailure("\(error)")
         }

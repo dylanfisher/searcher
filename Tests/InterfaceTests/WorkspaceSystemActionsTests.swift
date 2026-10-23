@@ -43,10 +43,35 @@ func openWithListsTheAppsLaunchServicesListsForAFileDefaultFirst(pathExtension: 
 
     let listed = NSWorkspace.shared.urlsForApplications(toOpen: file)
     let defaultApp = try #require(NSWorkspace.shared.urlForApplication(toOpen: file))
-    #expect(
-        Set(choices.all.map(\.bundleID))
-            == Set(listed.map { Bundle(url: $0)?.bundleIdentifier ?? $0.path }))
-    #expect(choices.all.count == Set(choices.all.map(\.bundleID)).count)
+    // One entry per bundle ID and version: copies of one version are listed once.
+    let listedApps = Set(
+        listed.map { url in
+            let bundle = Bundle(url: url)
+            return [
+                bundle?.bundleIdentifier ?? url.path,
+                bundle?.infoDictionary?["CFBundleShortVersionString"] as? String ?? "",
+            ]
+        })
+    let chosen = choices.all.map { [$0.bundleID, $0.version ?? ""] }
+    #expect(Set(chosen) == listedApps)
+    #expect(chosen.count == listedApps.count)
     #expect(choices.defaultApp?.bundleID == Bundle(url: defaultApp)?.bundleIdentifier)
     #expect(choices.all.first == choices.defaultApp)
+}
+
+/// An app is read with the name Finder shows for it, its bundle ID and version, and its icon at
+/// 16 points, 2x, off the main thread.
+@MainActor @Test func anAppIsReadWithItsDisplayNameBundleIDVersionAndIcon() async throws {
+    let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app", isDirectory: true)
+    let actions = WorkspaceSystemActions(applicationURL: { _ in nil }, presentError: { _ in })
+
+    let app = await actions.application(at: textEdit)
+
+    let bundle = try #require(Bundle(url: textEdit))
+    #expect(app.url == textEdit)
+    #expect(app.name == FileManager.default.displayName(atPath: textEdit.path))
+    #expect(app.bundleID == bundle.bundleIdentifier)
+    #expect(app.version == bundle.infoDictionary?["CFBundleShortVersionString"] as? String)
+    #expect(app.icon?.width == 32)
+    #expect(app.icon?.height == 32)
 }

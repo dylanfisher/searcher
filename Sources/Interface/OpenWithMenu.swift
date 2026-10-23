@@ -4,9 +4,10 @@ import UniformTypeIdentifiers
 
 /// The Open With submenu, in the File menu and a row's context menu. AppKit asks for its items
 /// each time it opens, and they come from the `OpenWith` cache: the default app, marked as
-/// Finder marks it, the other apps by name, then Other…, which asks for any app. While a type's
-/// list is building the menu shows Loading…, and the apps replace it when the list lands, the
-/// menu still open (docs/decisions/0073-open-with.md).
+/// Finder marks it, the other apps by name, each with its icon and, when two share a name, its
+/// version, then App Store…, which searches the store for the type, and Other…, which asks for
+/// any app. While a type's list is building the menu shows Loading…, and the apps replace it
+/// when the list lands, the menu still open (docs/decisions/0073-open-with.md).
 @MainActor
 final class OpenWithMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
     /// What the menu acts on: the pane whose selection it opens and the cache its apps come from.
@@ -17,7 +18,10 @@ final class OpenWithMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
 
     static let title = "Open With"
     static let loadingTitle = "Loading…"
+    static let appStoreTitle = "App Store…"
     static let otherTitle = "Other…"
+    /// The size of an app's icon in the menu, as Finder shows it.
+    static let iconSize = NSSize(width: 16, height: 16)
 
     /// The item that shows the submenu. It holds this object; the submenu and the items only
     /// point back at it weakly.
@@ -85,11 +89,11 @@ final class OpenWithMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
         menu.removeAllItems()
         if let choices {
             if let app = choices.defaultApp {
-                menu.addItem(appItem(app, title: "\(app.name) (default)"))
+                menu.addItem(appItem(app, in: choices, isDefault: true))
                 menu.addItem(.separator())
             }
             for app in choices.others {
-                menu.addItem(appItem(app, title: app.name))
+                menu.addItem(appItem(app, in: choices, isDefault: false))
             }
             if !choices.others.isEmpty {
                 menu.addItem(.separator())
@@ -98,14 +102,40 @@ final class OpenWithMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
             menu.addItem(NSMenuItem(title: Self.loadingTitle, action: nil, keyEquivalent: ""))
             menu.addItem(.separator())
         }
+        let appStore = NSMenuItem(
+            title: Self.appStoreTitle, action: #selector(searchAppStore(_:)), keyEquivalent: "")
+        appStore.target = self
+        menu.addItem(appStore)
         let other = NSMenuItem(
             title: Self.otherTitle, action: #selector(chooseOther(_:)), keyEquivalent: "")
         other.target = self
         menu.addItem(other)
     }
 
-    private func appItem(_ app: OpenWith.App, title: String) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: #selector(choose(_:)), keyEquivalent: "")
+    /// An item for `app`: its icon and name, then in the secondary color its version when
+    /// another app in `choices` has its name, and "(default)" for the default app.
+    private func appItem(_ app: OpenWith.App, in choices: OpenWith.Choices, isDefault: Bool)
+        -> NSMenuItem
+    {
+        var secondary = ""
+        if choices.showsVersion(of: app), let version = app.version {
+            secondary += " (\(version))"
+        }
+        if isDefault {
+            secondary += " (default)"
+        }
+        let item = NSMenuItem(
+            title: app.name + secondary, action: #selector(choose(_:)), keyEquivalent: "")
+        if !secondary.isEmpty {
+            let font = NSFont.menuFont(ofSize: 0)
+            let title = NSMutableAttributedString(string: app.name, attributes: [.font: font])
+            title.append(
+                NSAttributedString(
+                    string: secondary,
+                    attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor]))
+            item.attributedTitle = title
+        }
+        item.image = app.icon.map { NSImage(cgImage: $0, size: Self.iconSize) }
         item.target = self
         item.representedObject = app.url
         return item
@@ -119,6 +149,12 @@ final class OpenWithMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
             preconditionFailure("Open With item \"\(sender.title)\" holds no app")
         }
         open(with: app)
+    }
+
+    @objc private func searchAppStore(_ sender: NSMenuItem) {
+        // The window closed while the menu was open.
+        guard let target = target() else { return }
+        OpenWith.searchAppStore(forSelectionOf: target.pane)
     }
 
     @objc private func chooseOther(_ sender: NSMenuItem) {

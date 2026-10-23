@@ -23,4 +23,7 @@ public protocol SystemActions: AnyObject, Sendable {
     /// The app that opens a file of `type` by default, or nil when none does. Called off the main
     /// thread, as `applicationURLs(toOpen:)` is.
     nonisolated func defaultApplicationURL(toOpen type: UTType) -> URL?
+    /// The app at `url` as Open With lists it: its name, bundle ID, version and icon. Reading them
+    /// reads the app's bundle, so it is called off the main thread.
+    nonisolated func application(at url: URL) async -> OpenWith.App
 }

@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 
 @testable import Browser
 
-/// Apps every Mac has, so their bundle IDs and names can be read from the disk.
+/// Paths the stub describes; nothing is read from them.
 private let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
 private let preview = URL(fileURLWithPath: "/System/Applications/Preview.app")
 private let music = URL(fileURLWithPath: "/System/Applications/Music.app")
@@ -18,13 +18,15 @@ private func names(_ apps: [OpenWith.App]) -> [String] {
     apps.map(\.name)
 }
 
-/// An `OpenWith` over a stub listing `applications` for each type, that records each build.
+/// An `OpenWith` over a stub listing `applications` for each type and describing `apps`, that
+/// records each build.
 @MainActor
 private func openWith(
-    _ applications: [UTType: [URL]], defaults: [UTType: URL] = [:],
+    _ applications: [UTType: [URL]], defaults: [UTType: URL] = [:], apps: [OpenWith.App] = [],
     built: EventLog<UTType> = EventLog()
 ) -> (OpenWith, StubSystemActions) {
-    let actions = StubSystemActions(applications: applications, defaultApplications: defaults)
+    let actions = StubSystemActions(
+        applications: applications, defaultApplications: defaults, apps: apps)
     return (OpenWith(systemActions: actions, didBuild: { type, _ in built.append(type) }), actions)
 }
 
@@ -38,7 +40,7 @@ private func openWith(
     let choices = await cache.choices(for: [.plainText])
 
     #expect(choices.defaultApp?.name == "Preview")
-    #expect(choices.defaultApp?.bundleID == "com.apple.Preview")
+    #expect(choices.defaultApp?.url == preview)
     #expect(names(choices.others) == ["QuickTime Player", "TextEdit"])
     #expect(names(choices.all) == ["Preview", "QuickTime Player", "TextEdit"])
 }
@@ -111,5 +113,65 @@ private func openWith(
                     URL(fileURLWithPath: "/root/b.txt", isDirectory: false),
                 ],
                 application: textEdit)
+        ])
+}
+
+/// Copies of Google Chrome for Testing at three versions, as `@puppeteer/browsers` installs them,
+/// each under its own folder.
+private func chromeForTesting(_ version: String, in folder: String = "chrome") -> OpenWith.App {
+    let url = URL(
+        fileURLWithPath: "/Users/me/.cache/\(folder)/\(version)/Google Chrome for Testing.app",
+        isDirectory: true)
+    return OpenWith.App(
+        url: url, bundleID: "com.google.chrome.for.testing",
+        name: "Google Chrome for Testing.app", version: version, icon: stubAppIcon())
+}
+
+@MainActor @Test func eachAppCarriesTheNameVersionAndIconItWasReadWithOffTheMainActorOnce()
+    async throws
+{
+    let chrome = chromeForTesting("153.0.8010.12")
+    let (cache, actions) = openWith([.html: [chrome.url]], apps: [chrome])
+
+    let first = await cache.choices(for: [.html])
+    _ = await cache.choices(for: [.html])
+
+    let app = try #require(first.others.first)
+    #expect(app.name == "Google Chrome for Testing.app")
+    #expect(app.version == "153.0.8010.12")
+    #expect(app.icon === chrome.icon)
+    #expect(cache.cachedChoices(for: [.html])?.others.first?.icon === chrome.icon)
+    #expect(actions.appReads.all.map(\.url) == [chrome.url])
+    #expect(actions.appReads.all.allSatisfy { !$0.onMainThread })
+}
+
+@MainActor @Test func copiesOfAnAppAtDifferentVersionsAreEachListedAndShowTheirVersions() async {
+    let old = chromeForTesting("151.0.7000.1")
+    let current = chromeForTesting("152.0.7500.4")
+    let new = chromeForTesting("153.0.8010.12")
+    // A second copy of one version is listed once.
+    let newAgain = chromeForTesting("153.0.8010.12", in: "other")
+    let (cache, _) = openWith(
+        [.html: [new.url, textEdit, old.url, newAgain.url, current.url]],
+        defaults: [.html: current.url], apps: [old, current, new, newAgain])
+
+    let choices = await cache.choices(for: [.html])
+
+    #expect(choices.defaultApp?.url == current.url)
+    #expect(choices.others.map(\.url) == [old.url, new.url, textEdit])
+    #expect(choices.all.map { choices.showsVersion(of: $0) } == [true, true, true, false])
+}
+
+@MainActor @Test func appStoreSearchesTheStoreForTheSelectionsFileExtensions() async throws {
+    let fixture = PaneFixture(
+        at: "/types", folders: ["/types": [file("a.txt"), file("b.png"), file("c.txt")]])
+    await settle { fixture.pane.state.isLoaded }
+    fixture.select("a.txt", "b.png")
+
+    OpenWith.searchAppStore(forSelectionOf: fixture.pane)
+
+    #expect(
+        fixture.actions.openedURLs == [
+            try #require(URL(string: "macappstore://?action=search&term=png%20txt"))
         ])
 }
