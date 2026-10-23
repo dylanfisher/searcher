@@ -254,6 +254,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
                 })
             else { continue }
             controller.scroll(like: sourceController)
+            controller.pane.finishCopyScroll()
         }
         // One pane showing needs no mark.
         let marksFocus = tab.layout.panes.count > 1 && !tab.layout.isZoomed

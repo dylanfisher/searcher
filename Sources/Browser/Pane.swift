@@ -238,8 +238,14 @@ public final class Pane {
     }
 
     /// The pane this one was copied from by a split or a grid key, while it exists. The window
-    /// opens the copy's list at the same scroll position.
+    /// opens the copy's list at the same scroll position, once.
     public private(set) weak var copiedFrom: Pane?
+
+    /// Forgets the source once the window has handed its scroll position to the copy's list, so a
+    /// later view controller for the copy doesn't scroll to the source's offset again.
+    public func finishCopyScroll() {
+        copiedFrom = nil
+    }
 
     // MARK: - Navigation
 
