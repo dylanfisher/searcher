@@ -147,3 +147,28 @@ private func ask(_ request: ConfirmRequest, of fixture: Fixture, into returned: 
     await settle { returned.resolutions.count == 2 }
     #expect(fixture.presented.count == 2)
 }
+
+@MainActor @Test func cancelOnAConflictSheetCancelsItsOperation() async throws {
+    let folder = try TemporaryFolder("ConflictCancel")
+    let source = folder.url.appending(path: "src")
+    let destination = folder.url.appending(path: "dst")
+    for url in [source, destination] {
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+        try Data("text".utf8).write(to: url.appending(path: "a.txt"))
+    }
+    let fixture = Fixture()
+    let queue = FileOperationQueue(prompts: fixture.prompter.prompts) { _ in }
+    fixture.prompter.queue = queue
+    var finished: OperationState?
+    let operation = FileOperation.copy(
+        [source.appending(path: "a.txt").path], into: destination.path)
+    Task { @MainActor in finished = await queue.perform(operation) }
+    await settle { fixture.conflictSheet != nil }
+
+    try #require(fixture.conflictSheet).cancelButton.performClick(nil)
+    await settle { finished != nil }
+
+    #expect(finished?.phase == .cancelled(leftBehind: nil))
+    #expect(finished?.record.changes == [])
+    #expect(fixture.prompter.shown == nil)
+}

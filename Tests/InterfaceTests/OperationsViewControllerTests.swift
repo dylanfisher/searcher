@@ -111,6 +111,22 @@ private func snapshot(
     #expect(try fixture.row(2).detailLabel.stringValue.hasPrefix("Paused"))
 }
 
+@MainActor @Test func aRowSetsItsButtonImagesOnlyWhenThePhaseChanges() throws {
+    let fixture = Fixture()
+    fixture.controller.show([snapshot(1, .running)])
+    let row = try fixture.row(1)
+    let pause = try #require(row.pauseButton.image)
+    let cancel = try #require(row.cancelButton.image)
+
+    fixture.controller.show([snapshot(1, .running, copied: CopyProgress(bytes: 10, files: 1))])
+    #expect(row.pauseButton.image === pause)
+    #expect(row.cancelButton.image === cancel)
+
+    fixture.controller.show([snapshot(1, .paused)])
+    #expect(row.pauseButton.image !== pause)
+    #expect(row.cancelButton.image === cancel)
+}
+
 @MainActor @Test func aFinishedOperationLeavesThePanelAndAFailedOneShowsItsErrorWithThePath()
     throws
 {
