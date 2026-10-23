@@ -392,6 +392,86 @@ private func failedTrash(_ id: Int) -> FileOperationQueue.Snapshot {
             record: OperationRecord()))
 }
 
+/// A trash of `/root/a.txt` in `phase`, unfinished.
+private func trash(_ id: Int, _ phase: OperationState.Phase) -> FileOperationQueue.Snapshot {
+    FileOperationQueue.Snapshot(
+        id: FileOperationQueue.ID(id), operation: .trash(["/root/a.txt"]),
+        state: OperationState(
+            phase: phase,
+            progress: OperationState.Progress(
+                itemsDone: 0, itemCount: 1, copied: CopyProgress(bytes: 0, files: 0),
+                total: nil),
+            errors: [], record: OperationRecord()))
+}
+
+@MainActor @Test func quittingWithNothingRunningDoesNotAsk() async throws {
+    let fixture = try await Fixture()
+    fixture.windows.operationsChanged([failedTrash(3)])
+
+    #expect(fixture.windows.quitAlert() == nil)
+    #expect(
+        fixture.windows.shouldQuit(asking: { _ in
+            Issue.record("quitting asked with nothing running")
+            return false
+        }))
+}
+
+@MainActor @Test func quittingWithAPausedOperationAsksAndCancelKeepsItRunning() async throws {
+    let fixture = try await Fixture()
+    fixture.windows.operationsChanged([trash(1, .paused)])
+
+    let alert = try #require(fixture.windows.quitAlert())
+    #expect(alert.messageText == "Quit while a file operation is running?")
+    #expect(
+        alert.informativeText
+            == "Quitting stops it, and removes anything it was partway through writing.")
+    #expect(alert.buttons.map(\.title) == ["Quit", "Cancel"])
+    #expect(!fixture.windows.shouldQuit(asking: { _ in false }))
+    #expect(fixture.windows.quitAlert() != nil)
+    #expect(fixture.windows.shouldQuit(asking: { _ in true }))
+
+    fixture.windows.operationsChanged([])
+    #expect(fixture.windows.quitAlert() == nil)
+}
+
+@MainActor @Test func quittingCountsEveryUnfinishedOperation() async throws {
+    let fixture = try await Fixture()
+    fixture.windows.operationsChanged([
+        trash(1, .running), trash(2, .waitingForAnswer), trash(3, .queued), failedTrash(4),
+    ])
+
+    let alert = try #require(fixture.windows.quitAlert())
+    #expect(alert.messageText == "Quit while 3 file operations are running?")
+    #expect(
+        alert.informativeText
+            == "Quitting stops them, and removes anything they were partway through writing.")
+}
+
+/// The other-pane confirm is asked before anything is queued, so only the sheet shows it.
+@MainActor @Test func quittingWithAQuestionShowingAsksAndCancelLeavesItShowing() async throws {
+    let fixture = try await Fixture()
+    let sheets = SheetLog(fixture.windows)
+    let controller = try #require(fixture.windows.controllers.first)
+    try fixture.press(try keyEvent("T", modifiers: [.command, .shift]), in: controller)
+    let pane = controller.workspace.selectedTab.focusedPane
+    await settle { pane.state.isLoaded }
+    pane.select(Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+    try fixture.press(try keyEvent("C", modifiers: [.command, .shift]), in: controller)
+    await settle { sheets.presented.count == 1 }
+
+    let alert = try #require(fixture.windows.quitAlert())
+    #expect(alert.messageText == "Quit while a file operation waits for an answer?")
+    #expect(!fixture.windows.shouldQuit(asking: { _ in false }))
+
+    guard case .confirm(let sheet) = fixture.windows.prompter.shown else {
+        Issue.record("the confirm sheet closed")
+        return
+    }
+    sheet.cancelButton.performClick(nil)
+    await settle { fixture.windows.prompter.shown == nil }
+    #expect(fixture.windows.quitAlert() == nil)
+}
+
 @MainActor @Test func aFailureReportedWhileNoWindowIsOpenShowsInTheNextWindow() async throws {
     let fixture = try await Fixture()
     try #require(fixture.windows.controllers.first?.window).close()

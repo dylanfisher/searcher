@@ -466,8 +466,9 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         }
     }
 
-    /// Queues the drop's one copy or move, without asking first, as Paste does; or takes its
-    /// file promises. What lands in the pane's folder is selected once the pane lists it.
+    /// Queues the drop's one copy, move or duplicate, without asking first, as Paste does; or
+    /// takes its file promises. What lands in the pane's folder is selected once the pane lists
+    /// it.
     public func tableView(
         _ tableView: NSTableView, acceptDrop info: any NSDraggingInfo, row: Int,
         dropOperation: NSTableView.DropOperation

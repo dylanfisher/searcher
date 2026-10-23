@@ -1,4 +1,4 @@
-# 0068. Inline rename: a field beside the table, cancel on focus loss, New Folder after select
+# 0068. Inline rename: a field beside the table, commit on focus loss, New Folder after select
 
 - **Date:** 2026-10-22
 - **Status:** accepted
@@ -31,9 +31,21 @@ once the operation ends.
   it. If the old name is still listed 2 s after the rename is done, the pane lists the folder
   again and the field closes when that listing lands, or after another 2 s. Return in these
   states does nothing: the row still shows a name that no longer exists.
-- **Keys moving elsewhere** (a click, Tab) close the field with nothing renamed. Finder commits
-  then; a commit with no Return could rename a file the user only meant to look at, and a failure
-  would have to take the keys back from wherever they went.
+- **Keys moving elsewhere** (a click, Tab) rename as Return does, as Finder does; Esc still
+  closes the field with nothing renamed (amended 2026-10-23, at Dylan's ask to match Finder). The
+  keys stay where they went while the rename runs. An unchanged name closes the field. As in
+  Finder, an emptied name puts the old one back. A name `FileNameRule` refuses, and a rename the
+  queue fails, take the keys back to the field with the reason under it: Finder shows the reason
+  in an alert and, once it is dismissed, edits the name again, so both end with the user editing
+  the name they typed. The field shows it inline, as on Return, rather than in an alert.
+  - **Re-entrancy:** Return, Esc and closing the field each move the keys themselves after
+    leaving the editing state, so the end of editing that causes is ignored. A focus-loss commit
+    doesn't move the keys back to the table, since the window is in the middle of handing them
+    to the view clicked; taking them back for a refused name waits a turn of the main actor for
+    the same reason, as a first responder set mid-hand-off is replaced by the view clicked.
+  - **A click that also changes folder** closes the field before the rename starts; the rename is
+    then dropped rather than run in the new folder, since `FileCommands.rename` names the entry
+    in the pane's folder.
 - **New Folder** edits the new folder's name through the context's `editName`, once the pane
   selects it. `Pane.select(_:whenListedAtSelectionVersion:then:)` runs the closure only when it
   selects the names, so a New Folder that makes nothing, or whose names the user's selection
@@ -44,7 +56,11 @@ once the operation ends.
 - **Edit the cell's own text field with `editColumn(_:row:with:select:)`** — rejected: a patch
   refills cells in place and reused cells show other rows, so the text being typed could be
   overwritten; and the cell is in the table's responder chain.
-- **Commit when the keys move elsewhere, as Finder does** — rejected for now, as above.
+- **Close the field with nothing renamed when the keys move elsewhere** — the first choice,
+  since a commit with no Return could rename a file the user only meant to look at. Replaced by
+  Finder's behavior on 2026-10-23.
+- **An alert for a refused name on focus loss, as Finder shows** — rejected: the reason already
+  shows under the field, and an alert would be a second way to say the same thing.
 - **Open the field on any single new name selected after a change** — rejected: Duplicate also
   selects a new name, and Finder doesn't rename after Duplicate.
 - **Watch the selection in Interface after New Folder runs** — rejected: Interface can't see the

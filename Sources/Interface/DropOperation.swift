@@ -2,7 +2,8 @@ import AppKit
 import Browser
 
 /// What a drop of files does, by Finder's rules: items on the target folder's volume move and
-/// items from another volume copy; Option copies and Command moves either way. AppKit narrows
+/// items from another volume copy; Option copies and Command moves either way, and Option onto
+/// the items' own folder duplicates them with Finder's copy names. AppKit narrows
 /// the drag's allowed operations by the keys held, Option to copy, Command to generic and
 /// Command-Option to link, so the keys are read from that mask. Finder makes an alias for a
 /// link; Searcher makes none, so a link-only drag drops nothing. Volumes come from the
@@ -10,11 +11,14 @@ import Browser
 enum DropOperation: Equatable {
     case copy
     case move
+    case duplicate
 
     /// The operation for dropping `sources` into `folder` while the drag allows `allowed`, or
     /// nil for none: when a source is `folder` or holds it, which the queue would refuse, or
-    /// when every source is in `folder` already. A drop moves only when every source is on the
-    /// folder's volume; one on no volume the table knows counts as another volume.
+    /// when every source is in `folder` already and the drag allows more than a copy, as with
+    /// no keys held; with only a copy allowed, as with Option, they duplicate. A drop moves only
+    /// when every source is on the folder's volume; one on no volume the table knows counts as
+    /// another volume.
     @MainActor
     init?(
         dropping sources: [String], into folder: String, allowed: NSDragOperation,
@@ -26,7 +30,9 @@ enum DropOperation: Equatable {
         if sources.allSatisfy({
             FileOperation.comparable(($0 as NSString).deletingLastPathComponent) == target
         }) {
-            return nil
+            guard allowed == .copy else { return nil }
+            self = .duplicate
+            return
         }
         let canCopy = allowed.contains(.copy)
         let canMove = !allowed.isDisjoint(with: [.move, .generic])
@@ -50,16 +56,17 @@ enum DropOperation: Equatable {
     /// generic when Command left only that.
     func dragOperation(allowed: NSDragOperation) -> NSDragOperation {
         switch self {
-        case .copy: .copy
+        case .copy, .duplicate: .copy
         case .move: allowed.contains(.move) ? .move : .generic
         }
     }
 
-    /// The queued operation that puts `sources` in `folder`.
+    /// The queued operation that puts `sources` in `folder`; a duplicate's are in it already.
     func fileOperation(_ sources: [String], into folder: String) -> FileOperation {
         switch self {
         case .copy: .copy(sources, into: folder)
         case .move: .move(sources, into: folder)
+        case .duplicate: .duplicate(sources)
         }
     }
 }

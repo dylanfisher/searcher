@@ -31,7 +31,12 @@ to a folder the receiver names. Cut and paste already read and write Finder's pa
 - **Refusals before the queue.** A drop into an item itself or into a folder inside it is
   refused while the pointer is over it, with the check the queue's plan makes
   (`FileOperation.source(holding:among:)`). A drop whose items are all in the target folder
-  already does nothing, keys or not; Finder's Option-drag duplicate in place is not copied.
+  already does nothing, with no keys or with Command.
+- **Option onto the items' own folder duplicates them** (amended 2026-10-23, at Dylan's ask to
+  match Finder). With only a copy allowed, the drop queues one `FileOperation.duplicate`, as
+  Cmd-D does, so the copies get Finder's names ("a copy.txt") and are selected once listed. The
+  own folder is the pane's folder, reached by dropping on empty space, between rows or on a file
+  row. A drag from another app that allows only a copy duplicates the same way.
 - **Where it goes.** A drop on a folder row (Kind "Folder", not a package such as an app) goes
   into that folder; anywhere else, on a file row, between rows or below them, the drop is
   retargeted to the whole list and goes into the pane's folder. In column view each column is a
