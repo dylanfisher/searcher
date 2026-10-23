@@ -722,21 +722,29 @@ private func linkTree() async throws -> (Pane, StubSystemActions, TemporaryFolde
 }
 
 @MainActor @Test func aPaneCreatedFocusedLoadsAheadOfWaitingLoads() async {
-    let holds = (0..<ListingService.mostRunningLoads).map { "/hold-\($0)" }
+    // The last slot is for a focused load, so only three other loads can run beside it.
+    let others = (0..<ListingService.mostRunningLoads - 1).map { "/hold-\($0)" }
+    let focusedHold = "/hold-focused"
     let lister = GatedLister(
-        Dictionary(uniqueKeysWithValues: (holds + ["/normal", "/pane"]).map { ($0, .batches([])) }))
+        Dictionary(
+            uniqueKeysWithValues: (others + [focusedHold, "/normal", "/pane"]).map {
+                ($0, .batches([]))
+            }))
     defer { lister.releaseAll() }
     let service = ListingService(lister: lister)
-    for path in holds {
+    for path in others {
         service.load(Location(path: path)) { _ in }
     }
-    #expect(await lister.waitForCalls(holds.count))
+    #expect(await lister.waitForCalls(others.count))
+    // Asked once the others run, so none of them takes the focused load's slot.
+    service.load(Location(path: focusedHold), priority: .focused) { _ in }
+    #expect(await lister.waitForCall(focusedHold))
     service.load(Location(path: "/normal")) { _ in }
     _ = Pane(
         location: Location(path: "/pane"), service: service, systemActions: StubSystemActions(),
         settings: untouchedSettings(), isFocused: true)
 
-    lister.release(holds[0])
+    lister.release(focusedHold)
 
     #expect(await lister.waitForCall("/pane"))
     #expect(!lister.calls.map(\.path).contains("/normal"))
