@@ -30,8 +30,12 @@ public final class Pane {
     /// Goes up each time the selection changes, other than by being resolved or settled. A load,
     /// patch or sort resolves a copy of the selection off the main thread, and the pane takes that
     /// copy only if this hasn't moved since the copy was made. Otherwise it shows the current
-    /// selection provisionally and settles it off the main thread too.
-    private var selectionVersion = 0
+    /// selection provisionally and settles it off the main thread too. Leaving the folder moves
+    /// it too, so a command can tell whether the user has changed the selection since it ran.
+    private(set) var selectionVersion = 0
+    /// Names to select once the rows list them all, and the selection version they were asked
+    /// for at: dropped once the selection changes.
+    private var namesToSelect: (names: [ExactName], selectionVersion: Int)?
     /// A copy of the selection is being settled off the main thread.
     private var settleIsRunning = false
     /// Where selections settle. Tests suspend a queue of their own here to hold one unsettled.
@@ -509,12 +513,7 @@ public final class Pane {
     }
 
     private func openSelection(foldersIn other: Pane?) {
-        guard let listing = state.listing else { return }
-        // A provisional selection knows only the rows near the cursor. Opening right after a
-        // change that raced a load, patch or sort is rare enough to settle it here.
-        let selection =
-            selection.isProvisional ? onMain { selection.settled(in: listing) } : selection
-        let entries = selection.rows(in: listing).map { listing[$0] }
+        let entries = selectedEntries
         if entries.count == 1, entries[0].type == .directory {
             if let other { return other.navigate(to: location.child(named: entries[0].name)) }
             // A column moves into the folder's column instead, as → does.
@@ -691,6 +690,7 @@ public final class Pane {
             return
         }
         show(.loaded(listing), after: change, resolved: resolved, from: selectionVersion)
+        selectNamesIfListed()
         startSortIfNeeded()
         onChange?()
         startPatch()
@@ -800,6 +800,7 @@ public final class Pane {
         }
         guard version == stateVersion, isArranged(listing) else { return }
         show(state.showing(listing), after: change, resolved: resolved, from: selectionVersion)
+        selectNamesIfListed()
         onChange?()
     }
 
@@ -912,6 +913,7 @@ public final class Pane {
             if case .offline = state { return }
             goOffline()
         }
+        selectNamesIfListed()
         // A load that started before `setSort` arrives in the old sort, and shows in it until
         // this sort lands.
         startSortIfNeeded()
@@ -1006,6 +1008,41 @@ public final class Pane {
             preconditionFailure("rows \(rows) were selected with no listing shown")
         }
         set(Selection(rows: rows, in: listing, cursor: cursor, anchor: anchor))
+    }
+
+    /// The selected entries in row order. A provisional selection knows only the rows near the
+    /// cursor; a command right after a change that raced a load, patch or sort is rare enough to
+    /// settle it here.
+    public var selectedEntries: [DirectoryEntry] {
+        guard let listing = state.listing else { return [] }
+        let selection =
+            selection.isProvisional ? onMain { selection.settled(in: listing) } : selection
+        return selection.rows(in: listing).map { listing[$0] }
+    }
+
+    /// Selects `names`, the cursor on the last, once the rows list them all: at once if they do,
+    /// otherwise when the load or folder change that brings the last of them lands. Does nothing
+    /// if the selection has changed since `selectionVersion` was read, as it does when the user
+    /// selects something else or the pane leaves the folder, before or after this call.
+    func select(_ names: [String], whenListedAtSelectionVersion version: Int) {
+        guard version == selectionVersion, !names.isEmpty else { return }
+        namesToSelect = (names.map(ExactName.init), version)
+        selectNamesIfListed()
+    }
+
+    /// Selects `namesToSelect` if the rows list them all and the selection hasn't changed since
+    /// they were asked for.
+    private func selectNamesIfListed() {
+        guard let wanted = namesToSelect else { return }
+        guard wanted.selectionVersion == selectionVersion else {
+            namesToSelect = nil
+            return
+        }
+        guard let listing = state.listing,
+            wanted.names.allSatisfy({ listing.row(named: $0.name) != nil })
+        else { return }
+        namesToSelect = nil
+        select(Selection(Set(wanted.names), cursor: wanted.names.last))
     }
 
     /// Takes a selection already resolved against the listing shown.

@@ -207,6 +207,21 @@ private struct TextFieldWindow {
     #expect(setup.log.ids.isEmpty)
 }
 
+/// Cmd-Delete deletes to the start of the line in a text field, so Move to Trash has no receiver
+/// there and its item is off.
+@MainActor @Test func moveToTrashHasNoReceiverWhileATextFieldHasTheKeys() throws {
+    let setup = try TextFieldWindow()
+    let menu = try buildMenu(setup.table.registry)
+    #expect(setup.window.makeFirstResponder(setup.field))
+
+    let trash = try item(for: try keyEvent("\u{7F}", modifiers: .command), in: menu)
+
+    #expect(trash.representedObject as? CommandID == FileCommands.moveToTrash.id)
+    #expect(try receiver(of: trash, in: setup.window) == nil)
+    #expect(setup.window.makeFirstResponder(setup.table))
+    #expect(try receiver(of: trash, in: setup.window) === setup.table)
+}
+
 @MainActor @Test func selectAllInTheTableRunsTheCommandOnItsChord() throws {
     let setup = try TextFieldWindow()
     let menu = try buildMenu(setup.table.registry)
@@ -351,8 +366,9 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     let file = try #require(menu.items.first { $0.title == "File" }?.submenu)
     #expect(
         file.items.map(\.title) == [
-            "New Window", "New Tab", "Close Tab", "", "Quick Look", "Reveal in Finder",
-            "Open Terminal Here", "", "Filter",
+            "New Window", "New Folder", "New Tab", "Close Tab", "", "Rename", "Duplicate",
+            "Copy to Other Pane", "Move to Other Pane", "", "Quick Look", "Reveal in Finder",
+            "Open Terminal Here", "", "Move to Trash", "", "Filter",
         ])
     let edit = try #require(menu.items.first { $0.title == "Edit" }?.submenu)
     #expect(edit.items.map(\.title).contains("Copy Path"))

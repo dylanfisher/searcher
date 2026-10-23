@@ -10,6 +10,7 @@ public enum AppCommands {
         TilingCommands.self,
         DualPaneCommands.self,
         WindowCommands.self,
+        FileCommands.self,
     ]
 
     /// Every command in every set, with what it does.
