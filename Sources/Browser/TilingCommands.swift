@@ -27,7 +27,7 @@ public enum TilingCommands: CommandSet {
         "resize", title: resizeTitle, modifiers: [.control, .command])
     public static let zoom = Command(
         id: CommandID("tiling.zoom"), title: "Zoom Pane",
-        chords: [KeyChord(.return, modifiers: [.command, .shift])])
+        chords: [KeyChord("z", modifiers: [.command, .option, .shift])])
     public static let equalize = Command(
         id: CommandID("tiling.equalize"), title: "Equalize Panes",
         chords: [KeyChord("0", modifiers: [.command, .option])])
