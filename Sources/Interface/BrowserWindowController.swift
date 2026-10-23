@@ -104,6 +104,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         window.center()
         tabStrip.didSelectTab = { [weak self] in self?.showWorkspace() }
         window.didChangeFirstResponder = { [weak self] in self?.firstResponderDidChange() }
+        window.takeKey = { [weak self] event in self?.runControlTab(event) ?? false }
         window.delegate = self
         showWorkspace()
         window.initialFirstResponder = paneViewController.keyView
@@ -184,6 +185,23 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         return focusedTable.validateMenuItem(item)
     }
 
+    /// Runs the window command on Ctrl-Tab or Ctrl-Shift-Tab, Show Next or Previous Tab, on the
+    /// focused pane's table, wherever the keys are. `NSWindow.sendEvent` takes these keys for the
+    /// key view loop before any view's `keyDown` sees them, and a menu item shows only its
+    /// command's first chord, Cmd-Shift-] or [. Returns false when the command is off, as with
+    /// one tab, so the key still moves the key view.
+    private func runControlTab(_ event: NSEvent) -> Bool {
+        guard !isClosed, !workspace.isClosed, let chord = KeyChord(event: event),
+            chord.key == .tab, chord.modifiers.contains(.control)
+        else { return false }
+        let table = focusedTable
+        guard let command = table.registry.command(for: chord),
+            Self.windowCommands.contains(command.id), table.canRunCommand(command.id)
+        else { return false }
+        table.run(command.id)
+        return true
+    }
+
     private var focusedTable: ListingTableView {
         guard let table = paneViewController.keyView as? ListingTableView else {
             preconditionFailure("the focused pane's key view isn't a listing table")
@@ -213,8 +231,12 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             preconditionFailure("the selected tab \(tab.id) has no views")
         }
         views.paneControllers = views.paneControllers.filter { tab.panes[$0.key] != nil }
+        // Panes a split or a grid key added to the tab.
+        var added: [PaneViewController] = []
         for (id, pane) in tab.panes where views.paneControllers[id] == nil {
-            views.paneControllers[id] = makePaneController(for: pane, id: id)
+            let controller = makePaneController(for: pane, id: id)
+            views.paneControllers[id] = controller
+            added.append(controller)
         }
         if views.layoutView.superview !== tabHost {
             for view in tabHost.subviews {
@@ -224,6 +246,15 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             tabHost.addSubview(views.layoutView)
         }
         views.layoutView.show(tab.layout, paneViews: views.paneControllers.mapValues(\.view))
+        // A copied pane opens scrolled as its source is, once its view has its frame.
+        for controller in added {
+            guard let source = controller.pane.copiedFrom,
+                let sourceController = views.paneControllers.values.first(where: {
+                    $0.pane === source
+                })
+            else { continue }
+            controller.scroll(like: sourceController)
+        }
         // One pane showing needs no mark.
         let marksFocus = tab.layout.panes.count > 1 && !tab.layout.isZoomed
         for (id, controller) in views.paneControllers {
@@ -374,10 +405,17 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
 }
 
 /// A window that reports each change of its first responder, so the focused pane follows clicks
-/// and the key view loop.
+/// and the key view loop, and offers each key press to `takeKey` before AppKit handles it.
 @MainActor
 private final class BrowserWindow: NSWindow {
     var didChangeFirstResponder: @MainActor () -> Void = {}
+    /// Returns true for a key press it handled, which then goes no further.
+    var takeKey: @MainActor (NSEvent) -> Bool = { _ in false }
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown, takeKey(event) { return }
+        super.sendEvent(event)
+    }
 
     override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
         let made = super.makeFirstResponder(responder)

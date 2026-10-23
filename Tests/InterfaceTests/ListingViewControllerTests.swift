@@ -277,6 +277,38 @@ private func shownNames(_ controller: ListingViewController) -> [String] {
     #expect(!table.visibleRect.intersects(table.rect(ofRow: 2)))
 }
 
+@MainActor @Test func aListOpenedLikeAnotherStillListingTakesItsScrollOnceTheRowsShow() async throws
+{
+    let entries = (0..<2_000).map { file(String(format: "e%04d", $0)) }
+    let source = await controller(showing: entries)
+    source.view.layoutSubtreeIfNeeded()
+    source.pane.select(Selection([ExactName("e0010")], cursor: ExactName("e0010")))
+    let sourceScroll = try #require(source.view as? NSScrollView)
+    sourceScroll.contentView.scroll(to: NSPoint(x: 0, y: 5_000))
+    sourceScroll.reflectScrolledClipView(sourceScroll.contentView)
+    try #require(sourceScroll.contentView.bounds.origin.y == 5_000)
+    let lister = GatedLister(["/folder": .batches([entries])])
+    let pane = Pane(
+        location: Location(path: "/folder"), service: ListingService(lister: lister),
+        systemActions: StubSystemActions(), settings: untouchedSettings(),
+        selecting: ExactName("e0010"))
+    let copy = ListingViewController(pane: pane)
+    pane.onChange = { [weak copy] in copy?.paneDidChange() }
+    copy.view.frame = source.view.frame
+    copy.view.layoutSubtreeIfNeeded()
+
+    copy.scroll(like: source)
+    lister.releaseAll()
+    await settle { pane.state.isLoaded }
+    // Past the pass a scroll to the cursor after a reload waits for.
+    await withCheckedContinuation { continuation in
+        DispatchQueue.main.async { continuation.resume() }
+    }
+
+    let copyScroll = try #require(copy.view as? NSScrollView)
+    #expect(copyScroll.contentView.bounds.origin.y == 5_000)
+}
+
 @MainActor @Test func aMovedCursorIsScrolledIntoViewInTheSamePass() async throws {
     let entries = (0..<2_000).map { file(String(format: "e%04d", $0)) }
     let controller = await controller(showing: entries)

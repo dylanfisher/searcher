@@ -1036,9 +1036,11 @@ final class UIBench {
         static let sortByName = Key(
             characters: "1", keyCode: 18, flags: [.control, .option, .command])
         static let commandF = Key(characters: "f", keyCode: 3, flags: .command)
-        static let splitRight = Key(characters: "\\", keyCode: 42, flags: .command)
-        /// Shift applies to the character: a US keyboard types "|".
-        static let splitDown = Key(characters: "|", keyCode: 42, flags: [.command, .shift])
+        /// Shift applies to the letter.
+        static let splitRight = Key(characters: "T", keyCode: 17, flags: [.command, .shift])
+        /// The key is read without Option, so "T" as for Split Right.
+        static let splitDown = Key(
+            characters: "T", keyCode: 17, flags: [.command, .option, .shift])
 
         /// Cmd-Opt-Shift and an arrow: the tiling key that focuses the pane that way.
         static func focus(_ direction: Direction) -> Key {

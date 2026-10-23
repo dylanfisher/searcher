@@ -87,6 +87,8 @@ public enum MainMenuBuilder {
             .command(WindowCommands.previousTab.id), .command(WindowCommands.nextTab.id),
             .separator,
             .command(TilingCommands.splitRight.id), .command(TilingCommands.splitDown.id),
+            counts(TilingCommands.columnsTitle, TilingCommands.columns),
+            counts(TilingCommands.rowsTitle, TilingCommands.rows),
             .separator,
             // Tab is its key.
             .commandWithoutKey(DualPaneCommands.focusOtherPane.id),
@@ -231,6 +233,16 @@ public enum MainMenuBuilder {
                     }
                     return .command(command.id)
                 }))
+    }
+
+    /// A submenu titled `title` with one item per count, smallest first. A Shift-digit key
+    /// equivalent doesn't match the "!" a US keyboard types for it, so Cmd-Opt-Shift-1 reaches
+    /// its command through the table's `keyDown`, as Cmd-Shift-. does.
+    private static func counts(_ title: String, _ commands: [Int: Command]) -> Item {
+        .submenu(
+            Menu(
+                title: title,
+                items: commands.sorted { $0.key < $1.key }.map { .command($0.value.id) }))
     }
 
     /// Gives each item of a command that turns a setting on and off (`CommandBinding.isChecked`)

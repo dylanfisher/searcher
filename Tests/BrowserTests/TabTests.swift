@@ -287,3 +287,93 @@ private func expectLeavesMatchPanes(_ tab: Tab) {
 
     #expect(throws: DecodingError.self) { try JSONDecoder().decode(TabState.self, from: data) }
 }
+
+// MARK: Split and grid copies
+
+/// A workspace whose one tab's pane at `/r` has listed `tree`, with `a.txt` and `docs` selected
+/// and the cursor on `a.txt`.
+@MainActor
+private func loadedWorkspace() async -> (Workspace, PaneFixture) {
+    let fixture = PaneFixture(at: "/r", folders: tree)
+    let workspace = Workspace(tab: Tab(pane: fixture.pane))
+    await settle { fixture.pane.state.isLoaded }
+    fixture.select("docs", "a.txt")
+    return (workspace, fixture)
+}
+
+@MainActor @Test func splitOpensOnTheSameRowsAndSelectionWithoutListingAgain() async throws {
+    let (workspace, fixture) = await loadedWorkspace()
+    let tab = workspace.selectedTab
+    let calls = fixture.lister.calls.count
+
+    let new = try #require(tab.split(.horizontal, in: bounds))
+
+    #expect(new.state.isLoaded)
+    #expect(new.state.names == fixture.pane.state.names)
+    #expect(new.selection == fixture.pane.selection)
+    #expect(new.selection.cursor == ExactName("a.txt"))
+    // The new pane has the focus and its rows are as new as the old pane's, so nothing lists.
+    #expect(new.isFocused && !fixture.pane.isFocused)
+    #expect(new.load == nil)
+    await drainMainQueue()
+    #expect(fixture.lister.calls.count == calls)
+}
+
+@MainActor @Test func splitOfAPaneStillListingSelectsItsSelectionOnceTheRowsShow() async throws {
+    let (tab, fixture) = makeTab(held: true)
+    fixture.select("a.txt")
+
+    let new = try #require(tab.split(.vertical, in: bounds))
+    #expect(new.state.isLoading)
+    fixture.lister.releaseAll()
+    await settle { new.state.isLoaded }
+
+    #expect(new.selection.cursor == ExactName("a.txt"))
+    #expect(new.selection.rows(in: try #require(new.state.listing)) == [0])
+}
+
+@MainActor @Test func gridOpensNewPanesOnTheFocusedPanesRowsAndClosesTheRest() async throws {
+    let (workspace, fixture) = await loadedWorkspace()
+    let tab = workspace.selectedTab
+    let first = tab.layout.focused
+    let calls = fixture.lister.calls.count
+
+    #expect(tab.makeGrid(columns: 2, rows: 2, in: bounds))
+
+    #expect(tab.panes.count == 4)
+    #expect(tab.layout.focused == first)
+    #expect(tab.focusedPane === fixture.pane)
+    for (id, pane) in tab.panes where id != first {
+        #expect(pane.location == fixture.pane.location)
+        #expect(pane.state.isLoaded && pane.state.names == fixture.pane.state.names)
+        #expect(pane.selection == fixture.pane.selection)
+        #expect(!pane.isFocused)
+    }
+    expectLeavesMatchPanes(tab)
+    await drainMainQueue()
+    #expect(fixture.lister.calls.count == calls)
+
+    let others = tab.panes.filter { $0.key != first }
+    let monitors = others.mapValues { pane in
+        let monitor = StubMonitor()
+        pane.monitor = monitor
+        return monitor
+    }
+
+    #expect(tab.makeGrid(columns: 1, rows: 1, in: bounds))
+
+    #expect(tab.layout.panes == [first])
+    #expect(monitors.values.map(\.stopCount) == [1, 1, 1])
+    #expect(others.values.allSatisfy { $0.monitor == nil })
+    expectLeavesMatchPanes(tab)
+}
+
+@MainActor @Test func gridRefusedBelowTheMinimumSizeChangesNothing() {
+    let (tab, _) = makeTab()
+    let narrow = Rect(x: 0, y: 0, width: 200, height: 800)
+    let before = tab.layout
+
+    #expect(!tab.makeGrid(columns: 2, rows: 1, in: narrow))
+    #expect(tab.layout == before)
+    #expect(tab.panes.count == 1)
+}

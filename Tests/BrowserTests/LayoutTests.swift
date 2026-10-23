@@ -407,3 +407,122 @@ private func isClose(_ a: Double, _ b: Double) -> Bool {
         }
     }
 }
+
+// MARK: Grid
+
+@Test func gridCountsAreReadFromTheTree() throws {
+    var layout = Layout()
+    #expect(layout.columnCount == 1 && layout.rowCount == 1)
+    let first = layout.focused
+    _ = try splitPane(&layout, .horizontal, in: bounds)
+    #expect(layout.columnCount == 2 && layout.rowCount == 1)
+    _ = try splitPane(&layout, .vertical, in: bounds)
+    // p0 | (p1 over p2): two side by side in the top row, two stacked on the right.
+    #expect(layout.columnCount == 2 && layout.rowCount == 2)
+    layout.focus(first)
+    _ = try splitPane(&layout, .horizontal, in: bounds)
+    #expect(layout.columnCount == 3 && layout.rowCount == 2)
+
+    let l = lShape().layout
+    #expect(l.columnCount == 2 && l.rowCount == 2)
+    let g = grid().layout
+    #expect(g.columnCount == 2 && g.rowCount == 2)
+}
+
+/// Each pane's frame, in reading order: top to bottom, then left to right.
+private func readingOrder(_ layout: Layout) -> [PaneID] {
+    let frames = layout.frames(in: bounds)
+    return layout.panes.sorted {
+        let a = frames[$0] ?? Rect(x: 0, y: 0, width: 0, height: 0)
+        let b = frames[$1] ?? Rect(x: 0, y: 0, width: 0, height: 0)
+        return (a.y, a.x) < (b.y, b.x)
+    }
+}
+
+@Test func gridOfThreeByTwoFromOnePaneAddsFiveEvenPanesAndKeepsTheFocus() throws {
+    var layout = Layout()
+    let first = layout.focused
+
+    let made = layout.makeGrid(columns: 3, rows: 2, in: bounds)
+    let change = try #require(made)
+
+    #expect(change.closed.isEmpty)
+    #expect(change.added.count == 5)
+    #expect(layout.focused == first)
+    #expect(readingOrder(layout) == [first] + change.added)
+    #expect(layout.columnCount == 3 && layout.rowCount == 2)
+    #expect(layout.history.first == first && Set(layout.history) == Set(layout.panes))
+    let frames = layout.frames(in: bounds)
+    let width = (1200 - 2 * divider) / 3
+    let height = (800 - divider) / 2
+    for (index, pane) in readingOrder(layout).enumerated() {
+        let frame = try #require(frames[pane])
+        #expect(isClose(frame.width, width), "\(index)")
+        #expect(isClose(frame.height, height), "\(index)")
+        #expect(isClose(frame.x, Double(index % 3) * (width + divider)), "\(index)")
+        #expect(isClose(frame.y, Double(index / 3) * (height + divider)), "\(index)")
+    }
+}
+
+@Test func gridKeepsPanesInReadingOrderAndClosesTheRest() throws {
+    // p0 p1 over p2 p3, p1 focused.
+    var built = grid()
+    built.layout.focus(built[1])
+
+    let made = built.layout.makeGrid(columns: 1, rows: 2, in: bounds)
+    let change = try #require(made)
+
+    #expect(built.layout.panes == [built[0], built[1]])
+    #expect(change.closed == [built[2], built[3]])
+    #expect(change.added.isEmpty)
+    #expect(built.layout.focused == built[1])
+    #expect(built.layout.history.count == 2)
+    #expect(built.layout.columnCount == 1 && built.layout.rowCount == 2)
+}
+
+@Test func theFocusedPaneTakesTheLastKeptSlotWhenItWouldFallOffTheEnd() throws {
+    // p0 p1 over p2 p3, p3 focused.
+    var built = grid()
+
+    let made = built.layout.makeGrid(columns: 2, rows: 1, in: bounds)
+    let change = try #require(made)
+
+    #expect(readingOrder(built.layout) == [built[0], built[3]])
+    #expect(change.closed == [built[1], built[2]])
+    #expect(built.layout.focused == built[3])
+
+    let single = built.layout.makeGrid(columns: 1, rows: 1, in: bounds)
+    #expect(single != nil)
+    #expect(built.layout.panes == [built[3]])
+}
+
+@Test func gridReadsTheLShapeInReadingOrder() throws {
+    // p0 | p1 over p2: p0 and p1 share the top row, so p1 comes second.
+    var built = lShape()
+    built.layout.focus(built[0])
+
+    let made = built.layout.makeGrid(columns: 2, rows: 1, in: bounds)
+    #expect(made != nil)
+
+    #expect(built.layout.panes == [built[0], built[1]])
+}
+
+@Test func gridEndsAZoom() throws {
+    var built = grid()
+    built.layout.toggleZoom()
+
+    let made = built.layout.makeGrid(columns: 2, rows: 2, in: bounds)
+    #expect(made != nil)
+
+    #expect(!built.layout.isZoomed)
+}
+
+@Test func gridRefusesWhenAPaneWouldBeUnderTheMinimum() throws {
+    let narrow = Rect(x: 0, y: 0, width: 3 * minimum + 2 * divider - 1, height: 800)
+    var layout = Layout()
+    let before = layout
+
+    #expect(layout.makeGrid(columns: 3, rows: 1, in: narrow) == nil)
+    #expect(layout == before)
+    #expect(layout.makeGrid(columns: 2, rows: 3, in: narrow) != nil)
+}

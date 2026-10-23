@@ -10,8 +10,8 @@ public final class Tab {
     public let id = TabID()
     public private(set) var layout: Layout
     public private(set) var panes: [PaneID: Pane]
-    /// Runs after an edit that may focus another pane: focus, split, and closing a pane. Its
-    /// workspace sets it, to move the focus of the panes' loads.
+    /// Runs after an edit that may focus another pane or add one: focus, split, a grid, and
+    /// closing a pane. Its workspace sets it, to move the focus of the panes' loads.
     var onFocusChange: (@MainActor () -> Void)?
     /// Set once `closePane` reported `.tab`, `removeFocusedPane` took the last pane, or `close`
     /// ran.
@@ -45,17 +45,36 @@ public final class Tab {
 
     // MARK: Leaves
 
-    /// Splits the focused pane along `axis` and focuses the new pane, which shows the focused
-    /// pane's folder in its view mode and sort, using the same services, settings and system
-    /// actions. Returns `nil` and adds nothing when a half would be under the minimum size.
+    /// Splits the focused pane along `axis` and focuses the new pane, a `Pane.copy` of the
+    /// focused one. Returns `nil` and adds nothing when a half would be under the minimum size.
     @discardableResult
     public func split(_ axis: Axis, in bounds: Rect) -> Pane? {
         let model = focusedPane
         guard let id = layout.split(axis, in: bounds) else { return nil }
-        let pane = model.newPane(at: model.location)
+        let pane = model.copy(takingFocus: model.isFocused)
         panes[id] = pane
         onFocusChange?()
         return pane
+    }
+
+    /// Makes the tab an even grid of `columns` × `rows` (`Layout.makeGrid`). The panes it takes
+    /// out close, as `closePane` closes them, and each new leaf gets a `Pane.copy` of the focused
+    /// pane, which keeps the focus. Returns false and changes nothing when a pane would be under
+    /// the minimum size.
+    @discardableResult
+    public func makeGrid(columns: Int, rows: Int, in bounds: Rect) -> Bool {
+        let model = focusedPane
+        guard let change = layout.makeGrid(columns: columns, rows: rows, in: bounds) else {
+            return false
+        }
+        for id in change.closed {
+            panes.removeValue(forKey: id)?.close()
+        }
+        for id in change.added {
+            panes[id] = model.copy(takingFocus: false)
+        }
+        onFocusChange?()
+        return true
     }
 
     /// Closes the focused pane: cancels its load and stops its watch, then focuses the pane

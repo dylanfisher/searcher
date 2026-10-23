@@ -18,7 +18,8 @@ and Split each built the new pane by hand, copying the view mode, sort and folde
 - **`Pane.newPane(at:)`** makes a pane at a folder in this pane's view mode, sorted as its
   focused column is, with its folder sizes, services, settings and system actions. `Tab.split`,
   New Tab and Open in New Tab all call it, so a new tab from a folder takes the source pane's
-  view mode, as a split and Cmd-T do.
+  view mode, as a split and Cmd-T do. (Superseded for splits: a split copies the pane, see
+  [0061](0061-split-keys-and-grid-layouts.md).)
 - **`WindowCommands.openInNewTab`** ("Open in New Tab") adds a selected tab at
   `CommandContext.folder`, made from the selected tab's focused pane. It has no chord and no menu
   item, and is off without a folder; run without one, it traps. Keys and menu items leave

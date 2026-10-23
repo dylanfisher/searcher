@@ -45,6 +45,11 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     private var shownOrder: (column: SortColumn, ascending: Bool, filter: NameFilter)?
     /// A new folder, sort or filter is showing and the cursor's row hasn't been scrolled to yet.
     private var scrollsToCursorAfterReload = false
+    /// Where to scroll once the first rows show, for a list opened as another one was scrolled.
+    private var pendingScrollOrigin: NSPoint?
+    /// Goes up each time the view takes another list's scroll position, which drops a scroll to
+    /// the cursor still waiting for the next pass.
+    private var scrollGeneration = 0
     /// The modifier keys held in the event being handled, read when a click changes the
     /// selection. Tests replace it.
     var currentModifierFlags: @MainActor () -> NSEvent.ModifierFlags = {
@@ -133,7 +138,11 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         }
         let cursorMoved = pane.selection.cursor != shownCursor
         shownCursor = pane.selection.cursor
-        if reloaded {
+        if reloaded, listing != nil, let origin = pendingScrollOrigin {
+            pendingScrollOrigin = nil
+            scrollsToCursorAfterReload = false
+            scroll(to: origin)
+        } else if reloaded {
             guard scrollsToCursorAfterReload, let listing else { return }
             if pane.selection.cursorRow(in: listing) != nil {
                 scrollsToCursorAfterReload = false
@@ -171,14 +180,41 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// release build on top of the reload and the drawing; a pass later it takes about 4 ms. The
     /// cursor is read again then, since a key may have moved it.
     private func scrollToCursorInTheNextPass() {
+        let generation = scrollGeneration
         DispatchQueue.main.async { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, let listing = self.listing,
+                guard let self, self.scrollGeneration == generation, let listing = self.listing,
                     let row = self.pane.selection.cursorRow(in: listing)
                 else { return }
                 self.tableView.scrollRowToVisible(row)
             }
         }
+    }
+
+    /// Scrolls the rows as `other` has them scrolled, for a list opened on the same rows, in
+    /// place of the scroll to the cursor a new folder gets. Rows that haven't shown yet take the
+    /// position when they do.
+    func scroll(like other: ListingViewController) {
+        guard let source = other.view as? NSScrollView else {
+            preconditionFailure("the list's view is \(other.view)")
+        }
+        let origin = source.contentView.bounds.origin
+        scrollGeneration += 1
+        scrollsToCursorAfterReload = false
+        if listing == nil {
+            pendingScrollOrigin = origin
+        } else {
+            scroll(to: origin)
+        }
+    }
+
+    private func scroll(to origin: NSPoint) {
+        guard let scrollView = view as? NSScrollView else {
+            preconditionFailure("the list's view is \(view)")
+        }
+        scrollView.layoutSubtreeIfNeeded()
+        scrollView.contentView.scroll(to: origin)
+        scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
     /// Tells the pane how many whole rows fit, for Page Up and Page Down.

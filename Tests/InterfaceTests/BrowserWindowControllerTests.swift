@@ -54,7 +54,7 @@ private struct Fixture {
     /// Splits the focused pane right with its key and returns the new pane's ID.
     func splitRight() throws -> PaneID {
         let before = Set(tab.layout.panes)
-        try press(try keyEvent("\\", modifiers: .command))
+        try press(try keyEvent("T", modifiers: [.command, .shift]))
         return try #require(Set(tab.layout.panes).subtracting(before).first)
     }
 }
@@ -345,7 +345,7 @@ private func shiftedBracket(_ typed: String, keyCode: UInt16) throws -> NSEvent 
     let otherPane = try #require(menuItem(DualPaneCommands.focusOtherPane.id, in: menu))
     #expect(!column.validateMenuItem(otherPane))
 
-    column.keyDown(with: try keyEvent("\\", modifiers: .command))
+    column.keyDown(with: try keyEvent("T", modifiers: [.command, .shift]))
 
     #expect(fixture.tab.layout.panes.count == 2)
 }
@@ -531,7 +531,7 @@ private func receiver(of item: NSMenuItem, in window: NSWindow) throws -> NSResp
 @MainActor @Test func movingAPaneUpThenDownSwapsBackAndTheKeysStayOnIt() async throws {
     let fixture = try await Fixture()
     let top = fixture.tab.layout.focused
-    try fixture.press(try keyEvent("\\", modifiers: [.command, .shift]))
+    try fixture.press(try keyEvent("T", characters: "ˇ", modifiers: [.command, .option, .shift]))
     let bottom = try #require(fixture.tab.layout.panes.first { $0 != top })
     let original = fixture.tab.layout.root
     #expect(fixture.tab.layout.focused == bottom)
@@ -552,7 +552,7 @@ private func receiver(of item: NSMenuItem, in window: NSWindow) throws -> NSResp
 @MainActor @Test func movingAPaneDownThenUpSwapsBackAndTheKeysStayOnIt() async throws {
     let fixture = try await Fixture()
     let top = fixture.tab.layout.focused
-    try fixture.press(try keyEvent("\\", modifiers: [.command, .shift]))
+    try fixture.press(try keyEvent("T", characters: "ˇ", modifiers: [.command, .option, .shift]))
     let bottom = try #require(fixture.tab.layout.panes.first { $0 != top })
     try fixture.press(try arrow(NSUpArrowFunctionKey, [.command, .option, .shift]))
     #expect(fixture.tab.layout.focused == top)
@@ -594,4 +594,105 @@ private func receiver(of item: NSMenuItem, in window: NSWindow) throws -> NSResp
 
     #expect(fixture.tab.layout.focused == left)
     #expect(try fixture.keyTable === fixture.paneController(left).keyView)
+}
+
+// MARK: Split state, grid keys and Ctrl-Tab
+
+/// A key event as a US keyboard sends it, with the key code that reads its own character.
+@MainActor
+private func usKey(
+    _ ignoringModifiers: String, characters: String, keyCode: UInt16,
+    _ modifiers: NSEvent.ModifierFlags
+) throws -> NSEvent {
+    try #require(
+        NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
+            windowNumber: 0, context: nil, characters: characters,
+            charactersIgnoringModifiers: ignoringModifiers, isARepeat: false, keyCode: keyCode))
+}
+
+@MainActor @Test func splitOpensOnTheSameSelectionAndScrollPosition() async throws {
+    let names = (0..<300).map { "file\(1000 + $0).txt" }
+    let controller = BrowserWindowController(
+        location: Location(path: "/big"),
+        service: ListingService(
+            lister: StubLister(["/big": names.map { file($0) }, "/": [folder("big")]])
+        ) { "Test Disk" },
+        systemActions: StubSystemActions(), settings: untouchedSettings())
+    let window = try #require(controller.window)
+    window.contentView?.layoutSubtreeIfNeeded()
+    let tab = controller.workspace.selectedTab
+    let source = tab.focusedPane
+    await settle { source.state.isLoaded }
+    source.select(Selection([ExactName("file1150.txt")], cursor: ExactName("file1150.txt")))
+    let sourceList = try #require(controller.paneViewController(for: tab.layout.focused))
+        .listingViewController
+    let sourceScroll = try #require(sourceList.view as? NSScrollView)
+    // Scrolled away from the cursor, so the new pane can't match by scrolling to it.
+    sourceScroll.contentView.scroll(to: NSPoint(x: 0, y: 2000))
+    sourceScroll.reflectScrolledClipView(sourceScroll.contentView)
+    let origin = sourceScroll.contentView.bounds.origin
+    try #require(origin.y == 2000)
+
+    let table = try #require(window.firstResponder as? ListingTableView)
+    table.keyDown(with: try keyEvent("T", modifiers: [.command, .shift]))
+    // The table scrolls to a new folder's cursor a pass after it shows the rows.
+    await withCheckedContinuation { continuation in
+        DispatchQueue.main.async { continuation.resume() }
+    }
+
+    let newID = tab.layout.focused
+    #expect(tab.panes.count == 2)
+    let newPane = try #require(tab.panes[newID])
+    #expect(newPane !== source)
+    #expect(newPane.selection == source.selection)
+    let newList = try #require(controller.paneViewController(for: newID)).listingViewController
+    #expect(newList.tableView.selectedRowIndexes == [150])
+    let newScroll = try #require(newList.view as? NSScrollView)
+    #expect(newScroll.contentView.bounds.origin.y == origin.y)
+}
+
+@MainActor @Test func gridKeysAsAUSKeyboardTypesThemMakeAnEvenGrid() async throws {
+    let fixture = try await Fixture()
+    let first = fixture.tab.layout.focused
+
+    // Option-3 types "£"; Option-Shift-2 types "€", and Shift-2 alone "@".
+    try fixture.press(try usKey("3", characters: "£", keyCode: 20, [.command, .option]))
+    try fixture.press(try usKey("@", characters: "€", keyCode: 19, [.command, .option, .shift]))
+
+    #expect(fixture.tab.layout.columnCount == 3 && fixture.tab.layout.rowCount == 2)
+    #expect(fixture.tab.panes.count == 6)
+    #expect(fixture.tab.layout.focused == first)
+    let view = try fixture.layoutView
+    #expect(view.subviews.count == 6)
+    #expect(try fixture.keyTable === fixture.paneController(first).keyView)
+}
+
+@MainActor @Test func ctrlTabSwitchesTabsThroughTheWindowFromTheTableAndTheFilterField()
+    async throws
+{
+    let fixture = try await Fixture()
+    let first = fixture.tab
+    try fixture.press(try keyEvent("t", modifiers: .command))
+    let second = fixture.tab
+    try #require(second !== first)
+    let next = try usKey("\t", characters: "\t", keyCode: 48, .control)
+    let previous = try usKey("\u{19}", characters: "\u{19}", keyCode: 48, [.control, .shift])
+
+    // The window, not the table, sees the key first, as AppKit delivers it.
+    fixture.window.sendEvent(next)
+    #expect(fixture.tab === first)
+    #expect(try fixture.keyTable === fixture.paneController(first.layout.focused).keyView)
+    fixture.window.sendEvent(previous)
+    #expect(fixture.tab === second)
+
+    try fixture.press(try keyEvent("f", modifiers: .command))
+    #expect(fixture.window.firstResponder is NSTextView)
+    fixture.window.sendEvent(next)
+    #expect(fixture.tab === first)
+
+    fixture.window.sendEvent(try shiftedBracket("}", keyCode: 30))
+    #expect(fixture.tab === second)
+    fixture.window.sendEvent(try shiftedBracket("{", keyCode: 33))
+    #expect(fixture.tab === first)
 }

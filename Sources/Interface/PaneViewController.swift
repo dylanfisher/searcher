@@ -67,6 +67,13 @@ public final class PaneViewController: NSViewController {
     }
     private static let focusRingWidth = 2.0
 
+    /// Shows the list scrolled as `other`'s is, for a pane a split or grid key copied from
+    /// `other`'s. Column view keeps its own scrolling.
+    func scroll(like other: PaneViewController) {
+        guard pane.viewMode == .list, other.pane.viewMode == .list else { return }
+        listingViewController.scroll(like: other.listingViewController)
+    }
+
     /// Runs after the pane shows a new location, for the window title.
     public var onLocationChange: (@MainActor (Location) -> Void)?
     /// Runs each time the views have been updated for a change of the pane, in the same run loop
