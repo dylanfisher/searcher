@@ -713,7 +713,8 @@ private final class HeldWalks: @unchecked Sendable {
     func release(_ path: String, bytes: Int64, isPartial: Bool = false) {
         condition.withLock {
             failures.remove(Array(path.utf8))
-            totals[Array(path.utf8)] = TreeSizeWalker.Total(bytes: bytes, isPartial: isPartial)
+            totals[Array(path.utf8)] = TreeSizeWalker.Total(
+                bytes: bytes, files: 1, isPartial: isPartial)
             condition.broadcast()
         }
     }

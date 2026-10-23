@@ -286,6 +286,25 @@ private func preScan(_ path: String) async throws -> Int64 {
         #expect(all.contains { $0.bytes > 0 && $0.bytes < 3 * mebibyte / 2 && $0.files == 0 })
     }
 
+    /// "N of M files" must not end with N over M: the pre-scan counts what the copier counts.
+    @Test func filesEndAtThePreScannedCountOnATreeWithSymlinks() async throws {
+        let folder = try TemporaryFolder("FileCopierTests")
+        let source = folder.url.path + "/tree"
+        try makeFolder(source + "/inner")
+        try makeFile(source + "/one.bin", size: 1_000, seed: 1)
+        try makeFile(source + "/inner/two.bin", size: 2_000, seed: 2)
+        try FileManager.default.createSymbolicLink(
+            atPath: source + "/link", withDestinationPath: "one.bin")
+        try FileManager.default.createSymbolicLink(
+            atPath: source + "/inner/dangling", withDestinationPath: "missing.bin")
+        let total = try await BlockingCallThread.run { try TreeSizeWalker().walk(source) }
+
+        let done = try await copy(FileCopier(), source, to: folder.url.path + "/copy")
+
+        #expect(total == TreeSizeWalker.Total(bytes: 3_000, files: 4, isPartial: false))
+        #expect(done == CopyProgress(bytes: total.bytes, files: total.files))
+    }
+
     @Test func progressReachesCallersAtMostEvery100Milliseconds() async throws {
         let folder = try TemporaryFolder("FileCopierTests")
         let source = folder.url.path + "/tree"
