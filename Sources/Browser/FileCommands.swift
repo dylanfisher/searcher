@@ -94,7 +94,7 @@ public enum FileCommands: CommandSet {
     /// Queues `operation` and selects what it made in `pane` once the pane lists it, then runs
     /// `selected`. Nothing runs if it made nothing or the selection changed first.
     @MainActor
-    private static func run(
+    static func run(
         _ operation: FileOperation, selectingIn pane: Pane, queue: FileOperationQueue,
         then selected: (@MainActor () -> Void)? = nil
     ) {
@@ -134,7 +134,7 @@ public enum FileCommands: CommandSet {
     }
 
     @MainActor
-    private static func selectedPaths(in pane: Pane) -> [String] {
+    static func selectedPaths(in pane: Pane) -> [String] {
         pane.selectedEntries.map { pane.location.child(named: $0.name).path }
     }
 

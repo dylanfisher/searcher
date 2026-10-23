@@ -35,6 +35,20 @@ private final class StubMonitor: FolderMonitoring {
     func stop() { stopCount += 1 }
 }
 
+/// A clipboard in memory, so no test writes a pasteboard.
+@MainActor
+private final class MemoryClipboard: FileClipboard {
+    private(set) var changeCount = 0
+    private var urls: [URL] = []
+
+    func write(_ urls: [URL]) {
+        self.urls = urls
+        changeCount += 1
+    }
+
+    func fileURLs() -> [URL] { urls }
+}
+
 /// Browser windows that are never shown, the first one open at `/root` with its pane loaded.
 @MainActor
 private struct Fixture {
@@ -44,7 +58,8 @@ private struct Fixture {
     init() async throws {
         windows = WorkspaceWindows(
             service: ListingService(lister: lister) { "Test Disk" },
-            systemActions: StubSystemActions(), settings: untouchedSettings(), folderSizes: nil)
+            systemActions: StubSystemActions(), settings: untouchedSettings(), folderSizes: nil,
+            clipboard: MemoryClipboard())
         windows.showsWindows = false
         try await open()
     }
@@ -303,6 +318,29 @@ private final class SheetLog {
         }
         windows.prompter.dismiss = { _ in }
     }
+}
+
+@MainActor @Test func aCutInOneWindowDimsTheRowInAnotherShowingTheFolder() async throws {
+    let fixture = try await Fixture()
+    let first = try #require(fixture.windows.controllers.first)
+    let second = try await fixture.open()
+    let menu = try MainMenuBuilder.build(appName: "Searcher", registry: AppCommands.registry())
+    let cut = try #require(
+        menu.items.first { $0.title == "Edit" }?.submenu?.items.first { $0.title == "Cut" })
+    first.workspace.selectedTab.focusedPane.select(
+        Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+    let table = try fixture.keyTable(first)
+    #expect(table.validateMenuItem(cut))
+
+    #expect(table.tryToPerform(try #require(cut.action), with: cut))
+
+    #expect(first.clipboard === fixture.windows.clipboard)
+    #expect(second.clipboard === fixture.windows.clipboard)
+    let list = try fixture.keyTable(second)
+    let row = try #require(
+        second.workspace.selectedTab.focusedPane.state.listing?.row(named: "a.txt"))
+    let view = list.delegate?.tableView?(list, viewFor: list.tableColumns[0], row: row)
+    #expect(view?.alphaValue == ListingViewController.cutAlpha)
 }
 
 @MainActor @Test func theWindowsShareOneQueueAndItsFileCommandsAreOnWithASelection() async throws {

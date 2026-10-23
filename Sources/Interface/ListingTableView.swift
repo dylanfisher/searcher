@@ -103,10 +103,15 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
     }
 
     /// Disables a command's menu item while the command would do nothing, such as Back at the
-    /// start of the pane's history. Its key still reaches `keyDown`, where the command does
-    /// nothing. Other items sent here, such as Select All, stay enabled. Checks the item of the
-    /// pane's current mode, such as "as Columns".
+    /// start of the pane's history, and so Cut, Copy and Paste. Its key still reaches `keyDown`,
+    /// where the command does nothing. Other items sent here, such as Select All, stay enabled.
+    /// Checks the item of the pane's current mode, such as "as Columns".
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if let clipboardAction = [MainMenuBuilder.cut, MainMenuBuilder.copy, MainMenuBuilder.paste]
+            .first(where: { $0.action == item.action })
+        {
+            return command(on: clipboardAction).map { canRunCommand($0.id) } ?? false
+        }
         guard item.action == #selector(runMenuCommand(_:)) else { return true }
         guard let id = item.representedObject as? CommandID else {
             preconditionFailure("menu item \"\(item.title)\" holds no command ID")
@@ -126,9 +131,30 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
     /// Select All from the Edit menu runs the command bound to its chord, as the key would. The
     /// pane owns the selection, so `NSTableView`'s own select-all never runs.
     override func selectAll(_ sender: Any?) {
-        guard let chord = MainMenuBuilder.selectAll.chord,
-            let command = registry.command(for: chord)
-        else {
+        runCommand(on: MainMenuBuilder.selectAll)
+    }
+
+    /// Cut, Copy and Paste from the Edit menu run the clipboard commands on their chords. Text
+    /// fields answer these actions themselves, so they keep the keys.
+    @objc func cut(_ sender: Any?) {
+        runCommand(on: MainMenuBuilder.cut)
+    }
+
+    @objc func copy(_ sender: Any?) {
+        runCommand(on: MainMenuBuilder.copy)
+    }
+
+    @objc func paste(_ sender: Any?) {
+        runCommand(on: MainMenuBuilder.paste)
+    }
+
+    private func command(on action: MainMenuBuilder.StandardAction) -> Command? {
+        action.chord.flatMap(registry.command(for:))
+    }
+
+    /// Runs the command bound to `action`'s chord, or beeps when none is.
+    private func runCommand(on action: MainMenuBuilder.StandardAction) {
+        guard let command = command(on: action) else {
             beep()
             return
         }

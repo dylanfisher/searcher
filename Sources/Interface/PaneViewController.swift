@@ -51,6 +51,8 @@ public final class PaneViewController: NSViewController {
         let toggleOperations: @MainActor () -> Void
         /// Runs the file commands; nil where nothing answers its questions.
         let fileOperations: FileOperationQueue?
+        /// The app's clipboard, for Cut, Copy and Paste; nil where there is none.
+        let clipboard: CutState?
         /// Runs after each command, so the window shows what it changed.
         let didRunCommand: @MainActor () -> Void
     }
@@ -58,7 +60,12 @@ public final class PaneViewController: NSViewController {
     /// Set by the window showing the pane, and again by the window it moves to. Without it, as
     /// tests show a pane on its own, commands get a context with no workspace, which traps on a
     /// tiling, other-pane, tab or window command.
-    var windowLink: WindowLink?
+    var windowLink: WindowLink? {
+        didSet {
+            listingViewController.clipboard = windowLink?.clipboard
+            columnViewController.clipboard = windowLink?.clipboard
+        }
+    }
 
     /// Draws a ring around the pane, for the pane with the keys while another pane shows.
     var showsFocus = false {
@@ -308,7 +315,7 @@ public final class PaneViewController: NSViewController {
             showFilter: { [weak self] in self?.showFilter() },
             toggleOperations: link.toggleOperations, folder: folder,
             fileOperations: link.fileOperations,
-            editName: { [weak self] in self?.editName() })
+            editName: { [weak self] in self?.editName() }, clipboard: link.clipboard)
     }
 
     /// Rename's hook. Rename is on only with a queue in the context, and the field renames

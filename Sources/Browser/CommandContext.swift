@@ -31,6 +31,9 @@ public struct CommandContext {
     /// Starts editing the name of the pane's one selected entry in place, for Rename. Only the
     /// pane's view can; nil where it can't, and Rename is off then.
     public let editName: (@MainActor () -> Void)?
+    /// The app's file clipboard and its cut, for Cut, Copy and Paste. Nil where there is none,
+    /// as in a window the UI bench opens; those commands are off then.
+    public let clipboard: CutState?
     private let givenWorkspace: Workspace?
     private let givenWorkspaces: WorkspaceList?
 
@@ -59,7 +62,8 @@ public struct CommandContext {
         },
         folder: Location? = nil,
         fileOperations: FileOperationQueue? = nil,
-        editName: (@MainActor () -> Void)? = nil
+        editName: (@MainActor () -> Void)? = nil,
+        clipboard: CutState? = nil
     ) {
         if let workspace {
             precondition(
@@ -78,6 +82,7 @@ public struct CommandContext {
         self.folder = folder
         self.fileOperations = fileOperations
         self.editName = editName
+        self.clipboard = clipboard
     }
 
     /// The window's tabs. A context built for one pane, as the benches and pane tests build it,

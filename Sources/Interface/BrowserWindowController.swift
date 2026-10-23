@@ -29,6 +29,9 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// Runs the file commands' operations; nil in a window whose questions nothing answers, as
     /// the UI bench opens it, where the file commands are off.
     let fileOperations: FileOperationQueue?
+    /// The app's clipboard, for Cut, Copy and Paste; nil in a window the UI bench opens, where
+    /// those commands are off.
+    let clipboard: CutState?
     /// The operations panel under the panes, hidden until shown.
     let operations: OperationsViewController
     private let operationsHeight: NSLayoutConstraint
@@ -72,10 +75,11 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
 
     /// A window showing `workspace`, one of `workspaces`. `takePaneController` hands over another
     /// window's view controller for a pane that moved into `workspace`. `fileOperations` runs
-    /// the file commands, which are off without it.
+    /// the file commands, which are off without it; the clipboard commands are off without
+    /// `clipboard`.
     init(
         workspace: Workspace, workspaces: WorkspaceList,
-        fileOperations: FileOperationQueue? = nil,
+        fileOperations: FileOperationQueue? = nil, clipboard: CutState? = nil,
         takePaneController: @escaping @MainActor (PaneID) -> PaneViewController? = { _ in nil }
     ) {
         // The window has its own tab strip; AppKit's tabs would add a second kind of tab and
@@ -96,6 +100,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         tabStrip = strip
         tabStripHeight = strip.view.heightAnchor.constraint(equalToConstant: 0)
         self.fileOperations = fileOperations
+        self.clipboard = clipboard
         operations = OperationsViewController(
             control: fileOperations.map(OperationsViewController.Control.sending(to:)) ?? .none)
         operationsHeight = operations.view.heightAnchor.constraint(equalToConstant: 0)
@@ -343,7 +348,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             },
             didClosePane: { [weak self] result in self?.didClose(result) },
             toggleOperations: { [weak self] in self?.toggleOperations() },
-            fileOperations: fileOperations,
+            fileOperations: fileOperations, clipboard: clipboard,
             didRunCommand: { [weak self] in
                 self?.onCommand?()
                 self?.showWorkspace()

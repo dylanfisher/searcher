@@ -18,6 +18,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     static let notDownloadedLabel = "Not downloaded"
     /// The name cell's badge view, shown only for an entry that isn't downloaded.
     static let notDownloadedBadgeIdentifier = NSUserInterfaceItemIdentifier("notDownloadedBadge")
+    /// The opacity of a cut entry's cells.
+    static let cutAlpha: CGFloat = 0.5
 
     let tableView: ListingTableView
     /// Fills the Quick Look panel while this list controls it.
@@ -54,6 +56,16 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     private var scrollGeneration = 0
     /// The modifier keys held in the event being handled, read when a click changes the
     /// selection. Tests replace it.
+    /// The app's clipboard, whose cut entries in this folder draw dimmed. Nil shows none.
+    var clipboard: CutState? {
+        didSet {
+            guard clipboard !== oldValue else { return }
+            clipboard?.observe(for: self) { [weak self] in self?.cutDidChange() }
+            cutDidChange()
+        }
+    }
+    /// The names of the cut entries in the folder shown, read when the rows or the cut change.
+    private var cutNames: Set<String> = []
     var currentModifierFlags: @MainActor () -> NSEvent.ModifierFlags = {
         NSApp?.currentEvent?.modifierFlags ?? []
     }
@@ -115,6 +127,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         var reloaded = false
         if shownVersion != pane.stateVersion {
             shownVersion = pane.stateVersion
+            readCutNames()
             let shown = listing
             listing = pane.state.listing
             if shown != nil, listing != nil, pane.location == shownLocation {
@@ -176,6 +189,18 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             }
             label(rowView, row: row, in: listing)
         }
+    }
+
+    private func readCutNames() {
+        cutNames = clipboard?.cutNames(in: pane.location) ?? []
+    }
+
+    /// Dims the rows on screen that the new cut holds, and undims the ones it left.
+    private func cutDidChange() {
+        let shown = cutNames
+        readCutNames()
+        guard cutNames != shown, listing != nil else { return }
+        refreshRows()
     }
 
     /// Scrolls to the cursor's row once this run loop pass ends. In the pass that reloads 100k
@@ -391,6 +416,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             showNotDownloadedBadge(listing[row].isDataless, in: cell)
         }
         cell.textField?.stringValue = text(column, row: row, in: listing)
+        cell.alphaValue = cutNames.contains(listing[row].name) ? Self.cutAlpha : 1
     }
 
     /// What `column`'s cell shows for `row` of `listing`.
