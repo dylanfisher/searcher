@@ -8,7 +8,8 @@ import Browser
 /// position and folder monitor (docs/decisions/0057-windows-and-tear-out.md). Every window runs
 /// its file commands through one `FileOperationQueue`, whose questions show as sheets on the
 /// most recently active window and whose snapshots go to every window's operations panel
-/// (docs/decisions/0067-operations-panel.md).
+/// (docs/decisions/0067-operations-panel.md). Every window cuts, copies and pastes through one
+/// `CutState`, so a cut in one window pastes as a move in another.
 @MainActor
 public final class WorkspaceWindows {
     public let list = WorkspaceList()
@@ -25,6 +26,8 @@ public final class WorkspaceWindows {
     let fileOperations: FileOperationQueue
     /// Asks the queue's questions with sheets on the most recently active window.
     let prompter: OperationPrompter
+    /// The app's clipboard and its cut, shared by every window.
+    public let clipboard: CutState
     /// The unfinished operations in the queue's latest snapshots, for a window that opens while
     /// operations run.
     private var unfinished: [FileOperationQueue.Snapshot] = []
@@ -37,12 +40,13 @@ public final class WorkspaceWindows {
 
     public init(
         service: ListingService, systemActions: any SystemActions, settings: Settings,
-        folderSizes: FolderSizeService?
+        folderSizes: FolderSizeService?, clipboard: any FileClipboard
     ) {
         self.service = service
         self.systemActions = systemActions
         self.settings = settings
         self.folderSizes = folderSizes
+        self.clipboard = CutState(clipboard: clipboard)
         // A stream keeps the snapshots in the order the queue sent them on their way to the
         // main actor.
         let (stream, feed) = AsyncStream.makeStream(of: [FileOperationQueue.Snapshot].self)
@@ -102,6 +106,7 @@ public final class WorkspaceWindows {
         }?.window
         let controller = BrowserWindowController(
             workspace: workspace, workspaces: list, fileOperations: fileOperations,
+            clipboard: clipboard,
             takePaneController: { [weak self] id in self?.takePaneController(id) })
         controller.onCommand = { [weak self] in self?.showList() }
         controller.onClose = { [weak self] closed in self?.didClose(closed) }

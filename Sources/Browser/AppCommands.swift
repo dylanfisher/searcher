@@ -11,6 +11,7 @@ public enum AppCommands {
         DualPaneCommands.self,
         WindowCommands.self,
         FileCommands.self,
+        ClipboardCommands.self,
     ]
 
     /// Every command in every set, with what it does.

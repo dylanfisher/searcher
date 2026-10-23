@@ -84,9 +84,12 @@ private func buildMenu(_ registry: CommandRegistry) throws -> NSMenu {
     let registry = try AppCommands.registry()
     let menu = try buildMenu(registry)
     var listed = Set(allItems(menu).compactMap { $0.representedObject as? CommandID })
-    // Edit's Select All runs the command bound to its chord when the table has the keys.
-    if let chord = MainMenuBuilder.selectAll.chord, let selectAll = registry.command(for: chord) {
-        listed.insert(selectAll.id)
+    // Edit's Cut, Copy, Paste and Select All run the commands bound to their chords when the
+    // table has the keys.
+    for action in MainMenuBuilder.actionsRunningCommands {
+        if let chord = action.chord, let command = registry.command(for: chord) {
+            listed.insert(command.id)
+        }
     }
 
     let missing = AppCommands.bindings.map(\.command).filter { !listed.contains($0.id) }
@@ -157,8 +160,7 @@ private func buildMenu(_ registry: CommandRegistry) throws -> NSMenu {
     #expect(titles.contains("Zoom"))
 }
 
-/// An unshown window holding a pane's table, whose Cmd-A (Select All), Cmd-C and Cmd-V are bound
-/// to commands that only record, and a text field.
+/// An unshown window holding a pane's table, whose commands only record, and a text field.
 @MainActor
 private struct TextFieldWindow {
     let window = NSWindow(
@@ -170,14 +172,7 @@ private struct TextFieldWindow {
 
     init() throws {
         window.isReleasedWhenClosed = false
-        var registry = try AppCommands.registry()
-        for key: Character in ["c", "v"] {
-            try registry.register(
-                Command(
-                    id: CommandID("file.\(key)"), title: "File \(key)",
-                    chords: [KeyChord(.character(key), modifiers: .command)]))
-        }
-        table.registry = registry
+        table.registry = try AppCommands.registry()
         table.runCommand = { [log] in log.ids.append($0) }
         table.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name")))
         table.frame = NSRect(x: 0, y: 100, width: 400, height: 200)
@@ -194,7 +189,7 @@ private struct TextFieldWindow {
     let editor = try #require(setup.window.firstResponder as? NSTextView)
     #expect(editor.isFieldEditor)
 
-    for key in ["a", "c", "v"] {
+    for key in ["a", "x", "c", "v"] {
         let press = try keyEvent(key, modifiers: .command)
         let item = try item(for: press, in: menu)
         #expect(try receiver(of: item, in: setup.window) === editor, "Cmd-\(key)")
@@ -220,6 +215,52 @@ private struct TextFieldWindow {
     #expect(try receiver(of: trash, in: setup.window) == nil)
     #expect(setup.window.makeFirstResponder(setup.table))
     #expect(try receiver(of: trash, in: setup.window) === setup.table)
+}
+
+/// Move Items Here has no text-editing meaning, so its item is off while a text field has the
+/// keys and the field gets Cmd-Opt-V.
+@MainActor @Test func moveItemsHereHasNoReceiverWhileATextFieldHasTheKeys() throws {
+    let setup = try TextFieldWindow()
+    let menu = try buildMenu(setup.table.registry)
+    #expect(setup.window.makeFirstResponder(setup.field))
+
+    let moveHere = try item(for: try keyEvent("v", modifiers: [.command, .option]), in: menu)
+
+    #expect(moveHere.representedObject as? CommandID == ClipboardCommands.moveHere.id)
+    #expect(try receiver(of: moveHere, in: setup.window) == nil)
+    #expect(setup.window.makeFirstResponder(setup.table))
+    #expect(try receiver(of: moveHere, in: setup.window) === setup.table)
+}
+
+@MainActor @Test func cutCopyAndPasteInTheTableRunTheCommandsOnTheirChords() throws {
+    let setup = try TextFieldWindow()
+    let menu = try buildMenu(setup.table.registry)
+    #expect(setup.window.makeFirstResponder(setup.table))
+
+    for key in ["x", "c", "v"] {
+        let item = try item(for: try keyEvent(key, modifiers: .command), in: menu)
+        #expect(try receiver(of: item, in: setup.window) === setup.table, "Cmd-\(key)")
+        #expect(setup.table.tryToPerform(try #require(item.action), with: item), "Cmd-\(key)")
+    }
+
+    #expect(
+        setup.log.ids == [
+            ClipboardCommands.cut.id, ClipboardCommands.copy.id, ClipboardCommands.paste.id,
+        ])
+}
+
+@MainActor @Test func cutCopyAndPasteAreOffWhileTheirCommandsWouldDoNothing() throws {
+    let setup = try TextFieldWindow()
+    let menu = try buildMenu(setup.table.registry)
+    let on: Set<CommandID> = [ClipboardCommands.copy.id]
+    setup.table.canRunCommand = { on.contains($0) }
+
+    let enabled = try ["x", "c", "v"].map { key in
+        setup.table.validateMenuItem(
+            try item(for: try keyEvent(key, modifiers: .command), in: menu))
+    }
+
+    #expect(enabled == [false, true, false])
 }
 
 @MainActor @Test func selectAllInTheTableRunsTheCommandOnItsChord() throws {

@@ -405,6 +405,25 @@ private func shownNames(_ controller: ListingViewController) -> [String] {
     #expect(controller.tableView.style == .fullWidth)
 }
 
+@MainActor @Test func cutRowsDrawDimmedUntilTheCutEnds() async throws {
+    let pasteboard = NSPasteboard(name: NSPasteboard.Name("searcher-test-\(UUID().uuidString)"))
+    defer { pasteboard.releaseGlobally() }
+    let clipboard = CutState(clipboard: PasteboardFileClipboard(pasteboard: pasteboard))
+    let controller = await controller(showing: [file("a"), file("b")])
+    controller.clipboard = clipboard
+    func alphas() throws -> [CGFloat] {
+        try (0..<2).map { try cell(controller, row: $0, column: 0).alphaValue }
+    }
+    #expect(try alphas() == [1, 1])
+
+    clipboard.cut(["/folder/a"])
+    #expect(try alphas() == [ListingViewController.cutAlpha, 1])
+
+    pasteboard.clearContents()
+    clipboard.clipboardMayHaveChanged()
+    #expect(try alphas() == [1, 1])
+}
+
 @MainActor @Test func aClickThatSelectsMostRowsNamesTheRowsLeftOut() async throws {
     let controller = await controller(
         showing: [file("a"), file("b"), file("c"), file("d"), file("e")])

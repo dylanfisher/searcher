@@ -20,7 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// never makes them.
     private lazy var windows = WorkspaceWindows(
         service: service, systemActions: systemActions, settings: settings,
-        folderSizes: folderSizes)
+        folderSizes: folderSizes, clipboard: PasteboardFileClipboard(pasteboard: .general))
     private let bench: UIBench?
 
     init(bench: UIBench?) {
@@ -81,6 +81,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let window = openHomeWindow()
         NSApp.activate()
         LaunchWarmup.shared.start(after: window)
+    }
+
+    /// Another app may have written the clipboard while the user was in it, which ends a cut,
+    /// so the cut rows stop looking dimmed.
+    func applicationDidBecomeActive(_ notification: Notification) {
+        guard bench == nil else { return }
+        windows.clipboard.clipboardMayHaveChanged()
     }
 
     /// A Dock click with no browser window open opens one. With a window open, even a minimized
