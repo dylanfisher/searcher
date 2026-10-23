@@ -964,3 +964,32 @@ private func cancelAllFinishesAtOnce(_ queue: FileOperationQueue) async -> Bool 
     files.releaseAll()
     #expect(await watcher.waitUntilFinished(copy))
 }
+
+/// Quitting reads `unfinishedCount` the moment Cmd-Q is pressed, before any snapshot of a copy
+/// just queued; a reported drop failure, finished as it is made, isn't counted.
+@Test func unfinishedCountCountsASubmissionAtOnceUntilItFinishes() async throws {
+    let files = FakeFiles()
+    files.holdScan(of: "/S/held")
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher)
+    #expect(queue.unfinishedCount == 0)
+
+    await queue.report(
+        .receive(name: nil, app: "Mail", into: "/A"),
+        errors: [FileOperationError(reason: .unreachable, path: "/A", errno: ETIMEDOUT)])
+    #expect(queue.unfinishedCount == 0)
+
+    let held = queue.submit(.copy(["/S/held"], into: "/B"))
+    #expect(queue.unfinishedCount == 1)
+    let trash = queue.submit(.trash(["/A/old"]))
+    #expect(queue.unfinishedCount == 2)
+    #expect(await files.events.wait { $0.contains("holding scan /S/held") })
+    try await pause()
+    #expect(queue.unfinishedCount >= 1)
+
+    files.letScanGo(of: "/S/held")
+    files.releaseAll()
+    _ = await held.value
+    _ = await trash.value
+    #expect(queue.unfinishedCount == 0)
+}
