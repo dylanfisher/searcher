@@ -3,7 +3,7 @@ import Browser
 
 extension KeyChord {
     /// The chord a key event spells, or nil for a key `KeyChord.Key` has no case for (Home and End,
-    /// F-keys, forward delete, keypad Enter, backspace) or a dead key that typed nothing. The
+    /// forward delete, keypad Enter, backspace) or a dead key that typed nothing. The
     /// first of `candidates(for:)`.
     init?(event: NSEvent) {
         guard let chord = Self.candidates(for: event).first else { return nil }
@@ -71,6 +71,7 @@ extension KeyChord {
         case .delete: "\u{8}"
         case .space: " "
         case .escape: "\u{1B}"
+        case .function(let number): Self.functionKey(NSF1FunctionKey + number - 1)
         }
     }
 
@@ -105,6 +106,8 @@ extension KeyChord {
             case NSRightArrowFunctionKey: return .right
             case NSPageUpFunctionKey: return .pageUp
             case NSPageDownFunctionKey: return .pageDown
+            case NSF1FunctionKey...NSF35FunctionKey:
+                return .function(Int(scalar.value) - NSF1FunctionKey + 1)
             // AppKit's other function keys, which `Key` has no case for yet.
             case 0xF700...0xF8FF: return nil
             default: break

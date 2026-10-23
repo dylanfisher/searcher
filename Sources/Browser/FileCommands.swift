@@ -31,6 +31,15 @@ public enum FileCommands: CommandSet {
         id: CommandID("file.moveToOtherPane"), title: "Move to Other Pane",
         chords: [KeyChord("m", modifiers: [.command, .shift])])
 
+    /// The Commander F-key preset: the chord each command gets, after its own, while
+    /// `Settings.commanderFKeys` is on. F5 and F6 ask first, as Cmd-Shift-C and M do.
+    public static let commanderFKeys: [CommandID: KeyChord] = [
+        copyToOtherPane.id: KeyChord(.function(5)),
+        moveToOtherPane.id: KeyChord(.function(6)),
+        newFolder.id: KeyChord(.function(7)),
+        moveToTrash.id: KeyChord(.function(8)),
+    ]
+
     // A key runs its command whether or not it is enabled, so each one checks again and does
     // nothing when it is off.
     public static var bindings: [CommandBinding] {

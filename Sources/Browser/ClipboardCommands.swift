@@ -71,8 +71,9 @@ public enum ClipboardCommands: CommandSet {
 
     /// The selected entries' file URLs. Each says whether it is a folder, from the listing, so
     /// building it reads nothing from the disk; a folder's ends in a slash, as Finder writes it.
+    /// The list's services take these too.
     @MainActor
-    private static func selectedURLs(in pane: Pane) -> [URL] {
+    public static func selectedURLs(in pane: Pane) -> [URL] {
         pane.selectedEntries.map { entry in
             URL(
                 fileURLWithPath: pane.location.child(named: entry.name).path,
