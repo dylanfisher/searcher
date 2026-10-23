@@ -505,7 +505,7 @@ private func stopEverything(_ windows: WorkspaceWindows) async {
 
     let alert = try #require(fixture.windows.quitAlert())
     #expect(alert.messageText == "Quit while an undo is waiting to run?")
-    _ = await undo.value
+    #expect(await bounded(undo) != nil)
     await stopEverything(fixture.windows)
 }
 

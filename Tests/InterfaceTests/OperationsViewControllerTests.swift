@@ -203,5 +203,5 @@ private func snapshot(
 
     #expect(try fixture.row(1).detailLabel.stringValue == "“/V” is gone.")
     #expect(
-        try fixture.row(2).detailLabel.stringValue == "“/V” is gone, so this undo is dropped.")
+        try fixture.row(2).detailLabel.stringValue == "“/V” is gone. This undo is dropped.")
 }
