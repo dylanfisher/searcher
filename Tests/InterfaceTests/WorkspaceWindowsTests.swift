@@ -376,6 +376,29 @@ private final class SheetLog {
     }
 }
 
+@MainActor @Test func returnOnOneSelectedFileOpensTheRenameFieldOnItsRowAndOnTwoOpensNothing()
+    async throws
+{
+    let fixture = try await Fixture()
+    let controller = try #require(fixture.windows.controllers.first)
+    let table = try fixture.keyTable(controller)
+    let field = try #require(table.dataSource as? ListingViewController).renameField
+    let pane = controller.workspace.selectedTab.focusedPane
+    let returnKey = try keyEvent("\r")
+
+    pane.select(
+        Selection([ExactName("a.txt"), ExactName("b.txt")], cursor: ExactName("b.txt")))
+    try fixture.press(returnKey, in: controller)
+    #expect(!field.isShown)
+
+    pane.select(Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+    try fixture.press(returnKey, in: controller)
+    #expect(field.isEditing)
+    #expect(field.field.stringValue == "a.txt")
+    let row = try #require(pane.state.listing?.row(named: "a.txt"))
+    #expect(field.field.frame.midY == table.rect(ofRow: row).midY)
+}
+
 /// A trash of `/root/a.txt` that failed: the snapshot the queue sends once, as it finishes.
 private func failedTrash(_ id: Int) -> FileOperationQueue.Snapshot {
     FileOperationQueue.Snapshot(
