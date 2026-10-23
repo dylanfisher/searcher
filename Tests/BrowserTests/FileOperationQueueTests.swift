@@ -27,6 +27,8 @@ final class FakeFiles: @unchecked Sendable {
     private var allReleased = false
     private var copyFailures: [String: FileOperationError] = [:]
     private var cancelFailures: [String: FileOperationError] = [:]
+    private var moveFailures: [String: FileOperationError] = [:]
+    private var finishesDespiteCancel: Set<String> = []
     private var progressSteps = 0
 
     init(releasingAll: Bool = false) {
@@ -56,6 +58,17 @@ final class FakeFiles: @unchecked Sendable {
     /// what it wrote.
     func failCancel(of source: String, with error: FileOperationError) {
         condition.withLock { cancelFailures[source] = error }
+    }
+
+    /// The next move to `destination` throws `error`.
+    func failMove(to destination: String, with error: FileOperationError) {
+        condition.withLock { moveFailures[destination] = error }
+    }
+
+    /// The copy of `source` returns as if it had finished when it is cancelled: a cancel that
+    /// arrives as the copy returns.
+    func finishDespiteCancel(of source: String) {
+        condition.withLock { _ = finishesDespiteCancel.insert(source) }
     }
 
     func holdScan(of path: String) {
@@ -112,6 +125,12 @@ final class FakeFiles: @unchecked Sendable {
             },
             makeCopier: { FakeCopier(files: self) },
             move: { source, destination throws(FileOperationError) in
+                if let failure = self.condition.withLock({
+                    self.moveFailures.removeValue(forKey: destination)
+                }) {
+                    self.events.append("move failed \(source) to \(destination)")
+                    throw failure
+                }
                 self.events.append("move \(source) to \(destination)")
             },
             trash: { path throws(FileOperationError) in
@@ -121,10 +140,6 @@ final class FakeFiles: @unchecked Sendable {
                 self.events.append("trash \(path)")
                 return URL(
                     fileURLWithPath: "/S/.Trashes/501/" + (path as NSString).lastPathComponent)
-            },
-            hasTrash: { folder throws(FileOperationError) in
-                self.events.append("trash probe \(folder)")
-                return self.condition.withLock { !self.hasNoTrash }
             },
             deletePermanently: { path throws(FileOperationError) in
                 self.events.append("delete \(path)")
@@ -136,9 +151,6 @@ final class FakeFiles: @unchecked Sendable {
             makeFolder: { name, folder throws(FileOperationError) in
                 self.events.append("make folder \(folder)/\(name)")
                 return folder + "/" + name
-            },
-            swap: { first, second throws(FileOperationError) in
-                self.events.append("swap \(first) with \(second)")
             },
             isTaken: { name, folder throws(FileOperationError) in
                 self.condition.withLock { self.placed[folder + "/" + name] != nil }
@@ -163,7 +175,7 @@ final class FakeFiles: @unchecked Sendable {
             while !allReleased, !released.contains(source), !copier.isCancelled {
                 condition.wait()
             }
-            if copier.isCancelled {
+            if copier.isCancelled, !finishesDespiteCancel.contains(source) {
                 return .failure(cancelFailures[source] ?? CancellationError())
             }
             if let failure = copyFailures[source] { return .failure(failure) }

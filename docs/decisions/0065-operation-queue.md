@@ -62,43 +62,51 @@ that didn't happen.
   state always arrives. A finished operation is in one snapshot and then leaves the list, and
   nothing is sent once nothing is left. The copied bytes include the item being copied: the copy
   thread only stores its latest progress, and while anything runs the queue checks it once per
-  interval, so `copyfile`'s report every 0.5 ms never calls into the actor. Each operation's `onFinish` gets its final state at
-  once, outside the limit. Time comes from an injected `Clock`.
+  interval, so `copyfile`'s report every 0.5 ms never calls into the actor. Each operation's
+  `onFinish` gets its final state at once, outside the limit. Time comes from an injected
+  `Clock`.
 - **Pause.** A paused copy holds in `FileCopier`'s callback; other work holds before its next
   item. A paused operation keeps its lane.
 - **Questions are awaited, not blocking.** The queue asks through `Prompts`, two async calls
   Interface answers: `resolve` for a `ConflictRequest`, `confirm` for a `ConfirmRequest`. The
   operation shows `waitingForAnswer` and every other operation keeps running, its own lane's
   included: conflicts are asked after the plan and before the operation joins its lane. A cancel
-  or an unmount finishes a waiting operation at once, and the late answer is dropped.
+  or an unmount finishes a waiting operation at once, and the late answer is dropped. A question
+  asked while an item runs (no Trash, below) is answered nil by a cancel or an unmount, so the
+  operation cleans up what it staged before it finishes.
 - **Conflicts per top-level item.** The plan `lstat`s each item's name in the destination folder
   and, when it is taken, the source, so the question shows both items' kind, size and date
   without Interface reading the disk. Nothing inside two folders of one name is compared;
-  replace swaps the whole folder, there is no merge. Answers are replace, skip or keep both,
+  replace puts the whole folder in place, there is no merge. Answers are replace, skip or keep both,
   one question per conflict until an answer applies to all. Keep both takes
   `UniqueName.keepingBoth` when the item runs ("report 3.jpg" → "report 3 2.jpg"). An item
-  onto itself, as a paste into the folder it came from, asks nothing: a copy keeps both, a move
-  does nothing.
-- **Replace by swap.** The item is staged in a new `.searcher-replace-<UUID>` folder beside the
-  destination, under its own name: copied there, or moved there within one volume. A cancel up
-  to here removes the staged item (or moves it back) and the folder, and leaves the original.
-  Then `FileMover.swap` exchanges the two, so the original is in the staging folder under its
-  own name, and goes to the Trash from there, named as it was; the record lists
-  `.replaced(path, originalTrashedTo:)` before the change that put the new item there. If the
-  trash fails, the swap is undone and the staged item removed. `swap` is `renamex_np` with
-  `RENAME_SWAP`; HFS+ and exFAT refuse it with `ENOTSUP` (checked on macOS 26.6 images; APFS and
-  FAT swap), and there it is three `rename(2)` calls through a temporary name, during which the
-  destination is missing for a moment.
-- **No Trash.** A trash asks once per operation, when its first item fails with `noTrash`; that
-  failure moved nothing. Yes deletes that item and every later one that has no Trash; no ends
-  the operation cancelled, with earlier items, if any, already trashed. A replace has to know
-  before it copies, so once a replace is chosen the queue asks `Trasher.hasTrash` of the
-  destination folder: it makes an empty file there, trashes it, and deletes it from the Trash.
-  `FileManager.url(for: .trashDirectory, appropriateFor:)` can't answer it: it threw
-  `featureUnsupported` for HFS+, APFS and exFAT images that have a Trash. Without one, one
-  `ConfirmRequest.deleteImmediately` names every item the operation would replace, and nothing
-  is copied until it is answered; yes deletes each original after its swap (`.deleted`), no
-  cancels the operation.
+  onto itself, as a paste into the folder it came from, asks nothing: a copy takes Finder's
+  Duplicate name (`UniqueName.duplicate`, "report copy.txt", then "report copy 2.txt"), as
+  Finder names a paste there; a move does nothing.
+- **Replace, trash first.** In this order, for each item answered replace:
+  1. The item is staged in a new `.searcher-replace-<UUID>` folder beside the destination,
+     under its own name: copied there, or moved there within one volume. A cancel up to the end
+     of this step, including one that arrives as the copy returns, removes the staged item (or
+     moves it back) and the folder, and leaves the original.
+  2. The original goes to the Trash with `trashItem` from its own path, so Finder's Put Back
+     works, and its URL goes into the record as `.replaced(path, originalTrashedTo:)`, listed
+     before the change that put the new item there.
+  3. The staged item moves to the original's path with `FileMover.move`, which refuses to
+     replace anything, and the staging folder is removed.
+
+  Between steps 2 and 3 the path is empty for the length of one rename, microseconds on a local
+  disk. A crash there leaves the original in the Trash, where Put Back restores it, and the new
+  item in the staging folder; nothing is deleted on its own. If step 3 fails, the original
+  moves back from its Trash URL to its path, the staged item is removed, and the item fails
+  with the move's error; if the move back fails too, that error is reported and the record
+  keeps the Trash URL.
+- **No Trash.** `noTrash` from a trash is how the queue learns a volume has no Trash; the failed
+  call moved nothing. It then asks one `ConfirmRequest.deleteImmediately` for the operation and
+  waits, the item where it was. For a trash it names this item and the ones after it; for a
+  replace, this original and those of the later replaces, with the new item staged. Yes deletes
+  the item, or the original with the record saying `.deleted(path)`, and every later one that
+  has no Trash, without asking again. No ends the operation cancelled: a replace removes its
+  staged item and leaves the original; earlier items, if any, stay as they went.
 - **Unmount.** Queues add themselves to `VolumeEvents`, weakly, as panes do. Will-unmount fails
   every unfinished operation with a path at or under the mount point (comparable forms), source
   or destination, with `unreachable` on the mount point: one planning, asking or waiting in its
@@ -126,13 +134,15 @@ that didn't happen.
   times the updates, and the panel draws all of them anyway.
 - **Trash the source of a cross-volume move** — rejected: Finder deletes it, and the trash would
   fill with every item moved to another disk.
-- **Stage the replacing item under a temporary name beside the original, no folder** —
-  rejected: after the swap the original would carry that name into the Trash, where Finder
-  hides it as a dot file.
-- **Trash the original, then rename the staged item into place** — rejected: the destination is
-  empty between the two, and a failed rename leaves the original only in the Trash.
-- **Ask about no Trash after the swap, when the trash fails** — rejected: the new item would
-  already be in place while the question is open, and a no would have to swap back.
+- **Swap the staged item into place (`renamex_np` with `RENAME_SWAP`), then trash the original
+  from the staging folder** — the first version, rejected: the trashed original's Put Back
+  pointed at the staging folder, which was gone; knowing before the swap whether the volume has
+  a Trash took a probe (trash an empty file made for the purpose, then delete it from the
+  Trash), since `FileManager.url(for: .trashDirectory, appropriateFor:)` threw
+  `featureUnsupported` on HFS+, APFS and exFAT images that have one; and HFS+ and exFAT refuse
+  `RENAME_SWAP` with `ENOTSUP`, so there the swap was three renames and not atomic anyway.
+- **Ask about no Trash before staging** — rejected: it needs the probe above; asking with the
+  new item staged costs only the copy when the answer is no.
 - **Ask conflicts when the operation reaches its lane** — rejected: a copy queued behind a long
   one would ask only when that one ends, perhaps after the user has left; asking first also
   keeps a question from holding the lane.
@@ -148,14 +158,14 @@ operations) should weigh. A queued copy whose pre-scan is slow can start after a
 the same disk. A refused operation names the path, and Interface words the message.
 Each item runs on a thread of its own, about 50 ms of thread starts for a 1,000-item trash.
 `Trasher.deletePermanently` now has a second caller, the cross-volume move, as its doc says.
+
 Operations on paths reached through a link aren't matched by the refusal check, as 0049's panes
 aren't, nor by will-unmount. Will-unmount fails an operation still planning, but its plan
 thread stays stuck in a dead share's call as a cancel's does; no cap on plan threads was
 added, since nothing here makes more of them. Each copy or move into a folder costs one
 `lstat` per item, and one more per conflict, on the plan thread. A replace adds a folder, a
-swap and a trash per item, and a probe file per operation. Finder's Put Back on a replaced
-original aims at the staging folder, which is gone; Undo (M4.9) uses the record. An item
-created at a name after the plan looked fails with `exists`, as before. Whether an SMB share swaps, has a Trash, and gives
-`noTrash` for it is checked at M4.13. exFAT refuses `RENAME_EXCL` as well as `RENAME_SWAP`, so
-`FileMover.move`, and with it renames and moves within an exFAT volume, fail there with
-`other`; that is a separate fix.
+trash and a move per item. An item created at a name after the plan looked fails with
+`exists`, as before; one created at the replaced path between steps 2 and 3 fails the move,
+and the original comes back only if its path is free again. Whether an SMB share has a Trash,
+and gives `noTrash` without one, is checked at M4.13. On exFAT, `FileMover.move` checks the
+destination itself ([0063](0063-move-and-names.md)).

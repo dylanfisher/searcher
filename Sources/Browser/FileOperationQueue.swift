@@ -10,11 +10,12 @@ import Foundation
 /// refused. Every blocking call runs on a `BlockingCallThread`. The observer gets the state of
 /// every operation, at most once per `snapshotInterval`.
 ///
-/// Before an operation runs, it asks its questions through `Prompts`: what to do about each
-/// item whose name the destination already has, and whether to delete where a volume has no
-/// Trash. It waits for the answers without holding a lane. A replace copies the item into a
-/// staging folder beside the destination, swaps it into place, and trashes the original. A
-/// volume about to unmount fails the operations that read or write on it. See
+/// Before an operation runs, it asks through `Prompts` what to do about each item whose name
+/// the destination already has, and waits for the answers without holding a lane. A replace
+/// copies the item into a staging folder beside the destination, trashes the original, and
+/// moves the copy into place. Where a volume has no Trash, it asks once per operation whether
+/// to delete instead. A volume about to unmount fails the operations that read or write on it.
+/// See
 /// docs/decisions/0065-operation-queue.md.
 public actor FileOperationQueue {
     /// The shortest time between two snapshots.
@@ -81,15 +82,11 @@ public actor FileOperationQueue {
         var makeCopier: @Sendable () -> any Copier
         var move: @Sendable (String, String) throws(FileOperationError) -> Void
         var trash: @Sendable (String) throws(FileOperationError) -> URL
-        /// Whether the volume of a folder has a Trash.
-        var hasTrash: @Sendable (String) throws(FileOperationError) -> Bool
         var deletePermanently: @Sendable (String) throws(FileOperationError) -> Void
         var makeUntitledFolder: @Sendable (String) throws(FileOperationError) -> String
         /// Makes a folder by the name given first in the folder given second, and returns its
         /// path.
         var makeFolder: @Sendable (String, String) throws(FileOperationError) -> String
-        /// Exchanges two items on one volume.
-        var swap: @Sendable (String, String) throws(FileOperationError) -> Void
         /// Whether a folder, the second argument, has an item by the name given first.
         var isTaken: @Sendable (String, String) throws(FileOperationError) -> Bool
         /// The item at a path, or nil if there is none.
@@ -99,10 +96,9 @@ public actor FileOperationQueue {
             volumeOf: VolumeIdentity.init(path:), measure: OperationPlan.measure,
             makeCopier: { FileCopier() }, move: FileMover.move,
             trash: { path throws(FileOperationError) in try Trasher().trash(path) },
-            hasTrash: { folder throws(FileOperationError) in try Trasher().hasTrash(in: folder) },
             deletePermanently: Trasher.deletePermanently,
             makeUntitledFolder: FolderMaker.makeUntitledFolder,
-            makeFolder: FolderMaker.makeFolder(named:in:), swap: FileMover.swap(_:with:),
+            makeFolder: FolderMaker.makeFolder(named:in:),
             isTaken: UniqueName.isTaken, inspect: OperationPlan.inspect)
     }
 
@@ -209,7 +205,11 @@ public actor FileOperationQueue {
         entry.control.cancel()
         entry.copier.cancel()
         // A running one finishes in `run`, once its copy or its item stops.
-        if isWaiting(entry) { finishWaiting(entry, as: .cancelled(leftBehind: nil)) }
+        if entry.pendingAnswer != nil {
+            answer(id, nil)
+        } else if isWaiting(entry) {
+            finishWaiting(entry, as: .cancelled(leftBehind: nil))
+        }
     }
 
     /// The volume mounted at `mountPoint` is about to unmount. Every unfinished operation with a
@@ -230,7 +230,9 @@ public actor FileOperationQueue {
             entry.control.cancel()
             entry.copier.cancel()
             // A running one fails in `run`, once its copy or its item stops.
-            if isWaiting(entry) {
+            if entry.pendingAnswer != nil {
+                answer(entry.id, nil)
+            } else if isWaiting(entry) {
                 entry.errors.append(gone)
                 finishWaiting(entry, as: .failed)
             }
@@ -296,11 +298,10 @@ public actor FileOperationQueue {
     }
 
     /// Asks the questions `plan` raises before the operation joins its lane, so one waiting for
-    /// an answer holds no lane: one per conflict, until an answer applies to all; then, if a
-    /// replace would put an item in place of one on a volume without a Trash, whether to
-    /// delete that one instead. An item onto itself, as in a paste into the folder it came
-    /// from, asks nothing: a copy keeps both, a move has nothing to do. Returns false once the
-    /// operation has finished: cancelled, failed by an unmount, or the delete declined.
+    /// an answer holds no lane: one per conflict, until an answer applies to all. An item onto
+    /// itself, as in a paste into the folder it came from, asks nothing: a copy takes Finder's
+    /// Duplicate name, a move has nothing to do. Returns false once the operation has finished,
+    /// cancelled or failed by an unmount.
     private func ask(_ entry: Entry, about plan: OperationPlan) async -> Bool {
         var asked: [Int] = []
         for (index, item) in plan.items.enumerated() {
@@ -331,37 +332,6 @@ public actor FileOperationQueue {
             guard !entry.phase.isFinished else { return false }
             entry.choices[index] = answer.choice
             if answer.appliesToAll { forAll = answer.choice }
-        }
-        let replaced = asked.filter { entry.choices[$0] == .replace }
-        if let first = replaced.first, let destination = plan.items[first].destination {
-            let folder = (destination as NSString).deletingLastPathComponent
-            let fileSystem = fileSystem
-            entry.phase = .preparing
-            changed()
-            let probed = await BlockingCallThread.run {
-                Result { () throws(FileOperationError) in try fileSystem.hasTrash(folder) }
-            }
-            guard !entry.phase.isFinished else { return false }
-            switch probed {
-            case .success(true):
-                break
-            case .success(false):
-                entry.phase = .waitingForAnswer
-                changed()
-                let existing = replaced.compactMap { plan.items[$0].conflict?.existing.path }
-                let confirmed = await prompts.confirm(
-                    .deleteImmediately(existing, operation: entry.id))
-                guard !entry.phase.isFinished else { return false }
-                guard confirmed else {
-                    finish(entry, as: .cancelled(leftBehind: nil))
-                    return false
-                }
-                entry.deletesWithoutTrash = true
-            case .failure(let error):
-                entry.errors.append(error)
-                finish(entry, as: .failed)
-                return false
-            }
         }
         entry.progress.total = OperationPlan.total(
             of: plan.items.indices.filter { entry.choices[$0] != .skip }.map { plan.items[$0] })
@@ -435,7 +405,7 @@ public actor FileOperationQueue {
             let control = entry.control
             let choice = entry.choices[index]
             let deletesWithoutTrash = entry.deletesWithoutTrash
-            let outcome = await BlockingCallThread.run {
+            var outcome = await BlockingCallThread.run {
                 Self.perform(
                     item, of: operation, choice: choice, deletesWithoutTrash: deletesWithoutTrash,
                     fileSystem: fileSystem, copier: copier, control: control
@@ -446,30 +416,44 @@ public actor FileOperationQueue {
                 }
             }
             entry.control.live = CopyProgress(bytes: 0, files: 0)
+            if case .needsDelete(let staged) = outcome {
+                // Asks once for the operation, naming this original and those of the later
+                // replaces, then deletes it or takes the staged item away.
+                let later = plan.items.indices.filter {
+                    $0 > index && entry.choices[$0] == .replace
+                }
+                let request = ConfirmRequest.deleteImmediately(
+                    [staged.destination] + later.compactMap { plan.items[$0].destination },
+                    operation: entry.id)
+                let confirmed = await confirmWhileRunning(entry, request) == true
+                if confirmed { entry.deletesWithoutTrash = true }
+                outcome = await BlockingCallThread.run {
+                    confirmed
+                        ? Self.finishReplace(
+                            staged, deletesWithoutTrash: true, fileSystem: fileSystem)
+                        : Self.unstage(staged, fileSystem: fileSystem)
+                }
+            } else if isTrash, case .failed(let error, _) = outcome, error.reason == .noTrash,
+                !deletesWithoutTrash
+            {
+                // The volume has no Trash, and the item is where it was. Asks once whether to
+                // delete it and the items after it, then runs it again.
+                let request = ConfirmRequest.deleteImmediately(
+                    plan.items[index...].map(\.source), operation: entry.id)
+                guard await confirmWhileRunning(entry, request) == true else {
+                    wasCancelled = true
+                    break
+                }
+                entry.deletesWithoutTrash = true
+                continue
+            }
             var stops = false
             switch outcome {
             case .done(let changes, let copied):
                 entry.record.changes += changes
                 entry.add(copied)
-            case .failed(let error, _)
-            where isTrash && error.reason == .noTrash && !deletesWithoutTrash:
-                // The volume has no Trash, and the item is where it was. Asks once whether to
-                // delete it and the items after it, then runs it again.
-                entry.phase = .waitingForAnswer
-                changed()
-                let confirmed = await prompts.confirm(
-                    .deleteImmediately(plan.items[index...].map(\.source), operation: entry.id))
-                guard !entry.phase.isFinished else {
-                    release(plan.lane)
-                    return
-                }
-                entry.phase = .running
-                changed()
-                if confirmed {
-                    entry.deletesWithoutTrash = true
-                    continue
-                }
-                wasCancelled = true
+            case .needsDelete:
+                preconditionFailure("\(id) asked about deleting and still needs to")
             case .failed(let error, let changes):
                 entry.record.changes += changes
                 entry.errors.append(error)
@@ -498,6 +482,33 @@ public actor FileOperationQueue {
         release(plan.lane)
     }
 
+    /// Asks `request` for an operation that is running an item, which may have something
+    /// staged to clean up, so a cancel or an unmount answers it at once with nil, and `run`
+    /// finishes the operation once it has cleaned up. The user's later answer is dropped.
+    private func confirmWhileRunning(_ entry: Entry, _ request: ConfirmRequest) async -> Bool? {
+        entry.phase = .waitingForAnswer
+        changed()
+        let prompts = prompts
+        let id = entry.id
+        let answer = await withCheckedContinuation {
+            (continuation: CheckedContinuation<Bool?, Never>) in
+            entry.pendingAnswer = continuation
+            Task {
+                let confirmed = await prompts.confirm(request)
+                self.answer(id, confirmed)
+            }
+        }
+        entry.phase = .running
+        changed()
+        return answer
+    }
+
+    private func answer(_ id: ID, _ confirmed: Bool?) {
+        guard let entry = unfinished(id), let pending = entry.pendingAnswer else { return }
+        entry.pendingAnswer = nil
+        pending.resume(returning: confirmed)
+    }
+
     /// Frees an operation's lane, if it had one, for the next operation waiting in it.
     private func release(_ lane: VolumeIdentity?) {
         guard let lane else { return }
@@ -511,6 +522,119 @@ public actor FileOperationQueue {
         /// The item failed; `changes` is what it changed before it did.
         case failed(FileOperationError, changes: [OperationRecord.Change])
         case cancelled(leftBehind: FileOperationError?)
+        /// A replace whose original has nowhere to go: its volume has no Trash, and the user
+        /// hasn't agreed to delete it. The new item is staged; the original is untouched.
+        case needsDelete(StagedReplace)
+    }
+
+    /// A replace with its new item staged and the original still at `destination`.
+    private struct StagedReplace: Sendable {
+        let source: String
+        let destination: String
+        /// The folder beside `destination` that holds the staged item.
+        let staging: String
+        let isMove: Bool
+        /// A move within one volume: the item was moved, not copied, into `staging`.
+        let movesWithin: Bool
+        let crossesVolumes: Bool
+        let copied: CopyProgress
+
+        var stagedItem: String {
+            staging + "/" + (destination as NSString).lastPathComponent
+        }
+
+        func with(copied: CopyProgress) -> StagedReplace {
+            StagedReplace(
+                source: source, destination: destination, staging: staging, isMove: isMove,
+                movesWithin: movesWithin, crossesVolumes: crossesVolumes, copied: copied)
+        }
+    }
+
+    /// Ends a replace without touching the original: the staged item goes back to its source
+    /// for a move within one volume and is deleted otherwise, and the staging folder with it.
+    /// Runs on a `BlockingCallThread`.
+    private static func unstage(_ staged: StagedReplace, fileSystem: FileSystem) -> ItemOutcome {
+        do {
+            try removeStaged(staged, fileSystem: fileSystem)
+        } catch {
+            return .cancelled(leftBehind: error)
+        }
+        return .cancelled(leftBehind: nil)
+    }
+
+    private static func removeStaged(_ staged: StagedReplace, fileSystem: FileSystem)
+        throws(FileOperationError)
+    {
+        if staged.movesWithin {
+            try fileSystem.move(staged.stagedItem, staged.source)
+        } else {
+            try fileSystem.deletePermanently(staged.stagedItem)
+        }
+        try fileSystem.deletePermanently(staged.staging)
+    }
+
+    /// Puts a staged item in place: the original goes to the Trash from its own path, so
+    /// Finder's Put Back works, or is deleted when `deletesWithoutTrash` and its volume has
+    /// no Trash; then the staged item moves to its path with `FileMover.move`, which refuses
+    /// to replace anything. If that move fails, the original comes back from the Trash and the
+    /// staged item is taken away. Runs on a `BlockingCallThread`.
+    private static func finishReplace(
+        _ staged: StagedReplace, deletesWithoutTrash: Bool, fileSystem: FileSystem
+    ) -> ItemOutcome {
+        let destination = staged.destination
+        /// Fails with `error` after taking the staged item away; `changes` is what stays.
+        func failed(_ error: FileOperationError, changes: [OperationRecord.Change])
+            -> ItemOutcome
+        {
+            do {
+                try removeStaged(staged, fileSystem: fileSystem)
+            } catch let cleanup {
+                return .failed(cleanup, changes: changes)
+            }
+            return .failed(error, changes: changes)
+        }
+        let original: OperationRecord.Change
+        var trashed: URL?
+        do {
+            let url = try fileSystem.trash(destination)
+            trashed = url
+            original = .replaced(destination, originalTrashedTo: url)
+        } catch let error where error.reason == .noTrash {
+            guard deletesWithoutTrash else { return .needsDelete(staged) }
+            do {
+                try fileSystem.deletePermanently(destination)
+            } catch {
+                return failed(error, changes: [])
+            }
+            original = .deleted(destination)
+        } catch {
+            return failed(error, changes: [])
+        }
+        do {
+            try fileSystem.move(staged.stagedItem, destination)
+        } catch {
+            guard let trashed else { return failed(error, changes: [original]) }
+            do {
+                try fileSystem.move(trashed.path, destination)
+            } catch let restore {
+                return .failed(restore, changes: [original])
+            }
+            return failed(error, changes: [])
+        }
+        let placed: OperationRecord.Change =
+            staged.isMove
+            ? .moved(from: staged.source, to: destination) : .created(destination)
+        do {
+            try fileSystem.deletePermanently(staged.staging)
+            if staged.isMove, staged.crossesVolumes {
+                try fileSystem.deletePermanently(staged.source)
+            }
+        } catch {
+            let kept: OperationRecord.Change =
+                staged.isMove && staged.crossesVolumes ? .created(destination) : placed
+            return .failed(error, changes: [original, kept])
+        }
+        return .done([original, placed], copied: staged.copied)
     }
 
     /// A copy stopped by a cancel that couldn't remove what it wrote.
@@ -550,38 +674,40 @@ public actor FileOperationQueue {
             case .skip: return nil
             case .keepBoth:
                 let folder = (destination as NSString).deletingLastPathComponent
-                let name = try UniqueName.keepingBoth((destination as NSString).lastPathComponent) {
-                    name throws(FileOperationError) in try fileSystem.isTaken(name, folder)
+                let name = (destination as NSString).lastPathComponent
+                let isTaken = { (name: String) throws(FileOperationError) -> Bool in
+                    try fileSystem.isTaken(name, folder)
                 }
-                return folder + "/" + name
+                // Onto itself, as a paste into the folder it came from, a copy is named as
+                // Finder's Duplicate names it.
+                let isOntoItself = item.conflict.map {
+                    FileOperation.comparable($0.source.path)
+                        == FileOperation.comparable($0.existing.path)
+                }
+                return folder + "/"
+                    + (isOntoItself == true
+                        ? try UniqueName.duplicate(of: name, isTaken: isTaken)
+                        : try UniqueName.keepingBoth(name, isTaken: isTaken))
             }
         }
-        /// Puts the item in place of the one at `destination`: staged in a new folder beside it,
-        /// by a copy or, within one volume, a move; swapped into place; then the original,
-        /// now in the staging folder under its own name, goes to the Trash, or is deleted when
-        /// `deletesWithoutTrash`. A cancel before the swap takes the staged item away and
-        /// leaves the original; a failure after it swaps back.
+        /// Stages the item for a replace of the one at `destination`, in a new folder beside it
+        /// under its own name: by a copy or, within one volume, a move. A cancel before it is
+        /// done takes the staged item away and leaves the original. Then `finishReplace`.
         func replace(_ destination: String, isMove: Bool) throws -> ItemOutcome {
             let staging = try fileSystem.makeFolder(
                 stagingFolderPrefix + UUID().uuidString,
                 (destination as NSString).deletingLastPathComponent)
-            let staged = staging + "/" + (destination as NSString).lastPathComponent
             let movesWithin = isMove && !item.crossesVolumes
-            func unstage() throws(FileOperationError) {
-                if movesWithin {
-                    try fileSystem.move(staged, source)
-                } else {
-                    try fileSystem.deletePermanently(staged)
-                }
-                try fileSystem.deletePermanently(staging)
-            }
+            let staged = StagedReplace(
+                source: source, destination: destination, staging: staging, isMove: isMove,
+                movesWithin: movesWithin, crossesVolumes: item.crossesVolumes, copied: none)
             let copied: CopyProgress
             do {
                 if movesWithin {
-                    try fileSystem.move(source, staged)
+                    try fileSystem.move(source, staged.stagedItem)
                     copied = none
                 } else {
-                    copied = try copy(to: staged)
+                    copied = try copy(to: staged.stagedItem)
                 }
             } catch let left as LeftBehind {
                 throw left
@@ -595,46 +721,10 @@ public actor FileOperationQueue {
                 }
                 throw error
             }
-            guard !control.isCancelled else {
-                do {
-                    try unstage()
-                } catch {
-                    throw LeftBehind(error: error)
-                }
-                return .cancelled(leftBehind: nil)
-            }
-            do {
-                try fileSystem.swap(staged, destination)
-            } catch {
-                try unstage()
-                throw error
-            }
-            let original: OperationRecord.Change
-            do {
-                if deletesWithoutTrash {
-                    try fileSystem.deletePermanently(staged)
-                    original = .deleted(destination)
-                } else {
-                    original = .replaced(
-                        destination, originalTrashedTo: try fileSystem.trash(staged))
-                }
-            } catch {
-                try fileSystem.swap(staged, destination)
-                try unstage()
-                throw FileOperationError(
-                    reason: error.reason, path: destination, errno: error.errno)
-            }
-            let placed: OperationRecord.Change =
-                isMove ? .moved(from: source, to: destination) : .created(destination)
-            do {
-                try fileSystem.deletePermanently(staging)
-                if isMove, item.crossesVolumes { try fileSystem.deletePermanently(source) }
-            } catch {
-                let kept: OperationRecord.Change =
-                    isMove && item.crossesVolumes ? .created(destination) : placed
-                return .failed(error, changes: [original, kept])
-            }
-            return .done([original, placed], copied: copied)
+            guard !control.isCancelled else { return unstage(staged, fileSystem: fileSystem) }
+            return finishReplace(
+                staged.with(copied: copied), deletesWithoutTrash: deletesWithoutTrash,
+                fileSystem: fileSystem)
         }
         do {
             switch operation {
@@ -835,6 +925,8 @@ public actor FileOperationQueue {
         var deletesWithoutTrash = false
         /// Set when a volume the operation uses is about to unmount: the error it fails with.
         var volumeGone: FileOperationError?
+        /// Resumes `run` while it waits for an answer; nil means it was cancelled.
+        var pendingAnswer: CheckedContinuation<Bool?, Never>?
 
         init(
             id: ID, operation: FileOperation, copier: any Copier,

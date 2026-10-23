@@ -41,6 +41,11 @@ over `fnfErr`, a folder without write access is code 513 over `afpAccessDenied`.
 
 - **Move** is one `renamex_np(RENAME_EXCL)` call. `EXDEV` is `crossVolume` and the caller copies;
   `EEXIST` is `exists`, reported on the destination; every other error is reported on the source.
+  exFAT refuses `RENAME_EXCL` with `ENOTSUP` (macOS 26.6, exFAT disk image). There the move
+  `lstat`s the destination: an item there, other than the source itself as in a case-only
+  rename, is `exists`; otherwise it is a plain `rename(2)`. Something created at the destination
+  between the check and the rename is replaced; on exFAT that window is the price of moving at
+  all.
 - **Names** follow the duplicate rules above. Keep Both adds " 2", " 3" and on, the first free,
   after the whole base, with the same extension rule. `UniqueName` splits extensions with `UTType`, so Base imports
   `UniformTypeIdentifiers`, a system framework with no UI that Browser already uses.
@@ -63,8 +68,8 @@ over `fnfErr`, a folder without write access is code 513 over `afpAccessDenied`.
   extension too ("Stuff copy.txt"), so the item's kind doesn't decide it.
 - **Fail on a name too long for its suffix, as Finder does** — rejected: a Keep Both in a copy
   of many items would fail one item for its name alone.
-- **Rename with `rename(2)` after an `lstat` check** — rejected: something created between the
-  check and the rename would be replaced.
+- **Rename with `rename(2)` after an `lstat` check** — rejected where `RENAME_EXCL` works:
+  something created between the check and the rename would be replaced. It is the exFAT path.
 
 ## Consequences
 
