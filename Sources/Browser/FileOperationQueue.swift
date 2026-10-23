@@ -98,6 +98,8 @@ public actor FileOperationQueue {
         var listNames: @Sendable (String) throws(FileOperationError) -> [String]
         /// Removes a folder that has nothing in it.
         var removeEmptyFolder: @Sendable (String) throws(FileOperationError) -> Void
+        /// The identity of the item at a path, or nil if there is none.
+        var identify: @Sendable (String) throws(FileOperationError) -> OperationRecord.ItemIdentity?
 
         static let real = FileSystem(
             volumeOf: VolumeIdentity.init(path:), measure: OperationPlan.measure,
@@ -110,7 +112,8 @@ public actor FileOperationQueue {
             listNames: names(inFolderAt:),
             removeEmptyFolder: { path throws(FileOperationError) in
                 guard rmdir(path) == 0 else { throw FileOperationError(errno: errno, path: path) }
-            })
+            },
+            identify: OperationPlan.identify)
     }
 
     private let fileSystem: FileSystem
@@ -118,6 +121,7 @@ public actor FileOperationQueue {
     /// serves both.
     let prompts: Prompts
     private let onChange: @Sendable ([Snapshot]) -> Void
+    private let onAnyFinish: @Sendable (Snapshot) -> Void
     /// Time since the queue was made, on its clock.
     private let elapsed: @Sendable () -> Duration
     /// Sleeps until the given time since the queue was made.
@@ -136,23 +140,34 @@ public actor FileOperationQueue {
     private var isTicking = false
     /// Drop folders made and not yet removed.
     private var dropFolders: Set<DropFolder> = []
+    /// How many operations have finished, refused ones included.
+    public private(set) var finishedCount = 0
 
     /// A queue that works on the file system and asks its questions through `prompts`.
     /// `onChange` gets every operation's state, unfinished ones and those finished since the
-    /// last call, at most once per `snapshotInterval`, on no particular thread. The queue adds
-    /// itself to `VolumeEvents`, which tells it when a volume is about to unmount.
-    public init(prompts: Prompts, onChange: @escaping @Sendable ([Snapshot]) -> Void) {
+    /// last call, at most once per `snapshotInterval`, on no particular thread. `onAnyFinish`
+    /// gets each operation's last snapshot as it finishes, without that limit, in the order
+    /// they finish, also on no particular thread; the undo history learns of changes from it.
+    /// The queue adds itself to `VolumeEvents`, which tells it when a volume is about to
+    /// unmount.
+    public init(
+        prompts: Prompts, onChange: @escaping @Sendable ([Snapshot]) -> Void,
+        onAnyFinish: @escaping @Sendable (Snapshot) -> Void = { _ in }
+    ) {
         self.init(
-            fileSystem: .real, prompts: prompts, clock: ContinuousClock(), onChange: onChange)
+            fileSystem: .real, prompts: prompts, clock: ContinuousClock(), onChange: onChange,
+            onAnyFinish: onAnyFinish)
     }
 
     init<C: Clock<Duration>>(
         fileSystem: FileSystem, prompts: Prompts, clock: C,
-        onChange: @escaping @Sendable ([Snapshot]) -> Void
+        onChange: @escaping @Sendable ([Snapshot]) -> Void,
+        onAnyFinish: @escaping @Sendable (Snapshot) -> Void = { _ in }
     ) {
         self.fileSystem = fileSystem
         self.prompts = prompts
         self.onChange = onChange
+        self.onAnyFinish = onAnyFinish
         let start = clock.now
         elapsed = { start.duration(to: clock.now) }
         sleepUntil = { offset in
@@ -397,7 +412,8 @@ public actor FileOperationQueue {
             Result {
                 try OperationPlan.make(
                     for: operation, volumeOf: fileSystem.volumeOf, measure: fileSystem.measure,
-                    inspect: fileSystem.inspect, isCancelled: { control.isCancelled })
+                    inspect: fileSystem.inspect, identify: fileSystem.identify,
+                    isCancelled: { control.isCancelled })
             }
         }
         // A cancel while the plan ran finished the operation already.
@@ -545,8 +561,8 @@ public actor FileOperationQueue {
             let deletesWithoutTrash = entry.deletesWithoutTrash
             // An undo plans one item per step, or none.
             let undoStep = undoSteps.isEmpty ? nil : undoSteps[index]
-            var outcome = await BlockingCallThread.run {
-                Self.perform(
+            var (outcome, identities) = await BlockingCallThread.run {
+                let outcome = Self.perform(
                     item, of: operation, choice: choice, deletesWithoutTrash: deletesWithoutTrash,
                     undoStep: undoStep, fileSystem: fileSystem, copier: copier, control: control
                 ) { progress in
@@ -554,6 +570,7 @@ public actor FileOperationQueue {
                     // 0.5 ms at full speed.
                     control.live = progress
                 }
+                return (outcome, Self.identities(after: outcome, fileSystem: fileSystem))
             }
             entry.control.live = CopyProgress(bytes: 0, files: 0)
             if case .needsDelete(let staged) = outcome {
@@ -567,11 +584,13 @@ public actor FileOperationQueue {
                     operation: entry.id)
                 let confirmed = await confirmWhileRunning(entry, request) == true
                 if confirmed { entry.deletesWithoutTrash = true }
-                outcome = await BlockingCallThread.run {
-                    confirmed
+                (outcome, identities) = await BlockingCallThread.run {
+                    let outcome =
+                        confirmed
                         ? Self.finishReplace(
                             staged, deletesWithoutTrash: true, fileSystem: fileSystem)
                         : Self.unstage(staged, fileSystem: fileSystem)
+                    return (outcome, Self.identities(after: outcome, fileSystem: fileSystem))
                 }
             } else if isTrash, case .failed(let error, _) = outcome, error.reason == .noTrash,
                 !deletesWithoutTrash
@@ -588,6 +607,7 @@ public actor FileOperationQueue {
                 continue
             }
             var stops = false
+            entry.record.identities.merge(identities) { $1 }
             switch outcome {
             case .done(let changes, let copied):
                 entry.record.changes += changes
@@ -775,6 +795,28 @@ public actor FileOperationQueue {
             return .failed(error, changes: [original, kept])
         }
         return .done([original, placed], copied: staged.copied)
+    }
+
+    /// The identity of the item at each place `outcome`'s changes left one, read right after
+    /// them, for an undo to check against. Runs on a `BlockingCallThread`.
+    private static func identities(after outcome: ItemOutcome, fileSystem: FileSystem)
+        -> [String: OperationRecord.ItemIdentity]
+    {
+        let changes: [OperationRecord.Change]
+        switch outcome {
+        case .done(let done, _), .failed(_, let done): changes = done
+        case .cancelled, .needsDelete: return [:]
+        }
+        var identities: [String: OperationRecord.ItemIdentity] = [:]
+        for location in changes.compactMap(\.location) {
+            do {
+                identities[location] = try fileSystem.identify(location)
+            } catch {
+                // Left out: the undo then checks only that an item is at the path.
+                continue
+            }
+        }
+        return identities
     }
 
     /// A copy stopped by a cancel that couldn't remove what it wrote.
@@ -969,6 +1011,7 @@ public actor FileOperationQueue {
         switch error.reason {
         case .noSpace, .unreachable: true
         case .permissionDenied, .sourceGone, .exists, .crossVolume, .noTrash, .invalidName,
+            .notTheSameItem,
             .other:
             false
         }
@@ -977,7 +1020,10 @@ public actor FileOperationQueue {
     private func finish(_ entry: Entry, as phase: OperationState.Phase) {
         entry.phase = phase
         changed()
-        entry.onFinish(snapshot(of: entry))
+        finishedCount += 1
+        let last = snapshot(of: entry)
+        onAnyFinish(last)
+        entry.onFinish(last)
     }
 
     // MARK: - Refusals

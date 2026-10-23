@@ -11,6 +11,7 @@ public struct FileOperationError: Error, Equatable, Sendable {
         case crossVolume  // EXDEV
         case noTrash  // the volume has no trash
         case invalidName  // FileNameRule rejected the name
+        case notTheSameItem  // another item is at the path than the one an undo would change
         case other  // any other errno
     }
     public let reason: Reason

@@ -38,6 +38,7 @@ private final class Reads: @unchecked Sendable {
                 return TreeSizeWalker.Total(bytes: 100, files: 2, isPartial: false)
             },
             inspect: { _ throws(FileOperationError) in nil },
+            identify: { _ throws(FileOperationError) in nil },
             isCancelled: { false })
     }
 }

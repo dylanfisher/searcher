@@ -1,7 +1,9 @@
 /// Undo and Redo of file changes, app-wide, through the context's `UndoHistory`. Each runs as a
 /// queued operation, so neither waits for a copy that is running. Their menu items name the
 /// change: "Undo Move 3 Items", "Undo Rename", "Undo Replace". Both are off without a history or
-/// a queue, and with nothing to undo or redo (docs/decisions/0072-undo.md).
+/// a queue, with nothing to undo or redo, and while an undo or redo runs. A key press doesn't
+/// check for an entry: an operation that has just ended may not be in the history yet, and the
+/// history waits for it (docs/decisions/0072-undo.md).
 public enum UndoCommands: CommandSet {
     public static let undo = Command(
         id: CommandID("undo.undo"), title: "Undo",
@@ -10,16 +12,15 @@ public enum UndoCommands: CommandSet {
         id: CommandID("undo.redo"), title: "Redo",
         chords: [KeyChord("z", modifiers: [.command, .shift])])
 
-    // A key runs its command whether or not it is enabled, so each one checks again and does
-    // nothing when it is off.
+    // A key runs its command whether or not it is enabled; the history does nothing while busy
+    // or with nothing to undo once it has caught up.
     public static var bindings: [CommandBinding] {
         [
             CommandBinding(
                 undo, isEnabled: { canUndo($0) },
                 title: { $0.undoHistory?.undoTitle ?? undo.title },
                 run: { context in
-                    guard canUndo(context), let history = context.undoHistory,
-                        let queue = context.fileOperations
+                    guard let history = context.undoHistory, let queue = context.fileOperations
                     else { return }
                     history.undo(with: queue)
                 }),
@@ -27,8 +28,7 @@ public enum UndoCommands: CommandSet {
                 redo, isEnabled: { canRedo($0) },
                 title: { $0.undoHistory?.redoTitle ?? redo.title },
                 run: { context in
-                    guard canRedo(context), let history = context.undoHistory,
-                        let queue = context.fileOperations
+                    guard let history = context.undoHistory, let queue = context.fileOperations
                     else { return }
                     history.redo(with: queue)
                 }),

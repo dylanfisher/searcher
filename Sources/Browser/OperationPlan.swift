@@ -66,8 +66,8 @@ public struct OperationPlan: Equatable, Sendable {
     /// moves to another volume read the volumes involved with `volumeOf` and pre-scan each item
     /// with `measure`. Copies and moves look for each item's name in the destination folder
     /// with `inspect`, top-level items only, and inspect the source of each that is there. An
-    /// undo inspects each step's source and destination and reads the volumes of its moves.
-    /// Nothing else reads the file system. Blocks while it reads, so it runs on a
+    /// undo reads each step's source and destination with `identify` and the volumes of its
+    /// moves. Nothing else reads the file system. Blocks while it reads, so it runs on a
     /// `BlockingCallThread`.
     ///
     /// - Throws: `OperationState.Refusal`, or `CancellationError` once `isCancelled` returns true.
@@ -76,6 +76,7 @@ public struct OperationPlan: Equatable, Sendable {
         volumeOf: (String) throws(ListingError) -> VolumeIdentity,
         measure: (String, () -> Bool) throws -> TreeSizeWalker.Total,
         inspect: (String) throws(FileOperationError) -> ConflictRequest.Item?,
+        identify: (String) throws(FileOperationError) -> OperationRecord.ItemIdentity?,
         isCancelled: @escaping () -> Bool
     ) throws -> OperationPlan {
         switch operation {
@@ -134,8 +135,9 @@ public struct OperationPlan: Equatable, Sendable {
                 ], lane: nil, failures: [])
         case .undo(let record, _):
             return try undoing(
-                FileOperation.steps(undoing: record), volumeOf: volumeOf, measure: measure,
-                inspect: inspect, isCancelled: isCancelled)
+                FileOperation.steps(undoing: record), identities: record.identities,
+                volumeOf: volumeOf, measure: measure, identify: identify,
+                isCancelled: isCancelled)
         }
     }
 
@@ -207,30 +209,42 @@ public struct OperationPlan: Equatable, Sendable {
         return OperationPlan(items: items, lane: copies ? destination : nil, failures: failures)
     }
 
-    /// Plans an undo's steps, one item each in order. First it checks, with `inspect`, that each
-    /// step's item is at its source and its destination is free, as the steps before it leave
-    /// them; if any isn't, it plans no items and each such path is a failure, so nothing is
-    /// changed. A move whose two folders are on different volumes is copied, so it is
-    /// pre-scanned and the undo waits in the lane of the first such destination's volume.
+    /// Plans an undo's steps, one item each in order. First it checks, with `identify`, that
+    /// each step's item is at its source and its destination is free, as the steps before it
+    /// leave them, and that an item the record has an identity for is still that item, not
+    /// another put at its path since; if any isn't, it plans no items and each such path is a
+    /// failure, so nothing is changed. A move whose two folders are on different volumes is
+    /// copied, so it is pre-scanned and the undo waits in the lane of the first such
+    /// destination's volume.
     private static func undoing(
-        _ steps: [FileOperation.UndoStep],
+        _ steps: [FileOperation.UndoStep], identities: [String: OperationRecord.ItemIdentity],
         volumeOf: (String) throws(ListingError) -> VolumeIdentity,
         measure: (String, () -> Bool) throws -> TreeSizeWalker.Total,
-        inspect: (String) throws(FileOperationError) -> ConflictRequest.Item?,
+        identify: (String) throws(FileOperationError) -> OperationRecord.ItemIdentity?,
         isCancelled: @escaping () -> Bool
     ) throws -> OperationPlan {
         // Whether a path holds an item once the earlier steps have run, by comparable path.
         var after: [String: Bool] = [:]
         func isTaken(_ path: String) throws(FileOperationError) -> Bool {
             if let taken = after[FileOperation.comparable(path)] { return taken }
-            return try inspect(path) != nil
+            return try identify(path) != nil
         }
         var failures: [FileOperationError] = []
         for step in steps {
             if isCancelled() { throw CancellationError() }
             let source = step.source
             do throws(FileOperationError) {
-                if !(try isTaken(source)) {
+                if let taken = after[FileOperation.comparable(source)] {
+                    if !taken {
+                        failures.append(
+                            FileOperationError(reason: .sourceGone, path: source, errno: ENOENT))
+                    }
+                } else if let identity = try identify(source) {
+                    if let recorded = identities[source], recorded != identity {
+                        failures.append(
+                            FileOperationError(reason: .notTheSameItem, path: source, errno: nil))
+                    }
+                } else {
                     failures.append(
                         FileOperationError(reason: .sourceGone, path: source, errno: ENOENT))
                 }
@@ -328,6 +342,19 @@ public struct OperationPlan: Equatable, Sendable {
             modified: Date(
                 timeIntervalSince1970: TimeInterval(modified.tv_sec) + TimeInterval(
                     modified.tv_nsec) / 1_000_000_000))
+    }
+
+    /// The device and inode of the item at `path`, or nil if nothing is there. Symlinks aren't
+    /// followed. Blocks the calling thread, which must be a `BlockingCallThread`.
+    static func identify(_ path: String) throws(FileOperationError) -> OperationRecord.ItemIdentity?
+    {
+        BlockingCallThread.requireCurrent()
+        var info = stat()
+        if lstat(path, &info) != 0 {
+            if errno == ENOENT { return nil }
+            throw FileOperationError(errno: errno, path: path)
+        }
+        return OperationRecord.ItemIdentity(device: info.st_dev, inode: info.st_ino)
     }
 
     /// The size of the item at `path` as `FileCopier` counts what it copies: a folder's from

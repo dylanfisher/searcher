@@ -481,7 +481,7 @@ private func failedTrash(_ id: Int) -> FileOperationQueue.Snapshot {
     await settle { fixture.windows.prompter.shown == nil }
 }
 
-/// A rename that finished in one window names Undo in every window's Edit menu, and Redo once it
+/// A rename the history took in names Undo in every window's Edit menu, and Redo once it
 /// is undone.
 @MainActor @Test func aRenameInOneWindowNamesUndoInTheEditMenuOfEvery() async throws {
     let fixture = try await Fixture()
@@ -494,20 +494,54 @@ private func failedTrash(_ id: Int) -> FileOperationQueue.Snapshot {
     #expect(try !fixture.keyTable(first).validateMenuItem(undo))
     #expect(undo.title == "Undo")
 
-    fixture.windows.operationsChanged([
-        FileOperationQueue.Snapshot(
-            id: FileOperationQueue.ID(4), operation: .rename("/root/a.txt", to: "b.txt"),
-            state: OperationState(
-                phase: .done,
-                progress: OperationState.Progress(
-                    itemsDone: 1, itemCount: 1, copied: CopyProgress(bytes: 0, files: 0),
-                    total: nil),
-                errors: [],
-                record: OperationRecord(changes: [.moved(from: "/root/a.txt", to: "/root/b.txt")])))
-    ])
+    fixture.windows.undoHistory.record(
+        .rename("/root/a.txt", to: "b.txt"),
+        OperationState(
+            phase: .done,
+            progress: OperationState.Progress(
+                itemsDone: 1, itemCount: 1, copied: CopyProgress(bytes: 0, files: 0), total: nil),
+            errors: [],
+            record: OperationRecord(changes: [.moved(from: "/root/a.txt", to: "/root/b.txt")])))
 
     #expect(try fixture.keyTable(second).validateMenuItem(undo))
     #expect(undo.title == "Undo Rename")
     #expect(try !fixture.keyTable(first).validateMenuItem(redo))
     #expect(redo.title == "Redo")
+}
+
+/// Cmd-Z pressed as an operation finishes undoes that operation, not the one before it, though
+/// the operations panel hears of it up to a snapshot interval later.
+@MainActor @Test func cmdZRightAfterAnOperationEndsUndoesThatOperation() async throws {
+    let folder = try TemporaryFolder("WorkspaceWindowsTests")
+    let root = folder.url.path
+    for name in ["a.txt", "b.txt"] {
+        try Data(name.utf8).write(to: URL(fileURLWithPath: root + "/" + name))
+    }
+    let windows = WorkspaceWindows(
+        service: ListingService(), systemActions: StubSystemActions(),
+        settings: untouchedSettings(), folderSizes: nil, clipboard: MemoryClipboard())
+    windows.showsWindows = false
+    let controller = windows.open(at: Location(path: root))
+    let window = try #require(controller.window)
+    window.contentView?.layoutSubtreeIfNeeded()
+    let pane = controller.workspace.selectedTab.focusedPane
+    await settle { pane.state.isLoaded }
+    let table = try #require(window.firstResponder as? ListingTableView)
+    let menu = try MainMenuBuilder.build(appName: "Searcher", registry: AppCommands.registry())
+    let edit = try #require(menu.items.first { $0.title == "Edit" }?.submenu)
+    let undo = try #require(edit.items.first { $0.action == MainMenuBuilder.undo.action })
+    let queue = windows.fileOperations
+    _ = await queue.perform(.rename(root + "/a.txt", to: "a2.txt"))
+    await settle { table.validateMenuItem(undo) }
+
+    _ = await queue.perform(.rename(root + "/b.txt", to: "b2.txt"))
+    table.undo(nil)
+
+    let manager = FileManager.default
+    await settle {
+        manager.fileExists(atPath: root + "/b.txt") || manager.fileExists(atPath: root + "/a.txt")
+    }
+    #expect(manager.fileExists(atPath: root + "/b.txt"))
+    #expect(manager.fileExists(atPath: root + "/a2.txt"))
+    pane.monitor?.stop()
 }

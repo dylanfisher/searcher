@@ -32,7 +32,7 @@ public final class WorkspaceWindows {
     public let clipboard: CutState
     /// Every mounted volume, which every window's drops check.
     let mountTable = MountTable()
-    /// The app's undo history, fed every operation that finishes.
+    /// The app's undo history, fed every operation as it finishes.
     let undoHistory = UndoHistory()
     /// The unfinished operations in the queue's latest snapshots, for a window that opens while
     /// operations run.
@@ -43,6 +43,8 @@ public final class WorkspaceWindows {
     private var troubled: [FileOperationQueue.Snapshot] = []
     /// Ends the snapshot stream when the windows go away.
     private nonisolated let snapshotFeed: AsyncStream<[FileOperationQueue.Snapshot]>.Continuation
+    /// Ends the stream of finished operations to the undo history when the windows go away.
+    private nonisolated let finishedFeed: AsyncStream<FileOperationQueue.Snapshot>.Continuation
 
     public init(
         service: ListingService, systemActions: any SystemActions, settings: Settings,
@@ -59,7 +61,14 @@ public final class WorkspaceWindows {
         snapshotFeed = feed
         let prompter = OperationPrompter()
         self.prompter = prompter
-        fileOperations = FileOperationQueue(prompts: prompter.prompts) { feed.yield($0) }
+        // Each operation as it finishes, without the snapshots' limit, so Cmd-Z pressed right
+        // after one ends undoes it.
+        let (finished, finishedFeed) = AsyncStream.makeStream(of: FileOperationQueue.Snapshot.self)
+        self.finishedFeed = finishedFeed
+        fileOperations = FileOperationQueue(
+            prompts: prompter.prompts, onChange: { feed.yield($0) },
+            onAnyFinish: { finishedFeed.yield($0) })
+        undoHistory.follow(finished)
         prompter.queue = fileOperations
         prompter.window = { [weak self] in self?.frontWindow }
         Task { [weak self] in
@@ -93,6 +102,7 @@ public final class WorkspaceWindows {
 
     deinit {
         snapshotFeed.finish()
+        finishedFeed.finish()
     }
 
     /// Opens a window of one tab at `location`, in list view, as the app does at launch and when
@@ -171,12 +181,9 @@ public final class WorkspaceWindows {
         }?.window
     }
 
-    /// Shows the queue's snapshots in every window, closes the questions of operations that
-    /// finished, and records what those changed for Undo.
+    /// Shows the queue's snapshots in every window and closes the questions of operations that
+    /// finished.
     func operationsChanged(_ snapshots: [FileOperationQueue.Snapshot]) {
-        for snapshot in snapshots where snapshot.state.phase.isFinished {
-            undoHistory.record(snapshot.operation, snapshot.state)
-        }
         unfinished = snapshots.filter { !$0.state.phase.isFinished }
         troubled += snapshots.filter {
             $0.state.phase.isFinished && OperationRowView.isTrouble($0.state.phase)
