@@ -146,10 +146,25 @@ public final class Pane {
 
     /// Starts listing `location` right away, ahead of other panes' loads if `isFocused`, with
     /// `name` to be selected once it's listed. In column mode the first column lists it instead.
-    public init(
+    public convenience init(
         location: Location, service: ListingService, systemActions: any SystemActions,
         settings: Settings, sortedBy column: SortColumn = .name, ascending: Bool = true,
         isFocused: Bool = false, selecting name: ExactName? = nil, viewMode: ViewMode = .list
+    ) {
+        self.init(
+            location: location, service: service, systemActions: systemActions,
+            settings: settings, sortedBy: column, ascending: ascending, isFocused: isFocused,
+            selection: name.map { Selection([$0], cursor: $0) } ?? Selection(),
+            viewMode: viewMode, rows: nil)
+    }
+
+    /// A pane that shows `rows`, a complete listing of `location` in list mode, and lists nothing
+    /// until something asks it to; with no rows, it starts listing as above. In column mode the
+    /// first column selects the selection's cursor.
+    private init(
+        location: Location, service: ListingService, systemActions: any SystemActions,
+        settings: Settings, sortedBy column: SortColumn, ascending: Bool, isFocused: Bool,
+        selection: Selection, viewMode: ViewMode, rows: Listing?
     ) {
         self.location = location
         self.service = service
@@ -158,21 +173,26 @@ public final class Pane {
         self.isFocused = isFocused
         sortColumn = column
         sortAscending = ascending
-        selection = name.map { Selection([$0], cursor: $0) } ?? Selection()
+        self.selection = selection
         switch viewMode {
         case .list:
-            startLoad()
+            if let rows {
+                state = .loaded(rows)
+            } else {
+                startLoad()
+            }
         case .column:
             self.viewMode = .column
-            columnTrail = ColumnTrail(owner: self, at: location, selecting: name, sortedLike: self)
+            columnTrail = ColumnTrail(
+                owner: self, at: location, selecting: selection.cursor, sortedLike: self)
         }
         settings.observe(for: self) { [weak self] in self?.settingsDidChange() }
         VolumeEvents.add(self)
     }
 
     /// A pane at `location` in this pane's view mode, sorted as its focused column is, with its
-    /// folder sizes, services, settings and system actions. Split, New Tab and Open in New Tab
-    /// make their pane with it.
+    /// folder sizes, services, settings and system actions. New Tab, Open in New Tab and New
+    /// Window make their pane with it; a split copies the pane instead (`copy`).
     public func newPane(at location: Location) -> Pane {
         let sorted = commandPane
         let pane = Pane(
@@ -182,6 +202,44 @@ public final class Pane {
         pane.folderSizes = folderSizes
         return pane
     }
+
+    /// A pane as `newPane(at:)` makes one at this pane's folder, opened on the same entries: the
+    /// same selection and, in list mode, the same rows when this pane has listed its folder in
+    /// full, so it lists nothing. A split and the grid keys make their panes with it. It takes the
+    /// rows' patches and sorts from here on itself, and lists the folder when this pane still has
+    /// a listing or a patch to land, which its rows lack. With `takingFocus` such a pane is
+    /// focused already, so gaining the focus doesn't list it either. In column mode the new trail
+    /// selects the focused column's cursor in its first column.
+    func copy(takingFocus: Bool) -> Pane {
+        let sorted = commandPane
+        let rows: Listing? =
+            if viewMode == .list, case .loaded(let listing) = state { listing } else { nil }
+        let selected =
+            viewMode == .list
+            ? selection : sorted.selection.cursor.map { Selection([$0], cursor: $0) } ?? Selection()
+        let pane = Pane(
+            location: location, service: service, systemActions: systemActions,
+            settings: settings, sortedBy: sorted.sortColumn, ascending: sorted.sortAscending,
+            isFocused: rows != nil && takingFocus, selection: selected, viewMode: viewMode,
+            rows: rows)
+        pane.folderSizes = folderSizes
+        pane.copiedFrom = self
+        guard rows != nil else { return pane }
+        pane.loadedAt = loadedAt
+        pane.rootVolumeName = rootVolumeName
+        pane.volumeName = volumeName
+        if loadIsRunning || patchIsRunning || !waitingPatches.isEmpty || relistAfterLoad {
+            pane.startLoad()
+        }
+        // The rows are in this pane's sort and filter; the copy has no filter.
+        pane.startSortIfNeeded()
+        pane.startSettlingIfNeeded()
+        return pane
+    }
+
+    /// The pane this one was copied from by a split or a grid key, while it exists. The window
+    /// opens the copy's list at the same scroll position.
+    public private(set) weak var copiedFrom: Pane?
 
     // MARK: - Navigation
 

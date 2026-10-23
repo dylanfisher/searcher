@@ -84,8 +84,18 @@ private func resizeKey(_ direction: Direction) -> KeyChord {
     KeyChord(arrow(direction), modifiers: [.control, .command])
 }
 
-private let splitRight = KeyChord("\\", modifiers: .command)
-private let splitDown = KeyChord("\\", modifiers: [.command, .shift])
+private let splitRight = KeyChord("t", modifiers: [.command, .shift])
+private let splitDown = KeyChord("t", modifiers: [.command, .option, .shift])
+
+/// Cmd-Opt and a digit: that many panes side by side in every row.
+private func columnsKey(_ count: Int) -> KeyChord {
+    KeyChord(.character(Character("\(count)")), modifiers: [.command, .option])
+}
+
+/// Cmd-Opt-Shift and a digit: that many panes stacked in every column.
+private func rowsKey(_ count: Int) -> KeyChord {
+    KeyChord(.character(Character("\(count)")), modifiers: [.command, .option, .shift])
+}
 private let zoom = KeyChord("z", modifiers: [.command, .option, .shift])
 private let equalize = KeyChord("0", modifiers: [.command, .option])
 private let closePane = KeyChord("w", modifiers: .command)
@@ -121,6 +131,10 @@ private func expectClose(_ a: Rect?, _ b: Rect?, sourceLocation: SourceLocation 
         expected.append((moveKey(direction), try #require(TilingCommands.move[direction])))
         expected.append((resizeKey(direction), try #require(TilingCommands.resize[direction])))
     }
+    for count in 1...4 {
+        expected.append((columnsKey(count), try #require(TilingCommands.columns[count])))
+        expected.append((rowsKey(count), try #require(TilingCommands.rows[count])))
+    }
 
     for (chord, command) in expected {
         #expect(registry.command(for: chord) == command, "\(chord)")
@@ -133,6 +147,26 @@ private func expectClose(_ a: Rect?, _ b: Rect?, sourceLocation: SourceLocation 
     for direction in Direction.allCases {
         let chord = KeyChord(arrow(direction), modifiers: [.command, .option])
         #expect(registry.command(for: chord) == nil, "\(chord)")
+    }
+}
+
+@Test func cmdBackslashAndCmdShiftBackslashAreUnbound() throws {
+    // Cmd-\ is 1Password's autofill.
+    let registry = try AppCommands.registry()
+    for chord in [
+        KeyChord("\\", modifiers: .command), KeyChord("\\", modifiers: [.command, .shift]),
+    ] {
+        #expect(registry.command(for: chord) == nil, "\(chord)")
+    }
+}
+
+@Test func theSplitAndGridKeysAreTheTilingCommandsInTheAppRegistry() throws {
+    let registry = try AppCommands.registry()
+    #expect(registry.command(for: splitRight) == TilingCommands.splitRight)
+    #expect(registry.command(for: splitDown) == TilingCommands.splitDown)
+    for count in 1...4 {
+        #expect(registry.command(for: columnsKey(count)) == TilingCommands.columns[count])
+        #expect(registry.command(for: rowsKey(count)) == TilingCommands.rows[count])
     }
 }
 
@@ -472,4 +506,48 @@ func resizeMovesTheDividerOnTheTrailingEdgeElseTheLeadingOne(axis: Axis, nestedS
     #expect(try press(closePane, in: workspace) == .workspace)
     // The workspace keeps its closed tab; Interface closes the window.
     #expect(workspace.tabs.map(\.id) == [first.id])
+}
+
+// MARK: Grid keys
+
+@MainActor @Test func columnsAndRowsKeysCombineIntoAnEvenGrid() throws {
+    let workspace = oneTabWorkspace()
+    let tab = workspace.selectedTab
+    let first = tab.layout.focused
+
+    try press(columnsKey(3), in: workspace)
+    #expect(tab.layout.panes.count == 3)
+    #expect(tab.layout.columnCount == 3 && tab.layout.rowCount == 1)
+
+    try press(rowsKey(2), in: workspace)
+    #expect(tab.layout.panes.count == 6)
+    #expect(tab.layout.columnCount == 3 && tab.layout.rowCount == 2)
+    #expect(tab.panes.count == 6)
+    #expect(tab.layout.focused == first)
+    let frames = tab.layout.frames(in: bounds)
+    let width = (bounds.width - 2 * Layout.dividerThickness) / 3
+    let height = (bounds.height - Layout.dividerThickness) / 2
+    for frame in frames.values {
+        #expect(abs(frame.width - width) < tolerance && abs(frame.height - height) < tolerance)
+    }
+
+    try press(columnsKey(1), in: workspace)
+    #expect(tab.layout.columnCount == 1 && tab.layout.rowCount == 2)
+    #expect(tab.panes.count == 2)
+
+    try press(rowsKey(1), in: workspace)
+    #expect(tab.layout.panes == [first])
+    #expect(tab.panes.count == 1)
+}
+
+@MainActor @Test func aGridKeyEndsAZoom() throws {
+    let grid = try Grid()
+    try press(zoom, in: grid.workspace)
+    #expect(grid.tab.layout.isZoomed)
+
+    try press(columnsKey(2), in: grid.workspace)
+
+    #expect(!grid.tab.layout.isZoomed)
+    #expect(grid.tab.layout.focused == grid.d)
+    #expect(grid.tab.layout.panes.count == 4)
 }

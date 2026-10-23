@@ -394,7 +394,8 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(
         window.items.map(\.title) == [
             "Minimize", "Zoom", "", "Show Previous Tab", "Show Next Tab", "", "Split Right",
-            "Split Down", "", "Focus Other Pane", "Focus Pane", "Move Pane", "Resize Pane",
+            "Split Down", "Columns", "Rows", "", "Focus Other Pane", "Focus Pane", "Move Pane",
+            "Resize Pane",
             "Zoom Pane", "Equalize Panes", "", "Move Pane to New Window", "Merge Window into Tab",
             "", "Close Pane",
         ])
@@ -468,4 +469,64 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
             try #require(TilingCommands.move[.left]).id,
             try #require(TilingCommands.resize[.left]).id,
         ])
+}
+
+/// A key event as a US keyboard sends it: Shift applies to `ignoringModifiers`, and `keyCode`
+/// reads the key's own character.
+@MainActor
+private func usKey(
+    _ ignoringModifiers: String, characters: String, keyCode: UInt16,
+    _ modifiers: NSEvent.ModifierFlags
+) throws -> NSEvent {
+    try #require(
+        NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
+            windowNumber: 0, context: nil, characters: characters,
+            charactersIgnoringModifiers: ignoringModifiers, isARepeat: false, keyCode: keyCode))
+}
+
+@MainActor @Test func windowMenuRunsTheSplitAndGridKeysFromItsItems() throws {
+    let menu = try buildMenu(try AppCommands.registry())
+    let window = try #require(menu.items.first { $0.title == "Window" }?.submenu)
+    let columns = try #require(window.items.first { $0.title == "Columns" }?.submenu)
+    let rows = try #require(window.items.first { $0.title == "Rows" }?.submenu)
+    #expect(columns.items.map(\.title) == ["1 Column", "2 Columns", "3 Columns", "4 Columns"])
+    #expect(rows.items.map(\.title) == ["1 Row", "2 Rows", "3 Rows", "4 Rows"])
+    let table = ListingTableView()
+    let log = CommandLog()
+    table.runCommand = { log.ids.append($0) }
+
+    // Option and Shift-Option type other characters; Shift-4 types "$".
+    let presses = [
+        try usKey("T", characters: "T", keyCode: 17, [.command, .shift]),
+        try usKey("T", characters: "ˇ", keyCode: 17, [.command, .option, .shift]),
+        try usKey("1", characters: "¡", keyCode: 18, [.command, .option]),
+        try usKey("$", characters: "›", keyCode: 21, [.command, .option, .shift]),
+    ]
+    for press in presses {
+        let item = try item(for: press, in: menu)
+        #expect(table.tryToPerform(try #require(item.action), with: item))
+    }
+
+    #expect(
+        log.ids == [
+            TilingCommands.splitRight.id, TilingCommands.splitDown.id,
+            try #require(TilingCommands.columns[1]).id, try #require(TilingCommands.rows[4]).id,
+        ])
+}
+
+@MainActor @Test func theTableRunsCmdOptShiftDigitsAsAUSKeyboardTypesThem() throws {
+    let table = ListingTableView()
+    table.registry = try AppCommands.registry()
+    let log = CommandLog()
+    table.runCommand = { log.ids.append($0) }
+    table.beep = { Issue.record("beeped") }
+
+    for (typed, keyCode) in [("!", 18), ("@", 19), ("#", 20), ("$", 21)] as [(String, UInt16)] {
+        table.keyDown(
+            with: try usKey(
+                typed, characters: typed, keyCode: keyCode, [.command, .option, .shift]))
+    }
+
+    #expect(log.ids == (1...4).compactMap { TilingCommands.rows[$0]?.id })
 }

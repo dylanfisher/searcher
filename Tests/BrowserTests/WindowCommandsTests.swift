@@ -125,7 +125,10 @@ private func list(_ workspaces: Workspace...) -> WorkspaceList {
     async throws
 {
     let fixture = await PaneFixture.loaded()
+    let listed = fixture.pane.stateVersion
     let workspace = Workspace(tab: Tab(pane: fixture.pane))
+    // Gaining the focus lists the folder again; the split copies the rows once that lands.
+    await settle { fixture.pane.stateVersion > listed }
     let tab = workspace.selectedTab
     let kept = tab.layout.focused
     let moved = try #require(tab.split(.horizontal, in: Rect(x: 0, y: 0, width: 1200, height: 800)))

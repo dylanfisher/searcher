@@ -135,7 +135,7 @@ private func receiver(of item: NSMenuItem, in window: NSWindow) throws -> NSResp
     let source = try #require(fixture.windows.controllers.first)
     let tab = source.workspace.selectedTab
     let kept = tab.layout.focused
-    try fixture.press(try keyEvent("\\", modifiers: .command), in: source)
+    try fixture.press(try keyEvent("T", modifiers: [.command, .shift]), in: source)
     let movedID = tab.layout.focused
     let moved = tab.focusedPane
     await settle { moved.state.isLoaded }
