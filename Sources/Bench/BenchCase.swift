@@ -7,7 +7,8 @@ struct BenchCase: Sendable {
     static let runs = 20
 
     /// Every case the runner measures, in run order.
-    static let registered: [BenchCase] = openFolder + list + idle
+    static let registered: [BenchCase] =
+        openFolder + list + viewSettings + filter + listingCache + folderSize + idle
 
     let name: String
     /// The budget the p95 is checked against; nil for a case that is only reported.

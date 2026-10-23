@@ -1,0 +1,293 @@
+import AppKit
+import Base
+import Foundation
+import TestSupport
+import Testing
+
+@testable import Browser
+@testable import Interface
+
+/// A `Lister` over a `StubLister` that counts its calls. `/held` waits on `gate` until a test
+/// releases it.
+private final class CountingLister: Lister, @unchecked Sendable {
+    let gate = GatedLister(["/held": .batches([[file("x")]])])
+    private let lister = StubLister([
+        "/root": [folder("docs"), file("a.txt"), file("b.txt")],
+        "/root/docs": [file("inside.txt")],
+        "/": [folder("root")],
+    ])
+    private let lock = NSLock()
+    private var count = 0
+
+    var calls: Int { lock.withLock { count } }
+
+    func list(_ path: String, onBatch: ([DirectoryEntry]) throws -> Void) throws {
+        lock.withLock { count += 1 }
+        if path == "/held" { return try gate.list(path, onBatch: onBatch) }
+        try lister.list(path, onBatch: onBatch)
+    }
+}
+
+/// A monitor that only counts stops.
+private final class StubMonitor: FolderMonitoring {
+    private(set) var stopCount = 0
+
+    func stop() { stopCount += 1 }
+}
+
+/// Browser windows that are never shown, the first one open at `/root` with its pane loaded.
+@MainActor
+private struct Fixture {
+    let windows: WorkspaceWindows
+    let lister = CountingLister()
+
+    init() async throws {
+        windows = WorkspaceWindows(
+            service: ListingService(lister: lister) { "Test Disk" },
+            systemActions: StubSystemActions(), settings: untouchedSettings(), folderSizes: nil)
+        windows.showsWindows = false
+        try await open()
+    }
+
+    /// Opens a window at `/root` and waits for its pane to load.
+    @discardableResult
+    func open() async throws -> BrowserWindowController {
+        let controller = windows.open(at: Location(path: "/root"))
+        try #require(controller.window).contentView?.layoutSubtreeIfNeeded()
+        let pane = controller.workspace.selectedTab.focusedPane
+        await settle { pane.state.isLoaded }
+        return controller
+    }
+
+    func controller(_ workspace: Workspace) throws -> BrowserWindowController {
+        try #require(windows.controllers.first { $0.workspace === workspace })
+    }
+
+    /// The table with `controller`'s window's keys.
+    func keyTable(_ controller: BrowserWindowController) throws -> ListingTableView {
+        try #require(controller.window?.firstResponder as? ListingTableView)
+    }
+
+    /// Sends `event` to the table with `controller`'s window's keys.
+    func press(_ event: NSEvent, in controller: BrowserWindowController) throws {
+        try keyTable(controller).keyDown(with: event)
+    }
+
+    /// Runs command `id`'s menu item from `controller`'s filter field, as the menu would.
+    func runFromFilterField(_ id: CommandID, in controller: BrowserWindowController) throws {
+        try press(try keyEvent("f", modifiers: .command), in: controller)
+        let window = try #require(controller.window)
+        #expect(window.firstResponder is NSTextView)
+        let menu = try MainMenuBuilder.build(appName: "Searcher", registry: AppCommands.registry())
+        let item = try #require(menuItem(id, in: menu))
+        let taker = try #require(try receiver(of: item, in: window))
+        #expect(try #require(taker as? NSMenuItemValidation).validateMenuItem(item))
+        #expect(NSApplication.shared.sendAction(try #require(item.action), to: taker, from: item))
+    }
+}
+
+/// The item that runs command `id`, anywhere in `menu`.
+@MainActor
+private func menuItem(_ id: CommandID, in menu: NSMenu) -> NSMenuItem? {
+    menuItems(id, in: menu).first
+}
+
+@MainActor
+private func menuItems(_ id: CommandID, in menu: NSMenu) -> [NSMenuItem] {
+    menu.items.flatMap { item in
+        (item.representedObject as? CommandID == id ? [item] : [])
+            + (item.submenu.map { menuItems(id, in: $0) } ?? [])
+    }
+}
+
+/// The responder AppKit would send `item`'s action to from the window's first responder.
+@MainActor
+private func receiver(of item: NSMenuItem, in window: NSWindow) throws -> NSResponder? {
+    let action = try #require(item.action)
+    var responder = window.firstResponder
+    while let current = responder {
+        if current.responds(to: action) { return current }
+        responder = current.nextResponder
+    }
+    return nil
+}
+
+@MainActor @Test func cmdNOpensAWindowWithOneTabAtTheFocusedFolderAndViewMode() async throws {
+    let fixture = try await Fixture()
+    let first = try #require(fixture.windows.controllers.first)
+    first.workspace.selectedTab.focusedPane.navigate(to: Location(path: "/root/docs"))
+    try fixture.press(try keyEvent("3", modifiers: .command), in: first)
+
+    try fixture.press(try keyEvent("n", modifiers: .command), in: first)
+
+    #expect(fixture.windows.controllers.count == 2)
+    let opened = try fixture.controller(fixture.windows.list.workspaces[0])
+    #expect(opened !== first)
+    #expect(opened.workspace.tabs.count == 1)
+    let pane = opened.workspace.selectedTab.focusedPane
+    #expect(pane.location == Location(path: "/root/docs"))
+    #expect(pane.viewMode == .column)
+    #expect(try fixture.keyTable(opened).isDescendant(of: opened.paneViewController.view))
+}
+
+@MainActor @Test func movingAPaneTakesItsViewsToANewWindowWithoutListing() async throws {
+    let fixture = try await Fixture()
+    let source = try #require(fixture.windows.controllers.first)
+    let tab = source.workspace.selectedTab
+    let kept = tab.layout.focused
+    try fixture.press(try keyEvent("T", modifiers: [.command, .shift]), in: source)
+    let movedID = tab.layout.focused
+    let moved = tab.focusedPane
+    await settle { moved.state.isLoaded }
+    moved.select(Selection([ExactName("b.txt")], cursor: ExactName("b.txt")))
+    let monitor = StubMonitor()
+    moved.monitor = monitor
+    let movedController = source.paneViewController
+    let version = moved.stateVersion
+    let calls = fixture.lister.calls
+
+    try fixture.runFromFilterField(WindowCommands.movePaneToNewWindow.id, in: source)
+
+    #expect(fixture.windows.controllers.count == 2)
+    let opened = try fixture.controller(fixture.windows.list.workspaces[0])
+    #expect(opened !== source)
+    #expect(opened.workspace.selectedTab.layout.panes == [movedID])
+    #expect(opened.paneViewController === movedController)
+    #expect(movedController.view.window === opened.window)
+    #expect(try fixture.keyTable(opened).isDescendant(of: movedController.view))
+    #expect(moved.stateVersion == version)
+    #expect(moved.selection == Selection([ExactName("b.txt")], cursor: ExactName("b.txt")))
+    #expect(moved.monitor === monitor && monitor.stopCount == 0)
+    #expect(tab.layout.panes == [kept])
+    #expect(source.paneViewController(for: movedID) == nil)
+    #expect(try fixture.keyTable(source).isDescendant(of: source.paneViewController.view))
+    #expect(source.paneViewController.pane === tab.focusedPane)
+    try? await Task.sleep(for: .milliseconds(50))
+    #expect(fixture.lister.calls == calls)
+}
+
+@MainActor @Test func movePaneToNewWindowIsOffWithOnePaneInTheWindow() async throws {
+    let fixture = try await Fixture()
+    let controller = try #require(fixture.windows.controllers.first)
+    let menu = try MainMenuBuilder.build(appName: "Searcher", registry: AppCommands.registry())
+    let item = try #require(menuItem(WindowCommands.movePaneToNewWindow.id, in: menu))
+
+    #expect(try !fixture.keyTable(controller).validateMenuItem(item))
+    try fixture.press(try keyEvent("t", modifiers: .command), in: controller)
+    #expect(try fixture.keyTable(controller).validateMenuItem(item))
+}
+
+@MainActor @Test func mergingAWindowAppendsItsTabsToTheLastActiveOtherAndFreesIt() async throws {
+    let fixture = try await Fixture()
+    let target = try #require(fixture.windows.controllers.first)
+    let targetTabs = target.workspace.tabs
+    weak let source = try await fixture.open()
+    let sourceWorkspace = try #require(source?.workspace)
+    try fixture.press(try keyEvent("t", modifiers: .command), in: try #require(source))
+    let sourceTabs = sourceWorkspace.tabs
+    let panes = sourceTabs.map(\.focusedPane)
+    await settle { panes.allSatisfy(\.state.isLoaded) }
+    let monitors = panes.map { pane in
+        let monitor = StubMonitor()
+        pane.monitor = monitor
+        return monitor
+    }
+    let paneControllers = try sourceTabs.map { tab in
+        try #require(source?.paneViewController(for: tab.layout.focused))
+    }
+    let calls = fixture.lister.calls
+
+    try fixture.runFromFilterField(
+        WindowCommands.mergeWindowIntoTab.id, in: try #require(source))
+
+    #expect(target.workspace.tabs.map(\.id) == (targetTabs + sourceTabs).map(\.id))
+    #expect(target.workspace.selectedTab === sourceTabs[1])
+    #expect(fixture.windows.controllers.count == 1)
+    #expect(fixture.windows.controllers.first === target)
+    #expect(fixture.windows.list.workspaces.count == 1)
+    #expect(fixture.windows.list.workspaces.first === target.workspace)
+    for (tab, controller) in zip(sourceTabs, paneControllers) {
+        #expect(target.paneViewController(for: tab.layout.focused) === controller)
+    }
+    #expect(try fixture.keyTable(target).isDescendant(of: paneControllers[1].view))
+    // The source window's teardown leaves the panes it gave away open, watching their folders.
+    await settle { source == nil }
+    #expect(monitors.allSatisfy { $0.stopCount == 0 })
+    #expect(zip(panes, monitors).allSatisfy { $0.monitor === $1 })
+    try? await Task.sleep(for: .milliseconds(50))
+    #expect(fixture.lister.calls == calls)
+}
+
+@MainActor @Test func mergeWindowIntoTabIsOffWithOneWindow() async throws {
+    let fixture = try await Fixture()
+    let first = try #require(fixture.windows.controllers.first)
+    let menu = try MainMenuBuilder.build(appName: "Searcher", registry: AppCommands.registry())
+    let item = try #require(menuItem(WindowCommands.mergeWindowIntoTab.id, in: menu))
+
+    #expect(try !fixture.keyTable(first).validateMenuItem(item))
+    let second = try await fixture.open()
+    #expect(try fixture.keyTable(second).validateMenuItem(item))
+}
+
+@MainActor @Test func theKeyWindowIsTheMostRecentlyActive() async throws {
+    let fixture = try await Fixture()
+    let first = try #require(fixture.windows.controllers.first)
+    let second = try await fixture.open()
+    #expect(fixture.windows.list.workspaces[0] === second.workspace)
+
+    first.windowDidBecomeKey(
+        Notification(name: NSWindow.didBecomeKeyNotification, object: first.window))
+
+    #expect(fixture.windows.list.workspaces[0] === first.workspace)
+    #expect(first.workspace.isActive && !second.workspace.isActive)
+}
+
+@MainActor @Test func closingAWindowDropsItsWorkspaceAndController() async throws {
+    let fixture = try await Fixture()
+    weak let second = try await fixture.open()
+
+    second?.window?.close()
+
+    #expect(fixture.windows.controllers.count == 1)
+    #expect(fixture.windows.list.workspaces.count == 1)
+    await settle { second == nil }
+}
+
+@MainActor @Test func eachWindowCommandHasOneMenuItemAndOneRegistryEntry() throws {
+    let registry = try AppCommands.registry()
+    let menu = try MainMenuBuilder.build(appName: "Searcher", registry: registry)
+
+    for command in [
+        WindowCommands.newWindow, WindowCommands.movePaneToNewWindow,
+        WindowCommands.mergeWindowIntoTab,
+    ] {
+        #expect(registry.command(for: command.id) == command)
+        #expect(menuItems(command.id, in: menu).count == 1)
+    }
+    let newWindow = try #require(menuItem(WindowCommands.newWindow.id, in: menu))
+    #expect(newWindow.keyEquivalent == "n" && newWindow.keyEquivalentModifierMask == .command)
+}
+
+@MainActor @Test func closingAWindowClosesEveryPaneItStillHas() async throws {
+    let fixture = try await Fixture()
+    defer { fixture.lister.gate.releaseAll() }
+    let controller = try await fixture.open()
+    try fixture.press(try keyEvent("t", modifiers: .command), in: controller)
+    let panes = controller.workspace.tabs.map(\.focusedPane)
+    await settle { panes.allSatisfy(\.state.isLoaded) }
+    let monitors = panes.map { pane in
+        let monitor = StubMonitor()
+        pane.monitor = monitor
+        return monitor
+    }
+    panes[1].navigate(to: Location(path: "/held"))
+    #expect(await fixture.lister.gate.waitForCall("/held"))
+    let load = try #require(panes[1].load)
+
+    try #require(controller.window).performClose(nil)
+
+    #expect(fixture.windows.controllers.count == 1)
+    // Closed by the window, not freed: the panes are still here.
+    #expect(monitors.map(\.stopCount) == [1, 1])
+    #expect(load.isCancelled)
+}

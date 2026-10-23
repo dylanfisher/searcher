@@ -9,7 +9,14 @@ public final class GatedLister: Lister, @unchecked Sendable {
     /// What a released call does.
     public enum Outcome: Sendable {
         case batches([[DirectoryEntry]])
+        /// Waits `delay` seconds before delivering each batch, as a slow share does.
+        case delayedBatches([[DirectoryEntry]], delay: TimeInterval)
         case failure(ListingError)
+        /// Waits `delay` seconds, then throws, as a share that drops the connection does.
+        case delayedFailure(ListingError, delay: TimeInterval)
+        /// Never returns, even once released, as a share that stopped answering doesn't. The
+        /// calling thread stays blocked for the rest of the process.
+        case blockForever
     }
 
     /// One `list` call, as it started.
@@ -55,6 +62,9 @@ public final class GatedLister: Lister, @unchecked Sendable {
         while !allReleased && !released.contains(path) {
             condition.wait()
         }
+        if case .blockForever = outcome {
+            while true { condition.wait() }
+        }
         condition.unlock()
         defer {
             condition.lock()
@@ -65,14 +75,29 @@ public final class GatedLister: Lister, @unchecked Sendable {
         }
         switch outcome {
         case .batches(let batches):
-            for batch in batches {
-                condition.lock()
-                deliveredCount += 1
-                condition.unlock()
-                try onBatch(batch)
-            }
+            try deliver(batches, delay: 0, to: onBatch)
+        case .delayedBatches(let batches, let delay):
+            try deliver(batches, delay: delay, to: onBatch)
         case .failure(let error):
             throw error
+        case .delayedFailure(let error, let delay):
+            Thread.sleep(forTimeInterval: delay)
+            throw error
+        case .blockForever:
+            preconditionFailure("a call that blocks forever returned")
+        }
+    }
+
+    private func deliver(
+        _ batches: [[DirectoryEntry]], delay: TimeInterval,
+        to onBatch: ([DirectoryEntry]) throws -> Void
+    ) throws {
+        for batch in batches {
+            if delay > 0 { Thread.sleep(forTimeInterval: delay) }
+            condition.lock()
+            deliveredCount += 1
+            condition.unlock()
+            try onBatch(batch)
         }
     }
 
@@ -113,20 +138,48 @@ public final class GatedLister: Lister, @unchecked Sendable {
         return mostRunning
     }
 
+    // The waits come in two forms. The blocking one is for code that isn't async; the async one
+    // suspends instead of holding a cooperative pool thread, as `EventLog.wait` explains.
+
     /// Blocks until `count` calls have started, and returns false if `timeout` passes first.
+    @available(*, noasync, message: "blocks a cooperative thread; use the async wait")
     public func waitForCalls(_ count: Int, timeout: TimeInterval = 5) -> Bool {
         wait(timeout: timeout) { startedCalls.count >= count }
     }
 
+    /// Suspends until `count` calls have started, and returns false if `timeout` passes first.
+    public nonisolated(nonsending) func waitForCalls(_ count: Int, timeout: TimeInterval = 5) async
+        -> Bool
+    {
+        await wait(timeout: timeout) { startedCalls.count >= count }
+    }
+
     /// Blocks until a call for `path` has started, and returns false if `timeout` passes first.
+    @available(*, noasync, message: "blocks a cooperative thread; use the async wait")
     public func waitForCall(_ path: String, timeout: TimeInterval = 5) -> Bool {
         wait(timeout: timeout) { startedCalls.contains { $0.path == path } }
     }
 
+    /// Suspends until a call for `path` has started, and returns false if `timeout` passes first.
+    public nonisolated(nonsending) func waitForCall(_ path: String, timeout: TimeInterval = 5) async
+        -> Bool
+    {
+        await wait(timeout: timeout) { startedCalls.contains { $0.path == path } }
+    }
+
     /// Blocks until `count` calls have returned or thrown, and returns false if `timeout` passes
     /// first.
+    @available(*, noasync, message: "blocks a cooperative thread; use the async wait")
     public func waitForFinished(_ count: Int, timeout: TimeInterval = 5) -> Bool {
         wait(timeout: timeout) { finishedCount >= count }
+    }
+
+    /// Suspends until `count` calls have returned or thrown, and returns false if `timeout`
+    /// passes first.
+    public nonisolated(nonsending) func waitForFinished(_ count: Int, timeout: TimeInterval = 5)
+        async -> Bool
+    {
+        await wait(timeout: timeout) { finishedCount >= count }
     }
 
     private func wait(timeout: TimeInterval, until done: () -> Bool) -> Bool {
@@ -135,6 +188,17 @@ public final class GatedLister: Lister, @unchecked Sendable {
         defer { condition.unlock() }
         while !done() {
             if !condition.wait(until: deadline) { return done() }
+        }
+        return true
+    }
+
+    private nonisolated(nonsending) func wait(timeout: TimeInterval, until done: () -> Bool) async
+        -> Bool
+    {
+        let deadline = Date(timeIntervalSinceNow: timeout)
+        while !condition.withLock(done) {
+            if Date() >= deadline { return false }
+            try? await Task.sleep(for: .milliseconds(2))
         }
         return true
     }

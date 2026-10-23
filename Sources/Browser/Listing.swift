@@ -6,17 +6,54 @@ import Foundation
 /// Sorting and patching move indexes into `entries`, never the entries. Every column breaks ties
 /// by ascending name order, which follows `NameSortKey` and then the names' bytes, so the order
 /// is total and a patched listing matches one built fresh from the same entries.
+///
+/// With `foldersFirst`, folders come before every other entry, each group in the column's order.
+/// Without `showsHidden`, hidden entries (`isHidden(_:)`) are kept but have no row, so showing
+/// them again is a sort, not a new listing. Entries a non-empty `filter` doesn't match are kept
+/// the same way.
+///
+/// A folder's size is its walk's total (`applyFolderSizes`), kept beside the entry: a folder
+/// without one sorts by size as it did before its walk, below a zero-byte file.
 public struct Listing: Sendable {
-    /// The entries in the order they were added. Rows are indexes into this array.
+    /// What a walk found for a folder.
+    public enum FolderSizeValue: Equatable, Sendable {
+        /// The total of the files under it; a lower bound when `isPartial`.
+        case size(bytes: Int64, isPartial: Bool)
+        /// The walk stopped with an error.
+        case failed
+    }
+
+    /// A walk's result for a folder, as the folder was when its own modification date was
+    /// `modified`.
+    public struct FolderSizeUpdate: Equatable, Sendable {
+        public let modified: Date
+        public let value: FolderSizeValue
+
+        public init(modified: Date, value: FolderSizeValue) {
+            self.modified = modified
+            self.value = value
+        }
+    }
+
+    /// The entries in the order they were added, hidden ones included. Rows are indexes into this
+    /// array.
     public private(set) var entries: [DirectoryEntry]
     public private(set) var column = SortColumn.name
     public private(set) var ascending = true
+    public private(set) var foldersFirst = false
+    public private(set) var showsHidden = true
+    /// Names that don't match it have no row.
+    public private(set) var filter = NameFilter()
 
     // Parallel to `entries`.
     private var keys: [NameSortKey]
+    /// `NameSortKey.fold` of each name, for type-to-select and filtering.
+    private var foldedNames: [String]
     private var kindIndexes: [Int32]
     /// Each entry's position in `nameOrder`, so a tie in any column is one integer compare.
     private var nameRanks: [Int32]
+    /// Each folder's walked size; nil for a folder not walked yet and for every other entry.
+    private var folderSizes: [FolderSizeValue?]
 
     /// Indexes into `entries` in ascending name order.
     private var nameOrder: [Int32]
@@ -27,22 +64,32 @@ public struct Listing: Sendable {
     /// the same text share a position.
     private(set) var kinds: [EntryKind] = []
     private var kindRanks: [Int32] = []
+    /// Parallel to `kinds`: whether entries of the kind sort as folders. A package such as an app
+    /// is a folder on disk but sorts with the files, as in Finder.
+    private var kindIsFolder: [Bool] = []
 
-    /// Builds sort keys and kinds for `entries` and sorts them. Call it off the main thread.
+    /// Builds folded names, sort keys and kinds for `entries` and sorts them. Call it off the main
+    /// thread.
     ///
     /// - Precondition: no two entries have the same name.
-    public init(_ entries: [DirectoryEntry], column: SortColumn = .name, ascending: Bool = true) {
+    public init(
+        _ entries: [DirectoryEntry], column: SortColumn = .name, ascending: Bool = true,
+        foldersFirst: Bool = false, showsHidden: Bool = true, filter: NameFilter = NameFilter()
+    ) {
         dispatchPrecondition(condition: .notOnQueue(.main))
         precondition(entries.count < Int32.max, "\(entries.count) entries don't fit Int32 indexes")
         self.entries = entries
-        keys = NameSortKey.keys(for: entries.map(\.name))
+        (foldedNames, keys) = NameSortKey.foldedNamesAndKeys(for: entries.map(\.name))
         kindIndexes = []
         nameRanks = []
+        folderSizes = Array(repeating: nil, count: entries.count)
         nameOrder = []
         rows = []
         indexKinds()
         orderNames()
-        sort(by: column, ascending: ascending)
+        sort(
+            by: column, ascending: ascending, foldersFirst: foldersFirst, showsHidden: showsHidden,
+            filter: filter)
     }
 
     public var count: Int { rows.count }
@@ -55,40 +102,179 @@ public struct Listing: Sendable {
         kinds[Int(kindIndexes[Int(rows[row])])]
     }
 
-    /// The row of the entry named `name`, or nil if there is none.
+    /// The walked size of the folder at `row`; nil until one is applied, and for anything but a
+    /// folder.
+    public func folderSize(atRow row: Int) -> FolderSizeValue? {
+        folderSizes[Int(rows[row])]
+    }
+
+    /// The entry at `row`'s name as `NameSortKey.fold` folds it. Match it on its `utf8` view; the
+    /// fold's documentation says why.
+    public func foldedName(atRow row: Int) -> String {
+        foldedNames[Int(rows[row])]
+    }
+
+    /// The row of the entry named `name`, or nil if there is none or it has no row.
     public func row(named name: String) -> Int? {
-        guard let index = index(named: name, key: NameSortKey(name)).found else { return nil }
+        guard let index = index(named: name, key: NameSortKey(name)).found, isShown(index) else {
+            return nil
+        }
         return rowPosition(of: index)
     }
 
-    /// Puts the rows in `column` order. Sorting by name reuses the name order the listing keeps.
-    /// Call it off the main thread.
-    public mutating func sort(by column: SortColumn, ascending: Bool) {
+    /// The row of the entry named `name`. For an entry the listing has but hides, the row of the
+    /// first shown entry after it, or the last row when none follows. Nil when the listing has no
+    /// entry named `name` or no rows.
+    public func row(nearest name: String) -> Int? {
+        guard !rows.isEmpty, let index = index(named: name, key: NameSortKey(name)).found else {
+            return nil
+        }
+        return min(lowerBound(rows) { precedes(Int($0), index) }, rows.count - 1)
+    }
+
+    /// Whether `entry` is hidden: its name starts with a dot, or it has the hidden flag.
+    public static func isHidden(_ entry: DirectoryEntry) -> Bool {
+        entry.isHidden || entry.name.utf8.first == UInt8(ascii: ".")
+    }
+
+    /// The names of the entries this listing shows and `other` doesn't. Walks both name orders
+    /// side by side, so it compares keys once per entry and looks up or hashes nothing.
+    public func names(notIn other: Listing) -> [String] {
+        var added: [String] = []
+        var mine = 0
+        var theirs = 0
+        while mine < nameOrder.count {
+            let a = Int(nameOrder[mine])
+            guard isShown(a) else {
+                mine += 1
+                continue
+            }
+            guard theirs < other.nameOrder.count else {
+                added.append(entries[a].name)
+                mine += 1
+                continue
+            }
+            let b = Int(other.nameOrder[theirs])
+            guard other.isShown(b) else {
+                theirs += 1
+                continue
+            }
+            if keys[a] == other.keys[b],
+                entries[a].name.utf8.elementsEqual(other.entries[b].name.utf8)
+            {
+                mine += 1
+                theirs += 1
+            } else if Self.namePrecedes(
+                keys[a], entries[a].name, other.keys[b], other.entries[b].name)
+            {
+                added.append(entries[a].name)
+                mine += 1
+            } else {
+                theirs += 1
+            }
+        }
+        return added
+    }
+
+    /// Puts the shown entries in rows in `column` order, with folders first if `foldersFirst`: the
+    /// hidden ones only if `showsHidden`, and only those whose names `filter` matches. Sorting by
+    /// name reuses the name order the listing keeps. Call it off the main thread.
+    public mutating func sort(
+        by column: SortColumn, ascending: Bool, foldersFirst: Bool, showsHidden: Bool,
+        filter: NameFilter = NameFilter()
+    ) {
         dispatchPrecondition(condition: .notOnQueue(.main))
         self.column = column
         self.ascending = ascending
+        self.foldersFirst = foldersFirst
+        self.showsHidden = showsHidden
+        self.filter = filter
         if column == .name {
-            rows = ascending ? nameOrder : nameOrder.reversed()
+            let ordered = ascending ? nameOrder : nameOrder.reversed()
+            guard foldersFirst || !showsHidden || !filter.isEmpty else {
+                rows = ordered
+                return
+            }
+            var folders: [Int32] = []
+            var others: [Int32] = []
+            others.reserveCapacity(ordered.count)
+            for index in ordered where isShown(Int(index)) {
+                if tier(Int(index)) == 0 {
+                    folders.append(index)
+                } else {
+                    others.append(index)
+                }
+            }
+            rows = folders + others
             return
         }
         // Sorting (value, rank) pairs side by side took 6 ms for 100k entries in a release build;
         // sorting indexes with a comparator that looks up each entry took 80 ms.
         var pairs = [RowKey]()
         pairs.reserveCapacity(nameOrder.count)
-        for (rank, index) in nameOrder.enumerated() {
-            pairs.append(RowKey(value: sortValue(Int(index)), rank: Int32(rank)))
+        for (rank, index) in nameOrder.enumerated() where isShown(Int(index)) {
+            pairs.append(
+                RowKey(tier: tier(Int(index)), value: sortValue(Int(index)), rank: Int32(rank)))
         }
         pairs.sort()
         rows = pairs.map { nameOrder[Int($0.rank)] }
     }
 
-    /// Adds `entry`, or replaces the entry with its name, and moves only that entry's row. Call it
-    /// off the main thread.
+    /// Adds `entry`, or replaces the entry with its name, and moves only that entry's row. A
+    /// folder keeps its walked size while its own modification date stays the same. Call it off
+    /// the main thread.
     public mutating func update(_ entry: DirectoryEntry) {
         dispatchPrecondition(condition: .notOnQueue(.main))
         let key = NameSortKey(entry.name)
+        let kept = index(named: entry.name, key: key).found.flatMap { index in
+            Self.isSameFolder(entries[index], entry) ? folderSizes[index] : nil
+        }
         remove(named: entry.name, key: key)
-        insert(entry, key: key)
+        insert(entry, key: key, folderSize: kept)
+    }
+
+    /// Gives each folder named in `updates` its walked size, if its own modification date is the
+    /// one the update was walked at, and moves the rows sorted by size. Names of files, of
+    /// entries the listing lacks, and of folders whose date moved are skipped. Returns whether a
+    /// size changed. Call it off the main thread.
+    @discardableResult
+    public mutating func applyFolderSizes(_ updates: [ExactName: FolderSizeUpdate]) -> Bool {
+        dispatchPrecondition(condition: .notOnQueue(.main))
+        var changed = false
+        for (exact, update) in updates {
+            guard let index = index(named: exact.name, key: NameSortKey(exact.name)).found,
+                entries[index].type == .directory, entries[index].modified == update.modified,
+                folderSizes[index] != update.value
+            else { continue }
+            folderSizes[index] = update.value
+            changed = true
+        }
+        if changed, column == .size { sortAgain() }
+        return changed
+    }
+
+    /// Drops every folder's walked size, so folders sort and show as before their walks. Call it
+    /// off the main thread.
+    public mutating func clearFolderSizes() {
+        dispatchPrecondition(condition: .notOnQueue(.main))
+        guard folderSizes.contains(where: { $0 != nil }) else { return }
+        folderSizes = Array(repeating: nil, count: entries.count)
+        if column == .size { sortAgain() }
+    }
+
+    /// Sorts the rows again in the listing's own order. A batch of sizes can move any number of
+    /// rows: moving them one at a time, as `update` does, shifts the row array once per size,
+    /// where a sort of 100k entries takes about 6 ms in a release build.
+    private mutating func sortAgain() {
+        sort(
+            by: column, ascending: ascending, foldersFirst: foldersFirst, showsHidden: showsHidden,
+            filter: filter)
+    }
+
+    /// Whether `new` is the folder `old` was, with the same modification date, so its walked
+    /// size still holds.
+    private static func isSameFolder(_ old: DirectoryEntry, _ new: DirectoryEntry) -> Bool {
+        old.type == .directory && new.type == .directory && old.modified == new.modified
     }
 
     /// Removes the entry named `name` and its row, and returns it; nil if there is none.
@@ -130,6 +316,7 @@ public struct Listing: Sendable {
             return Int32(index)
         }
         kinds.append(kind)
+        kindIsFolder.append(kind.type == .folder)
         let textKeys = kinds.map { NameSortKey($0.text) }
         let byText = kinds.indices.sorted {
             Self.namePrecedes(textKeys[$0], kinds[$0].text, textKeys[$1], kinds[$1].text)
@@ -180,18 +367,23 @@ public struct Listing: Sendable {
 
     // MARK: - Patching
 
-    private mutating func insert(_ entry: DirectoryEntry, key: NameSortKey) {
+    private mutating func insert(
+        _ entry: DirectoryEntry, key: NameSortKey, folderSize: FolderSizeValue?
+    ) {
         let position = index(named: entry.name, key: key).position
         let index = Int32(entries.count)
         let kind = EntryKind(entry.type, pathExtension: EntryKind.pathExtension(of: entry.name))
         let kindIndex = kindIndex(of: kind)
         entries.append(entry)
         keys.append(key)
+        foldedNames.append(NameSortKey.fold(entry.name))
         kindIndexes.append(kindIndex)
+        folderSizes.append(folderSize)
         let rank = Int32(position)
         Self.shift(&nameRanks, past: rank - 1, by: 1)
         nameRanks.append(rank)
         nameOrder.insert(index, at: position)
+        guard isShown(Int(index)) else { return }
         let row = lowerBound(rows) { precedes(Int($0), Int(index)) }
         rows.insert(index, at: row)
     }
@@ -200,12 +392,16 @@ public struct Listing: Sendable {
     private mutating func remove(named name: String, key: NameSortKey) -> DirectoryEntry? {
         let (position, found) = index(named: name, key: key)
         guard let index = found else { return nil }
-        rows.remove(at: rowPosition(of: index))
+        if isShown(index) {
+            rows.remove(at: rowPosition(of: index))
+        }
         nameOrder.remove(at: position)
         let entry = entries.remove(at: index)
         keys.remove(at: index)
+        foldedNames.remove(at: index)
         kindIndexes.remove(at: index)
         nameRanks.remove(at: index)
+        folderSizes.remove(at: index)
         // Every index and rank past the removed one shifts down by one.
         let removedIndex = Int32(index)
         let removedRank = Int32(position)
@@ -243,13 +439,27 @@ public struct Listing: Sendable {
         return row
     }
 
-    /// Whether the entry at `a` comes before the entry at `b` in row order.
+    /// Whether the entry at `index` has a row.
+    private func isShown(_ index: Int) -> Bool {
+        (showsHidden || !Self.isHidden(entries[index]))
+            && filter.matches(foldedName: foldedNames[index])
+    }
+
+    /// The entry at `index`'s group in row order: 0 for a folder when folders come first, else 1.
+    private func tier(_ index: Int) -> UInt8 {
+        foldersFirst && kindIsFolder[Int(kindIndexes[index])] ? 0 : 1
+    }
+
+    /// Whether the entry at `a` comes before the entry at `b` in row order. Either may be hidden,
+    /// for finding where a hidden entry would go.
     private func precedes(_ a: Int, _ b: Int) -> Bool {
+        let (aTier, bTier) = (tier(a), tier(b))
+        if aTier != bTier { return aTier < bTier }
         if column == .name {
             return ascending ? nameRanks[a] < nameRanks[b] : nameRanks[a] > nameRanks[b]
         }
-        return RowKey(value: sortValue(a), rank: nameRanks[a])
-            < RowKey(value: sortValue(b), rank: nameRanks[b])
+        return RowKey(tier: aTier, value: sortValue(a), rank: nameRanks[a])
+            < RowKey(tier: bTier, value: sortValue(b), rank: nameRanks[b])
     }
 
     /// The entry at `index`'s value in the sort column, as an integer whose order is the row
@@ -260,14 +470,21 @@ public struct Listing: Sendable {
         case .name:
             preconditionFailure("rows sorted by name come from nameOrder")
         case .size:
-            // Entries without a size sort below a zero-byte file.
-            value = UInt64(bitPattern: entries[index].size ?? -1) ^ (1 << 63)
+            // Entries without a size, folders not walked yet among them, sort below a zero-byte
+            // file.
+            value = UInt64(bitPattern: entries[index].size ?? walkedBytes(index) ?? -1) ^ (1 << 63)
         case .dateModified:
             value = Self.orderedBits(entries[index].modified.timeIntervalSinceReferenceDate)
         case .kind:
             value = UInt64(kindRanks[Int(kindIndexes[index])])
         }
         return ascending ? value : ~value
+    }
+
+    /// The walked size of the folder at `index`, if it has one.
+    private func walkedBytes(_ index: Int) -> Int64? {
+        guard case .size(let bytes, _) = folderSizes[index] else { return nil }
+        return bytes
     }
 
     /// Bits of `seconds` whose unsigned order is the numeric order.
@@ -307,12 +524,14 @@ public struct Listing: Sendable {
     }
 }
 
-/// A row's place in a sort by any column but name: the column's value, then the name rank.
+/// A row's place in a sort by any column but name: its group (folders first or not), the
+/// column's value, then the name rank.
 private struct RowKey: Comparable {
+    let tier: UInt8
     let value: UInt64
     let rank: Int32
 
     static func < (a: RowKey, b: RowKey) -> Bool {
-        (a.value, a.rank) < (b.value, b.rank)
+        (a.tier, a.value, a.rank) < (b.tier, b.value, b.rank)
     }
 }

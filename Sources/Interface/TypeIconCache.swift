@@ -19,6 +19,17 @@ public final class TypeIconCache {
         self.makeIcon = makeIcon
     }
 
+    /// The cloud with a down arrow that Finder shows by an iCloud item that isn't downloaded, made
+    /// the first time a row shows it and shared by every such row. A template, so it takes its
+    /// view's tint.
+    public private(set) lazy var notDownloadedBadge: NSImage = {
+        let name = "icloud.and.arrow.down"
+        guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil) else {
+            preconditionFailure("no system symbol named \(name)")
+        }
+        return image
+    }()
+
     public func icon(for type: UTType) -> NSImage {
         if let icon = icons[type] {
             return icon

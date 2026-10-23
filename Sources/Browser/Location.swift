@@ -19,6 +19,16 @@ public struct Location: Equatable, Sendable {
         return Location(path: "/" + components.dropLast().joined(separator: "/"))
     }
 
+    /// Every folder from `/` down to this one, this one last.
+    public var ancestors: [Location] {
+        var path = ""
+        return [Location(path: "/")]
+            + pathComponents(self.path).map { component in
+                path += "/" + component
+                return Location(path: path)
+            }
+    }
+
     /// The folder named `name` inside this one. Builds a path only; it doesn't check that the
     /// folder exists.
     ///

@@ -20,3 +20,27 @@ import Testing
 
     #expect(registry.command(for: KeyChord(.down, modifiers: .command))?.title == "Open")
 }
+
+@Test func theAppRegistersTheTilingDualPaneAndWindowCommands() throws {
+    let registry = try AppCommands.registry()
+
+    #expect(
+        registry.command(for: KeyChord("t", modifiers: [.command, .shift]))
+            == TilingCommands.splitRight)
+    #expect(registry.command(for: KeyChord("w", modifiers: .command)) == TilingCommands.closePane)
+    #expect(registry.command(for: KeyChord(.tab)) == DualPaneCommands.focusOtherPane)
+    #expect(registry.command(for: KeyChord("t", modifiers: .command)) == WindowCommands.newTab)
+    #expect(
+        registry.command(for: KeyChord("w", modifiers: [.command, .shift]))
+            == WindowCommands.closeTab)
+    #expect(registry.command(for: KeyChord(.tab, modifiers: .control)) == WindowCommands.nextTab)
+    #expect(
+        registry.command(for: KeyChord("]", modifiers: [.command, .shift]))
+            == WindowCommands.nextTab)
+    #expect(
+        registry.command(for: KeyChord(.tab, modifiers: [.control, .shift]))
+            == WindowCommands.previousTab)
+    #expect(
+        registry.command(for: KeyChord("[", modifiers: [.command, .shift]))
+            == WindowCommands.previousTab)
+}

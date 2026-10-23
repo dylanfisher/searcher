@@ -1,5 +1,6 @@
 import Browser
 import Foundation
+import TestSupport
 import Testing
 
 private let bounds = Rect(x: 0, y: 0, width: 1200, height: 800)
@@ -157,6 +158,43 @@ private func isClose(_ a: Double, _ b: Double) -> Bool {
     #expect(built.layout.history == [built[3], built[1], built[2], built[0]])
 }
 
+// MARK: Other pane
+
+@Test func otherPaneIsTheMostRecentlyFocusedOtherLeafNotTheNearest() {
+    // p0 | p1 | p2: p1 is p2's neighbor, but p0 was focused after it.
+    var built = Built(layout: Layout(), panes: [])
+    built.panes.append(built.layout.focused)
+    split(&built, .horizontal)
+    split(&built, .horizontal)
+    built.layout.focus(built[1])
+    built.layout.focus(built[0])
+    built.layout.focus(built[2])
+
+    #expect(built.layout.otherPane == built[0])
+}
+
+@Test func otherPaneFollowsFocusMovesAndCloses() {
+    var built = grid()
+    built.layout.focus(built[0])
+    built.layout.focus(built[1])
+    built.layout.focus(built[2])
+    #expect(built.layout.otherPane == built[1])
+
+    built.layout.move(.right)
+    #expect(built.layout.otherPane == built[1])
+
+    built.layout.focus(built[1])
+    #expect(built.layout.otherPane == built[2])
+
+    built.layout.close()
+    #expect(built.layout.focused == built[2])
+    #expect(built.layout.otherPane == built[0])
+}
+
+@Test func oneLeafHasNoOtherPane() {
+    #expect(Layout().otherPane == nil)
+}
+
 @Test func moveSwapsWithNeighborAndKeepsFocus() {
     var built = grid()
     built.layout.focus(built[0])
@@ -177,6 +215,23 @@ private func isClose(_ a: Double, _ b: Double) -> Bool {
     let top = try #require(frames[built[1]])
     #expect(isClose(top.height, (800 - divider) / 2 + 40))
     #expect(isClose(try #require(frames[built[0]]).width, (1200 - divider) / 2))
+}
+
+@Test func resizeMovesTheDividerOnTheRightEdgeWhateverTheTreesShape() throws {
+    // (p0 | p1) | p2: the innermost split holding p1 is p0 | p1, on its left edge, but ← moves
+    // the divider on its right edge, as it does in p0 | (p1 | p2).
+    var layout = Layout()
+    let p0 = layout.focused
+    let p2 = try splitPane(&layout, .horizontal, in: bounds)
+    layout.focus(p0)
+    let p1 = try splitPane(&layout, .horizontal, in: bounds)
+    let before = try #require(layout.frames(in: bounds)[p1])
+
+    layout.resize(.left, by: 40, in: bounds)
+
+    let frames = layout.frames(in: bounds)
+    #expect(isClose(try #require(frames[p1]).maxX, before.maxX - 40))
+    #expect(isClose(try #require(frames[p2]).width, (1200 - divider) / 2 + 40))
 }
 
 @Test func resizeClampsAtMinimumPaneSize() throws {
@@ -312,23 +367,10 @@ private func isClose(_ a: Double, _ b: Double) -> Bool {
 
 // MARK: Random edits
 
-/// SplitMix64, so a failing seed replays the same edits.
-private struct SeededGenerator: RandomNumberGenerator {
-    var state: UInt64
-
-    mutating func next() -> UInt64 {
-        state &+= 0x9E37_79B9_7F4A_7C15
-        var z = state
-        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
-        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
-        return z ^ (z >> 31)
-    }
-}
-
 /// Random edits keep every pane listed once, focus and history valid, frames and dividers tiling
 /// the rect, and every pane at least the minimum size.
 @Test(arguments: 0..<200) func randomEditsKeepInvariants(seed: Int) {
-    var random = SeededGenerator(state: UInt64(seed))
+    var random = SeededGenerator(seed: UInt64(seed))
     var layout = Layout()
     for _ in 0..<(12 + seed % 30) {
         let direction = Direction.allCases.randomElement(using: &random)!
@@ -364,4 +406,123 @@ private struct SeededGenerator: RandomNumberGenerator {
             #expect(frame.width >= minimum - 1e-9 && frame.height >= minimum - 1e-9)
         }
     }
+}
+
+// MARK: Grid
+
+@Test func gridCountsAreReadFromTheTree() throws {
+    var layout = Layout()
+    #expect(layout.columnCount == 1 && layout.rowCount == 1)
+    let first = layout.focused
+    _ = try splitPane(&layout, .horizontal, in: bounds)
+    #expect(layout.columnCount == 2 && layout.rowCount == 1)
+    _ = try splitPane(&layout, .vertical, in: bounds)
+    // p0 | (p1 over p2): two side by side in the top row, two stacked on the right.
+    #expect(layout.columnCount == 2 && layout.rowCount == 2)
+    layout.focus(first)
+    _ = try splitPane(&layout, .horizontal, in: bounds)
+    #expect(layout.columnCount == 3 && layout.rowCount == 2)
+
+    let l = lShape().layout
+    #expect(l.columnCount == 2 && l.rowCount == 2)
+    let g = grid().layout
+    #expect(g.columnCount == 2 && g.rowCount == 2)
+}
+
+/// Each pane's frame, in reading order: top to bottom, then left to right.
+private func readingOrder(_ layout: Layout) -> [PaneID] {
+    let frames = layout.frames(in: bounds)
+    return layout.panes.sorted {
+        let a = frames[$0] ?? Rect(x: 0, y: 0, width: 0, height: 0)
+        let b = frames[$1] ?? Rect(x: 0, y: 0, width: 0, height: 0)
+        return (a.y, a.x) < (b.y, b.x)
+    }
+}
+
+@Test func gridOfThreeByTwoFromOnePaneAddsFiveEvenPanesAndKeepsTheFocus() throws {
+    var layout = Layout()
+    let first = layout.focused
+
+    let made = layout.makeGrid(columns: 3, rows: 2, in: bounds)
+    let change = try #require(made)
+
+    #expect(change.closed.isEmpty)
+    #expect(change.added.count == 5)
+    #expect(layout.focused == first)
+    #expect(readingOrder(layout) == [first] + change.added)
+    #expect(layout.columnCount == 3 && layout.rowCount == 2)
+    #expect(layout.history.first == first && Set(layout.history) == Set(layout.panes))
+    let frames = layout.frames(in: bounds)
+    let width = (1200 - 2 * divider) / 3
+    let height = (800 - divider) / 2
+    for (index, pane) in readingOrder(layout).enumerated() {
+        let frame = try #require(frames[pane])
+        #expect(isClose(frame.width, width), "\(index)")
+        #expect(isClose(frame.height, height), "\(index)")
+        #expect(isClose(frame.x, Double(index % 3) * (width + divider)), "\(index)")
+        #expect(isClose(frame.y, Double(index / 3) * (height + divider)), "\(index)")
+    }
+}
+
+@Test func gridKeepsPanesInReadingOrderAndClosesTheRest() throws {
+    // p0 p1 over p2 p3, p1 focused.
+    var built = grid()
+    built.layout.focus(built[1])
+
+    let made = built.layout.makeGrid(columns: 1, rows: 2, in: bounds)
+    let change = try #require(made)
+
+    #expect(built.layout.panes == [built[0], built[1]])
+    #expect(change.closed == [built[2], built[3]])
+    #expect(change.added.isEmpty)
+    #expect(built.layout.focused == built[1])
+    #expect(built.layout.history.count == 2)
+    #expect(built.layout.columnCount == 1 && built.layout.rowCount == 2)
+}
+
+@Test func theFocusedPaneTakesTheLastKeptSlotWhenItWouldFallOffTheEnd() throws {
+    // p0 p1 over p2 p3, p3 focused.
+    var built = grid()
+
+    let made = built.layout.makeGrid(columns: 2, rows: 1, in: bounds)
+    let change = try #require(made)
+
+    #expect(readingOrder(built.layout) == [built[0], built[3]])
+    #expect(change.closed == [built[1], built[2]])
+    #expect(built.layout.focused == built[3])
+
+    let single = built.layout.makeGrid(columns: 1, rows: 1, in: bounds)
+    #expect(single != nil)
+    #expect(built.layout.panes == [built[3]])
+}
+
+@Test func gridReadsTheLShapeInReadingOrder() throws {
+    // p0 | p1 over p2: p0 and p1 share the top row, so p1 comes second.
+    var built = lShape()
+    built.layout.focus(built[0])
+
+    let made = built.layout.makeGrid(columns: 2, rows: 1, in: bounds)
+    #expect(made != nil)
+
+    #expect(built.layout.panes == [built[0], built[1]])
+}
+
+@Test func gridEndsAZoom() throws {
+    var built = grid()
+    built.layout.toggleZoom()
+
+    let made = built.layout.makeGrid(columns: 2, rows: 2, in: bounds)
+    #expect(made != nil)
+
+    #expect(!built.layout.isZoomed)
+}
+
+@Test func gridRefusesWhenAPaneWouldBeUnderTheMinimum() throws {
+    let narrow = Rect(x: 0, y: 0, width: 3 * minimum + 2 * divider - 1, height: 800)
+    var layout = Layout()
+    let before = layout
+
+    #expect(layout.makeGrid(columns: 3, rows: 1, in: narrow) == nil)
+    #expect(layout == before)
+    #expect(layout.makeGrid(columns: 2, rows: 3, in: narrow) != nil)
 }

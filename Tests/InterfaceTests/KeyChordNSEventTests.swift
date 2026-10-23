@@ -23,7 +23,7 @@ func functionKey(_ code: Int) -> String {
 }
 
 /// Arrow events carry these flags along with the modifiers held.
-private let arrowFlags: NSEvent.ModifierFlags = [.numericPad, .function]
+let arrowFlags: NSEvent.ModifierFlags = [.numericPad, .function]
 
 @MainActor @Test func cmdDownCmdOAndCmdUpMapToTheRegisteredChords() throws {
     let registry = try AppCommands.registry()
@@ -54,9 +54,47 @@ private let arrowFlags: NSEvent.ModifierFlags = [.numericPad, .function]
     }
 }
 
+/// Fn-↑ and Fn-↓ on a laptop, and the Page Up and Page Down keys on a full keyboard.
+@MainActor @Test func pageKeysMapToPageUpAndPageDown() throws {
+    let pageDown = try KeyChord(
+        event: keyEvent(functionKey(NSPageDownFunctionKey), modifiers: .function))
+    let pageUp = try KeyChord(
+        event: keyEvent(functionKey(NSPageUpFunctionKey), modifiers: .function))
+
+    #expect(pageDown == KeyChord(.pageDown))
+    #expect(pageUp == KeyChord(.pageUp))
+    #expect(pageDown?.description == "Page Down")
+}
+
 @MainActor @Test func shiftedLetterIsTheLowercaseLetterWithShift() throws {
     let chord = try KeyChord(event: keyEvent("G", modifiers: [.command, .shift]))
     #expect(chord == KeyChord("g", modifiers: [.command, .shift]))
+}
+
+/// Shift applies to punctuation too, and where "." sits depends on the layout. A US keyboard
+/// types ">" for Shift and the period key; a French AZERTY one types "." for Shift and the key
+/// whose own character is ";". The typed character comes first, then the key's own.
+@Test func shiftedPunctuationMeansTheTypedCharacterThenTheKeysOwn() {
+    let flags: NSEvent.ModifierFlags = [.command, .shift]
+    let modifiers: KeyChord.Modifiers = [.command, .shift]
+
+    #expect(
+        KeyChord.candidates(typed: ">", unshifted: ".", flags: flags) == [
+            KeyChord(">", modifiers: modifiers), KeyChord(".", modifiers: modifiers),
+        ])
+    #expect(
+        KeyChord.candidates(typed: ".", unshifted: ";", flags: flags) == [
+            KeyChord(".", modifiers: modifiers), KeyChord(";", modifiers: modifiers),
+        ])
+    // A letter and an unshifted key have one meaning.
+    #expect(
+        KeyChord.candidates(typed: "G", unshifted: "g", flags: flags) == [
+            KeyChord("g", modifiers: modifiers)
+        ])
+    #expect(
+        KeyChord.candidates(typed: ".", unshifted: ".", flags: .command) == [
+            KeyChord(".", modifiers: .command)
+        ])
 }
 
 @MainActor @Test func capsLockLetterIsTheLowercaseLetter() throws {
@@ -83,14 +121,33 @@ private let arrowFlags: NSEvent.ModifierFlags = [.numericPad, .function]
 }
 
 @MainActor @Test func keysWithoutAChordSpellingGiveNil() throws {
-    // Keypad Enter, backspace, F1, Page Down, forward delete, and a dead key that typed nothing.
+    // Keypad Enter, backspace, F1, forward delete, and a dead key that typed nothing.
     let unmapped = [
-        "\u{03}", "\u{08}", functionKey(NSF1FunctionKey), functionKey(NSPageDownFunctionKey),
-        functionKey(NSDeleteFunctionKey), "",
+        "\u{03}", "\u{08}", functionKey(NSF1FunctionKey), functionKey(NSDeleteFunctionKey), "",
     ]
     for characters in unmapped {
         #expect(
             try KeyChord(event: keyEvent(characters)) == nil,
             "\(characters.unicodeScalars.map { $0.escaped(asASCII: true) })")
     }
+}
+
+@MainActor @Test func aKeyEquivalentReadsBackAsItsChord() throws {
+    let chords = [
+        KeyChord(.down, modifiers: .command), KeyChord(.up, modifiers: .command),
+        KeyChord(.left), KeyChord(.right, modifiers: .option), KeyChord("o", modifiers: .command),
+        KeyChord("g", modifiers: [.command, .shift]),
+        KeyChord("1", modifiers: [.control, .option, .command]),
+        KeyChord(.return, modifiers: .command), KeyChord(.tab), KeyChord(.space),
+        KeyChord(.escape), KeyChord(.pageDown), KeyChord(.pageUp, modifiers: .shift),
+    ]
+    for chord in chords {
+        let event = try keyEvent(
+            chord.keyEquivalent, modifiers: chord.keyEquivalentModifierMask)
+        #expect(KeyChord(event: event) == chord, "\(chord)")
+    }
+}
+
+@MainActor @Test func deleteIsTheBackspaceKeyEquivalent() {
+    #expect(KeyChord(.delete, modifiers: .command).keyEquivalent == "\u{8}")
 }

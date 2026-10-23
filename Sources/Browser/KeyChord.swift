@@ -6,6 +6,8 @@ public struct KeyChord: Hashable, Sendable, CustomStringConvertible {
         /// rejects any other spelling; see there.
         case character(Character)
         case up, down, left, right
+        /// The Page Up and Page Down keys, which Fn-↑ and Fn-↓ type on a laptop keyboard.
+        case pageUp, pageDown
         case tab, `return`, delete, space, escape
 
         public init(extendedGraphemeClusterLiteral value: Character) {
@@ -69,6 +71,9 @@ public struct KeyChord: Hashable, Sendable, CustomStringConvertible {
         case .down: "↓"
         case .left: "←"
         case .right: "→"
+        // Fn-↑ and Fn-↓ type these on a laptop keyboard.
+        case .pageUp: "Page Up"
+        case .pageDown: "Page Down"
         case .tab: "Tab"
         case .return: "Return"
         case .delete: "Delete"

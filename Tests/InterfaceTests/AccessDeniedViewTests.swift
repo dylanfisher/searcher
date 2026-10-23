@@ -28,7 +28,7 @@ private struct DeniedFixture {
         lister.releaseAll()
         pane = Pane(
             location: Location(path: path), service: ListingService(lister: lister),
-            systemActions: actions, isFocused: true)
+            systemActions: actions, settings: untouchedSettings(), isFocused: true)
         controller = PaneViewController(
             pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
             tableView: table, monitorsFolders: false)
@@ -41,8 +41,8 @@ private struct DeniedFixture {
 extension ListingState {
     fileprivate var hasEnded: Bool {
         switch self {
-        case .loading, .partial: false
-        case .loaded, .denied, .failed: true
+        case .loading, .partial, .cachedRefreshing, .slow: false
+        case .loaded, .offline, .denied, .failed: true
         }
     }
 }
@@ -54,7 +54,7 @@ extension ListingState {
     #expect(!fixture.deniedView.isHidden)
     #expect(fixture.deniedView.titleLabel.stringValue.contains("“Mail”"))
     #expect(fixture.controller.messageLabel.isHidden)
-    #expect(fixture.controller.spinner.isHidden)
+    #expect(fixture.controller.status.spinner.isHidden)
 }
 
 @MainActor @Test func theButtonOpensFullDiskAccessInSystemSettings() async throws {
@@ -91,7 +91,7 @@ func otherFailuresShowTheErrorTextNotTheDeniedView(path: String) async {
 
     #expect(fixture.pane.location == Location(path: "/root"))
     #expect(fixture.deniedView.isHidden)
-    #expect(fixture.pane.selection == [ExactName("Mail")])
+    #expect(fixture.pane.selection.members == .only([ExactName("Mail")]))
 }
 
 @MainActor @Test func aLongFolderNameTruncatesWithinTheViewsWidth() async {
@@ -101,7 +101,8 @@ func otherFailuresShowTheErrorTextNotTheDeniedView(path: String) async {
     lister.releaseAll()
     let pane = Pane(
         location: Location(path: path), service: ListingService(lister: lister),
-        systemActions: StubSystemActions(), isFocused: true)
+        systemActions: StubSystemActions(), settings: untouchedSettings(),
+        isFocused: true)
     let controller = PaneViewController(
         pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
         tableView: ListingTableView(), monitorsFolders: false)

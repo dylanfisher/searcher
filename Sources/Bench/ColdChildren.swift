@@ -10,6 +10,21 @@ enum ColdChildren {
     /// Lists the first `count` subfolders of `folder` in name order, one `list` call each, and
     /// returns each call's time in milliseconds. Call it off the main thread.
     static func time(in folder: String, lister: any Lister) throws -> Samples {
+        let clock = ContinuousClock()
+        var samples: [Double] = []
+        for child in try children(of: folder, lister: lister) {
+            let elapsed = try clock.measure {
+                try lister.list(child) { _ in }
+            }
+            samples.append(BenchCase.milliseconds(elapsed))
+        }
+        return Samples(samples)
+    }
+
+    /// The paths of the first `count` subfolders of `folder` in name order, which `time` lists
+    /// and the UI bench's `cold` and `revisit` scenarios open. Lists `folder` alone, so the
+    /// subfolders stay unopened. Call it off the main thread.
+    static func children(of folder: String, lister: any Lister) throws -> [String] {
         var children: [String] = []
         try lister.list(folder) { batch in
             children += batch.filter { $0.type == .directory }.map(\.name)
@@ -17,16 +32,7 @@ enum ColdChildren {
         guard children.count >= count else {
             throw TooFewChildren(folder: folder, found: children.count)
         }
-        children.sort()
-        let clock = ContinuousClock()
-        var samples: [Double] = []
-        for child in children.prefix(count) {
-            let elapsed = try clock.measure {
-                try lister.list(folder + "/" + child) { _ in }
-            }
-            samples.append(BenchCase.milliseconds(elapsed))
-        }
-        return Samples(samples)
+        return children.sorted().prefix(count).map { folder + "/" + $0 }
     }
 
     struct TooFewChildren: Error, CustomStringConvertible {

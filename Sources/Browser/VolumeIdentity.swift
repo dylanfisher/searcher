@@ -1,0 +1,66 @@
+import Base
+import Darwin
+
+/// Which mounted volume a folder is on, as `statfs` reports it. `ListingService` limits blocking
+/// reads per volume by it, so a share that stops answering holds only its own loads.
+public struct VolumeIdentity: Hashable, Sendable {
+    /// What is mounted (`f_mntfromname`): a device such as `/dev/disk3s1`, or a share such as
+    /// `//user@server/share`.
+    public let device: String
+    /// Where it is mounted (`f_mntonname`).
+    public let mountPoint: String
+    public let kind: VolumeKind
+
+    public init(device: String, mountPoint: String, kind: VolumeKind) {
+        self.device = device
+        self.mountPoint = mountPoint
+        self.kind = kind
+    }
+
+    /// The volume's name as a pane's slow or offline note gives it: its mount point's last
+    /// component, read without asking the volume, which may not be answering.
+    public var name: String { Self.name(mountedAt: mountPoint) }
+
+    /// The name of the volume mounted at `mountPoint`, as `name` gives it, for a volume known
+    /// only by where it was mounted.
+    public static func name(mountedAt mountPoint: String) -> String {
+        Location(path: mountPoint).name
+    }
+
+    /// Reads the volume holding `path`. `statfs` blocks on a share that has stopped answering, so
+    /// this traps unless it runs on a `BlockingCallThread`.
+    public init(path: String) throws(ListingError) {
+        BlockingCallThread.requireCurrent()
+        var info = statfs()
+        if statfs(path, &info) != 0 { throw ListingError(path: path, code: errno) }
+        self.init(
+            device: Self.string(&info.f_mntfromname), mountPoint: Self.string(&info.f_mntonname),
+            kind: VolumeKind(mountFlags: info.f_flags))
+    }
+
+    /// Every mounted volume, from the kernel's mount table (`getmntinfo` with `MNT_NOWAIT`),
+    /// which no volume is asked for, so it returns while a share hangs. It places a path by its
+    /// text alone, so `VolumeIdentity(path:)` stays the answer for a path through a link.
+    public static func mounted() -> [VolumeIdentity] {
+        BlockingCallThread.requireCurrent()
+        var buffer: UnsafeMutablePointer<statfs>?
+        let count = getmntinfo_r_np(&buffer, MNT_NOWAIT)
+        guard count > 0, let buffer else {
+            preconditionFailure("getmntinfo_r_np failed with errno \(errno)")
+        }
+        defer { free(buffer) }
+        return (0..<Int(count)).map { index in
+            var info = buffer[index]
+            return VolumeIdentity(
+                device: string(&info.f_mntfromname), mountPoint: string(&info.f_mntonname),
+                kind: VolumeKind(mountFlags: info.f_flags))
+        }
+    }
+
+    /// A NUL-terminated `statfs` name field as a `String`.
+    private static func string<Field>(_ field: inout Field) -> String {
+        withUnsafeBytes(of: &field) { bytes in
+            String(decoding: bytes.prefix { $0 != 0 }, as: UTF8.self)
+        }
+    }
+}

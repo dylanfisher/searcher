@@ -1,0 +1,195 @@
+import Base
+import Foundation
+import TestSupport
+import Testing
+
+@testable import Browser
+
+private func share(_ name: String) -> VolumeIdentity {
+    VolumeIdentity(device: "//nas/\(name)", mountPoint: "/fake/\(name)", kind: .network)
+}
+
+private let listing = ListingCache.Folder(
+    entries: [file("a"), folder("b")], listedAt: Date(timeIntervalSinceReferenceDate: 1_000))
+
+private func store(_ folder: TemporaryFolder, log: EventLog<String> = EventLog())
+    -> ListingCacheStore
+{
+    ListingCacheStore(
+        roots: StoreRoots(
+            caches: folder.url.appending(path: "Caches"),
+            applicationSupport: folder.url.appending(path: "Application Support")),
+        log: { log.append($0) }, clock: ManualClock())
+}
+
+@Test func anInsertDuringASlowReadWinsOverTheFile() async {
+    let path = "/fake/a/x"
+    let older = ListingCache.Folder(entries: [file("old")], listedAt: testDate)
+    let reads = EventLog<Int>()
+    let release = AsyncStream<Void>.makeStream()
+    // The first read waits for the test; any later one finds no file.
+    let cache = ListingCache(
+        load: { _ in
+            let call = reads.all.count
+            reads.append(call)
+            guard call == 0 else { return [:] }
+            for await _ in release.stream {}
+            return [path: older]
+        }, save: { _, _ in }, flush: {})
+
+    let lookup = Task { await cache.folder(at: path, on: share("a")) }
+    #expect(await reads.wait { $0.count == 1 })
+    await cache.insert(listing, at: path, on: share("a"))
+    release.continuation.finish()
+
+    #expect(await lookup.value == listing)
+    #expect(await cache.folder(at: path, on: share("a")) == listing)
+}
+
+@Test func aFolderInsertedOnANetworkVolumeHits() async {
+    let cache = ListingCache(store: nil)
+    await cache.insert(listing, at: "/fake/a/x", on: share("a"))
+    #expect(await cache.folder(at: "/fake/a/x", on: share("a")) == listing)
+    #expect(await cache.folder(at: "/fake/a/y", on: share("a")) == nil)
+}
+
+@Test func localVolumesAreNeverStored() async throws {
+    let temporary = try TemporaryFolder("ListingCacheTests")
+    let local = VolumeIdentity(device: "/dev/disk9s1", mountPoint: "/", kind: .local)
+    let cache = ListingCache(store: store(temporary))
+    await cache.insert(listing, at: "/Users", on: local)
+    await cache.flush()
+
+    #expect(await cache.folder(at: "/Users", on: local) == nil)
+    let listings = temporary.url.appending(path: "Caches/listings")
+    let files = (try? FileManager.default.contentsOfDirectory(atPath: listings.path)) ?? []
+    #expect(files.isEmpty)
+}
+
+@Test func aDifferentShareAtTheSameMountPointMisses() async throws {
+    let temporary = try TemporaryFolder("ListingCacheTests")
+    let music = VolumeIdentity(device: "//nas/Music", mountPoint: "/fake/share", kind: .network)
+    let photos = VolumeIdentity(device: "//nas/Photos", mountPoint: "/fake/share", kind: .network)
+    let cache = ListingCache(store: store(temporary))
+    await cache.insert(listing, at: "/fake/share/x", on: music)
+    await cache.flush()
+
+    #expect(await cache.folder(at: "/fake/share/x", on: photos) == nil)
+    #expect(
+        await ListingCache(store: store(temporary)).folder(at: "/fake/share/x", on: photos) == nil)
+}
+
+@Test func theLeastRecentlyUsedVolumeIsEvictedPastTheCap() async {
+    let cache = ListingCache(volumeCap: 2, store: nil)
+    await cache.insert(listing, at: "/fake/a/x", on: share("a"))
+    await cache.insert(listing, at: "/fake/b/x", on: share("b"))
+    // Using a makes b the least recently used.
+    #expect(await cache.folder(at: "/fake/a/x", on: share("a")) != nil)
+    await cache.insert(listing, at: "/fake/c/x", on: share("c"))
+
+    #expect(await cache.folder(at: "/fake/a/x", on: share("a")) != nil)
+    #expect(await cache.folder(at: "/fake/b/x", on: share("b")) == nil)
+    #expect(await cache.folder(at: "/fake/c/x", on: share("c")) != nil)
+}
+
+/// A folder of `count` files, listed `at` seconds after the reference date.
+private func folder(of count: Int, at seconds: Double) -> ListingCache.Folder {
+    ListingCache.Folder(
+        entries: (0..<count).map { file("f\($0)") },
+        listedAt: Date(timeIntervalSinceReferenceDate: seconds))
+}
+
+@Test func pastTheEntryCapTheLeastRecentlyUsedVolumeGoesFirst() async {
+    let cache = ListingCache(entryCap: 4, store: nil)
+    await cache.insert(folder(of: 2, at: 1), at: "/fake/a/x", on: share("a"))
+    await cache.insert(folder(of: 2, at: 2), at: "/fake/b/x", on: share("b"))
+    // Using a makes b the least recently used.
+    #expect(await cache.folder(at: "/fake/a/x", on: share("a")) != nil)
+    await cache.insert(folder(of: 2, at: 3), at: "/fake/c/x", on: share("c"))
+
+    #expect(await cache.folder(at: "/fake/a/x", on: share("a")) != nil)
+    #expect(await cache.folder(at: "/fake/b/x", on: share("b")) == nil)
+    #expect(await cache.folder(at: "/fake/c/x", on: share("c")) != nil)
+}
+
+@Test func aVolumePastTheEntryCapDropsItsLeastRecentlyListedFolders() async {
+    let saves = EventLog<Set<String>>()
+    let cache = ListingCache(
+        entryCap: 4, load: nil, save: { folders, _ in saves.append(Set(folders.keys)) },
+        flush: {})
+    await cache.insert(folder(of: 2, at: 2), at: "/fake/a/y", on: share("a"))
+    await cache.insert(folder(of: 2, at: 1), at: "/fake/a/x", on: share("a"))
+    await cache.insert(folder(of: 2, at: 3), at: "/fake/a/z", on: share("a"))
+
+    #expect(await cache.folder(at: "/fake/a/x", on: share("a")) == nil)
+    #expect(await cache.folder(at: "/fake/a/y", on: share("a")) != nil)
+    #expect(await cache.folder(at: "/fake/a/z", on: share("a")) != nil)
+    // The volume's file keeps what memory keeps.
+    #expect(saves.all.last == ["/fake/a/y", "/fake/a/z"])
+}
+
+@Test func aFolderLargerThanTheEntryCapIsKeptAlone() async {
+    let cache = ListingCache(entryCap: 4, store: nil)
+    await cache.insert(folder(of: 2, at: 1), at: "/fake/a/x", on: share("a"))
+    await cache.insert(folder(of: 6, at: 2), at: "/fake/a/big", on: share("a"))
+
+    #expect(await cache.folder(at: "/fake/a/x", on: share("a")) == nil)
+    #expect(await cache.folder(at: "/fake/a/big", on: share("a"))?.entries.count == 6)
+}
+
+@Test func aVolumeEvictedFromMemoryIsReadBackFromItsFile() async throws {
+    let temporary = try TemporaryFolder("ListingCacheTests")
+    let cache = ListingCache(volumeCap: 1, store: store(temporary))
+    await cache.insert(listing, at: "/fake/a/x", on: share("a"))
+    await cache.insert(listing, at: "/fake/b/x", on: share("b"))
+    #expect(await cache.folder(at: "/fake/a/x", on: share("a")) == listing)
+}
+
+@Test func listingsOutliveTheCache() async throws {
+    let temporary = try TemporaryFolder("ListingCacheTests")
+    let first = ListingCache(store: store(temporary))
+    await first.insert(listing, at: "/fake/a/x", on: share("a"))
+    await first.flush()
+
+    // A folder added after a relaunch keeps the ones already in the volume's file.
+    let second = ListingCache(store: store(temporary))
+    await second.insert(listing, at: "/fake/a/y", on: share("a"))
+    await second.flush()
+
+    let third = ListingCache(store: store(temporary))
+    #expect(await third.folder(at: "/fake/a/x", on: share("a")) == listing)
+    #expect(await third.folder(at: "/fake/a/y", on: share("a")) == listing)
+}
+
+@Test func aFlushThatNeverFinishesReturnsAtItsDeadline() async {
+    let never = AsyncStream<Void>.makeStream()
+    defer { never.continuation.finish() }
+    let cache = ListingCache(
+        load: nil, save: { _, _ in }, flush: { for await _ in never.stream {} })
+    let clock = ManualClock()
+    let deadline = clock.now.advanced(by: .seconds(2))
+
+    let flushed = Task { await cache.flush(by: deadline, clock: clock) }
+    clock.advance(by: .seconds(2))
+
+    #expect(await flushed.value == false)
+}
+
+@Test func aFlushThatFinishesInTimeSaysSo() async {
+    let cache = ListingCache(load: nil, save: { _, _ in }, flush: {})
+    let clock = ManualClock()
+
+    #expect(await cache.flush(by: clock.now.advanced(by: .seconds(2)), clock: clock))
+}
+
+@Test func aFlushWritesAnInsertStartedJustBeforeIt() async throws {
+    let temporary = try TemporaryFolder("ListingCacheTests")
+    let cache = ListingCache(store: store(temporary))
+
+    cache.startInsert(listing, at: "/fake/a/x", on: share("a"))
+    #expect(
+        await cache.flush(by: ContinuousClock.now.advanced(by: .seconds(5)), clock: .continuous))
+
+    let reread = ListingCache(store: store(temporary))
+    #expect(await reread.folder(at: "/fake/a/x", on: share("a")) == listing)
+}

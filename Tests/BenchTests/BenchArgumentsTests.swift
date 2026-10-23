@@ -54,8 +54,8 @@ import Testing
     let folder = FileManager.default.temporaryDirectory.path
     #expect(
         try BenchArguments.parse(["--path", folder, "--ui", "/b/Searcher.app"])
-            == .ui(app: "/b/Searcher.app", folder: folder))
+            == .ui(app: "/b/Searcher.app", folder: folder, scenario: nil))
     #expect(
         try BenchArguments.parse(["--ui", "/b/Searcher.app"])
-            == .ui(app: "/b/Searcher.app", folder: nil))
+            == .ui(app: "/b/Searcher.app", folder: nil, scenario: nil))
 }

@@ -29,7 +29,8 @@ sets; its `registry()` builds the registry the key router uses.
 Choices the plan left open:
 
 - Open on a symbolic link goes to `SystemActions`, as a file. Telling a link to a folder from a
-  link to a file takes a `stat`, and the system resolves it.
+  link to a file takes a `stat`, and the system resolves it. Replaced for a single selected
+  link by [0036](0036-open-folder-links.md).
 - Open with several rows selected opens the files and skips folders.
 - ↑ / ↓ with nothing selected selects the first row going down and the last going up; with several
   rows selected they do nothing.

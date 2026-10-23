@@ -5,8 +5,13 @@ import Testing
 
 @Test func openFolderCasesCoverTheirBudgets() {
     let ids = BenchCase.openFolder.compactMap(\.budget?.id)
-    #expect(ids == ["B2.W1", "B2.W2", "B5.W2", "B9"])
+    #expect(ids == ["B2.W1", "B2.W2", "B5.W2", "B9", "B2.W2"])
     #expect(BenchCase.openFolder.contains { $0.name.contains("×10") && $0.budget == nil })
+    // The focused pane's first rows while nine other loads wait or run are held to B2.
+    #expect(
+        BenchCase.openFolder.contains {
+            $0.name.contains("×10") && $0.name.contains("focused") && $0.budget?.id == "B2.W2"
+        })
 }
 
 @Test func openFolderCasesRunOnAFolder() async throws {

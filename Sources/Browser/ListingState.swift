@@ -1,12 +1,38 @@
 import Base
+import Foundation
 
 /// What a pane has to show for its location.
 public enum ListingState: Sendable {
+    /// Rows a slow or offline pane keeps showing from before its load stalled.
+    public struct KeptRows: Sendable {
+        public let listing: Listing
+        /// When the rows were fully listed; nil for a first batch.
+        public let listedAt: Date?
+        /// The rows are a full listing read by the pane's own loads. Cached rows and a first
+        /// batch aren't: a name they lack may still be there.
+        public let isComplete: Bool
+
+        public init(listing: Listing, listedAt: Date?, isComplete: Bool) {
+            self.listing = listing
+            self.listedAt = listedAt
+            self.isComplete = isComplete
+        }
+    }
+
     /// Nothing has arrived yet.
     case loading
     /// The first entries of a large folder, while the rest is still being read.
     case partial(Listing)
     case loaded(Listing)
+    /// The folder's rows as the listing cache kept them from a listing at `listedAt`, shown while
+    /// the folder is listed again.
+    case cachedRefreshing(Listing, listedAt: Date)
+    /// The load has read nothing for `LoadTimeouts.slow` and is still waiting, showing the rows
+    /// shown before, if any.
+    case slow(KeptRows?)
+    /// The folder's volume stopped answering, returned nothing for `LoadTimeouts.giveUp`, or is
+    /// no longer mounted. The pane shows the rows shown before, if any.
+    case offline(KeptRows?)
     /// Privacy protection keeps the app out of the folder until the user grants it Full Disk
     /// Access. A folder whose Unix permissions keep the user out is `failed`: granting the app
     /// access wouldn't help.
@@ -16,8 +42,49 @@ public enum ListingState: Sendable {
     /// The rows to show, if any have arrived.
     public var listing: Listing? {
         switch self {
-        case .partial(let listing), .loaded(let listing): listing
+        case .partial(let listing), .loaded(let listing), .cachedRefreshing(let listing, _):
+            listing
+        case .slow(let kept), .offline(let kept): kept?.listing
         case .loading, .denied, .failed: nil
         }
+    }
+
+    /// When the rows of a cached, slow or offline state were fully listed; nil for every other
+    /// state, and for kept rows that are a first batch.
+    public var listedAt: Date? {
+        switch self {
+        case .cachedRefreshing(_, let listedAt): listedAt
+        case .slow(let kept), .offline(let kept): kept?.listedAt
+        case .loading, .partial, .loaded, .denied, .failed: nil
+        }
+    }
+
+    /// The rows shown are a full listing read by the pane's own loads, so a name they lack isn't
+    /// in the folder.
+    public var showsCompleteListing: Bool {
+        switch self {
+        case .loaded: true
+        case .slow(let kept), .offline(let kept): kept?.isComplete ?? false
+        case .loading, .partial, .cachedRefreshing, .denied, .failed: false
+        }
+    }
+
+    /// The same state showing `listing`, a re-sort or re-filter of the rows it shows.
+    func showing(_ listing: Listing) -> ListingState {
+        switch self {
+        case .partial: .partial(listing)
+        case .loaded: .loaded(listing)
+        case .cachedRefreshing(_, let listedAt): .cachedRefreshing(listing, listedAt: listedAt)
+        case .slow(let kept?): .slow(kept.showing(listing))
+        case .offline(let kept?): .offline(kept.showing(listing))
+        case .loading, .slow(nil), .offline(nil), .denied, .failed:
+            preconditionFailure("\(self) has no rows to replace")
+        }
+    }
+}
+
+extension ListingState.KeptRows {
+    fileprivate func showing(_ listing: Listing) -> Self {
+        Self(listing: listing, listedAt: listedAt, isComplete: isComplete)
     }
 }

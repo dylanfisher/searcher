@@ -27,3 +27,9 @@ final class IconMaker {
     #expect(first !== folder)
     #expect(maker.calls == [.mp3: 1, .folder: 1])
 }
+
+@MainActor @Test func theNotDownloadedBadgeIsMadeOnce() {
+    let cache = TypeIconCache()
+    #expect(cache.notDownloadedBadge === cache.notDownloadedBadge)
+    #expect(cache.notDownloadedBadge.isTemplate)
+}

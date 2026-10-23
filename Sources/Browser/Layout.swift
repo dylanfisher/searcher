@@ -38,6 +38,11 @@ public struct Layout: Codable, Equatable, Sendable {
 
     public var panes: [PaneID] { root.panes }
 
+    /// The most recently focused pane other than `focused`, which Tab focuses and the dual-pane
+    /// commands act on. Focus history alone decides it, never where the panes are. `nil` with one
+    /// pane.
+    public var otherPane: PaneID? { history.count > 1 ? history[1] : nil }
+
     // MARK: Editing
 
     /// Splits the focused pane in half along `axis`. The new pane goes right of or below it and
@@ -93,10 +98,15 @@ public struct Layout: Codable, Equatable, Sendable {
         isZoomed = false
     }
 
-    /// Moves the divider of the innermost split on `direction`'s axis that holds the focused pane
-    /// `points` toward `direction`, stopping where a pane would go under the minimum size.
+    /// Moves a divider on the focused pane's edge `points` toward `direction`, stopping where a
+    /// pane would go under the minimum size. The divider is the one on the pane's right edge, or
+    /// bottom edge for ↑ and ↓, and the one on its left or top edge only when it has none there,
+    /// so the tree's shape never changes which divider moves.
     public mutating func resize(_ direction: Direction, by points: Double, in bounds: Rect) {
-        guard let path = Self.path(toInnermostSplitOn: direction.axis, holding: focused, in: root)
+        let axis = direction.axis
+        guard
+            let path = Self.path(toSplitOn: axis, holding: focused, in: .first, of: root)
+                ?? Self.path(toSplitOn: axis, holding: focused, in: .second, of: root)
         else { return }
         let signed = direction == .left || direction == .up ? -points : points
         changeRatio(at: path, in: bounds) { ratio, space in ratio + signed / space }
@@ -117,6 +127,85 @@ public struct Layout: Codable, Equatable, Sendable {
 
     public mutating func toggleZoom() {
         isZoomed.toggle()
+    }
+
+    // MARK: Grid
+
+    /// What `makeGrid` changed: the panes it took out, in reading order, and the leaves it added,
+    /// in the order of their slots.
+    public struct GridChange: Equatable, Sendable {
+        public let closed: [PaneID]
+        public let added: [PaneID]
+    }
+
+    /// The most panes side by side: a horizontal split adds its children's counts, a vertical one
+    /// takes the larger. Exact for a grid; for any other tree, the widest row of panes.
+    public var columnCount: Int { Self.count(of: root, along: .horizontal) }
+    /// The most panes stacked, counted as `columnCount` counts side by side.
+    public var rowCount: Int { Self.count(of: root, along: .vertical) }
+
+    /// Makes the layout an even grid of `columns` side by side in each of `rows` rows, in a
+    /// vertical run of rows, each a horizontal run of panes. The panes keep their reading order,
+    /// left to right then top to bottom, and fill the slots in that order; the focused pane is
+    /// always kept, in the last slot when it would fall after it, and keeps the focus. Panes past
+    /// the last slot leave the layout, and new leaves fill the slots left over, last in the
+    /// history. Ends a zoom. Returns `nil` and changes nothing when a pane would be under the
+    /// minimum size.
+    public mutating func makeGrid(columns: Int, rows: Int, in bounds: Rect) -> GridChange? {
+        precondition(columns > 0 && rows > 0, "a grid of \(columns) × \(rows)")
+        func fits(_ count: Int, _ extent: Double) -> Bool {
+            Double(count) * Self.minimumPaneSize + Double(count - 1) * Self.dividerThickness
+                <= extent
+        }
+        guard fits(columns, bounds.width), fits(rows, bounds.height) else { return nil }
+        let slots = columns * rows
+        let order = readingOrder
+        var kept = Array(order.prefix(slots))
+        if !kept.contains(focused) {
+            kept[slots - 1] = focused
+        }
+        let closed = order.filter { !kept.contains($0) }
+        let added = (kept.count..<slots).map { _ in PaneID() }
+        let leaves = (kept + added).map(LayoutNode.pane)
+        root = Self.run(
+            (0..<rows).map { row in
+                Self.run(Array(leaves[row * columns..<(row + 1) * columns]), along: .horizontal)
+            },
+            along: .vertical)
+        history = history.filter { kept.contains($0) } + added
+        isZoomed = false
+        equalize(in: bounds)
+        return GridChange(closed: closed, added: added)
+    }
+
+    /// The panes left to right, then top to bottom: by the top edge of each, then the left.
+    private var readingOrder: [PaneID] {
+        let frames = Self.frames(of: root, in: Rect(x: 0, y: 0, width: 1, height: 1), gap: 0)
+        let tolerance = 1e-9
+        return panes.sorted { a, b in
+            guard let one = frames[a], let other = frames[b] else {
+                preconditionFailure("a pane of the tree has no frame")
+            }
+            if abs(one.minY - other.minY) > tolerance { return one.minY < other.minY }
+            return one.minX < other.minX - tolerance
+        }
+    }
+
+    private static func count(of node: LayoutNode, along axis: Axis) -> Int {
+        guard case .split(let splitAxis, _, let first, let second) = node else { return 1 }
+        let a = count(of: first, along: axis)
+        let b = count(of: second, along: axis)
+        return splitAxis == axis ? a + b : max(a, b)
+    }
+
+    /// `nodes` as a run of same-axis splits, each first child one node and its second the rest.
+    /// Its ratios are rough; `equalize` evens them out.
+    private static func run(_ nodes: [LayoutNode], along axis: Axis) -> LayoutNode {
+        guard let first = nodes.first else { preconditionFailure("a run of no panes") }
+        guard nodes.count > 1 else { return first }
+        return .split(
+            axis: axis, ratio: 1 / Double(nodes.count), first: first,
+            second: run(Array(nodes.dropFirst()), along: axis))
     }
 
     // MARK: Geometry
@@ -333,16 +422,18 @@ public struct Layout: Codable, Equatable, Sendable {
         return frames
     }
 
+    /// The path to the innermost split on `axis` that holds `pane` in its `side` child: with
+    /// `.first`, the split whose divider is on the pane's right or bottom edge.
     private static func path(
-        toInnermostSplitOn axis: Axis, holding pane: PaneID, in node: LayoutNode
+        toSplitOn axis: Axis, holding pane: PaneID, in side: LayoutNode.Child, of node: LayoutNode
     ) -> [LayoutNode.Child]? {
         guard case .split(let splitAxis, _, let first, let second) = node else { return nil }
         let (child, subtree): (LayoutNode.Child, LayoutNode) =
             first.panes.contains(pane) ? (.first, first) : (.second, second)
-        if let inner = path(toInnermostSplitOn: axis, holding: pane, in: subtree) {
+        if let inner = path(toSplitOn: axis, holding: pane, in: side, of: subtree) {
             return [child] + inner
         }
-        return splitAxis == axis && node.panes.contains(pane) ? [] : nil
+        return splitAxis == axis && child == side && subtree.panes.contains(pane) ? [] : nil
     }
 
     private static func replacing(

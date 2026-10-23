@@ -3,6 +3,13 @@ public enum AppCommands {
     public static let sets: [any CommandSet.Type] = [
         NavigationCommands.self,
         SelectionCommands.self,
+        ViewCommands.self,
+        ColumnCommands.self,
+        SystemCommands.self,
+        SizeCommands.self,
+        TilingCommands.self,
+        DualPaneCommands.self,
+        WindowCommands.self,
     ]
 
     /// Every command in every set, with what it does.

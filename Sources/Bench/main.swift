@@ -94,29 +94,40 @@ func runCompareUI(previous: String, current: String, branch: String) throws -> B
     return report.passed
 }
 
-/// Launches the app bundle at `app` in its UI bench mode `UIBenchReport.launches` times, each a
-/// new process, so every launch is a cold launch (B1) with a warm file-system cache. The first
-/// launch also presses ↓ `UIBenchReport.keyPresses` times. Each launch writes its samples to
-/// `UIBenchReport.path`; the runner reads them after it exits and writes all of them back there.
-/// Returns whether every span is within budget; stalls are reported only.
-func runUI(app: String, folder: String?) throws -> Bool {
-    try prepareFixtures()
+/// Launches the app bundle at `app` in its UI bench mode `UIBenchReport.launches(for:)` times,
+/// each a new process, so every launch is a cold launch (B1) with a warm file-system cache. The
+/// first launch also presses ↓ `UIBenchReport.keyPresses` times, in the list, in column view and
+/// in two split layouts.
+/// A scenario is one launch that times only its own spans, on `folder` when it needs a real one.
+/// Each launch writes its samples to `UIBenchReport.path(for:)`; the runner reads them after it
+/// exits and writes all of them back there. Returns whether every span is within budget, and for
+/// `column-walk` whether no stall came after the launch; other runs report stalls only.
+func runUI(app: String, folder: String?, scenario: UIBenchOptions.Scenario?) throws -> Bool {
+    if scenario?.needsPath != true { try prepareFixtures() }
     let machine = try MachineLoad.sample()
     if let warning = machine.warning { printError(warning) }
     guard let executable = Bundle(path: app)?.executableURL else {
         throw UILaunchFailed(description: "\(app) is not an app bundle")
     }
+    let recordPath = UIBenchReport.path(for: scenario)
     let output = URL(filePath: FileManager.default.currentDirectoryPath)
-        .appending(path: UIBenchReport.path)
+        .appending(path: recordPath)
     let stallArguments = try BenchArguments.stallArguments()
+    // Listed here, before the app starts, so the app opens each one for the first time.
+    var folders: [String] = []
+    if scenario == .cold || scenario == .revisit, let folder {
+        folders = try ColdChildren.children(of: folder, lister: DirectoryLister())
+    }
     // One prefix per run, so a launch that had to be stopped can be cleaned up after.
     let tempPrefix = "searcher-bench-ui-\(ProcessInfo.processInfo.processIdentifier)"
     var record = UIBenchRecord()
-    for launch in 0..<UIBenchReport.launches {
+    for launch in 0..<UIBenchReport.launches(for: scenario) {
         let options = UIBenchOptions(
             output: output.path, w1: folder ?? Fixture(.w1).path.path,
             w2: folder ?? Fixture(.w2).path.path,
-            keyPresses: launch == 0 ? UIBenchReport.keyPresses : 0, tempPrefix: tempPrefix)
+            keyPresses: UIBenchReport.keyPresses(launch: launch, scenario: scenario),
+            tempPrefix: tempPrefix,
+            scenario: scenario, folders: folders)
         // A launch that fails before writing must not leave the last one's samples to be read.
         if FileManager.default.fileExists(atPath: output.path) {
             try FileManager.default.removeItem(at: output)
@@ -132,13 +143,18 @@ func runUI(app: String, folder: String?) throws -> Bool {
         record.append(try UIBenchRecord.decode(Data(contentsOf: output)))
     }
     try AtomicWrite.write(try record.encoded(), to: output)
-    print("wrote \(UIBenchReport.path)")
-    let report = try UIBenchReport(record: record)
+    print("wrote \(recordPath)")
+    let report = try UIBenchReport(record: record, scenario: scenario)
     print(report.text)
     for miss in report.overBudget {
         let budget = miss.budget.map(describe) ?? "none"
         printError(
             "over budget: \(miss.name) p95 \(format(miss.p95)) \(miss.unit.rawValue), budget \(budget)"
+        )
+    }
+    if let budget = report.stallBudget, !report.stallsOverBudget.isEmpty {
+        printError(
+            "over budget: \(report.stallsOverBudget.count) stalls after launch, budget \(describe(budget))"
         )
     }
     return report.passed
@@ -259,8 +275,11 @@ Task.detached {
             exit(try await runCases(folder: folder) ? 0 : 1)
         case .compareUI(let previous, let current, let branch):
             exit(try runCompareUI(previous: previous, current: current, branch: branch) ? 0 : 1)
-        case .ui(let app, let folder):
-            exit(try runUI(app: app, folder: folder) ? 0 : 1)
+        case .ui(let app, let folder, let scenario):
+            exit(try runUI(app: app, folder: folder, scenario: scenario) ? 0 : 1)
+        case .help:
+            print(BenchArguments.scenarioHelp)
+            exit(0)
         }
     } catch {
         printError("\(error)")

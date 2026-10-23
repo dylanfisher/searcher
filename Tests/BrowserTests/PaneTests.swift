@@ -10,9 +10,17 @@ import Testing
 final class StubSystemActions: SystemActions {
     private(set) var openedFiles: [URL] = []
     private(set) var openedURLs: [URL] = []
+    private(set) var copiedTexts: [String] = []
+    private(set) var revealed: [[URL]] = []
+    private(set) var openedInApp: [OpenedInApp] = []
 
     func openFile(_ url: URL) { openedFiles.append(url) }
     func openURL(_ url: URL) { openedURLs.append(url) }
+    func copyToPasteboard(_ text: String) { copiedTexts.append(text) }
+    func revealInFinder(_ urls: [URL]) { revealed.append(urls) }
+    func open(_ folder: URL, inAppWithBundleID bundleID: String) {
+        openedInApp.append(OpenedInApp(folder: folder, bundleID: bundleID))
+    }
 }
 
 final class StubMonitor: FolderMonitoring {
@@ -30,14 +38,15 @@ struct PaneFixture {
 
     init(
         at path: String, folders: [String: [DirectoryEntry]], held: Bool = false,
-        sortedBy column: SortColumn = .name, ascending: Bool = true
+        settings: Settings = untouchedSettings(), sortedBy column: SortColumn = .name,
+        ascending: Bool = true
     ) {
         lister = GatedLister(folders.mapValues { .batches([$0]) })
         if !held { lister.releaseAll() }
         actions = StubSystemActions()
         pane = Pane(
             location: Location(path: path), service: ListingService(lister: lister),
-            systemActions: actions, sortedBy: column, ascending: ascending)
+            systemActions: actions, settings: settings, sortedBy: column, ascending: ascending)
     }
 
     /// A pane at `/root` with files `a.txt` and `b.txt` and a folder `docs`, already loaded.
@@ -53,11 +62,20 @@ struct PaneFixture {
         return fixture
     }
 
+    /// Selects `names`, with the cursor and anchor on the last.
     func select(_ names: String...) {
-        pane.select(Set(names.map(ExactName.init)))
+        pane.select(
+            Selection(Set(names.map(ExactName.init)), cursor: names.last.map(ExactName.init)))
     }
 
-    var selectedNames: Set<String> { Set(pane.selection.map(\.name)) }
+    /// The names selected one by one; records an issue after Select All, which names none.
+    var selectedNames: Set<String> {
+        guard case .only(let names) = pane.selection.members else {
+            Issue.record("expected named entries, not \(pane.selection.members)")
+            return []
+        }
+        return Set(names.map(\.name))
+    }
 }
 
 extension ListingState {
@@ -65,6 +83,15 @@ extension ListingState {
     var isLoading: Bool { if case .loading = self { true } else { false } }
     var isDenied: Bool { if case .denied = self { true } else { false } }
     var isFailed: Bool { if case .failed = self { true } else { false } }
+    var isCachedRefreshing: Bool { if case .cachedRefreshing = self { true } else { false } }
+    var isSlow: Bool { if case .slow = self { true } else { false } }
+    var isOffline: Bool { if case .offline = self { true } else { false } }
+    var error: ListingError? {
+        switch self {
+        case .denied(let error), .failed(let error): error
+        case .loading, .partial, .loaded, .cachedRefreshing, .slow, .offline: nil
+        }
+    }
 
     var names: [String] {
         guard let listing else { return [] }
@@ -96,13 +123,14 @@ func drainMainQueue() async {
     lister.releaseAll()
     let pane = Pane(
         location: Location(path: "/big"), service: ListingService(lister: lister),
-        systemActions: StubSystemActions())
+        systemActions: StubSystemActions(), settings: untouchedSettings())
     var seen: [String] = []
     pane.onChange = {
         switch pane.state {
         case .loading: seen.append("loading")
         case .partial: seen.append("partial")
         case .loaded: seen.append("loaded")
+        case .cachedRefreshing, .slow, .offline: seen.append("kept")
         case .denied, .failed: seen.append("error")
         }
     }
@@ -119,7 +147,7 @@ func drainMainQueue() async {
     lister.releaseAll()
     let pane = Pane(
         location: Location(path: "/secret"), service: ListingService(lister: lister),
-        systemActions: StubSystemActions())
+        systemActions: StubSystemActions(), settings: untouchedSettings())
 
     await settle { pane.state.isDenied }
 
@@ -132,7 +160,7 @@ func drainMainQueue() async {
     lister.releaseAll()
     let pane = Pane(
         location: Location(path: "/var/root"), service: ListingService(lister: lister),
-        systemActions: StubSystemActions())
+        systemActions: StubSystemActions(), settings: untouchedSettings())
 
     await settle { pane.state.isFailed || pane.state.isDenied }
 
@@ -144,7 +172,7 @@ func drainMainQueue() async {
     lister.releaseAll()
     let pane = Pane(
         location: Location(path: "/gone"), service: ListingService(lister: lister),
-        systemActions: StubSystemActions())
+        systemActions: StubSystemActions(), settings: untouchedSettings())
 
     await settle { pane.state.isFailed }
 }
@@ -154,11 +182,11 @@ func drainMainQueue() async {
         at: "/a", folders: ["/a": [file("from-a")], "/b": [file("from-b")]], held: true)
     let monitor = StubMonitor()
     fixture.pane.monitor = monitor
-    #expect(fixture.lister.waitForCall("/a"))
+    #expect(await fixture.lister.waitForCall("/a"))
 
     fixture.pane.navigate(to: Location(path: "/b"))
     fixture.lister.release("/a")
-    #expect(fixture.lister.waitForFinished(1))
+    #expect(await fixture.lister.waitForFinished(1))
     await drainMainQueue()
 
     #expect(monitor.stopCount == 1)
@@ -202,7 +230,7 @@ func drainMainQueue() async {
     await settle { fixture.pane.state.isLoaded }
     await drainMainQueue()
 
-    #expect(fixture.pane.selection == [ExactName(composed)])
+    #expect(fixture.pane.selection.members == .only([ExactName(composed)]))
     #expect(!fixture.pane.selection.contains(ExactName(decomposed)))
 }
 
@@ -212,17 +240,17 @@ func drainMainQueue() async {
 
     fixture.pane.didGainFocus()
 
-    #expect(fixture.lister.waitForCalls(2))
+    #expect(await fixture.lister.waitForCalls(2))
     #expect(fixture.pane.state.isLoaded)
 }
 
 @MainActor @Test func regainingFocusWhileLoadingStartsNoSecondLoad() async {
     let fixture = PaneFixture(at: "/root", folders: ["/root": [file("a")]], held: true)
-    #expect(fixture.lister.waitForCalls(1))
+    #expect(await fixture.lister.waitForCalls(1))
 
     fixture.pane.didGainFocus()
 
-    #expect(!fixture.lister.waitForCalls(2, timeout: 0.2))
+    #expect(await !fixture.lister.waitForCalls(2, timeout: 0.2))
     fixture.lister.releaseAll()
     await settle { fixture.pane.state.isLoaded }
 }
@@ -281,7 +309,7 @@ func drainMainQueue() async {
     let lister = StubLister(["/root": [file("a", size: 3), file("b", size: 1), file("c", size: 2)]])
     let pane = Pane(
         location: Location(path: "/root"), service: ListingService(lister: lister),
-        systemActions: StubSystemActions())
+        systemActions: StubSystemActions(), settings: untouchedSettings())
     await settle { pane.state.isLoaded }
     lister.set(
         "/root",
@@ -329,7 +357,7 @@ private func heldSortQueue() -> DispatchQueue {
     let lister = StubLister(["/root": [file("a", size: 1), file("b", size: 2)]])
     let pane = Pane(
         location: Location(path: "/root"), service: ListingService(lister: lister),
-        systemActions: StubSystemActions())
+        systemActions: StubSystemActions(), settings: untouchedSettings())
     await settle { pane.state.isLoaded }
     let sorts = heldSortQueue()
     pane.sortQueue = sorts
@@ -375,7 +403,7 @@ private func heldSortQueue() -> DispatchQueue {
         at: "/root",
         folders: ["/root": [file("a", size: 3), file("b", size: 1), file("c", size: 2)]],
         held: true)
-    #expect(fixture.lister.waitForCalls(1))
+    #expect(await fixture.lister.waitForCalls(1))
 
     fixture.pane.setSort(.size, ascending: false)
     fixture.lister.releaseAll()
@@ -408,18 +436,9 @@ private func heldSortQueue() -> DispatchQueue {
     fixture.pane.moveSelection(by: 1)
     #expect(fixture.selectedNames == ["a.txt"])
 
-    fixture.pane.select([])
+    fixture.pane.select(Selection())
     fixture.pane.moveSelection(by: -1)
     #expect(fixture.selectedNames == ["docs"])
-}
-
-@MainActor @Test func movingWithSeveralRowsSelectedChangesNothing() async {
-    let fixture = await PaneFixture.loaded()
-    fixture.select("a.txt", "b.txt")
-
-    fixture.pane.moveSelection(by: 1)
-
-    #expect(fixture.selectedNames == ["a.txt", "b.txt"])
 }
 
 @MainActor @Test func onChangeFiresWhenTheSelectionChanges() async {
@@ -452,6 +471,226 @@ private func heldSortQueue() -> DispatchQueue {
 
     #expect(fixture.actions.openedFiles == [URL(fileURLWithPath: "/root/a.txt")])
     #expect(fixture.pane.location == Location(path: "/root"))
+}
+
+/// A pane over a temporary folder holding `folder` (with `inside.txt`), `file.txt`, links to
+/// each, a link to the folder's link, a broken link and a link to itself, loaded.
+@MainActor
+private func linkTree() async throws -> (Pane, StubSystemActions, TemporaryFolder) {
+    let root = try TemporaryFolder("PaneTests")
+    let path = root.url.path
+    try FileManager.default.createDirectory(
+        atPath: path + "/folder", withIntermediateDirectories: false)
+    try Data().write(to: root.url.appending(path: "folder/inside.txt"))
+    try Data().write(to: root.url.appending(path: "file.txt"))
+    for (link, target) in [
+        ("folder link", "folder"), ("link to link", "folder link"), ("file link", "file.txt"),
+        ("broken link", "missing"), ("loop", "loop"),
+    ] {
+        try FileManager.default.createSymbolicLink(
+            atPath: path + "/" + link, withDestinationPath: target)
+    }
+    let actions = StubSystemActions()
+    let pane = Pane(
+        location: Location(path: path), service: ListingService(), systemActions: actions,
+        settings: untouchedSettings())
+    await settle { pane.state.isLoaded }
+    return (pane, actions, root)
+}
+
+@MainActor @Test func openOnALinkToAFolderLoadsItAtTheLinksPath() async throws {
+    let (pane, actions, root) = try await linkTree()
+    pane.select(Selection([ExactName("folder link")], cursor: ExactName("folder link")))
+
+    pane.openSelection()
+    await settle { pane.location.name == "folder link" && pane.state.isLoaded }
+
+    #expect(pane.location == Location(path: root.url.path).child(named: "folder link"))
+    #expect(pane.state.names == ["inside.txt"])
+    #expect(actions.openedFiles.isEmpty)
+
+    pane.goBack()
+    await settle { pane.location.path == root.url.path && pane.state.isLoaded }
+    #expect(pane.selection.cursor == ExactName("folder link"))
+}
+
+@MainActor @Test func openInAnotherPaneTakesALinkToAFolderThereAndAFileLinkToTheSystem()
+    async throws
+{
+    let (pane, actions, root) = try await linkTree()
+    let other = Pane(
+        location: Location(path: root.url.path), service: ListingService(), systemActions: actions,
+        settings: untouchedSettings())
+    await settle { other.state.isLoaded }
+
+    pane.select(Selection([ExactName("file link")], cursor: ExactName("file link")))
+    pane.openSelection(in: other)
+    await settle { actions.openedFiles.count == 1 }
+    #expect(actions.openedFiles.last?.lastPathComponent == "file link")
+    #expect(other.location == Location(path: root.url.path))
+
+    pane.select(Selection([ExactName("folder link")], cursor: ExactName("folder link")))
+    pane.openSelection(in: other)
+    await settle { other.location.name == "folder link" && other.state.isLoaded }
+
+    #expect(other.state.names == ["inside.txt"])
+    #expect(pane.location == Location(path: root.url.path))
+    #expect(actions.openedFiles.count == 1)
+}
+
+@MainActor @Test func openOnALinkWhoseLoadGoesSlowLeavesThePaneWhereItWas() async {
+    let link = DirectoryEntry(
+        name: "link", type: .symbolicLink, size: nil, modified: testDate, isHidden: false,
+        isDataless: false)
+    let lister = GatedLister([
+        "/root": .batches([[link, file("a.txt")]]), "/root/link": .blockForever,
+    ])
+    lister.releaseAll()
+    let clock = ManualClock()
+    let actions = StubSystemActions()
+    let pane = Pane(
+        location: Location(path: "/root"), service: ListingService(lister: lister, clock: clock),
+        systemActions: actions, settings: untouchedSettings())
+    await settle { pane.state.isLoaded }
+    pane.select(Selection([ExactName("link")], cursor: ExactName("link")))
+
+    pane.openSelection()
+    #expect(await lister.waitForCall("/root/link"))
+    clock.advance(by: LoadTimeouts.slow)
+    // The slow update reaches the main queue from the load's timer task, with nothing to wait on.
+    try? await Task.sleep(for: .milliseconds(200))
+    await drainMainQueue()
+
+    #expect(pane.location == Location(path: "/root"))
+    #expect(pane.state.names == ["a.txt", "link"])
+    #expect(actions.openedFiles.isEmpty)
+    #expect(!pane.canGoBack)
+}
+
+@MainActor @Test func openOnALinkToALinkToAFolderLoadsTheFolder() async throws {
+    let (pane, actions, root) = try await linkTree()
+    pane.select(Selection([ExactName("link to link")], cursor: ExactName("link to link")))
+
+    pane.openSelection()
+    await settle { pane.location.name == "link to link" && pane.state.isLoaded }
+
+    #expect(pane.location == Location(path: root.url.path).child(named: "link to link"))
+    #expect(pane.state.names == ["inside.txt"])
+    #expect(actions.openedFiles.isEmpty)
+}
+
+@MainActor @Test func openOnALinkToAFileOrABrokenLinkHandsItToTheSystem() async throws {
+    let (pane, actions, root) = try await linkTree()
+    for name in ["file link", "broken link"] {
+        pane.select(Selection([ExactName(name)], cursor: ExactName(name)))
+        let opened = actions.openedFiles.count
+
+        pane.openSelection()
+        await settle { actions.openedFiles.count == opened + 1 }
+
+        #expect(actions.openedFiles.last?.path == root.url.path + "/" + name)
+        #expect(pane.location.path == root.url.path)
+    }
+}
+
+@MainActor @Test func openOnSeveralEntriesHandsLinksToTheSystemUnresolved() async throws {
+    let (pane, actions, root) = try await linkTree()
+    pane.select(
+        Selection(
+            [ExactName("folder link"), ExactName("file.txt"), ExactName("folder")],
+            cursor: ExactName("folder")))
+
+    pane.openSelection()
+
+    #expect(
+        Set(actions.openedFiles.map(\.lastPathComponent)) == ["folder link", "file.txt"])
+    #expect(pane.location.path == root.url.path)
+}
+
+@MainActor @Test func openOnALinkThatLandsAfterThePaneMovedDoesNothing() async throws {
+    let (pane, actions, root) = try await linkTree()
+    pane.select(Selection([ExactName("folder link")], cursor: ExactName("folder link")))
+
+    pane.openSelection()
+    pane.navigate(to: Location(path: root.url.path).child(named: "folder"))
+    // The link's listing would land on the main queue by now.
+    try await Task.sleep(for: .milliseconds(100))
+    await drainMainQueue()
+
+    #expect(pane.location == Location(path: root.url.path).child(named: "folder"))
+    #expect(actions.openedFiles.isEmpty)
+}
+
+@MainActor @Test func openOnALinkToItselfShowsTheFailedState() async throws {
+    let (pane, actions, root) = try await linkTree()
+    pane.select(Selection([ExactName("loop")], cursor: ExactName("loop")))
+
+    pane.openSelection()
+    await settle { pane.location.name == "loop" && pane.state.isFailed }
+
+    #expect(pane.location == Location(path: root.url.path).child(named: "loop"))
+    #expect(pane.state.error?.code == ELOOP)
+    #expect(actions.openedFiles.isEmpty)
+}
+
+@MainActor @Test func openOnALinkThenBackAndForwardDoesNotOpenTheLinkLate() async throws {
+    let (pane, actions, root) = try await linkTree()
+    pane.navigate(to: Location(path: root.url.path).child(named: "folder"))
+    await settle { pane.location.name == "folder" && pane.state.isLoaded }
+    pane.goBack()
+    await settle { pane.location.path == root.url.path && pane.state.isLoaded }
+    pane.select(Selection([ExactName("folder link")], cursor: ExactName("folder link")))
+
+    pane.openSelection()
+    pane.goForward()
+    pane.goBack()
+    try await Task.sleep(for: .milliseconds(100))
+    await drainMainQueue()
+
+    #expect(pane.location.path == root.url.path)
+    #expect(pane.canGoForward)
+    #expect(actions.openedFiles.isEmpty)
+}
+
+@MainActor @Test func goToFolderDuringALinkOpenWins() async throws {
+    // The link is real, so anything that reads it finds a folder; the go's listing is held so
+    // it lands last.
+    let root = try TemporaryFolder("PaneTests")
+    let path = root.url.path
+    try FileManager.default.createDirectory(
+        atPath: path + "/folder", withIntermediateDirectories: false)
+    try FileManager.default.createSymbolicLink(
+        atPath: path + "/folder link", withDestinationPath: "folder")
+    let link = DirectoryEntry(
+        name: "folder link", type: .symbolicLink, size: nil, modified: Date(), isHidden: false,
+        isDataless: false)
+    let lister = GatedLister([
+        path: .batches([[folder("folder"), link]]),
+        path + "/folder": .batches([[file("inside.txt")]]),
+        path + "/folder link": .batches([[file("through the link.txt")]]),
+    ])
+    lister.release(path)
+    lister.release(path + "/folder link")
+    let pane = Pane(
+        location: Location(path: path), service: ListingService(lister: lister),
+        systemActions: StubSystemActions(), settings: untouchedSettings())
+    await settle { pane.state.isLoaded }
+    pane.select(Selection([ExactName("folder link")], cursor: ExactName("folder link")))
+    var finished: [ListingError?] = []
+
+    pane.openSelection()
+    pane.goToFolder(Location(path: path + "/folder")) { finished.append($0) }
+    try await Task.sleep(for: .milliseconds(100))
+    await drainMainQueue()
+    // The link's load was cancelled: its rows never reached the pane, which still shows its own.
+    #expect(pane.state.names == ["folder", "folder link"])
+    #expect(pane.location == Location(path: path))
+    lister.release(path + "/folder")
+    await settle { finished.count == 1 && pane.state.isLoaded }
+
+    #expect(pane.location == Location(path: path + "/folder"))
+    #expect(finished.count == 1)
+    #expect(finished.first.map { $0 == nil } == true)
 }
 
 @MainActor @Test func openWithNothingSelectedDoesNothing() async {
@@ -494,7 +733,8 @@ private func heldSortQueue() -> DispatchQueue {
     lister.releaseAll()
     let pane = Pane(
         location: Location(path: "/big"), service: ListingService(lister: lister),
-        systemActions: StubSystemActions(), sortedBy: .size, ascending: false)
+        systemActions: StubSystemActions(), settings: untouchedSettings(),
+        sortedBy: .size, ascending: false)
 
     await settle { pane.state.isLoaded }
 
@@ -511,15 +751,15 @@ private func heldSortQueue() -> DispatchQueue {
     for path in holds {
         service.load(Location(path: path)) { _ in }
     }
-    #expect(lister.waitForCalls(holds.count))
+    #expect(await lister.waitForCalls(holds.count))
     service.load(Location(path: "/normal")) { _ in }
     _ = Pane(
         location: Location(path: "/pane"), service: service, systemActions: StubSystemActions(),
-        isFocused: true)
+        settings: untouchedSettings(), isFocused: true)
 
     lister.release(holds[0])
 
-    #expect(lister.waitForCall("/pane"))
+    #expect(await lister.waitForCall("/pane"))
     #expect(!lister.calls.map(\.path).contains("/normal"))
 }
 
@@ -555,7 +795,7 @@ private func heldSortQueue() -> DispatchQueue {
 
     fixture.pane.apply(.relist, at: fixture.pane.location)
 
-    #expect(fixture.lister.waitForCalls(2))
+    #expect(await fixture.lister.waitForCalls(2))
 }
 
 @MainActor @Test func aChangeForAFolderThePaneLeftIsIgnored() async {
@@ -612,10 +852,10 @@ private final class HeldLister: Lister, @unchecked Sendable {
     let held = HeldLister(lister, gate, heldFrom: 2)
     let pane = Pane(
         location: Location(path: "/root"), service: ListingService(lister: held),
-        systemActions: StubSystemActions())
+        systemActions: StubSystemActions(), settings: untouchedSettings())
     await settle { pane.state.names == ["a"] }
     pane.reload()
-    #expect(gate.waitForCalls(1))
+    #expect(await gate.waitForCalls(1))
 
     // The reload has read the folder; the file appears, and its patch shows at once.
     lister.set("/root", to: [file("a"), file("new")])
@@ -636,8 +876,8 @@ private final class HeldLister: Lister, @unchecked Sendable {
     let pane = Pane(
         location: Location(path: "/root"),
         service: ListingService(lister: HeldLister(lister, gate)),
-        systemActions: StubSystemActions())
-    #expect(gate.waitForCalls(1))
+        systemActions: StubSystemActions(), settings: untouchedSettings())
+    #expect(await gate.waitForCalls(1))
 
     // The file appears after the lister has read the folder, but before the load ends.
     lister.set("/root", to: [file("a"), file("new")])
@@ -650,7 +890,7 @@ private final class HeldLister: Lister, @unchecked Sendable {
 
 @MainActor @Test func aRelistDuringALoadListsTheFolderAgainOnceItEnds() async {
     let fixture = PaneFixture(at: "/root", folders: ["/root": [file("a")]], held: true)
-    #expect(fixture.lister.waitForCalls(1))
+    #expect(await fixture.lister.waitForCalls(1))
 
     fixture.pane.apply(.relist, at: fixture.pane.location)
     fixture.lister.releaseAll()
@@ -664,7 +904,7 @@ private final class HeldLister: Lister, @unchecked Sendable {
     let lister = StubLister(["/root": [file("a", size: 1), file("b", size: 2)]])
     let pane = Pane(
         location: Location(path: "/root"), service: ListingService(lister: lister),
-        systemActions: StubSystemActions())
+        systemActions: StubSystemActions(), settings: untouchedSettings())
     await settle { pane.state.isLoaded }
     lister.set("/root", to: [file("a", size: 1), file("b", size: 2), file("c", size: 3)])
 
@@ -686,4 +926,163 @@ private final class HeldLister: Lister, @unchecked Sendable {
 
     fixture.pane.setSort(.size, ascending: false)
     await settle { fixture.pane.stateVersion > loaded }
+}
+
+#if DEBUG
+    /// A pane at `/wide` over a `StubLister` with files "w0000" up to `count`, loaded.
+    @MainActor
+    private func widePane(_ count: Int) async -> (Pane, StubLister) {
+        let lister = StubLister(["/wide": wideEntries(count)])
+        let pane = Pane(
+            location: Location(path: "/wide"), service: ListingService(lister: lister),
+            systemActions: StubSystemActions(), settings: untouchedSettings())
+        await settle { pane.state.isLoaded }
+        return (pane, lister)
+    }
+
+    private func wideEntries(_ count: Int) -> [DirectoryEntry] {
+        (0..<count).map { file(String(format: "w%04d", $0)) }
+    }
+
+    private func wide(_ row: Int) -> ExactName {
+        ExactName(String(format: "w%04d", row))
+    }
+
+    /// The positive control for the tests below: selecting half the rows by name finds them on the
+    /// main thread, by a walk of every row, and the count shows it.
+    @MainActor @Test func mainSelectionWorkCountsWorkDoneOnTheMainThread() async {
+        let (pane, _) = await widePane(4_000)
+        let work = pane.mainSelectionWork
+
+        pane.select(Selection(Set((0..<2_000).map(wide)), cursor: wide(1_999)))
+
+        #expect(pane.mainSelectionWork - work >= 4_000)
+    }
+
+    enum Worker: Sendable, CaseIterable {
+        case load, patch, sort
+    }
+
+    /// The worker resolves the selection it started with; Shift-↓ replaces it before the result
+    /// lands, and the pane resolves the new one off the main thread too.
+    @MainActor @Test(arguments: Worker.allCases)
+    func aSelectionChangedWhileAWorkerRunsLandsWithNoPerEntryWorkOnTheMainThread(
+        worker: Worker
+    ) async throws {
+        let (pane, lister) = await widePane(4_000)
+        pane.select(Selection(Set((0..<2_000).map(wide)), cursor: wide(1_999)))
+        let work = pane.mainSelectionWork
+        let version = pane.stateVersion
+        let expected: IndexSet
+        switch worker {
+        case .load:
+            // "a-new" sorts first and moves every row down one.
+            lister.set("/wide", to: wideEntries(4_000) + [file("a-new")])
+            pane.reload()
+            expected = IndexSet(1...2_001)
+        case .patch:
+            pane.apply(.patches([.update(file("a-new"))]), at: pane.location)
+            expected = IndexSet(1...2_001)
+        case .sort:
+            // Reversed, "w2000" is row 1999 and "w0000" the last.
+            pane.setSort(.name, ascending: false)
+            expected = IndexSet(1_999..<4_000)
+        }
+
+        // The worker hands its result over on the main queue, so this runs before it lands.
+        pane.moveSelection(by: 1, extending: true)
+        await settle { pane.stateVersion != version }
+        #expect(pane.mainSelectionWork - work < 100)
+
+        let listing = try #require(pane.state.listing)
+        await settle { pane.selection.rows(in: listing) == expected }
+        #expect(pane.selection.contains(wide(2_000)))
+        #expect(pane.mainSelectionWork - work < 100)
+    }
+
+    /// Cmd-A on the first batch selects only the entries it shows; the full listing, which the
+    /// load's worker resolved against the selection from before Cmd-A, lands with no comparison
+    /// of the two listings on the main thread.
+    @MainActor @Test func commandAOnAFirstBatchThenTheFullListingLandsWithNoPerEntryWorkOnMain()
+        async throws
+    {
+        let entries = wideEntries(4_000)
+        let lister = GatedLister([
+            "/wide": .batches([Array(entries[0..<300]), Array(entries[300...])])
+        ])
+        lister.releaseAll()
+        let pane = Pane(
+            location: Location(path: "/wide"), service: ListingService(lister: lister),
+            systemActions: StubSystemActions(), settings: untouchedSettings())
+        var work: Int?
+        pane.onChange = {
+            guard case .partial = pane.state, work == nil else { return }
+            work = pane.mainSelectionWork
+            pane.selectAll()
+        }
+
+        await settle { pane.state.isLoaded }
+        let before = try #require(work)
+        #expect(pane.mainSelectionWork - before < 100)
+
+        // The first batch is the first 200 entries read.
+        let listing = try #require(pane.state.listing)
+        await settle { pane.selection.rows(in: listing) == IndexSet(0..<200) }
+        #expect(!pane.selection.contains(wide(200)))
+        #expect(pane.mainSelectionWork - before < 100)
+    }
+#endif
+
+/// Files "n000" to "n099" in a pane at `/n`, loaded, whose selections settle on a queue the test
+/// holds suspended until it resumes it.
+@MainActor
+private func heldSettlePane() async -> (Pane, StubSystemActions, DispatchQueue) {
+    let actions = StubSystemActions()
+    let pane = Pane(
+        location: Location(path: "/n"),
+        service: ListingService(
+            lister: StubLister(["/n": (0..<100).map { file(String(format: "n%03d", $0)) }])),
+        systemActions: actions, settings: untouchedSettings())
+    await settle { pane.state.isLoaded }
+    let held = DispatchQueue(label: "held settles")
+    held.suspend()
+    pane.settleQueue = held
+    return (pane, actions, held)
+}
+
+/// A click's settle that started before a patch shifted the rows lands after it. The patch
+/// resolved the selection itself, so the settle, made against the old rows, must not replace it.
+@MainActor @Test func aSettleThatLandsAfterAPatchIsDropped() async throws {
+    let (pane, _, held) = await heldSettlePane()
+    pane.select(rows: IndexSet(0..<50), cursor: ExactName("n049"), anchor: ExactName("n049"))
+    let version = pane.stateVersion
+
+    // "a-new" sorts first and moves every row down one.
+    pane.apply(.patches([.update(file("a-new"))]), at: pane.location)
+    await settle { pane.stateVersion != version }
+    held.resume()
+    // The settle has run and queued its result on the main queue, which then runs it.
+    held.sync {}
+    await drainMainQueue()
+
+    #expect(pane.selection.isSettled)
+    #expect(pane.selection.rows(in: try #require(pane.state.listing)) == IndexSet(1...50))
+    #expect(!pane.selection.contains(ExactName("a-new")))
+}
+
+/// Cmd-A while a patch runs leaves a provisional selection that knows only the rows near the
+/// cursor; Open still hands over every selected file.
+@MainActor @Test func openOnAProvisionalSelectionOpensEverySelectedFile() async throws {
+    let (pane, actions, held) = await heldSettlePane()
+    let version = pane.stateVersion
+
+    pane.apply(.patches([.update(file("a-new"))]), at: pane.location)
+    pane.selectAll()
+    await settle { pane.stateVersion != version }
+    #expect(pane.selection.isProvisional)
+    pane.openSelection()
+    held.resume()
+
+    #expect(actions.openedFiles.count == 100)
+    #expect(!actions.openedFiles.contains { $0.lastPathComponent == "a-new" })
 }

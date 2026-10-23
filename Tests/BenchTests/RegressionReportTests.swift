@@ -112,7 +112,27 @@ private func uiRun(keyDown: Double, launches: Int = UIBenchReport.launches) -> U
         openW1: Array(repeating: 10, count: launches),
         openW2: Array(repeating: 30, count: launches),
         keyDown: Array(repeating: keyDown, count: UIBenchReport.keyPresses),
-        sortChange: Array(repeating: 90, count: launches))
+        optionArrows: Array(repeating: 5, count: 200),
+        controlShiftDown: Array(repeating: 5, count: 200),
+        pageDown: Array(repeating: 5, count: 200), shiftDown: Array(repeating: 5, count: 200),
+        selectAll: Array(repeating: 5, count: 100),
+        patchAllSelected: Array(repeating: 5, count: 100),
+        reloadAllSelected: Array(repeating: 5, count: 20),
+        patchAddingAllSelected: Array(repeating: 5, count: 100),
+        clickHalf: Array(repeating: 5, count: 100),
+        patchAfterShiftDown: Array(repeating: 5, count: 100),
+        loadAfterSelectAll: Array(repeating: 5, count: 20),
+        typeSelect: Array(repeating: 5, count: 24),
+        sortChange: Array(repeating: 90, count: launches),
+        hiddenToggle: Array(repeating: 40, count: 2 * launches),
+        foldersFirstToggle: Array(repeating: 40, count: 2 * launches),
+        sortKey: Array(repeating: 60, count: 2 * launches),
+        filterKey: Array(repeating: 20, count: 6 * launches),
+        columnDown: Array(repeating: 5, count: UIBenchReport.keyPresses),
+        columnRight: Array(repeating: 5, count: 100), columnLeft: Array(repeating: 5, count: 100),
+        splitDown: Array(repeating: 5, count: UIBenchReport.keyPresses),
+        gridDown: Array(repeating: 5, count: UIBenchReport.keyPresses),
+        tenPaneOpen: Array(repeating: 70, count: launches))
 }
 
 /// Judges one CI run per ↓ p95 in order, each against the history the one before it kept, and

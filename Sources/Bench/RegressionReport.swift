@@ -183,7 +183,7 @@ extension RegressionReport {
             guard current.launch.count == UIBenchReport.launches else {
                 throw TooManyLaunches(launches: current.launch.count)
             }
-            let report = try UIBenchReport(record: current)
+            let report = try UIBenchReport(record: current, scenario: nil)
             hasPrevious = previous != nil
             self.unreadablePrevious = unreadablePrevious
             previousBranch = previous.flatMap { $0.branch == branch ? nil : $0.branch }

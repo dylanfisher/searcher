@@ -24,13 +24,46 @@ public struct DirectoryLister: Lister {
         let fd = open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
         if fd < 0 { throw ListingError(path: path, code: errno) }
         defer { close(fd) }
+        try read(fd, path: path, skipsMountPoints: false, onBatch: onBatch)
+    }
 
+    /// Lists `path` as `list(_:onBatch:)` does, leaving out folders that another volume is
+    /// mounted on, if the folder is on `device`; returns whether it was. A folder on another
+    /// device is opened but not read. The device is read from the open folder, so the path is
+    /// looked up once. A walk uses it to stay on one volume: `/System/Volumes/Data` shares its
+    /// device with `/`, so only the mount status keeps a walk of `/System` out of it.
+    public func listWithoutMountPoints(
+        _ path: String, ifOnDevice device: dev_t, onBatch: ([DirectoryEntry]) throws -> Void
+    ) throws -> Bool {
+        let fd = open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        if fd < 0 { throw ListingError(path: path, code: errno) }
+        defer { close(fd) }
+        var info = Darwin.stat()
+        if fstat(fd, &info) != 0 { throw ListingError(path: path, code: errno) }
+        guard info.st_dev == device else { return false }
+        try read(fd, path: path, skipsMountPoints: true, onBatch: onBatch)
+        return true
+    }
+
+    /// The device holding `path`, following a symlink, as
+    /// `listWithoutMountPoints(_:ifOnDevice:onBatch:)` compares it.
+    public func device(of path: String) throws -> dev_t {
+        var info = Darwin.stat()
+        if fstatat(AT_FDCWD, path, &info, 0) != 0 { throw ListingError(path: path, code: errno) }
+        return info.st_dev
+    }
+
+    private func read(
+        _ fd: Int32, path: String, skipsMountPoints: Bool,
+        onBatch: ([DirectoryEntry]) throws -> Void
+    ) throws {
         var request = attrlist()
         request.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
         request.commonattr =
             attrgroup_t(ATTR_CMN_RETURNED_ATTRS) | attrgroup_t(ATTR_CMN_ERROR)
             | attrgroup_t(ATTR_CMN_NAME) | attrgroup_t(ATTR_CMN_OBJTYPE)
             | attrgroup_t(ATTR_CMN_MODTIME) | attrgroup_t(ATTR_CMN_FLAGS)
+        if skipsMountPoints { request.dirattr = attrgroup_t(ATTR_DIR_MOUNTSTATUS) }
         request.fileattr = attrgroup_t(ATTR_FILE_DATALENGTH)
 
         let buffer = UnsafeMutableRawPointer.allocate(byteCount: bufferSize, alignment: 16)
@@ -44,8 +77,10 @@ public struct DirectoryLister: Lister {
             batch.reserveCapacity(Int(count))
             var record = UnsafeRawPointer(buffer)
             for _ in 0..<count {
-                if let entry = try parse(record, directory: fd, path: path) {
-                    batch.append(entry)
+                if let parsed = try parseRecord(record, directory: fd, path: path),
+                    !(skipsMountPoints && parsed.isMountPoint)
+                {
+                    batch.append(parsed.entry)
                 }
                 record += Int(record.loadUnaligned(as: UInt32.self))
             }
@@ -67,8 +102,17 @@ public struct DirectoryLister: Lister {
     /// Reads one `getattrlistbulk` record. Attributes are packed in bitmap order and only those
     /// marked returned are present, so each field is read only if its bit is set. Returns nil for
     /// an entry deleted while the directory was being listed.
-    private func parse(_ record: UnsafeRawPointer, directory fd: Int32, path: String) throws
+    func parse(_ record: UnsafeRawPointer, directory fd: Int32, path: String) throws
         -> DirectoryEntry?
+    {
+        try parseRecord(record, directory: fd, path: path)?.entry
+    }
+
+    /// Reads one record as `parse` does, with whether the entry is a folder another volume is
+    /// mounted on. That is known only when the record has `ATTR_DIR_MOUNTSTATUS`, which
+    /// `listWithoutMountPoints` asks for.
+    func parseRecord(_ record: UnsafeRawPointer, directory fd: Int32, path: String) throws
+        -> (entry: DirectoryEntry, isMountPoint: Bool)?
     {
         var field = record + MemoryLayout<UInt32>.size
         let returned = field.loadUnaligned(as: attribute_set_t.self)
@@ -96,9 +140,18 @@ public struct DirectoryLister: Lister {
             modified = field.loadUnaligned(as: timespec.self)
             field += MemoryLayout<timespec>.size
         }
+        // A file system without flags leaves them out, and XNU's `stat` reports 0 for it too, so
+        // stat'ing the entry would cost a call per entry for the same answer. APFS, HFS+, FAT32,
+        // exFAT, SMB and devfs all return them.
         var flags: UInt32 = 0
         if returned.commonattr & attrgroup_t(ATTR_CMN_FLAGS) != 0 {
             flags = field.loadUnaligned(as: UInt32.self)
+            field += MemoryLayout<UInt32>.size
+        }
+        var isMountPoint = false
+        if returned.dirattr & attrgroup_t(ATTR_DIR_MOUNTSTATUS) != 0 {
+            isMountPoint =
+                field.loadUnaligned(as: UInt32.self) & UInt32(DIR_MNTSTATUS_MNTPOINT) != 0
             field += MemoryLayout<UInt32>.size
         }
         var dataLength: off_t?
@@ -109,16 +162,17 @@ public struct DirectoryLister: Lister {
         // A firmlink reports the attributes of its stub on the read-only system volume, such as
         // /Applications at /, where the data volume folder it points to holds the real ones.
         // `fstatat` follows it. An entry the bulk call couldn't fully describe is stat'ed too.
-        let isFirmlink = flags & UInt32(SF_FIRMLINK) != 0
-        guard !isFirmlink, let objectType, let modified,
+        guard flags & UInt32(SF_FIRMLINK) == 0, let objectType, let modified,
             objectType != fsobj_type_t(VREG.rawValue) || dataLength != nil
         else {
-            return try stat(name, in: fd, path: path)
+            return try stat(name, in: fd, path: path).map { ($0, isMountPoint) }
         }
         let type = fileType(objectType)
-        return DirectoryEntry(
+        let entry = DirectoryEntry(
             name: name, type: type, size: type == .regular ? dataLength : nil,
-            modified: date(modified))
+            modified: date(modified), isHidden: flags & UInt32(UF_HIDDEN) != 0,
+            isDataless: flags & UInt32(SF_DATALESS) != 0)
+        return (entry, isMountPoint)
     }
 
     private func stat(_ name: String, in fd: Int32, path: String) throws -> DirectoryEntry? {
@@ -140,7 +194,8 @@ public struct DirectoryLister: Lister {
             }
         return DirectoryEntry(
             name: name, type: type, size: type == .regular ? info.st_size : nil,
-            modified: date(info.st_mtimespec))
+            modified: date(info.st_mtimespec), isHidden: info.st_flags & UInt32(UF_HIDDEN) != 0,
+            isDataless: info.st_flags & UInt32(SF_DATALESS) != 0)
     }
 
     private func fileType(_ objectType: fsobj_type_t) -> DirectoryEntry.FileType {

@@ -7,27 +7,36 @@ import Testing
 
 @Suite(.serialized) struct StallLoggingTests {
     @Test func stallInATestRunLoopIsLoggedWithItsStackThenHandedOn() throws {
+        let threshold = Duration.milliseconds(50)
+        let blockedFor = Duration.milliseconds(500)
         let (logger, category) = testLogger()
         let loop = RunLoopThread()
-        let handedOn = OSAllocatedUnfairLock(initialState: [Duration]())
+        let handedOn = OSAllocatedUnfairLock(initialState: [Stall]())
         let watchdog = StallLogging.watchdog(
-            runLoop: loop.runLoop, thread: loop.stack, threshold: .milliseconds(50), logger: logger
-        ) { stall in handedOn.withLock { $0.append(stall.duration) } }
+            runLoop: loop.runLoop, thread: loop.stack, threshold: threshold, logger: logger
+        ) { stall in handedOn.withLock { $0.append(stall) } }
         watchdog.start()
-        loop.perform { blockTestRunLoop(for: .milliseconds(80)) }
+        loop.perform { blockTestRunLoop(for: blockedFor) }
         // One more pass, so the watchdog's end observer has run for the stalled one.
         loop.perform {}
         // The watched thread must outlive `stop()`, which delivers the stall before returning.
         watchdog.stop()
         loop.finish()
 
-        let messages = try loggedMessages(in: category)
-        #expect(messages.count == 1)
+        // A loaded machine can delay a pass the test didn't block past the threshold, and so
+        // log a stall of its own. Only the blocked pass carries `blockTestRunLoop` in its stack.
+        // The block is many times the threshold so the watchdog thread captures its stack
+        // however late it is scheduled.
+        let messages = try loggedMessages(in: category) { $0.contains("blockTestRunLoop") }
+            .filter { $0.contains("blockTestRunLoop") }
+        #expect(messages.count == 1, "\(messages)")
         let message = try #require(messages.first)
         #expect(message.hasPrefix("run loop stalled for "), "\(message)")
-        #expect(message.contains("blockTestRunLoop"), "\(message)")
-        #expect(handedOn.withLock { $0.count } == 1)
-        #expect(handedOn.withLock { $0.allSatisfy { $0 >= .milliseconds(80) } })
+        let stalls = handedOn.withLock { $0 }.filter {
+            $0.symbols.contains { $0.contains("blockTestRunLoop") }
+        }
+        #expect(stalls.count == 1)
+        #expect(stalls.allSatisfy { $0.duration >= blockedFor })
     }
 
     @Test func thresholdComesFromTheLaunchArgument() {
@@ -38,16 +47,17 @@ import Testing
     }
 
     #if DEBUG
-        @MainActor @Test func debugLaunchWithoutTheThresholdLogsThatTheWatchdogIsOff() throws {
+        @MainActor @Test func debugLaunchWithoutTheThresholdLogsThatTheWatchdogIsOff() async throws
+        {
             let (logger, category) = testLogger()
 
             let watchdog = StallLogging.start(arguments: ["Searcher"], logger: logger)
 
             #expect(watchdog == nil)
-            #expect(
-                try loggedMessages(in: category) == [
-                    "stall watchdog is off: launched without --stall-threshold-ms"
-                ])
+            // Read off the main actor: the read waits on logd, which a loaded machine slows to
+            // seconds, and the main actor runs every other @MainActor test in this target.
+            let messages = try await Task.detached { try loggedMessages(in: category) }.value
+            #expect(messages == ["stall watchdog is off: launched without --stall-threshold-ms"])
         }
     #endif
 }
@@ -60,11 +70,20 @@ private func testLogger() -> (Logger, String) {
     return (Logger(subsystem: subsystem, category: category), category)
 }
 
-/// What this process has logged under `category`, oldest first.
-private func loggedMessages(in category: String) throws -> [String] {
+/// What this process has logged under `category`, oldest first. With `until`, waits up to 10 s for
+/// a message that satisfies it, because the log store can lag behind `Logger` under load; the
+/// result is whatever was logged when the wait ended.
+private func loggedMessages(
+    in category: String, until found: (String) -> Bool = { _ in true }
+) throws -> [String] {
     let store = try OSLogStore(scope: .currentProcessIdentifier)
     let predicate = NSPredicate(format: "subsystem == %@ AND category == %@", subsystem, category)
-    return try store.getEntries(matching: predicate).map(\.composedMessage)
+    let deadline = ContinuousClock.now + .seconds(10)
+    while true {
+        let messages = try store.getEntries(matching: predicate).map(\.composedMessage)
+        if messages.contains(where: found) || ContinuousClock.now >= deadline { return messages }
+        Thread.sleep(forTimeInterval: 0.05)
+    }
 }
 
 @inline(never) private func blockTestRunLoop(for duration: Duration) {
