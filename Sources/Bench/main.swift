@@ -234,6 +234,7 @@ func line(for result: BenchReport.Case) -> String {
             + "  p95 \(format(floor.rate(milliseconds: result.p95))) MB/s  \(result.limit)"
     }
     if result.overBudget { line += "  OVER BUDGET" }
+    if result.underFloorReportedOnly { line += "  UNDER FLOOR (reported only)" }
     return line
 }
 
@@ -243,7 +244,8 @@ func finish(_ report: BenchReport) throws -> Bool {
     print("wrote \(BenchReport.path)")
     for miss in report.overBudget {
         printError(
-            "over budget: \(miss.name) p95 \(format(miss.p95)) \(miss.unit.rawValue), \(miss.limit)"
+            "over budget: \(miss.name) p95 \(format(miss.p95)) \(miss.unit.rawValue), "
+                + miss.limit
         )
     }
     return report.passed

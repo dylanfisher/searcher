@@ -82,19 +82,67 @@ if [ "$image_megabytes" = 0 ]; then
   exec "$bench" ${args[@]+"${args[@]}"}
 fi
 
+# Whether hdiutil lists an attached image whose path holds $1. Read whole
+# before the search, so an early exit of grep can't cut hdiutil off and make an
+# attached image read as detached.
+image_attached() {
+  local info
+  info=$(hdiutil info) || return 1
+  grep -qF "$1" <<<"$info"
+}
+
+# Whether the mount table lists anything at or under the folder $1. The table
+# names folders by their resolved path, /private/var rather than /var.
+mounted_under() {
+  local resolved mounts
+  resolved=$(cd "$1" 2>/dev/null && pwd -P) || return 1
+  mounts=$(mount)
+  grep -qF -e " on $resolved/" -e " on $resolved (" <<<"$mounts"
+}
+
+# Detaches $1, a device or a mount point, trying five times a second apart: a
+# process the run started can hold a file on the image for a moment after it.
+detach() {
+  local try
+  for try in 1 2 3 4 5; do
+    if hdiutil detach -quiet -force "$1"; then return 0; fi
+    [ "$try" = 5 ] || sleep 1
+  done
+  return 1
+}
+
+# Images earlier runs left behind, such as one killed with SIGKILL. A folder
+# whose image is detached and that has nothing mounted under it is removed;
+# one still attached is named, for the user to detach.
+for old in "$image_parent"/searcher-bench-image.*; do
+  [ -d "$old" ] || continue
+  if image_attached "$(basename "$old")/image.sparseimage"; then
+    echo "scripts/bench: an earlier run's image is still attached; detach it with" \
+      "hdiutil detach -force \"$old/mount\" and remove $old" >&2
+  elif mounted_under "$old"; then
+    echo "scripts/bench: something is still mounted under $old; it is left" >&2
+  else
+    rm -rf "$old"
+  fi
+done
+
 image_root=$(mktemp -d "$image_parent/searcher-bench-image.XXXXXX")
 image_device=
 # Detaches and removes the image however the run ends. The folder is removed
-# only once the image is detached: removing it while mounted would delete
+# only once nothing is mounted under it: removing it while mounted would delete
 # through the mount point.
 cleanup() {
   # Attached even when attach printed no device, so the image is looked up too.
   if [ -n "$image_device" ] ||
-    hdiutil info | grep -qF "$(basename "$image_root")/image.sparseimage"; then
-    if ! hdiutil detach -quiet -force "${image_device:-$image_root/mount}"; then
+    image_attached "$(basename "$image_root")/image.sparseimage"; then
+    if ! detach "${image_device:-$image_root/mount}"; then
       echo "scripts/bench: could not detach the image in $image_root; it is left" >&2
       return
     fi
+  fi
+  if mounted_under "$image_root"; then
+    echo "scripts/bench: something is still mounted under $image_root; it is left" >&2
+    return
   fi
   rm -rf "$image_root"
 }

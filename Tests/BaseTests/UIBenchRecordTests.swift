@@ -40,6 +40,19 @@ import Testing
     #expect(record == UIBenchRecord(splitDown: [1], gridDown: [2, 4], tenPaneOpen: [3, 5]))
 }
 
+@Test func fewerThanATenthOfThePressesDuringTheCopyFails() {
+    #expect {
+        try UIBenchRecord.checkQueueKeyDown(kept: 49, of: 500)
+    } throws: { error in
+        String(describing: error) == "49 of 500 ↓ presses landed before the copy finished; need 50"
+    }
+}
+
+@Test func aTenthOfThePressesDuringTheCopyPasses() throws {
+    try UIBenchRecord.checkQueueKeyDown(kept: 50, of: 500)
+    try UIBenchRecord.checkQueueKeyDown(kept: 500, of: 500)
+}
+
 @Test func splitSamplesSurviveJSON() throws {
     let record = UIBenchRecord(splitDown: [1.5], gridDown: [2], tenPaneOpen: [70])
     #expect(try UIBenchRecord.decode(record.encoded()) == record)

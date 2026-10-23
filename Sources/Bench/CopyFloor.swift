@@ -19,6 +19,12 @@ struct CopyFloor: Sendable, Equatable, Codable {
         Double(bytes) / 1e6 / (milliseconds / 1000)
     }
 
+    /// Whether a rate under the floor fails the run: everywhere but CI, whose hosted runners copy
+    /// to virtualised disks at a rate no run has measured yet. There it is printed, reported only.
+    static func isEnforced(environment: [String: String]) -> Bool {
+        environment["CI"] == nil
+    }
+
     /// Whether a run that took `milliseconds` was slower than the floor.
     func isMissed(byMilliseconds milliseconds: Double) -> Bool {
         rate(milliseconds: milliseconds) < Double(megabytesPerSecond)

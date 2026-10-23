@@ -32,14 +32,17 @@ import Testing
     #expect(BenchReport(machine: MachineLoad(topProcesses: []), cases: []).passed)
 }
 
-/// One run of a copy case per sample, each the milliseconds its 1 GB took.
-private func copyReport(_ milliseconds: [Double]) -> BenchReport {
+/// One run of a copy case per sample, each the milliseconds its 1 GB took, off CI unless
+/// `environment` says otherwise.
+private func copyReport(
+    _ milliseconds: [Double], environment: [String: String] = [:]
+) -> BenchReport {
     BenchReport(
         machine: MachineLoad(topProcesses: []),
         cases: [
             BenchReport.Case(
                 name: "copy", budget: nil, floor: .s7, unit: .milliseconds,
-                samples: Samples(milliseconds))
+                samples: Samples(milliseconds), environment: environment)
         ])
 }
 
@@ -61,4 +64,21 @@ private func copyReport(_ milliseconds: [Double]) -> BenchReport {
     #expect(text.contains("p95 500.00 MB/s"), "\(text)")
     #expect(text.contains("floor S7 \(CopyFloor.s7.megabytesPerSecond) MB/s"), "\(text)")
     #expect(text.contains("OVER BUDGET"), "\(text)")
+}
+
+@Test func copySlowerThanS7OnCIIsReportedAndPasses() {
+    let report = copyReport([1000, 1000, 2000], environment: ["CI": "true"])
+    #expect(report.passed)
+    let text = line(for: report.cases[0])
+    #expect(text.contains("p95 500.00 MB/s"), "\(text)")
+    #expect(
+        text.contains("floor S7 \(CopyFloor.s7.megabytesPerSecond) MB/s, reported only on CI"),
+        "\(text)")
+    #expect(text.contains("UNDER FLOOR (reported only)"), "\(text)")
+    #expect(!text.contains("OVER BUDGET"), "\(text)")
+}
+
+@Test func copyFasterThanS7OnCIIsNotMarked() {
+    let text = line(for: copyReport([900, 1000, 1000], environment: ["CI": "true"]).cases[0])
+    #expect(!text.contains("UNDER FLOOR"), "\(text)")
 }

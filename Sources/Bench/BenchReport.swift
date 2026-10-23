@@ -12,6 +12,8 @@ struct BenchReport: Sendable, Codable {
         let budget: Budget?
         /// The copy rate a copy case is held to, in place of a budget; nil for every other case.
         let floor: CopyFloor?
+        /// Whether a p95 under `floor` fails the run; false on CI, where it is reported only.
+        let floorEnforced: Bool
         let unit: Budget.Unit
         /// Every run in `unit`, ascending.
         let samples: [Double]
@@ -21,23 +23,33 @@ struct BenchReport: Sendable, Codable {
 
         init(
             name: String, budget: Budget?, floor: CopyFloor? = nil, unit: Budget.Unit,
-            samples: Samples
+            samples: Samples,
+            environment: [String: String] = ProcessInfo.processInfo.environment
         ) {
             self.name = name
             self.budget = budget
             self.floor = floor
+            floorEnforced = CopyFloor.isEnforced(environment: environment)
             self.unit = unit
             self.samples = samples.sorted
             median = samples.median
             p95 = samples.p95
             overBudget =
                 (budget.map { samples.p95 > Double($0.limit) } ?? false)
-                || (floor?.isMissed(byMilliseconds: samples.p95) ?? false)
+                || (floorEnforced && floor?.isMissed(byMilliseconds: samples.p95) == true)
+        }
+
+        /// Whether the p95 is under `floor` on CI, where that is reported and doesn't fail.
+        var underFloorReportedOnly: Bool {
+            !floorEnforced && floor?.isMissed(byMilliseconds: p95) == true
         }
 
         /// What the p95 is judged against, as the reports print it.
         var limit: String {
-            if let floor { return "floor \(floor.id) \(floor.megabytesPerSecond) MB/s" }
+            if let floor {
+                let mode = floorEnforced ? "" : ", reported only on CI"
+                return "floor \(floor.id) \(floor.megabytesPerSecond) MB/s\(mode)"
+            }
             return "budget " + (budget.map(describe) ?? "none")
         }
     }
