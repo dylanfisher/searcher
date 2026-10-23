@@ -44,6 +44,16 @@ public enum FileOperation: Equatable, Sendable {
         }
     }
 
+    /// `path` as the refusal checks compare it: without case and with Unicode normalized, as
+    /// APFS compares names by default, and without trailing slashes. On a case-sensitive volume
+    /// two different items can compare equal, which only refuses more.
+    static func comparable(_ path: String) -> String {
+        var path = path.folding(options: .caseInsensitive, locale: nil)
+            .precomposedStringWithCanonicalMapping
+        while path.utf8.count > 1, path.hasSuffix("/") { path.removeLast() }
+        return path
+    }
+
     /// Where `source` goes when it moves or is copied into `folder`.
     static func path(of source: String, in folder: String) -> String {
         (folder.hasSuffix("/") ? folder : folder + "/") + (source as NSString).lastPathComponent

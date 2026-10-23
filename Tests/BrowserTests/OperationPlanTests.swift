@@ -57,6 +57,18 @@ func aFolderIntoItselfOrItsSubfolderIsRefusedBeforeAnythingIsRead(into folder: S
     #expect(reads.measures.isEmpty)
 }
 
+/// APFS compares names without case, and a trailing slash names the same folder.
+@Test(arguments: [
+    ("/L/Music/Album", "/l/music/album/Disc 1"),
+    ("/L/music/album/", "/L/music/album"),
+    ("/L/music/album/", "/L/music/album/disc 1/"),
+])
+func intoItselfIgnoresCaseAndTrailingSlashes(source: String, into folder: String) throws {
+    #expect(throws: OperationState.Refusal.intoItself(source: source)) {
+        try Reads().plan(.copy([source], into: folder))
+    }
+}
+
 @Test func aCopyIntoAFolderNamedLikeTheSourceIsNotIntoItself() throws {
     let plan = try Reads().plan(.copy(["/L/music/album"], into: "/L/music/album 2"))
 

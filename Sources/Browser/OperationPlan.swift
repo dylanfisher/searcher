@@ -45,7 +45,7 @@ public struct OperationPlan: Equatable, Sendable {
     }
 
     /// Plans `operation`. A folder copied or moved into itself is refused before anything is
-    /// read. Copies, duplicates and moves to another volume read the volumes involved with
+    /// read, comparing paths as `FileOperation.comparable` gives them. Copies, duplicates and moves to another volume read the volumes involved with
     /// `volumeOf` and pre-scan each item with `measure`; nothing else reads the file system.
     /// Blocks while it reads, so it runs on a `BlockingCallThread`.
     ///
@@ -58,7 +58,10 @@ public struct OperationPlan: Equatable, Sendable {
     ) throws -> OperationPlan {
         switch operation {
         case .copy(let sources, let folder), .move(let sources, let folder):
-            if let source = sources.first(where: { isPath(folder, atOrUnder: $0) }) {
+            let target = FileOperation.comparable(folder)
+            if let source = sources.first(where: {
+                isPath(target, atOrUnder: FileOperation.comparable($0))
+            }) {
                 throw OperationState.Refusal.intoItself(source: source)
             }
             let isMove = if case .move = operation { true } else { false }
