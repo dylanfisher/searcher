@@ -37,7 +37,7 @@ the dependency direction.
 | Tier | Path | What belongs here | May import from |
 |---|---|---|---|
 | **c** | `Sources/C*` | Plain C for measured hot paths only (bulk directory reads, matching). Added when a profile justifies it, never speculatively. | system headers |
-| **base** | `Sources/Base` | Domain-free building blocks: paths, file-system enumeration, matching. Foundation only, no AppKit. Portable as-is. | c |
+| **base** | `Sources/Base` | Domain-free building blocks: paths, file-system enumeration, matching. Foundation and system frameworks without UI, such as UniformTypeIdentifiers; no AppKit. Portable as-is. | c |
 | **browser** | `Sources/Browser` | The file-manager model: listings, selection, the pane/tiling layout tree, commands, `Settings`. No AppKit — testable without a window. | base, c |
 | **interface** | `Sources/Interface` | AppKit windows, split panes, table views, keybindings. | browser, base |
 | **app** | `Sources/Searcher` | The executable: app delegate, menus, wiring. Kept thin. | everything |

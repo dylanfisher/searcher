@@ -1,4 +1,4 @@
-# 00XX. Move with renamex_np, name copies as Finder does, read no-trash from the Cocoa error
+# 0063. Move with renamex_np, name copies as Finder does, read no-trash from the Cocoa error
 
 - **Date:** 2026-10-22
 - **Status:** accepted
@@ -27,8 +27,9 @@ names present; `UniqueNameTests` lists what it returned. What it showed:
   present, "report.txt" duplicates as "report copy.txt".
 - A name with no room for " copy" fails with "File name too long".
 
-There is no API for Keep Both. Its table comes from Finder's known behavior ("name 2.ext", then
-" 3"), not from a run.
+There is no API for Keep Both. Dylan checked it in Finder on macOS 26: copying "report 3.jpg"
+onto a folder's "report 3.jpg" and choosing Keep Both gave "report 3 2.jpg". Unlike Duplicate,
+Keep Both doesn't continue a number the name already ends in.
 
 `renamex_np` with `RENAME_EXCL` renamed "a.txt" to "A.txt" on case-insensitive APFS and HFS+
 images without an error, so a case-only rename needs nothing extra.
@@ -40,11 +41,13 @@ over `fnfErr`, a folder without write access is code 513 over `afpAccessDenied`.
 
 - **Move** is one `renamex_np(RENAME_EXCL)` call. `EXDEV` is `crossVolume` and the caller copies;
   `EEXIST` is `exists`, reported on the destination; every other error is reported on the source.
-- **Names** follow the duplicate rules above, and Keep Both applies the same rules with " N" in
-  place of " copy N". `UniqueName` splits extensions with `UTType`, so Base imports
+- **Names** follow the duplicate rules above. Keep Both adds " 2", " 3" and on, the first free,
+  after the whole base, with the same extension rule. `UniqueName` splits extensions with `UTType`, so Base imports
   `UniformTypeIdentifiers`, a system framework with no UI that Browser already uses.
 - **Long names** are shortened by whole characters before the suffix until the name fits 255
-  UTF-8 bytes, so a copy or a Keep Both still happens where Finder would fail.
+  UTF-8 bytes, so a copy or a Keep Both still happens where Finder would fail. A suffix that alone
+  passes 255 bytes would need a declared extension of about 245 bytes; none exists, so that case
+  traps rather than throws.
 - **No trash** is `CocoaError.featureUnsupported` from `trashItem`. Other trash errors map by
   their Cocoa code, or by the POSIX error underneath when there is one.
 - **Permanent delete** is `Trasher.deletePermanently`, `FileManager.removeItem` on the path. It
@@ -65,8 +68,8 @@ over `fnfErr`, a folder without write access is code 513 over `afpAccessDenied`.
 
 ## Consequences
 
-The duplicate table is checked against the system; Keep Both is not, and "Report 2024.pdf"
-becomes "Report 2025.pdf" under it. An app that declares an extension changes how names with it
+The duplicate table is checked against the system, and Keep Both against one Finder run; the
+rest of the Keep Both table follows from that run. An app that declares an extension changes how names with it
 split, as it does in Finder. Copy names are English only. Whether a share or an exFAT volume
 without a trash gives `featureUnsupported` is still open; the M4.13 SMB check settles it, and a
 different error there changes only `Trasher`'s mapping.
