@@ -12,7 +12,7 @@ import UniformTypeIdentifiers
 /// and ".zshrc", "Photos.2024" and "x.qqq" have no extension. That holds for folders too:
 /// a folder named "Stuff.txt" duplicates as "Stuff copy.txt". A name too long for the suffix is
 /// shortened by whole characters before it; Finder refuses to duplicate it instead. See
-/// docs/decisions/00XX-move-and-names.md.
+/// docs/decisions/0063-move-and-names.md.
 public enum UniqueName {
     /// Finder's Duplicate: "name copy.ext", then "name copy 2.ext" and on. A name that already
     /// ends in " copy" or " copy N" continues from it: "name copy.ext" duplicates as
@@ -35,16 +35,12 @@ public enum UniqueName {
         return try firstFree(base, marker, pathExtension, unnumberedFirst: true, isTaken: isTaken)
     }
 
-    /// Finder's Keep Both: "name 2.ext", then "name 3.ext" and on. A name that already ends in
-    /// " N" continues from it: "name 2.ext" becomes "name 3.ext".
+    /// Finder's Keep Both: "name 2.ext", then "name 3.ext" and on. Unlike Duplicate, a name that
+    /// already ends in a number keeps it: "name 2.ext" becomes "name 2 2.ext".
     public static func keepingBoth<Failure: Error>(
         _ name: String, isTaken: (String) throws(Failure) -> Bool
     ) throws(Failure) -> String {
         let (base, pathExtension) = split(name)
-        if let (prefix, number) = trailingNumber(base) {
-            return try firstFree(
-                String(prefix), "", pathExtension, from: number + 1, isTaken: isTaken)
-        }
         return try firstFree(base, "", pathExtension, from: 2, isTaken: isTaken)
     }
 

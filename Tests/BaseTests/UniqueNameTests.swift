@@ -73,16 +73,18 @@ func duplicateNamesMatchFinder(_ row: NameCase) {
 }
 
 /// Finder's Keep Both, for an item copied or moved onto a name the folder already has. There is
-/// no API that names these, so this table comes from Finder's behavior as documented and seen in
-/// use, not from a run: " 2", " 3" and on before the extension, with the extension rule of
-/// `duplicateNamesMatchFinder`. A name that already ends in a number continues from it, as
-/// Duplicate does after " copy".
+/// no API that names these. Dylan checked Finder on macOS 26 on 2026-10-22: copying "report 3.jpg"
+/// onto a folder's "report 3.jpg" and choosing Keep Both gave "report 3 2.jpg". So " 2", " 3" and
+/// on, the first free, go after the whole base, a trailing number included, with the extension
+/// rule of `duplicateNamesMatchFinder`.
 @Test(arguments: [
+    NameCase("report 3.jpg", ["report 3.jpg"], "report 3 2.jpg"),
     NameCase("report.txt", ["report.txt"], "report 2.txt"),
     NameCase("report.txt", ["report.txt", "report 2.txt"], "report 3.txt"),
     NameCase("report.txt", ["report.txt", "report 3.txt"], "report 2.txt"),
-    NameCase("report 2.txt", ["report 2.txt"], "report 3.txt"),
-    NameCase("report 2.txt", ["report 2.txt", "report 3.txt"], "report 4.txt"),
+    NameCase("report 2.txt", ["report 2.txt"], "report 2 2.txt"),
+    NameCase("report 2.txt", ["report 2.txt", "report 2 2.txt"], "report 2 3.txt"),
+    NameCase("Report 2024.pdf", ["Report 2024.pdf"], "Report 2024 2.pdf"),
     NameCase("report copy.txt", ["report copy.txt"], "report copy 2.txt"),
     NameCase("archive.tar.gz", ["archive.tar.gz"], "archive.tar 2.gz"),
     NameCase(".zshrc", [".zshrc"], ".zshrc 2"),
@@ -105,6 +107,7 @@ func keepBothNamesMatchFinder(_ row: NameCase) {
     #expect(
         UniqueName.newFolder(isTaken: taken(["untitled folder", "untitled folder 3"]))
             == "untitled folder 2")
+    #expect(UniqueName.newFolder(isTaken: taken(["untitled folder 2"])) == "untitled folder")
 }
 
 /// Finder fails to duplicate a name this long (`NSWorkspace.duplicate` returned "File name too
