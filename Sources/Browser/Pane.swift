@@ -506,7 +506,7 @@ public final class Pane {
         waitingPatches = []
         relistAfterLoad = false
         volumeIsGone = false
-        forgetFolderSizes()
+        forgetFolderSizes(lettingLocalWalksFinish: true)
         self.location = location
         filter = NameFilter()
         selection = name.map { Selection([$0], cursor: $0) } ?? Selection()
@@ -873,19 +873,21 @@ public final class Pane {
         let selectionVersion = selectionVersion
         // A load started with sizes the setting has since turned off drops them when it lands.
         let sizes = showsFolderSizes ? knownSizes : [:]
+        let keptSizes = showsFolderSizes ? folderSizes : nil
+        let folder = location
         load = service.load(
             location, sortedBy: sortColumn, ascending: sortAscending,
             foldersFirst: settings.foldersFirst, showsHidden: settings.showHidden, filter: filter,
             priority: loadPriority,
             prepare: { update in
-                let update = Self.applying(sizes, to: update)
+                let update = Self.applying(sizes, keptIn: keptSizes, under: folder, to: update)
                 return (update, Self.resolve(selection, against: update))
             },
             onUpdate: { [weak self] prepared in
                 // A full listing is the time to ask again for the walks that failed.
                 if case .full = prepared.0 { self?.failedSizes = [] }
                 self?.receive(prepared.0, resolved: prepared.1, from: selectionVersion)
-                if !sizes.isEmpty { self?.dropSizesIfOff() }
+                if keptSizes != nil { self?.dropSizesIfOff() }
             })
     }
 
@@ -1295,6 +1297,9 @@ public final class Pane {
     /// Goes up whenever the pane's walks are cancelled, so a result of one asked for before is
     /// dropped when it lands.
     private var sizeGeneration = 0
+    /// The `sizeGeneration` the last cancel of running walks too moved to, so a scan that lands
+    /// after a cancel it missed stops its walks as that cancel would have.
+    private var runningSizeWalksCancelledAt = 0
     private var sizeScanIsRunning = false
     /// The rows changed while a scan ran; scan them again when it lands.
     private var sizeScanIsStale = false
@@ -1324,16 +1329,23 @@ public final class Pane {
     }
 
     /// Cancels the pane's walks. The sizes walked stay, and the folders not walked yet are asked
-    /// for again by the next scan.
-    private func cancelSizeWalks() {
-        folderSizes?.cancelWalks(for: sizeWalkOwner)
+    /// for again by the next scan. Letting local walks finish, a walk already running on a local
+    /// volume goes on and keeps its size for a later visit, without delivering it here.
+    private func cancelSizeWalks(lettingLocalWalksFinish: Bool = false) {
+        if lettingLocalWalksFinish {
+            folderSizes?.cancelWaitingWalks(for: sizeWalkOwner)
+        } else {
+            folderSizes?.cancelWalks(for: sizeWalkOwner)
+        }
         sizeGeneration += 1
+        if !lettingLocalWalksFinish { runningSizeWalksCancelledAt = sizeGeneration }
         requestedSizes = [:]
     }
 
-    /// Cancels the pane's walks and forgets the sizes of the folder it shows.
-    private func forgetFolderSizes() {
-        cancelSizeWalks()
+    /// Cancels the pane's walks and forgets the sizes of the folder it shows. The service keeps
+    /// the sizes walked, and a later listing of the folder gets them from it.
+    private func forgetFolderSizes(lettingLocalWalksFinish: Bool = false) {
+        cancelSizeWalks(lettingLocalWalksFinish: lettingLocalWalksFinish)
         knownSizes = [:]
         failedSizes = []
         waitingSizes = [:]
@@ -1420,8 +1432,11 @@ public final class Pane {
             startSizeBatch()
         } else {
             // The walks were asked for after the pane cancelled its walks, so that cancel
-            // didn't reach them.
-            for walk in walks { walk.cancel() }
+            // didn't reach them. One that only left the folder lets local walks finish.
+            let leftOnly = generation != sizeGeneration && runningSizeWalksCancelledAt <= generation
+            for walk in walks {
+                if leftOnly { walk.leave() } else { walk.cancel() }
+            }
         }
         if sizeScanIsStale {
             sizeScanIsStale = false
@@ -1534,23 +1549,50 @@ public final class Pane {
     }
 
     /// `update` with `sizes` applied to its listing, on the load's worker, so a folder listed
-    /// again shows the sizes walked for it at once.
+    /// again shows the sizes walked for it at once. Folders `sizes` lacks get the sizes
+    /// `folderSizes` keeps in memory, so a folder visited again shows its subfolders' sizes with
+    /// its first rows; the scan that follows asks for each, and the service's own checks decide
+    /// whether it is walked again.
     private nonisolated static func applying(
-        _ sizes: [ExactName: Listing.FolderSizeUpdate], to update: ListingUpdate
+        _ sizes: [ExactName: Listing.FolderSizeUpdate], keptIn folderSizes: FolderSizeService?,
+        under folder: Location, to update: ListingUpdate
     ) -> ListingUpdate {
-        guard !sizes.isEmpty else { return update }
+        guard !sizes.isEmpty || folderSizes != nil else { return update }
+        func applied(_ listing: Listing) -> Listing {
+            var listing = listing
+            listing.applyFolderSizes(
+                kept(in: listing, from: folderSizes, under: folder).merging(sizes) { _, known in
+                    known
+                })
+            return listing
+        }
         switch update {
-        case .cached(var listing, let listedAt, let rootVolumeName):
-            listing.applyFolderSizes(sizes)
-            return .cached(listing, listedAt: listedAt, rootVolumeName: rootVolumeName)
-        case .firstBatch(var listing, let rootVolumeName):
-            listing.applyFolderSizes(sizes)
-            return .firstBatch(listing, rootVolumeName: rootVolumeName)
-        case .full(var listing, let rootVolumeName):
-            listing.applyFolderSizes(sizes)
-            return .full(listing, rootVolumeName: rootVolumeName)
+        case .cached(let listing, let listedAt, let rootVolumeName):
+            return .cached(applied(listing), listedAt: listedAt, rootVolumeName: rootVolumeName)
+        case .firstBatch(let listing, let rootVolumeName):
+            return .firstBatch(applied(listing), rootVolumeName: rootVolumeName)
+        case .full(let listing, let rootVolumeName):
+            return .full(applied(listing), rootVolumeName: rootVolumeName)
         case .failed, .slow, .gaveUp, .volumeGone:
             return update
         }
+    }
+
+    /// The sizes `folderSizes` keeps in memory for the folder rows of `listing`, a listing of
+    /// `folder`, at the dates the rows show.
+    private nonisolated static func kept(
+        in listing: Listing, from folderSizes: FolderSizeService?, under folder: Location
+    ) -> [ExactName: Listing.FolderSizeUpdate] {
+        guard let folderSizes else { return [:] }
+        let folders = (0..<listing.count).map { listing[$0] }.filter { $0.type == .directory }
+        let asked = folders.map { (path: folder.child(named: $0.name).path, modified: $0.modified) }
+        var found: [ExactName: Listing.FolderSizeUpdate] = [:]
+        for (entry, size) in zip(folders, folderSizes.keptSizes(of: asked)) {
+            guard let size else { continue }
+            found[ExactName(entry.name)] = Listing.FolderSizeUpdate(
+                modified: entry.modified,
+                value: .size(bytes: size.bytes, isPartial: size.isPartial))
+        }
+        return found
     }
 }

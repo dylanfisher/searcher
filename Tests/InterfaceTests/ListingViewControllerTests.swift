@@ -971,7 +971,9 @@ private func folderSize(_ name: String, in pane: Pane) -> Listing.FolderSizeValu
     #expect(try sizeText(controller) == ["--"])
 }
 
-@MainActor @Test func navigatingAwayCancelsThePanesWalks() async throws {
+/// A running walk on a local volume finishes, so a return finds its size kept; one on a share
+/// is still cancelled (FolderSizeServiceTests).
+@MainActor @Test func navigatingAwayLetsTheRunningLocalWalkFinish() async throws {
     let walks = HeldWalks()
     let lister = HoldableLister(["/other": [file("x")]])
     let controller = await sizedController(
@@ -979,8 +981,11 @@ private func folderSize(_ name: String, in pane: Pane) -> Listing.FolderSizeValu
     await settle { walks.started == ["/folder/Music"] }
 
     controller.pane.navigate(to: Location(path: "/other"))
+    await settle { controller.pane.state.isLoaded }
+    try await Task.sleep(for: .milliseconds(50))
 
-    await settle { walks.cancelled == ["/folder/Music"] }
+    #expect(walks.cancelled.isEmpty)
+    walks.release("/folder/Music", bytes: 1)
 }
 
 @MainActor @Test func columnViewCancelsTheListsWalksAndRequestsNone() async throws {

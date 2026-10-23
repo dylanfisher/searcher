@@ -105,3 +105,31 @@ retried until the folder is listed again or Recalculate Sizes runs. Sizes cost 1
 entry in each listing, files included. A sort started while a batch runs is dropped when the
 batch lands and started again, as with a patch. The setting has no menu item; `defaults write`
 changes it until the config file (M5b.1) does.
+
+## Amendment: sizes on a revisit's first rows (M4.21)
+
+Going back to a folder showed "…" for every subfolder until the scan, the service's volume read,
+its cache lookups and a batch refilled them, which reads as walking again.
+
+- **Leaving lets local walks finish.** Leaving the folder calls
+  `FolderSizeService.cancelWaitingWalks(for:)` ([0043](0043-folder-sizes.md), M4.21 amendment):
+  walks running on a local volume finish and keep their sizes for the next visit. The pane still
+  forgets its own sizes and drops any result that lands after it left. Switching to columns,
+  closing, the setting going off, hidden tabs, unmounts and Recalculate Sizes still cancel every
+  walk.
+- **Kept sizes go on the first rows.** The load's worker applies, beside the pane's own sizes for
+  a reload, the sizes `FolderSizeService.keptSizes(of:)` holds in memory for the listing's folder
+  rows at the dates they show, so the first rows of a revisit, cached or listed, have them. It is
+  one lock and a dictionary lookup per folder row, on the load's worker, with no file read. The
+  scan after the rows land asks for each folder as before, and the service's checks decide: a
+  size it still holds answers at once, and one dropped or marked since is walked again, the rows
+  showing the old size meanwhile.
+
+Rejected: **the pane keeping the last few folders' size maps by `Location`** — a second copy of
+sizes the service already holds, one that `FolderSizeCache`'s drops wouldn't reach, so a size
+dropped for a change would come back on the next visit until the scan replaced it. A read of the
+cache's memory has one source and sees every drop. **Waiting for the actor in load prep** — the
+load's worker would wait behind walks finishing and network volume file reads.
+
+Consequences: a share's sizes not yet read from its volume file this session aren't on the first
+rows; the scan's request reads them, as before. B4 now includes this lookup on the load's worker.

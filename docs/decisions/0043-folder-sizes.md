@@ -103,3 +103,41 @@ pending re-reads the volume file to merge them in, a decode of up to the 50 MB c
 saving listings uses the sizes the store already holds. Sizes count toward the cap with the
 listings, so a volume that goes over it isn't written at all: neither its new listings nor its
 new sizes reach the disk. Both accepted for now.
+
+## Amendment: walks left running, narrower drops, a drop log (M4.21)
+
+Dylan saw sizes walked again on every return to a folder. Three causes, each changed here:
+
+- **Leaving keeps running local walks.** `cancelWaitingWalks(for:)` replaces `cancelWalks(for:)`
+  when a pane leaves its folder: a waiting walk never starts, a walk running on a share is
+  cancelled as before, and one running on a local volume finishes and keeps its size, delivering
+  nothing. A share keeps cancelling because it has one walk slot, which a walk nobody waits for
+  mustn't hold. Unmounts, hidden tabs, closing, the setting going off and Recalculate Sizes still
+  cancel every walk. A walk that waited checks the cache once more when it starts, so one queued
+  behind a left walk of the same folder takes its size instead of walking again.
+- **Lost events mark instead of drop.** A must-rescan event names the folder to read again, and
+  the other events of its batch still count. Only the watched parent's children that hold that
+  folder or are under it are in doubt: a folder deeper down is watched through its own parent,
+  whose stream reports what happens under it, and every kept size's parent is watched or the size
+  is already marked. A root-changed event, or a path outside the watched folder, puts every child
+  of the parent in doubt. A size in doubt isn't dropped but marked: `size(of:modified:on:)` no
+  longer gives it, so the next request walks the folder, and `keptSizes(of:)` still does, so a
+  pane shows it while that walk runs. The folder's own date still drops it outright when it
+  differs. A walk that started before the mark isn't kept, as before.
+- **Eviction marks only the evicted parent's children**, for the same reason: past
+  `mostWatchedFolders` the oldest parent's stream stops, and only its children were watched
+  through it.
+- **Drop log.** `FolderSizeCache` takes a `debugLog`; the app sends it to category `folderSizes`
+  at debug level. Each drop or mark logs a line with the count, up to 20 paths and the reason (a
+  change at a path, lost events at a path, a parent no longer watched, a changed folder date, or
+  Recalculate Sizes). Nothing is logged when nothing was dropped.
+
+Rejected: **ignoring `.DS_Store` and other noise** — sizes count every file, so a change to any
+file has to drop its folders. **Dropping on lost events, as before** — the drop is what made a
+revisit show "…" and walk everything under the parent again; a mark costs the same walk but only
+for folders that are shown, and shows the old size meanwhile. **Letting share walks finish
+too** — see above.
+
+Consequences: a folder whose size is in doubt shows its old size, not "…", until its walk lands.
+Two panes asking for the same folder at once still walk it twice; a left walk and a new request
+for its folder do too when a slot is free for the new one.

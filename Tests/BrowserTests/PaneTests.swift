@@ -1065,3 +1065,97 @@ private func heldSettlePane() async -> (Pane, StubSystemActions, DispatchQueue) 
     #expect(actions.openedFiles.count == 100)
     #expect(!actions.openedFiles.contains { $0.lastPathComponent == "a-new" })
 }
+
+/// Folder walks of 42 bytes each that wait until the test releases them, on a local volume.
+private final class GatedWalks: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var isReleased = false
+    private var started: [String] = []
+    let cache = FolderSizeCache(store: nil)
+
+    var startedPaths: [String] { condition.withLock { started } }
+
+    func service() -> FolderSizeService {
+        FolderSizeService(
+            cache: cache, log: { _ in }, walk: { try self.walk($0, isCancelled: $1) },
+            volumeOf: { _ in ListingService.listerVolume })
+    }
+
+    func release() {
+        condition.withLock {
+            isReleased = true
+            condition.broadcast()
+        }
+    }
+
+    private func walk(_ path: String, isCancelled: () -> Bool) throws -> TreeSizeWalker.Total {
+        condition.lock()
+        defer { condition.unlock() }
+        started.append(path)
+        while !isReleased {
+            if isCancelled() { throw CancellationError() }
+            condition.wait(until: Date(timeIntervalSinceNow: 0.001))
+        }
+        return TreeSizeWalker.Total(bytes: 42, files: 1, isPartial: false)
+    }
+}
+
+/// A pane at a real, watchable folder holding a subfolder `big`, with `walks` as its sizes.
+@MainActor
+private func sizedPane(_ root: String, _ walks: GatedWalks) -> Pane {
+    let pane = PaneFixture(
+        at: root, folders: [root: [folder("big"), file("f")], root + "/big": [file("x")]]
+    ).pane
+    pane.folderSizes = walks.service()
+    return pane
+}
+
+@MainActor
+private func bigSize(_ pane: Pane) -> Listing.FolderSizeValue? {
+    guard let listing = pane.state.listing, let row = listing.row(named: "big") else { return nil }
+    return listing.folderSize(atRow: row)
+}
+
+/// Goes back with size batches held, so a size on the rows can only have come with the load.
+@MainActor
+private func goBackWithBatchesHeld(_ pane: Pane, to root: String) async -> Listing.FolderSizeValue?
+{
+    let held = DispatchQueue(label: "held size batches")
+    held.suspend()
+    pane.rowWorkQueue = held
+    pane.goBack()
+    await settle { pane.location.path == root && pane.state.listing != nil }
+    let size = bigSize(pane)
+    held.resume()
+    return size
+}
+
+@MainActor @Test func aWalkRunningWhenThePaneLeavesFinishesAndItsSizeShowsOnReturn() async throws {
+    let temp = try TemporaryFolder("PaneTests")
+    let root = temp.url.path
+    let walks = GatedWalks()
+    let pane = sizedPane(root, walks)
+    await settle { walks.startedPaths == [root + "/big"] }
+
+    pane.navigate(to: Location(path: root + "/big"))
+    await settle { pane.location.path == root + "/big" && pane.state.isLoaded }
+    walks.release()
+    await settle { walks.cache.keptSizes(of: [(root + "/big", testDate)])[0] != nil }
+
+    #expect(await goBackWithBatchesHeld(pane, to: root) == .size(bytes: 42, isPartial: false))
+    #expect(walks.startedPaths == [root + "/big"])
+}
+
+@MainActor @Test func keptSizesShowOnARevisitsFirstRows() async throws {
+    let temp = try TemporaryFolder("PaneTests")
+    let root = temp.url.path
+    let walks = GatedWalks()
+    walks.release()
+    let pane = sizedPane(root, walks)
+    await settle { bigSize(pane) == .size(bytes: 42, isPartial: false) }
+
+    pane.navigate(to: Location(path: root + "/big"))
+    await settle { pane.location.path == root + "/big" && pane.state.isLoaded }
+
+    #expect(await goBackWithBatchesHeld(pane, to: root) == .size(bytes: 42, isPartial: false))
+}
