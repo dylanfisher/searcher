@@ -87,3 +87,12 @@ beeps instead of passing it to `super` ([0027](0027-key-dispatch.md)). Suggestio
   them to next and previous tab as the key table asks.
 - Route the filter field's `insertTab:` to the registry, as above.
 - Keep Shift-Tab unbound.
+
+## Amendment: folders only (M4.19)
+
+This replaces the Cmd-Opt-O point's handling of files and links, and the rejected alternative of
+doing nothing on a file. Dylan found a file opening in its app from Open in Other Pane, which
+names a pane, not an app. Cmd-Opt-O now acts as Open in New Tab does: its menu items are off
+unless the selection is one folder, a package included, since the pane lists one as a folder,
+and the key does nothing then, without the one-pane split. A link is off too: whether it points
+at a folder is known only by reading it, and a link to a file would go to its app.
