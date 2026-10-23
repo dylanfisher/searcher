@@ -118,13 +118,22 @@ public enum MainMenuBuilder {
         Menu(
             title: "File",
             items: [
-                .command(WindowCommands.newWindow.id), .command(WindowCommands.newTab.id),
+                .command(WindowCommands.newWindow.id), .command(FileCommands.newFolder.id),
+                .command(WindowCommands.newTab.id),
                 .command(WindowCommands.closeTab.id),
+                .separator,
+                // Return is its key.
+                .commandWithoutKey(FileCommands.rename.id),
+                .command(FileCommands.duplicate.id),
+                .command(FileCommands.copyToOtherPane.id),
+                .command(FileCommands.moveToOtherPane.id),
                 .separator,
                 // Space is its key.
                 .commandWithoutKey(ViewCommands.toggleQuickLook.id),
                 .command(SystemCommands.revealInFinder.id),
                 .command(SystemCommands.openTerminal.id),
+                .separator,
+                .command(FileCommands.moveToTrash.id),
                 .separator,
                 // Where Finder puts Find.
                 .command(ViewCommands.filter.id),

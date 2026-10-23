@@ -44,3 +44,14 @@ import Testing
         registry.command(for: KeyChord("[", modifiers: [.command, .shift]))
             == WindowCommands.previousTab)
 }
+
+@Test func theAppRegistersTheFileCommands() throws {
+    let registry = try AppCommands.registry()
+
+    for binding in FileCommands.bindings {
+        #expect(registry.command(for: binding.command.id) == binding.command)
+    }
+    #expect(
+        registry.command(for: KeyChord(.delete, modifiers: .command)) == FileCommands.moveToTrash)
+    #expect(registry.command(for: KeyChord(.return)) == FileCommands.rename)
+}

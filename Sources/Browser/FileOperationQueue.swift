@@ -103,7 +103,9 @@ public actor FileOperationQueue {
     }
 
     private let fileSystem: FileSystem
-    private let prompts: Prompts
+    /// Also asks the file commands' questions, such as the other-pane confirm, so one answerer
+    /// serves both.
+    let prompts: Prompts
     private let onChange: @Sendable ([Snapshot]) -> Void
     /// Time since the queue was made, on its clock.
     private let elapsed: @Sendable () -> Duration

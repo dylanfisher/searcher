@@ -22,6 +22,12 @@ public struct CommandContext {
     /// The folder a click named, for Open in New Tab: a Cmd-double-clicked folder row or a
     /// Cmd-clicked path bar segment. Nil when a key or menu item runs a command.
     public let folder: Location?
+    /// Runs the file commands' operations and asks their questions. Nil where nothing answers
+    /// the queue's questions, as in a window without its sheets; the file commands are off then.
+    public let fileOperations: FileOperationQueue?
+    /// Starts editing the name of the pane's one selected entry in place, for Rename. Only the
+    /// pane's view can; nil where it can't, and Rename is off then.
+    public let editName: (@MainActor () -> Void)?
     private let givenWorkspace: Workspace?
     private let givenWorkspaces: WorkspaceList?
 
@@ -45,7 +51,9 @@ public struct CommandContext {
         showFilter: @escaping @MainActor () -> Void = {
             preconditionFailure("this command context has no filter field")
         },
-        folder: Location? = nil
+        folder: Location? = nil,
+        fileOperations: FileOperationQueue? = nil,
+        editName: (@MainActor () -> Void)? = nil
     ) {
         if let workspace {
             precondition(
@@ -61,6 +69,8 @@ public struct CommandContext {
         self.askForFolder = askForFolder
         self.showFilter = showFilter
         self.folder = folder
+        self.fileOperations = fileOperations
+        self.editName = editName
     }
 
     /// The window's tabs. A context built for one pane, as the benches and pane tests build it,
