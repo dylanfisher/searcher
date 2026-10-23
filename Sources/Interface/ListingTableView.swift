@@ -39,6 +39,9 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
     var selectTyped: @MainActor (String) -> Bool = { query in
         preconditionFailure("ListingTableView has no type-select for \(query)")
     }
+    /// What Open With acts on: this table's pane and the app's Open With cache; nil in a window
+    /// without the cache, as the UI bench opens it. Set with `runCommand`.
+    var openWith: @MainActor () -> OpenWithMenu.Target? = { nil }
     /// Builds the context menu for a right-click on a row, or below the rows at -1. Set by the
     /// list's controller.
     var contextMenu: @MainActor (_ row: Int) -> NSMenu? = { _ in nil }

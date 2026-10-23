@@ -25,6 +25,8 @@ public enum MainMenuBuilder {
         case commandWithoutKey(CommandID)
         case standard(StandardAction)
         case submenu(Menu)
+        /// The Open With submenu for the selection of the table with the keys.
+        case openWith
         case separator
     }
 
@@ -157,6 +159,7 @@ public enum MainMenuBuilder {
                 .command(FileCommands.copyToOtherPane.id),
                 .command(FileCommands.moveToOtherPane.id),
                 .separator,
+                .openWith,
                 // Space is its key.
                 .commandWithoutKey(ViewCommands.toggleQuickLook.id),
                 .command(SystemCommands.revealInFinder.id),
@@ -361,6 +364,10 @@ public enum MainMenuBuilder {
             return .separator()
         case .submenu(let submenu):
             return try submenuItem(submenu, registry: registry)
+        case .openWith:
+            return OpenWithMenu(target: {
+                (NSApplication.shared.keyWindow?.firstResponder as? ListingTableView)?.openWith()
+            }).item
         case .command(let id), .commandWithoutKey(let id):
             guard let command = registry.command(for: id) else {
                 throw .unregistered(id, menu: menu.title)

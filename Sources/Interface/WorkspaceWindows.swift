@@ -34,6 +34,8 @@ public final class WorkspaceWindows {
     let mountTable = MountTable()
     /// The app's undo history, fed every operation as it finishes.
     let undoHistory = UndoHistory()
+    /// The apps Open With lists for each file type, shared by every window.
+    let openWith: OpenWith
     /// The unfinished operations in the queue's latest snapshots, for a window that opens while
     /// operations run.
     private var unfinished: [FileOperationQueue.Snapshot] = []
@@ -55,6 +57,14 @@ public final class WorkspaceWindows {
         self.settings = settings
         self.folderSizes = folderSizes
         self.clipboard = CutState(clipboard: clipboard)
+        let openWithLogger = Logger(category: "openWith")
+        openWith = OpenWith(
+            systemActions: systemActions,
+            didBuild: { type, elapsed in
+                openWithLogger.notice(
+                    "Open With apps for \(type.identifier, privacy: .public): \(Int((elapsed / .milliseconds(1)).rounded()), privacy: .public) ms off the main thread"
+                )
+            })
         // A stream keeps the snapshots in the order the queue sent them on their way to the
         // main actor.
         let (stream, feed) = AsyncStream.makeStream(of: [FileOperationQueue.Snapshot].self)
@@ -145,6 +155,7 @@ public final class WorkspaceWindows {
         let controller = BrowserWindowController(
             workspace: workspace, workspaces: list, fileOperations: fileOperations,
             clipboard: clipboard, mountTable: mountTable, undoHistory: undoHistory,
+            openWith: openWith,
             takePaneController: { [weak self] id in self?.takePaneController(id) })
         controller.onCommand = { [weak self] in self?.showList() }
         controller.onClose = { [weak self] closed in self?.didClose(closed) }
