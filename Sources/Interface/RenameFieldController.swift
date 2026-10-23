@@ -37,11 +37,11 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
     /// Why `FileNameRule` refuses a name, for the line under the field.
     static func message(for problem: FileNameRule.Problem) -> String {
         switch problem {
-        case .empty: "A name can't be empty."
-        case .dotOrDotDot: "“.” and “..” can't be used as names."
-        case .slash: "A name can't contain “/”."
-        case .colon: "A name can't contain “:”."
-        case .nul: "A name can't contain a null character."
+        case .empty: "A name can’t be empty."
+        case .dotOrDotDot: "“.” and “..” can’t be used as names."
+        case .slash: "A name can’t contain “/”."
+        case .colon: "A name can’t contain “:”."
+        case .nul: "A name can’t contain a null character."
         case .tooLong: "The name is too long."
         }
     }
@@ -63,16 +63,16 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
         }
         switch error.reason {
         case .exists: return "The name “\(newName)” is already taken. Choose another one."
-        case .permissionDenied: return "You don't have permission to rename “\(name)”."
+        case .permissionDenied: return "You don’t have permission to rename “\(name)”."
         case .sourceGone: return "“\(name)” is no longer in this folder."
-        case .unreachable: return "The volume isn't responding."
+        case .unreachable: return "The volume isn’t responding."
         case .noSpace: return "The volume is full."
         case .invalidName:
             return FileNameRule.problem(with: newName).map(message(for:))
-                ?? "“\(newName)” can't be used as a name."
+                ?? "“\(newName)” can’t be used as a name."
         case .crossVolume, .noTrash, .notTheSameItem, .other:
-            guard let code = error.errno else { return "“\(name)” couldn't be renamed." }
-            return "“\(name)” couldn't be renamed: \(String(cString: strerror(code)))."
+            guard let code = error.errno else { return "“\(name)” couldn’t be renamed." }
+            return "“\(name)” couldn’t be renamed: \(String(cString: strerror(code)))."
         }
     }
 
