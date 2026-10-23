@@ -47,6 +47,10 @@ public final class PaneViewController: NSViewController {
         let tabBounds: @MainActor () -> Rect
         /// Takes what Close Pane or Close Tab closed.
         let didClosePane: @MainActor (CloseResult) -> Void
+        /// Shows or hides the window's operations panel.
+        let toggleOperations: @MainActor () -> Void
+        /// Runs the file commands; nil where nothing answers its questions.
+        let fileOperations: FileOperationQueue?
         /// Runs after each command, so the window shows what it changed.
         let didRunCommand: @MainActor () -> Void
     }
@@ -300,7 +304,9 @@ public final class PaneViewController: NSViewController {
             didClosePane: link.didClosePane,
             toggleQuickLook: { [weak self] in self?.keyListing.quickLook.toggle() },
             askForFolder: { [weak self] in self?.askForFolder() },
-            showFilter: { [weak self] in self?.showFilter() }, folder: folder)
+            showFilter: { [weak self] in self?.showFilter() },
+            toggleOperations: link.toggleOperations, folder: folder,
+            fileOperations: link.fileOperations)
     }
 
     /// Shows the filter field and focuses it, its text selected. Typing then narrows the rows.

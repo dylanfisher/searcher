@@ -291,3 +291,96 @@ private func receiver(of item: NSMenuItem, in window: NSWindow) throws -> NSResp
     #expect(monitors.map(\.stopCount) == [1, 1])
     #expect(load.isCancelled)
 }
+
+/// Records the sheets `windows`' prompter would show, on which window, instead of showing them.
+@MainActor
+private final class SheetLog {
+    var presented: [(sheet: NSWindow, over: NSWindow)] = []
+
+    init(_ windows: WorkspaceWindows) {
+        windows.prompter.present = { [unowned self] sheet, window in
+            presented.append((sheet, window))
+        }
+        windows.prompter.dismiss = { _ in }
+    }
+}
+
+@MainActor @Test func theWindowsShareOneQueueAndItsFileCommandsAreOnWithASelection() async throws {
+    let fixture = try await Fixture()
+    let first = try #require(fixture.windows.controllers.first)
+    let second = try await fixture.open()
+    let menu = try MainMenuBuilder.build(appName: "Searcher", registry: AppCommands.registry())
+    let duplicate = try #require(menuItem(FileCommands.duplicate.id, in: menu))
+    let trash = try #require(menuItem(FileCommands.moveToTrash.id, in: menu))
+    let newFolder = try #require(menuItem(FileCommands.newFolder.id, in: menu))
+
+    #expect(first.fileOperations === fixture.windows.fileOperations)
+    #expect(second.fileOperations === fixture.windows.fileOperations)
+    #expect(try fixture.keyTable(first).validateMenuItem(newFolder))
+    #expect(try !fixture.keyTable(first).validateMenuItem(duplicate))
+    first.workspace.selectedTab.focusedPane.select(
+        Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+
+    #expect(try fixture.keyTable(first).validateMenuItem(duplicate))
+    #expect(try fixture.keyTable(first).validateMenuItem(trash))
+}
+
+@MainActor @Test func twoOtherPaneConfirmsPressedBeforeAnsweringAreQueued() async throws {
+    let fixture = try await Fixture()
+    let sheets = SheetLog(fixture.windows)
+    let controller = try #require(fixture.windows.controllers.first)
+    let tab = controller.workspace.selectedTab
+    try fixture.press(try keyEvent("T", modifiers: [.command, .shift]), in: controller)
+    let pane = tab.focusedPane
+    await settle { pane.state.isLoaded }
+    pane.select(Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+    let prompter = fixture.windows.prompter
+
+    try fixture.press(try keyEvent("C", modifiers: [.command, .shift]), in: controller)
+    try fixture.press(try keyEvent("C", modifiers: [.command, .shift]), in: controller)
+    await settle { prompter.waitingCount == 1 }
+
+    #expect(sheets.presented.count == 1)
+    #expect(sheets.presented.first?.over === controller.window)
+    guard case .confirm(let first) = prompter.shown else {
+        Issue.record("no confirm sheet is shown")
+        return
+    }
+    first.cancelButton.performClick(nil)
+    await settle { sheets.presented.count == 2 }
+    #expect(prompter.waitingCount == 0)
+    guard case .confirm(let second) = prompter.shown else {
+        Issue.record("the second confirm isn't shown")
+        return
+    }
+    #expect(second !== first)
+    second.cancelButton.performClick(nil)
+    await settle { prompter.shown == nil }
+}
+
+@MainActor @Test func whileASheetIsOpenOnOneWindowAnotherTakesKeys() async throws {
+    let fixture = try await Fixture()
+    let sheets = SheetLog(fixture.windows)
+    let back = try #require(fixture.windows.controllers.first)
+    let front = try await fixture.open()
+    try fixture.press(try keyEvent("T", modifiers: [.command, .shift]), in: front)
+    let frontPane = front.workspace.selectedTab.focusedPane
+    await settle { frontPane.state.isLoaded }
+    frontPane.select(Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+    try fixture.press(try keyEvent("M", modifiers: [.command, .shift]), in: front)
+    await settle { sheets.presented.count == 1 }
+    #expect(sheets.presented.first?.over === front.window)
+    let backPane = back.workspace.selectedTab.focusedPane
+    let before = backPane.selection
+
+    try fixture.press(
+        try keyEvent(functionKey(NSDownArrowFunctionKey), modifiers: arrowFlags), in: back)
+
+    #expect(backPane.selection != before)
+    guard case .confirm(let sheet) = fixture.windows.prompter.shown else {
+        Issue.record("no confirm sheet is shown")
+        return
+    }
+    sheet.cancelButton.performClick(nil)
+    await settle { fixture.windows.prompter.shown == nil }
+}

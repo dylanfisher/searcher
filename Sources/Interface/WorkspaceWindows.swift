@@ -5,7 +5,10 @@ import Browser
 /// command in any window it shows the list as it is: a window for each new workspace, every
 /// window's workspace again, and no window for a workspace that left the list. A pane or tab
 /// that moves between windows takes its view controllers with it, so it keeps its table, scroll
-/// position and folder monitor (docs/decisions/0057-windows-and-tear-out.md).
+/// position and folder monitor (docs/decisions/0057-windows-and-tear-out.md). Every window runs
+/// its file commands through one `FileOperationQueue`, whose questions show as sheets on the
+/// most recently active window and whose snapshots go to every window's operations panel
+/// (docs/decisions/0067-operations-panel.md).
 @MainActor
 public final class WorkspaceWindows {
     public let list = WorkspaceList()
@@ -18,6 +21,14 @@ public final class WorkspaceWindows {
     private let systemActions: any SystemActions
     private let settings: Settings
     private let folderSizes: FolderSizeService?
+    /// The one queue every window's file commands run through.
+    let fileOperations: FileOperationQueue
+    /// Asks the queue's questions with sheets on the most recently active window.
+    let prompter: OperationPrompter
+    /// The queue's latest snapshots, for a window that opens while operations run.
+    private var snapshots: [FileOperationQueue.Snapshot] = []
+    /// Ends the snapshot stream when the windows go away.
+    private nonisolated let snapshotFeed: AsyncStream<[FileOperationQueue.Snapshot]>.Continuation
 
     public init(
         service: ListingService, systemActions: any SystemActions, settings: Settings,
@@ -27,6 +38,24 @@ public final class WorkspaceWindows {
         self.systemActions = systemActions
         self.settings = settings
         self.folderSizes = folderSizes
+        // A stream keeps the snapshots in the order the queue sent them on their way to the
+        // main actor.
+        let (stream, feed) = AsyncStream.makeStream(of: [FileOperationQueue.Snapshot].self)
+        snapshotFeed = feed
+        let prompter = OperationPrompter()
+        self.prompter = prompter
+        fileOperations = FileOperationQueue(prompts: prompter.prompts) { feed.yield($0) }
+        prompter.queue = fileOperations
+        prompter.window = { [weak self] in self?.frontWindow }
+        Task { [weak self] in
+            for await snapshots in stream {
+                self?.operationsChanged(snapshots)
+            }
+        }
+    }
+
+    deinit {
+        snapshotFeed.finish()
     }
 
     /// Opens a window of one tab at `location`, in list view, as the app does at launch and when
@@ -67,10 +96,11 @@ public final class WorkspaceWindows {
             controllers.first { $0.workspace === other }
         }?.window
         let controller = BrowserWindowController(
-            workspace: workspace, workspaces: list,
+            workspace: workspace, workspaces: list, fileOperations: fileOperations,
             takePaneController: { [weak self] id in self?.takePaneController(id) })
         controller.onCommand = { [weak self] in self?.showList() }
         controller.onClose = { [weak self] closed in self?.didClose(closed) }
+        controller.showOperations(snapshots)
         controllers.append(controller)
         guard let window = controller.window else {
             preconditionFailure("a browser window controller has no window")
@@ -82,6 +112,8 @@ public final class WorkspaceWindows {
         if showsWindows {
             controller.showWindow(nil)
         }
+        // A question asked while no window was open.
+        prompter.showNext()
     }
 
     /// The view controller another window has for pane `id`, which moved, taken out of it.
@@ -93,9 +125,27 @@ public final class WorkspaceWindows {
         return nil
     }
 
+    /// The window of the most recently active workspace, where questions go.
+    private var frontWindow: NSWindow? {
+        list.workspaces.first.flatMap { workspace in
+            controllers.first { $0.workspace === workspace }
+        }?.window
+    }
+
+    private func operationsChanged(_ snapshots: [FileOperationQueue.Snapshot]) {
+        self.snapshots = snapshots.filter { !$0.state.phase.isFinished }
+        for controller in controllers {
+            controller.showOperations(snapshots)
+        }
+        prompter.operationsChanged(snapshots)
+    }
+
     private func didClose(_ controller: BrowserWindowController) {
         controllers.removeAll { $0 === controller }
         list.remove(controller.workspace)
+        if let window = controller.window {
+            prompter.windowClosed(window)
+        }
     }
 
     private func controller(for workspace: Workspace) -> BrowserWindowController {
