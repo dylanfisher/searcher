@@ -83,6 +83,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         LaunchWarmup.shared.start(after: window)
     }
 
+    /// Promised files still on their way when the app quits leave their hidden drop folders;
+    /// those are removed now.
+    func applicationWillTerminate(_ notification: Notification) {
+        guard bench == nil else { return }
+        windows.removeDropFoldersBeforeQuit()
+    }
+
     /// Another app may have written the clipboard while the user was in it, which ends a cut,
     /// so the cut rows stop looking dimmed.
     func applicationDidBecomeActive(_ notification: Notification) {

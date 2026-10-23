@@ -1,5 +1,6 @@
 import AppKit
 import Browser
+import os
 
 /// The app's browser windows: one `BrowserWindowController` per workspace in `list`. After each
 /// command in any window it shows the list as it is: a window for each new workspace, every
@@ -64,6 +65,28 @@ public final class WorkspaceWindows {
             }
         }
     }
+
+    /// Removes the drop folders of promises still on their way, as the app quits, waiting at
+    /// most `quitCleanupLimit`. The removal runs off the main thread; the main thread only
+    /// waits for it. Failures are logged, since no window is left to show them.
+    public func removeDropFoldersBeforeQuit() {
+        let queue = fileOperations
+        let done = DispatchSemaphore(value: 0)
+        Task.detached {
+            let logger = Logger(category: "drop")
+            for error in await queue.removePendingDropFolders() {
+                logger.error(
+                    "a drop folder is left at quit: \(String(describing: error), privacy: .public)")
+            }
+            done.signal()
+        }
+        if done.wait(timeout: .now() + Self.quitCleanupLimit) == .timedOut {
+            Logger(category: "drop").error("quitting before the drop folders were removed")
+        }
+    }
+
+    /// How long quitting waits for the drop folders to be removed.
+    static let quitCleanupLimit: DispatchTimeInterval = .seconds(1)
 
     deinit {
         snapshotFeed.finish()

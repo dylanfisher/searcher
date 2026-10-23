@@ -3,8 +3,9 @@ import Foundation
 
 /// What panes, operation queues and mount tables do when a volume mounts or unmounts. The app
 /// forwards the system's mount notifications here, with the volume's mount point, and every
-/// pane, queue and mount table adds itself when it is made. A pane is on a volume when its folder is the mount point or
-/// under it, by the path's text. See docs/decisions/0049-volume-events.md.
+/// pane, queue and mount table adds itself when it is made. A pane is on a volume when its
+/// folder is the mount point or under it, by the path's text. See
+/// docs/decisions/0049-volume-events.md.
 @MainActor
 public enum VolumeEvents {
     /// Every pane made, weakly, so a released pane leaves no entry behind once it is pruned.

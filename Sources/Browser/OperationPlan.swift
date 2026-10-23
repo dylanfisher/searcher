@@ -122,6 +122,8 @@ public struct OperationPlan: Equatable, Sendable {
                         source: path, destination: FileOperation.renamed(path, to: name),
                         size: nil, crossesVolumes: false, conflict: nil)
                 ], lane: nil, failures: [])
+        case .receive:
+            preconditionFailure("\(operation) is reported, never planned")
         case .newFolder(let folder):
             return OperationPlan(
                 items: [
