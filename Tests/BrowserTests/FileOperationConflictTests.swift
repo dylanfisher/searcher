@@ -117,11 +117,12 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
         ])
 }
 
-/// Pasting into the folder an item came from: a copy keeps both without asking, a move has
-/// nothing to do.
+/// Pasting into the folder an item came from: a copy is named as Finder's Duplicate names it,
+/// without asking; a move has nothing to do.
 @Test func anItemOntoItselfAsksNothing() async throws {
     let files = FakeFiles(releasingAll: true)
     files.place("/A/x.txt")
+    files.place("/A/x copy.txt")
     let watcher = Watcher()
     let queue = makeQueue(files, watcher)
 
@@ -130,13 +131,13 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
     let move = await enqueue(queue, .move(["/A/x.txt"], into: "/A"), watcher)
     #expect(await watcher.waitUntilFinished(move))
 
-    #expect(watcher.state(of: copy)?.record.changes == [.created("/A/x 2.txt")])
+    #expect(watcher.state(of: copy)?.record.changes == [.created("/A/x copy 2.txt")])
     #expect(watcher.state(of: move)?.phase == .done)
     #expect(watcher.state(of: move)?.record.changes == [])
     #expect(!files.events.all.contains { $0.hasPrefix("move") })
 }
 
-@Test func replaceCopiesToATempNameSoCancellingBeforeTheSwapLeavesTheOriginal() async throws {
+@Test func replaceCopiesToAStagingFolderSoCancellingLeavesTheOriginal() async throws {
     let files = FakeFiles()
     files.place("/A/song.flac")
     let prompter = Prompter()
@@ -151,12 +152,37 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
     #expect(await watcher.waitUntilFinished(id))
     #expect(watcher.state(of: id)?.phase == .cancelled(leftBehind: nil))
     let staging = try stagingFolder(files)
-    #expect(!files.events.all.contains { $0.hasPrefix("swap") || $0.hasPrefix("trash /") })
+    #expect(!files.events.all.contains { $0.hasPrefix("move") || $0.hasPrefix("trash /") })
     #expect(files.events.all.last == "delete \(staging)")
     #expect(watcher.state(of: id)?.record.changes == [])
 }
 
-@Test func afterTheSwapTheOriginalGoesToTheTrashAndItsURLIsInTheRecord() async throws {
+/// The cancel arrives as the copy returns: the copy is whole, but nothing replaces the original.
+@Test func aCancelAsTheStagingCopyReturnsRemovesItAndLeavesTheOriginal() async throws {
+    let files = FakeFiles()
+    files.place("/A/song.flac")
+    files.finishDespiteCancel(of: "/S/song.flac")
+    let prompter = Prompter()
+    prompter.answer(replace)
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher, prompter: prompter)
+    let id = await enqueue(queue, .copy(["/S/song.flac"], into: "/A"), watcher)
+    #expect(await files.events.wait { $0.contains("copy /S/song.flac") })
+
+    await queue.cancel(id)
+
+    #expect(await watcher.waitUntilFinished(id))
+    #expect(watcher.state(of: id)?.phase == .cancelled(leftBehind: nil))
+    let staging = try stagingFolder(files)
+    #expect(
+        Array(files.events.all.drop { !$0.hasPrefix("copied") }) == [
+            "copied /S/song.flac to \(staging)/song.flac", "delete \(staging)/song.flac",
+            "delete \(staging)",
+        ])
+    #expect(watcher.state(of: id)?.record.changes == [])
+}
+
+@Test func replaceTrashesTheOriginalFromItsPathThenMovesTheCopyIntoPlace() async throws {
     let files = FakeFiles(releasingAll: true)
     files.place("/A/song.flac")
     files.place("/A/in/cover.jpg")
@@ -173,9 +199,8 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
     #expect(
         Array(files.events.all.drop { !$0.hasPrefix("make folder") }) == [
             "make folder \(staging)", "copy /S/song.flac",
-            "copied /S/song.flac to \(staging)/song.flac",
-            "swap \(staging)/song.flac with /A/song.flac", "trash \(staging)/song.flac",
-            "delete \(staging)",
+            "copied /S/song.flac to \(staging)/song.flac", "trash /A/song.flac",
+            "move \(staging)/song.flac to /A/song.flac", "delete \(staging)",
         ])
     let trashed = URL(fileURLWithPath: "/S/.Trashes/501/song.flac")
     #expect(
@@ -195,6 +220,31 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
             .moved(from: "/A/in/cover.jpg", to: "/A/sorted/cover.jpg"),
         ])
     #expect(!files.events.all.contains("copy /A/in/cover.jpg"))
+}
+
+@Test func aFailedMoveIntoPlacePutsTheOriginalBackFromTheTrash() async throws {
+    let files = FakeFiles(releasingAll: true)
+    files.place("/A/song.flac")
+    let denied = FileOperationError(reason: .permissionDenied, path: "/A/song.flac", errno: EACCES)
+    files.failMove(to: "/A/song.flac", with: denied)
+    let prompter = Prompter()
+    prompter.answer(replace)
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher, prompter: prompter)
+
+    let id = await enqueue(queue, .copy(["/S/song.flac"], into: "/A"), watcher)
+
+    #expect(await watcher.waitUntilFinished(id))
+    let staging = try stagingFolder(files)
+    #expect(
+        Array(files.events.all.drop { !$0.hasPrefix("trash") }) == [
+            "trash /A/song.flac", "move failed \(staging)/song.flac to /A/song.flac",
+            "move /S/.Trashes/501/song.flac to /A/song.flac", "delete \(staging)/song.flac",
+            "delete \(staging)",
+        ])
+    #expect(watcher.state(of: id)?.phase == .failed)
+    #expect(watcher.state(of: id)?.errors == [denied])
+    #expect(watcher.state(of: id)?.record.changes == [])
 }
 
 @Test func withNoTrashATrashAsksOnceToDeleteAndDoesNothingUntilAnswered() async throws {
@@ -225,7 +275,7 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
     #expect(!files.events.all.contains("delete /S/c"))
 }
 
-@Test func withNoTrashAReplaceAsksOnceToDeleteBeforeItCopiesAnything() async throws {
+@Test func withNoTrashAReplaceAsksOnceAfterTheCopyAndDeletesOnlyOnYes() async throws {
     let files = FakeFiles(releasingAll: true)
     files.removeTrash()
     files.place("/A/a")
@@ -241,16 +291,62 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
     #expect(prompter.confirms.all == [.deleteImmediately(["/A/a", "/A/b"], operation: id)])
     #expect(await watcher.waitUntil(id, is: .waitingForAnswer))
     try await pause()
-    #expect(!files.events.all.contains { $0.hasPrefix("copy") || $0.hasPrefix("make folder") })
+    let staging = try stagingFolder(files)
+    #expect(files.events.all.contains("copied /S/a to \(staging)/a"))
+    #expect(!files.events.all.contains { $0.hasPrefix("delete") || $0.hasPrefix("move") })
     prompter.answer(confirming: true)
     #expect(await watcher.waitUntilFinished(id))
-    let staging = try stagingFolder(files)
-    #expect(files.events.all.contains("delete \(staging)/a"))
+    #expect(files.events.all.contains("delete /A/a"))
+    #expect(files.events.all.contains("move \(staging)/a to /A/a"))
     #expect(
         watcher.state(of: id)?.record.changes == [
             .deleted("/A/a"), .created("/A/a"), .deleted("/A/b"), .created("/A/b"),
         ])
     #expect(prompter.confirms.all.count == 1)
+}
+
+@Test func decliningToDeleteWhereThereIsNoTrashCancelsAndRemovesTheStagedCopy() async throws {
+    let files = FakeFiles(releasingAll: true)
+    files.removeTrash()
+    files.place("/A/a")
+    let prompter = Prompter()
+    prompter.answer(replace)
+    prompter.answer(confirming: false)
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher, prompter: prompter)
+
+    let id = await enqueue(queue, .copy(["/S/a"], into: "/A"), watcher)
+
+    #expect(await watcher.waitUntilFinished(id))
+    #expect(watcher.state(of: id)?.phase == .cancelled(leftBehind: nil))
+    #expect(watcher.state(of: id)?.record.changes == [])
+    let staging = try stagingFolder(files)
+    #expect(
+        Array(files.events.all.drop { !$0.hasPrefix("copied") }) == [
+            "copied /S/a to \(staging)/a", "delete \(staging)/a", "delete \(staging)",
+        ])
+}
+
+@Test func aCancelWhileTheDeleteQuestionWaitsRemovesTheStagedCopyAtOnce() async throws {
+    let files = FakeFiles(releasingAll: true)
+    files.removeTrash()
+    files.place("/A/a")
+    let prompter = Prompter()
+    prompter.answer(replace)
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher, prompter: prompter)
+    let id = await enqueue(queue, .copy(["/S/a"], into: "/A"), watcher)
+    #expect(await prompter.confirms.wait { !$0.isEmpty })
+
+    await queue.cancel(id)
+
+    #expect(await watcher.waitUntilFinished(id))
+    #expect(watcher.state(of: id)?.phase == .cancelled(leftBehind: nil))
+    let staging = try stagingFolder(files)
+    #expect(files.events.all.suffix(2) == ["delete \(staging)/a", "delete \(staging)"])
+    prompter.answer(confirming: true)
+    try await pause()
+    #expect(!files.events.all.contains("delete /A/a"))
 }
 
 @Test func otherLanesKeepRunningWhileAnOperationWaitsForAnAnswer() async throws {
@@ -327,7 +423,7 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
     #expect(files.events.all.contains("copy failed /S/replaced"))
     #expect(files.events.all.contains("delete \(staging)"))
     #expect(files.events.all.contains("copy failed \(mountPoint)/song"))
-    #expect(!files.events.all.contains { $0.hasPrefix("swap") || $0.contains("/S/waiting") })
+    #expect(!files.events.all.contains { $0.hasPrefix("trash /") || $0.contains("/S/waiting") })
     #expect(watcher.state(of: elsewhere) == nil)
     files.releaseAll()
     #expect(await watcher.waitUntilFinished(elsewhere))
@@ -358,8 +454,6 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
 /// Real volumes: replaces only items the test makes on a disk image, and removes the replaced
 /// original from the image's trash afterwards.
 @Suite(.serialized) struct FileOperationConflictDiskTests {
-    /// The default image is HFS+, which has no `RENAME_SWAP`, so this also runs the swap by
-    /// renames.
     @Test func replacingAFolderOnADiskImagePutsTheCopyInPlaceWholeAndTrashesTheOriginal()
         async throws
     {

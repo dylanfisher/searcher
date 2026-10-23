@@ -31,9 +31,10 @@ public final class DiskImage {
         mountPoint = folder.url.appending(path: "mount").path
         try FileManager.default.createDirectory(
             atPath: mountPoint, withIntermediateDirectories: false)
+        // exFAT and FAT take volume names of at most 11 characters.
         try await Self.hdiutil([
             "create", "-quiet", "-size", "\(megabytes)m", "-fs", fileSystem, "-layout", "NONE",
-            "-volname", "SearcherTest", image,
+            "-volname", "SearcherTst", image,
         ])
         try await attach()
     }

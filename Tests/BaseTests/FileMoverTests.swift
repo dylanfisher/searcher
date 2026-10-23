@@ -73,6 +73,26 @@ import Testing
         try await image.detach()
     }
 
+    /// exFAT refuses `RENAME_EXCL`, so the move checks the destination itself there.
+    @Test func moveOnExFATMovesAndRefusesAnExistingName() async throws {
+        let image = try await DiskImage("FileMoverTests", megabytes: 40, fileSystem: "ExFAT")
+        let source = image.mountPoint + "/a.txt"
+        let taken = image.mountPoint + "/b.txt"
+        try Data("a".utf8).write(to: URL(fileURLWithPath: source))
+        try Data("b".utf8).write(to: URL(fileURLWithPath: taken))
+
+        #expect(throws: FileOperationError(reason: .exists, path: taken, errno: EEXIST)) {
+            try FileMover.move(source, to: taken)
+        }
+        #expect(try String(contentsOfFile: taken, encoding: .utf8) == "b")
+        let moved = image.mountPoint + "/c.txt"
+        try FileMover.move(source, to: moved)
+
+        #expect(!FileManager.default.fileExists(atPath: source))
+        #expect(try String(contentsOfFile: moved, encoding: .utf8) == "a")
+        try await image.detach()
+    }
+
     /// The boot volume can be case-sensitive, so this runs on an image that isn't.
     @Test func caseOnlyRenameWorksOnCaseInsensitiveAPFS() async throws {
         let image = try await DiskImage("FileMoverTests", megabytes: 2, fileSystem: "APFS")
@@ -87,41 +107,5 @@ import Testing
         // The old spelling still finds the file, so the volume is case-insensitive.
         #expect(FileManager.default.fileExists(atPath: source))
         try await image.detach()
-    }
-
-    /// APFS swaps in one call; HFS+ and exFAT refuse `RENAME_SWAP`, so there it takes renames.
-    @Test(arguments: ["APFS", "HFS+"])
-    func swapExchangesTwoItemsAndLeavesNoOtherName(fileSystem: String) async throws {
-        let image = try await DiskImage("FileMoverTests", megabytes: 4, fileSystem: fileSystem)
-        let staging = image.mountPoint + "/staging"
-        try FileManager.default.createDirectory(atPath: staging, withIntermediateDirectories: false)
-        let new = staging + "/album"
-        let old = image.mountPoint + "/album"
-        for (folder, file) in [(new, "new.txt"), (old, "old.txt")] {
-            try FileManager.default.createDirectory(
-                atPath: folder, withIntermediateDirectories: false)
-            try Data(file.utf8).write(to: URL(fileURLWithPath: folder + "/" + file))
-        }
-
-        try FileMover.swap(new, with: old)
-
-        #expect(try FileManager.default.contentsOfDirectory(atPath: old) == ["new.txt"])
-        #expect(try FileManager.default.contentsOfDirectory(atPath: new) == ["old.txt"])
-        #expect(try FileManager.default.contentsOfDirectory(atPath: staging) == ["album"])
-        #expect(
-            try FileManager.default.contentsOfDirectory(atPath: image.mountPoint)
-                .filter { !$0.hasPrefix(".") }.sorted() == ["album", "staging"])
-        try await image.detach()
-    }
-
-    @Test func swapWithAMissingItemThrowsAndChangesNothing() throws {
-        let folder = try TemporaryFolder("FileMoverTests")
-        let present = folder.url.appending(path: "present.txt").path
-        let missing = folder.url.appending(path: "missing.txt").path
-        try Data("present".utf8).write(to: URL(fileURLWithPath: present))
-
-        #expect(throws: FileOperationError.self) { try FileMover.swap(present, with: missing) }
-        #expect(
-            try FileManager.default.contentsOfDirectory(atPath: folder.url.path) == ["present.txt"])
     }
 }
