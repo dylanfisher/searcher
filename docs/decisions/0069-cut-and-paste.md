@@ -23,7 +23,10 @@ and moves run through the app's one queue ([0065](0065-operation-queue.md),
 - **A cut lasts until the next write.** `CutState` keeps the cut paths and the pasteboard's
   `changeCount` right after the cut wrote them. Paste moves only while the count is unchanged;
   any later write, by Searcher's Copy or by another app, makes Paste copy. A paste that moves
-  ends the cut, so a second Cmd-V copies what is on the pasteboard.
+  ends the cut, so a second Cmd-V copies what is on the pasteboard. Pressed again at once, that
+  copy reads the sources the move is changing, so the queue refuses it, or, once the move is
+  done, it fails with the sources gone; either shows in the operations panel and nothing is
+  copied.
 - **Move Items Here** moves whatever file URLs are on the pasteboard, cut or not, Finder's
   included, as Finder's Cmd-Opt-V does. It ends a cut too.
 - **No question.** Neither paste asks before queueing. Conflicts are asked by the queue as for
@@ -32,9 +35,11 @@ and moves run through the app's one queue ([0065](0065-operation-queue.md),
 - **Selection.** Pasted items are selected once the pane lists them, as Duplicate selects its
   copies, through `Pane.select(_:whenListedAtSelectionVersion:)`. No name is edited.
 - **Pasteboard shape.** One `NSPasteboardItem` per file with its `public.file-url`, as Finder
-  writes; the names, one per line, as `public.utf8-plain-text` on the first item, so a text
-  field or a text editor pastes the names. Reading takes the file URL of every item and ignores
-  web URLs and text. `PasteboardFileClipboard` does both, over any `NSPasteboard`; drag and drop
+  writes, a folder's ending in a slash. Whether an entry is a folder comes from the listing, so
+  building the URLs reads nothing from the disk on the main thread. The names, one per line, as `public.utf8-plain-text` on the first item, so a text
+  field or a text editor pastes the names. Reading goes through `NSURL` with
+  `urlReadingFileURLsOnly`, which takes every item's file URL and the file names older apps
+  write as `NSFilenamesPboardType`, and ignores web URLs and text. `PasteboardFileClipboard` does both, over any `NSPasteboard`; drag and drop
   (M4.11a) uses it with the drag's pasteboard.
 - **Menus.** Edit's Cut, Copy and Paste stay AppKit's text actions. A text field answers them for
   its text; `ListingTableView` answers them by running the command on the item's chord, as it
@@ -64,7 +69,7 @@ and moves run through the app's one queue ([0065](0065-operation-queue.md),
 
 The dimmed rows can stay dimmed after a background app writes the pasteboard while Searcher is
 active, until the rows change or the app is activated again; Paste still copies then, since it
-checks the count. A file reference URL (`file:///.file/id=…`) on the pasteboard is taken as a
-path and fails as a missing item; Finder writes path URLs. Names joined by newlines can't show
+checks the count. A file reference URL (`file:///.file/id=…`) on the pasteboard is not
+handled on its own; Finder writes path URLs. Names joined by newlines can't show
 a name that holds a newline unambiguously; the file URLs are what a paste reads. A paste is one
 queued copy or move, so whatever undoes a copy or move undoes a paste.

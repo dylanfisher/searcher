@@ -54,8 +54,6 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// Goes up each time the view takes another list's scroll position, which drops a scroll to
     /// the cursor still waiting for the next pass.
     private var scrollGeneration = 0
-    /// The modifier keys held in the event being handled, read when a click changes the
-    /// selection. Tests replace it.
     /// The app's clipboard, whose cut entries in this folder draw dimmed. Nil shows none.
     var clipboard: CutState? {
         didSet {
@@ -66,6 +64,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     }
     /// The names of the cut entries in the folder shown, read when the rows or the cut change.
     private var cutNames: Set<String> = []
+    /// The modifier keys held in the event being handled, read when a click changes the
+    /// selection. Tests replace it.
     var currentModifierFlags: @MainActor () -> NSEvent.ModifierFlags = {
         NSApp?.currentEvent?.modifierFlags ?? []
     }

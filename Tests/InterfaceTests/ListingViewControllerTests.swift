@@ -416,7 +416,7 @@ private func shownNames(_ controller: ListingViewController) -> [String] {
     }
     #expect(try alphas() == [1, 1])
 
-    clipboard.cut(["/folder/a"])
+    clipboard.cut([URL(fileURLWithPath: "/folder/a", isDirectory: false)])
     #expect(try alphas() == [ListingViewController.cutAlpha, 1])
 
     pasteboard.clearContents()

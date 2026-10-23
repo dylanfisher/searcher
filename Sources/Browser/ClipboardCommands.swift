@@ -32,7 +32,7 @@ public enum ClipboardCommands: CommandSet {
                     guard canTakeSelection(context), let clipboard = context.clipboard else {
                         return
                     }
-                    clipboard.copy(FileCommands.selectedPaths(in: context.pane))
+                    clipboard.copy(selectedURLs(in: context.pane))
                 }),
             CommandBinding(
                 cut, isEnabled: { canTakeSelection($0) },
@@ -40,7 +40,7 @@ public enum ClipboardCommands: CommandSet {
                     guard canTakeSelection(context), let clipboard = context.clipboard else {
                         return
                     }
-                    clipboard.cut(FileCommands.selectedPaths(in: context.pane))
+                    clipboard.cut(selectedURLs(in: context.pane))
                 }),
             CommandBinding(
                 paste, isEnabled: { canPaste($0) },
@@ -59,7 +59,7 @@ public enum ClipboardCommands: CommandSet {
             let queue = context.fileOperations
         else { return }
         let isCut = clipboard.cutPaths != nil
-        let paths = clipboard.clipboard.fileURLs().map { $0.path(percentEncoded: false) }
+        let paths = clipboard.clipboard.fileURLs().map(\.path)
         if isCut || alwaysMoving {
             clipboard.clear()
         }
@@ -67,6 +67,17 @@ public enum ClipboardCommands: CommandSet {
         let operation: FileOperation =
             isCut || alwaysMoving ? .move(paths, into: folder) : .copy(paths, into: folder)
         FileCommands.run(operation, selectingIn: context.pane, queue: queue)
+    }
+
+    /// The selected entries' file URLs. Each says whether it is a folder, from the listing, so
+    /// building it reads nothing from the disk; a folder's ends in a slash, as Finder writes it.
+    @MainActor
+    private static func selectedURLs(in pane: Pane) -> [URL] {
+        pane.selectedEntries.map { entry in
+            URL(
+                fileURLWithPath: pane.location.child(named: entry.name).path,
+                isDirectory: entry.type == .directory)
+        }
     }
 
     /// Whether Copy and Cut can run: there is a clipboard and a selection.
