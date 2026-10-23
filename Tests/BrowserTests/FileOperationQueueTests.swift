@@ -28,6 +28,7 @@ final class FakeFiles: @unchecked Sendable {
     private var copyFailures: [String: FileOperationError] = [:]
     private var cancelFailures: [String: FileOperationError] = [:]
     private var moveFailures: [String: FileOperationError] = [:]
+    private var deleteFailures: [String: FileOperationError] = [:]
     private var finishesDespiteCancel: Set<String> = []
     private var progressSteps = 0
     private var contents: [String: [String]] = [:]
@@ -64,6 +65,11 @@ final class FakeFiles: @unchecked Sendable {
     /// The next move to `destination` throws `error`.
     func failMove(to destination: String, with error: FileOperationError) {
         condition.withLock { moveFailures[destination] = error }
+    }
+
+    /// The next delete of `path` throws `error`.
+    func failDelete(of path: String, with error: FileOperationError) {
+        condition.withLock { deleteFailures[path] = error }
     }
 
     /// The copy of `source` returns as if it had finished when it is cancelled: a cancel that
@@ -148,6 +154,12 @@ final class FakeFiles: @unchecked Sendable {
                     fileURLWithPath: "/S/.Trashes/501/" + (path as NSString).lastPathComponent)
             },
             deletePermanently: { path throws(FileOperationError) in
+                if let failure = self.condition.withLock({
+                    self.deleteFailures.removeValue(forKey: path)
+                }) {
+                    self.events.append("delete failed \(path)")
+                    throw failure
+                }
                 self.events.append("delete \(path)")
             },
             makeUntitledFolder: { folder throws(FileOperationError) in
@@ -172,6 +184,11 @@ final class FakeFiles: @unchecked Sendable {
             },
             removeEmptyFolder: { folder throws(FileOperationError) in
                 self.events.append("remove folder \(folder)")
+            },
+            identify: { path throws(FileOperationError) in
+                let isPlaced = self.condition.withLock { self.placed[path] != nil }
+                return isPlaced || isPath(path, atOrUnder: "/S")
+                    ? OperationRecord.ItemIdentity(device: 0, inode: 0) : nil
             })
     }
 

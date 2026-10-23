@@ -159,6 +159,7 @@ final class OperationRowView: NSView {
         case .crossVolume: "\(path) is on another volume."
         case .noTrash: "The volume of \(path) has no Trash."
         case .invalidName: "\(path) isn’t a name a file can have."
+        case .notTheSameItem: "\(path) is another item now, so it was left as it is."
         case .other:
             if let code = error.errno {
                 "\(path) couldn’t be changed: \(String(cString: strerror(code)))."

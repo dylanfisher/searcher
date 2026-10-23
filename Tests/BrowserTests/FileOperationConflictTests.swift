@@ -440,6 +440,7 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
             inspected.append(path)
             return path == "/A/new" ? nil : FakeFiles.item(path)
         },
+        identify: { _ throws(FileOperationError) in nil },
         isCancelled: { false })
 
     #expect(inspected == ["/A/album", "/S/album", "/A/new"])

@@ -20,6 +20,8 @@ private final class Fixture {
     let pane: Pane
     let controller: PaneViewController
     let queue: FileOperationQueue
+    /// Follows the queue, as the app's history does.
+    let history = UndoHistory()
     /// Every snapshot the queue reported, so a test can count the operations it was given.
     let snapshots = EventLog<FileOperationQueue.Snapshot>()
 
@@ -39,13 +41,15 @@ private final class Fixture {
             pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
             tableView: ListingTableView(), monitorsFolders: monitors)
         let snapshots = snapshots
+        let (finished, feed) = AsyncStream.makeStream(of: FileOperationQueue.Snapshot.self)
         queue = FileOperationQueue(
             prompts: FileOperationQueue.Prompts(
                 resolve: { request in preconditionFailure("a rename asked \(request)") },
-                confirm: { request in preconditionFailure("a rename asked \(request)") })
-        ) { reported in
-            for snapshot in reported { snapshots.append(snapshot) }
-        }
+                confirm: { request in preconditionFailure("a rename asked \(request)") }),
+            onChange: { reported in
+                for snapshot in reported { snapshots.append(snapshot) }
+            }, onAnyFinish: { feed.yield($0) })
+        history.follow(finished)
         window.isReleasedWhenClosed = false
         controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 400)
         window.contentView?.addSubview(controller.view)
@@ -74,7 +78,8 @@ private final class Fixture {
             binding.run(
                 CommandContext(
                     pane: pane.commandPane, fileOperations: queue,
-                    editName: { [unowned self] in controller.editName(queue: queue) }))
+                    editName: { [unowned self] in controller.editName(queue: queue) },
+                    undoHistory: history))
         }
     }
 
@@ -466,4 +471,52 @@ private func renameAndWait(_ fixture: Fixture) async throws {
 
     #expect(fixture.pane.viewMode == .column)
     #expect(!fixture.field.isShown)
+}
+
+/// Cmd-Z in the name field undoes its typing, through the Edit menu's Undo as the key reaches
+/// it, and queues no undo of the file rename the history holds.
+@MainActor @Test func cmdZInTheNameFieldUndoesTypingAndNoFileChange() async throws {
+    let fixture = try await Fixture("a.txt")
+    defer { fixture.stop() }
+    let root = fixture.folder.url.path
+    _ = await fixture.queue.perform(.rename(root + "/a.txt", to: "b.txt"))
+    await fixture.history.catchUp(with: fixture.queue)
+    #expect(fixture.history.canUndo)
+    await settle { fixture.pane.state.listing?.row(named: "b.txt") != nil }
+    await fixture.select("b.txt")
+    try fixture.press(returnKey)
+    try fixture.type("zzz")
+    let editor = try fixture.editor()
+    #expect(editor.string == "zzz.txt")
+    let operations = fixture.operationCount
+
+    // The item Cmd-Z picks in the menu bar, and the responder its action reaches from the
+    // window's first responder.
+    let menu = try MainMenuBuilder.build(appName: "Searcher", registry: AppCommands.registry())
+    let edit = try #require(menu.items.first { $0.title == "Edit" }?.submenu)
+    let undo = try #require(
+        edit.items.first { $0.keyEquivalent == "z" && $0.keyEquivalentModifierMask == .command })
+    let action = try #require(undo.action)
+    let taker = responder(for: action, from: fixture.window.firstResponder)
+    // The field editor's typing is in its window's undo manager, which the window's undo:
+    // runs; the list's table, which would undo a file change, isn't in the chain.
+    #expect(taker === fixture.window, "\(String(describing: taker))")
+    #expect(NSApplication.shared.sendAction(action, to: taker, from: undo))
+
+    #expect(editor.string == "b.txt")
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(fixture.operationCount == operations)
+    #expect(fixture.exists("b.txt"))
+    #expect(fixture.history.canUndo)
+}
+
+/// The first responder from `first` up the chain that answers `action`.
+@MainActor
+private func responder(for action: Selector, from first: NSResponder?) -> NSResponder? {
+    var responder = first
+    while let current = responder {
+        if current.responds(to: action) { return current }
+        responder = current.nextResponder
+    }
+    return nil
 }

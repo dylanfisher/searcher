@@ -9,8 +9,22 @@ import Testing
 private let undoChord = KeyChord("z", modifiers: .command)
 private let redoChord = KeyChord("z", modifiers: [.command, .shift])
 
-/// A queue over the real file system, whose questions `prompter` answers, and the history it
-/// feeds, as the app's windows feed theirs.
+/// A queue on `fileSystem` whose finished operations `history` follows, as the app's windows
+/// make theirs. `watcher` gets its snapshots.
+@MainActor
+private func followedQueue(
+    _ history: UndoHistory, fileSystem: FileOperationQueue.FileSystem = .real,
+    prompter: Prompter = Prompter(), watcher: Watcher = Watcher()
+) -> FileOperationQueue {
+    let (finished, feed) = AsyncStream.makeStream(of: FileOperationQueue.Snapshot.self)
+    history.follow(finished)
+    return FileOperationQueue(
+        fileSystem: fileSystem, prompts: prompter.prompts, clock: ContinuousClock(),
+        onChange: { watcher.snapshots.append($0) }, onAnyFinish: { feed.yield($0) })
+}
+
+/// A queue over the real file system, whose questions `prompter` answers, and the history that
+/// follows it.
 @MainActor
 private final class Harness {
     let prompter = Prompter()
@@ -18,26 +32,31 @@ private final class Harness {
     let history = UndoHistory()
 
     init() {
-        queue = FileOperationQueue(
-            fileSystem: .real, prompts: prompter.prompts, clock: ContinuousClock()
-        ) { _ in }
+        queue = followedQueue(history, prompter: prompter)
     }
 
-    /// Runs `operation` and gives its end to the history.
+    /// Runs `operation` and waits until the history has taken it in.
     @discardableResult
     func perform(_ operation: FileOperation) async -> OperationState {
         let state = await queue.perform(operation)
-        history.record(operation, state)
+        await history.catchUp(with: queue)
         return state
     }
 
     func undo() async throws -> OperationState {
-        try await #require(history.undo(with: queue)).value
+        try await value(of: history.undo(with: queue))
     }
 
     func redo() async throws -> OperationState {
-        try await #require(history.redo(with: queue)).value
+        try await value(of: history.redo(with: queue))
     }
+}
+
+/// The state an undo or redo ended in; fails when the history was busy or had nothing to do.
+@MainActor
+private func value(of task: Task<OperationState?, Never>?) async throws -> OperationState {
+    let task = try #require(task, "the history was busy")
+    return try #require(await task.value, "there was nothing to undo or redo")
 }
 
 private func write(_ text: String, to path: String) throws {
@@ -143,7 +162,7 @@ private func makeFolder(_ path: String) throws {
 
     #expect(!harness.history.canUndo)
     #expect(harness.history.undoTitle == "Undo")
-    #expect(harness.history.undo(with: harness.queue) == nil)
+    #expect(try await #require(harness.history.undo(with: harness.queue)).value == nil)
 }
 
 @MainActor @Test func aNewOperationClearsRedo() async throws {
@@ -176,7 +195,7 @@ private func makeFolder(_ path: String) throws {
 
     #expect(harness.history.undoTitle == "Can’t Undo Delete")
     #expect(!harness.history.canUndo)
-    #expect(harness.history.undo(with: harness.queue) == nil)
+    #expect(try await #require(harness.history.undo(with: harness.queue)).value == nil)
     #expect(exists(root + "/c.txt"))
 }
 
@@ -231,8 +250,8 @@ private func makeFolder(_ path: String) throws {
 @MainActor @Test func anUndoRunsWhileACopyIsStillRunning() async throws {
     let files = FakeFiles()
     let watcher = Watcher()
-    let queue = makeQueue(files, watcher)
     let history = UndoHistory()
+    let queue = followedQueue(history, fileSystem: files.fileSystem(), watcher: watcher)
     files.place("/A/b")
     history.record(
         .rename("/A/a", to: "b"),
@@ -247,7 +266,7 @@ private func makeFolder(_ path: String) throws {
     let undone = try #require(history.undo(with: queue))
     #expect(!history.canUndo)
 
-    #expect(await undone.value.phase == .done)
+    #expect(await undone.value?.phase == .done)
     #expect(files.events.all.contains("move /A/b to /A/a"))
     #expect(watcher.state(of: copy) == nil)
     files.releaseAll()
@@ -281,8 +300,9 @@ private func makeFolder(_ path: String) throws {
     #expect(undo.title?(context) == "Undo Rename")
     #expect(undo.isEnabled?(CommandContext(pane: pane, fileOperations: harness.queue)) == false)
     undo.run(context)
-    // The entry leaves at once; Redo has it once the undo has run.
-    #expect(undo.title?(context) == "Undo")
+    // Both are off while it runs; Redo has the entry once the undo has run.
+    #expect(undo.isEnabled?(context) == false)
+    #expect(redo.isEnabled?(context) == false)
     await settle { redo.isEnabled?(context) == true }
     #expect(redo.title?(context) == "Redo Rename")
     #expect(exists(root + "/a.txt"))
@@ -350,4 +370,136 @@ private func makeFolder(_ path: String) throws {
         #expect(harness.history.undoTitle == "Undo Replace")
         try await image.detach()
     }
+}
+
+// MARK: Identity
+
+/// An item put at the path since, as a save that writes a new file and renames it over the old
+/// one, isn't the item the record changed, so the undo leaves it.
+@MainActor @Test func anotherItemAtTheRecordedPathFailsTheUndo() async throws {
+    let folder = try TemporaryFolder("UndoHistoryTests")
+    let root = folder.url.path
+    try write("a", to: root + "/a.txt")
+    let harness = Harness()
+    await harness.perform(.rename(root + "/a.txt", to: "b.txt"))
+    try write("new", to: root + "/c.txt")
+    try FileManager.default.removeItem(atPath: root + "/b.txt")
+    #expect(rename(root + "/c.txt", root + "/b.txt") == 0)
+
+    let undone = try await harness.undo()
+
+    #expect(undone.phase == .failed)
+    #expect(undone.errors.map(\.path) == [root + "/b.txt"])
+    #expect(undone.errors.map(\.reason) == [.notTheSameItem])
+    #expect(try read(root + "/b.txt") == "new")
+    #expect(!exists(root + "/a.txt"))
+    #expect(!harness.history.canUndo)
+}
+
+// MARK: One at a time
+
+/// A finished operation's state, as the queue reports it.
+private func finished(_ changes: OperationRecord.Change...) -> OperationState {
+    OperationState(
+        phase: .done,
+        progress: OperationState.Progress(
+            itemsDone: changes.count, itemCount: changes.count,
+            copied: CopyProgress(bytes: 0, files: 0), total: nil),
+        errors: [], record: OperationRecord(changes: changes))
+}
+
+/// A press while an undo is still running does nothing, so the entry under it isn't undone out
+/// of turn; a refused undo leaves its entry where it was.
+@MainActor @Test func aRefusedUndoKeepsItsEntryAndAPressWhileItRunsIsIgnored() async throws {
+    let files = FakeFiles()
+    let watcher = Watcher()
+    let history = UndoHistory()
+    let queue = followedQueue(history, fileSystem: files.fileSystem(), watcher: watcher)
+    files.place("/A/m/x")
+    files.place("/A/b")
+    history.record(.move(["/A/x"], into: "/A/m"), finished(.moved(from: "/A/x", to: "/A/m/x")))
+    history.record(.rename("/A/a", to: "b"), finished(.moved(from: "/A/a", to: "/A/b")))
+    // The copy reads the renamed item, so its undo is refused while the copy runs.
+    let copy = await enqueue(queue, .copy(["/A/b"], into: "/B"), watcher)
+    #expect(await files.events.wait { $0.contains("copy /A/b") })
+
+    let first = history.undo(with: queue)
+    let second = history.undo(with: queue)
+
+    #expect(second == nil)
+    let refused = try #require(first)
+    guard case .refused = await refused.value?.phase else {
+        Issue.record("the undo wasn't refused")
+        return
+    }
+    #expect(history.undoTitle == "Undo Rename")
+    #expect(!history.canRedo)
+    files.releaseAll()
+    #expect(await watcher.waitUntilFinished(copy))
+    #expect(try await #require(history.undo(with: queue)).value?.phase == .done)
+    #expect(files.events.all.contains("move /A/b to /A/a"))
+    #expect(!files.events.all.contains("move /A/m/x to /A/x"))
+    #expect(history.undoTitle == "Undo Move 1 Item")
+}
+
+/// An undo that ends after a new change was recorded doesn't offer a Redo the new change
+/// cleared, and its entry leaves from under the new one. Undoing a move between volumes copies
+/// the item back and deletes it where it was.
+@MainActor @Test func anUndoEndingAfterANewChangeOffersNoRedo() async throws {
+    let files = FakeFiles()
+    let watcher = Watcher()
+    let history = UndoHistory()
+    let queue = followedQueue(history, fileSystem: files.fileSystem(), watcher: watcher)
+    files.place("/B/x")
+    files.place("/A/q")
+    history.record(.move(["/A/x"], into: "/B"), finished(.moved(from: "/A/x", to: "/B/x")))
+    let undo = try #require(history.undo(with: queue))
+    #expect(await files.events.wait { $0.contains("copy /B/x") })
+
+    history.record(.rename("/A/p", to: "q"), finished(.moved(from: "/A/p", to: "/A/q")))
+    files.releaseAll()
+
+    #expect(await undo.value?.phase == .done)
+    #expect(files.events.all.contains("delete /B/x"))
+    #expect(!history.canRedo)
+    #expect(history.undoTitle == "Undo Rename")
+    #expect(try await #require(history.undo(with: queue)).value?.phase == .done)
+    #expect(!history.canUndo)
+}
+
+/// A move between volumes undone whose copy back is made but whose item can't be deleted where
+/// it was is left as it is: no Redo, no entry.
+@MainActor @Test func anUndoThatCopiesBackButCantDeleteOffersNoRedo() async throws {
+    let files = FakeFiles(releasingAll: true)
+    let watcher = Watcher()
+    let history = UndoHistory()
+    let queue = followedQueue(history, fileSystem: files.fileSystem(), watcher: watcher)
+    files.place("/B/x")
+    let denied = FileOperationError(reason: .permissionDenied, path: "/B/x", errno: EACCES)
+    files.failDelete(of: "/B/x", with: denied)
+    history.record(.move(["/A/x"], into: "/B"), finished(.moved(from: "/A/x", to: "/B/x")))
+
+    let undone = try await value(of: history.undo(with: queue))
+
+    #expect(undone.phase == .failed)
+    #expect(undone.errors == [denied])
+    #expect(!history.canRedo)
+    #expect(!history.canUndo)
+}
+
+// MARK: Limit
+
+@MainActor @Test func theHistoryKeepsTheLastHundredEntries() {
+    let history = UndoHistory()
+    history.record(
+        .trash(["/A/a"]),
+        finished(.trashed(from: "/A/a", to: URL(fileURLWithPath: "/A/.Trashes/a"))))
+    for number in 1...UndoHistory.limit {
+        history.record(
+            .rename("/A/\(number)", to: "n\(number)"),
+            finished(.moved(from: "/A/\(number)", to: "/A/n\(number)")))
+    }
+
+    #expect(history.undoCount == 100)
+    #expect(history.undoTitle == "Undo Rename")
 }

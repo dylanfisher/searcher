@@ -70,7 +70,7 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
         case .invalidName:
             return FileNameRule.problem(with: newName).map(message(for:))
                 ?? "“\(newName)” can't be used as a name."
-        case .crossVolume, .noTrash, .other:
+        case .crossVolume, .noTrash, .notTheSameItem, .other:
             guard let code = error.errno else { return "“\(name)” couldn't be renamed." }
             return "“\(name)” couldn't be renamed: \(String(cString: strerror(code)))."
         }
