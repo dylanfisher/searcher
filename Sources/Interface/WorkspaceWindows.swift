@@ -246,11 +246,18 @@ public final class WorkspaceWindows {
         defer { scheduleSave() }
         list.awaitsRestore = false
         // After the open windows, so a closed workspace named like an open one is the one
-        // dropped.
+        // renamed.
         defer { listClosedWorkspaces(of: contents) }
         guard let session = contents.session else { return nil }
-        let states = session.workspaces.compactMap { contents.workspaces[$0] }
-        guard !states.isEmpty else { return nil }
+        let saved = session.workspaces.compactMap { contents.workspaces[$0] }
+        guard !saved.isEmpty else { return nil }
+        // Front window first, so a back window named like a front one is the one renamed.
+        var names: [String] = []
+        let states = saved.map { state in
+            let renamed = withFreeName(state, among: names)
+            renamed.name.map { names.append($0) }
+            return renamed
+        }
         let keyID =
             session.keyWindow.flatMap { id in states.first { $0.id == id }?.id } ?? states[0].id
         // The key window's panes are made first, so their loads are asked for first.
@@ -262,7 +269,8 @@ public final class WorkspaceWindows {
             guard let workspace = workspaces[state.id] else {
                 preconditionFailure("workspace \(state.id) wasn't made")
             }
-            lastSaved[state.id] = state
+            // As read, so a renamed workspace is saved under its new name.
+            lastSaved[state.id] = contents.workspaces[state.id]
             list.add(workspace)
             makeController(for: workspace, frame: CGRect(state.frame))
         }
@@ -302,29 +310,43 @@ public final class WorkspaceWindows {
     /// Lists the named workspaces of `contents` that aren't open as saved, in name order, and
     /// has the files of unnamed ones deleted: they belong to windows a crash closed, or to a
     /// session that didn't load, and can't be restored. A named one whose name another saved
-    /// workspace has is logged and deleted, so the names stay unique.
+    /// workspace has gets the next free name, which is saved.
     private func listClosedWorkspaces(of contents: WorkspaceStore.Contents) {
         let open = Set(list.workspaces.map(\.id))
         let closed = contents.workspaces.values.filter { !open.contains($0.id) }
-        for state in closed.sorted(by: Self.nameOrder) {
-            guard state.name != nil else {
-                forget(state.id)
+        for read in closed.sorted(by: Self.nameOrder) {
+            guard read.name != nil else {
+                forget(read.id)
                 continue
             }
+            let state = withFreeName(read, among: list.saved.map(\.name))
             do {
                 try list.addSaved(state)
-                lastSaved[state.id] = state
             } catch {
-                Logger(category: "workspaces").error(
-                    "deleting saved workspace \(state.id, privacy: .public): \(error.description, privacy: .public)"
-                )
-                forget(state.id)
+                preconditionFailure("workspace \(state.id) was given a taken name: \(error)")
+            }
+            lastSaved[state.id] = state
+            if state != read {
+                unsavedClosed[state.id] = state
             }
         }
     }
 
+    /// `state`, renamed to the next free name if one of `names` is its name, which is logged.
+    private func withFreeName(_ state: WorkspaceState, among names: [String]) -> WorkspaceState {
+        guard let name = state.name else { return state }
+        let free = WorkspaceList.freeName(name, among: names)
+        guard free != name else { return state }
+        Logger(category: "workspaces").notice(
+            "renaming workspace \(state.id, privacy: .public) from \(name, privacy: .public) to \(free, privacy: .public): the name was taken"
+        )
+        return WorkspaceState(
+            id: state.id, name: free, frame: state.frame, tabs: state.tabs,
+            selectedTab: state.selectedTab, showsSidebar: state.showsSidebar)
+    }
+
     /// Unnamed first, then by name as Finder sorts, then by ID, so which of two same-named
-    /// workspaces is kept doesn't depend on the order the files were read.
+    /// workspaces keeps its name doesn't depend on the order the files were read.
     private static func nameOrder(_ a: WorkspaceState, _ b: WorkspaceState) -> Bool {
         switch (a.name, b.name) {
         case (nil, nil): return a.id.uuidString < b.id.uuidString

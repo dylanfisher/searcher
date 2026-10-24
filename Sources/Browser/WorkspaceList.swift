@@ -113,6 +113,25 @@ public final class WorkspaceList {
         closed.append(state)
     }
 
+    /// `name`, or the first of "`name` 2", "`name` 3" and so on that no saved workspace but `id`
+    /// has, as Finder names a duplicate. The launch gives it to a workspace whose name another
+    /// has, which only a file edited by hand can hold.
+    public func freeName(_ name: String, for id: UUID) -> String {
+        Self.freeName(name, among: saved.filter { $0.id != id }.map(\.name))
+    }
+
+    /// `name`, or the first of "`name` 2", "`name` 3" and so on that isn't among `names`,
+    /// compared as `name(_:as:)` compares names.
+    public static func freeName(_ name: String, among names: [String]) -> String {
+        let taken = Set(names.map(key))
+        guard taken.contains(key(name)) else { return name }
+        var number = 2
+        while taken.contains(key("\(name) \(number)")) {
+            number += 1
+        }
+        return "\(name) \(number)"
+    }
+
     /// Throws when a saved workspace other than `id` has `name`, in any case.
     private func checkFree(_ name: String, for id: UUID) throws(NameRefusal) {
         let key = Self.key(name)
