@@ -43,7 +43,8 @@ public final class Workspace {
             if isActive != oldValue { updatePanes() }
         }
     }
-    /// The tabs' states just before closing the last tab or pane closed the workspace.
+    /// The tabs' states just before closing the last tab or pane closed the workspace, when it
+    /// is a saved one; an unnamed one's state isn't kept once its window closes.
     private var tabStatesBeforeClose: [TabState]?
     /// The pane last told it gained the focus, until it is told it lost it.
     private weak var focusedPane: Pane?
@@ -99,7 +100,7 @@ public final class Workspace {
     @discardableResult
     public func close(_ id: TabID) -> CloseResult {
         let index = index(of: id)
-        if tabs.count == 1 { tabStatesBeforeClose = tabStates }
+        if tabs.count == 1, name != nil { tabStatesBeforeClose = tabStates }
         tabs[index].close()
         return remove(at: index)
     }
@@ -108,14 +109,16 @@ public final class Workspace {
     @discardableResult
     public func closePane() -> CloseResult {
         let tab = selectedTab
-        if tabs.count == 1, tab.panes.count == 1 { tabStatesBeforeClose = tabStates }
+        if tabs.count == 1, tab.panes.count == 1, name != nil {
+            tabStatesBeforeClose = tabStates
+        }
         guard tab.closePane() == .tab else { return .pane }
         return remove(at: index(of: tab.id))
     }
 
     /// The tabs as `WorkspaceState` keeps them, in strip order. Once closing its last tab or
-    /// pane closed the workspace, they are the tabs as they were just before, with the closed
-    /// tab's folders and selections, so a saved workspace is kept as it was.
+    /// pane closed a saved workspace, they are the tabs as they were just before, with the
+    /// closed tab's folders and selections, so it is kept as it was.
     public var tabStates: [TabState] {
         tabStatesBeforeClose ?? tabs.map(\.state)
     }

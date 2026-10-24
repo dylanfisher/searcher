@@ -242,11 +242,12 @@ public final class WorkspaceWindows {
     public func restore(_ contents: WorkspaceStore.Contents) -> BrowserWindowController? {
         // Decided now, whatever is restored: saves from here on keep the windows as they are.
         awaitsRestore = false
-        // Changes noted while saves were held.
-        defer { scheduleSave() }
         list.awaitsRestore = false
-        // After the open windows, so a closed workspace named like an open one is the one
-        // renamed.
+        // Runs last: saves the changes noted while saves were held, and the closed workspaces'
+        // renames and deletes.
+        defer { scheduleSave() }
+        // Runs first, once the open windows are made, so a closed workspace named like an open
+        // one is the one renamed.
         defer { listClosedWorkspaces(of: contents) }
         guard let session = contents.session else { return nil }
         let saved = session.workspaces.compactMap { contents.workspaces[$0] }
