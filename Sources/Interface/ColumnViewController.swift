@@ -4,7 +4,8 @@ import Browser
 /// A pane in column view: its trail's columns side by side in a horizontal scroll view, each a
 /// `ListingViewController` showing names only, so rows, icons, badges, labels, type-select and
 /// Quick Look work in a column as they do in the list. The focused column is scrolled into view
-/// whenever the focused column's index or the column count changes (0046-column-view.md).
+/// whenever the focused column's index or the column count changes (0046-column-view.md). The
+/// trail's preview shows right of the last column (0090-preview-column.md).
 ///
 /// It shows the trail; the trail decides which columns there are and which one has the keys
 /// (0041-column-model.md).
@@ -66,9 +67,12 @@ final class ColumnViewController: NSViewController {
     let columnsView = NSView()
     /// The line right of each column, one per column.
     private var separators: [NSBox] = []
-    /// The focused column and the column count last scrolled to, so a selection change within a
-    /// column leaves the view where the user scrolled it.
-    private var scrolledTo: (focus: Int, count: Int)?
+    /// The trail's preview, right of the last column: made the first time a file is selected,
+    /// then kept and hidden while there is none.
+    private(set) var previewView: ColumnPreviewView?
+    /// The focused column, the column count and whether a preview showed when last scrolled, so
+    /// a selection change within a column leaves the view where the user scrolled it.
+    private var scrolledTo: (focus: Int, count: Int, hasPreview: Bool)?
 
     /// Posts an accessibility notification. Tests replace it to record what would be posted.
     var postAccessibility:
@@ -151,7 +155,9 @@ final class ColumnViewController: NSViewController {
             spinner.indicator.removeFromSuperview()
             spinners[id] = nil
         }
-        let columnViews = columnControllers.map(\.view)
+        showPreview()
+        var columnViews = columnControllers.map(\.view)
+        if let previewView, !previewView.isHidden { columnViews.append(previewView) }
         if browserChildren.map({ !$0.elementsEqual(columnViews, by: ===) }) ?? true {
             browserChildren = columnViews
             columnsView.setAccessibilityChildren(columnViews)
@@ -216,7 +222,9 @@ final class ColumnViewController: NSViewController {
         }
         let height = scrollView.contentSize.height
         let pitch = Self.columnWidth + 1
-        let width = max(Double(columnControllers.count) * pitch, scrollView.contentSize.width)
+        let shownPreview = previewView.flatMap { $0.isHidden ? nil : $0 }
+        let shown = columnControllers.count + (shownPreview == nil ? 0 : 1)
+        let width = max(Double(shown) * pitch, scrollView.contentSize.width)
         if columnsView.frame.size != NSSize(width: width, height: height) {
             columnsView.frame = NSRect(x: 0, y: 0, width: width, height: height)
         }
@@ -247,6 +255,33 @@ final class ColumnViewController: NSViewController {
                 }
             }
         }
+        if let shownPreview {
+            let frame = NSRect(
+                x: Double(columnControllers.count) * pitch, y: 0, width: Self.columnWidth,
+                height: height)
+            if shownPreview.frame != frame {
+                shownPreview.frame = frame
+            }
+        }
+    }
+
+    /// Shows the trail's preview right of the last column, making its view the first time, or
+    /// hides it when there is none.
+    private func showPreview() {
+        guard let preview = pane.columnTrail?.preview else {
+            previewView?.isHidden = true
+            return
+        }
+        let view =
+            previewView
+            ?? {
+                let view = ColumnPreviewView(iconCache: iconCache, formatter: formatter)
+                columnsView.addSubview(view)
+                previewView = view
+                return view
+            }()
+        view.show(preview)
+        view.isHidden = false
     }
 
     /// The side of a column's small spinner, and its distance from the column's bottom and right
@@ -299,20 +334,27 @@ final class ColumnViewController: NSViewController {
         postAccessibility(focused.tableView, .focusedUIElementChanged, nil)
     }
 
-    /// Scrolls the focused column fully into view, with the column right of it too where it
-    /// fits, once per change of the focus or the column count.
+    /// Scrolls the focused column fully into view, with the column or the preview right of it
+    /// too where it fits, once per change of the focus, the column count or whether a preview
+    /// shows.
     private func scrollToFocusedColumn() {
         guard let trail = pane.columnTrail, !columnControllers.isEmpty else {
             scrolledTo = nil
             return
         }
-        let target = (focus: trail.focusedIndex, count: columnControllers.count)
+        let shownPreview = previewView.flatMap { $0.isHidden ? nil : $0 }
+        let target = (
+            focus: trail.focusedIndex, count: columnControllers.count,
+            hasPreview: shownPreview != nil
+        )
         guard scrolledTo.map({ $0 != target }) ?? true else { return }
         scrolledTo = target
         let focused = columnControllers[trail.focusedIndex].view.frame
-        if trail.focusedIndex + 1 < columnControllers.count {
-            columnsView.scrollToVisible(
-                focused.union(columnControllers[trail.focusedIndex + 1].view.frame))
+        let next =
+            trail.focusedIndex + 1 < columnControllers.count
+            ? columnControllers[trail.focusedIndex + 1].view : shownPreview
+        if let next {
+            columnsView.scrollToVisible(focused.union(next.frame))
         }
         columnsView.scrollToVisible(focused)
     }

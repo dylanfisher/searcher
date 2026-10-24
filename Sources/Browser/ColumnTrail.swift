@@ -5,7 +5,8 @@ import Foundation
 /// last one, and which column keys act on. The column to the right of each one shows the folder
 /// selected in it: selecting another folder truncates the columns to its right and adds one for
 /// it, and selecting anything else truncates them. A truncated column stops its load and its
-/// folder monitor (0041-column-model.md).
+/// folder monitor (0041-column-model.md). One file selected in the last column is its `preview`
+/// (0090-preview-column.md).
 @MainActor
 public final class ColumnTrail {
     public private(set) var columns: [Column] = []
@@ -15,6 +16,9 @@ public final class ColumnTrail {
     unowned let owner: Pane
 
     public var focused: Column { columns[focusedIndex] }
+    /// The one file selected in the last column, shown to its right; nil for a folder, several
+    /// rows or none. It isn't a column: it lists, watches and takes the keys for nothing.
+    public private(set) var preview: ColumnPreview?
 
     /// One column at `location` with `name` selected, sorted like `model`: the owner when the
     /// trail starts from the list, the focused column of the trail it replaces otherwise.
@@ -77,6 +81,7 @@ public final class ColumnTrail {
     func close() {
         for column in columns { column.close() }
         columns = []
+        preview = nil
     }
 
     /// Moves the focus to the column at `index`, without listing anything again.
@@ -115,7 +120,26 @@ public final class ColumnTrail {
         // A closed column can still report a change it was making.
         guard columns.contains(where: { $0 === column }) else { return }
         follow(column)
+        updatePreview()
         owner.trailDidChange()
+    }
+
+    /// Previews the one file selected in the last column, as its listing has it now, so a patch
+    /// to the file shows and a removal, which drops it from the selection, clears the preview.
+    /// A folder has its own column instead, and several rows or none show nothing.
+    private func updatePreview() {
+        var next: ColumnPreview?
+        if let pane = columns.last?.pane, let listing = pane.state.listing,
+            let row = pane.selection.cursorRow(in: listing),
+            listing[row].type != .directory,
+            pane.selection.rows(in: listing) == IndexSet(integer: row)
+        {
+            let entry = listing[row]
+            next = ColumnPreview(
+                location: pane.location.child(named: entry.name), entry: entry,
+                kind: listing.kind(atRow: row))
+        }
+        preview = next
     }
 
     /// Makes the columns right of `column` match its selection: the selected folder's column
