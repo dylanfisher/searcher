@@ -749,3 +749,25 @@ private func usKey(
 
     #expect(log.ids == [UndoCommands.undo.id, UndoCommands.redo.id])
 }
+
+/// Selection undo has its own items under Redo, on Sublime Text's soft undo keys, separate from
+/// the file Undo and Redo; they grey out while their commands would do nothing.
+@MainActor @Test func editMenuHasUndoAndRedoSelectionOnCmdUAndShiftCmdU() throws {
+    let registry = try AppCommands.registry()
+    let menu = try buildMenu(registry)
+    let edit = try #require(menu.items.first { $0.title == "Edit" }?.submenu)
+    let titles = edit.items.map(\.title)
+    let undo = try #require(edit.items.first { $0.title == "Undo Selection" })
+    let redo = try #require(edit.items.first { $0.title == "Redo Selection" })
+
+    #expect(Array(titles.prefix(4)) == ["Undo", "Redo", "Undo Selection", "Redo Selection"])
+    #expect(undo.keyEquivalent == "u" && undo.keyEquivalentModifierMask == .command)
+    #expect(redo.keyEquivalent == "u" && redo.keyEquivalentModifierMask == [.command, .shift])
+    #expect(undo.representedObject as? CommandID == SelectionCommands.undoSelection.id)
+    #expect(redo.representedObject as? CommandID == SelectionCommands.redoSelection.id)
+    let table = ListingTableView()
+    table.registry = registry
+    table.canRunCommand = { $0 == SelectionCommands.undoSelection.id }
+    #expect(table.validateMenuItem(undo))
+    #expect(!table.validateMenuItem(redo))
+}

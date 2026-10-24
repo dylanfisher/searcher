@@ -399,21 +399,40 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         pane.setSort(column, ascending: ascending)
     }
 
+    /// Reports the rows a mouse press selects to the pane at mouse down, and as a drag across rows
+    /// changes them, rather than at mouse up. A press in a pane without the keys focuses it, which
+    /// lists its folder again; that listing can land while the button is down, and showing it
+    /// would put the pane's old selection back in the table until mouse up. A press inside a
+    /// multi-row selection leaves the table's rows as they are until mouse up, so a drag takes
+    /// them all; nothing is reported then.
+    public func tableViewSelectionIsChanging(_ notification: Notification) {
+        guard !isShowingPane, let listing,
+            tableView.selectedRowIndexes != pane.selection.rows(in: listing)
+        else { return }
+        reportTableSelection(in: listing)
+    }
+
     /// Reports a selection the table changed itself, by a click, Shift-click, Cmd-click or drag,
     /// to the pane. Keys never get here: they run the pane's commands. The clicked row becomes the
     /// cursor, or with no click the row the table selected last. A Shift-click keeps the pane's
     /// anchor, so Shift-↑ and Shift-↓ extend from where the range started; any other click puts
     /// the anchor on the cursor. The pane takes the table's rows as they are and names them off
-    /// the main thread.
+    /// the main thread. The changes of one press are one step of the selection history.
     public func tableViewSelectionDidChange(_ notification: Notification) {
         guard !isShowingPane, let listing else { return }
+        reportTableSelection(in: listing)
+    }
+
+    private func reportTableSelection(in listing: Listing) {
         let row =
             (0..<listing.count).contains(tableView.clickedRow)
             ? tableView.clickedRow : tableView.selectedRow
         let cursor = row >= 0 ? ExactName(listing[row].name) : nil
         let anchor =
             currentModifierFlags().contains(.shift) ? pane.selection.anchor ?? cursor : cursor
-        pane.select(rows: tableView.selectedRowIndexes, cursor: cursor, anchor: anchor)
+        pane.select(
+            rows: tableView.selectedRowIndexes, cursor: cursor, anchor: anchor,
+            as: .press(tableView.pressCount))
     }
 
     /// Runs Open on a double-click, as Cmd-↓ does. A row outside the selection is selected first;

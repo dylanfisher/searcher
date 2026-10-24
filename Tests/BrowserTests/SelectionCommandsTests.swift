@@ -308,3 +308,148 @@ func movingOnAnEmptyListingDoesNothing(chord: KeyChord) async throws {
     #expect(fixture.pane.selection == Selection())
     #expect(changes == 0)
 }
+
+// MARK: Selection undo
+
+private let commandU = KeyChord("u", modifiers: .command)
+private let shiftCommandU = KeyChord("u", modifiers: [.command, .shift])
+
+@MainActor
+private func isEnabled(_ chord: KeyChord, in fixture: PaneFixture) throws -> Bool {
+    let registry = try AppCommands.registry()
+    let command = try #require(registry.command(for: chord), "nothing is bound to \(chord)")
+    let binding = try #require(AppCommands.bindings.first { $0.command == command })
+    return binding.isEnabled?(CommandContext(pane: fixture.pane)) ?? true
+}
+
+@MainActor @Test func commandURestoresTheSelectionAndCursorAndShiftCommandURedoes() async throws {
+    let fixture = await rows25()
+    put(fixture, at: 3)
+    fixture.pane.select(Selection(names(5...6), cursor: name(6), anchor: name(5)))
+    #expect(try !isEnabled(shiftCommandU, in: fixture))
+
+    try run(commandU, in: fixture)
+    await settle { fixture.pane.selection.isSettled }
+    #expect(fixture.pane.selection == Selection([name(3)], cursor: name(3)))
+    #expect(fixture.pane.selection.rows(in: try #require(fixture.pane.state.listing)) == [3])
+
+    try run(shiftCommandU, in: fixture)
+    await settle { fixture.pane.selection.isSettled }
+    #expect(fixture.pane.selection == Selection(names(5...6), cursor: name(6), anchor: name(5)))
+    #expect(fixture.pane.selection.rows(in: try #require(fixture.pane.state.listing)) == [5, 6])
+}
+
+@MainActor @Test func selectionUndoIsOffWithNothingToUndoAndOnAfterAChange() async throws {
+    let fixture = await rows25()
+    #expect(try !isEnabled(commandU, in: fixture))
+    #expect(try !isEnabled(shiftCommandU, in: fixture))
+
+    put(fixture, at: 3)
+    put(fixture, at: 4)
+
+    #expect(try isEnabled(commandU, in: fixture))
+    try run(commandU, in: fixture)
+    #expect(try isEnabled(shiftCommandU, in: fixture))
+}
+
+@MainActor @Test func aChangeAfterCommandUEndsTheWayForward() async throws {
+    let fixture = await rows25()
+    put(fixture, at: 3)
+    put(fixture, at: 4)
+    try run(commandU, in: fixture)
+
+    try run(down, in: fixture)
+
+    #expect(try !isEnabled(shiftCommandU, in: fixture))
+}
+
+@MainActor @Test func aHeldDownArrowIsOneStepAndAPauseStartsAnother() async throws {
+    let fixture = await rows25()
+    let clock = ManualClock()
+    fixture.pane.selectionHistory = SelectionHistory(clock: clock)
+    put(fixture, at: 2)
+
+    for _ in 0..<5 {
+        try run(down, in: fixture)
+        clock.advance(by: .milliseconds(35))
+    }
+    clock.advance(by: .seconds(2))
+    try run(down, in: fixture)
+    #expect(fixture.pane.selection.cursor == name(8))
+
+    try run(commandU, in: fixture)
+    await settle { fixture.pane.selection.isSettled }
+    #expect(fixture.pane.selection == Selection([name(7)], cursor: name(7)))
+    try run(commandU, in: fixture)
+    await settle { fixture.pane.selection.isSettled }
+    #expect(fixture.pane.selection == Selection([name(2)], cursor: name(2)))
+}
+
+@MainActor @Test func aTypeToSelectBurstIsOneStep() async throws {
+    let fixture = await rows25()
+    put(fixture, at: 0)
+    let context = CommandContext(pane: fixture.pane)
+
+    for query in ["r", "r1", "r12"] {
+        #expect(SelectionCommands.selectFirstRow(startingWith: query, in: context))
+    }
+    #expect(fixture.pane.selection.cursor == name(12))
+
+    try run(commandU, in: fixture)
+    await settle { fixture.pane.selection.isSettled }
+    #expect(fixture.pane.selection == Selection([name(0)], cursor: name(0)))
+    #expect(try !isEnabled(commandU, in: fixture))
+}
+
+@MainActor @Test func commandURestoresOnlyTheEntriesStillListed() async throws {
+    let fixture = await rows25()
+    fixture.pane.select(Selection(names(3...4), cursor: name(4), anchor: name(3)))
+    put(fixture, at: 10)
+    let version = fixture.pane.stateVersion
+    fixture.pane.apply(.patches([.remove(name: "r04")]), at: fixture.pane.location)
+    await settle { fixture.pane.stateVersion != version }
+
+    try run(commandU, in: fixture)
+    await settle { fixture.pane.selection.isSettled }
+
+    #expect(fixture.pane.selection.members == .only([name(3)]))
+    #expect(fixture.pane.selection.rows(in: try #require(fixture.pane.state.listing)) == [3])
+}
+
+/// Each folder keeps its own steps, so Cmd-U never navigates: in a folder with none it does
+/// nothing, and back in the first folder it steps through that folder's.
+@MainActor @Test func selectionUndoStaysInTheFolderAndEachFolderKeepsItsSteps() async throws {
+    let fixture = PaneFixture(
+        at: "/rows",
+        folders: [
+            "/rows": (0..<25).map { file(String(format: "r%02d", $0)) },
+            "/other": [file("o1"), file("o2")],
+        ])
+    await settle { fixture.pane.state.isLoaded }
+    put(fixture, at: 3)
+    put(fixture, at: 5)
+
+    fixture.pane.navigate(to: Location(path: "/other"))
+    await settle { fixture.pane.state.isLoaded && fixture.pane.location.path == "/other" }
+    #expect(try !isEnabled(commandU, in: fixture))
+    try run(commandU, in: fixture)
+    #expect(fixture.pane.location.path == "/other")
+    #expect(fixture.pane.selection == Selection())
+
+    fixture.pane.goBack()
+    await settle { fixture.pane.state.isLoaded && fixture.pane.location.path == "/rows" }
+    #expect(fixture.pane.selection.cursor == name(5))
+    try run(commandU, in: fixture)
+    await settle { fixture.pane.selection.isSettled }
+    #expect(fixture.pane.selection == Selection([name(3)], cursor: name(3)))
+}
+
+@MainActor @Test func eachPaneHasItsOwnSelectionHistory() async throws {
+    let first = await rows25()
+    let second = await rows25()
+    put(first, at: 3)
+    put(first, at: 4)
+
+    #expect(try isEnabled(commandU, in: first))
+    #expect(try !isEnabled(commandU, in: second))
+}

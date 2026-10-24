@@ -45,6 +45,9 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
     /// Builds the context menu for a right-click on a row, or below the rows at -1. Set by the
     /// list's controller.
     var contextMenu: @MainActor (_ row: Int) -> NSMenu? = { _ in nil }
+    /// Counts mouse presses in the table, so the selection changes of one press are one step of
+    /// the pane's selection history.
+    var pressCount = 0
     /// Signals a key that does nothing. Tests replace it.
     var beep: @MainActor () -> Void = { NSSound.beep() }
 
@@ -140,6 +143,11 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
     override func menu(for event: NSEvent) -> NSMenu? {
         window?.makeFirstResponder(self)
         return contextMenu(row(at: convert(event.locationInWindow, from: nil)))
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        pressCount += 1
+        super.mouseDown(with: event)
     }
 
     override func becomeFirstResponder() -> Bool {

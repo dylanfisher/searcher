@@ -370,6 +370,91 @@ private func shownNames(_ controller: ListingViewController) -> [String] {
     #expect(table.selectedRowIndexes == [3])
 }
 
+/// A table that holds a press's rows as AppKit's mouse tracking does: a mouse down changes the
+/// rows the table shows and posts that its selection is changing, and says it changed only on
+/// mouse up. A real press can't be sent; see `aCmdClickOnARowStillTogglesItsSelection`. Rows set
+/// from code replace the pressed ones, as they would during a real press.
+private final class PressedTableView: ListingTableView {
+    var row = -1
+    private var pressed: IndexSet?
+
+    override var clickedRow: Int { row }
+    override var selectedRowIndexes: IndexSet { pressed ?? super.selectedRowIndexes }
+
+    override func selectRowIndexes(_ indexes: IndexSet, byExtendingSelection extend: Bool) {
+        pressed = nil
+        super.selectRowIndexes(indexes, byExtendingSelection: extend)
+    }
+
+    /// Mouse down on `row`, leaving `rows` selected.
+    func pressDown(on row: Int, selecting rows: IndexSet) {
+        self.row = row
+        pressed = rows
+        NotificationCenter.default.post(
+            name: NSTableView.selectionIsChangingNotification, object: self)
+    }
+
+    func pressUp() {
+        NotificationCenter.default.post(
+            name: NSTableView.selectionDidChangeNotification, object: self)
+    }
+}
+
+/// A press in the pane without the keys focuses it, which lists its folder again. That listing
+/// lands while the button is still down, and the pane's selection, shown again, must already be
+/// the pressed row, or the table drops back to the old row until mouse up.
+@MainActor @Test func aMouseDownSelectsThePressedRowInThePaneBeforeMouseUp() async throws {
+    let table = PressedTableView()
+    let controller = await controller(showing: [file("a"), file("b"), file("c")], tableView: table)
+    let pane = controller.pane
+    pane.select(Selection([ExactName("a")], cursor: ExactName("a")))
+
+    table.pressDown(on: 1, selecting: [1])
+
+    #expect(pane.selection.cursor == ExactName("b"))
+    let version = pane.stateVersion
+    pane.didGainFocus()
+    await settle { pane.stateVersion != version }
+    #expect(table.selectedRowIndexes == [1])
+    await settle { pane.selection.isSettled }
+    #expect(pane.selection == Selection([ExactName("b")], cursor: ExactName("b")))
+}
+
+/// Mouse up reports the rows mouse down already gave the pane, which changes nothing: Cmd-U
+/// takes one step back to the row before the press.
+@MainActor @Test func mouseUpAfterThePressChangesNothingMore() async throws {
+    let table = PressedTableView()
+    let controller = await controller(showing: [file("a"), file("b"), file("c")], tableView: table)
+    let pane = controller.pane
+    pane.select(Selection([ExactName("a")], cursor: ExactName("a")))
+    table.pressDown(on: 1, selecting: [1])
+    await settle { pane.selection.isSettled }
+    let version = pane.selectionVersion
+
+    table.pressUp()
+
+    #expect(pane.selectionVersion == version)
+    pane.undoSelection()
+    await settle { pane.selection.isSettled }
+    #expect(pane.selection == Selection([ExactName("a")], cursor: ExactName("a")))
+    #expect(!pane.canUndoSelection)
+}
+
+/// A press on a row of a multi-row selection leaves the selection to the table until mouse up,
+/// so a drag takes every selected row; the mouse-down report changes nothing.
+@MainActor @Test func aPressInsideTheSelectionKeepsItForADrag() async throws {
+    let table = PressedTableView()
+    let controller = await controller(showing: [file("a"), file("b"), file("c")], tableView: table)
+    let pane = controller.pane
+    pane.select(Selection([ExactName("a"), ExactName("b")], cursor: ExactName("b")))
+    let version = pane.selectionVersion
+
+    table.pressDown(on: 0, selecting: [0, 1])
+
+    #expect(pane.selectionVersion == version)
+    #expect(table.selectedRowIndexes == [0, 1])
+}
+
 #if DEBUG
     /// The table already has the rows, so the pane takes them as they are and names them off the
     /// main thread.
