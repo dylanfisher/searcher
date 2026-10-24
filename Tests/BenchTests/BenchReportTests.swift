@@ -92,7 +92,7 @@ private func copyReport(
 }
 
 @Test func copyMissNamesTheMedianWhereverItIsPrinted() throws {
-    let copy = copyReport([1000, 2000, 2000])
+    let copy = copyReport([2000, 2000, 3000])
     let text = copy.cases[0].missText()
     #expect(text.hasPrefix("over budget: copy median 2000"), "\(text)")
     #expect(!text.contains("p95"), "\(text)")
