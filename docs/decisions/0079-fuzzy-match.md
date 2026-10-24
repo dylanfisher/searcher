@@ -12,7 +12,8 @@ type-to-select and filtering do, with the one fold in `NameSortKey.fold`
 ([0028](0028-folded-names.md)). The plan asks that "dl" find "Downloads" at the D and the l, and
 that "prj1" rank "Project 1" above "pr-junk-1". Review against file-browser names asked for
 initials to win: "gh" should find "GitHub" before "ghost", "mvd" "my-video-downloads" before
-"mvdir", and "dl" "Downloads" before "Deleted Items".
+"mvdir", and "dl" "Downloads" before "Deleted Items". Typing a name should still put that name
+first: "ab" should rank "ab" above "a-b", and "down" "Downloads" above "d-o-w-n".
 
 ## Decision
 
@@ -27,12 +28,17 @@ initials to win: "gh" should find "GitHub" before "ghost", "mvd" "my-video-downl
     new-word cost outweighs the word-start bonus, so letters kept in one word beat letters spread
     over word starts: "prj" reads as an abbreviation of "Project", not of "pr-junk".
   - **An initials chain** is the exception: while every matched letter so far is the first
-    letter of a word in one path component, each keeps its word-start bonus with no gap or
-    new-word cost. "gh" scores 18 in "GitHub" against 16 for the run in "ghost", and "mvd" 26 in
+    letter of a word of two or more letters in one path component, each keeps its word-start
+    bonus with no gap or new-word cost. A word of one letter matched whole is the text spelled
+    out, as "a-b" spells "ab" and "d-o-w-n" "down", not an abbreviation, so it doesn't chain. "gh" scores 18 in "GitHub" against 16 for the run in "ghost", and "mvd" 26 in
     "my-video-downloads" against 22 in "mvdir". The chain stops at a `/`: path components are
     separate names, so "dl" in "Desktop/lib" isn't a chain and "Downloads" ranks first. Once a
     letter falls outside the chain, the rest score by the rules above, so "pr-junk-1" gets no
     chain for "prj1".
+  - **A whole path component.** A query equal to a whole component (from its start to the next
+    `/` or the end) scores as a prefix run plus 3 per letter. That outweighs the 2 per letter an
+    initials chain gains over a run, so the exact name ranks first at any length: "ab" scores
+    22 in "ab" against 18 for the chain in "ax-bx" and 16 for the prefix of "abc".
 - **Best alignment.** A dynamic program over query × candidate bytes finds the best-scoring
   placement, not the first, so "doc" against "old/docs" highlights "docs". It keeps two tables,
   the best score and the best initials-chain score at each cell. Each query byte is only tried
@@ -73,6 +79,9 @@ initials to win: "gh" should find "GitHub" before "ghost", "mvd" "my-video-downl
 - **A chain when only the previous letter was a word start** — rejected: "pr-junk-1" then chains
   "j" to "1" and ranks above "Project 1" for "prj1".
 - **A chain across path components** — rejected: it ranks "Desktop/lib" above "Downloads".
+- **A prefix run beating an initials chain of the same length** — rejected: "gh" would rank
+  "ghost" above "GitHub" and "mvd" "mvdir" above "my-video-downloads". The one-letter-word rule
+  and the whole-component bonus cover the cases where the typed text is the name.
 - **Match on `Character` or unicode scalars** — rejected: the folded text is canonically
   decomposed, and comparing bytes is what type-to-select does; scalar arrays would cost four
   bytes a scalar per candidate for the same answers.
@@ -88,7 +97,8 @@ thread. A candidate costs 2 bytes a folded byte plus its array header, and 4 mor
 when it isn't ASCII. Camel-case word starts are only seen in ASCII texts. "ss" ties "Sessions"
 with "Screenshots", since both start with S and skip letters inside one word, and the shorter
 "Sessions" ranks first; a name the user opens often has to win through frecency in M5a.6. An
-initials chain beats an exact prefix: "ab" ranks "a-b" above "ab". The scores are plain integers
+initials chain of real words still beats a prefix that isn't the whole name: "pro" ranks
+"pdf-reader-online" above "Project". The scores are plain integers
 for one query; M5a.6 combines them with frecency and kind order. If B11 misses on real candidate
 lists, the next steps are splitting `best` over cores and the incremental rescore above, before
 C.

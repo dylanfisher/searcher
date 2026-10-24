@@ -6,10 +6,11 @@
 /// a smaller one at the start of a word (after a space or punctuation, or a capital after a
 /// lowercase letter), and a run bonus right after the previous matched letter. Skipping letters
 /// inside a word costs a flat penalty; moving on to a later word costs more, growing with the
-/// distance. Letters that are all initials of words in one path component, such as "gh" in
-/// "GitHub" or "mvd" in "my-video-downloads", keep every word-start bonus with no gap cost.
-/// Otherwise letters kept in one word beat letters spread over words: "prj1" ranks "Project 1"
-/// above "pr-junk-1". The best alignment is found by dynamic programming over the folded bytes,
+/// distance. Letters that are all initials of words of two or more letters in one path
+/// component, such as "gh" in "GitHub" or "mvd" in "my-video-downloads", keep every word-start
+/// bonus with no gap cost. Otherwise letters kept in one word beat letters spread over words:
+/// "prj1" ranks "Project 1" above "pr-junk-1". A query that is a whole path component beats
+/// everything else: "ab" ranks "ab" first. The best alignment is found by dynamic programming over the folded bytes,
 /// so a later word start can win over the first occurrence of a letter.
 ///
 /// Prepare each candidate once with `Candidate`; a keystroke then only scores. Matching works on
@@ -111,6 +112,9 @@ public struct FuzzyMatcher: Sendable {
     static let gapOpenPenalty: Int32 = 3
     static let gapBytePenalty: Int32 = 1
     static let newWordPenalty: Int32 = 10
+    /// Per letter, for a query that is a whole path component. It exceeds wordStartBonus minus
+    /// runBonus, so the exact name beats an initials chain of any length.
+    static let exactComponentBonus: Int32 = 3
     /// A cell no alignment reaches; far enough from Int32's limits that adding penalties to it
     /// can't overflow.
     private static let unreachable: Int32 = .min / 4
@@ -132,10 +136,11 @@ public struct FuzzyMatcher: Sendable {
     /// The score and the matched ranges of `candidate.text`, or nil when it doesn't match.
     public func match(_ candidate: Candidate) -> FuzzyMatch? {
         var scratch = Scratch()
-        return align(candidate, in: &scratch) { table, end, score in
-            FuzzyMatch(
-                score: score,
-                ranges: ranges(of: positions(endingAt: end, in: table), in: candidate))
+        return align(candidate, in: &scratch) { table, end, score, isExact in
+            let positions =
+                isExact
+                ? Array((end - query.count + 1)...end) : positions(endingAt: end, in: table)
+            return FuzzyMatch(score: score, ranges: ranges(of: positions, in: candidate))
         }
     }
 
@@ -218,18 +223,19 @@ public struct FuzzyMatcher: Sendable {
     }
 
     private func score(_ candidate: Candidate, in scratch: inout Scratch) -> Int? {
-        align(candidate, in: &scratch) { _, _, score in score }
+        align(candidate, in: &scratch) { _, _, score, _ in score }
     }
 
     /// Fills the tables for `candidate` and passes them to `body` with the end of the best
-    /// alignment and its score; nil when nothing aligns. An empty query passes no tables.
+    /// alignment, its score, and whether it is the query as a whole path component, whose
+    /// bytes are the `m` ending there; nil when nothing aligns. An empty query passes no tables.
     private func align<Result>(
         _ candidate: Candidate, in scratch: inout Scratch,
-        _ body: (Table?, Int, Int) -> Result
+        _ body: (Table?, Int, Int, Bool) -> Result
     ) -> Result? {
         let m = query.count
         let n = candidate.units.count
-        guard m > 0 else { return body(nil, -1, 0) }
+        guard m > 0 else { return body(nil, -1, 0, false) }
         guard m <= n else { return nil }
         scratch.reserve(rows: m, columns: n)
         return scratch.cells.withUnsafeMutableBufferPointer { cells in
@@ -250,7 +256,16 @@ public struct FuzzyMatcher: Sendable {
                                 end = j
                             }
                             guard end >= 0 else { return nil }
-                            return body(table, end, Int(best))
+                            if let start = Self.exactComponent(table) {
+                                let letters = Int32(query.count { !Self.isContinuation($0) })
+                                let exact =
+                                    Self.componentStartBonus + Self.runBonus * (letters - 1)
+                                    + Self.exactComponentBonus * letters
+                                if exact >= best {
+                                    return body(table, start + m - 1, Int(exact), true)
+                                }
+                            }
+                            return body(table, end, Int(best), false)
                         }
                     }
                 }
@@ -280,13 +295,27 @@ public struct FuzzyMatcher: Sendable {
         return true
     }
 
+    /// The first position where the query is a whole path component, if any.
+    private static func exactComponent(_ table: Table) -> Int? {
+        let (m, n, units, query, windows) = (
+            table.m, table.n, table.units, table.query, table.windows
+        )
+        return (windows[0]...windows[m]).first { start in
+            start + m <= n && position(units[start]) == .componentStart
+                && (start + m == n || byte(units[start + m]) == UInt8(ascii: "/"))
+                && (0..<m).allSatisfy { byte(units[start + $0]) == query[$0] }
+        }
+    }
+
     private static func fill(_ table: Table) {
         let (m, n, units, query) = (table.m, table.n, table.units, table.query)
         let (cells, chains, windows) = (table.cells, table.chains, table.windows)
         for j in windows[0]...windows[m] {
             let matches = byte(units[j]) == query[0]
             cells[j] = matches ? bonus(units[j]) : unreachable
-            chains[j] = matches && startsWord(units[j]) ? bonus(units[j]) : unreachable
+            chains[j] =
+                matches && startsWord(units[j]) && startsLongWord(units, j)
+                ? bonus(units[j]) : unreachable
         }
         for i in 1..<m {
             let row = i * n
@@ -338,7 +367,9 @@ public struct FuzzyMatcher: Sendable {
                                 * Int32(j - 1) - newWordPenalty)
                     }
                     if sameWord > unreachable { best = max(best, sameWord - gapOpenPenalty) }
-                    if position(units[j]) == .wordStart && chain > unreachable {
+                    if position(units[j]) == .wordStart && startsLongWord(units, j)
+                        && chain > unreachable
+                    {
                         chained = chain + wordStartBonus
                     }
                 }
@@ -442,6 +473,13 @@ public struct FuzzyMatcher: Sendable {
 
     private static func position(_ unit: UInt16) -> Position {
         Position(rawValue: UInt8(unit >> 8))!
+    }
+
+    /// Whether the word starting at `j` has more letters. An initials chain needs that: a word
+    /// of one letter matched whole is the text spelled out, as "a-b" spells "ab", not an
+    /// abbreviation.
+    private static func startsLongWord(_ units: UnsafeBufferPointer<UInt16>, _ j: Int) -> Bool {
+        j + 1 < units.count && position(units[j + 1]) == .inWord
     }
 
     private static func startsWord(_ unit: UInt16) -> Bool {
