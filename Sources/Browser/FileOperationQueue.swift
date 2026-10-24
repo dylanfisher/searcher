@@ -670,6 +670,13 @@ public actor FileOperationQueue {
                 asked.append(index)
             }
         }
+        // Only a copy or a move plans conflicts.
+        let kind: ConflictRequest.Kind? =
+            switch entry.operation {
+            case .copy: .copy
+            case .move: .move
+            case .trash, .rename, .newFolder, .duplicate, .deleteImmediately, .receive, .undo: nil
+            }
         var forAll: ConflictResolution.Choice?
         for (number, index) in asked.enumerated() {
             if let forAll {
@@ -679,13 +686,16 @@ public actor FileOperationQueue {
             guard let conflict = plan.items[index].conflict else {
                 preconditionFailure("\(entry.id) asked about item \(index) without a conflict")
             }
+            guard let kind else {
+                preconditionFailure("\(entry.operation) planned a conflict; only copy and move do")
+            }
             entry.phase = .waitingForAnswer
             changed()
             settle(entry.id)
             let answer = await prompts.resolve(
                 ConflictRequest(
-                    operation: entry.id, source: conflict.source, existing: conflict.existing,
-                    remaining: asked.count - number - 1))
+                    operation: entry.id, kind: kind, source: conflict.source,
+                    existing: conflict.existing, remaining: asked.count - number - 1))
             guard !entry.phase.isFinished else { return false }
             entry.choices[index] = answer.choice
             if answer.appliesToAll { forAll = answer.choice }

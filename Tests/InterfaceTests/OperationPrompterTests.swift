@@ -49,7 +49,8 @@ private func conflict(_ operation: Int) -> ConflictRequest {
     let item = ConflictRequest.Item(
         path: "/b/x.txt", isFolder: false, bytes: 1, modified: Date(timeIntervalSince1970: 0))
     return ConflictRequest(
-        operation: FileOperationQueue.ID(operation), source: item, existing: item, remaining: 0)
+        operation: FileOperationQueue.ID(operation), kind: .copy, source: item, existing: item,
+        remaining: 0)
 }
 
 @MainActor
