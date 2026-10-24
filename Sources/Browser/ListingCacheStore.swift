@@ -6,8 +6,9 @@ import Foundation
 /// plist per network volume in `<caches root>/listings/`, at most `byteCap` bytes in all, the
 /// least recently written file dropped first, except the files of volumes a saved workspace
 /// shows (`keep`). Saves are written `writeDelay` after the first unwritten one, so a burst of
-/// loads costs one write per volume. A file that doesn't decode to the one stored shape, or
-/// isn't named as a volume's file is, is deleted and logged, and reads as empty. See
+/// loads costs one write per volume. A file that doesn't decode to the one stored shape is
+/// deleted and logged, and reads as empty. So is a file whose name doesn't have the form
+/// `url(for:)` gives, at the next write. See
 /// docs/decisions/0039-listing-cache.md, docs/decisions/0043-folder-sizes.md and
 /// docs/decisions/0081-restored-network-panes.md.
 public actor ListingCacheStore {
@@ -258,8 +259,9 @@ public actor ListingCacheStore {
             && stem.enumerated().allSatisfy { $0.offset == 64 || hex.contains($0.element) }
     }
 
-    /// Deletes every file not named as a volume's file is, then the least recently written files
-    /// until the folder fits `byteCap`, leaving the files of `kept` volumes.
+    /// Deletes every file whose name doesn't have the form `url(for:)` gives, then the least
+    /// recently written files until the folder fits `byteCap`, leaving the files of `kept`
+    /// volumes.
     private func trim() {
         let keys: [URLResourceKey] = [.fileSizeKey, .contentModificationDateKey]
         do {
@@ -273,7 +275,7 @@ public actor ListingCacheStore {
             }
             for file in files where !Self.isVolumeFileName(file.url.lastPathComponent) {
                 try FileManager.default.removeItem(at: file.url)
-                log("discarded \(file.url.path), which isn't named as a cached listing file is")
+                log("discarded \(file.url.path), whose name isn't a cached listing file's")
             }
             files.removeAll { !Self.isVolumeFileName($0.url.lastPathComponent) }
             files.sort { $0.modified < $1.modified }
