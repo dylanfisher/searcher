@@ -1,13 +1,14 @@
 import Base
 import Foundation
 
-/// Keeps workspaces and the session on disk: one JSON file per workspace in
-/// `<application support root>/workspaces/<id>.json`, the open windows in
+/// Keeps workspaces and the session on disk: one JSON file per open window's workspace in
+/// `<application support root>/workspaces/<id>.json`, one per saved workspace's snapshot in
+/// `<application support root>/snapshots/<id>.json`, the open windows in
 /// `<application support root>/session.json`, and the palette's `FolderHistory` in
 /// `<application support root>/folder-history.json`. Saves are written `writeDelay` after the first
 /// unwritten one, so a burst of edits costs one write per file, each through `AtomicWrite`. A
 /// file that isn't in the one stored shape is deleted and reported, and the rest still load. See
-/// docs/decisions/0078-workspace-store.md.
+/// docs/decisions/0078-workspace-store.md and docs/decisions/0088-workspace-snapshots.md.
 public actor WorkspaceStore {
     /// How long after the first unwritten save the store writes.
     public static let writeDelay: Duration = .seconds(1)
@@ -15,10 +16,23 @@ public actor WorkspaceStore {
     /// What a load finds.
     public struct Contents: Equatable, Sendable {
         public let session: SessionState?
+        /// The open windows' workspaces, as last saved, by ID.
         public let workspaces: [UUID: WorkspaceState]
+        /// The saved workspaces' snapshots, by ID; each has a name.
+        public let snapshots: [UUID: WorkspaceState]
+
+        public init(
+            session: SessionState?, workspaces: [UUID: WorkspaceState],
+            snapshots: [UUID: WorkspaceState]
+        ) {
+            self.session = session
+            self.workspaces = workspaces
+            self.snapshots = snapshots
+        }
     }
 
     private let folder: URL
+    private let snapshotFolder: URL
     private let sessionFile: URL
     private let folderHistoryFile: URL
     private let report: @Sendable (StoreProblem) -> Void
@@ -27,6 +41,8 @@ public actor WorkspaceStore {
     private let write: @Sendable (Data, URL) throws -> Void
     /// Workspaces not yet written, by ID.
     private var pending: [UUID: WorkspaceState] = [:]
+    /// Snapshots not yet written, by ID.
+    private var pendingSnapshots: [UUID: WorkspaceState] = [:]
     private var pendingSession: SessionState?
     private var pendingFolderHistory: FolderHistory?
     /// The wait for the next write, cancelled by a `flush` that writes first, so a save after
@@ -44,6 +60,7 @@ public actor WorkspaceStore {
         }
     ) {
         folder = roots.applicationSupport.appending(path: "workspaces")
+        snapshotFolder = roots.applicationSupport.appending(path: "snapshots")
         sessionFile = roots.applicationSupport.appending(path: "session.json")
         folderHistoryFile = roots.applicationSupport.appending(path: "folder-history.json")
         self.report = report
@@ -54,9 +71,15 @@ public actor WorkspaceStore {
         self.write = write
     }
 
-    /// Saves `workspace`, replacing what was saved under its ID.
+    /// Saves `workspace`, an open window's, replacing what was saved under its ID.
     public func save(_ workspace: WorkspaceState) {
         pending[workspace.id] = workspace
+        scheduleWrite()
+    }
+
+    /// Saves `snapshot`, a saved workspace's, replacing the snapshot saved under its ID.
+    public func saveSnapshot(_ snapshot: WorkspaceState) {
+        pendingSnapshots[snapshot.id] = snapshot
         scheduleWrite()
     }
 
@@ -75,9 +98,19 @@ public actor WorkspaceStore {
     /// Deletes workspace `id`'s file and drops a save of it not yet written. A workspace that was
     /// never written has no file, which isn't a problem.
     public func delete(_ id: UUID) {
-        dispatchPrecondition(condition: .notOnQueue(.main))
         pending[id] = nil
-        let url = url(for: id)
+        deleteFile(url(for: id))
+    }
+
+    /// Deletes the file of saved workspace `id`'s snapshot and drops a save of it not yet
+    /// written, as `delete` does for a window's.
+    public func deleteSnapshot(_ id: UUID) {
+        pendingSnapshots[id] = nil
+        deleteFile(snapshotURL(for: id))
+    }
+
+    private func deleteFile(_ url: URL) {
+        dispatchPrecondition(condition: .notOnQueue(.main))
         do {
             try FileManager.default.removeItem(at: url)
         } catch let error as CocoaError where error.code == .fileNoSuchFile {
@@ -110,17 +143,22 @@ public actor WorkspaceStore {
         scheduledWrite?.cancel()
         scheduledWrite = nil
         let workspaces = pending
+        let snapshots = pendingSnapshots
         let session = pendingSession
         let folderHistory = pendingFolderHistory
         pending = [:]
+        pendingSnapshots = [:]
         pendingSession = nil
         pendingFolderHistory = nil
-        guard !workspaces.isEmpty || session != nil || folderHistory != nil else { return }
+        guard !workspaces.isEmpty || !snapshots.isEmpty || session != nil || folderHistory != nil
+        else { return }
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(
+                at: snapshotFolder, withIntermediateDirectories: true)
         } catch {
-            // The session and history files sit beside the folder, so they fail with it.
-            var files = workspaces.keys.map(url(for:))
+            // The session and history files sit beside the folders, so they fail with them.
+            var files = workspaces.keys.map(url(for:)) + snapshots.keys.map(snapshotURL(for:))
             if session != nil { files.append(sessionFile) }
             if folderHistory != nil { files.append(folderHistoryFile) }
             for url in files {
@@ -130,6 +168,9 @@ public actor WorkspaceStore {
         }
         for (id, workspace) in workspaces {
             store(workspace, to: url(for: id))
+        }
+        for (id, snapshot) in snapshots {
+            store(snapshot, to: snapshotURL(for: id))
         }
         if let session {
             store(session, to: sessionFile)
@@ -147,13 +188,29 @@ public actor WorkspaceStore {
         }
     }
 
-    /// The session and every workspace: the latest saves, written or not. A file that isn't in
-    /// the one stored shape, or a workspace file not named for its workspace's ID, is deleted
-    /// and reported, and loads as missing. In the workspaces folder, an unfinished write left by
-    /// a crash is deleted without a report, and other dot-files are left alone. The session is
-    /// returned as saved, even when it names a workspace that didn't load.
+    /// The session, every window's workspace and every snapshot: the latest saves, written or
+    /// not. A file that isn't in the one stored shape, a workspace file not named for its
+    /// workspace's ID, and a snapshot without a name are deleted and reported, and load as
+    /// missing. In the workspaces and snapshots folders, an unfinished write left by a crash is
+    /// deleted without a report, and other dot-files are left alone. The session is returned as
+    /// saved, even when it names a workspace that didn't load.
     public func load() -> Contents {
         dispatchPrecondition(condition: .notOnQueue(.main))
+        let workspaces = readWorkspaces(in: folder, at: url(for:)).merging(pending) { _, new in
+            new
+        }
+        var snapshots = readWorkspaces(in: snapshotFolder, at: snapshotURL(for:))
+        for (id, snapshot) in snapshots where snapshot.name == nil {
+            snapshots[id] = nil
+            discard(snapshotURL(for: id), because: "it has no name, which a saved workspace has")
+        }
+        snapshots.merge(pendingSnapshots) { _, new in new }
+        let session = pendingSession ?? read(SessionState.self, from: sessionFile)
+        return Contents(session: session, workspaces: workspaces, snapshots: snapshots)
+    }
+
+    /// The workspaces in `folder`, each of whose files must be at `url(id)`.
+    private func readWorkspaces(in folder: URL, at url: (UUID) -> URL) -> [UUID: WorkspaceState] {
         var workspaces: [UUID: WorkspaceState] = [:]
         let names: [String]
         do {
@@ -165,23 +222,21 @@ public actor WorkspaceStore {
             names = []
         }
         for name in names {
-            let url = folder.appending(path: name)
+            let file = folder.appending(path: name)
             if AtomicWrite.isPartial(name) {
-                removeLeftover(url)
+                removeLeftover(file)
                 continue
             }
             // Such as Finder's .DS_Store, which isn't the store's to delete.
             if name.hasPrefix(".") { continue }
-            guard let workspace = read(WorkspaceState.self, from: url) else { continue }
-            guard url == self.url(for: workspace.id) else {
-                discard(url, because: "it holds workspace \(workspace.id)")
+            guard let workspace = read(WorkspaceState.self, from: file) else { continue }
+            guard file == url(workspace.id) else {
+                discard(file, because: "it holds workspace \(workspace.id)")
                 continue
             }
             workspaces[workspace.id] = workspace
         }
-        workspaces.merge(pending) { _, new in new }
-        let session = pendingSession ?? read(SessionState.self, from: sessionFile)
-        return Contents(session: session, workspaces: workspaces)
+        return workspaces
     }
 
     /// The latest saved folder history, written or not; an empty one when there is none, or when
@@ -220,9 +275,14 @@ public actor WorkspaceStore {
         }
     }
 
-    /// The file `id`'s workspace is kept in.
+    /// The file `id`'s window's workspace is kept in.
     nonisolated func url(for id: UUID) -> URL {
         folder.appending(path: "\(id.uuidString).json")
+    }
+
+    /// The file saved workspace `id`'s snapshot is kept in.
+    nonisolated func snapshotURL(for id: UUID) -> URL {
+        snapshotFolder.appending(path: "\(id.uuidString).json")
     }
 
     /// Deletes a write's temporary file that a crash left. It held nothing the user lost, since

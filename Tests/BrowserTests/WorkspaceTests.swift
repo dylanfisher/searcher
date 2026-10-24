@@ -353,6 +353,50 @@ private func openPath(_ descriptor: Int32) -> String? {
 
 // MARK: Changes
 
+/// Loading a saved workspace's snapshot into its open window closes every tab the window had,
+/// splits and all, and shows the snapshot's, whose changes it then reports.
+@MainActor @Test func reloadClosesEveryTabAndShowsTheNewOnes() throws {
+    let first = heldTab()
+    let workspace = Workspace(tab: first)
+    _ = try #require(first.split(.horizontal, in: bounds))
+    let second = heldTab()
+    workspace.add(second)
+    var changes = 0
+    workspace.onChange = { changes += 1 }
+    let one = heldTab()
+    let two = heldTab()
+
+    workspace.reload(tabs: [one, two], selectedTab: 1, showsSidebar: true)
+
+    #expect(first.isClosed && second.isClosed)
+    #expect(workspace.tabs.map(\.id) == [one.id, two.id])
+    #expect(workspace.selectedTab === two && workspace.showsSidebar)
+    #expect(two.focusedPane.isFocused && two.focusedPane.isVisible)
+    #expect(!one.focusedPane.isFocused && !one.focusedPane.isVisible)
+    #expect(changes > 0)
+    let before = changes
+    _ = try #require(two.split(.horizontal, in: bounds))
+    #expect(changes > before)
+    workspace.closeAllTabs()
+}
+
+@MainActor @Test func stateKeepsTheTabsTheSelectedOneAndTheGivenFrame() {
+    let first = heldTab()
+    let workspace = Workspace(tab: first, showsSidebar: true)
+    workspace.add(heldTab())
+    workspace.select(first.id)
+    let frame = Rect(x: 10, y: 20, width: 900, height: 600)
+
+    let state = workspace.state(frame: frame)
+
+    #expect(
+        state
+            == WorkspaceState(
+                id: workspace.id, name: nil, frame: frame, tabs: workspace.tabs.map(\.state),
+                selectedTab: 0, showsSidebar: true))
+    workspace.closeAllTabs()
+}
+
 /// Each edit to what `WorkspaceState` keeps reports a change: the tabs, a tab's layout, and a
 /// pane's folder or selection, in a tab added later and in one moved in from another workspace.
 @MainActor @Test func workspaceReportsEachChangeToWhatItKeeps() async throws {

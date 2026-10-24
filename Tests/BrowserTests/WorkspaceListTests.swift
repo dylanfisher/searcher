@@ -51,7 +51,7 @@ private func loadedWorkspace() async -> (Workspace, GatedLister) {
         list.add(workspace)
     }
 
-    list.windowClosed(two, as: state(of: two))
+    list.windowClosed(two)
 
     #expect(list.workspaces.map(ObjectIdentifier.init) == [three, one].map(ObjectIdentifier.init))
 }
@@ -111,17 +111,14 @@ private func loadedWorkspace() async -> (Workspace, GatedLister) {
 
 // MARK: Saved workspaces
 
-/// `workspace` as the store keeps it, with a fixed frame.
-@MainActor
-private func state(of workspace: Workspace) -> WorkspaceState {
-    WorkspaceState(
-        id: workspace.id, name: workspace.name, frame: Rect(x: 40, y: 60, width: 900, height: 600),
-        tabs: workspace.tabs.map(\.state), selectedTab: 0, showsSidebar: false)
-}
+private let frame = Rect(x: 40, y: 60, width: 900, height: 600)
 
-/// A list of `count` loaded workspaces, the last most recently active, and the IDs it forgets.
+/// A list of `count` loaded workspaces, the last most recently active, the IDs it forgets and
+/// the snapshots it saves.
 @MainActor
-private func savingList(_ count: Int) async -> (WorkspaceList, [Workspace], EventLog<UUID>) {
+private func savingList(_ count: Int) async -> (
+    WorkspaceList, [Workspace], EventLog<UUID>, EventLog<WorkspaceState>
+) {
     let list = WorkspaceList()
     var workspaces: [Workspace] = []
     for _ in 0..<count {
@@ -130,52 +127,104 @@ private func savingList(_ count: Int) async -> (WorkspaceList, [Workspace], Even
         workspaces.append(workspace)
     }
     let forgotten = EventLog<UUID>()
+    let snapshots = EventLog<WorkspaceState>()
     list.onForget = { forgotten.append($0) }
-    return (list, workspaces, forgotten)
+    list.onSnapshot = { snapshots.append($0) }
+    return (list, workspaces, forgotten, snapshots)
 }
 
-@MainActor @Test func namingTheOpenWorkspaceListsItAsSaved() async throws {
-    let (list, workspaces, _) = await savingList(2)
+@MainActor @Test func savingAnUnnamedWorkspaceNamesItAndKeepsItsStateAsTheSnapshot() async throws {
+    let (list, workspaces, _, snapshots) = await savingList(2)
     let named = workspaces[0]
     var changes = 0
     named.onChange = { changes += 1 }
 
-    try list.name(named, as: "  Project 1 ")
+    try list.save(named, as: "  Project 1 ", frame: frame)
 
     #expect(named.name == "Project 1")
     #expect(list.saved == [WorkspaceList.Saved(id: named.id, name: "Project 1", isOpen: true)])
+    #expect(list.snapshots == [named.id: named.state(frame: frame)])
+    #expect(snapshots.all == [named.state(frame: frame)])
     #expect(changes == 1)
 }
 
-@MainActor @Test func savedWorkspacesAreListedByNameAsFinderSortsThem() async throws {
-    let (list, workspaces, _) = await savingList(3)
+@MainActor @Test func savingANamedWorkspaceAgainReplacesItsSnapshot() async throws {
+    let (list, workspaces, _, snapshots) = await savingList(1)
+    let named = workspaces[0]
+    try list.save(named, as: "Project 1", frame: frame)
+    named.selectedTab.focusedPane.navigate(to: Location(path: "/root/docs"))
+    let moved = Rect(x: 300, y: 200, width: 1000, height: 700)
 
-    try list.name(workspaces[0], as: "Project 10")
-    try list.name(workspaces[1], as: "project 9")
-    try list.name(workspaces[2], as: "Archive")
+    try list.save(named, frame: moved)
+
+    #expect(list.snapshots[named.id] == named.state(frame: moved))
+    #expect(
+        list.snapshots[named.id]?.tabs[0].panes.values.first?.location
+            == Location(path: "/root/docs"))
+    #expect(snapshots.all.count == 2)
+}
+
+@MainActor @Test func changesAfterASaveLeaveTheSnapshotAlone() async throws {
+    let (list, workspaces, _, snapshots) = await savingList(1)
+    let named = workspaces[0]
+    try list.save(named, as: "Project 1", frame: frame)
+    let saved = named.state(frame: frame)
+
+    named.selectedTab.focusedPane.navigate(to: Location(path: "/root/docs"))
+    _ = try #require(named.selectedTab.split(.horizontal, in: frame))
+
+    #expect(list.snapshots[named.id] == saved)
+    #expect(snapshots.all == [saved])
+}
+
+@MainActor @Test func savedWorkspacesAreListedByNameAsFinderSortsThem() async throws {
+    let (list, workspaces, _, _) = await savingList(3)
+
+    try list.save(workspaces[0], as: "Project 10", frame: frame)
+    try list.save(workspaces[1], as: "project 9", frame: frame)
+    try list.save(workspaces[2], as: "Archive", frame: frame)
 
     #expect(list.saved.map(\.name) == ["Archive", "project 9", "Project 10"])
 }
 
 @MainActor @Test func aDuplicateNameIsRefusedNamingTheExistingOne() async throws {
-    let (list, workspaces, _) = await savingList(3)
-    try list.name(workspaces[0], as: "Project 1")
-    try list.name(workspaces[1], as: "Closed")
-    list.windowClosed(workspaces[1], as: state(of: workspaces[1]))
+    let (list, workspaces, _, _) = await savingList(3)
+    try list.save(workspaces[0], as: "Project 1", frame: frame)
+    try list.save(workspaces[1], as: "Closed", frame: frame)
+    list.windowClosed(workspaces[1])
 
     #expect(throws: WorkspaceList.NameRefusal.taken("Project 1")) {
-        try list.name(workspaces[2], as: "project 1")
+        try list.save(workspaces[2], as: "project 1", frame: frame)
     }
     #expect(throws: WorkspaceList.NameRefusal.taken("Closed")) {
-        try list.name(workspaces[2], as: "CLOSED")
+        try list.save(workspaces[2], as: "CLOSED", frame: frame)
     }
     #expect(throws: WorkspaceList.NameRefusal.empty) {
-        try list.name(workspaces[2], as: "   ")
+        try list.save(workspaces[2], as: "   ", frame: frame)
     }
-    #expect(workspaces[2].name == nil)
+    #expect(workspaces[2].name == nil && list.snapshots[workspaces[2].id] == nil)
     // A workspace may take its own name in another case.
-    try list.name(workspaces[0], as: "PROJECT 1")
+    try list.rename(workspaces[0], as: "PROJECT 1")
     #expect(workspaces[0].name == "PROJECT 1")
+}
+
+@MainActor @Test func renamingRenamesTheSnapshotAndKeepsTheRestOfIt() async throws {
+    let (list, workspaces, _, snapshots) = await savingList(2)
+    let named = workspaces[0]
+    try list.save(named, as: "Project 1", frame: frame)
+    let saved = named.state(frame: frame)
+    named.selectedTab.focusedPane.navigate(to: Location(path: "/root/docs"))
+
+    try list.rename(named, as: " Project 2 ")
+
+    #expect(named.name == "Project 2")
+    let renamed = try #require(list.snapshots[named.id])
+    #expect(renamed.name == "Project 2")
+    #expect(renamed.tabs == saved.tabs && renamed.frame == saved.frame)
+    #expect(snapshots.all.last == renamed)
+    #expect(throws: WorkspaceList.NameRefusal.empty) {
+        try list.rename(named, as: "")
+    }
 }
 
 @MainActor @Test func theRefusalSaysWhichNameIsTaken() {
@@ -184,35 +233,37 @@ private func savingList(_ count: Int) async -> (WorkspaceList, [Workspace], Even
             == "The name “Project 1” is already taken. Please choose a different name.")
 }
 
-@MainActor @Test func closingANamedWorkspacesWindowKeepsItsEntryAsItWasAtClose() async throws {
-    let (list, workspaces, forgotten) = await savingList(2)
+@MainActor @Test func closingANamedWorkspacesWindowKeepsItsSnapshot() async throws {
+    let (list, workspaces, forgotten, snapshots) = await savingList(2)
     let named = workspaces[0]
-    try list.name(named, as: "Project 1")
-    let atClose = state(of: named)
+    try list.save(named, as: "Project 1", frame: frame)
+    let saved = named.state(frame: frame)
+    named.selectedTab.focusedPane.navigate(to: Location(path: "/root/docs"))
 
-    list.windowClosed(named, as: atClose)
+    list.windowClosed(named)
 
     #expect(list.workspaces.map(\.id) == [workspaces[1].id])
-    #expect(list.closed == [atClose])
+    #expect(list.closed == [saved])
     #expect(list.saved == [WorkspaceList.Saved(id: named.id, name: "Project 1", isOpen: false)])
+    #expect(forgotten.all.isEmpty && snapshots.all == [saved])
+}
+
+@MainActor @Test func closingAnUnnamedWorkspacesWindowKeepsNothing() async {
+    let (list, workspaces, forgotten, _) = await savingList(2)
+
+    list.windowClosed(workspaces[0])
+
+    #expect(list.closed.isEmpty && list.saved.isEmpty)
     #expect(forgotten.all.isEmpty)
 }
 
-@MainActor @Test func closingAnUnnamedWorkspacesWindowForgetsIt() async {
-    let (list, workspaces, forgotten) = await savingList(2)
-
-    list.windowClosed(workspaces[0], as: state(of: workspaces[0]))
-
-    #expect(forgotten.all == [workspaces[0].id])
-    #expect(list.closed.isEmpty && list.saved.isEmpty)
-}
-
-@MainActor @Test func openingAClosedWorkspaceRebuildsTheStateItHadAtClose() async throws {
-    let (list, workspaces, _) = await savingList(2)
+@MainActor @Test func openingAClosedWorkspaceRebuildsItsSnapshot() async throws {
+    let (list, workspaces, _, _) = await savingList(2)
     let named = workspaces[0]
-    try list.name(named, as: "Project 1")
-    let atClose = state(of: named)
-    list.windowClosed(named, as: atClose)
+    try list.save(named, as: "Project 1", frame: frame)
+    let saved = named.state(frame: frame)
+    named.selectedTab.focusedPane.navigate(to: Location(path: "/root/docs"))
+    list.windowClosed(named)
     let rebuilt = Workspace(
         id: named.id, name: "Project 1", tabs: [Tab(pane: await PaneFixture.loaded().pane)],
         selectedTab: 0, showsSidebar: false)
@@ -223,16 +274,17 @@ private func savingList(_ count: Int) async -> (WorkspaceList, [Workspace], Even
         return rebuilt
     }
 
-    #expect(given == [atClose])
+    #expect(given == [saved])
     #expect(opened === rebuilt)
     #expect(list.workspaces.first === rebuilt && rebuilt.isActive)
     #expect(list.closed.isEmpty)
+    #expect(list.snapshots[named.id] == saved)
 }
 
 @MainActor @Test func openingAnOpenWorkspaceActivatesItAndBuildsNothing() async throws {
-    let (list, workspaces, _) = await savingList(2)
+    let (list, workspaces, _, _) = await savingList(2)
     let named = workspaces[0]
-    try list.name(named, as: "Project 1")
+    try list.save(named, as: "Project 1", frame: frame)
 
     let opened = list.open(named.id) { _ in
         Issue.record("an open workspace was rebuilt")
@@ -245,53 +297,52 @@ private func savingList(_ count: Int) async -> (WorkspaceList, [Workspace], Even
 }
 
 @MainActor @Test func deletingAnOpenWorkspaceClosesItAndForgetsItOnce() async throws {
-    let (list, workspaces, forgotten) = await savingList(2)
+    let (list, workspaces, forgotten, _) = await savingList(2)
     let named = workspaces[0]
-    try list.name(named, as: "Project 1")
+    try list.save(named, as: "Project 1", frame: frame)
 
     list.delete(named.id)
 
     #expect(list.workspaces.map(\.id) == [workspaces[1].id])
     #expect(named.isClosed)
     #expect(forgotten.all == [named.id])
-    #expect(list.saved.isEmpty)
+    #expect(list.saved.isEmpty && list.snapshots.isEmpty)
     // Its window then closes, which keeps nothing and forgets nothing more.
-    list.windowClosed(named, as: state(of: workspaces[1]))
+    list.windowClosed(named)
     #expect(list.closed.isEmpty)
     #expect(forgotten.all == [named.id])
 }
 
 @MainActor @Test func deletingAClosedWorkspaceForgetsIt() async throws {
-    let (list, workspaces, forgotten) = await savingList(1)
+    let (list, workspaces, forgotten, _) = await savingList(1)
     let named = workspaces[0]
-    try list.name(named, as: "Project 1")
-    list.windowClosed(named, as: state(of: named))
+    try list.save(named, as: "Project 1", frame: frame)
+    list.windowClosed(named)
 
     list.delete(named.id)
 
-    #expect(list.closed.isEmpty && list.saved.isEmpty)
+    #expect(list.closed.isEmpty && list.saved.isEmpty && list.snapshots.isEmpty)
     #expect(forgotten.all == [named.id])
 }
 
-@MainActor @Test func aMergedWorkspaceIsKeptIfNamedAndForgottenIfNotAsItsWindowCloses() async throws
-{
-    let (list, workspaces, forgotten) = await savingList(3)
+@MainActor @Test func aMergedWorkspaceKeepsItsSnapshotAsItsWindowCloses() async throws {
+    let (list, workspaces, forgotten, _) = await savingList(3)
     let named = workspaces[1]
     let unnamed = workspaces[2]
-    try list.name(named, as: "Project 1")
-    let atMerge = state(of: named)
+    try list.save(named, as: "Project 1", frame: frame)
+    let saved = named.state(frame: frame)
 
     list.merge(named)
-    list.windowClosed(named, as: atMerge)
+    list.windowClosed(named)
     list.merge(unnamed)
-    list.windowClosed(unnamed, as: state(of: workspaces[0]))
+    list.windowClosed(unnamed)
 
-    #expect(list.closed == [atMerge])
-    #expect(forgotten.all == [unnamed.id])
+    #expect(list.closed == [saved])
+    #expect(forgotten.all.isEmpty)
 }
 
 @MainActor @Test func aRestoredClosedWorkspaceIsListedAsSaved() async throws {
-    let (list, workspaces, _) = await savingList(1)
+    let (list, workspaces, _, snapshots) = await savingList(1)
     let closed = WorkspaceState(
         id: UUID(), name: "Project 1", frame: Rect(x: 0, y: 0, width: 800, height: 500),
         tabs: workspaces[0].tabs.map(\.state), selectedTab: 0, showsSidebar: false)
@@ -300,27 +351,44 @@ private func savingList(_ count: Int) async -> (WorkspaceList, [Workspace], Even
 
     #expect(list.closed == [closed])
     #expect(list.saved == [WorkspaceList.Saved(id: closed.id, name: "Project 1", isOpen: false)])
+    // The launch read it; nothing new to write.
+    #expect(snapshots.all.isEmpty)
     #expect(throws: WorkspaceList.NameRefusal.taken("Project 1")) {
-        try list.name(workspaces[0], as: "Project 1")
+        try list.save(workspaces[0], as: "Project 1", frame: frame)
     }
 }
 
-@MainActor @Test func namingIsRefusedUntilTheSavedWorkspacesAreListed() async throws {
-    let (list, workspaces, _) = await savingList(1)
+/// A window the launch restores linked to a saved workspace is listed open, not closed.
+@MainActor @Test func aRestoredSnapshotOfAnOpenWindowIsListedOpen() async throws {
+    let (list, _, _, _) = await savingList(0)
+    let (open, _) = await loadedWorkspace()
+    let linked = Workspace(
+        id: open.id, name: "Project 1", tabs: open.removeAllTabs(), selectedTab: 0,
+        showsSidebar: false)
+    list.add(linked)
+
+    try list.addSaved(linked.state(frame: frame))
+
+    #expect(list.closed.isEmpty)
+    #expect(list.saved == [WorkspaceList.Saved(id: linked.id, name: "Project 1", isOpen: true)])
+}
+
+@MainActor @Test func savingIsRefusedUntilTheSavedWorkspacesAreListed() async throws {
+    let (list, workspaces, _, _) = await savingList(1)
     list.awaitsRestore = true
 
     #expect(throws: WorkspaceList.NameRefusal.loading) {
-        try list.name(workspaces[0], as: "Project 1")
+        try list.save(workspaces[0], as: "Project 1", frame: frame)
     }
     #expect(workspaces[0].name == nil)
     list.awaitsRestore = false
-    try list.name(workspaces[0], as: "Project 1")
+    try list.save(workspaces[0], as: "Project 1", frame: frame)
     #expect(workspaces[0].name == "Project 1")
 }
 
 @MainActor @Test func aRestoredClosedWorkspaceWhoseNameIsTakenIsRefused() async throws {
-    let (list, workspaces, _) = await savingList(1)
-    try list.name(workspaces[0], as: "Project 1")
+    let (list, workspaces, _, _) = await savingList(1)
+    try list.save(workspaces[0], as: "Project 1", frame: frame)
     let closed = WorkspaceState(
         id: UUID(), name: "project 1", frame: Rect(x: 0, y: 0, width: 800, height: 500),
         tabs: workspaces[0].tabs.map(\.state), selectedTab: 0, showsSidebar: false)
@@ -332,9 +400,9 @@ private func savingList(_ count: Int) async -> (WorkspaceList, [Workspace], Even
 }
 
 @MainActor @Test func aFreeNameTakesTheNextNumberAsFinderNamesADuplicate() async throws {
-    let (list, workspaces, _) = await savingList(3)
-    try list.name(workspaces[0], as: "Project 1")
-    try list.name(workspaces[1], as: "project 1 2")
+    let (list, workspaces, _, _) = await savingList(3)
+    try list.save(workspaces[0], as: "Project 1", frame: frame)
+    try list.save(workspaces[1], as: "project 1 2", frame: frame)
 
     #expect(list.freeName("PROJECT 1", for: workspaces[2].id) == "PROJECT 1 3")
     #expect(list.freeName("Project 1", for: workspaces[0].id) == "Project 1")

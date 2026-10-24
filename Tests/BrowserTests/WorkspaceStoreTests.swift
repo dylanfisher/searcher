@@ -401,3 +401,62 @@ private func editJSON(_ data: Data, _ edit: (inout [String: Any]) throws -> Void
         #expect(!text.lowercased().contains("version"))
     }
 }
+
+// MARK: Snapshots
+
+private func snapshotsFolder(_ folder: TemporaryFolder) -> URL {
+    roots(folder).applicationSupport.appending(path: "snapshots")
+}
+
+@Test func aSnapshotRoundTripsInItsOwnFolderBesideTheWindowOfItsWorkspace() async throws {
+    let folder = try TemporaryFolder("WorkspaceStoreTests")
+    let id = UUID()
+    let snapshot = try workspace(id, name: "Project 1")
+    let window = try workspace(id, name: "Project 1", tabs: [onePaneTab()])
+    let problems = EventLog<StoreProblem>()
+    let writer = store(folder, problems: problems)
+    await writer.save(window)
+    await writer.saveSnapshot(snapshot)
+    await writer.flush()
+
+    let loaded = await store(folder, problems: problems).load()
+    #expect(loaded.snapshots == [id: snapshot])
+    #expect(loaded.workspaces == [id: window])
+    #expect(
+        FileManager.default.fileExists(
+            atPath: snapshotsFolder(folder).appending(path: "\(id.uuidString).json").path))
+    #expect(problems.all.isEmpty)
+}
+
+@Test func deletingASnapshotLeavesTheWindowsFile() async throws {
+    let folder = try TemporaryFolder("WorkspaceStoreTests")
+    let id = UUID()
+    let writer = store(folder)
+    await writer.save(try workspace(id))
+    await writer.saveSnapshot(try workspace(id))
+    await writer.flush()
+
+    await writer.deleteSnapshot(id)
+    await writer.flush()
+
+    let loaded = await store(folder).load()
+    #expect(loaded.snapshots.isEmpty)
+    #expect(loaded.workspaces.keys.contains(id))
+}
+
+/// A saved workspace has a name; a snapshot without one is a file of another shape.
+@Test func aSnapshotWithoutANameIsDeletedAndReported() async throws {
+    let folder = try TemporaryFolder("WorkspaceStoreTests")
+    let unnamed = try workspace(name: nil)
+    let writer = store(folder)
+    await writer.saveSnapshot(unnamed)
+    await writer.flush()
+
+    let problems = EventLog<StoreProblem>()
+    let loaded = await store(folder, problems: problems).load()
+    let url = snapshotsFolder(folder).appending(path: "\(unnamed.id.uuidString).json")
+    #expect(loaded.snapshots.isEmpty)
+    #expect(problems.all.map(\.file) == [url])
+    #expect(problems.all.map(\.kind) == [.discarded])
+    #expect(!FileManager.default.fileExists(atPath: url.path))
+}

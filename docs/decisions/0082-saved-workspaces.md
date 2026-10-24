@@ -1,7 +1,10 @@
 # 0082. Saved workspaces: a name makes one, closing keeps it, delete asks
 
 - **Date:** 2026-10-24
-- **Status:** accepted
+- **Status:** accepted; the autosave of a named workspace, the state kept at close and Name
+  Workspace… are superseded by [0088](0088-workspace-snapshots.md)
+- **2026-10-24:** a saved workspace is now a snapshot that only Save Workspace changes; see
+  [0088](0088-workspace-snapshots.md).
 
 ## Context
 

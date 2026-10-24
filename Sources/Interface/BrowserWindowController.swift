@@ -93,7 +93,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// Runs as the window closes.
     var onClose: (@MainActor (BrowserWindowController) -> Void)?
     /// Hands over the view controller another window has for a pane that moved here, or nil.
-    private let takePaneController: @MainActor (PaneID) -> PaneViewController?
+    private let takePaneController: @MainActor (PaneID, Pane) -> PaneViewController?
 
     /// A window of one tab at `location`, in a list of its own, as the UI bench opens it. With
     /// `fileOperations`, its operations panel lists what `showOperations` is given.
@@ -123,7 +123,9 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         fileOperations: FileOperationQueue? = nil, clipboard: CutState? = nil,
         mountTable: MountTable? = nil, undoHistory: UndoHistory? = nil, openWith: OpenWith? = nil,
         folderVisits: FolderVisits? = nil,
-        takePaneController: @escaping @MainActor (PaneID) -> PaneViewController? = { _ in nil },
+        takePaneController: @escaping @MainActor (PaneID, Pane) -> PaneViewController? = {
+            _, _ in nil
+        },
         openSavedWorkspace: @escaping @MainActor (UUID) -> Void = { id in
             preconditionFailure("this window can't open saved workspace \(id)")
         }
@@ -261,16 +263,34 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     // MARK: Saved workspace
 
     /// The name sheet while it shows.
-    private var nameSheet: WorkspaceNameSheet?
+    private(set) var nameSheet: WorkspaceNameSheet?
 
-    /// Shows the sheet that names or renames the window's workspace, unless it already shows.
+    /// Shows the sheet that saves the window's workspace under a name, or renames the saved
+    /// one, unless it already shows.
     private func askForWorkspaceName() {
         guard nameSheet == nil else { return }
         guard let window else { preconditionFailure("a browser window controller has no window") }
-        let sheet = WorkspaceNameSheet(workspace: workspace, list: workspaces)
+        let sheet = WorkspaceNameSheet(
+            workspace: workspace, list: workspaces, frame: { Rect(window.frame) })
         sheet.onClose = { [weak self] in self?.nameSheet = nil }
         nameSheet = sheet
         sheet.present(over: window)
+    }
+
+    /// Saves the window's workspace as the window has it now: under `name` if it isn't saved
+    /// yet, else over its snapshot, keeping its name (docs/decisions/0088-workspace-snapshots.md).
+    func saveWorkspace(as name: String? = nil) throws(WorkspaceList.NameRefusal) {
+        guard let window else { preconditionFailure("a browser window controller has no window") }
+        try workspaces.save(workspace, as: name, frame: Rect(window.frame))
+    }
+
+    /// Save Workspace on a saved workspace, which asks nothing and can't be refused.
+    private func saveSavedWorkspace() {
+        do {
+            try saveWorkspace()
+        } catch {
+            preconditionFailure("saving workspace \(workspace.id) again was refused: \(error)")
+        }
     }
 
     /// The question before Delete Workspace deletes `name`, a saved workspace; Delete is first.
@@ -359,8 +379,15 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             })
     }
 
-    /// Shows the sidebar, which the command has the workspace show, and moves the keys into it.
+    /// Shows the sidebar, which the command has the workspace show, and moves the keys into it;
+    /// with the keys in it already, gives them back to the focused pane.
     private func focusSidebar() {
+        if let responder = window?.firstResponder as? NSView,
+            responder.isDescendant(of: sidebar.view)
+        {
+            giveKeysBack()
+            return
+        }
         showSidebar()
         window?.makeFirstResponder(sidebar.outlineView)
     }
@@ -511,7 +538,8 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         TilingCommands.closePane.id, WindowCommands.closeTab.id, WindowCommands.newTab.id,
         WindowCommands.nextTab.id, WindowCommands.previousTab.id, WindowCommands.newWindow.id,
         WindowCommands.movePaneToNewWindow.id, WindowCommands.mergeWindowIntoTab.id,
-        WindowCommands.toggleOperations.id, WorkspaceCommands.name.id,
+        WindowCommands.toggleOperations.id, WorkspaceCommands.save.id,
+        WorkspaceCommands.rename.id,
         WorkspaceCommands.delete.id, WorkspaceCommands.toggleSidebar.id,
         WorkspaceCommands.focusSidebar.id, WindowCommands.showPalette.id,
     ]
@@ -637,7 +665,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// A view controller for pane `id`: the one another window had, if the pane moved here, so
     /// it keeps its table, scroll position and folder monitor; else a new one.
     private func makePaneController(for pane: Pane, id: PaneID) -> PaneViewController {
-        let controller = takePaneController(id) ?? PaneViewController(pane: pane)
+        let controller = takePaneController(id, pane) ?? PaneViewController(pane: pane)
         precondition(
             controller.pane === pane,
             "the view controller handed over for pane \(id) at \(pane.location.path) shows "
@@ -652,6 +680,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             didClosePane: { [weak self] result in self?.didClose(result) },
             toggleOperations: { [weak self] in self?.toggleOperations() },
             askForWorkspaceName: { [weak self] in self?.askForWorkspaceName() },
+            saveWorkspace: { [weak self] in self?.saveSavedWorkspace() },
             askToDeleteWorkspace: { [weak self] in self?.askToDeleteWorkspace() },
             focusSidebar: { [weak self] in self?.focusSidebar() },
             showPalette: { [weak self] in self?.showPalette() },
@@ -674,11 +703,13 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         return Rect(view.bounds)
     }
 
-    /// Gives up the view controller of pane `id`, which moved to another window, if this window
-    /// has one. Its view leaves this window's layout now, before the other window adds it, so a
-    /// later update here can't take it out of that window.
-    func handOver(_ id: PaneID) -> PaneViewController? {
-        guard let views = tabViews.values.first(where: { $0.paneControllers[id] != nil }),
+    /// Gives up the view controller of `pane`, under `id`, which moved to another window, if
+    /// this window has one. Its view leaves this window's layout now, before the other window
+    /// adds it, so a later update here can't take it out of that window. A pane of another
+    /// object under the same ID, as a reloaded snapshot rebuilds it, gets nothing.
+    func handOver(_ id: PaneID, of pane: Pane) -> PaneViewController? {
+        guard
+            let views = tabViews.values.first(where: { $0.paneControllers[id]?.pane === pane }),
             let controller = views.paneControllers.removeValue(forKey: id)
         else { return nil }
         showWorkspace()

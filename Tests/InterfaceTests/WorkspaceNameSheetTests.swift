@@ -8,8 +8,10 @@ import Testing
 
 @testable import Interface
 
+private let frame = Rect(x: 0, y: 0, width: 900, height: 600)
+
 /// Two open workspaces at `/root` in one list, and a name sheet for the first that is never
-/// shown.
+/// shown, whose window is at `frame`.
 @MainActor
 private final class Fixture {
     let list = WorkspaceList()
@@ -34,30 +36,31 @@ private final class Fixture {
     }
 
     func sheet() -> WorkspaceNameSheet {
-        let sheet = WorkspaceNameSheet(workspace: workspace, list: list)
+        let sheet = WorkspaceNameSheet(workspace: workspace, list: list, frame: { frame })
         sheet.onClose = { [weak self] in self?.closes += 1 }
         sheet.beep = { [weak self] in self?.beeps += 1 }
         return sheet
     }
 }
 
-@MainActor @Test func aNewNameNamesTheWorkspaceAndClosesTheSheet() {
+@MainActor @Test func aNewNameSavesTheWorkspaceAndClosesTheSheet() {
     let fixture = Fixture()
     let sheet = fixture.sheet()
-    #expect(sheet.alert.messageText == "Name this workspace:")
-    #expect(sheet.alert.buttons.map(\.title) == ["Name", Dialog.cancel])
+    #expect(sheet.alert.messageText == "Save this workspace as:")
+    #expect(sheet.alert.buttons.map(\.title) == ["Save", Dialog.cancel])
     #expect(sheet.field.stringValue == "")
 
     sheet.field.stringValue = "Project 1"
     sheet.confirm()
 
     #expect(fixture.workspace.name == "Project 1")
+    #expect(fixture.list.snapshots[fixture.workspace.id] == fixture.workspace.state(frame: frame))
     #expect(fixture.closes == 1)
 }
 
 @MainActor @Test func aTakenNameSaysWhichAndKeepsTheSheetUp() throws {
     let fixture = Fixture()
-    try fixture.list.name(fixture.other, as: "Project 1")
+    try fixture.list.save(fixture.other, as: "Project 1", frame: frame)
     let sheet = fixture.sheet()
 
     sheet.field.stringValue = "project 1"
@@ -85,13 +88,17 @@ private final class Fixture {
 
 @MainActor @Test func renameStartsFromTheCurrentName() throws {
     let fixture = Fixture()
-    try fixture.list.name(fixture.workspace, as: "Project 1")
+    try fixture.list.save(fixture.workspace, as: "Project 1", frame: frame)
 
     let sheet = fixture.sheet()
 
     #expect(sheet.alert.messageText == "Rename the workspace “Project 1”:")
     #expect(sheet.alert.buttons.map(\.title) == ["Rename", Dialog.cancel])
     #expect(sheet.field.stringValue == "Project 1")
+    sheet.field.stringValue = "Project 2"
+    sheet.confirm()
+    #expect(fixture.workspace.name == "Project 2")
+    #expect(fixture.list.snapshots[fixture.workspace.id]?.name == "Project 2")
 }
 
 @MainActor @Test func cancelLeavesTheNameAsItWas() {
@@ -105,7 +112,7 @@ private final class Fixture {
     #expect(fixture.closes == 1)
 }
 
-@MainActor @Test func nameBeforeTheSavedWorkspacesAreListedSaysWhy() {
+@MainActor @Test func savingBeforeTheSavedWorkspacesAreListedSaysWhy() {
     let fixture = Fixture()
     fixture.list.awaitsRestore = true
     let sheet = fixture.sheet()

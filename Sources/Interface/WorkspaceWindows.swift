@@ -15,9 +15,11 @@ import os
 ///
 /// It saves every window's workspace and the session to its `WorkspaceStore`, once changes have
 /// stopped for `saveDelay`, and at launch rebuilds the windows the store kept
-/// (docs/decisions/0080-restore-at-launch.md). A named workspace's file is kept when its window
-/// closes, as it was at close, and an unnamed one's is deleted
-/// (docs/decisions/0082-saved-workspaces.md).
+/// (docs/decisions/0080-restore-at-launch.md). A window's file is deleted when it closes. A saved
+/// workspace's snapshot is saved only when `WorkspaceList` saves or renames it; going to a saved
+/// workspace whose window is open loads the snapshot into that window, and the window's edited
+/// dot shows while it differs from its snapshot (docs/decisions/0082-saved-workspaces.md,
+/// docs/decisions/0088-workspace-snapshots.md).
 @MainActor
 public final class WorkspaceWindows {
     public let list = WorkspaceList()
@@ -40,10 +42,12 @@ public final class WorkspaceWindows {
     private let store: WorkspaceStore?
     /// The workspaces changed since they were last saved.
     private var unsaved: Set<ObjectIdentifier> = []
-    /// Saved workspaces whose windows closed since the last save, as they were at close.
-    private var unsavedClosed: [UUID: WorkspaceState] = [:]
-    /// Workspaces forgotten since the last save, whose files go.
+    /// Snapshots saved or renamed since the last save.
+    private var unsavedSnapshots: [UUID: WorkspaceState] = [:]
+    /// Windows closed since the last save, whose files go.
     private var unsavedDeletes: Set<UUID> = []
+    /// Saved workspaces deleted since the last save, whose snapshots' files go.
+    private var unsavedSnapshotDeletes: Set<UUID> = []
     /// The wait before the next save, while one is due.
     private var saveWait: Task<Void, Never>?
     /// The clock saves wait on. Tests give a manual one.
@@ -148,7 +152,8 @@ public final class WorkspaceWindows {
                 self?.operationsChanged(snapshots)
             }
         }
-        list.onForget = { [weak self] id in self?.forget(id) }
+        list.onForget = { [weak self] id in self?.forgetSnapshot(id) }
+        list.onSnapshot = { [weak self] snapshot in self?.snapshotChanged(snapshot) }
     }
 
     /// Cancels every file operation as the app quits, so a copy removes what it was writing and
@@ -243,32 +248,79 @@ public final class WorkspaceWindows {
     /// Opens a window for each workspace of `contents`' session that loaded, in the session's
     /// order, each at its saved frame moved onto a display if it is on none, with its tabs,
     /// layouts, folders, view modes, sorts, histories and selections. A session ID with no
-    /// workspace is skipped (docs/decisions/0078-workspace-store.md). The key window's workspace
-    /// is made active, so its focused pane's load goes first, and its window is made key when
-    /// windows are shown. Returns the key window's controller, or nil when there was nothing to
-    /// restore. Every pane lists its folder off the main thread, so a slow or missing one
-    /// doesn't hold the windows back.
+    /// workspace is skipped (docs/decisions/0078-workspace-store.md). A window is linked to the
+    /// saved workspace whose snapshot has its ID, and named after it; its edited dot shows if it
+    /// differs from the snapshot. Every snapshot is listed as saved, and the window files the
+    /// session doesn't list are deleted. The key window's workspace is made active, so its
+    /// focused pane's load goes first, and its window is made key when windows are shown.
+    /// Returns the key window's controller, or nil when there was nothing to restore. Every pane
+    /// lists its folder off the main thread, so a slow or missing one doesn't hold the windows
+    /// back.
     @discardableResult
     public func restore(_ contents: WorkspaceStore.Contents) -> BrowserWindowController? {
         // Decided now, whatever is restored: saves from here on keep the windows as they are.
         awaitsRestore = false
         list.awaitsRestore = false
-        // Runs last: saves the changes noted while saves were held, and the closed workspaces'
-        // renames and deletes.
+        // Runs last: saves the changes noted while saves were held, and the renames and deletes.
         defer { scheduleSave() }
-        // Runs first, once the open windows are made, so a closed workspace named like an open
-        // one is the one renamed.
-        defer { listClosedWorkspaces(of: contents) }
-        guard let session = contents.session else { return nil }
-        let saved = session.workspaces.compactMap { contents.workspaces[$0] }
-        guard !saved.isEmpty else { return nil }
-        // Front window first, so a back window named like a front one is the one renamed.
-        var names: [String] = []
-        let states = saved.map { state in
-            let renamed = withFreeName(state, among: names)
-            renamed.name.map { names.append($0) }
-            return renamed
+        let saved = contents.session?.workspaces.compactMap { contents.workspaces[$0] } ?? []
+        let open = Set(saved.map(\.id))
+        // Window files of windows a crash closed, or of a session that didn't load.
+        for id in contents.workspaces.keys where !open.contains(id) {
+            forgetWindow(id)
         }
+        let snapshots = freelyNamed(contents.snapshots, frontFirst: saved.map(\.id))
+        let key = openWindows(saved, contents: contents, snapshots: snapshots)
+        // Once the windows are open, so their snapshots are listed open.
+        for snapshot in snapshots {
+            do {
+                try list.addSaved(snapshot)
+            } catch {
+                preconditionFailure("workspace \(snapshot.id) was given a taken name: \(error)")
+            }
+        }
+        if let key {
+            list.activate(key.workspace)
+            // The session as restored, so the first save after launch doesn't write it again.
+            lastSession = currentSession
+            if showsWindows {
+                key.window?.makeKeyAndOrderFront(nil)
+            }
+        }
+        return key
+    }
+
+    /// Every snapshot in `snapshots`, a name another one has replaced by the next free name,
+    /// which is saved: the open windows' first, in `frontFirst` order, so the front window keeps
+    /// its name, then the closed ones by name.
+    private func freelyNamed(_ snapshots: [UUID: WorkspaceState], frontFirst: [UUID])
+        -> [WorkspaceState]
+    {
+        let ordered =
+            frontFirst.compactMap { snapshots[$0] }
+            + snapshots.values.filter { !frontFirst.contains($0.id) }.sorted(by: Self.nameOrder)
+        var names: [String] = []
+        return ordered.map { read in
+            let state = withFreeName(read, among: names)
+            guard let name = state.name else {
+                preconditionFailure("the snapshot of workspace \(state.id) has no name")
+            }
+            names.append(name)
+            if state != read {
+                unsavedSnapshots[state.id] = state
+            }
+            return state
+        }
+    }
+
+    /// Opens the windows of `saved`, front first, each named after its snapshot in `snapshots`
+    /// if it has one. Returns the key window's controller, or nil with no window.
+    private func openWindows(
+        _ saved: [WorkspaceState], contents: WorkspaceStore.Contents, snapshots: [WorkspaceState]
+    ) -> BrowserWindowController? {
+        guard let session = contents.session, !saved.isEmpty else { return nil }
+        let linked = Dictionary(uniqueKeysWithValues: snapshots.map { ($0.id, $0) })
+        let states = saved.map { $0.renamed(linked[$0.id]?.name) }
         let keyID =
             session.keyWindow.flatMap { id in states.first { $0.id == id }?.id } ?? states[0].id
         // The key window's panes are made first, so their loads are asked for first.
@@ -280,25 +332,21 @@ public final class WorkspaceWindows {
             guard let workspace = workspaces[state.id] else {
                 preconditionFailure("workspace \(state.id) wasn't made")
             }
-            // As read, so a renamed workspace is saved under its new name.
+            // As read, so a renamed or unlinked workspace is saved under its new name.
             lastSaved[state.id] = contents.workspaces[state.id]
             list.add(workspace)
             makeController(for: workspace, frame: CGRect(state.frame))
+            controller(for: workspace).window?.isDocumentEdited =
+                linked[state.id].map { $0 != state } ?? false
         }
         guard let key = workspaces[keyID] else { preconditionFailure("the key workspace is gone") }
-        list.activate(key)
-        // The session as restored, so the first save after launch doesn't write it again.
-        lastSession = currentSession
-        let controller = controller(for: key)
-        if showsWindows {
-            controller.window?.makeKeyAndOrderFront(nil)
-        }
-        return controller
+        return controller(for: key)
     }
 
-    /// Opens saved workspace `id`: a closed one in a window as it was at close, at its frame
-    /// moved onto a display if it is on none, and an open one's window made key. Returns the
-    /// workspace's window controller.
+    /// Opens saved workspace `id` from its snapshot: a closed one in a new window, at its frame
+    /// moved onto a display if it is on none; an open one's window made key, with the snapshot
+    /// loaded into it if the window has changed since. Returns the workspace's window
+    /// controller.
     @discardableResult
     public func open(savedWorkspace id: UUID) -> BrowserWindowController {
         var frame: Rect?
@@ -310,6 +358,9 @@ public final class WorkspaceWindows {
             makeController(for: workspace, frame: CGRect(frame))
         }
         let controller = controller(for: workspace)
+        if frame == nil {
+            reloadIfChanged(controller)
+        }
         if showsWindows {
             controller.window?.makeKeyAndOrderFront(nil)
         }
@@ -318,29 +369,21 @@ public final class WorkspaceWindows {
         return controller
     }
 
-    /// Lists the named workspaces of `contents` that aren't open as saved, in name order, and
-    /// has the files of unnamed ones deleted: they belong to windows a crash closed, or to a
-    /// session that didn't load, and can't be restored. A named one whose name another saved
-    /// workspace has gets the next free name, which is saved.
-    private func listClosedWorkspaces(of contents: WorkspaceStore.Contents) {
-        let open = Set(list.workspaces.map(\.id))
-        let closed = contents.workspaces.values.filter { !open.contains($0.id) }
-        for read in closed.sorted(by: Self.nameOrder) {
-            guard read.name != nil else {
-                forget(read.id)
-                continue
-            }
-            let state = withFreeName(read, among: list.saved.map(\.name))
-            do {
-                try list.addSaved(state)
-            } catch {
-                preconditionFailure("workspace \(state.id) was given a taken name: \(error)")
-            }
-            lastSaved[state.id] = state
-            if state != read {
-                unsavedClosed[state.id] = state
-            }
+    /// Loads saved workspace `controller`'s snapshot into its window, unless the window is as
+    /// the snapshot has it: its tabs, panes and sidebar, and its frame moved onto a display if it
+    /// is on none. The tabs it had close; the new panes start with no selection history.
+    private func reloadIfChanged(_ controller: BrowserWindowController) {
+        let workspace = controller.workspace
+        guard let snapshot = list.snapshots[workspace.id], let window = controller.window else {
+            preconditionFailure("workspace \(workspace.id) has no snapshot or no window")
         }
+        guard workspace.state(frame: Rect(window.frame)) != snapshot else { return }
+        workspace.reload(
+            tabs: restoredTabs(snapshot), selectedTab: snapshot.selectedTab,
+            showsSidebar: snapshot.showsSidebar)
+        window.setFrame(Self.placed(CGRect(snapshot.frame), on: screens()), display: false)
+        controller.showWorkspace()
+        window.isDocumentEdited = false
     }
 
     /// `state`, renamed to the next free name if one of `names` is its name, which is logged.
@@ -351,27 +394,28 @@ public final class WorkspaceWindows {
         Logger(category: "workspaces").notice(
             "renaming workspace \(state.id, privacy: .public) from \(name, privacy: .public) to \(free, privacy: .public): the name was taken"
         )
-        return WorkspaceState(
-            id: state.id, name: free, frame: state.frame, tabs: state.tabs,
-            selectedTab: state.selectedTab, showsSidebar: state.showsSidebar)
+        return state.renamed(free)
     }
 
-    /// Unnamed first, then by name as Finder sorts, then by ID, so which of two same-named
-    /// workspaces keeps its name doesn't depend on the order the files were read.
+    /// By name as Finder sorts, then by ID, so which of two same-named snapshots keeps its name
+    /// doesn't depend on the order the files were read.
     private static func nameOrder(_ a: WorkspaceState, _ b: WorkspaceState) -> Bool {
-        switch (a.name, b.name) {
-        case (nil, nil): return a.id.uuidString < b.id.uuidString
-        case (nil, _): return true
-        case (_, nil): return false
-        case (let x?, let y?):
-            let order = x.localizedStandardCompare(y)
-            return order == .orderedSame
-                ? a.id.uuidString < b.id.uuidString : order == .orderedAscending
+        guard let x = a.name, let y = b.name else {
+            preconditionFailure("a snapshot has no name: \(a.id) or \(b.id)")
         }
+        let order = x.localizedStandardCompare(y)
+        return order == .orderedSame
+            ? a.id.uuidString < b.id.uuidString : order == .orderedAscending
     }
 
     private func restoredWorkspace(_ state: WorkspaceState) -> Workspace {
-        let tabs = state.tabs.map { tab in
+        Workspace(
+            id: state.id, name: state.name, tabs: restoredTabs(state),
+            selectedTab: state.selectedTab, showsSidebar: state.showsSidebar)
+    }
+
+    private func restoredTabs(_ state: WorkspaceState) -> [Tab] {
+        state.tabs.map { tab in
             Tab(restoring: tab) { saved in
                 let pane = Pane(
                     restoring: saved, service: service, systemActions: systemActions,
@@ -381,9 +425,6 @@ public final class WorkspaceWindows {
                 return pane
             }
         }
-        return Workspace(
-            id: state.id, name: state.name, tabs: tabs, selectedTab: state.selectedTab,
-            showsSidebar: state.showsSidebar)
     }
 
     /// The height of a window's title bar that must be on a display for the window to stay
@@ -500,47 +541,66 @@ public final class WorkspaceWindows {
         return min(lastChange + saveDelay, firstUnsaved + Self.longestSaveWait)
     }
 
-    /// Hands the store each changed workspace's state and the session, when they differ from
-    /// what it was last given. A workspace whose window closed or whose tabs moved away is left
-    /// as last saved.
+    /// Hands the store each changed window's state, the snapshots saved, and the session, when
+    /// they differ from what it was last given, and deletes the files of closed windows and
+    /// deleted saved workspaces. A workspace whose window closed or whose tabs moved away is
+    /// left as last saved. Each changed window linked to a saved workspace shows its edited dot
+    /// while its state differs from the snapshot.
     private func saveChanges() {
         saveWait?.cancel()
         saveWait = nil
         firstUnsaved = nil
         guard let store, !awaitsRestore else { return }
-        var states = Array(unsavedClosed.values)
-        unsavedClosed = [:]
-        let deletes = unsavedDeletes
+        var states: [WorkspaceState] = []
+        let snapshots = Array(unsavedSnapshots.values)
+        unsavedSnapshots = [:]
+        var deletes = unsavedDeletes
         unsavedDeletes = []
+        let snapshotDeletes = unsavedSnapshotDeletes
+        unsavedSnapshotDeletes = []
         for controller in controllers where unsaved.contains(ObjectIdentifier(controller.workspace))
         {
-            guard !controller.workspace.isClosed, let state = state(of: controller),
-                lastSaved[state.id] != state
-            else { continue }
+            guard !controller.workspace.isClosed, let state = state(of: controller) else {
+                continue
+            }
+            controller.window?.isDocumentEdited =
+                list.snapshots[state.id].map { $0 != state } ?? false
+            guard lastSaved[state.id] != state else { continue }
             lastSaved[state.id] = state
             states.append(state)
+            // A saved workspace's window closed and opened again since the last save.
+            deletes.remove(state.id)
         }
         unsaved = []
         let session = currentSession
         let changedSession = session != lastSession ? session : nil
         lastSession = session
-        guard !states.isEmpty || !deletes.isEmpty || changedSession != nil else { return }
-        let kept = ListingCache.folders(of: Array(lastSaved.values))
+        let filesChanged =
+            !states.isEmpty || !deletes.isEmpty || !snapshots.isEmpty || !snapshotDeletes.isEmpty
+        guard filesChanged || changedSession != nil else { return }
+        let kept = ListingCache.folders(
+            of: Array(lastSaved.values) + Array(list.snapshots.values))
         let cache = cache
         let previous = saving
         saving = Task {
             await previous?.value
+            for id in deletes {
+                await store.delete(id)
+            }
+            for id in snapshotDeletes {
+                await store.deleteSnapshot(id)
+            }
             for state in states {
                 await store.save(state)
             }
-            for id in deletes {
-                await store.delete(id)
+            for snapshot in snapshots {
+                await store.saveSnapshot(snapshot)
             }
             if let changedSession {
                 await store.saveSession(changedSession)
             }
             // The folders every stored workspace holds now, computed as the launch computes them.
-            if !states.isEmpty || !deletes.isEmpty {
+            if filesChanged {
                 await cache?.keep(folders: kept)
             }
         }
@@ -568,14 +628,7 @@ public final class WorkspaceWindows {
 
     /// The workspace of `controller` as the store keeps it, with its window's frame.
     private func state(of controller: BrowserWindowController) -> WorkspaceState? {
-        let workspace = controller.workspace
-        guard let window = controller.window,
-            let selected = workspace.tabs.firstIndex(where: { $0 === workspace.selectedTab })
-        else { return nil }
-        return WorkspaceState(
-            id: workspace.id, name: workspace.name, frame: Rect(window.frame),
-            tabs: workspace.tabStates, selectedTab: selected,
-            showsSidebar: workspace.showsSidebar)
+        controller.window.map { controller.workspace.state(frame: Rect($0.frame)) }
     }
 
     // MARK: Store problems
@@ -658,7 +711,7 @@ public final class WorkspaceWindows {
             fileOperations: fileOperations,
             clipboard: clipboard, mountTable: mountTable, undoHistory: undoHistory,
             openWith: openWith, folderVisits: folderVisits,
-            takePaneController: { [weak self] id in self?.takePaneController(id) },
+            takePaneController: { [weak self] id, pane in self?.takePaneController(id, of: pane) },
             openSavedWorkspace: { [weak self] id in self?.open(savedWorkspace: id) })
         controller.onCommand = { [weak self] in self?.showList() }
         controller.onClose = { [weak self] closed in self?.didClose(closed) }
@@ -683,11 +736,12 @@ public final class WorkspaceWindows {
         showStoreProblems()
     }
 
-    /// The view controller another window has for pane `id`, which moved, taken out of it.
-    private func takePaneController(_ id: PaneID) -> PaneViewController? {
+    /// The view controller another window has for `pane`, under `id`, which moved, taken out of
+    /// it.
+    private func takePaneController(_ id: PaneID, of pane: Pane) -> PaneViewController? {
         // A loop, not a lazy map: handing over changes the window, so it must run once.
         for controller in controllers {
-            if let handed = controller.handOver(id) { return handed }
+            if let handed = controller.handOver(id, of: pane) { return handed }
         }
         return nil
     }
@@ -720,25 +774,12 @@ public final class WorkspaceWindows {
         }
     }
 
-    /// Drops the workspace of `controller`, whose window is closing and whose tabs are still
-    /// open, unless they moved to another window. A saved one is kept as it is now, and saved if
-    /// that differs from what the store was last given.
+    /// Drops the workspace of `controller`, whose window is closing, and has its window's file
+    /// deleted. A saved workspace's snapshot stays as it is.
     private func didClose(_ controller: BrowserWindowController) {
         controllers.removeAll { $0 === controller }
-        var atClose: WorkspaceState?
-        list.windowClosed(
-            controller.workspace,
-            as: {
-                guard let state = state(of: controller) else {
-                    preconditionFailure("a closing browser window has no window")
-                }
-                atClose = state
-                return state
-            }())
-        if let atClose, lastSaved[atClose.id] != atClose {
-            lastSaved[atClose.id] = atClose
-            unsavedClosed[atClose.id] = atClose
-        }
+        list.windowClosed(controller.workspace)
+        forgetWindow(controller.workspace.id)
         unsaved.remove(ObjectIdentifier(controller.workspace))
         for observer in windowObservers.removeValue(forKey: ObjectIdentifier(controller)) ?? [] {
             NotificationCenter.default.removeObserver(observer)
@@ -749,11 +790,28 @@ public final class WorkspaceWindows {
         scheduleSave()
     }
 
-    /// Has the file of workspace `id` deleted with the next save, and nothing more saved of it.
-    private func forget(_ id: UUID) {
+    /// Has the file of window workspace `id` deleted with the next save.
+    private func forgetWindow(_ id: UUID) {
         lastSaved[id] = nil
-        unsavedClosed[id] = nil
         unsavedDeletes.insert(id)
+        scheduleSave()
+    }
+
+    /// Has the snapshot file of saved workspace `id`, which was deleted, deleted with the next
+    /// save, and nothing more saved of it.
+    private func forgetSnapshot(_ id: UUID) {
+        unsavedSnapshots[id] = nil
+        unsavedSnapshotDeletes.insert(id)
+        scheduleSave()
+    }
+
+    /// Has `snapshot`, saved or renamed, saved, and shows whether its open window still differs
+    /// from it.
+    private func snapshotChanged(_ snapshot: WorkspaceState) {
+        unsavedSnapshots[snapshot.id] = snapshot
+        if let controller = controllers.first(where: { $0.workspace.id == snapshot.id }) {
+            controller.window?.isDocumentEdited = state(of: controller) != snapshot
+        }
         scheduleSave()
     }
 

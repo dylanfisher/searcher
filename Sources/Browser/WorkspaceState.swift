@@ -30,6 +30,13 @@ public struct WorkspaceState: Codable, Equatable, Sendable {
         self.showsSidebar = showsSidebar
     }
 
+    /// The same state under `name`, as a rename or a free name at launch gives it.
+    public func renamed(_ name: String?) -> WorkspaceState {
+        WorkspaceState(
+            id: id, name: name, frame: frame, tabs: tabs, selectedTab: selectedTab,
+            showsSidebar: showsSidebar)
+    }
+
     // MARK: Coding
 
     private enum CodingKeys: String, CodingKey {
