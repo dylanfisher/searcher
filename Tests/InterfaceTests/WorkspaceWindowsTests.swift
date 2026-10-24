@@ -709,7 +709,7 @@ private func stopEverything(_ windows: WorkspaceWindows) async {
 
     try fixture.press(
         try keyEvent("s", modifiers: [.command, .control]), in: first)
-    try #require(first.window).makeKeyAndOrderFront(nil)
+    SecondDisplay.orderFront(try #require(first.window))
     fixture.windows.list.activate(first.workspace)
 
     #expect(!fixture.windows.open(at: Location(path: "/root")).showsSidebar)
