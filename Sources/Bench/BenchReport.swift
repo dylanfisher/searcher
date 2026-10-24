@@ -12,7 +12,7 @@ struct BenchReport: Sendable, Codable {
         let budget: Budget?
         /// The copy rate a copy case is held to, in place of a budget; nil for every other case.
         let floor: CopyFloor?
-        /// Whether a p95 under `floor` fails the run; false on CI, where it is reported only.
+        /// Whether a median under `floor` fails the run; false on CI, where it is reported only.
         let floorEnforced: Bool
         let unit: Budget.Unit
         /// Every run in `unit`, ascending.
@@ -36,15 +36,15 @@ struct BenchReport: Sendable, Codable {
             p95 = samples.p95
             overBudget =
                 (budget.map { samples.p95 > Double($0.limit) } ?? false)
-                || (floorEnforced && floor?.isMissed(byMilliseconds: samples.p95) == true)
+                || (floorEnforced && floor?.isMissed(byMilliseconds: samples.median) == true)
         }
 
-        /// Whether the p95 is under `floor` on CI, where that is reported and doesn't fail.
+        /// Whether the median is under `floor` on CI, where that is reported and doesn't fail.
         var underFloorReportedOnly: Bool {
-            !floorEnforced && floor?.isMissed(byMilliseconds: p95) == true
+            !floorEnforced && floor?.isMissed(byMilliseconds: median) == true
         }
 
-        /// What the p95 is judged against, as the reports print it.
+        /// What the case is judged against, as the reports print it.
         var limit: String {
             if let floor {
                 let mode = floorEnforced ? "" : ", reported only on CI"

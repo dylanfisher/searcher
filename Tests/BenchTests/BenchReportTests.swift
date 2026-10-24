@@ -46,11 +46,19 @@ private func copyReport(
         ])
 }
 
-@Test func copySlowerThanS7FailsTheRun() {
-    // 1 GB in 2 s is 500 MB/s, under S7's floor, at the p95.
-    let report = copyReport([1000, 1000, 2000])
+@Test func copyWithMedianUnderS7FailsTheRun() {
+    // 1 GB in 2 s is 500 MB/s, under S7's floor, at the median.
+    let report = copyReport([1000, 2000, 2000])
     #expect(!report.passed)
     #expect(report.overBudget.map(\.name) == ["copy"])
+}
+
+@Test func copyWithMedianOverS7PassesWhateverTheP95() {
+    // The median is 1000 MB/s, over the floor; the p95 is 500 MB/s, under it. S7's 792 is a
+    // median, so only the median is judged against it.
+    let report = copyReport([1000, 1000, 2000])
+    #expect(report.passed)
+    #expect(report.cases[0].p95 == 2000)
 }
 
 @Test func copyFasterThanS7Passes() {
@@ -59,15 +67,15 @@ private func copyReport(
 }
 
 @Test func copyCaseIsPrintedInMegabytesPerSecondAgainstS7() {
-    let text = line(for: copyReport([1000, 1000, 2000]).cases[0])
-    #expect(text.contains("median 1000.00 MB/s"), "\(text)")
+    let text = line(for: copyReport([1000, 2000, 2000]).cases[0])
+    #expect(text.contains("median 500.00 MB/s"), "\(text)")
     #expect(text.contains("p95 500.00 MB/s"), "\(text)")
     #expect(text.contains("floor S7 \(CopyFloor.s7.megabytesPerSecond) MB/s"), "\(text)")
     #expect(text.contains("OVER BUDGET"), "\(text)")
 }
 
 @Test func copySlowerThanS7OnCIIsReportedAndPasses() {
-    let report = copyReport([1000, 1000, 2000], environment: ["CI": "true"])
+    let report = copyReport([1000, 2000, 2000], environment: ["CI": "true"])
     #expect(report.passed)
     let text = line(for: report.cases[0])
     #expect(text.contains("p95 500.00 MB/s"), "\(text)")
