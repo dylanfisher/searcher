@@ -19,7 +19,7 @@ private func roots(_ folder: TemporaryFolder) -> StoreRoots {
 
 /// Windows that are never shown, on a lister of `/root` and `/root/docs`, saving to `store`.
 @MainActor
-private func makeWindows(store: WorkspaceStore?) -> WorkspaceWindows {
+private func makeWindows(store: WorkspaceStore?, cache: ListingCache? = nil) -> WorkspaceWindows {
     let lister = StubLister([
         "/root": [folder("docs"), file("a.txt"), file("b.txt")],
         "/root/docs": [file("inside.txt")],
@@ -28,7 +28,7 @@ private func makeWindows(store: WorkspaceStore?) -> WorkspaceWindows {
     let windows = WorkspaceWindows(
         service: ListingService(lister: lister) { "Test Disk" },
         systemActions: StubSystemActions(), settings: untouchedSettings(), folderSizes: nil,
-        clipboard: MemoryClipboard(), store: store)
+        clipboard: MemoryClipboard(), store: store, cache: cache)
     windows.showsWindows = false
     windows.screens = { [screen] }
     return windows
@@ -820,4 +820,71 @@ private func expectReopenedAsBeforeClosing(with key: NSEvent) async throws {
     let restored = try #require(restoring.restore(contents))
 
     #expect(restored.showsSidebar)
+}
+
+// MARK: Cached folders
+
+private func share(_ name: String) -> VolumeIdentity {
+    VolumeIdentity(device: "//nas/\(name)", mountPoint: "/\(name)", kind: .network)
+}
+
+/// Lists `count` files at `path` on a share in `cache`, `seconds` after the reference date.
+private func insert(
+    _ count: Int, at path: String, seconds: Double, into cache: ListingCache
+) async {
+    await cache.insert(
+        ListingCache.Folder(
+            entries: (0..<count).map { file("f\($0)") },
+            listedAt: Date(timeIntervalSinceReferenceDate: seconds)),
+        at: path, on: share("root"))
+}
+
+/// Lists `path`, then enough other folders to pass the cache's entry cap of 4, and returns
+/// whether `path` is still there.
+private func survivesTheCap(_ path: String, in cache: ListingCache) async -> Bool {
+    await insert(2, at: path, seconds: 1, into: cache)
+    await insert(2, at: "/root/other1", seconds: 2, into: cache)
+    await insert(2, at: "/root/other2", seconds: 3, into: cache)
+    return await cache.folder(at: path, on: share("root")) != nil
+}
+
+@MainActor @Test func aWorkspaceNamedDuringTheSessionKeepsItsPanesFolderFromItsFirstSave()
+    async throws
+{
+    let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
+    let cache = ListingCache(entryCap: 4, store: nil)
+    let windows = makeWindows(store: diskStore(folder), cache: cache)
+    let controller = windows.open(at: Location(path: "/root"))
+    try windows.list.name(controller.workspace, as: "Project 1")
+    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+
+    #expect(await survivesTheCap("/root", in: cache))
+}
+
+@MainActor @Test func aPaneThatNavigatesInANamedWorkspaceKeepsTheNewFolderAfterTheSave()
+    async throws
+{
+    let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
+    let cache = ListingCache(entryCap: 4, store: nil)
+    let windows = makeWindows(store: diskStore(folder), cache: cache)
+    let controller = windows.open(at: Location(path: "/root"))
+    try windows.list.name(controller.workspace, as: "Project 1")
+    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    controller.workspace.selectedTab.focusedPane.navigate(to: Location(path: "/root/docs"))
+    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+
+    #expect(await survivesTheCap("/root/docs", in: cache))
+}
+
+@MainActor @Test func aFolderNoWorkspaceHoldsAnymoreIsNoLongerKeptAfterTheSave() async throws {
+    let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
+    let cache = ListingCache(entryCap: 4, store: nil)
+    let windows = makeWindows(store: diskStore(folder), cache: cache)
+    let controller = windows.open(at: Location(path: "/root"))
+    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    // An unnamed workspace's file goes with its window.
+    try #require(controller.window).close()
+    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+
+    #expect(await !survivesTheCap("/root", in: cache))
 }

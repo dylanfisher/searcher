@@ -269,3 +269,61 @@ private func folder(of count: Int, at seconds: Double) -> ListingCache.Folder {
 
     #expect(await cache.folder(at: "/fake/a/kept", on: share("a")) != nil)
 }
+
+@Test func keepingNewFoldersReplacesTheOnesTheCapsLeave() async {
+    let cache = ListingCache(entryCap: 4, store: nil)
+    await cache.restore(folders: ["/fake/a/old"], mountedVolumes: { [] })
+    await cache.keep(folders: ["/fake/a/new"])
+    await cache.insert(folder(of: 2, at: 1), at: "/fake/a/old", on: share("a"))
+    await cache.insert(folder(of: 2, at: 2), at: "/fake/a/new", on: share("a"))
+    await cache.insert(folder(of: 2, at: 3), at: "/fake/a/y", on: share("a"))
+
+    #expect(await cache.folder(at: "/fake/a/new", on: share("a")) != nil)
+    // The oldest listing, no longer kept, went to make room.
+    #expect(await cache.folder(at: "/fake/a/old", on: share("a")) == nil)
+}
+
+@Test func keepingFoldersMovesTheByteCapsProtectionToTheirVolumeFiles() async throws {
+    let temporary = try TemporaryFolder("ListingCacheTests")
+    let writer = store(temporary)
+    await writer.save(["/fake/a/x": listing], for: share("a"))
+    await writer.save(["/fake/b/x": listing], for: share("b"))
+    await writer.flush()
+    let fileA = writer.url(for: share("a"))
+    let fileB = writer.url(for: share("b"))
+    for (file, age) in [(fileA, -7200.0), (fileB, -3600.0)] {
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSinceNow: age)], ofItemAtPath: file.path)
+    }
+    let size = try FileManager.default.attributesOfItem(atPath: fileA.path)[.size] as! Int
+
+    // Room for two files, not three.
+    let cache = ListingCache(store: store(temporary, byteCap: size * 2 + size / 2))
+    await cache.restore(folders: ["/fake/a/x"], mountedVolumes: { [share("a"), share("b")] })
+    await cache.keep(folders: ["/fake/b/x"])
+    await cache.insert(listing, at: "/fake/c/x", on: share("c"))
+    await cache.flush()
+
+    // a is the oldest file and no longer kept, so it goes for c; b stays.
+    #expect(!FileManager.default.fileExists(atPath: fileA.path))
+    #expect(FileManager.default.fileExists(atPath: fileB.path))
+}
+
+@Test func keepingFoldersStillKeepsTheVolumeOfAFolderRestoredFromTheStore() async throws {
+    let temporary = try TemporaryFolder("ListingCacheTests")
+    let writer = store(temporary)
+    await writer.save(["/fake/a/x": listing], for: share("a"))
+    await writer.flush()
+    let file = writer.url(for: share("a"))
+    try FileManager.default.setAttributes(
+        [.modificationDate: Date(timeIntervalSinceNow: -3600)], ofItemAtPath: file.path)
+    let size = try FileManager.default.attributesOfItem(atPath: file.path)[.size] as! Int
+
+    let cache = ListingCache(store: store(temporary, byteCap: size + size / 2))
+    await cache.restore(folders: ["/fake/a/x"], mountedVolumes: { [share("a")] })
+    await cache.keep(folders: ["/fake/a/x", "/fake/z"])
+    await cache.insert(listing, at: "/fake/b/x", on: share("b"))
+    await cache.flush()
+
+    #expect(FileManager.default.fileExists(atPath: file.path))
+}
