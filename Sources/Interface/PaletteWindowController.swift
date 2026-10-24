@@ -1,10 +1,10 @@
 import AppKit
 import Browser
 
-/// The palette's window: a panel whose title bar is hidden, a child of the browser window it opened
-/// over, centered on it near its top as Xcode's Open Quickly sits over its window. It takes the
-/// keys while it shows and closes when it loses them, as Spotlight does, and when its view
-/// controller closes it (docs/decisions/0087-palette-window.md).
+/// The palette's window: a borderless panel over a rounded blur, as Spotlight's is, a child of the
+/// browser window it opened over, centered on it near its top as Xcode's Open Quickly sits over
+/// its window. It takes the keys while it shows and closes when it loses them, as Spotlight does,
+/// and when its view controller closes it (docs/decisions/0087-palette-window.md).
 @MainActor
 public final class PaletteWindowController: NSWindowController, NSWindowDelegate {
     public let viewController: PaletteViewController
@@ -34,16 +34,14 @@ public final class PaletteWindowController: NSWindowController, NSWindowDelegate
             contentRect: NSRect(
                 x: 0, y: 0, width: PaletteViewController.width,
                 height: PaletteViewController.height),
-            styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: true)
-        panel.titleVisibility = .hidden
-        panel.titlebarAppearsTransparent = true
+            styleMask: [.borderless], backing: .buffered, defer: true)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
         panel.isMovable = false
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = true
         panel.becomesKeyOnlyIfNeeded = false
-        for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
-            panel.standardWindowButton(button)?.isHidden = true
-        }
         panel.setAccessibilityLabel("Open Quickly")
         super.init(window: panel)
         panel.contentViewController = viewController
@@ -112,6 +110,9 @@ public final class PaletteWindowController: NSWindowController, NSWindowDelegate
 private final class PalettePanel: NSPanel {
     var closingChords: Set<KeyChord> = []
     var onClosingChord: @MainActor () -> Void = {}
+
+    /// A borderless window refuses the keys unless told otherwise; the field needs them.
+    override var canBecomeKey: Bool { true }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard KeyChord.candidates(for: event).contains(where: closingChords.contains) else {

@@ -255,3 +255,33 @@ private func isBold(_ title: NSAttributedString, at offset: Int) -> Bool {
     #expect(try fixture.editor.string == "dl")
     #expect(fixture.ran.all.isEmpty && fixture.closes == 0)
 }
+
+@MainActor @Test func theContentIsAnActiveBehindWindowBlurWithRoundedCorners() {
+    let controller = PaletteWindowController(palette: Palette(sources: []))
+    let blur = controller.viewController.view as? NSVisualEffectView
+
+    #expect(blur?.material == .popover)
+    #expect(blur?.blendingMode == .behindWindow)
+    #expect(blur?.state == .active)
+    #expect(blur?.wantsLayer == true)
+    #expect(blur?.layer?.cornerRadius == PaletteViewController.cornerRadius)
+    #expect(blur?.layer?.masksToBounds == true)
+}
+
+@MainActor @Test func thePanelIsBorderlessClearAndShadowed() throws {
+    let controller = PaletteWindowController(palette: Palette(sources: []))
+    let panel = try #require(controller.window)
+
+    #expect(panel.styleMask.contains(.titled) == false)
+    #expect(panel.isOpaque == false)
+    #expect(panel.backgroundColor == .clear)
+    #expect(panel.hasShadow)
+    #expect(panel.canBecomeKey)
+}
+
+@MainActor @Test func theSearchFieldIsLargerThanTheRows() {
+    let controller = PaletteWindowController(palette: Palette(sources: []))
+    _ = controller.viewController.view
+
+    #expect((controller.viewController.field.font?.pointSize ?? 0) >= 24)
+}
