@@ -140,12 +140,21 @@ private func score(_ query: String, _ candidate: String) -> Int? {
             == ["Sessions", "Screenshots", "assets"])
 }
 
+@Test func typingANameRanksThatNameFirst() {
+    #expect(ranked("ab", ["a-b", "ab"]) == ["ab", "a-b"])
+    #expect(ranked("down", ["d-o-w-n", "Downloads"]) == ["Downloads", "d-o-w-n"])
+    // A whole component beats an initials chain of longer words, and a prefix of a longer name.
+    #expect(ranked("ab", ["ax-bx", "abc", "ab"]) == ["ab", "ax-bx", "abc"])
+    #expect(ranked("docs", ["dx-ox-cx-sx", "projects/docs"]) == ["projects/docs", "dx-ox-cx-sx"])
+    #expect(matchedTexts("docs", "docs/x/docs") == ["docs"])
+}
+
 @Test func eachBonusAndPenaltyCounts() throws {
     typealias M = FuzzyMatcher
     #expect(score("ab", "xab") == Int(M.runBonus))
     #expect(score("ab", "axb") == Int(M.componentStartBonus - M.gapOpenPenalty))
     #expect(score("b", "x-b") == Int(M.wordStartBonus))
-    #expect(score("b", "x/b") == Int(M.componentStartBonus))
+    #expect(score("b", "x/bc") == Int(M.componentStartBonus))
     // Into a later word: the gap's bytes count, and so does the new word.
     let intoLaterWord = try #require(score("ab", "a-xb"))
     #expect(
@@ -154,8 +163,13 @@ private func score(_ query: String, _ candidate: String) -> Int? {
                 M.componentStartBonus - M.gapOpenPenalty - 2 * M.gapBytePenalty
                     - M.newWordPenalty))
     #expect(score("ab", "a-xxb") == intoLaterWord - Int(M.gapBytePenalty))
-    // An initials chain keeps each word-start bonus with no gap cost.
-    #expect(score("ab", "a-xx-bx") == Int(M.componentStartBonus + M.wordStartBonus))
+    // An initials chain keeps each word-start bonus with no gap cost, for words of two or
+    // more letters.
+    #expect(score("ab", "ax-xx-bx") == Int(M.componentStartBonus + M.wordStartBonus))
+    #expect(score("ab", "a-xx-bx")! < Int(M.componentStartBonus))
+    #expect(
+        score("ab", "x/ab")
+            == Int(M.componentStartBonus + M.runBonus + 2 * M.exactComponentBonus))
 }
 
 @Test func aRunRanksAboveAGap() {
@@ -184,6 +198,7 @@ private func bruteForceScore(_ query: String, _ text: String) -> Int? {
     let byte = { (j: Int) in UInt8(truncatingIfNeeded: units[j]) }
     let position = { (j: Int) in M.Position(rawValue: UInt8(units[j] >> 8))! }
     let starts = { (j: Int) in position(j) == .wordStart || position(j) == .componentStart }
+    let longWord = { (j: Int) in j + 1 < units.count && position(j + 1) == .inWord }
     let bonus = { (j: Int) -> Int in
         switch position(j) {
         case .componentStart: Int(M.componentStartBonus)
@@ -198,7 +213,7 @@ private func bruteForceScore(_ query: String, _ text: String) -> Int? {
             guard placement[i] == placement[i - 1] + 1 else { return }
         }
         // The longest prefix that is an initials chain.
-        var chainEnd = starts(placement[0]) ? 0 : -1
+        var chainEnd = starts(placement[0]) && longWord(placement[0]) ? 0 : -1
         var chainScore = bonus(placement[0])
         var chainScores = [chainScore]
         if chainEnd == 0 {
@@ -206,7 +221,7 @@ private func bruteForceScore(_ query: String, _ text: String) -> Int? {
                 let (k, j) = (placement[i - 1], placement[i])
                 if isContinuation(i) {
                     chainEnd = i
-                } else if position(j) == .wordStart
+                } else if position(j) == .wordStart && longWord(j)
                     && !(k + 1...j).contains(where: { position($0) == .componentStart })
                 {
                     chainScore += bonus(j)
@@ -243,6 +258,19 @@ private func bruteForceScore(_ query: String, _ text: String) -> Int? {
         }
     }
     place(0, from: 0, [])
+    // The query as a whole path component.
+    let letters = query.count { $0 & 0xC0 != 0x80 }
+    let m = query.count
+    for start in units.indices
+    where position(start) == .componentStart && start + m <= units.count
+        && (start + m == units.count || byte(start + m) == UInt8(ascii: "/"))
+        && (0..<m).allSatisfy({ byte(start + $0) == query[$0] })
+    {
+        let exact =
+            Int(M.componentStartBonus) + Int(M.runBonus) * (letters - 1)
+            + Int(M.exactComponentBonus) * letters
+        best = max(best ?? exact, exact)
+    }
     return best
 }
 
