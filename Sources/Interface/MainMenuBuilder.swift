@@ -128,6 +128,8 @@ public enum MainMenuBuilder {
             .command(WindowCommands.movePaneToNewWindow.id),
             .command(WindowCommands.mergeWindowIntoTab.id),
             .separator,
+            .command(WorkspaceCommands.name.id), .command(WorkspaceCommands.delete.id),
+            .separator,
             .command(WindowCommands.toggleOperations.id),
             .separator,
             // Cmd-W closes the pane, then the tab with its last pane, then the window with its
