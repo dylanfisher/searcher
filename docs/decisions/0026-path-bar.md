@@ -36,9 +36,11 @@ name can't ride in the listing itself.
   row too long even then is clipped at the bar's edge.
 - **A truncated segment under the mouse** gets its full width, as in Finder's path bar: the bar
   lays the row out again with that segment shrinking last, so the others give way in the usual
-  order and the row's ends stay put. The change is instant, with no animation, so the segments
-  never move under a mouse that's still. The segment's left edge can only move left and its
-  right edge only right, so the mouse stays over it. Each segment still truncated after layout
+  order and the row's ends stay put. The change is instant, with no animation. Which segment is
+  hovered is read from the mouse's x against the row with nothing expanded, never against the
+  row as it lies, so it depends on the mouse alone. Reading it from the expanded row oscillated:
+  expanding one segment could move the next under a still mouse, AppKit then reported the mouse
+  over that one, it expanded, and the first came back. Each segment still truncated after layout
   has its full name as a tooltip, and the others have none (added 2026-10-23, M4.23).
 - **Inset.** The row starts 9 points from the bar's sides, `BarInset.horizontal`, which the
   operations panel's rows share, so the first folder lines up with their text (2026-10-23; it
@@ -53,13 +55,13 @@ name can't ride in the listing itself.
   with the titles at any font size. Its frame is the one around its intrinsic size taken as an
   alignment rect. The "›" text labels this replaced were given their intrinsic width, 5 points,
   while the glyph needs 9 with the label's insets, so the glyph was clipped.
-- **Hover.** Each segment has its own tracking area (entered and exited, in the visible rect,
-  while the app is active) and keeps whether the mouse is over it. The bar draws a rounded
+- **Hover.** The bar has one tracking area (entered, exited and moved, in the visible rect,
+  while the app is active; until 2026-10-23 each segment had its own) and keeps which segment
+  the mouse is over; a separator or the ends hover none. The bar draws a rounded
   `quaternaryLabelColor` rectangle behind that segment, 2 points taller than the title above and
   below, as Finder does; the color is darker grey in light mode and lighter in dark. Segments keep
   their intrinsic height, because a taller button draws its title lower than its baseline offset
-  reports, which put the chevrons off center. A new path replaces the segments, which clears the
-  highlight.
+  reports, which put the chevrons off center. A new path clears the highlight.
 
 ## Alternatives considered
 
@@ -73,11 +75,12 @@ name can't ride in the listing itself.
   rows aren't there, which is what the plan rules out.
 - **Route the click through the command registry** — not yet: no command takes a target folder.
   M3.6a's open-in-new-tab command is where a path command would join the registry.
-
 - **A short animation for the expanding segment** — rejected: the segments would slide under the
   mouse, and a tooltip or click mid-slide lands on a moving target.
 - **A tooltip only, no expanding** — rejected: Finder expands, and the tooltip waits for the
   hover delay.
+- **A tracking area per segment** — replaced: each segment reported the mouse against its
+  current frame, so an expansion that moved a neighbor under the mouse handed the hover on.
 
 ## Consequences
 
@@ -85,10 +88,9 @@ Every load, including a reload and a monitor's re-list, costs one more call off 
 A folder that fails to list moves the bar to it, so the bar and the error line agree. Until the
 first update of a pane lands, the bar is empty.
 
-Moving the mouse from an expanded segment into a truncated neighbor lays the row out again, and
-the segments to its right can grow back as the one it left shrinks. In a crowded row that can put
-the neighbor's new right edge left of the mouse, so the segment after it takes the hover. It
-settles on whichever segment is under the mouse after the next move.
+A segment hovers while the mouse is inside its span in the unexpanded row, so the highlight can
+change while the mouse is still over the expanded segment's text, at the point where the next
+segment's unexpanded span starts.
 
 ## Open questions for Dylan
 
