@@ -53,10 +53,13 @@ step adds the model, the files and the commands on the window's own workspace.
   file; a missing file is not a problem, and a failure is a `StoreProblem` of kind `unforgotten`.
 - **At launch** a named workspace that isn't in the session is listed as closed, and an unnamed
   one, which a crash left, has its file deleted. If `session.json` doesn't decode, no workspace
-  is open, so every unnamed file is deleted: none of them could be restored anyway. A closed
-  workspace whose name an open one, or another closed one, already has is logged and deleted, so
-  names stay unique; the open one is kept, and between closed ones the first in name and ID
-  order.
+  is open, so every unnamed file is deleted: none of them could be restored anyway.
+- **Names are unique after every launch.** Only a file edited by hand can repeat a name. A
+  workspace whose name an earlier one has keeps its layout and gets the next free name, as
+  Finder names a duplicate: "Project 1 2", then "Project 1 3", compared with the same folding
+  as naming (`WorkspaceList.freeName`). The renamed file is saved and the rename logged. Open
+  windows go first, front to back, then closed workspaces in name and ID order, so the front
+  window keeps its name.
 - **No naming before the launch's restore.** Until the restore lists the closed saved
   workspaces, their names aren't known, so `WorkspaceList.name` refuses with "Saved workspaces
   are still loading. Try again in a moment.", which the name sheet shows. The wait is the
@@ -64,6 +67,8 @@ step adds the model, the files and the commands on the window's own workspace.
 
 ## Alternatives considered
 
+- **Delete a workspace whose name is taken at launch** — rejected: it loses the user's layout
+  for a clash the user can fix by renaming.
 - **Forget a named workspace when Merge Window into Tab takes its tabs** — rejected: merging
   closes its window, and closing a saved workspace's window keeps it everywhere else.
 - **Delete without asking** — rejected: Delete closes the window and loses the layout, and the
@@ -78,4 +83,4 @@ step adds the model, the files and the commands on the window's own workspace.
 A saved workspace can be reopened only through `WorkspaceWindows.open(savedWorkspace:)` until
 the palette and sidebar land. A window opened by New Window while the launch is still reading
 the store can't be named until the restore has run. A file edited by hand to repeat a name
-loses that workspace at the next launch, with a log line.
+comes back under a numbered name at the next launch, with a log line.

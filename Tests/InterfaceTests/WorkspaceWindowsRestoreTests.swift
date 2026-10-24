@@ -582,7 +582,7 @@ private func expectReopenedAsBeforeClosing(with key: NSEvent) async throws {
     #expect(early.workspace.name == "Project 1")
 }
 
-@MainActor @Test func aClosedWorkspaceNamedLikeAnOpenOneIsDroppedAtLaunch() async throws {
+@MainActor @Test func aClosedWorkspaceNamedLikeAnOpenOneIsRenamedAtLaunch() async throws {
     let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
     let saving = makeWindows(store: diskStore(folder))
     let open = saving.open(at: Location(path: "/root"))
@@ -604,10 +604,45 @@ private func expectReopenedAsBeforeClosing(with key: NSEvent) async throws {
 
     #expect(
         restoring.list.saved == [
-            WorkspaceList.Saved(id: open.workspace.id, name: "Project 1", isOpen: true)
+            WorkspaceList.Saved(id: open.workspace.id, name: "Project 1", isOpen: true),
+            WorkspaceList.Saved(id: twin.id, name: "project 1 2", isOpen: false),
         ])
     #expect(await restoring.saveBeforeQuit(by: .now + .seconds(5)))
-    #expect(Array(await diskStore(folder).load().workspaces.keys) == [open.workspace.id])
+    let onDisk = await diskStore(folder).load().workspaces
+    #expect(onDisk[open.workspace.id]?.name == "Project 1")
+    #expect(onDisk[twin.id]?.name == "project 1 2")
+    #expect(onDisk[twin.id]?.tabs == twin.tabs)
+}
+
+@MainActor @Test func twoOpenWindowsWithTheSameNameAreRenamedAtLaunch() async throws {
+    let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
+    let saving = makeWindows(store: diskStore(folder))
+    let back = saving.open(at: Location(path: "/root"))
+    let front = saving.open(at: Location(path: "/root"))
+    try saving.list.name(back.workspace, as: "Project 1")
+    try saving.list.name(front.workspace, as: "Other")
+    #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
+    let saved = await diskStore(folder).load()
+    // As a hand edit could leave it: the front window renamed to the back one's name.
+    let frontState = try #require(saved.workspaces[front.workspace.id])
+    let clash = WorkspaceState(
+        id: frontState.id, name: "Project 1", frame: frontState.frame, tabs: frontState.tabs,
+        selectedTab: frontState.selectedTab, showsSidebar: frontState.showsSidebar)
+    var workspaces = saved.workspaces
+    workspaces[clash.id] = clash
+
+    let restoring = makeWindows(store: diskStore(folder))
+    restoring.holdSavesUntilRestore()
+    restoring.restore(WorkspaceStore.Contents(session: saved.session, workspaces: workspaces))
+
+    #expect(
+        restoring.list.saved == [
+            WorkspaceList.Saved(id: front.workspace.id, name: "Project 1", isOpen: true),
+            WorkspaceList.Saved(id: back.workspace.id, name: "Project 1 2", isOpen: true),
+        ])
+    #expect(await restoring.saveBeforeQuit(by: .now + .seconds(5)))
+    let onDisk = await diskStore(folder).load().workspaces
+    #expect(onDisk[back.workspace.id]?.name == "Project 1 2")
 }
 
 @MainActor @Test func openingASavedWorkspaceThatIsOpenFocusesItsWindow() throws {

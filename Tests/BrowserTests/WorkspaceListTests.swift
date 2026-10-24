@@ -330,3 +330,14 @@ private func savingList(_ count: Int) async -> (WorkspaceList, [Workspace], Even
     }
     #expect(list.closed.isEmpty)
 }
+
+@MainActor @Test func aFreeNameTakesTheNextNumberAsFinderNamesADuplicate() async throws {
+    let (list, workspaces, _) = await savingList(3)
+    try list.name(workspaces[0], as: "Project 1")
+    try list.name(workspaces[1], as: "project 1 2")
+
+    #expect(list.freeName("PROJECT 1", for: workspaces[2].id) == "PROJECT 1 3")
+    #expect(list.freeName("Project 1", for: workspaces[0].id) == "Project 1")
+    #expect(list.freeName("Archive", for: workspaces[2].id) == "Archive")
+    #expect(WorkspaceList.freeName("Notes", among: ["notes", "Notes 2"]) == "Notes 3")
+}
