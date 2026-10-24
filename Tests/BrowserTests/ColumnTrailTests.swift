@@ -85,7 +85,7 @@ private func press(_ chord: KeyChord, on pane: Pane) throws {
     await settle { trail(fixture.pane).columns[1].pane.state.isLoaded }
     #expect(trail(fixture.pane).columns[1].pane.state.names == ["sub", "x.txt"])
 
-    // No preview column for a file: the folder's column goes, and nothing replaces it.
+    // A file opens no column: the folder's column goes, and the file's preview isn't one.
     select("a.txt", in: first)
     #expect(paths(fixture.pane) == ["/r"])
 }
@@ -187,6 +187,7 @@ private func press(_ chord: KeyChord, on pane: Pane) throws {
 
     #expect(trail(fixture.pane).focusedIndex == 0)
     #expect(paths(fixture.pane) == ["/r"])
+    #expect(trail(fixture.pane).preview?.location == Location(path: "/r/a.txt"))
 }
 
 @MainActor
@@ -633,4 +634,85 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
     trail(pane).focus(trail(pane).columns[1])
 
     #expect(changes == 1)
+}
+
+@MainActor @Test func oneSelectedFileInTheLastColumnIsPreviewedFromItsListing() async throws {
+    let fixture = await columnPane()
+    let first = trail(fixture.pane).columns[0]
+    let calls = fixture.lister.calls.count
+    #expect(trail(fixture.pane).preview == nil)
+
+    select("a.txt", in: first)
+
+    let preview = try #require(trail(fixture.pane).preview)
+    let listing = try #require(first.pane.state.listing)
+    let row = try #require(listing.row(named: "a.txt"))
+    #expect(preview.location == Location(path: "/r/a.txt"))
+    #expect(preview.entry == file("a.txt"))
+    #expect(preview.kind == listing.kind(atRow: row))
+    // The preview is neither a column nor a pane, and reads nothing.
+    #expect(paths(fixture.pane) == ["/r"])
+    await drainMainQueue()
+    #expect(fixture.lister.calls.count == calls)
+}
+
+@MainActor @Test func aFolderSeveralRowsOrNoneSelectedClearThePreview() async throws {
+    let fixture = await columnPane()
+    let first = trail(fixture.pane).columns[0]
+    select("a.txt", in: first)
+    #expect(trail(fixture.pane).preview != nil)
+
+    select("docs", in: first)
+    #expect(trail(fixture.pane).preview == nil)
+
+    select("a.txt", in: first)
+    #expect(trail(fixture.pane).preview != nil)
+    first.pane.select(
+        Selection([ExactName("a.txt"), ExactName("other")], cursor: ExactName("a.txt")))
+    #expect(trail(fixture.pane).preview == nil)
+
+    select("a.txt", in: first)
+    #expect(trail(fixture.pane).preview != nil)
+    first.pane.select(Selection())
+    #expect(trail(fixture.pane).preview == nil)
+}
+
+@MainActor @Test func thePreviewFollowsTheLastColumnOnly() async throws {
+    let fixture = await columnPane()
+    let pane = fixture.pane
+    select("docs", in: trail(pane).columns[0])
+    await settle { trail(pane).columns[1].pane.state.isLoaded }
+
+    select("x.txt", in: trail(pane).columns[1])
+
+    #expect(trail(pane).preview?.location == Location(path: "/r/docs/x.txt"))
+    #expect(paths(pane) == ["/r", "/r/docs"])
+
+    // Choosing another folder on the left drops the column the file was in, and its preview.
+    select("other", in: trail(pane).columns[0])
+
+    #expect(trail(pane).preview == nil)
+}
+
+@MainActor @Test func aPatchedEntryUpdatesThePreviewAndARemovedOneClearsIt() async throws {
+    let fixture = await columnPane()
+    let first = trail(fixture.pane).columns[0].pane
+    select("a.txt", in: trail(fixture.pane).columns[0])
+
+    first.apply(.patches([.update(file("a.txt", size: 5))]), at: first.location)
+    await settle { trail(fixture.pane).preview?.entry.size == 5 }
+
+    first.apply(.patches([.remove(name: "a.txt")]), at: first.location)
+    await settle { trail(fixture.pane).preview == nil }
+    #expect(paths(fixture.pane) == ["/r"])
+}
+
+@MainActor @Test func closingTheTrailClearsThePreview() async throws {
+    let fixture = await columnPane(selecting: "a.txt")
+    let trail = trail(fixture.pane)
+    #expect(trail.preview != nil)
+
+    fixture.pane.setViewMode(.list)
+
+    #expect(trail.preview == nil)
 }

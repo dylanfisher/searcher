@@ -63,7 +63,9 @@ stacked single-column tables over `NSBrowser`.
 
 ## Consequences
 
-Columns are a fixed 240 points wide and can't be resized. A folder row shows no disclosure
+Columns are a fixed 240 points wide and can't be resized. There is no preview column
+(superseded 2026-10-24: one selected file in the last column shows a preview to its right, see
+[0090](0090-preview-column.md)). A folder row shows no disclosure
 chevron. A column whose folder can't be listed shows an empty table with no message; only the
 spinner is per column ([0053](0053-column-accessibility.md)). A column's table carries the list's
 `ListingViewController`, so changes to the list's rows reach columns too; a change meant for the

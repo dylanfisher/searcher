@@ -242,14 +242,15 @@ private struct Fixture {
     #expect(fixture.pane.location == Location(path: "/r/docs/sub"))
 }
 
-/// The views and children of the shown columns, and nothing else: a column, its separator and
-/// its spinner each.
+/// The views and children of the shown columns, and nothing else but the preview: a column, its
+/// separator and its spinner each.
 @MainActor
 private func expectOnlyShownColumns(in controller: ColumnViewController) {
     let shown = controller.columnControllers
     #expect(controller.children.count == shown.count)
     #expect(zip(controller.children, shown).allSatisfy { $0 === $1 })
-    let subviews = controller.columnsView.subviews
+    // The preview view stays once made, shown or hidden.
+    let subviews = controller.columnsView.subviews.filter { !($0 is ColumnPreviewView) }
     #expect(subviews.count == shown.count * 3)
     #expect(subviews.filter { $0 is NSProgressIndicator }.count == shown.count)
     #expect(shown.allSatisfy { column in subviews.contains { $0 === column.view } })
@@ -358,4 +359,88 @@ private struct LoadingThirdColumn {
 
     fixture.lister.release("/r/docs/sub")
     await settle { fixture.trail.columns[2].pane.state.isLoaded }
+}
+
+@MainActor @Test func oneSelectedFileShowsItsPreviewRightOfTheLastColumn() async throws {
+    let maker = IconMaker()
+    let iconCache = TypeIconCache(makeIcon: maker.icon(for:))
+    let fixture = await Fixture(iconCache: iconCache)
+    await fixture.select("docs", inColumn: 0)
+
+    await fixture.select("x.txt", inColumn: 1)
+    fixture.controller.view.layoutSubtreeIfNeeded()
+
+    let preview = try #require(fixture.trail.preview)
+    let view = try #require(fixture.controller.previewView)
+    #expect(!view.isHidden)
+    #expect(view.superview === fixture.controller.columnsView)
+    let last = try #require(fixture.controller.columnControllers.last).view.frame
+    #expect(view.frame.minX == last.maxX + 1)
+    #expect(view.frame.size == NSSize(width: ColumnViewController.columnWidth, height: last.height))
+    #expect(fixture.controller.columnsView.frame.width >= view.frame.maxX)
+    #expect(view.iconView.image === iconCache.icon(for: preview.kind.type))
+    #expect(view.iconView.frame.size == NSSize(width: 128, height: 128))
+    #expect(view.nameField.stringValue == "x.txt")
+    #expect(view.summaryField.stringValue == "\(preview.kind.text) – 1 byte")
+    #expect(view.sizeField.stringValue == "1 byte")
+    #expect(view.modifiedField.stringValue == EntryCellFormatter().date(testDate))
+    #expect(!view.acceptsFirstResponder)
+}
+
+@MainActor @Test func aFolderOrNoSelectionHidesThePreviewAndTheNextFileReusesIt() async throws {
+    let fixture = await Fixture()
+    await fixture.select("a.txt", inColumn: 0)
+    let view = try #require(fixture.controller.previewView)
+    #expect(!view.isHidden)
+    #expect(view.nameField.stringValue == "a.txt")
+
+    await fixture.select("docs", inColumn: 0)
+    #expect(view.isHidden)
+
+    await fixture.select("x.txt", inColumn: 1)
+    #expect(fixture.controller.previewView === view)
+    #expect(!view.isHidden)
+    #expect(view.nameField.stringValue == "x.txt")
+
+    fixture.trail.columns[1].pane.select(Selection())
+    #expect(view.isHidden)
+}
+
+@MainActor @Test func aPatchedFileUpdatesItsPreview() async throws {
+    let fixture = await Fixture()
+    await fixture.select("a.txt", inColumn: 0)
+    let view = try #require(fixture.controller.previewView)
+    let column = fixture.trail.columns[0].pane
+
+    column.apply(.patches([.update(file("a.txt", size: 2_000_000))]), at: column.location)
+
+    await settle { view.sizeField.stringValue == "2 MB" }
+    #expect(view.summaryField.stringValue.hasSuffix(" – 2 MB"))
+
+    column.apply(.patches([.remove(name: "a.txt")]), at: column.location)
+
+    await settle { view.isHidden }
+}
+
+/// → into a column whose first row is a file shows that file's preview past the right edge; it
+/// is scrolled into view with the focused column.
+@MainActor @Test func thePreviewIsScrolledIntoViewWithTheFocusedColumn() async throws {
+    // Room for two columns.
+    let fixture = await Fixture(width: ColumnViewController.columnWidth * 2 + 20)
+    await fixture.openThreeColumns()
+    let scrollView = try #require(fixture.controller.view as? NSScrollView)
+
+    fixture.trail.moveRight()
+    fixture.trail.moveRight()
+
+    #expect(fixture.trail.focusedIndex == 2)
+    #expect(fixture.trail.preview?.location == Location(path: "/r/docs/sub/one.flac"))
+    let view = try #require(fixture.controller.previewView)
+    let focused = fixture.controller.columnControllers[2].view.frame
+    #expect(scrollView.documentVisibleRect.contains(focused))
+    #expect(scrollView.documentVisibleRect.contains(view.frame))
+
+    // → on a file does nothing.
+    fixture.trail.moveRight()
+    #expect(fixture.trail.focusedIndex == 2)
 }

@@ -8,7 +8,8 @@
 M2.6 gives a pane a view mode, list or column (Cmd-1, Cmd-3). In column mode the pane holds a
 trail of columns, each with its own listing, selection, load and watch (`tmp/behavior.md`: →
 into the selected folder, ← to the parent column, Cmd-↑ or ← past the first column adds the
-parent on the left, no preview column). The plan asks columns to use the pane's load path, so
+parent on the left, no preview column; superseded 2026-10-24: one selected file shows a
+preview, see [0090](0090-preview-column.md)). The plan asks columns to use the pane's load path, so
 that M2.3's cached and offline states reach them without a second copy. `Pane` holds that path:
 the load through `ListingService`, the off-main sort and filter ([0025](0025-sort-off-main.md),
 [0031](0031-view-settings.md), [0037](0037-type-to-filter.md)), patches, and selection settling
