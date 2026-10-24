@@ -366,3 +366,53 @@ private func folder(of count: Int, at seconds: Double) -> ListingCache.Folder {
 
     #expect(FileManager.default.fileExists(atPath: file.path))
 }
+
+@Test func savesKeepingAColdFolderReadItsVolumeFileOnceThroughVolumePressure() async {
+    let loads = EventLog<String>()
+    let cache = ListingCache(
+        volumeCap: 1,
+        load: { volume in
+            loads.append(volume.device)
+            return [:]
+        }, save: { _, _ in }, flush: {}, findVolume: { _ in nil })
+    let mounted: @Sendable () -> [VolumeIdentity] = { [share("x"), share("y")] }
+    for second in 1...3 {
+        await cache.keep(folders: ["/fake/x/cold"], mountedVolumes: mounted)
+        await cache.insert(folder(of: 1, at: Double(second)), at: "/fake/y/z", on: share("y"))
+    }
+
+    #expect(loads.all.filter { $0 == "//nas/x" }.count == 1)
+}
+
+@Test func aSaveAfterAnEjectDoesNotMakeTheSharePlacedAsRestored() async throws {
+    let temporary = try TemporaryFolder("ListingCacheTests")
+    let writer = store(temporary)
+    await writer.save(["/fake/a/x": listing], for: share("a"))
+    await writer.flush()
+
+    let cache = ListingCache(store: store(temporary))
+    await cache.keep(folders: ["/fake/a/x"], mountedVolumes: { [] })
+
+    #expect(cache.restoredVolume(holding: "/fake/a/x") == nil)
+}
+
+@Test func keepingFoldersHoldsTheOldAndTheNewVolumeBeforeTheNewFileIsRead() async {
+    let events = EventLog<String>()
+    let cache = ListingCache(
+        load: { volume in
+            events.append("load \(volume.device)")
+            return [:]
+        }, save: { _, _ in }, flush: {},
+        findVolume: { _ in nil },
+        keepFiles: { volumes in events.append("hold \(volumes.map(\.device).sorted())") })
+    let mounted: @Sendable () -> [VolumeIdentity] = { [share("a"), share("b")] }
+    await cache.keep(folders: ["/fake/a/x"], mountedVolumes: mounted)
+    let before = events.all.count
+    await cache.keep(folders: ["/fake/b/x"], mountedVolumes: mounted)
+
+    // a stays held until b is, and b is held before its file is read.
+    #expect(
+        Array(events.all.dropFirst(before)) == [
+            "hold [\"//nas/a\", \"//nas/b\"]", "load //nas/b", "hold [\"//nas/b\"]",
+        ])
+}

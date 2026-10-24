@@ -84,3 +84,7 @@ A saved workspace can be reopened only through `WorkspaceWindows.open(savedWorks
 the palette and sidebar land. A window opened by New Window while the launch is still reading
 the store can't be named until the restore has run. A file edited by hand to repeat a name
 comes back under a numbered name at the next launch, with a log line.
+
+Each save that writes or deletes a workspace gives the listing cache the folders of every
+stored workspace (`ListingCache.keep(folders:)`), so a workspace named, or a pane moved, during
+the session keeps its folders through the caps from that save on.
