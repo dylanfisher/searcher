@@ -1,45 +1,140 @@
 #!/usr/bin/env bash
-# Run the test suite. Passes through any extra args to the test runner,
-# so `./scripts/test path/to/file` works for a focused run.
+# Run the tests.
+#   ./scripts/test                   the whole suite, skipped when its inputs match the last
+#                                    passing whole run (SEARCHER_RETEST=1 runs it anyway)
+#   ./scripts/test --changed [ref]   only the tests for the files changed since ref (default
+#                                    HEAD), uncommitted and untracked files included
+#   ./scripts/test <args>            passes args to swift test: `./scripts/test --filter name`
 # `--gentle` (first argument) or SEARCHER_GENTLE=1 throttles it: see scripts/gentle.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/gentle
-
-# Command Line Tools ship the Swift Testing macro plugin in a subdirectory the
-# default build system misses on a cold build ("plugin for module
-# 'TestingMacros' not found"). Point at it explicitly when it exists.
-swift_bin="$(xcrun --find swift)"
-plugins="$(dirname "$swift_bin")/../lib/swift/host/plugins/testing"
-flags=()
-[ -d "$plugins" ] && flags=(-Xswiftc -plugin-path -Xswiftc "$plugins")
 
 # Tests never play the alert sound: the BeepInterpose dylib replaces it and fails the test that
 # made it. dyld only interposes from an image loaded at launch, so the dylib is inserted into
 # the test processes, and only those, not the builds. It runs the toolchain's `swift`, not
 # /usr/bin/swift, because the system shim drops DYLD_* variables.
 # Reason: docs/decisions/0083-silent-tests.md.
-swift_cmd build "${flags[@]}" --product BeepInterpose
-beep_interpose="$(swift build --show-bin-path)/libBeepInterpose.dylib"
-swift_test() { DYLD_INSERT_LIBRARIES="$beep_interpose" "$swift_bin" test "$@"; }
+swift_cmd build --product BeepInterpose
+beep_interpose="$(swift_cmd build --show-bin-path)/libBeepInterpose.dylib"
+swift_test() { DYLD_INSERT_LIBRARIES="$beep_interpose" swift_cmd test "$@"; }
 
 # The interface tests run one at a time, everything else in parallel. Reason and
-# measurements: docs/decisions/0064-serial-interface-tests.md. A focused run (any
-# args) is a single swift test call; it picks its own tests, so there is no split.
+# measurements: docs/decisions/0064-serial-interface-tests.md. A run with swift test's own
+# args is a single call; it picks its own tests, so there is no split.
 serial="InterfaceTests"
 
 # Gentle mode builds the tests at low priority first; the run below stays at normal priority.
-[ -z "${SEARCHER_GENTLE:-}" ] || swift_cmd build --build-tests "${flags[@]}"
+[ -z "${SEARCHER_GENTLE:-}" ] || swift_cmd build --build-tests
 
-if [ $# -gt 0 ]; then
-  if [ -z "${SEARCHER_GENTLE:-}" ]; then
-    export DYLD_INSERT_LIBRARIES="$beep_interpose"
-    exec "$swift_bin" test "${flags[@]}" "$@"
+# A key for everything the tests are built from: the files under these paths as they are on
+# disk, tracked or not, and the toolchain. A copy of the index takes the snapshot, so the real
+# index is left alone.
+inputs=(Package.swift Sources Tests scripts/test scripts/gentle)
+inputs_key() {
+  local index tree
+  index="$(mktemp)"
+  cp "$(git rev-parse --git-path index)" "$index"
+  GIT_INDEX_FILE="$index" git add -A -- "${inputs[@]}"
+  tree="$(GIT_INDEX_FILE="$index" git write-tree)"
+  rm -f "$index"
+  { git rev-parse "${inputs[@]/#/$tree:}"; "$swift_bin" --version 2>&1; } | shasum | cut -d' ' -f1
+}
+passed=.build/tests-passed
+
+# run_all — the whole suite, recorded in $passed when it passes.
+run_all() {
+  local key status=0
+  key="$(inputs_key)"
+  if [ -z "${SEARCHER_RETEST:-}" ] && [ "$(cat "$passed" 2>/dev/null)" = "$key" ]; then
+    echo "tests: these inputs passed the whole suite already; skipped. SEARCHER_RETEST=1 runs them."
+    return 0
   fi
-  swift_test "${flags[@]}" "$@"; exit $?
-fi
+  rm -f "$passed"
+  swift_test --skip "$serial" || status=1
+  swift_test --filter "$serial" --no-parallel || status=1
+  [ "$status" -ne 0 ] || echo "$key" > "$passed"
+  return "$status"
+}
 
-status=0
-swift_test "${flags[@]}" --skip "$serial" || status=1
-swift_test "${flags[@]}" --filter "$serial" --no-parallel || status=1
-exit "$status"
+# test_functions <file> — the name of each @Test function in a test file, one per line.
+test_functions() {
+  perl -0777 -ne 's{//[^\n]*}{}g;
+    while (/\@Test\b(\((?:[^()]++|(?1))*\))?\s*(?:\@\w+(?:\((?:[^()]++|(?1))*\))?\s*)*(?:(?:static|nonisolated|private|fileprivate|internal|public|final)\s+)*func\s+(\w+)/g) { print "$2\n" }' "$1"
+}
+
+# select_file <test target> <test file> — "<target> <function>" for each test in the file, or
+# "<target> *" for the whole target when the file is gone or holds only helpers.
+select_file() {
+  local functions=""
+  [ -f "$2" ] && functions="$(test_functions "$2")"
+  if [ -z "$functions" ]; then echo "$1 *"; return; fi
+  printf "$1 %s\n" $functions
+}
+
+# select_tests <path> — what to run for one changed file: "*" for the whole suite, or lines of
+# select_file. A source file maps to its mirror in Tests (docs/map.md, Naming), or to its
+# target's tests when it has none. Paths that no test is built from print nothing.
+select_tests() {
+  local path="$1" module target mirror
+  case "$path" in
+    Package.swift | scripts/test | scripts/gentle | Sources/TestSupport/* | \
+      Sources/BrowserTestSupport/* | Sources/BeepInterpose/*)
+      echo "*" ;;
+    Tests/*.swift)
+      target="${path#Tests/}"
+      select_file "${target%%/*}" "$path" ;;
+    Sources/*.swift)
+      module="${path#Sources/}"
+      module="${module%%/*}"
+      target="${module}Tests"
+      if [ ! -d "Tests/$target" ]; then
+        echo "tests: no test target covers $path" >&2
+        return
+      fi
+      mirror="Tests/$target/$(basename "$path" .swift)Tests.swift"
+      if [ -f "$mirror" ]; then select_file "$target" "$mirror"; else echo "$target *"; fi ;;
+  esac
+}
+
+# run_changed [ref] — the tests for the files changed since ref.
+run_changed() {
+  local ref="${1:-HEAD}" changed path selected target filter functions status=0
+  changed="$({ git diff --name-only "$ref" --; git ls-files --others --exclude-standard; } | sort -u)"
+  selected="$(for path in $changed; do select_tests "$path"; done | sort -u)"
+  if [ -z "$selected" ]; then
+    echo "tests: nothing changed since $ref that a test is built from"
+    return 0
+  fi
+  if grep -qx '\*' <<<"$selected"; then
+    echo "tests: a shared input changed; running the whole suite"
+    run_all
+    return
+  fi
+  # One --filter per target: the whole target, or its functions as
+  # <target>.<function>( and <target>.<Suite>/<function>(.
+  local parallel=() serial_filter=()
+  for target in $(cut -d' ' -f1 <<<"$selected" | sort -u); do
+    if grep -qx "$target \*" <<<"$selected"; then
+      filter="^$target\."
+    else
+      functions="$(grep "^$target " <<<"$selected" | cut -d' ' -f2 | paste -sd'|' -)"
+      filter="^$target\.(.*/)?($functions)\("
+    fi
+    if [ "$target" = "$serial" ]; then serial_filter=(--filter "$filter")
+    else parallel+=(--filter "$filter"); fi
+  done
+  echo "tests: running the tests for"
+  printf '  %s\n' $changed
+  if [ ${#parallel[@]} -gt 0 ]; then swift_test "${parallel[@]}" || status=1; fi
+  if [ ${#serial_filter[@]} -gt 0 ]; then
+    swift_test "${serial_filter[@]}" --no-parallel || status=1
+  fi
+  return "$status"
+}
+
+case "${1:-}" in
+  "") run_all ;;
+  --changed) run_changed "${2:-}" ;;
+  *) swift_test "$@" ;;
+esac
