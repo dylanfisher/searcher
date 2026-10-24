@@ -1114,7 +1114,8 @@ private final class GatedWalks: @unchecked Sendable {
 @MainActor
 private func sizedPane(_ root: String, _ walks: GatedWalks) -> Pane {
     let pane = PaneFixture(
-        at: root, folders: [root: [folder("big"), file("f")], root + "/big": [file("x")]]
+        at: root, folders: [root: [folder("big"), file("f")], root + "/big": [file("x")]],
+        settings: sizedSettings()
     ).pane
     pane.folderSizes = walks.service()
     return pane

@@ -3,8 +3,8 @@ import Darwin
 import Foundation
 
 /// Walks folders for their sizes on a queue of its own, apart from `ListingService`'s: at most
-/// `mostRunningWalks` at once at utility QoS, each walk on a `BlockingCallThread`, and at most
-/// `mostWalks(on:)` on one volume. Sizes come from `FolderSizeCache` when it has them. Before a
+/// `mostRunningWalks` at once at utility QoS, each walk on a `BlockingCallThread` whose disk reads
+/// are throttled (`throttleDiskReads()`), and at most `mostWalks(on:)` on one volume. Sizes come from `FolderSizeCache` when it has them. Before a
 /// walk on a local volume starts, the service watches the folder's parent with FSEvents, and a
 /// change anywhere under a folder drops its size; a size whose parent can't be watched is
 /// delivered but not kept. See docs/decisions/0006-concurrency-shape.md and
@@ -211,7 +211,7 @@ public final class FolderSizeService: Sendable {
     }
 
     /// Drops the kept sizes of `folder` and every folder under it, so the next request for each
-    /// walks again, and returns whether it did. Recalculate Sizes runs it. When the folder's
+    /// walks again, and returns whether it did. Calculate Sizes runs it. When the folder's
     /// volume can't be read, nothing is dropped and the error goes to the log.
     public func recalculateSizes(under folder: String) async -> Bool {
         let volumeOf = volumeOf
@@ -302,6 +302,7 @@ public final class FolderSizeService: Sendable {
             outcome = .success(
                 try await BlockingCallThread.run(qos: .utility) {
                     BlockingCallThread.requireCurrent()
+                    Self.throttleDiskReads()
                     // The watch starts before the walk reads, so no change during it goes unseen.
                     let isWatched = isLocal ? self.watchParent(of: walk.path) : true
                     return (try walkFolder(walk.path) { walk.isCancelled }, isWatched)
@@ -329,6 +330,38 @@ public final class FolderSizeService: Sendable {
             preconditionFailure("a walk of \(walk.path) threw \(error), which isn't a ListingError")
         }
         finish(walk, with: result, started: true)
+    }
+
+    /// Puts the calling thread's disk I/O at the throttled tier, `IOPOL_THROTTLE`, so a walk's
+    /// reads wait while other I/O on the disk runs and listings aren't slowed by them. Utility QoS
+    /// alone gives a milder tier. Setting a thread's I/O policy takes away its QoS, which leaves
+    /// it at the default CPU priority, above utility's, so the thread then takes back the
+    /// priority it had. Each walk has a thread of its own, so the policy ends with the walk.
+    /// See docs/decisions/0043-folder-sizes.md.
+    static func throttleDiskReads() {
+        let priority = threadPriority()
+        let status = setiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_THREAD, IOPOL_THROTTLE)
+        precondition(status == 0, "setiopolicy_np failed with errno \(errno)")
+        var parameters = sched_param()
+        parameters.sched_priority = priority
+        let error = pthread_setschedparam(pthread_self(), SCHED_OTHER, &parameters)
+        precondition(error == 0, "pthread_setschedparam failed with \(error)")
+    }
+
+    /// The calling thread's base scheduling priority, as the kernel reports it.
+    static func threadPriority() -> Int32 {
+        var info = thread_extended_info()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<thread_extended_info>.size / MemoryLayout<integer_t>.size)
+        let port = mach_thread_self()
+        defer { mach_port_deallocate(mach_task_self_, port) }
+        let status = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                thread_info(port, thread_flavor_t(THREAD_EXTENDED_INFO), $0, &count)
+            }
+        }
+        precondition(status == KERN_SUCCESS, "thread_info failed with \(status)")
+        return info.pth_priority
     }
 
     /// Hands `result` to the walk's caller on the main actor, unless it is nil or the walk was

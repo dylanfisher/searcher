@@ -39,7 +39,8 @@ public final class Settings {
         didSet { store(foldersFirst, for: .foldersFirst, changed: foldersFirst != oldValue) }
     }
     /// Whether a pane in list view walks each subfolder for its size and shows it, on local and
-    /// network volumes alike. On by default.
+    /// network volumes alike: Finder's Calculate All Sizes. Off by default, as in Finder, so
+    /// browsing reads no more of the disk than the listings.
     public var folderSizes: Bool {
         didSet { store(folderSizes, for: .folderSizes, changed: folderSizes != oldValue) }
     }
@@ -81,7 +82,7 @@ public final class Settings {
         self.defaults = defaults
         showHidden = Self.bool(.showHidden, in: defaults) ?? false
         foldersFirst = Self.bool(.foldersFirst, in: defaults) ?? false
-        folderSizes = Self.bool(.folderSizes, in: defaults) ?? true
+        folderSizes = Self.bool(.folderSizes, in: defaults) ?? false
         terminalBundleID = Self.string(.terminalBundleID, in: defaults) ?? "com.apple.Terminal"
         commanderFKeys = Self.bool(.commanderFKeys, in: defaults) ?? false
         hideEmptyOperationsPanel = Self.bool(.hideEmptyOperationsPanel, in: defaults) ?? true

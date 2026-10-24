@@ -153,3 +153,49 @@ progress, which a revisit then walks again.
 Consequences: a folder whose size is in doubt shows its old size, not "…", until its walk lands.
 A left walk is cancelled whenever a shown folder needs its slot, so a big folder left behind
 keeps its size only if nothing else was waiting while it ran.
+
+## Amendment: sizes off by default, Calculate Sizes, throttled walks (M4.22)
+
+Dylan: "folder sizes should be an option to enable/disable. its important we don't thrash the
+disk. we should have a keyboard shortcut to calculate size in current folder". Finder's lead:
+Calculate All Sizes is a view option, off by default, and folders show "--".
+
+- **Off by default.** `Settings.folderSizes` defaults to false. View ▸ Calculate All Sizes
+  (`SizeCommands.calculateAllSizes`, Finder's name) toggles it with a checkmark and persists it,
+  as Folders First does. On, every list pane walks as before; off, the panes cancel running and
+  waiting walks and drop the sizes shown. Kept sizes stay in `FolderSizeCache`.
+- **Calculate Sizes, ⌃⌘S** (`SizeCommands.calculateSizes`), replaces Recalculate Sizes. In a
+  list pane it drops the kept sizes under the pane's folder with `recalculateSizes(under:)`, as
+  Recalculate Sizes did, then walks the folder's subfolders. With the setting on that is all it
+  does. With it off it walks them once, and the folder shows the sizes the cache keeps from then
+  on; the pane side is in [0051](0051-folder-sizes-in-list.md)'s M4.22 amendment. It is off in
+  column view, as before. One command because both cases mean "walk this folder now": with the
+  setting off nothing is kept to recalculate, and two items for the same walk would differ only
+  by whether the setting is on. No other command has ⌃⌘S; Finder gives sizes no key.
+- **Throttled disk reads.** Each walk's `BlockingCallThread` calls
+  `setiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_THREAD, IOPOL_THROTTLE)` before it reads
+  (`FolderSizeService.throttleDiskReads()`), so a walk's reads wait while other I/O on the disk
+  runs. The thread is the walk's own and ends with it, so no other work inherits the policy;
+  listings, volume reads and Calculate Sizes' drop run on threads without it. Utility QoS alone
+  isn't the same: `getiopolicy_np` reads `IOPOL_DEFAULT` on a utility thread, and xnu's QoS table
+  gives utility I/O tier 1, the tier `IOPOL_STANDARD` names, where `IOPOL_THROTTLE` is tier 3.
+  Measured on macOS 26 (Darwin 25.6): setting the policy also takes away the thread's QoS, so
+  `qos_class_self()` reads unspecified and the base priority goes from utility's 20 to the
+  default 31; `pthread_set_qos_class_self_np` then fails with `EPERM`. The walk thread reads its
+  base priority before setting the policy and puts it back with `pthread_setschedparam`, so walks
+  keep utility's CPU priority. A test reads both on the walk thread. The four-walk and one-per-share
+  caps are unchanged.
+
+Rejected: **walks at background QoS** — xnu gives it I/O tier 2, not 3, its CPU priority is 4,
+it runs only on efficiency cores and Low Power Mode defers it further, so a walk on screen would
+slow far more than the disk needs; and `getiopolicy_np` can't show its tier. **`IOPOL_UTILITY`**
+— tier 2, which still competes with listings more than tier 3. **A process-wide policy** — it
+throttles listings. **Leaving the priority at 31** — walks would outrank every utility thread on
+the CPU, the opposite of the point. **Keeping Recalculate Sizes beside Calculate Sizes** — see
+above.
+
+Consequences: a walk reads slower while anything else reads the disk, including listings and
+other apps, by design; on an idle disk the throttle has no cost. A walk thread no longer has a
+QoS class, so the scheduler treats it as a legacy thread at priority 20 rather than a utility
+one, which can change which cores it runs on. The throttle applies to local disks; a share's
+reads go over the network and are paced by its one-walk cap as before.
