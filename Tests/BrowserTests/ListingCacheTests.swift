@@ -320,8 +320,47 @@ private func folder(of count: Int, at seconds: Double) -> ListingCache.Folder {
     let size = try FileManager.default.attributesOfItem(atPath: file.path)[.size] as! Int
 
     let cache = ListingCache(store: store(temporary, byteCap: size + size / 2))
-    await cache.restore(folders: ["/fake/a/x"], mountedVolumes: { [share("a")] })
-    await cache.keep(folders: ["/fake/a/x", "/fake/z"])
+    // The share isn't mounted, so its file is found in the store.
+    await cache.restore(folders: ["/fake/a/x"], mountedVolumes: { [] })
+    await cache.keep(folders: ["/fake/a/x", "/fake/z"], mountedVolumes: { [] })
+    await cache.insert(listing, at: "/fake/b/x", on: share("b"))
+    await cache.flush()
+
+    #expect(FileManager.default.fileExists(atPath: file.path))
+}
+
+@Test func keepingAColdFolderOfAMountedShareKeepsTheSharesFile() async throws {
+    let temporary = try TemporaryFolder("ListingCacheTests")
+    let writer = store(temporary)
+    await writer.save(["/fake/a/x": listing], for: share("a"))
+    await writer.flush()
+    let file = writer.url(for: share("a"))
+    try FileManager.default.setAttributes(
+        [.modificationDate: Date(timeIntervalSinceNow: -3600)], ofItemAtPath: file.path)
+    let size = try FileManager.default.attributesOfItem(atPath: file.path)[.size] as! Int
+
+    let cache = ListingCache(store: store(temporary, byteCap: size + size / 2))
+    // No listing of the folder yet, so no key for it in the share's folders.
+    await cache.keep(folders: ["/fake/a/new"], mountedVolumes: { [share("a")] })
+    await cache.insert(listing, at: "/fake/b/x", on: share("b"))
+    await cache.flush()
+
+    #expect(FileManager.default.fileExists(atPath: file.path))
+}
+
+@Test func keepingAFolderOfAVolumeLeftMemoryKeepsItsFile() async throws {
+    let temporary = try TemporaryFolder("ListingCacheTests")
+    let first = ListingCache(volumeCap: 1, store: store(temporary))
+    await first.insert(listing, at: "/fake/a/x", on: share("a"))
+    await first.flush()
+    let file = store(temporary).url(for: share("a"))
+    try FileManager.default.setAttributes(
+        [.modificationDate: Date(timeIntervalSinceNow: -3600)], ofItemAtPath: file.path)
+    let size = try FileManager.default.attributesOfItem(atPath: file.path)[.size] as! Int
+
+    // A new cache starts with a out of memory, as one the volume cap dropped is.
+    let cache = ListingCache(volumeCap: 1, store: store(temporary, byteCap: size + size / 2))
+    await cache.keep(folders: ["/fake/a/x"], mountedVolumes: { [share("a")] })
     await cache.insert(listing, at: "/fake/b/x", on: share("b"))
     await cache.flush()
 
