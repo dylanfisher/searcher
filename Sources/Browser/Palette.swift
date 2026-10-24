@@ -50,6 +50,9 @@ public final class Palette {
     /// The ranking whose results `results` holds.
     private var rankedRequest = 0
 
+    /// The latest ranking, cancelled when a later one replaces it.
+    private(set) var ranking: Task<[Result], Never>?
+
     /// Whether a ranking is still running. Tests wait on it.
     var isRanking: Bool { rankedRequest != rankRequest }
 
@@ -99,9 +102,11 @@ public final class Palette {
         let gathered = gathered
         let query = query
         let limit = limit
+        self.ranking?.cancel()
         let ranking = Task.detached(priority: .userInitiated) {
             Self.rank(gathered, for: query, limit: limit)
         }
+        self.ranking = ranking
         Task { [weak self] in
             let results = await ranking.value
             guard let self, request == rankRequest else { return }
@@ -124,10 +129,12 @@ public final class Palette {
     }
 
     /// The best `limit` of `gathered`'s items for `query`, without the items an earlier source
-    /// handed over.
-    nonisolated static func rank(_ gathered: [[PaletteItem]], for query: String, limit: Int)
-        -> [Result]
-    {
+    /// handed over. Stops before the next bucket once `isCancelled`, returning nothing, since a
+    /// later query's ranking replaces it.
+    nonisolated static func rank(
+        _ gathered: [[PaletteItem]], for query: String, limit: Int,
+        isCancelled: () -> Bool = { Task.isCancelled }
+    ) -> [Result] {
         var seen: Set<PaletteItem.ID> = []
         var items: [PaletteItem] = []
         for batch in gathered {
@@ -150,6 +157,7 @@ public final class Palette {
         }
         var ranked: [Ranked] = []
         for (bucket, unsorted) in buckets {
+            if isCancelled() { return [] }
             let items =
                 unsorted.allSatisfy({ $0.frecency == unsorted[0].frecency })
                 ? unsorted

@@ -27,7 +27,10 @@ no recursive file search or Spotlight (that is M5b.3).
     bonus in the matcher (6), so they reorder near-ties rather than override the match.
 - **Frecency** (`FolderHistory`) is the visit count times a weight for how long ago the last
   visit was, as zoxide weights it: 4 within the hour, 2 within the day, 1/2 within the week,
-  1/4 before. It keeps 1,000 folders; a visit past that drops the least frecent.
+  1/4 before. It keeps 1,000 folders; a visit past that drops the least frecent. It is
+  stored as a list of folders sorted by path, each with its count and last visit; a file with
+  more than 1,000 folders, a path that isn't absolute, listed twice or out of order, or a count
+  under 1 fails to decode, and the store discards and reports it like any other mismatch.
 - **Ties.** Equal scores rank workspaces, then folders, then commands; then the larger frecency
   bonus; then as `best` ranks them, the shorter text first; then the more frecent folder.
 - **Top-k, not a full sort.** Items are split into buckets of the same kind, frecency bonus and
@@ -43,13 +46,17 @@ no recursive file search or Spotlight (that is M5b.3).
 - **A typed path.** A query starting with `/` or `~` that holds a `/` lists the parent it names
   (expanded by `PathInput`) through `ListingService`, off the main actor. Its folders are titled
   the typed parent plus the name, and matched from the end of the typed parent by the name typed
-  after the last `/`, so "~/Do" scores the "Do" against "Documents". Only folders are listed;
-  hidden ones only once the typed name starts with a dot, as Finder's Go to Folder completes.
+  after the last `/`, so "~/Do" scores the "Do" against "Documents". Only folders are listed.
+  A folder whose name starts with a dot is listed once the typed name does too; one hidden by
+  its flag, such as `~/Library`, always is, as Finder's Go to Folder completes it. A full listing
+  after cached rows or a first batch keeps the items already made and prepares only the new
+  folders.
 - **Duplicates.** An item another source already gave, such as a typed path's folder that is in
   the history, is dropped; the earlier source's item is kept.
 - **Off the main actor.** Each key gathers every source's items on the main actor, from memory,
-  and ranks them in a detached task. A source's items for an earlier query, and a ranking a
-  later one replaced, are dropped by generation.
+  and ranks them in a detached task. A source's items for an earlier query are dropped by
+  generation. A new ranking cancels the one it replaces, which stops before its next bucket, and
+  only the latest ranking's results are kept.
 
 ## Alternatives considered
 
@@ -68,6 +75,14 @@ no recursive file search or Spotlight (that is M5b.3).
   key cost several times more.
 
 ## Consequences
+
+For a query of one or two letters, an unvisited folder named exactly that ranks below a saved
+workspace whose name only starts with it: "p" scores 13 in "~/p" (10 at the component start and
+3 for the whole component) and 10 in "Project 1", which the workspace bonus lifts to 15. This is
+accepted: one or two letters say little about which item is meant, the user named the
+workspace, and a folder the user visits passes it soon, since two visits within the hour add 3.
+From three letters a whole component earns 3 a letter on top of the prefix bonus ("pro" scores
+37 in "~/pro" and 28 in "~/Projects"), so the exact name wins.
 
 `FolderHistory` is stored in `<application support root>/folder-history.json`, beside the
 session, by `WorkspaceStore`, with the same delayed atomic write and the same discard of a file
