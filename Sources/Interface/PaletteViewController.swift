@@ -29,6 +29,8 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
     public private(set) var shownQuery: String?
     private var results: [Palette.Result] = []
 
+    /// What the field's editor is asked to do for a key with no binding, such as Cmd-T.
+    private static let noop = Selector(("noop:"))
     /// How many rows show without scrolling.
     static let visibleRows = 9
     static let width: CGFloat = 640
@@ -186,7 +188,9 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
         palette.setQuery(field.stringValue)
     }
 
-    /// ↑, ↓, Return and Esc in the field; every other key edits the text.
+    /// ↑, ↓, Return and Esc in the field; every other key edits the text. Option- and
+    /// Shift-Return run the item as Return does, rather than typing a line break, and a Command
+    /// key the field doesn't use does nothing, rather than beep: the menu has had it first.
     public func control(
         _ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector
     )
@@ -201,10 +205,14 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
             moveSelection(by: Self.visibleRows)
         case #selector(NSResponder.pageUp(_:)), #selector(NSResponder.scrollPageUp(_:)):
             moveSelection(by: -Self.visibleRows)
-        case #selector(NSResponder.insertNewline(_:)):
+        case #selector(NSResponder.insertNewline(_:)),
+            #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)),
+            #selector(NSResponder.insertLineBreak(_:)):
             runSelected()
         case #selector(NSResponder.cancelOperation(_:)):
             close()
+        case Self.noop:
+            break
         default:
             return false
         }

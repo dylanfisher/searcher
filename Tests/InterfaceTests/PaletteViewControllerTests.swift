@@ -20,8 +20,8 @@ private struct FixedSource: PaletteSource {
     func cancel() {}
 }
 
-/// A palette over the folders "Downloads" and "Documents" and the commands New Tab and Show
-/// Palette, in a view that is never shown, with what ran and the beeps counted. New Tab is off
+/// A palette over `folders`, "Downloads" and "Documents" unless given, and the commands New Tab
+/// and Open Quickly, in a view that is never shown, with what ran and the beeps counted. New Tab is off
 /// while `newTabIsOff`.
 @MainActor
 private final class Fixture {
@@ -32,7 +32,7 @@ private final class Fixture {
     var beeps = 0
     var newTabIsOff = false
 
-    init() {
+    init(folders: [String] = ["Downloads", "Documents"]) {
         let ran = ran
         func folder(_ name: String) -> PaletteItem {
             PaletteItem(id: .folder(path: "/Users/me/\(name)"), title: name) { ran.append(name) }
@@ -43,7 +43,7 @@ private final class Fixture {
             ) { ran.append(command.title) }
         }
         let palette = Palette(sources: [
-            FixedSource(items: [folder("Downloads"), folder("Documents")]),
+            FixedSource(items: folders.map(folder)),
             FixedSource(items: [
                 command(WindowCommands.newTab), command(WindowCommands.showPalette),
             ]),
@@ -215,4 +215,43 @@ private func isBold(_ title: NSAttributedString, at offset: Int) -> Bool {
     try await fixture.type("new")
     let command = try #require(fixture.cell(at: fixture.row(titled: "New Tab")))
     #expect(command.accessibilityLabel() == "New Tab, command, ⌘T, unavailable")
+}
+
+@MainActor @Test func aHomePathTitleAndAnAccentedTitleBoldTheLettersMatched() async throws {
+    let fixture = Fixture(folders: ["~/Projects", "Résumés"])
+
+    try await fixture.type("pr")
+    let path = try #require(fixture.cell(at: fixture.row(titled: "~/Projects")))
+    let pathTitle = path.titleField.attributedStringValue
+    #expect((0..<pathTitle.length).filter { isBold(pathTitle, at: $0) } == [2, 3])
+
+    // "e" matches "é".
+    try await fixture.type("res")
+    let accented = try #require(fixture.cell(at: fixture.row(titled: "Résumés")))
+    let accentedTitle = accented.titleField.attributedStringValue
+    #expect((0..<accentedTitle.length).filter { isBold(accentedTitle, at: $0) } == [0, 1, 2])
+}
+
+@MainActor @Test func optionAndShiftReturnRunTheSelectedItemAsReturnDoes() async throws {
+    for modifiers: NSEvent.ModifierFlags in [.option, .shift] {
+        let fixture = Fixture()
+        try await fixture.type("dl")
+
+        try fixture.press("\r", keyCode: 36, modifiers: modifiers)
+
+        #expect(fixture.ran.all == ["Downloads"], "\(modifiers)")
+        #expect(fixture.beeps == 0)
+        #expect(fixture.window.unhandledCommands.isEmpty && fixture.window.unhandledKeys.isEmpty)
+    }
+}
+
+@MainActor @Test func aCommandKeyTheFieldDoesntUseDoesNothing() async throws {
+    let fixture = Fixture()
+    try await fixture.type("dl")
+
+    try fixture.press("t", keyCode: 17, modifiers: .command)
+
+    #expect(fixture.window.unhandledCommands.isEmpty && fixture.window.unhandledKeys.isEmpty)
+    #expect(try fixture.editor.string == "dl")
+    #expect(fixture.ran.all.isEmpty && fixture.closes == 0)
 }

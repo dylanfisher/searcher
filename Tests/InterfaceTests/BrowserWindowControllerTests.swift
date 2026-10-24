@@ -1016,21 +1016,112 @@ private func sidebarKey() throws -> NSEvent {
     #expect(first.nextKeyView !== outline)
 }
 
-@MainActor @Test func escInThePaletteClosesItAndGivesTheKeysBackToTheFocusedPanesTable()
-    async throws
-{
-    let fixture = try await Fixture()
-    let table = try fixture.keyTable
-    try fixture.press(try keyEvent("k", modifiers: .command))
-    let palette = try #require(fixture.controller.palette)
-    let panel = try #require(palette.window)
+// MARK: Palette
+
+/// A text field in `fixture`'s window outside every pane, to move the window's keys to while the
+/// palette shows: on screen they stay where they were, but a test must see them come back.
+@MainActor
+private func strayField(in fixture: Fixture) throws -> NSTextField {
+    let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 100, height: 22))
+    try #require(fixture.window.contentView).addSubview(field)
+    return field
+}
+
+/// Shows the palette over `fixture`'s window, moves the window's keys to a stray field, and
+/// presses Esc in the palette's field.
+@MainActor
+private func escapePalette(in fixture: Fixture) throws {
+    let panel = try #require(fixture.controller.palette?.window)
     let editor = try #require(panel.firstResponder as? NSTextView)
     #expect(editor.isFieldEditor)
-    // On screen the keys go to the panel; this window never shows, so take them from the table.
-    fixture.window.makeFirstResponder(nil)
+    #expect(fixture.window.makeFirstResponder(try strayField(in: fixture)))
 
     editor.keyDown(with: try keyEvent("\u{1B}"))
 
     #expect(fixture.controller.palette == nil)
+}
+
+@MainActor @Test func escInThePaletteGivesTheKeysBackToTheTableThatHadThem() async throws {
+    let fixture = try await Fixture()
+    let table = try fixture.keyTable
+    try fixture.press(try keyEvent("k", modifiers: .command))
+
+    try escapePalette(in: fixture)
+
     #expect(fixture.window.firstResponder === table)
+}
+
+@MainActor @Test func escInThePaletteGivesTheKeysBackToTheSidebarThatHadThem() async throws {
+    let fixture = try await Fixture()
+    try fixture.press(try sidebarKey())
+    let outline = fixture.controller.sidebar.outlineView
+    #expect(fixture.window.makeFirstResponder(outline))
+    fixture.controller.showPalette()
+
+    try escapePalette(in: fixture)
+
+    #expect(fixture.window.firstResponder === outline)
+}
+
+@MainActor @Test func escInThePaletteGivesTheKeysBackToTheFilterFieldThatHadThem() async throws {
+    let fixture = try await Fixture()
+    try fixture.press(try keyEvent("f", modifiers: .command))
+    let filter = fixture.controller.paneViewController.filterBar.field
+    // The menu item runs Open Quickly with the keys in the field.
+    fixture.controller.showPalette()
+
+    try escapePalette(in: fixture)
+
+    let editor = try #require(fixture.window.firstResponder as? NSTextView)
+    #expect(editor.delegate === filter)
+}
+
+@MainActor @Test func cmdKAndCmdWInThePaletteCloseItAsKeyEquivalents() async throws {
+    for key in ["k", "w"] {
+        let fixture = try await Fixture()
+        let table = try fixture.keyTable
+        fixture.controller.showPalette()
+        let panel = try #require(fixture.controller.palette?.window)
+
+        #expect(panel.performKeyEquivalent(with: try keyEvent(key, modifiers: .command)))
+
+        #expect(fixture.controller.palette == nil, "Cmd-\(key)")
+        #expect(fixture.window.firstResponder === table)
+        #expect(fixture.workspace.tabs.count == 1)
+    }
+}
+
+@MainActor @Test func anotherCommandKeyInThePaletteDoesNothingAndDoesntBeep() async throws {
+    let fixture = try await Fixture()
+    fixture.controller.showPalette()
+    let panel = try #require(fixture.controller.palette?.window)
+    let editor = try #require(panel.firstResponder as? NSTextView)
+    let newTab = try keyEvent("t", modifiers: .command)
+
+    // The menu takes it next, where the item is off; then the field's editor gets it.
+    #expect(!panel.performKeyEquivalent(with: newTab))
+    editor.keyDown(with: newTab)
+
+    #expect(fixture.controller.palette != nil)
+    #expect(fixture.workspace.tabs.count == 1)
+}
+
+@MainActor @Test func thePaletteClosesWhenItLosesTheKeys() async throws {
+    let fixture = try await Fixture()
+    fixture.controller.showPalette()
+    let palette = try #require(fixture.controller.palette)
+
+    NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: palette.window)
+
+    #expect(fixture.controller.palette == nil)
+}
+
+@MainActor @Test func closingTheWindowClosesItsPalette() async throws {
+    let fixture = try await Fixture()
+    fixture.controller.showPalette()
+    #expect(fixture.controller.palette != nil)
+
+    fixture.window.close()
+
+    #expect(fixture.controller.palette == nil)
 }

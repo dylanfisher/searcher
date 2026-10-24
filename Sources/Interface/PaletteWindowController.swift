@@ -8,6 +8,18 @@ import Browser
 @MainActor
 public final class PaletteWindowController: NSWindowController, NSWindowDelegate {
     public let viewController: PaletteViewController
+    /// Chords that close the palette while it has the keys: Open Quickly's, so it toggles, and
+    /// Close Pane's, as Cmd-W closes Xcode's Open Quickly. Set by the window that shows it.
+    var closingChords: Set<KeyChord> {
+        get { panel.closingChords }
+        set { panel.closingChords = newValue }
+    }
+    private var panel: PalettePanel {
+        guard let panel = window as? PalettePanel else {
+            preconditionFailure("the palette's window isn't its panel")
+        }
+        return panel
+    }
     /// Runs once as the palette closes, by Esc, a chosen item or losing the keys.
     var onClose: @MainActor () -> Void = {}
     private var isClosed = false
@@ -18,7 +30,7 @@ public final class PaletteWindowController: NSWindowController, NSWindowDelegate
 
     init(palette: Palette) {
         viewController = PaletteViewController(palette: palette)
-        let panel = NSPanel(
+        let panel = PalettePanel(
             contentRect: NSRect(
                 x: 0, y: 0, width: PaletteViewController.width,
                 height: PaletteViewController.height),
@@ -39,6 +51,7 @@ public final class PaletteWindowController: NSWindowController, NSWindowDelegate
             NSSize(width: PaletteViewController.width, height: PaletteViewController.height))
         panel.initialFirstResponder = viewController.field
         panel.delegate = self
+        panel.onClosingChord = { [weak self] in self?.close() }
         viewController.onClose = { [weak self] in self?.close() }
     }
 
@@ -89,5 +102,22 @@ public final class PaletteWindowController: NSWindowController, NSWindowDelegate
     /// Spotlight does.
     public func windowDidResignKey(_ notification: Notification) {
         close()
+    }
+}
+
+/// The palette's panel, which closes the palette on one of `closingChords`. A key window is
+/// offered a key equivalent before the menu bar, so these chords never reach the menu, whose
+/// items are off while the palette has the keys.
+@MainActor
+private final class PalettePanel: NSPanel {
+    var closingChords: Set<KeyChord> = []
+    var onClosingChord: @MainActor () -> Void = {}
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard KeyChord.candidates(for: event).contains(where: closingChords.contains) else {
+            return super.performKeyEquivalent(with: event)
+        }
+        onClosingChord()
+        return true
     }
 }
