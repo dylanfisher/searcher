@@ -1,16 +1,24 @@
-/// Folder sizes: Recalculate Sizes drops the kept sizes of the pane's folder and every folder
-/// under it, so the list walks its subfolders again (docs/decisions/0043-folder-sizes.md). It has
-/// no chord; the View menu runs it. It is off where the pane shows no folder sizes, such as in
-/// column view.
+/// Folder sizes (docs/decisions/0043-folder-sizes.md). Calculate All Sizes, Finder's name for it,
+/// turns `Settings.folderSizes` on and off: on, every list pane walks its subfolders. Calculate
+/// Sizes walks the subfolders of the pane's folder now: with the setting off it walks them once
+/// and the folder shows their sizes from then on, and with it on it drops the kept sizes of the
+/// folder and every folder under it and walks again. It is off where the pane shows no folder
+/// sizes, such as in column view.
 public enum SizeCommands: CommandSet {
-    public static let recalculateSizes = Command(
-        id: CommandID("size.recalculate"), title: "Recalculate Sizes", chords: [])
+    public static let calculateAllSizes = Command(
+        id: CommandID("size.calculateAll"), title: "Calculate All Sizes", chords: [])
+    public static let calculateSizes = Command(
+        id: CommandID("size.calculate"), title: "Calculate Sizes",
+        chords: [KeyChord("s", modifiers: [.control, .command])])
 
     public static var bindings: [CommandBinding] {
         [
             CommandBinding(
-                recalculateSizes, isEnabled: { $0.pane.showsFolderSizes },
-                run: { $0.pane.recalculateSizes() })
+                calculateAllSizes, isChecked: { $0.folderSizes },
+                run: { $0.pane.settings.folderSizes.toggle() }),
+            CommandBinding(
+                calculateSizes, isEnabled: { $0.pane.canCalculateSizes },
+                run: { $0.pane.calculateSizes() }),
         ]
     }
 }

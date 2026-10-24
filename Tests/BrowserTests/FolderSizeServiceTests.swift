@@ -19,7 +19,9 @@ private let laterModified = Date(timeIntervalSinceReferenceDate: 700_000_060)
 private final class FakeWalks: @unchecked Sendable {
     struct Start: Equatable {
         let path: String
-        let qos: DispatchQoS.QoSClass
+        /// The thread's disk I/O policy, from `getiopolicy_np`.
+        let ioPolicy: Int32
+        let priority: Int32
         let onBlockingCallThread: Bool
     }
 
@@ -44,7 +46,8 @@ private final class FakeWalks: @unchecked Sendable {
             startedWalks.append(
                 Start(
                     path: path,
-                    qos: DispatchQoS.QoSClass(rawValue: qos_class_self()) ?? .unspecified,
+                    ioPolicy: getiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_THREAD),
+                    priority: FolderSizeService.threadPriority(),
                     onBlockingCallThread: BlockingCallThread.isCurrent))
             running += 1
             mostRunning = max(mostRunning, running)
@@ -215,19 +218,27 @@ private func makeFolder(_ path: String) throws {
     #expect(Set(walks.starts.map(\.path)) == Set(paths))
 }
 
-@Test func walksRunOnBlockingCallThreadsAtUtility() async throws {
+@Test func walksRunOnBlockingCallThreadsWithThrottledDiskReadsAtUtilityPriority() async throws {
     let folder = try TemporaryFolder("FolderSizeServiceTests")
     let walks = FakeWalks()
     walks.releaseAll()
     let sizes = service(walks) { _ in ListingService.listerVolume }
     let log = EventLog<(String, SizeResult)>()
+    let utility = await BlockingCallThread.run(qos: .utility) {
+        (FolderSizeService.threadPriority(), getiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_THREAD))
+    }
 
     request(sizes, folder.url.path, into: log)
 
     #expect(await log.wait { $0.count == 1 })
+    // Utility QoS alone leaves the thread's policy at the default; its tier isn't the throttled one.
+    #expect(utility.1 == IOPOL_DEFAULT)
     #expect(
-        walks.starts
-            == [FakeWalks.Start(path: folder.url.path, qos: .utility, onBlockingCallThread: true)])
+        walks.starts == [
+            FakeWalks.Start(
+                path: folder.url.path, ioPolicy: IOPOL_THROTTLE, priority: utility.0,
+                onBlockingCallThread: true)
+        ])
 }
 
 @Test func aShareRunsOneWalkAtATime() async throws {

@@ -4,13 +4,14 @@ import Foundation
 
 /// The Size and Date Modified text of a list row, in Finder's formats: "4.2 MB", "Zero bytes",
 /// "--" for anything without a size, and "Today at 9:41 AM" or "Sep 13, 2020 at 12:26 PM". A
-/// folder whose size is walked shows `pendingSize` until its walk ends, then its size, after
+/// folder waiting for its walk shows `pendingSize` until the walk ends, then its size, after
 /// `partialPrefix` when part of its tree couldn't be read.
 @MainActor
 public struct EntryCellFormatter {
     /// A folder whose walk hasn't ended.
     public static let pendingSize = "…"
-    /// Anything without a size: a link, a folder whose sizes aren't shown or whose walk failed.
+    /// Anything without a size: a link, a folder whose sizes aren't shown, aren't walked or whose
+    /// walk failed.
     public static let noSize = "--"
     /// Before a folder's size when the walk couldn't read all of it, so the size is a lower bound.
     public static let partialPrefix = "≥ "
@@ -32,15 +33,17 @@ public struct EntryCellFormatter {
         dates.doesRelativeDateFormatting = true
     }
 
-    /// The Size text of `entry`. `folderSize` is its walked size, for a folder, and
-    /// `showsFolderSizes` whether the pane walks its folders; without it a folder has no size.
+    /// The Size text of `entry`. `folderSize` is its walked size, for a folder,
+    /// `showsFolderSizes` whether the pane shows its folders' sizes, without which a folder has
+    /// no size, and `awaitsFolderSizes` whether a folder without one waits for a walk.
     public func size(
-        _ entry: DirectoryEntry, folderSize: Listing.FolderSizeValue?, showsFolderSizes: Bool
+        _ entry: DirectoryEntry, folderSize: Listing.FolderSizeValue?, showsFolderSizes: Bool,
+        awaitsFolderSizes: Bool
     ) -> String {
         if let size = entry.size { return sizes.string(fromByteCount: size) }
         guard showsFolderSizes, entry.type == .directory else { return Self.noSize }
         switch folderSize {
-        case nil: return Self.pendingSize
+        case nil: return awaitsFolderSizes ? Self.pendingSize : Self.noSize
         case .failed: return Self.noSize
         case .size(let bytes, let isPartial):
             let text = sizes.string(fromByteCount: bytes)

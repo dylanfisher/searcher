@@ -133,3 +133,33 @@ load's worker would wait behind walks finishing and network volume file reads.
 
 Consequences: a share's sizes not yet read from its volume file this session aren't on the first
 rows; the scan's request reads them, as before. B4 now includes this lookup on the load's worker.
+
+## Amendment: sizes on request (M4.22)
+
+The setting is off by default and Calculate Sizes (⌃⌘S) walks one folder on request
+([0043](0043-folder-sizes.md)'s M4.22 amendment). The pane's side:
+
+- **Which folders show sizes.** `Pane.showsFolderSizes` is true in a list pane with a service
+  when the setting is on, or when the pane's folder is one it ran Calculate Sizes in with the
+  setting off (`calculatedFolders`, by path). Turning the setting off empties that set. A visit
+  to such a folder applies the kept sizes to its first rows as before, and its scan reapplies
+  known sizes but asks for no walk, so a revisit, a reload and a change event walk nothing.
+- **Once.** With the setting off, Calculate Sizes sets `calculatesSizesOnce`; the next scan asks
+  for every folder row the cache doesn't answer, notes the asked names in `calculatingSizes`, and
+  clears the flag. Later scans in that folder ask for nothing, so a subfolder that changes shows
+  "--" until Calculate Sizes runs again. Leaving the folder clears both, and walks behave as
+  before: local ones finish and keep their sizes, share ones are cancelled.
+- **Text.** `Pane.awaitsFolderSizes` says whether a folder row without a size waits for a walk:
+  the setting is on, or the once scan's walks haven't all landed. `EntryCellFormatter` shows "…"
+  for it then and "--" otherwise, as it already did for a failed walk and for panes without
+  sizes.
+
+Rejected: **sharing `calculatedFolders` across panes in the service** — the request is the
+pane's, and the other pane can run the chord; a set in the pane needs no lock. **Walking new
+subfolders after a change while the folder stays shown** — that is what the setting is for, and
+"once" is what keeps the disk quiet with it off.
+
+Consequences: a folder calculated in one pane shows "--" in another until that pane runs the
+chord, which drops the kept sizes and walks them again. A size the cache marks as in doubt still shows
+on a revisit with the setting off, since nothing walks it again; Calculate Sizes replaces it.
+The calculated folders last for the pane's life.
