@@ -1,17 +1,31 @@
 /// A tab as plain values: its layout, with ratios, focus, focus history and zoom, and for each
-/// leaf the pane's location, view mode and Back and Forward history. The only `Codable` form of a
-/// tab; `Pane` itself isn't. It leaves out what a pane shows (rows, selection, filter, sort) and,
-/// in column mode, every column but the focused one's folder, which is the pane's location.
+/// leaf the pane's location, view mode, Back and Forward history, selection by name and sort. The
+/// only `Codable` form of a tab; `Pane` itself isn't. It leaves out the rows, the filter, hidden
+/// files, the scroll offset and the selection history, and, in column mode, every column but the
+/// focused one's folder, which is the pane's location.
 public struct TabState: Codable, Equatable, Sendable {
     public struct PaneState: Equatable, Sendable {
         public let location: Location
         public let viewMode: ViewMode
         public let history: History
+        /// The selected entries' names. A name no longer in the folder is dropped on restore.
+        public let selection: Set<ExactName>
+        public let cursor: ExactName?
+        public let sortColumn: SortColumn
+        public let sortAscending: Bool
 
-        public init(location: Location, viewMode: ViewMode, history: History) {
+        public init(
+            location: Location, viewMode: ViewMode, history: History,
+            selection: Set<ExactName>, cursor: ExactName?, sortColumn: SortColumn,
+            sortAscending: Bool
+        ) {
             self.location = location
             self.viewMode = viewMode
             self.history = history
+            self.selection = selection
+            self.cursor = cursor
+            self.sortColumn = sortColumn
+            self.sortAscending = sortAscending
         }
     }
 
@@ -40,10 +54,19 @@ public struct TabState: Codable, Equatable, Sendable {
         let viewMode: StoredViewMode
         let back: [StoredEntry]
         let forward: [StoredEntry]
+        /// Sorted by UTF-8 bytes, for the same reason.
+        let selection: [String]
+        let cursor: String?
+        let sortColumn: StoredSortColumn
+        let sortAscending: Bool
     }
 
     private enum StoredViewMode: String, Codable {
         case list, column
+    }
+
+    private enum StoredSortColumn: String, Codable {
+        case name, size, dateModified, kind
     }
 
     private struct StoredEntry: Codable {
@@ -70,10 +93,22 @@ public struct TabState: Codable, Equatable, Sendable {
                 case .list: .list
                 case .column: .column
                 }
+            let sortColumn: StoredSortColumn =
+                switch pane.sortColumn {
+                case .name: .name
+                case .size: .size
+                case .dateModified: .dateModified
+                case .kind: .kind
+                }
             return StoredPane(
                 id: id, path: pane.location.path, viewMode: viewMode,
                 back: pane.history.backEntries.map(StoredEntry.init),
-                forward: pane.history.forwardEntries.map(StoredEntry.init))
+                forward: pane.history.forwardEntries.map(StoredEntry.init),
+                selection: pane.selection.map(\.name).sorted {
+                    $0.utf8.lexicographicallyPrecedes($1.utf8)
+                },
+                cursor: pane.cursor?.name, sortColumn: sortColumn,
+                sortAscending: pane.sortAscending)
         }
         try container.encode(stored, forKey: .panes)
     }
@@ -97,12 +132,22 @@ public struct TabState: Codable, Equatable, Sendable {
                     case .list: .list
                     case .column: .column
                     }
+                let sortColumn: SortColumn =
+                    switch pane.sortColumn {
+                    case .name: .name
+                    case .size: .size
+                    case .dateModified: .dateModified
+                    case .kind: .kind
+                    }
                 let history = History(
                     back: pane.back.map(\.entry), forward: pane.forward.map(\.entry))
                 return (
                     pane.id,
                     PaneState(
-                        location: Location(path: pane.path), viewMode: viewMode, history: history)
+                        location: Location(path: pane.path), viewMode: viewMode, history: history,
+                        selection: Set(pane.selection.map(ExactName.init)),
+                        cursor: pane.cursor.map(ExactName.init), sortColumn: sortColumn,
+                        sortAscending: pane.sortAscending)
                 )
             })
     }

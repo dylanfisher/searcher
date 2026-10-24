@@ -32,14 +32,25 @@ public final class Tab {
         return pane
     }
 
-    /// The panes' locations, view modes and histories with the layout, as plain values.
+    /// The panes' locations, view modes, histories, selections and sorts with the layout, as
+    /// plain values. A settled selection of names gives them as they are, so one whose folder is
+    /// still loading keeps them; any other, such as Select All's, gives the selected rows' names.
     public var state: TabState {
         checkOpen()
         return TabState(
             layout: layout,
-            panes: panes.mapValues {
-                TabState.PaneState(
-                    location: $0.location, viewMode: $0.viewMode, history: $0.history)
+            panes: panes.mapValues { pane in
+                let shown = pane.commandPane
+                let selection: Set<ExactName> =
+                    if shown.selection.isSettled, case .only(let names) = shown.selection.members {
+                        names
+                    } else {
+                        Set(shown.selectedEntries.map { ExactName($0.name) })
+                    }
+                return TabState.PaneState(
+                    location: pane.location, viewMode: pane.viewMode, history: pane.history,
+                    selection: selection, cursor: shown.selection.cursor,
+                    sortColumn: pane.sortColumn, sortAscending: pane.sortAscending)
             })
     }
 
