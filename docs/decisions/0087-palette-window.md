@@ -83,8 +83,8 @@ title, kind, chord and whether it is unavailable; a pass with VoiceOver on is le
 Dylan asked for the blurred, rounded look of Spotlight's window. The panel is now borderless
 (`.borderless`, with `canBecomeKey` overridden so the field still takes the keys), non-opaque with
 a clear background and a window shadow. The content is an `NSVisualEffectView` with material
-`.popover`, blending `.behindWindow` and state `.active`, its layer rounded to 20 pt with the
-continuous curve. `.popover` is the material the system uses for popovers and follows light and dark
+`.popover`, blending `.behindWindow` and state `.active`, rounded to 20 pt by a
+resizable `maskImage`, so the blur and the window shadow follow the shape. `.popover` is the material the system uses for popovers and follows light and dark
 appearance; `.hudWindow` is always dark and `.menu` is tuned for menu rows. The state is `.active`
 because the panel is only ever shown with the keys, and a blur that went flat when the panel lost
 them would flash as it closes. Nothing overrides the view's handling of Reduce Transparency or
