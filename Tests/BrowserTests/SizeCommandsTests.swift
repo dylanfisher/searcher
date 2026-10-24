@@ -167,8 +167,8 @@ private func albumsSize(_ pane: Pane) -> Listing.FolderSizeValue? {
     #expect(!isEnabled(CommandContext(pane: pane.commandPane)))
 }
 
-@Test func calculateSizesHasControlCommandS() throws {
-    #expect(SizeCommands.calculateSizes.chords == [KeyChord("s", modifiers: [.control, .command])])
+@Test func calculateSizesHasOptionCommandS() throws {
+    #expect(SizeCommands.calculateSizes.chords == [KeyChord("s", modifiers: [.option, .command])])
     #expect(SizeCommands.calculateAllSizes.chords.isEmpty)
     #expect(
         AppCommands.sets.contains { ObjectIdentifier($0) == ObjectIdentifier(SizeCommands.self) })

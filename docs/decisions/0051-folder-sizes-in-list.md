@@ -136,7 +136,7 @@ rows; the scan's request reads them, as before. B4 now includes this lookup on t
 
 ## Amendment: sizes on request (M4.22)
 
-The setting is off by default and Calculate Sizes (⌃⌘S) walks one folder on request
+The setting is off by default and Calculate Sizes (⌥⌘S) walks one folder on request
 ([0043](0043-folder-sizes.md)'s M4.22 amendment). The pane's side:
 
 - **Which folders show sizes.** `Pane.showsFolderSizes` is true in a list pane with a service
@@ -163,3 +163,6 @@ Consequences: a folder calculated in one pane shows "--" in another until that p
 chord, which drops the kept sizes and walks them again. A size the cache marks as in doubt still shows
 on a revisit with the setting off, since nothing walks it again; Calculate Sizes replaces it.
 The calculated folders last for the pane's life.
+
+Amendment (2026-10-24): Calculate Sizes is on Option-Command-S, not Control-Command-S
+([0043](0043-folder-sizes.md)).

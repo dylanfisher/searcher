@@ -13,11 +13,10 @@ public enum WorkspaceCommands: CommandSet {
     public static let delete = Command(
         id: CommandID("workspace.delete"), title: "Delete Workspace…", chords: [])
     /// Shows the window's workspace sidebar, or hides it; the workspace keeps which. Its menu
-    /// item says which it would do, as Finder's does. Finder's chord, Control-Command-S, is
-    /// Calculate Sizes' here, so it has Option-Command-S, Finder's chord for it before.
+    /// item says which it would do, as Finder's does, and has Finder's chord, Control-Command-S.
     public static let toggleSidebar = Command(
         id: CommandID("workspace.toggleSidebar"), title: "Show Sidebar",
-        chords: [KeyChord("s", modifiers: [.option, .command])])
+        chords: [KeyChord("s", modifiers: [.control, .command])])
     /// Shows the sidebar and moves the keys into it. Esc there gives them back to the pane.
     public static let focusSidebar = Command(
         id: CommandID("workspace.focusSidebar"), title: "Focus Sidebar", chords: [])

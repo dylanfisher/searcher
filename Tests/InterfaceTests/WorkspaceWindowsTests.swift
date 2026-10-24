@@ -697,7 +697,7 @@ private func stopEverything(_ windows: WorkspaceWindows) async {
     let fixture = try await Fixture()
     let first = try #require(fixture.windows.controllers.first)
     try fixture.press(
-        try keyEvent("s", characters: "ß", modifiers: [.command, .option]), in: first)
+        try keyEvent("s", modifiers: [.command, .control]), in: first)
 
     try fixture.press(try keyEvent("n", modifiers: .command), in: first)
 
@@ -708,7 +708,7 @@ private func stopEverything(_ windows: WorkspaceWindows) async {
     #expect(fixture.windows.open(at: Location(path: "/root")).showsSidebar)
 
     try fixture.press(
-        try keyEvent("s", characters: "ß", modifiers: [.command, .option]), in: first)
+        try keyEvent("s", modifiers: [.command, .control]), in: first)
     try #require(first.window).makeKeyAndOrderFront(nil)
     fixture.windows.list.activate(first.workspace)
 
