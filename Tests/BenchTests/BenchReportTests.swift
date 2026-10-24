@@ -90,3 +90,16 @@ private func copyReport(
     let text = line(for: copyReport([900, 1000, 1000], environment: ["CI": "true"]).cases[0])
     #expect(!text.contains("UNDER FLOOR"), "\(text)")
 }
+
+@Test func copyMissNamesTheMedianWhereverItIsPrinted() throws {
+    let copy = copyReport([1000, 2000, 2000])
+    let text = copy.cases[0].missText()
+    #expect(text.hasPrefix("over budget: copy median 2000"), "\(text)")
+    #expect(!text.contains("p95"), "\(text)")
+    let regression = RegressionReport(previous: nil, current: copy)
+    #expect(regression.text.contains("over budget: copy median"), "\(regression.text)")
+    let budgeted = BenchReport.Case(
+        name: "open", budget: try Budget.named("B10"), unit: .milliseconds,
+        samples: Samples([1000]))
+    #expect(budgeted.missText().hasPrefix("over budget: open p95 1000"), "\(budgeted.missText())")
+}

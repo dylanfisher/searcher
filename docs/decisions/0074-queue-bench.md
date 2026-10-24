@@ -44,7 +44,11 @@ table's numbers alone, in ms and MB, and the UI bench reports stalls without jud
   per 1 GB; it fails when the rate at its median time is under the floor, and the p95 rate is
   printed for information. S7's 792 is the median of 5 runs and runs to an image swing about 2×,
   so a p95 against a median always failed; the floor is judged like with like. `compare` and
-  `bench.json` use the same `overBudget` flag. Ten runs. On CI (`CI`
+  `bench.json` use the same `overBudget` flag. Ten runs, with
+  one untimed warm-up copy first so the source is in the page cache, and after each run the copy
+  is removed and the image flushed with `F_FULLFSYNC`, untimed: without that the previous run's
+  dirty pages and freed space compete with the next 1 GB write. The timed region is the
+  `FileCopier` call alone. On CI (`CI`
   set) the rate and the floor are printed and the case is reported only: the hosted runners copy
   to virtualised disks at a rate no run has shown yet. Enforce it on CI once a few runs show
   the real rate there.

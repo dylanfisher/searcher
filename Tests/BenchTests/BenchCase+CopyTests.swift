@@ -21,3 +21,15 @@ import Testing
     #expect(milliseconds > 0)
     #expect(try FileManager.default.contentsOfDirectory(atPath: image.path) == [])
 }
+
+@Test func copyCaseWarmsUpBeforeItsTimedRuns() {
+    #expect(BenchCase.copy(to: "/image").warmUp != nil)
+}
+
+@Test func flushingAFolderSucceedsAndAMissingOneFails() throws {
+    let folder = try TemporaryFolder("CopyBenchFlush")
+    try BenchCase.flush(folder.url.path)
+    #expect(throws: POSIXError.self) {
+        try BenchCase.flush(folder.url.appending(path: "none").path)
+    }
+}
