@@ -6,6 +6,8 @@
 # problem. Fixing four failures should cost one run, not four.
 set -uo pipefail
 cd "$(dirname "$0")/.."
+# `--gentle` (first argument) or SEARCHER_GENTLE=1 throttles the build and tests.
+source scripts/gentle
 
 failures=()
 
@@ -101,7 +103,7 @@ run residue bash -c '
 run format    swift format lint --strict --recursive --parallel Package.swift Sources Tests
 # The build is the typecheck: Swift 6 mode, warnings as errors. Importing a
 # target that isn't a declared dependency fails here too.
-run typecheck swift build --explicit-target-dependency-import-check error
+run typecheck swift_cmd build --explicit-target-dependency-import-check error
 run arch      ./scripts/arch
 # TCC grants, caches and Services key on the bundle ID, so the app has to run as
 # a bundle carrying the one ID in Sources/Searcher/Info.plist. Comparing the
