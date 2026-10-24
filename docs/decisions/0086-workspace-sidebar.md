@@ -1,4 +1,4 @@
-# 0086. Workspace sidebar: a Finder-style source list, on Option-Command-S
+# 0086. Workspace sidebar: a Finder-style source list, on Control-Command-S
 
 - **Date:** 2026-10-24
 - **Status:** accepted
@@ -46,10 +46,10 @@ commands on one chord. Each window already stored whether its sidebar shows
 - **Tab and Shift-Tab.** The window puts the sidebar's list into the key view loop just before
   the focused pane's key view, and moves it when the focus moves, so Shift-Tab in the pane and
   Tab in the sidebar go between the two. A hidden sidebar is passed over.
-- **Option-Command-S for Show Sidebar.** Control-Command-S stays Calculate Sizes.
+- **Option-Command-S for Show Sidebar.** Control-Command-S stayed Calculate Sizes.
   Option-Command-S was Finder's Hide Sidebar chord in earlier macOS versions, and nothing here
-  used it. Giving the sidebar Finder's current chord means moving Calculate Sizes, which is
-  Dylan's call.
+  used it. Giving the sidebar Finder's current chord meant moving Calculate Sizes, which was
+  Dylan's call (see the amendment below).
 - **Menu titles from bindings.** A command item's title now comes from its binding's `title`
   when it has one, as Undo's did; this also makes Name Workspace… read Rename Workspace… once
   named, which 0082 described but the menu didn't show.
@@ -68,6 +68,10 @@ commands on one chord. Each window already stored whether its sidebar shows
 ## Consequences
 
 With no window open, a new window opens with the sidebar hidden; restored and reopened windows
-show it as saved. With no saved workspace the sidebar shows only its group row. If
-Calculate Sizes moves off Control-Command-S, `WorkspaceCommands.toggleSidebar` can take it in a
-one-line change.
+show it as saved. With no saved workspace the sidebar shows only its group row.
+
+## Amendment: Control-Command-S (2026-10-24)
+
+Dylan decided the sidebar takes Finder's chord, Control-Command-S. Calculate Sizes moved to
+Option-Command-S ([0043](0043-folder-sizes.md)); no other command uses it and it is not a
+system-wide macOS shortcut. The Context and the bullet above describe the chord as first built.

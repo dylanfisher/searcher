@@ -864,10 +864,10 @@ private func copySnapshot(_ id: Int, _ phase: OperationState.Phase) -> FileOpera
 
 // MARK: Workspace sidebar
 
-/// Option-Command-S as a US keyboard types it.
+/// Control-Command-S.
 @MainActor
 private func sidebarKey() throws -> NSEvent {
-    try keyEvent("s", characters: "ß", modifiers: [.command, .option])
+    try keyEvent("s", modifiers: [.command, .control])
 }
 
 @MainActor @Test func theSidebarKeyShowsAndHidesTheSidebarAndTheWorkspaceKeepsIt() async throws {

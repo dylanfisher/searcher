@@ -319,8 +319,8 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
                 windowNumber: 0, context: nil, characters: ">", charactersIgnoringModifiers: ">",
                 isARepeat: false, keyCode: 47)),
         try keyEvent("6", modifiers: [.control, .option, .command]),
+        try keyEvent("s", modifiers: [.option, .command]),
         try keyEvent("s", modifiers: [.control, .command]),
-        try keyEvent("s", characters: "ß", modifiers: [.option, .command]),
     ]
     for press in presses {
         let item = try item(for: press, in: menu)

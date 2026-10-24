@@ -824,7 +824,7 @@ private func expectReopenedAsBeforeClosing(with key: NSEvent) async throws {
     let saving = makeWindows(store: diskStore(folder))
     let controller = saving.open(at: Location(path: "/root"))
     let table = try #require(controller.window?.firstResponder as? ListingTableView)
-    table.keyDown(with: try keyEvent("s", characters: "ß", modifiers: [.command, .option]))
+    table.keyDown(with: try keyEvent("s", modifiers: [.command, .control]))
     #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
     let contents = await diskStore(folder).load()
     #expect(contents.workspaces[controller.workspace.id]?.showsSidebar == true)

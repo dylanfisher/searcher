@@ -102,15 +102,14 @@ private func binding(_ command: Command) throws -> CommandBinding {
     #expect(asked.all == ["focusSidebar"])
 }
 
-/// Finder's Show Sidebar chord, Control-Command-S, is Calculate Sizes' here, so the sidebar
-/// takes Option-Command-S, the key Finder used for it before.
-@MainActor @Test func toggleSidebarHasOptionCommandSAndCalculateSizesKeepsItsChord() throws {
+/// Show Sidebar has Finder's chord, Control-Command-S; Calculate Sizes has Option-Command-S.
+@MainActor @Test func toggleSidebarHasControlCommandSAndCalculateSizesHasOptionCommandS() throws {
     let registry = try AppCommands.registry()
     #expect(
-        registry.command(for: KeyChord("s", modifiers: [.option, .command]))
+        registry.command(for: KeyChord("s", modifiers: [.control, .command]))
             == WorkspaceCommands.toggleSidebar)
     #expect(
-        registry.command(for: KeyChord("s", modifiers: [.control, .command]))
+        registry.command(for: KeyChord("s", modifiers: [.option, .command]))
             == SizeCommands.calculateSizes)
     #expect(WorkspaceCommands.focusSidebar.chords.isEmpty)
 }
