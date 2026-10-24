@@ -21,6 +21,8 @@ public struct CommandRegistry: Sendable {
         }
     }
 
+    /// Every command, in the order registered.
+    public private(set) var commands: [Command] = []
     private var byID: [CommandID: Command] = [:]
     private var byChord: [KeyChord: Command] = [:]
 
@@ -39,6 +41,7 @@ public struct CommandRegistry: Sendable {
                 throw .chord(chord, existing: existing, new: command)
             }
         }
+        commands.append(command)
         byID[command.id] = command
         for chord in command.chords {
             byChord[chord] = command
