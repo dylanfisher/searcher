@@ -36,6 +36,19 @@ private let side = CGRect(x: 5120, y: 0, width: 5120, height: 2840)
         #expect(SecondDisplay.placed(frame, on: [main, side]) == frame)
     }
 
+    @Test func displaysLeftOfOrAboveTheMainOneAreTargets() {
+        let frame = CGRect(x: 100, y: 300, width: 800, height: 600)
+        let left = CGRect(x: -5120, y: 0, width: 5120, height: 2840)
+        let above = CGRect(x: 0, y: 2840, width: 5120, height: 2840)
+
+        let toLeft = SecondDisplay.placed(frame, on: [main, left])
+        let toAbove = SecondDisplay.placed(frame, on: [main, above])
+
+        #expect(toLeft == CGRect(x: -5020, y: 275, width: 800, height: 600))
+        #expect(toAbove == CGRect(x: 100, y: 3115, width: 800, height: 600))
+        #expect(left.contains(toLeft) && above.contains(toAbove))
+    }
+
     @Test func oneDisplayLeavesTheFrameAlone() {
         let frame = CGRect(x: 100, y: 300, width: 800, height: 600)
 
