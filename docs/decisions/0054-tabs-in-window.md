@@ -116,3 +116,11 @@ effect at the next focus change. Closing a window with its close button leaves i
 tabs to be freed with the window controller, as the one-pane window did (superseded: the
 window now closes its panes, see [0057](0057-windows-and-tear-out.md)). Tabs have no close
 button and can't be dragged; Close Tab and Close Pane close them.
+
+## Amendment: every command outside the tables (2026-10-24)
+
+Outside every pane's table and outside a text field, as in the sidebar, the path bar or the tab
+strip, the window controller now takes every command's menu item but Quick Look, and the Edit
+menu's command items, and runs them on the focused pane's table
+([0089](0089-sidebar-key-routing.md)). In a text field only the window and tab commands' items
+work, as the bullet above says.
