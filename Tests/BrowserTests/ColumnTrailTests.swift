@@ -716,3 +716,28 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
 
     #expect(trail.preview == nil)
 }
+
+/// Telling a link to a folder from a link to a file takes a read, which the preview never makes,
+/// and Open treats a link to a folder as its folder; so no link is previewed. A socket or another
+/// special file is, as in Finder.
+@MainActor @Test func aLinkShowsNoPreviewAndASpecialFileDoes() async throws {
+    func entry(_ name: String, _ type: DirectoryEntry.FileType) -> DirectoryEntry {
+        DirectoryEntry(
+            name: name, type: type, size: nil, modified: testDate, isHidden: false,
+            isDataless: false)
+    }
+    var folders = tree
+    folders["/r"] = [folder("docs"), entry("link", .symbolicLink), entry("socket", .other)]
+    let fixture = PaneFixture(at: "/r", folders: folders)
+    await settle { fixture.pane.state.isLoaded }
+    fixture.pane.setViewMode(.column)
+    await settle { trail(fixture.pane).focused.pane.state.isLoaded }
+    let first = trail(fixture.pane).columns[0]
+
+    select("socket", in: first)
+    #expect(trail(fixture.pane).preview?.location == Location(path: "/r/socket"))
+
+    select("link", in: first)
+    #expect(trail(fixture.pane).preview == nil)
+    #expect(paths(fixture.pane) == ["/r"])
+}
