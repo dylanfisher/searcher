@@ -44,6 +44,18 @@ struct BenchReport: Sendable, Codable {
             !floorEnforced && floor?.isMissed(byMilliseconds: median) == true
         }
 
+        /// The statistic the case is judged on and its value: the median for a floor case, whose
+        /// floor is a median, else the p95 that budgets are.
+        var judged: (label: String, value: Double) {
+            floor == nil ? ("p95", p95) : ("median", median)
+        }
+
+        /// The line naming this case as a miss, "<prefix>: name p95 12 ms, budget ...", prefix being
+        /// "over budget" unless the caller qualifies it.
+        func missText(prefix: String = "over budget") -> String {
+            "\(prefix): \(name) \(judged.label) \(format(judged.value)) \(unit.rawValue), \(limit)"
+        }
+
         /// What the case is judged against, as the reports print it.
         var limit: String {
             if let floor {

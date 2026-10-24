@@ -228,7 +228,7 @@ func line(for result: BenchReport.Case) -> String {
         "\(result.name)  median \(format(result.median)) \(unit)  p95 \(format(result.p95)) \(unit)"
     if let budget = result.budget { line += "  budget \(describe(budget))" }
     if let floor = result.floor {
-        // The p95 time is the slow end, so it gives the low rate.
+        // The p95 time is the slow end, so it gives the low rate; the median rate is the one judged.
         line +=
             "  median \(format(floor.rate(milliseconds: result.median))) MB/s"
             + "  p95 \(format(floor.rate(milliseconds: result.p95))) MB/s  \(result.limit)"
@@ -238,15 +238,12 @@ func line(for result: BenchReport.Case) -> String {
     return line
 }
 
-/// Writes the report, names each miss, and returns whether every budgeted p95 is within budget.
+/// Writes the report, names each miss, and returns whether every case is within its budget or floor.
 func finish(_ report: BenchReport) throws -> Bool {
     try report.write(to: BenchReport.path)
     print("wrote \(BenchReport.path)")
     for miss in report.overBudget {
-        printError(
-            "over budget: \(miss.name) p95 \(format(miss.p95)) \(miss.unit.rawValue), "
-                + miss.limit
-        )
+        printError(miss.missText())
     }
     return report.passed
 }

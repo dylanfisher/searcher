@@ -24,10 +24,14 @@ struct BenchCase: Sendable {
     let run: @Sendable (_ folder: String?) async throws -> Double
     /// How many times `measure` runs the case.
     let runs: Int
+    /// Work done once, untimed, before the first run: it makes the first run start in the same
+    /// state as the rest. Nil for most cases.
+    let warmUp: (@Sendable (_ folder: String?) async throws -> Void)?
 
     init(
         name: String, budget: Budget?, floor: CopyFloor? = nil, unit: Budget.Unit,
         runs: Int = BenchCase.runs,
+        warmUp: (@Sendable (_ folder: String?) async throws -> Void)? = nil,
         run: @escaping @Sendable (_ folder: String?) async throws -> Double
     ) {
         if let budget {
@@ -41,10 +45,13 @@ struct BenchCase: Sendable {
         self.unit = unit
         self.run = run
         self.runs = runs
+        self.warmUp = warmUp
     }
 
-    /// Runs the case `runs` times (`BenchCase.runs` unless the case sets fewer).
+    /// Runs `warmUp` if the case has one, then the case `runs` times (`BenchCase.runs` unless the case
+    /// sets fewer).
     func measure(folder: String?) async throws -> Samples {
+        try await warmUp?(folder)
         var samples: [Double] = []
         for _ in 0..<runs {
             samples.append(try await run(folder))
