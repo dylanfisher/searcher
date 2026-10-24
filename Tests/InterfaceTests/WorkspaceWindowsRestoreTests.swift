@@ -614,6 +614,43 @@ private func expectReopenedAsBeforeClosing(with key: NSEvent) async throws {
     #expect(onDisk[twin.id]?.tabs == twin.tabs)
 }
 
+/// The renamed window is restored as its file has it in every other way, so only the new name
+/// makes it differ from what was read.
+@MainActor @Test func anOpenWindowRenamedAtLaunchIsSavedThoughNothingElseChanged() async throws {
+    let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
+    let saving = makeWindows(store: diskStore(folder))
+    let back = saving.open(at: Location(path: "/root"))
+    let front = saving.open(at: Location(path: "/root"))
+    // On the test's screen, so the restore keeps the frames as saved.
+    try #require(back.window).setFrame(
+        CGRect(x: 100, y: 200, width: 900, height: 600), display: false)
+    try #require(front.window).setFrame(
+        CGRect(x: 1100, y: 200, width: 900, height: 600), display: false)
+    for controller in [back, front] {
+        let pane = controller.workspace.selectedTab.focusedPane
+        await settle { pane.state.isLoaded }
+    }
+    try saving.list.name(back.workspace, as: "Project 1")
+    #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
+    let saved = await diskStore(folder).load()
+    let frontState = try #require(saved.workspaces[front.workspace.id])
+    let clash = WorkspaceState(
+        id: frontState.id, name: "Project 1", frame: frontState.frame, tabs: frontState.tabs,
+        selectedTab: frontState.selectedTab, showsSidebar: frontState.showsSidebar)
+    let writer = diskStore(folder)
+    await writer.save(clash)
+    await writer.flush()
+
+    let restoring = makeWindows(store: diskStore(folder))
+    restoring.holdSavesUntilRestore()
+    restoring.restore(await diskStore(folder).load())
+    #expect(await restoring.saveBeforeQuit(by: .now + .seconds(5)))
+
+    let onDisk = await diskStore(folder).load().workspaces
+    #expect(onDisk[front.workspace.id]?.name == "Project 1")
+    #expect(onDisk[back.workspace.id]?.name == "Project 1 2")
+}
+
 @MainActor @Test func twoOpenWindowsWithTheSameNameAreRenamedAtLaunch() async throws {
     let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
     let saving = makeWindows(store: diskStore(folder))
