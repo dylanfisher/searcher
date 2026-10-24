@@ -121,29 +121,45 @@ private func pathBar(
     }
 }
 
-@MainActor private func mouseEvent(_ type: NSEvent.EventType) throws -> NSEvent {
-    try #require(
+/// A mouse event at `point` in the bar, which sits at the origin of no window.
+@MainActor private func mouseEvent(_ type: NSEvent.EventType, at point: NSPoint = .zero) throws
+    -> NSEvent
+{
+    if type == .mouseMoved {
+        return try #require(
+            NSEvent.mouseEvent(
+                with: type, location: point, modifierFlags: [], timestamp: 0, windowNumber: 0,
+                context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
+    }
+    return try #require(
         NSEvent.enterExitEvent(
-            with: type, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0,
+            with: type, location: point, modifierFlags: [], timestamp: 0, windowNumber: 0,
             context: nil, eventNumber: 0, trackingNumber: 0, userData: nil))
 }
 
-@MainActor @Test func eachSegmentTracksTheMouse() {
+/// The middle of segment `index`'s frame.
+@MainActor private func middle(of index: Int, in bar: PathBarView) -> NSPoint {
+    NSPoint(x: bar.segments[index].frame.midX, y: bar.bounds.midY)
+}
+
+@MainActor @Test func theBarTracksTheMouseMovingOverIt() {
     let bar = pathBar(showing: "/Users/dylan/Projects")
 
     #expect(
-        bar.segments.allSatisfy { segment in
-            segment.trackingAreas.contains { $0.options.contains(.mouseEnteredAndExited) }
+        bar.trackingAreas.contains {
+            $0.options.isSuperset(of: [.mouseEnteredAndExited, .mouseMoved])
         })
 }
 
 @MainActor @Test func aSegmentIsHighlightedWhileTheMouseIsOverIt() throws {
     let bar = pathBar(showing: "/Users/dylan/Projects")
 
-    bar.segments[1].mouseEntered(with: try mouseEvent(.mouseEntered))
+    bar.mouseEntered(with: try mouseEvent(.mouseEntered, at: middle(of: 1, in: bar)))
     #expect(bar.hoveredSegment == 1)
+    bar.mouseMoved(with: try mouseEvent(.mouseMoved, at: middle(of: 2, in: bar)))
+    #expect(bar.hoveredSegment == 2)
 
-    bar.segments[1].mouseExited(with: try mouseEvent(.mouseExited))
+    bar.mouseExited(with: try mouseEvent(.mouseExited))
     #expect(bar.hoveredSegment == nil)
 }
 
@@ -151,7 +167,7 @@ private func pathBar(
     let bar = pathBar(showing: "/Users/dylan/Projects")
     #expect(bar.highlightFrame == nil)
 
-    bar.segments[2].mouseEntered(with: try mouseEvent(.mouseEntered))
+    bar.mouseMoved(with: try mouseEvent(.mouseMoved, at: middle(of: 2, in: bar)))
 
     let highlight = try #require(bar.highlightFrame)
     let segment = bar.segments[2].frame
@@ -161,7 +177,7 @@ private func pathBar(
 
 @MainActor @Test func showingAnotherFolderClearsTheHighlight() throws {
     let bar = pathBar(showing: "/Users/dylan/Projects")
-    bar.segments[2].mouseEntered(with: try mouseEvent(.mouseEntered))
+    bar.mouseMoved(with: try mouseEvent(.mouseMoved, at: middle(of: 2, in: bar)))
 
     bar.show(Location(path: "/Users/dylan"), rootVolumeName: "Macintosh HD")
 
@@ -190,7 +206,7 @@ private func pathBar(
         bar.segments.indices.last { bar.segments[$0].frame.width < natural[$0] })
     let end = bar.segments.last?.frame.maxX
 
-    bar.segments[truncated].mouseEntered(with: try mouseEvent(.mouseEntered))
+    bar.mouseEntered(with: try mouseEvent(.mouseEntered, at: middle(of: truncated, in: bar)))
     bar.layoutSubtreeIfNeeded()
 
     #expect(bar.segments[truncated].frame.width == natural[truncated])
@@ -200,9 +216,36 @@ private func pathBar(
             $0 != truncated && bar.segments[$0].frame.width < natural[$0]
         })
 
-    bar.segments[truncated].mouseExited(with: try mouseEvent(.mouseExited))
+    bar.mouseExited(with: try mouseEvent(.mouseExited))
     bar.layoutSubtreeIfNeeded()
     #expect(bar.segments[truncated].frame.width < natural[truncated])
+}
+
+/// With the mouse still at a truncated segment's edges, laying the row out again and reading the
+/// mouse again, as AppKit does when frames move under it, keeps the same segment hovered, and
+/// the mouse over it.
+@MainActor @Test func aStillMouseKeepsItsSegmentAfterTheRowExpands() throws {
+    let (bar, natural) = truncatedPathBar(cut: 200)
+    let truncated = bar.segments.indices.filter { bar.segments[$0].frame.width < natural[$0] }
+    #expect(truncated.count >= 2)
+    let resting = bar.segments.map(\.frame)
+
+    for index in truncated {
+        for x in [resting[index].minX + 0.5, resting[index].maxX - 0.5] {
+            let point = NSPoint(x: x, y: bar.bounds.midY)
+            bar.mouseMoved(with: try mouseEvent(.mouseMoved, at: point))
+            bar.layoutSubtreeIfNeeded()
+            #expect(bar.hoveredSegment == index)
+            #expect(bar.segments[index].frame.contains(point))
+
+            bar.mouseMoved(with: try mouseEvent(.mouseMoved, at: point))
+            bar.layoutSubtreeIfNeeded()
+            #expect(bar.hoveredSegment == index)
+        }
+    }
+    bar.mouseExited(with: try mouseEvent(.mouseExited))
+    bar.layoutSubtreeIfNeeded()
+    #expect(bar.segments.map(\.frame) == resting)
 }
 
 @MainActor @Test func onlyTruncatedSegmentsHaveATooltipWithTheirFullName() {
