@@ -304,18 +304,49 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     // MARK: Sidebar
 
     /// Whether the sidebar shows, or is on its way to showing.
-    var showsSidebar: Bool { !sidebarItem.isCollapsed }
+    var showsSidebar: Bool { !(sidebarTarget ?? sidebarItem.isCollapsed) }
+
+    /// Whether the sidebar is collapsing (true) or opening (false) in an animation a command
+    /// started, until the animation ends; nil otherwise. The split view resizes all through it,
+    /// with `isCollapsed` read at any point of the way, so those resizes say nothing about a
+    /// drag of the divider.
+    private var sidebarTarget: Bool?
+
+    /// Runs `change` in an animation and `completion` once it ends. Tests replace it to step
+    /// through an animation.
+    var animateSidebar:
+        @MainActor (
+            _ change: @escaping @MainActor () -> Void, _ completion: @escaping @MainActor () -> Void
+        ) -> Void = { change, completion in
+            NSAnimationContext.runAnimationGroup { _ in
+                MainActor.assumeIsolated { change() }
+            } completionHandler: {
+                MainActor.assumeIsolated { completion() }
+            }
+        }
 
     /// Shows or hides the sidebar as the workspace says, animated in a window on screen. Keys in
     /// a sidebar that hides go back to the focused pane once the window shows its workspace.
     private func showSidebar() {
-        let collapsed = !workspace.showsSidebar
-        guard sidebarItem.isCollapsed != collapsed else { return }
-        if window?.isVisible == true {
-            sidebarItem.animator().isCollapsed = collapsed
-        } else {
+        setSidebarCollapsed(!workspace.showsSidebar, animated: window?.isVisible == true)
+    }
+
+    /// Collapses or opens the sidebar for a command, unless it is already that way or on its way.
+    func setSidebarCollapsed(_ collapsed: Bool, animated: Bool) {
+        guard (sidebarTarget ?? sidebarItem.isCollapsed) != collapsed else { return }
+        guard animated else {
             sidebarItem.isCollapsed = collapsed
+            return
         }
+        sidebarTarget = collapsed
+        animateSidebar(
+            { [weak self] in self?.sidebarItem.animator().isCollapsed = collapsed },
+            { [weak self] in
+                // A later command's animation may have taken over.
+                guard let self, sidebarTarget == collapsed else { return }
+                sidebarTarget = nil
+                sidebarDidResize()
+            })
     }
 
     /// Shows the sidebar, which the command has the workspace show, and moves the keys into it.
@@ -331,9 +362,10 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     }
 
     /// The split view resized: a drag of its divider may have collapsed or opened the sidebar,
-    /// which the workspace keeps.
+    /// which the workspace keeps. Resizes during a command's animation are the command's.
     private func sidebarDidResize() {
-        guard !isClosed, !workspace.isClosed, workspace.showsSidebar == sidebarItem.isCollapsed
+        guard !isClosed, !workspace.isClosed, sidebarTarget == nil,
+            workspace.showsSidebar == sidebarItem.isCollapsed
         else { return }
         workspace.showsSidebar = !sidebarItem.isCollapsed
         if sidebarItem.isCollapsed {
@@ -489,7 +521,9 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         for (id, controller) in views.paneControllers {
             controller.showsFocus = marksFocus && id == tab.layout.focused
         }
-        moveKeys(to: focusedController(in: views, of: tab))
+        let focused = focusedController(in: views, of: tab)
+        linkSidebarKeyView(to: focused.keyView)
+        moveKeys(to: focused)
         updatePreviewPanel()
         showTitles()
     }
@@ -610,6 +644,21 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             return
         }
         window.makeFirstResponder(controller.keyView)
+    }
+
+    /// Puts the sidebar's list into the key view loop just before `key`, the focused pane's key
+    /// view, so Shift-Tab there and Tab in the sidebar move between the two. With no loop yet,
+    /// the two make one. A hidden sidebar can't take the keys, so the loop passes over it.
+    private func linkSidebarKeyView(to key: NSView) {
+        let outline = sidebar.outlineView
+        guard outline.nextKeyView !== key else { return }
+        if let before = outline.previousKeyView, before !== outline {
+            let after = outline.nextKeyView
+            before.nextKeyView = after === before ? nil : after
+        }
+        let before = key.previousKeyView ?? key
+        before.nextKeyView = outline
+        outline.nextKeyView = key
     }
 
     /// The first responder moved, by a click, the key view loop or code. If it is now in another

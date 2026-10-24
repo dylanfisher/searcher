@@ -58,12 +58,18 @@ public enum WindowCommands: CommandSet {
             CommandBinding(newWindow) { context in
                 let focused = context.tab.focusedPane
                 context.workspaces.add(
-                    Workspace(tab: Tab(pane: focused.newPane(at: focused.location))))
+                    Workspace(
+                        tab: Tab(pane: focused.newPane(at: focused.location)),
+                        showsSidebar: context.workspace.showsSidebar))
             },
             CommandBinding(
                 movePaneToNewWindow, isEnabled: { $0.workspace.paneCount > 1 },
                 run: { context in
-                    context.workspaces.add(Workspace(tab: context.workspace.removeFocusedPane()))
+                    let showsSidebar = context.workspace.showsSidebar
+                    context.workspaces.add(
+                        Workspace(
+                            tab: context.workspace.removeFocusedPane(),
+                            showsSidebar: showsSidebar))
                 }),
             CommandBinding(
                 mergeWindowIntoTab, isEnabled: { $0.workspaces.workspaces.count > 1 },

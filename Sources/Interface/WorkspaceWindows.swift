@@ -216,13 +216,14 @@ public final class WorkspaceWindows {
     }
 
     /// Opens a window of one tab at `location`, in list view, as the app does at launch and when
-    /// no window has the keys.
+    /// no window has the keys. It shows the sidebar if the most recently active window does.
     @discardableResult
     public func open(at location: Location) -> BrowserWindowController {
         let pane = Pane(
             location: location, service: service, systemActions: systemActions, settings: settings)
         pane.folderSizes = folderSizes
-        let workspace = Workspace(tab: Tab(pane: pane))
+        let workspace = Workspace(
+            tab: Tab(pane: pane), showsSidebar: list.workspaces.first?.showsSidebar ?? false)
         list.add(workspace)
         showList()
         return controller(for: workspace)

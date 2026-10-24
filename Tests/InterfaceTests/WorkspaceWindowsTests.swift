@@ -692,3 +692,25 @@ private func stopEverything(_ windows: WorkspaceWindows) async {
     #expect(manager.fileExists(atPath: root + "/a2.txt"))
     pane.monitor?.stop()
 }
+
+@MainActor @Test func aNewWindowShowsTheSidebarAsTheWindowItOpensFrom() async throws {
+    let fixture = try await Fixture()
+    let first = try #require(fixture.windows.controllers.first)
+    try fixture.press(
+        try keyEvent("s", characters: "ß", modifiers: [.command, .option]), in: first)
+
+    try fixture.press(try keyEvent("n", modifiers: .command), in: first)
+
+    let opened = try fixture.controller(fixture.windows.list.workspaces[0])
+    #expect(opened !== first)
+    #expect(opened.workspace.showsSidebar && opened.showsSidebar)
+    // Opening at a folder, as a Dock click does, follows the front window too.
+    #expect(fixture.windows.open(at: Location(path: "/root")).showsSidebar)
+
+    try fixture.press(
+        try keyEvent("s", characters: "ß", modifiers: [.command, .option]), in: first)
+    try #require(first.window).makeKeyAndOrderFront(nil)
+    fixture.windows.list.activate(first.workspace)
+
+    #expect(!fixture.windows.open(at: Location(path: "/root")).showsSidebar)
+}

@@ -958,3 +958,60 @@ private func sidebarKey() throws -> NSEvent {
 
     #expect(!fixture.workspace.showsSidebar)
 }
+
+/// Collapses the sidebar as a command in a window on screen does, with the animation stepped by
+/// hand: the split view resizes while the item still reads open, then again once the animator
+/// has set it, then the animation ends.
+@MainActor @Test func theResizesOfACommandsAnimatedCollapseLeaveTheSidebarHidden() async throws {
+    let fixture = try await Fixture()
+    try fixture.press(try sidebarKey())
+    var change: (@MainActor () -> Void)?
+    var finish: (@MainActor () -> Void)?
+    fixture.controller.animateSidebar = {
+        change = $0
+        finish = $1
+    }
+    let split = try #require(fixture.controller.contentViewController as? NSSplitViewController)
+    let resize = { @MainActor in
+        NotificationCenter.default.post(
+            name: NSSplitView.didResizeSubviewsNotification, object: split.splitView)
+    }
+
+    fixture.workspace.showsSidebar = false
+    fixture.controller.setSidebarCollapsed(true, animated: true)
+    #expect(!fixture.controller.sidebarItem.isCollapsed)
+    resize()
+
+    #expect(!fixture.workspace.showsSidebar && !fixture.controller.showsSidebar)
+
+    let runChange = try #require(change)
+    runChange()
+    resize()
+    #expect(!fixture.workspace.showsSidebar)
+
+    fixture.controller.sidebarItem.isCollapsed = true
+    let runFinish = try #require(finish)
+    runFinish()
+
+    #expect(!fixture.workspace.showsSidebar && !fixture.controller.showsSidebar)
+    // A drag after the animation is the user's, and the workspace follows it.
+    fixture.controller.sidebarItem.isCollapsed = false
+    resize()
+    #expect(fixture.workspace.showsSidebar)
+}
+
+@MainActor @Test func tabAndShiftTabMoveBetweenTheSidebarAndTheFocusedPane() async throws {
+    let fixture = try await Fixture()
+    try fixture.press(try sidebarKey())
+    let outline = fixture.controller.sidebar.outlineView
+    let first = try fixture.keyTable
+
+    #expect(outline.nextKeyView === first)
+    #expect(first.previousKeyView === outline)
+
+    let second = try fixture.paneController(try fixture.splitRight()).keyView
+
+    #expect(outline.nextKeyView === second)
+    #expect(second.previousKeyView === outline)
+    #expect(first.nextKeyView !== outline)
+}
