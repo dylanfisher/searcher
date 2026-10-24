@@ -809,7 +809,7 @@ private final class HoldableLister: Lister, @unchecked Sendable {
 private func sizedController(
     at path: String = "/folder", showing entries: [DirectoryEntry], walks: HeldWalks,
     clock: ManualClock = ManualClock(),
-    settings: Settings = untouchedSettings(), lister: HoldableLister = HoldableLister(),
+    settings: Settings = sizedSettings(), lister: HoldableLister = HoldableLister(),
     sortedBy column: SortColumn = .name, ascending: Bool = true,
     mounted: [VolumeIdentity] = []
 ) async -> ListingViewController {
@@ -931,12 +931,11 @@ private func folderSize(_ name: String, in pane: Pane) -> Listing.FolderSizeValu
     #expect(label.contains(", 4 MB, "))
 }
 
-@MainActor @Test func withFolderSizesOffNoWalkIsRequestedAndFoldersShowNoSize() async throws {
+@MainActor @Test func byDefaultNoWalkIsRequestedAndFoldersShowNoSize() async throws {
     let walks = HeldWalks()
-    let settings = untouchedSettings()
-    settings.folderSizes = false
     let controller = await sizedController(
-        showing: [folder("Music"), file("notes", size: 500)], walks: walks, settings: settings)
+        showing: [folder("Music"), file("notes", size: 500)], walks: walks,
+        settings: untouchedSettings())
     try await Task.sleep(for: .milliseconds(50))
 
     #expect(walks.volumeReads == 0)
@@ -944,9 +943,30 @@ private func folderSize(_ name: String, in pane: Pane) -> Listing.FolderSizeValu
     #expect(try sizeText(controller) == ["--", "500 bytes"])
 }
 
+@MainActor @Test func calculateSizesWithSizesOffShowsPendingTextThenTheSize() async throws {
+    let walks = HeldWalks()
+    let clock = ManualClock()
+    let controller = await sizedController(
+        showing: [folder("Music"), file("notes", size: 500)], walks: walks, clock: clock,
+        settings: untouchedSettings())
+    let calculate = try #require(
+        AppCommands.bindings.first { $0.command == SizeCommands.calculateSizes })
+
+    calculate.run(CommandContext(pane: controller.pane))
+
+    let pending = EntryCellFormatter.pendingSize
+    await settle { (try? sizeText(controller)) == [pending, "500 bytes"] }
+    walks.release("/folder/Music", bytes: 4_000_000)
+    await settle {
+        clock.advance(by: Pane.sizeBatchInterval)
+        return (try? sizeText(controller)) == ["4 MB", "500 bytes"]
+    }
+    #expect(walks.started == ["/folder/Music"])
+}
+
 @MainActor @Test func turningSizesOffDuringALoadKeepsThemOffWhenItLands() async throws {
     let walks = HeldWalks()
-    let settings = untouchedSettings()
+    let settings = sizedSettings()
     let lister = HoldableLister()
     let clock = ManualClock()
     let controller = await sizedController(
@@ -971,7 +991,9 @@ private func folderSize(_ name: String, in pane: Pane) -> Listing.FolderSizeValu
     #expect(try sizeText(controller) == ["--"])
 }
 
-@MainActor @Test func navigatingAwayCancelsThePanesWalks() async throws {
+/// A running walk on a local volume finishes, so a return finds its size kept; one on a share
+/// is still cancelled (FolderSizeServiceTests).
+@MainActor @Test func navigatingAwayLetsTheRunningLocalWalkFinish() async throws {
     let walks = HeldWalks()
     let lister = HoldableLister(["/other": [file("x")]])
     let controller = await sizedController(
@@ -979,8 +1001,11 @@ private func folderSize(_ name: String, in pane: Pane) -> Listing.FolderSizeValu
     await settle { walks.started == ["/folder/Music"] }
 
     controller.pane.navigate(to: Location(path: "/other"))
+    await settle { controller.pane.state.isLoaded }
+    try await Task.sleep(for: .milliseconds(50))
 
-    await settle { walks.cancelled == ["/folder/Music"] }
+    #expect(walks.cancelled.isEmpty)
+    walks.release("/folder/Music", bytes: 1)
 }
 
 @MainActor @Test func columnViewCancelsTheListsWalksAndRequestsNone() async throws {
@@ -1023,7 +1048,7 @@ private func folderSize(_ name: String, in pane: Pane) -> Listing.FolderSizeValu
 
 @MainActor @Test func patchesStillLandAfterSizesAreTurnedOffWhileTheRowsLoad() async throws {
     let walks = HeldWalks()
-    let settings = untouchedSettings()
+    let settings = sizedSettings()
     let lister = HoldableLister(["/other": [folder("Albums")]])
     let controller = await sizedController(
         showing: [folder("Music")], walks: walks, settings: settings, lister: lister)

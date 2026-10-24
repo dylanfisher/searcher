@@ -19,7 +19,9 @@ private let laterModified = Date(timeIntervalSinceReferenceDate: 700_000_060)
 private final class FakeWalks: @unchecked Sendable {
     struct Start: Equatable {
         let path: String
-        let qos: DispatchQoS.QoSClass
+        /// The thread's disk I/O policy, from `getiopolicy_np`.
+        let ioPolicy: Int32
+        let priority: Int32
         let onBlockingCallThread: Bool
     }
 
@@ -44,7 +46,8 @@ private final class FakeWalks: @unchecked Sendable {
             startedWalks.append(
                 Start(
                     path: path,
-                    qos: DispatchQoS.QoSClass(rawValue: qos_class_self()) ?? .unspecified,
+                    ioPolicy: getiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_THREAD),
+                    priority: FolderSizeService.threadPriority(),
                     onBlockingCallThread: BlockingCallThread.isCurrent))
             running += 1
             mostRunning = max(mostRunning, running)
@@ -215,19 +218,27 @@ private func makeFolder(_ path: String) throws {
     #expect(Set(walks.starts.map(\.path)) == Set(paths))
 }
 
-@Test func walksRunOnBlockingCallThreadsAtUtility() async throws {
+@Test func walksRunOnBlockingCallThreadsWithThrottledDiskReadsAtUtilityPriority() async throws {
     let folder = try TemporaryFolder("FolderSizeServiceTests")
     let walks = FakeWalks()
     walks.releaseAll()
     let sizes = service(walks) { _ in ListingService.listerVolume }
     let log = EventLog<(String, SizeResult)>()
+    let utility = await BlockingCallThread.run(qos: .utility) {
+        (FolderSizeService.threadPriority(), getiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_THREAD))
+    }
 
     request(sizes, folder.url.path, into: log)
 
     #expect(await log.wait { $0.count == 1 })
+    // Utility QoS alone leaves the thread's policy at the default; its tier isn't the throttled one.
+    #expect(utility.1 == IOPOL_DEFAULT)
     #expect(
-        walks.starts
-            == [FakeWalks.Start(path: folder.url.path, qos: .utility, onBlockingCallThread: true)])
+        walks.starts == [
+            FakeWalks.Start(
+                path: folder.url.path, ioPolicy: IOPOL_THROTTLE, priority: utility.0,
+                onBlockingCallThread: true)
+        ])
 }
 
 @Test func aShareRunsOneWalkAtATime() async throws {
@@ -437,19 +448,29 @@ private func makeFolder(_ path: String) throws {
     #expect(await cache.size(of: "/a/c", modified: firstModified, on: local) == size)
 }
 
-@Test func pastTheWatchCapTheOldestParentsSizesAreDropped() async throws {
+@Test func pastTheWatchCapOnlyTheOldestParentsChildrenAreWalkedAgain() async throws {
     let folder = try TemporaryFolder("FolderSizeServiceTests")
-    let children = (0...FolderSizeService.mostWatchedFolders).map {
-        folder.url.path + "/parent-\($0)/child"
+    // Only the watched parents are made: the event for making a walked folder, reported by the
+    // watch that starts with its walk, would drop its size.
+    let parents = (0..<FolderSizeService.mostWatchedFolders).map {
+        folder.url.path + "/parent-\($0)"
     }
-    for child in children { try makeFolder(child) }
+    for parent in parents { try makeFolder(parent) }
+    let children = parents.map { $0 + "/child" }
+    // Under the oldest parent, but watched through its own parent, which stays watched.
+    let watchedInside = parents[0] + "/other"
+    try makeFolder(watchedInside)
+    let grandchild = watchedInside + "/grandchild"
+    let walks = FakeWalks()
+    walks.releaseAll()
     let cache = FolderSizeCache(store: nil)
-    let sizes = FolderSizeService(cache: cache, log: { _ in })
-    let volume = try await localVolume(of: folder.url.path)
+    let sizes = service(walks, cache: cache) { _ in ListingService.listerVolume }
+    let volume = ListingService.listerVolume
     let log = EventLog<(String, SizeResult)>()
 
-    for (index, child) in children.enumerated() {
-        request(sizes, child, into: log)
+    // One parent more than the cap: `parent-0`, the least recently walked, stops being watched.
+    for (index, path) in ([children[0], grandchild] + children.dropFirst()).enumerated() {
+        request(sizes, path, into: log)
         #expect(await log.wait { $0.count == index + 1 })
     }
 
@@ -460,6 +481,9 @@ private func makeFolder(_ path: String) throws {
         try await Task.sleep(for: .milliseconds(10))
     }
     #expect(await cache.size(of: children[0], modified: firstModified, on: volume) == nil)
+    // Shown while it is walked again.
+    #expect(cache.keptSizes(of: [(children[0], firstModified)])[0] != nil)
+    #expect(await cache.size(of: grandchild, modified: firstModified, on: volume) != nil)
     #expect(await cache.size(of: children[1], modified: firstModified, on: volume) != nil)
     #expect(
         await cache.size(of: children[children.count - 1], modified: firstModified, on: volume)
@@ -538,4 +562,242 @@ private func makeFolder(_ path: String) throws {
     #expect(await log.wait { $0.count == 1 })
     #expect(log.all.map(\.0) == [parent + "/local"])
     #expect(reads.all == [parent])
+}
+
+@Test func leavingLetsRunningLocalWalksFinishAndKeepTheirSizesButStartsNoWaitingOne() async throws {
+    let folder = try TemporaryFolder("FolderSizeServiceTests")
+    // Watched through `folder`, and not made: the event for making one, reported by the watch
+    // that starts with the walk, would keep its size from being kept.
+    let paths = (0..<5).map { folder.url.path + "/folder-\($0)" }
+    let walks = FakeWalks()
+    defer { walks.releaseAll() }
+    let cache = FolderSizeCache(store: nil)
+    let sizes = service(walks, cache: cache) { _ in ListingService.listerVolume }
+    let log = EventLog<(String, SizeResult)>()
+    let leaving = PaneID()
+    for path in paths { request(sizes, path, pane: leaving, into: log) }
+    #expect(await walks.waitForStarts(4))
+
+    sizes.cancelWaitingWalks(for: leaving)
+    walks.releaseAll()
+
+    // The four running walks finish and keep their sizes; the waiting one never starts, and
+    // the pane that left gets nothing.
+    let volume = ListingService.listerVolume
+    let deadline = Date(timeIntervalSinceNow: 5)
+    for path in walks.starts.map(\.path) {
+        while await cache.size(of: path, modified: firstModified, on: volume) == nil,
+            Date() < deadline
+        {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(await cache.size(of: path, modified: firstModified, on: volume) != nil, "\(path)")
+    }
+    #expect(await !walks.waitForStarts(5, timeout: 0.2))
+    #expect(walks.cancelled.isEmpty)
+    #expect(log.all.isEmpty)
+}
+
+@Test func leavingStillCancelsAWalkRunningOnAShare() async throws {
+    let walks = FakeWalks()
+    defer { walks.releaseAll() }
+    let sizes = service(walks) { _ in share }
+    let log = EventLog<(String, SizeResult)>()
+    let leaving = PaneID()
+    let path = share.mountPoint + "/Artist"
+    request(sizes, path, pane: leaving, into: log)
+    #expect(await walks.waitForStarts(1))
+
+    sizes.cancelWaitingWalks(for: leaving)
+
+    #expect(await walks.waitForCancelled(path))
+}
+
+@Test func aWaitingWalkWhoseSizeWasKeptMeanwhileDoesNotWalkAgain() async throws {
+    let folder = try TemporaryFolder("FolderSizeServiceTests")
+    // Watched through `folder`, and not made: the event for making one, reported by the watch
+    // that starts with the walk, would keep its size from being kept.
+    let paths = (0..<4).map { folder.url.path + "/folder-\($0)" }
+    let walks = FakeWalks()
+    defer { walks.releaseAll() }
+    let sizes = service(walks) { _ in ListingService.listerVolume }
+    let log = EventLog<(String, SizeResult)>()
+    let leaving = PaneID()
+    for path in paths { request(sizes, path, pane: leaving, into: log) }
+    #expect(await walks.waitForStarts(4))
+    sizes.cancelWaitingWalks(for: leaving)
+
+    // Back again while the walks that were left still hold every slot: this one waits behind
+    // them, and gets the slot the left walk of its folder frees.
+    request(sizes, paths[0], pane: PaneID(), into: log)
+    #expect(await !walks.waitForStarts(5, timeout: 0.05))
+    walks.release(paths[0])
+
+    #expect(await log.wait { $0.count == 1 })
+    #expect(walks.starts.count == paths.count)
+}
+
+@Test func keptSizesAreReadWithoutTheActorForTheDateTheyWereWalkedAt() async {
+    let cache = FolderSizeCache(store: nil)
+    let local = VolumeIdentity(device: "/dev/fake", mountPoint: "/", kind: .local)
+    let size = FolderSize(bytes: 7, isPartial: false, walkedAt: Date())
+    await keep(["/p/a"], size, on: local, in: cache)
+
+    let kept = cache.keptSizes(
+        of: [("/p/a", firstModified), ("/p/a", laterModified), ("/p/b", firstModified)])
+
+    #expect(kept == [size, nil, nil])
+}
+
+/// Keeps `size` for each of `paths` on `volume`, walked at `firstModified`.
+private func keep(
+    _ paths: [String], _ size: FolderSize, on volume: VolumeIdentity, in cache: FolderSizeCache
+) async {
+    for path in paths {
+        let walk = await cache.startWalk(of: path)
+        await cache.finishWalk(walk, size: size, of: path, modified: firstModified, on: volume)
+    }
+}
+
+@Test func aChangeUnderOneSubfolderDropsOnlyItAndTheFoldersAboveItAndLogsWhy() async {
+    let debug = EventLog<String>()
+    let cache = FolderSizeCache(store: nil, debugLog: { debug.append($0) })
+    let local = VolumeIdentity(device: "/dev/fake", mountPoint: "/", kind: .local)
+    let size = FolderSize(bytes: 1, isPartial: false, walkedAt: Date())
+    await keep(["/p", "/p/a", "/p/a/x", "/p/b"], size, on: local, in: cache)
+
+    await cache.dropSizes(affectedBy: "/p/a/file")
+
+    #expect(await cache.size(of: "/p", modified: firstModified, on: local) == nil)
+    #expect(await cache.size(of: "/p/a", modified: firstModified, on: local) == nil)
+    #expect(await cache.size(of: "/p/a/x", modified: firstModified, on: local) == size)
+    #expect(await cache.size(of: "/p/b", modified: firstModified, on: local) == size)
+    #expect(debug.all.contains { $0.contains("2 sizes") && $0.contains("/p/a/file") })
+}
+
+@Test func aMustRescanMarksOnlyTheWatchedParentsChildrenItCantRuleOut() async {
+    let debug = EventLog<String>()
+    let cache = FolderSizeCache(store: nil, debugLog: { debug.append($0) })
+    let local = VolumeIdentity(device: "/dev/fake", mountPoint: "/", kind: .local)
+    let size = FolderSize(bytes: 1, isPartial: false, walkedAt: Date())
+    let all = ["/p/a", "/p/b", "/p/a/x", "/q/c"]
+    await keep(all, size, on: local, in: cache)
+    let running = await cache.startWalk(of: "/p/a")
+    let other = await cache.startWalk(of: "/p/b")
+
+    // FSEvents says to rescan `/p/a/deep`: of `/p`'s children only `/p/a` holds it. `/p/a/x`
+    // is watched through its own parent, `/p/a`, whose stream reports what happens under it.
+    await cache.markForWalk(childrenOf: "/p", around: "/p/a/deep", because: "events were lost")
+
+    #expect(await cache.size(of: "/p/a", modified: firstModified, on: local) == nil)
+    #expect(await cache.size(of: "/p/b", modified: firstModified, on: local) == size)
+    #expect(await cache.size(of: "/p/a/x", modified: firstModified, on: local) == size)
+    #expect(await cache.size(of: "/q/c", modified: firstModified, on: local) == size)
+    // A marked size is still there to show while its folder is walked again.
+    #expect(cache.keptSizes(of: all.map { ($0, firstModified) }) == [size, size, size, size])
+    #expect(debug.all.contains { $0.contains("/p/a") && $0.contains("events were lost") })
+    // A walk of a marked folder that started before the mark isn't kept; one of another is.
+    #expect(
+        !(await cache.finishWalk(
+            running, size: size, of: "/p/a", modified: firstModified, on: local)))
+    #expect(
+        await cache.finishWalk(other, size: size, of: "/p/b", modified: firstModified, on: local))
+
+    // A walk that starts after the mark confirms the size again.
+    await keep(["/p/a"], size, on: local, in: cache)
+    #expect(await cache.size(of: "/p/a", modified: firstModified, on: local) == size)
+
+    // Rescanning the whole parent marks every child of it, and still nothing deeper.
+    await cache.markForWalk(childrenOf: "/p", around: "/p", because: "events were lost")
+    #expect(await cache.size(of: "/p/a", modified: firstModified, on: local) == nil)
+    #expect(await cache.size(of: "/p/b", modified: firstModified, on: local) == nil)
+    #expect(await cache.size(of: "/p/a/x", modified: firstModified, on: local) == size)
+}
+
+@Test func aMustRescanEventNamesThePathToRescanAndOtherEventsInItsBatchStillCount() {
+    let watched = "/private/var/w"
+    let change = FolderSizeService.change(
+        for: [
+            FileEvent(path: watched + "/a/deep", flags: .mustRescan),
+            FileEvent(path: watched + "/b/file", flags: .created),
+            FileEvent(path: "/elsewhere", flags: .mustRescan),
+            FileEvent(path: watched, flags: .rootChanged),
+        ],
+        watched: watched, as: "/var/w")
+
+    #expect(change.changed == ["/var/w/b/file"])
+    #expect(change.lost == ["/var/w/a/deep", "/var/w", "/var/w"])
+}
+
+@Test func aShownFoldersWalkStartsAtOnceWhenLeftWalksHoldEverySlot() async throws {
+    let folder = try TemporaryFolder("FolderSizeServiceTests")
+    // Not made: see `leavingLetsRunningLocalWalksFinish…`.
+    let left = (0..<4).map { folder.url.path + "/left-\($0)" }
+    let shown = folder.url.path + "/shown"
+    let walks = FakeWalks()
+    defer { walks.releaseAll() }
+    let sizes = service(walks) { _ in ListingService.listerVolume }
+    let log = EventLog<(String, SizeResult)>()
+    let leaving = PaneID()
+    for path in left {
+        request(sizes, path, pane: leaving, into: log)
+        // In order, so the oldest is known.
+        #expect(await walks.waitForStarts(left.firstIndex(of: path)! + 1))
+    }
+    sizes.cancelWaitingWalks(for: leaving)
+
+    request(sizes, shown, pane: PaneID(), into: log)
+
+    #expect(await walks.waitForStarts(5, timeout: 1))
+    #expect(walks.cancelled == [left[0]])
+    walks.release(shown)
+    #expect(await log.wait { $0.count == 1 })
+    #expect(log.all.map(\.0) == [shown])
+}
+
+@Test func aRequestForAFolderBeingWalkedWaitsForThatWalk() async throws {
+    let folder = try TemporaryFolder("FolderSizeServiceTests")
+    let path = folder.url.path + "/big"
+    let walks = FakeWalks(bytes: [path: 500])
+    defer { walks.releaseAll() }
+    let cache = FolderSizeCache(store: nil)
+    let sizes = service(walks, cache: cache) { _ in ListingService.listerVolume }
+    let log = EventLog<(String, SizeResult)>()
+    let leaving = PaneID()
+    request(sizes, path, pane: leaving, into: log)
+    #expect(await walks.waitForStarts(1))
+    sizes.cancelWaitingWalks(for: leaving)
+
+    // Back before the walk ends.
+    request(sizes, path, pane: PaneID(), into: log)
+    #expect(await !walks.waitForStarts(2, timeout: 0.1))
+    walks.release(path)
+
+    #expect(await log.wait { $0.count == 1 })
+    #expect(try log.all[0].1.get().bytes == 500)
+    #expect(walks.starts.count == 1)
+    #expect(
+        await cache.size(of: path, modified: firstModified, on: ListingService.listerVolume)?.bytes
+            == 500)
+}
+
+@Test func aRequestThatJoinedACancelledWalkWalksItself() async throws {
+    let path = "/searcher-no-such-folder/big"
+    let walks = FakeWalks()
+    defer { walks.releaseAll() }
+    let sizes = service(walks) { _ in ListingService.listerVolume }
+    let log = EventLog<(String, SizeResult)>()
+    let first = PaneID()
+    request(sizes, path, pane: first, into: log)
+    #expect(await walks.waitForStarts(1))
+    request(sizes, path, pane: PaneID(), into: log)
+    try await Task.sleep(for: .milliseconds(50))
+
+    sizes.cancelWalks(for: first)
+
+    #expect(await walks.waitForCancelled(path))
+    #expect(await walks.waitForStarts(2))
+    walks.release(path)
+    #expect(await log.wait { $0.count == 1 })
+    #expect(await !log.wait(timeout: 0.1) { $0.count > 1 })
 }

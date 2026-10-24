@@ -15,6 +15,7 @@ public final class Settings {
         case folderSizes
         case terminalBundleID
         case commanderFKeys
+        case hideEmptyOperationsPanel
     }
 
     /// What the Settings window says about `commanderFKeys`.
@@ -22,6 +23,11 @@ public final class Settings {
         "F5 copies and F6 moves the selection to the other pane, F7 makes a new folder and F8 "
         + "moves the selection to the Trash. Hold Fn with them unless “Use F1, F2, etc. keys as "
         + "standard function keys” is on in System Settings ▸ Keyboard."
+
+    /// What the Settings window says about `hideEmptyOperationsPanel`.
+    public static let hideEmptyOperationsPanelHelp =
+        "The operations panel shows when an operation runs past a second and hides when the last "
+        + "one finishes. Window ▸ Operations still shows and hides it."
 
     /// Whether panes list hidden entries: names starting with a dot, and entries with the hidden
     /// flag (`chflags hidden`). Off by default.
@@ -33,7 +39,8 @@ public final class Settings {
         didSet { store(foldersFirst, for: .foldersFirst, changed: foldersFirst != oldValue) }
     }
     /// Whether a pane in list view walks each subfolder for its size and shows it, on local and
-    /// network volumes alike. On by default.
+    /// network volumes alike: Finder's Calculate All Sizes. Off by default, as in Finder, so
+    /// browsing reads no more of the disk than the listings.
     public var folderSizes: Bool {
         didSet { store(folderSizes, for: .folderSizes, changed: folderSizes != oldValue) }
     }
@@ -53,6 +60,16 @@ public final class Settings {
         }
     }
 
+    /// Whether a window's operations panel hides once it has no operations left, as Finder shows
+    /// none while idle. Off, the panel stays and says "No operations". On by default.
+    public var hideEmptyOperationsPanel: Bool {
+        didSet {
+            store(
+                hideEmptyOperationsPanel, for: .hideEmptyOperationsPanel,
+                changed: hideEmptyOperationsPanel != oldValue)
+        }
+    }
+
     private let defaults: UserDefaults
     private var observers: [Observer] = []
 
@@ -65,9 +82,10 @@ public final class Settings {
         self.defaults = defaults
         showHidden = Self.bool(.showHidden, in: defaults) ?? false
         foldersFirst = Self.bool(.foldersFirst, in: defaults) ?? false
-        folderSizes = Self.bool(.folderSizes, in: defaults) ?? true
+        folderSizes = Self.bool(.folderSizes, in: defaults) ?? false
         terminalBundleID = Self.string(.terminalBundleID, in: defaults) ?? "com.apple.Terminal"
         commanderFKeys = Self.bool(.commanderFKeys, in: defaults) ?? false
+        hideEmptyOperationsPanel = Self.bool(.hideEmptyOperationsPanel, in: defaults) ?? true
     }
 
     /// Runs `handler` after each change of a setting, for as long as `owner` exists.

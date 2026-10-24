@@ -98,3 +98,72 @@ private func pathBar(
     #expect(opened == [Location(path: "/Users"), Location(path: "/Users/dylan/Projects")])
     #expect(selected.isEmpty)
 }
+
+@MainActor @Test func separatorsFitTheirGlyphAndCenterOnTheText() throws {
+    let bar = pathBar(showing: "/Users/dylan/Projects")
+    let separators = bar.subviews.filter { !($0 is NSButton) }
+    let segment = bar.segments[0]
+    let font = try #require(segment.font)
+    // The middle of a capital letter, which Finder's chevrons line up with.
+    let baseline = segment.frame.maxY - segment.firstBaselineOffsetFromTop
+    let textMiddle = baseline + font.capHeight / 2
+
+    // A taller button draws its title lower than its baseline offset says.
+    #expect(segment.frame.height == ceil(segment.intrinsicContentSize.height))
+    #expect(separators.count == 3)
+    for separator in separators {
+        let natural = separator.frame(
+            forAlignmentRect: NSRect(origin: .zero, size: separator.intrinsicContentSize))
+        #expect(separator.frame.width >= natural.width)
+        #expect(separator.frame.height >= natural.height)
+        #expect(bar.bounds.contains(separator.frame))
+        #expect(abs(separator.frame.midY - textMiddle) <= 1)
+    }
+}
+
+@MainActor private func mouseEvent(_ type: NSEvent.EventType) throws -> NSEvent {
+    try #require(
+        NSEvent.enterExitEvent(
+            with: type, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0,
+            context: nil, eventNumber: 0, trackingNumber: 0, userData: nil))
+}
+
+@MainActor @Test func eachSegmentTracksTheMouse() {
+    let bar = pathBar(showing: "/Users/dylan/Projects")
+
+    #expect(
+        bar.segments.allSatisfy { segment in
+            segment.trackingAreas.contains { $0.options.contains(.mouseEnteredAndExited) }
+        })
+}
+
+@MainActor @Test func aSegmentIsHighlightedWhileTheMouseIsOverIt() throws {
+    let bar = pathBar(showing: "/Users/dylan/Projects")
+
+    bar.segments[1].mouseEntered(with: try mouseEvent(.mouseEntered))
+    #expect(bar.hoveredSegment == 1)
+
+    bar.segments[1].mouseExited(with: try mouseEvent(.mouseExited))
+    #expect(bar.hoveredSegment == nil)
+}
+
+@MainActor @Test func theHighlightSitsBehindTheHoveredSegment() throws {
+    let bar = pathBar(showing: "/Users/dylan/Projects")
+    #expect(bar.highlightFrame == nil)
+
+    bar.segments[2].mouseEntered(with: try mouseEvent(.mouseEntered))
+
+    let highlight = try #require(bar.highlightFrame)
+    let segment = bar.segments[2].frame
+    #expect(highlight.minX == segment.minX && highlight.maxX == segment.maxX)
+    #expect(highlight.minY < segment.minY && highlight.maxY > segment.maxY)
+}
+
+@MainActor @Test func showingAnotherFolderClearsTheHighlight() throws {
+    let bar = pathBar(showing: "/Users/dylan/Projects")
+    bar.segments[2].mouseEntered(with: try mouseEvent(.mouseEntered))
+
+    bar.show(Location(path: "/Users/dylan"), rootVolumeName: "Macintosh HD")
+
+    #expect(bar.hoveredSegment == nil)
+}

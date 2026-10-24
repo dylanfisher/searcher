@@ -7,7 +7,8 @@ import UniformTypeIdentifiers
 /// Finder marks it, the other apps by name, each with its icon and, when two share a name, its
 /// version, then App Store…, which searches the store for the type, and Other…, which asks for
 /// any app. While a type's list is building the menu shows Loading…, and the apps replace it
-/// when the list lands, the menu still open (docs/decisions/0073-open-with.md).
+/// when the list lands, the menu still open. A menu shown from the cache refreshes it, so an app
+/// installed since shows the next time (docs/decisions/0073-open-with.md).
 @MainActor
 final class OpenWithMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
     /// What the menu acts on: the pane whose selection it opens and the cache its apps come from.
@@ -73,6 +74,8 @@ final class OpenWithMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
         }
         if let choices = target.openWith.cachedChoices(for: types) {
             show(choices, in: menu)
+            // For the next open: this one stays as shown.
+            target.openWith.refresh(types)
             return
         }
         show(nil, in: menu)

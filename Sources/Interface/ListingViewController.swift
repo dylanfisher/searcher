@@ -601,7 +601,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         case .size:
             return formatter.size(
                 entry, folderSize: listing.folderSize(atRow: row),
-                showsFolderSizes: pane.showsFolderSizes)
+                showsFolderSizes: pane.showsFolderSizes,
+                awaitsFolderSizes: pane.awaitsFolderSizes)
         case .dateModified: return formatter.date(entry.modified)
         case .kind: return listing.kind(atRow: row).text
         }

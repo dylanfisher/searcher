@@ -284,6 +284,14 @@ func untouchedSettings() -> Settings {
     Settings(defaults: temporarySuite(in: FileManager.default.temporaryDirectory.path))
 }
 
+/// `untouchedSettings` with folder sizes on, for a test of the walks that setting starts.
+@MainActor
+func sizedSettings() -> Settings {
+    let settings = untouchedSettings()
+    settings.folderSizes = true
+    return settings
+}
+
 /// Settings stored in `folder`, which takes the suite's file with it when the test removes it.
 @MainActor
 func storedSettings(in folder: TemporaryFolder) -> Settings {
@@ -297,7 +305,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
         view.items.map(\.title) == [
             "as List", "as Columns", "", "Show Hidden Files", "Folders First", "", "Sort by Name",
             "Sort by Kind",
-            "Sort by Date Modified", "Sort by Size", "", "Recalculate Sizes",
+            "Sort by Date Modified", "Sort by Size", "", "Calculate All Sizes", "Calculate Sizes",
         ])
     let table = ListingTableView()
     let log = CommandLog()
@@ -311,13 +319,18 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
                 windowNumber: 0, context: nil, characters: ">", charactersIgnoringModifiers: ">",
                 isARepeat: false, keyCode: 47)),
         try keyEvent("6", modifiers: [.control, .option, .command]),
+        try keyEvent("s", modifiers: [.control, .command]),
     ]
     for press in presses {
         let item = try item(for: press, in: menu)
         #expect(table.tryToPerform(try #require(item.action), with: item))
     }
 
-    #expect(log.ids == [ViewCommands.toggleHidden.id, ViewCommands.sortBySize.id])
+    #expect(
+        log.ids == [
+            ViewCommands.toggleHidden.id, ViewCommands.sortBySize.id,
+            SizeCommands.calculateSizes.id,
+        ])
 }
 
 @MainActor @Test func viewMenuCheckMarksFollowTheSettings() throws {
@@ -328,8 +341,14 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     let hidden = try #require(allItems(menu).first { $0.title == "Show Hidden Files" })
     let foldersFirst = try #require(allItems(menu).first { $0.title == "Folders First" })
     let sortByName = try #require(allItems(menu).first { $0.title == "Sort by Name" })
+    let allSizes = try #require(allItems(menu).first { $0.title == "Calculate All Sizes" })
     #expect(hidden.state == .off)
     #expect(foldersFirst.state == .off)
+    #expect(allSizes.state == .off)
+
+    settings.folderSizes = true
+    #expect(allSizes.state == .on)
+    #expect(hidden.state == .off)
 
     settings.showHidden = true
     #expect(hidden.state == .on)

@@ -41,6 +41,17 @@ other-pane confirm names nothing, and two Cmd-Shift-C presses ask two questions 
 - **Showing itself.** The panel shows when an operation is still unfinished 1 s after the panel
   first saw it, or finishes in trouble, and only in the most recently active window. A shorter
   operation that succeeds never shows it.
+- **Hiding when empty.** `Settings.hideEmptyOperationsPanel`, on by default, as Finder shows
+  no panel while idle: a panel that showed itself hides when its last row leaves, cleared or
+  finished, and shows again by the rule above. A panel the user opened with Operations stays,
+  empty or not, until the user closes it, so a copy ending in another window never closes it.
+  Turning the setting on while an empty panel that showed itself is up hides it. Off, the empty
+  panel stays and says "No operations".
+- **Size.** The panel is as tall as its rows, up to 200 pt (about three rows), past which they
+  scroll; with no rows it is one line saying so. Its height comes from the rows' constraints, so
+  it grows and shrinks a row at a time and the panes give up only that room. A progress tick
+  changes a row's text and bar, never its height, so it lays out nothing above the row. Each
+  row's bar takes the row's width beside its buttons.
 - **Key.** Operations, Cmd-Opt-L, in the Window menu after the window moves. The key table has
   none; Cmd-Opt-L is Safari's Downloads key and no command or standard item used it. It works
   from the filter field too, like the other window commands.
@@ -58,6 +69,11 @@ other-pane confirm names nothing, and two Cmd-Shift-C presses ask two questions 
   the window, and a floating window would take focus as it opens.
 - **Show the panel in every window after 1 s** — rejected: every window would grow a panel for
   one copy.
+- **A fixed-height panel** — rejected: one row sat in a box three rows tall.
+- **Hiding the empty panel always** — rejected: a user who wants to watch the panel, empty or
+  not, can turn the setting off.
+- **Hiding every empty panel** — rejected: every window gets every snapshot, so a copy ending
+  in one window would close a panel the user opened in another.
 - **Failed rows kept per window** — rejected: a window opened later wouldn't list a failure,
   and one reported with no window open would be lost.
 

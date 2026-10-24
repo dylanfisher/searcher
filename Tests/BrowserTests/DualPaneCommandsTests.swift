@@ -1,4 +1,5 @@
 import Base
+import BrowserTestSupport
 import Foundation
 import TestSupport
 import Testing
@@ -53,6 +54,18 @@ private func press(_ chord: KeyChord, in workspace: Workspace, tabBounds: Rect =
         CommandContext(
             pane: workspace.selectedTab.focusedPane.commandPane, workspace: workspace,
             tabBounds: { tabBounds }))
+}
+
+/// Whether `command`'s menu item is on for `workspace`'s selected tab.
+@MainActor
+private func isEnabled(_ command: Command, in workspace: Workspace) -> Bool {
+    guard let binding = DualPaneCommands.bindings.first(where: { $0.command == command }) else {
+        preconditionFailure("\(command.id) isn't a dual-pane command")
+    }
+    let context = CommandContext(
+        pane: workspace.selectedTab.focusedPane.commandPane, workspace: workspace,
+        tabBounds: { bounds })
+    return binding.isEnabled?(context) ?? true
 }
 
 // MARK: Chords
@@ -156,18 +169,27 @@ private func press(_ chord: KeyChord, in workspace: Workspace, tabBounds: Rect =
     #expect(fixture.fixture.actions.openedFiles.isEmpty)
 }
 
-@MainActor @Test func openInOtherPaneOpensASelectedFileAsOpenDoes() async throws {
+@MainActor @Test func openInOtherPaneIsOffAndItsKeyDoesNothingWithoutOneSelectedFolder()
+    async throws
+{
     let fixture = await Fixture.make()
     let (first, second) = try fixture.splitRightKeepingFocus()
     let other = try fixture.pane(second)
-    fixture.fixture.select("a.txt")
 
-    try press(openInOtherPane, in: fixture.workspace)
+    for names in [["a.txt"], ["docs", "a.txt"], []] {
+        fixture.fixture.pane.select(
+            Selection(Set(names.map(ExactName.init)), cursor: names.last.map(ExactName.init)))
+        #expect(!isEnabled(DualPaneCommands.openInOtherPane, in: fixture.workspace), "\(names)")
 
-    #expect(fixture.fixture.actions.openedFiles == [URL(fileURLWithPath: "/root/a.txt")])
-    #expect(other.location.path == "/root")
-    #expect(!other.canGoBack)
-    #expect(fixture.tab.layout.focused == first)
+        try press(openInOtherPane, in: fixture.workspace)
+
+        #expect(fixture.fixture.actions.openedFiles.isEmpty, "\(names)")
+        #expect(other.location.path == "/root", "\(names)")
+        #expect(!other.canGoBack, "\(names)")
+        #expect(fixture.tab.layout.focused == first, "\(names)")
+    }
+    fixture.fixture.select("docs")
+    #expect(isEnabled(DualPaneCommands.openInOtherPane, in: fixture.workspace))
 }
 
 @MainActor @Test func openInOtherPaneWithOneLeafSplitsRightAndKeepsFocus() async throws {
@@ -187,21 +209,111 @@ private func press(_ chord: KeyChord, in workspace: Workspace, tabBounds: Rect =
     #expect(try fixture.pane(first).location.path == "/root")
 }
 
-@MainActor @Test func openInOtherPaneWithOneLeafSplitsRightAndOpensAFileAsOpenDoes() async throws {
+@MainActor @Test func openInOtherPaneWithOneLeafAndAFileSelectedNeitherSplitsNorOpens()
+    async throws
+{
     let fixture = await Fixture.make()
-    let first = fixture.tab.layout.focused
+    let before = fixture.tab.layout
     fixture.fixture.select("a.txt")
 
+    #expect(!isEnabled(DualPaneCommands.openInOtherPane, in: fixture.workspace))
     try press(openInOtherPane, in: fixture.workspace)
 
-    let layout = fixture.tab.layout
-    let second = try #require(layout.otherPane)
-    #expect(layout.focused == first)
-    #expect(
-        layout.root
-            == .split(axis: .horizontal, ratio: 0.5, first: .pane(first), second: .pane(second)))
-    #expect(fixture.fixture.actions.openedFiles == [URL(fileURLWithPath: "/root/a.txt")])
-    #expect(try fixture.pane(second).location.path == "/root")
+    #expect(fixture.tab.layout == before)
+    #expect(fixture.tab.panes.count == 1)
+    #expect(fixture.fixture.actions.openedFiles.isEmpty)
+}
+
+/// A workspace of one tab at `/root`, listed, holding `folder link`, a link that lists as a
+/// folder, and `file link`, a link to a file, which lists as not a directory.
+@MainActor
+private func linkWorkspace() async -> (Workspace, Pane, GatedLister, StubSystemActions) {
+    let link = { (name: String) in
+        DirectoryEntry(
+            name: name, type: .symbolicLink, size: nil, modified: testDate, isHidden: false,
+            isDataless: false)
+    }
+    let lister = GatedLister([
+        "/root": .batches([[link("folder link"), link("file link"), file("a.txt")]]),
+        "/root/folder link": .batches([[file("inside.txt")]]),
+        "/root/file link": .failure(ListingError(path: "/root/file link", code: ENOTDIR)),
+    ])
+    lister.releaseAll()
+    let actions = StubSystemActions()
+    let pane = Pane(
+        location: Location(path: "/root"), service: ListingService(lister: lister),
+        systemActions: actions, settings: untouchedSettings())
+    await settle { pane.state.isLoaded }
+    return (Workspace(tab: Tab(pane: pane)), pane, lister, actions)
+}
+
+@MainActor @Test func openInOtherPaneTakesALinkToAFolderThereAsAFolder() async throws {
+    let (workspace, pane, _, actions) = await linkWorkspace()
+    let tab = workspace.selectedTab
+    let first = tab.layout.focused
+    try #require(tab.split(.horizontal, in: bounds) != nil)
+    let other = try #require(tab.panes[tab.layout.focused])
+    tab.focus(first)
+    pane.select(Selection([ExactName("folder link")], cursor: ExactName("folder link")))
+
+    #expect(isEnabled(DualPaneCommands.openInOtherPane, in: workspace))
+    try press(openInOtherPane, in: workspace)
+    await settle { other.location.path == "/root/folder link" && other.state.isLoaded }
+
+    #expect(other.state.names == ["inside.txt"])
+    #expect(pane.location.path == "/root")
+    #expect(tab.layout.focused == first)
+    #expect(actions.openedFiles.isEmpty)
+}
+
+@MainActor @Test func openInOtherPaneWithOneLeafSplitsForALinkToAFolderOnceItLists() async throws {
+    let (workspace, pane, _, actions) = await linkWorkspace()
+    let tab = workspace.selectedTab
+    let first = tab.layout.focused
+    pane.select(Selection([ExactName("folder link")], cursor: ExactName("folder link")))
+
+    try press(openInOtherPane, in: workspace)
+    await settle { tab.layout.otherPane != nil }
+
+    let id = try #require(tab.layout.otherPane)
+    let other = try #require(tab.panes[id])
+    await settle { other.location.path == "/root/folder link" }
+    #expect(tab.layout.focused == first)
+    #expect(pane.location.path == "/root")
+    #expect(actions.openedFiles.isEmpty)
+}
+
+@MainActor @Test func openInOtherPaneOnALinkToAFileOpensNothingAndDoesNotSplit() async throws {
+    let (workspace, pane, lister, actions) = await linkWorkspace()
+    let tab = workspace.selectedTab
+    let before = tab.layout
+    pane.select(Selection([ExactName("file link")], cursor: ExactName("file link")))
+
+    #expect(isEnabled(DualPaneCommands.openInOtherPane, in: workspace))
+    try press(openInOtherPane, in: workspace)
+    #expect(await lister.waitForCall("/root/file link"))
+    try? await Task.sleep(for: .milliseconds(100))
+    await drainMainQueue()
+
+    #expect(tab.layout == before)
+    #expect(tab.panes.count == 1)
+    #expect(pane.location.path == "/root")
+    #expect(!pane.canGoBack)
+    #expect(actions.openedFiles.isEmpty)
+
+    // With two panes, the other pane stays where it is.
+    let first = tab.layout.focused
+    try #require(tab.split(.horizontal, in: bounds) != nil)
+    let other = try #require(tab.panes[tab.layout.focused])
+    tab.focus(first)
+    try press(openInOtherPane, in: workspace)
+    await settle { lister.calls.filter { $0.path == "/root/file link" }.count == 2 }
+    try? await Task.sleep(for: .milliseconds(100))
+    await drainMainQueue()
+
+    #expect(other.location.path == "/root")
+    #expect(!other.canGoBack)
+    #expect(actions.openedFiles.isEmpty)
 }
 
 // MARK: Zoom, size and columns

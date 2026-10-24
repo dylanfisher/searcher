@@ -155,9 +155,12 @@ final class UIBench {
         if options.scenario == nil, options.keyPresses > 0 {
             fileOperations = makeQueue()
         }
+        let settings = Settings(defaults: defaults)
+        // The queue case opens and closes the panel with its key, around a copy that empties it.
+        settings.hideEmptyOperationsPanel = false
         let controller = BrowserWindowController(
             location: Location(path: root.folder.path), service: service,
-            systemActions: systemActions, settings: Settings(defaults: defaults),
+            systemActions: systemActions, settings: settings,
             fileOperations: fileOperations)
         self.controller = controller
         controller.paneViewController.onShow = { [weak self] in self?.paneShown() }

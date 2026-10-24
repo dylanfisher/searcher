@@ -150,6 +150,8 @@ public final class Pane {
     /// were resolved from the selection it started with then.
     private var goSelectionVersion = 0
     /// The cached rows of a `goToFolder` that hasn't moved the pane yet, shown when it moves.
+    /// The listing of a link `openSelectedLink(asFolderIn:)` checks before it asks for a pane.
+    private var linkCheck: ListingLoad?
     private var pendingGoCached: (update: ListingUpdate, resolved: Selection?)?
     /// When the rows of the `loaded` state were listed, for the slow and offline states that keep
     /// them.
@@ -402,8 +404,11 @@ public final class Pane {
         pendingGo = (load, request)
     }
 
-    /// Stops a `goToFolder` that hasn't moved the pane yet; its `finish` never runs.
+    /// Stops a `goToFolder` that hasn't moved the pane yet, and an
+    /// `openSelectedLink(asFolderIn:)` that hasn't asked for its pane; its `finish` never runs.
     public func cancelGoToFolder() {
+        linkCheck?.cancel()
+        linkCheck = nil
         pendingGo?.load.cancel()
         pendingGo = nil
         pendingGoCached = nil
@@ -501,7 +506,7 @@ public final class Pane {
         waitingPatches = []
         relistAfterLoad = false
         volumeIsGone = false
-        forgetFolderSizes()
+        forgetFolderSizes(lettingLocalWalksFinish: true)
         self.location = location
         filter = NameFilter()
         selection = name.map { Selection([$0], cursor: $0) } ?? Selection()
@@ -515,10 +520,52 @@ public final class Pane {
         openSelection(foldersIn: nil)
     }
 
-    /// Opens the selection as `openSelection` does, except that a single selected folder, or link
-    /// to one, opens in `other`, which must not be a column. Files still go to the system.
+    /// Opens a single selected folder in `other`, which must not be a column. Any other
+    /// selection opens as `openSelection` opens it, so a file goes to the system; Open in Other
+    /// Pane calls this for a folder only, and `openSelectedLink(asFolderIn:)` for a link.
     public func openSelection(in other: Pane) {
         openSelection(foldersIn: other)
+    }
+
+    /// Opens the one selected link as a folder in the pane `other` returns, as Open opens a link
+    /// to a folder. The link is listed first, off the main thread, and `other` is called only
+    /// once it lists, so a link to a file or a broken link opens nothing and makes no pane.
+    /// The pane then goes to the link with `goToFolder`, which shows any other failure there.
+    /// A later navigation or Go to folder in this pane cancels the open.
+    public func openSelectedLink(asFolderIn other: @escaping @MainActor () -> Pane?) {
+        let entries = selectedEntries
+        precondition(
+            entries.count == 1 && entries[0].type == .symbolicLink,
+            "openSelectedLink(asFolderIn:) ran without one selected link")
+        let link = location.child(named: entries[0].name)
+        cancelGoToFolder()
+        linkCheck = service.load(link, priority: loadPriority) { [weak self] update in
+            // Nil once cancelled or decided; a cancelled load sends nothing more.
+            guard let self, linkCheck != nil else { return }
+            switch update {
+            // A stalled or cached read hasn't said whether the link is a folder.
+            case .cached, .slow, .gaveUp:
+                return
+            case .failed(let error, _, _)
+            where error.reason == .notFound || error.reason == .notADirectory:
+                linkCheck = nil
+                return
+            case .firstBatch, .full, .failed, .volumeGone:
+                break
+            }
+            linkCheck?.cancel()
+            linkCheck = nil
+            other()?.goToFolder(link) { error in
+                guard let error else { return }
+                switch error.reason {
+                // The link changed since it was listed; it still opens nothing.
+                case .notADirectory, .notFound:
+                    return
+                case .privacyProtected, .permissionDenied, .unreachable, .other:
+                    preconditionFailure("goToFolder moved the pane for \(error) but reported it")
+                }
+            }
+        }
     }
 
     private func openSelection(foldersIn other: Pane?) {
@@ -826,19 +873,21 @@ public final class Pane {
         let selectionVersion = selectionVersion
         // A load started with sizes the setting has since turned off drops them when it lands.
         let sizes = showsFolderSizes ? knownSizes : [:]
+        let keptSizes = showsFolderSizes ? folderSizes : nil
+        let folder = location
         load = service.load(
             location, sortedBy: sortColumn, ascending: sortAscending,
             foldersFirst: settings.foldersFirst, showsHidden: settings.showHidden, filter: filter,
             priority: loadPriority,
             prepare: { update in
-                let update = Self.applying(sizes, to: update)
+                let update = Self.applying(sizes, keptIn: keptSizes, under: folder, to: update)
                 return (update, Self.resolve(selection, against: update))
             },
             onUpdate: { [weak self] prepared in
                 // A full listing is the time to ask again for the walks that failed.
                 if case .full = prepared.0 { self?.failedSizes = [] }
                 self?.receive(prepared.0, resolved: prepared.1, from: selectionVersion)
-                if !sizes.isEmpty { self?.dropSizesIfOff() }
+                if keptSizes != nil { self?.dropSizesIfOff() }
             })
     }
 
@@ -1211,8 +1260,8 @@ public final class Pane {
     public static let sizeBatchInterval: Duration = .milliseconds(250)
 
     /// Walks the subfolders of a list pane's folder for their sizes while `Settings.folderSizes`
-    /// is on. The pane's owner sets it once; a pane without one, such as a column's, shows no
-    /// folder sizes.
+    /// is on, or once when `calculateSizes()` asks. The pane's owner sets it once; a pane without
+    /// one, such as a column's, shows no folder sizes.
     public var folderSizes: FolderSizeService? {
         didSet {
             precondition(oldValue == nil, "a pane's folder size service is set once")
@@ -1220,14 +1269,26 @@ public final class Pane {
             startSizeScan()
         }
     }
-    /// Whether folder rows show walked sizes: a list pane with a size service, with the setting
-    /// on.
-    public var showsFolderSizes: Bool {
-        folderSizes != nil && settings.folderSizes && viewMode == .list
+    /// Whether `calculateSizes()` can run: a list pane with a size service.
+    public var canCalculateSizes: Bool {
+        folderSizes != nil && viewMode == .list
     }
-    /// Whether the pane asks for walks now: it shows folder sizes, is in the selected tab, and
-    /// its volume is mounted. A hidden tab's pane mustn't hold a share's one walk while the
-    /// focused pane waits for sizes.
+    /// Whether folder rows show walked sizes: a list pane with a size service, with the setting
+    /// on or in a folder `calculateSizes()` walked.
+    public var showsFolderSizes: Bool {
+        canCalculateSizes
+            && (settings.folderSizes || calculatedFolders.contains(ExactName(location.path)))
+    }
+    /// Whether a folder row without a size waits for a walk, and shows pending text: the setting
+    /// is on, or the walks `calculateSizes()` asked for haven't all landed. Otherwise it shows no
+    /// size.
+    public var awaitsFolderSizes: Bool {
+        showsFolderSizes
+            && (settings.folderSizes || calculatesSizesOnce || !calculatingSizes.isEmpty)
+    }
+    /// Whether the pane scans its rows now, for walks to ask for and kept sizes to show: it shows
+    /// folder sizes, is in the selected tab, and its volume is mounted. A hidden tab's pane
+    /// mustn't hold a share's one walk while the focused pane waits for sizes.
     private var walksFolders: Bool {
         showsFolderSizes && isVisible && !volumeIsGone && !isClosed
     }
@@ -1248,6 +1309,9 @@ public final class Pane {
     /// Goes up whenever the pane's walks are cancelled, so a result of one asked for before is
     /// dropped when it lands.
     private var sizeGeneration = 0
+    /// The `sizeGeneration` the last cancel of running walks too moved to, so a scan that lands
+    /// after a cancel it missed stops its walks as that cancel would have.
+    private var runningSizeWalksCancelledAt = 0
     private var sizeScanIsRunning = false
     /// The rows changed while a scan ran; scan them again when it lands.
     private var sizeScanIsStale = false
@@ -1255,6 +1319,13 @@ public final class Pane {
     private var sizeBatchIsWaiting = false
     /// `Settings.folderSizes` as the pane last followed it.
     private var sizeSettingSeen = false
+    /// The folders, by path, whose subfolders `calculateSizes()` walked with the setting off. A
+    /// visit shows the sizes kept for them and walks nothing. Turning the setting off empties it.
+    private var calculatedFolders: Set<ExactName> = []
+    /// `calculateSizes()` asked the next scan to walk the rows with the setting off.
+    private var calculatesSizesOnce = false
+    /// The folders that scan asked for whose walks haven't landed.
+    private var calculatingSizes: Set<ExactName> = []
     /// The setting changed since the rows were last refreshed: the next batch lands even if no
     /// size changed, so folder rows switch between pending text and no size, and it drops every
     /// size when the setting is off.
@@ -1263,30 +1334,45 @@ public final class Pane {
     private let sizeScanQueue = DispatchQueue.global(qos: .utility)
 
     /// Drops the kept sizes of the folder and every folder under it, and walks its subfolders
-    /// again once that is done. The sizes shown stay until the new ones arrive. When the drop
-    /// fails, the service logs why and the pane keeps what it has.
-    public func recalculateSizes() {
-        guard showsFolderSizes, let folderSizes else { return }
+    /// again once that is done. With the setting off they are walked once, and the folder shows
+    /// sizes from then on without walking again. The sizes shown stay until the new ones arrive.
+    /// When the drop fails, the service logs why and the pane keeps what it has.
+    public func calculateSizes() {
+        guard canCalculateSizes, let folderSizes else { return }
         let folder = location
+        if !settings.folderSizes { calculatedFolders.insert(ExactName(folder.path)) }
         Task { [weak self] in
             guard await folderSizes.recalculateSizes(under: folder.path) else { return }
-            guard let self, self.location == folder else { return }
+            guard let self, self.location == folder, self.showsFolderSizes else { return }
             self.forgetFolderSizes()
+            self.calculatesSizesOnce = !self.settings.folderSizes
+            // The rows switch to pending text.
+            self.sizeSettingChanged = true
             self.startSizeScan()
+            self.startSizeBatch()
         }
     }
 
     /// Cancels the pane's walks. The sizes walked stay, and the folders not walked yet are asked
-    /// for again by the next scan.
-    private func cancelSizeWalks() {
-        folderSizes?.cancelWalks(for: sizeWalkOwner)
+    /// for again by the next scan. Letting local walks finish, a walk already running on a local
+    /// volume goes on and keeps its size for a later visit, without delivering it here.
+    private func cancelSizeWalks(lettingLocalWalksFinish: Bool = false) {
+        if lettingLocalWalksFinish {
+            folderSizes?.cancelWaitingWalks(for: sizeWalkOwner)
+        } else {
+            folderSizes?.cancelWalks(for: sizeWalkOwner)
+        }
         sizeGeneration += 1
+        if !lettingLocalWalksFinish { runningSizeWalksCancelledAt = sizeGeneration }
         requestedSizes = [:]
+        calculatesSizesOnce = false
+        calculatingSizes = []
     }
 
-    /// Cancels the pane's walks and forgets the sizes of the folder it shows.
-    private func forgetFolderSizes() {
-        cancelSizeWalks()
+    /// Cancels the pane's walks and forgets the sizes of the folder it shows. The service keeps
+    /// the sizes walked, and a later listing of the folder gets them from it.
+    private func forgetFolderSizes(lettingLocalWalksFinish: Bool = false) {
+        cancelSizeWalks(lettingLocalWalksFinish: lettingLocalWalksFinish)
         knownSizes = [:]
         failedSizes = []
         waitingSizes = [:]
@@ -1297,7 +1383,10 @@ public final class Pane {
     private func followSizeSetting() {
         guard folderSizes != nil, settings.folderSizes != sizeSettingSeen else { return }
         sizeSettingSeen = settings.folderSizes
-        if !settings.folderSizes { forgetFolderSizes() }
+        if !settings.folderSizes {
+            forgetFolderSizes()
+            calculatedFolders = []
+        }
         sizeSettingChanged = true
         startSizeScan()
         startSizeBatch()
@@ -1312,8 +1401,9 @@ public final class Pane {
     }
 
     /// Finds, off the main actor, the folder rows not yet walked at their current date and asks
-    /// for those walks there, and finds the known sizes the rows lack and queues them. Runs after
-    /// each change of the rows, one scan at a time.
+    /// for those walks there, while the setting is on or `calculateSizes()` asked, and finds the
+    /// known sizes the rows lack and queues them. Runs after each change of the rows, one scan at
+    /// a time.
     private func startSizeScan() {
         guard walksFolders, let folderSizes, let listing = state.listing else { return }
         guard !sizeScanIsRunning else {
@@ -1321,6 +1411,8 @@ public final class Pane {
             return
         }
         sizeScanIsRunning = true
+        let once = calculatesSizesOnce && !settings.folderSizes
+        let asksForWalks = settings.folderSizes || once
         let requested = requestedSizes
         let known = knownSizes
         let failed = failedSizes
@@ -1336,7 +1428,7 @@ public final class Pane {
                 let name = ExactName(entry.name)
                 if let update = known[name], update.modified == entry.modified {
                     if listing.folderSize(atRow: row) != update.value { missing[name] = update }
-                } else if requested[name] != entry.modified, !failed.contains(name) {
+                } else if asksForWalks, requested[name] != entry.modified, !failed.contains(name) {
                     found.append((name, entry.modified))
                 }
             }
@@ -1356,7 +1448,8 @@ public final class Pane {
                         return
                     }
                     self.finishSizeScan(
-                        asked: asked, walks: walks, missing: missing, from: generation)
+                        asked: asked, walks: walks, missing: missing, once: once,
+                        from: generation)
                 }
             }
         }
@@ -1364,17 +1457,30 @@ public final class Pane {
 
     private func finishSizeScan(
         asked: [(name: ExactName, modified: Date)], walks: [FolderSizeService.Walk],
-        missing: [ExactName: Listing.FolderSizeUpdate], from generation: Int
+        missing: [ExactName: Listing.FolderSizeUpdate], once: Bool, from generation: Int
     ) {
         sizeScanIsRunning = false
         if generation == sizeGeneration, walksFolders {
             for folder in asked { requestedSizes[folder.name] = folder.modified }
+            if once {
+                // A walk can land before its scan does; those already have their size or failed.
+                calculatingSizes = Set(
+                    asked.filter { knownSizes[$0.name]?.modified != $0.modified }
+                        .map(\.name)
+                ).subtracting(failedSizes)
+                calculatesSizesOnce = false
+                // Rows still without a size switch from pending text once nothing is walked.
+                if calculatingSizes.isEmpty { sizeSettingChanged = true }
+            }
             waitingSizes.merge(missing) { waiting, _ in waiting }
             startSizeBatch()
         } else {
             // The walks were asked for after the pane cancelled its walks, so that cancel
-            // didn't reach them.
-            for walk in walks { walk.cancel() }
+            // didn't reach them. One that only left the folder lets local walks finish.
+            let leftOnly = generation != sizeGeneration && runningSizeWalksCancelledAt <= generation
+            for walk in walks {
+                if leftOnly { walk.leave() } else { walk.cancel() }
+            }
         }
         if sizeScanIsStale {
             sizeScanIsStale = false
@@ -1388,6 +1494,7 @@ public final class Pane {
     ) {
         // A walk the scan asked for can land before the scan does, after a cancel it missed.
         guard generation == sizeGeneration else { return }
+        calculatingSizes.remove(name)
         let value: Listing.FolderSizeValue
         switch result {
         case .success(let size):
@@ -1487,23 +1594,50 @@ public final class Pane {
     }
 
     /// `update` with `sizes` applied to its listing, on the load's worker, so a folder listed
-    /// again shows the sizes walked for it at once.
+    /// again shows the sizes walked for it at once. Folders `sizes` lacks get the sizes
+    /// `folderSizes` keeps in memory, so a folder visited again shows its subfolders' sizes with
+    /// its first rows; the scan that follows asks for each, and the service's own checks decide
+    /// whether it is walked again.
     private nonisolated static func applying(
-        _ sizes: [ExactName: Listing.FolderSizeUpdate], to update: ListingUpdate
+        _ sizes: [ExactName: Listing.FolderSizeUpdate], keptIn folderSizes: FolderSizeService?,
+        under folder: Location, to update: ListingUpdate
     ) -> ListingUpdate {
-        guard !sizes.isEmpty else { return update }
+        guard !sizes.isEmpty || folderSizes != nil else { return update }
+        func applied(_ listing: Listing) -> Listing {
+            var listing = listing
+            listing.applyFolderSizes(
+                kept(in: listing, from: folderSizes, under: folder).merging(sizes) { _, known in
+                    known
+                })
+            return listing
+        }
         switch update {
-        case .cached(var listing, let listedAt, let rootVolumeName):
-            listing.applyFolderSizes(sizes)
-            return .cached(listing, listedAt: listedAt, rootVolumeName: rootVolumeName)
-        case .firstBatch(var listing, let rootVolumeName):
-            listing.applyFolderSizes(sizes)
-            return .firstBatch(listing, rootVolumeName: rootVolumeName)
-        case .full(var listing, let rootVolumeName):
-            listing.applyFolderSizes(sizes)
-            return .full(listing, rootVolumeName: rootVolumeName)
+        case .cached(let listing, let listedAt, let rootVolumeName):
+            return .cached(applied(listing), listedAt: listedAt, rootVolumeName: rootVolumeName)
+        case .firstBatch(let listing, let rootVolumeName):
+            return .firstBatch(applied(listing), rootVolumeName: rootVolumeName)
+        case .full(let listing, let rootVolumeName):
+            return .full(applied(listing), rootVolumeName: rootVolumeName)
         case .failed, .slow, .gaveUp, .volumeGone:
             return update
         }
+    }
+
+    /// The sizes `folderSizes` keeps in memory for the folder rows of `listing`, a listing of
+    /// `folder`, at the dates the rows show.
+    private nonisolated static func kept(
+        in listing: Listing, from folderSizes: FolderSizeService?, under folder: Location
+    ) -> [ExactName: Listing.FolderSizeUpdate] {
+        guard let folderSizes else { return [:] }
+        let folders = (0..<listing.count).map { listing[$0] }.filter { $0.type == .directory }
+        let asked = folders.map { (path: folder.child(named: $0.name).path, modified: $0.modified) }
+        var found: [ExactName: Listing.FolderSizeUpdate] = [:]
+        for (entry, size) in zip(folders, folderSizes.keptSizes(of: asked)) {
+            guard let size else { continue }
+            found[ExactName(entry.name)] = Listing.FolderSizeUpdate(
+                modified: entry.modified,
+                value: .size(bytes: size.bytes, isPartial: size.isPartial))
+        }
+        return found
     }
 }

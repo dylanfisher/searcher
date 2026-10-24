@@ -238,7 +238,7 @@ private func choose(_ item: NSMenuItem) throws {
     let workspace = Workspace(tab: Tab(pane: pane))
     workspaces.add(workspace)
     let controller = BrowserWindowController(
-        workspace: workspace, workspaces: workspaces, openWith: cache)
+        workspace: workspace, workspaces: workspaces, settings: pane.settings, openWith: cache)
     let window = try #require(controller.window)
     window.contentView?.layoutSubtreeIfNeeded()
     await settle { pane.state.isLoaded }
@@ -307,5 +307,33 @@ private func choose(_ item: NSMenuItem) throws {
     #expect(
         fixture.actions.openedURLs == [
             try #require(URL(string: "macappstore://?action=search&term=txt"))
+        ])
+}
+
+@MainActor @Test func aMenuShownFromTheCacheRefreshesItSoTheNextOpenShowsANewApp() async throws {
+    let fixture = await Fixture()
+    fixture.cache.refreshInterval = .zero
+    fixture.select("a.txt")
+    _ = await fixture.cache.choices(for: [.plainText])
+    await settle { !fixture.cache.resting.contains(.plainText) }
+    let music = URL(fileURLWithPath: "/System/Applications/Music.app")
+    fixture.actions.setApplications(
+        [.plainText: [textEdit, quickTime, preview, music]],
+        defaultApplications: [.plainText: textEdit])
+
+    let menu = try fixture.open()
+
+    // This open shows the cache as it was.
+    #expect(
+        titles(menu) == [
+            "TextEdit (default)", "-", "Preview", "QuickTime Player", "-",
+            OpenWithMenu.appStoreTitle, OpenWithMenu.otherTitle,
+        ])
+    await settle { fixture.cache.cachedChoices(for: [.plainText])?.others.count == 3 }
+    _ = try fixture.open()
+    #expect(
+        titles(menu) == [
+            "TextEdit (default)", "-", "Music", "Preview", "QuickTime Player", "-",
+            OpenWithMenu.appStoreTitle, OpenWithMenu.otherTitle,
         ])
 }

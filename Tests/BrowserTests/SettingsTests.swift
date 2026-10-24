@@ -13,6 +13,14 @@ func untouchedSettings() -> Settings {
     Settings(defaults: temporarySuite(in: FileManager.default.temporaryDirectory.path))
 }
 
+/// `untouchedSettings` with folder sizes on, for a test of the walks that setting starts.
+@MainActor
+func sizedSettings() -> Settings {
+    let settings = untouchedSettings()
+    settings.folderSizes = true
+    return settings
+}
+
 /// Settings stored in `folder`, which takes the suite's file with it when the test removes it.
 @MainActor
 func storedSettings(in folder: TemporaryFolder) -> Settings {
@@ -24,9 +32,10 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
 
     #expect(!settings.showHidden)
     #expect(!settings.foldersFirst)
-    #expect(settings.folderSizes)
+    #expect(!settings.folderSizes)
     #expect(settings.terminalBundleID == "com.apple.Terminal")
     #expect(!settings.commanderFKeys)
+    #expect(settings.hideEmptyOperationsPanel)
 }
 
 @MainActor @Test func aWrongTypedValueIsDiscardedNotCoerced() throws {
@@ -35,14 +44,14 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     // UserDefaults' own `bool(forKey:)` reads both of these as true.
     defaults.set("YES", forKey: Settings.Key.showHidden.rawValue)
     defaults.set(1, forKey: Settings.Key.foldersFirst.rawValue)
-    defaults.set(0, forKey: Settings.Key.folderSizes.rawValue)
+    defaults.set(1, forKey: Settings.Key.folderSizes.rawValue)
     defaults.set(7, forKey: Settings.Key.terminalBundleID.rawValue)
 
     let settings = Settings(defaults: defaults)
 
     #expect(!settings.showHidden)
     #expect(!settings.foldersFirst)
-    #expect(settings.folderSizes)
+    #expect(!settings.folderSizes)
     #expect(defaults.object(forKey: Settings.Key.folderSizes.rawValue) == nil)
     #expect(defaults.object(forKey: Settings.Key.showHidden.rawValue) == nil)
     #expect(defaults.object(forKey: Settings.Key.foldersFirst.rawValue) == nil)
@@ -57,16 +66,18 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
 
     first.showHidden = true
     first.foldersFirst = true
-    first.folderSizes = false
+    first.folderSizes = true
     first.terminalBundleID = "com.googlecode.iterm2"
     first.commanderFKeys = true
+    first.hideEmptyOperationsPanel = false
 
     let relaunched = Settings(defaults: try #require(UserDefaults(suiteName: name)))
     #expect(relaunched.showHidden)
     #expect(relaunched.foldersFirst)
-    #expect(!relaunched.folderSizes)
+    #expect(relaunched.folderSizes)
     #expect(relaunched.terminalBundleID == "com.googlecode.iterm2")
     #expect(relaunched.commanderFKeys)
+    #expect(!relaunched.hideEmptyOperationsPanel)
 }
 
 @MainActor @Test func aChangeReachesEveryPane() async throws {
@@ -88,4 +99,8 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
 
 @MainActor @Test func theCommanderPresetsHelpSaysTheFKeysNeedFn() {
     #expect(Settings.commanderFKeysHelp.contains("Fn"))
+}
+
+@MainActor @Test func theEmptyPanelsHelpNamesTheMenuItemThatStillShowsIt() {
+    #expect(Settings.hideEmptyOperationsPanelHelp.contains("Window ▸ Operations"))
 }

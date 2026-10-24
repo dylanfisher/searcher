@@ -1,4 +1,5 @@
 import AppKit
+import Base
 import BrowserTestSupport
 import Foundation
 import TestSupport
@@ -14,11 +15,11 @@ private struct Fixture {
     let controller: BrowserWindowController
     let window: NSWindow
 
-    init() async throws {
+    init(settings: Settings = untouchedSettings()) async throws {
         controller = BrowserWindowController(
             location: Location(path: "/root"),
             service: ListingService(lister: StubLister(Self.folders)) { "Test Disk" },
-            systemActions: StubSystemActions(), settings: untouchedSettings())
+            systemActions: StubSystemActions(), settings: settings)
         window = try #require(controller.window)
         window.contentView?.layoutSubtreeIfNeeded()
         let workspace = controller.workspace
@@ -776,6 +777,84 @@ private func usKey(
     let panel = fixture.controller.operations.view
 
     fixture.controller.operations.onNeedsAttention?()
+
+    #expect(!panel.isHidden)
+}
+
+private func copySnapshot(_ id: Int, _ phase: OperationState.Phase) -> FileOperationQueue.Snapshot {
+    FileOperationQueue.Snapshot(
+        id: FileOperationQueue.ID(id), operation: .copy(["/root/a.txt"], into: "/root/docs"),
+        state: OperationState(
+            phase: phase,
+            progress: OperationState.Progress(
+                itemsDone: 0, itemCount: 1, copied: CopyProgress(bytes: 0, files: 0), total: nil),
+            errors: [], record: OperationRecord()))
+}
+
+@MainActor @Test func thePanelHidesWhenItsLastOperationLeavesByDefault() async throws {
+    let fixture = try await Fixture()
+    let panel = fixture.controller.operations.view
+    fixture.controller.showOperations([copySnapshot(1, .running)])
+    fixture.controller.operations.onNeedsAttention?()
+    #expect(!panel.isHidden)
+
+    fixture.controller.showOperations([copySnapshot(1, .done)])
+    fixture.window.contentView?.layoutSubtreeIfNeeded()
+
+    #expect(panel.isHidden)
+    let host = try #require(fixture.controller.layoutView(for: fixture.tab.id)?.superview)
+    #expect(host.frame.minY == 0)
+
+    // Cmd-Opt-L still shows the empty panel.
+    try fixture.press(try keyEvent("l", characters: "¬", modifiers: [.command, .option]))
+    #expect(!panel.isHidden)
+}
+
+@MainActor @Test func withTheSettingOffTheEmptyPanelStays() async throws {
+    let folder = try TemporaryFolder("BrowserWindowControllerTests")
+    let settings = storedSettings(in: folder)
+    settings.hideEmptyOperationsPanel = false
+    let fixture = try await Fixture(settings: settings)
+    let panel = fixture.controller.operations.view
+    fixture.controller.showOperations([copySnapshot(1, .running)])
+    fixture.controller.operations.onNeedsAttention?()
+
+    fixture.controller.showOperations([copySnapshot(1, .done)])
+
+    #expect(!panel.isHidden)
+    #expect(!fixture.controller.operations.emptyLabel.isHiddenOrHasHiddenAncestor)
+
+    settings.hideEmptyOperationsPanel = true
+    #expect(panel.isHidden)
+}
+
+@MainActor @Test func aPanelTheUserOpenedStaysWhenAnotherWindowsCopyEnds() async throws {
+    let copying = try await Fixture()
+    let watching = try await Fixture()
+    let panel = watching.controller.operations.view
+    try watching.press(try keyEvent("l", characters: "¬", modifiers: [.command, .option]))
+    #expect(!panel.isHidden)
+
+    for fixture in [copying, watching] {
+        fixture.controller.showOperations([copySnapshot(1, .running)])
+    }
+    copying.controller.operations.onNeedsAttention?()
+    for fixture in [copying, watching] {
+        fixture.controller.showOperations([copySnapshot(1, .done)])
+    }
+
+    #expect(!panel.isHidden)
+    #expect(copying.controller.operations.view.isHidden)
+}
+
+@MainActor @Test func aPanelTheUserOpenedStaysWhenItsOwnCopyEnds() async throws {
+    let fixture = try await Fixture()
+    let panel = fixture.controller.operations.view
+    try fixture.press(try keyEvent("l", characters: "¬", modifiers: [.command, .option]))
+
+    fixture.controller.showOperations([copySnapshot(1, .running)])
+    fixture.controller.operations.onNeedsAttention?()
+    fixture.controller.showOperations([copySnapshot(1, .done)])
 
     #expect(!panel.isHidden)
 }
