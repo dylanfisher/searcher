@@ -62,6 +62,21 @@ public actor WorkspaceStore {
         scheduleWrite()
     }
 
+    /// Deletes workspace `id`'s file and drops a save of it not yet written. A workspace that was
+    /// never written has no file, which isn't a problem.
+    public func delete(_ id: UUID) {
+        dispatchPrecondition(condition: .notOnQueue(.main))
+        pending[id] = nil
+        let url = url(for: id)
+        do {
+            try FileManager.default.removeItem(at: url)
+        } catch let error as CocoaError where error.code == .fileNoSuchFile {
+            return
+        } catch {
+            report(StoreProblem(file: url, kind: .unforgotten, reason: "\(error)"))
+        }
+    }
+
     private func scheduleWrite() {
         guard scheduledWrite == nil else { return }
         let wait = startWait(Self.writeDelay)

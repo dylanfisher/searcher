@@ -11,8 +11,13 @@ import Foundation
 public final class Workspace {
     /// Names the workspace's file in `WorkspaceStore`, and its window in the session.
     public let id: UUID
-    /// Nil for the workspace of a window that hasn't been named.
-    public let name: String?
+    /// Nil for the workspace of a window that hasn't been named. `WorkspaceList` names it, so no
+    /// two saved workspaces share a name.
+    public internal(set) var name: String? {
+        didSet {
+            if name != oldValue { onChange?() }
+        }
+    }
     /// Kept as restored, so saving the workspace again doesn't lose it.
     public let showsSidebar: Bool
     public private(set) var tabs: [Tab] {
@@ -26,8 +31,8 @@ public final class Workspace {
             }
         }
     }
-    /// Runs after any change to what `WorkspaceState` keeps of the workspace's tabs: the strip,
-    /// the selected tab, a tab's layout or a change in one of its panes. Its window's owner sets
+    /// Runs after any change to what `WorkspaceState` keeps of the workspace: its name, the tab
+    /// strip, the selected tab, a tab's layout or a change in one of its panes. Its window's owner sets
     /// it, to save the workspace once the changes stop.
     public var onChange: (@MainActor () -> Void)?
     /// Whether the workspace's window is the key window. Only then does the selected tab's

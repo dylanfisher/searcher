@@ -12,6 +12,9 @@ public struct StoreProblem: Error, Equatable, Sendable, CustomStringConvertible 
         case undeletable
         /// The file couldn't be written. The one before it, if any, is left as it was.
         case unwritten
+        /// The file of a workspace that is no longer kept, an unnamed one whose window closed or
+        /// a deleted one, couldn't be deleted.
+        case unforgotten
     }
 
     public let file: URL
@@ -37,6 +40,9 @@ public struct StoreProblem: Error, Equatable, Sendable, CustomStringConvertible 
                 + " Searcher can read: \(reason)"
         case .unwritten:
             "Couldn't save \(file.path), so the last change to it isn't kept: \(reason)"
+        case .unforgotten:
+            "Couldn't delete \(file.path), the file of a workspace that is no longer kept:"
+                + " \(reason)"
         }
     }
 }

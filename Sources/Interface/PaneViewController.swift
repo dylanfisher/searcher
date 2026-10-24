@@ -49,6 +49,10 @@ public final class PaneViewController: NSViewController {
         let didClosePane: @MainActor (CloseResult) -> Void
         /// Shows or hides the window's operations panel.
         let toggleOperations: @MainActor () -> Void
+        /// Asks for a name for the window's workspace.
+        let askForWorkspaceName: @MainActor () -> Void
+        /// Asks whether to delete the window's saved workspace.
+        let askToDeleteWorkspace: @MainActor () -> Void
         /// Runs the file commands; nil where nothing answers its questions.
         let fileOperations: FileOperationQueue?
         /// The app's clipboard, for Cut, Copy and Paste; nil where there is none.
@@ -355,7 +359,9 @@ public final class PaneViewController: NSViewController {
             toggleQuickLook: { [weak self] in self?.keyListing.quickLook.toggle() },
             askForFolder: { [weak self] in self?.askForFolder() },
             showFilter: { [weak self] in self?.showFilter() },
-            toggleOperations: link.toggleOperations, folder: folder,
+            toggleOperations: link.toggleOperations,
+            askForWorkspaceName: link.askForWorkspaceName,
+            askToDeleteWorkspace: link.askToDeleteWorkspace, folder: folder,
             fileOperations: link.fileOperations,
             editName: { [weak self] in self?.editName() }, clipboard: link.clipboard,
             undoHistory: link.undoHistory, isKeyRepeat: isKeyRepeat)

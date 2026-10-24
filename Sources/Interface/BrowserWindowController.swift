@@ -207,11 +207,65 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
 
     /// The window closes for good: its panes stop their loads, walks and watches now. A
     /// workspace whose tabs merged into another window closes none, and a pane that moved out is
-    /// no longer here.
+    /// no longer here. The owner hears of it first, while the tabs are open, so it can keep a
+    /// saved workspace as it is at close.
     public func windowWillClose(_ notification: Notification) {
         isClosed = true
-        workspace.closeAllTabs()
         onClose?(self)
+        workspace.closeAllTabs()
+    }
+
+    // MARK: Saved workspace
+
+    /// The name sheet while it shows.
+    private var nameSheet: WorkspaceNameSheet?
+
+    /// Shows the sheet that names or renames the window's workspace, unless it already shows.
+    private func askForWorkspaceName() {
+        guard nameSheet == nil else { return }
+        guard let window else { preconditionFailure("a browser window controller has no window") }
+        let sheet = WorkspaceNameSheet(workspace: workspace, list: workspaces)
+        sheet.onClose = { [weak self] in self?.nameSheet = nil }
+        nameSheet = sheet
+        sheet.present(over: window)
+    }
+
+    /// The question before Delete Workspace deletes `name`, a saved workspace; Delete is first.
+    static func deleteWorkspaceAlert(name: String) -> NSAlert {
+        Dialog.alert(
+            message: "Are you sure you want to delete the workspace “\(name)”?",
+            information: "Its window closes. You can’t undo this action.",
+            buttons: ["Delete", Dialog.cancel], firstIsDestructive: true)
+    }
+
+    /// The delete question while it shows.
+    private var deleteAlert: NSAlert?
+
+    /// Asks whether to delete the window's saved workspace, as a sheet on the window.
+    private func askToDeleteWorkspace() {
+        guard deleteAlert == nil else { return }
+        guard let window, let name = workspace.name else {
+            preconditionFailure("Delete Workspace ran for an unnamed workspace or no window")
+        }
+        let alert = Self.deleteWorkspaceAlert(name: name)
+        Dialog.sheet(alert, target: self, action: #selector(deleteAlertPressed(_:)))
+        deleteAlert = alert
+        window.beginSheet(alert.window)
+    }
+
+    @objc private func deleteAlertPressed(_ sender: NSButton) {
+        guard let alert = deleteAlert else { return }
+        deleteAlert = nil
+        window?.endSheet(alert.window)
+        if sender === alert.buttons[0] {
+            deleteWorkspace()
+        }
+    }
+
+    /// Forgets the window's saved workspace and closes the window, as after any command.
+    func deleteWorkspace() {
+        workspaces.delete(workspace.id)
+        onCommand?()
     }
 
     // MARK: Operations panel
@@ -262,7 +316,8 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         TilingCommands.closePane.id, WindowCommands.closeTab.id, WindowCommands.newTab.id,
         WindowCommands.nextTab.id, WindowCommands.previousTab.id, WindowCommands.newWindow.id,
         WindowCommands.movePaneToNewWindow.id, WindowCommands.mergeWindowIntoTab.id,
-        WindowCommands.toggleOperations.id,
+        WindowCommands.toggleOperations.id, WorkspaceCommands.name.id,
+        WorkspaceCommands.delete.id,
     ]
 
     /// Runs a window or tab command's menu item on the focused pane's table. A table with the
@@ -397,6 +452,8 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             },
             didClosePane: { [weak self] result in self?.didClose(result) },
             toggleOperations: { [weak self] in self?.toggleOperations() },
+            askForWorkspaceName: { [weak self] in self?.askForWorkspaceName() },
+            askToDeleteWorkspace: { [weak self] in self?.askToDeleteWorkspace() },
             fileOperations: fileOperations, clipboard: clipboard, mountTable: mountTable,
             undoHistory: undoHistory, openWith: openWith,
             didRunCommand: { [weak self] in

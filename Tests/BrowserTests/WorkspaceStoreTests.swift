@@ -202,6 +202,27 @@ private func onePaneTab() -> TabState {
     #expect(loaded.session == session)
 }
 
+@Test func deleteRemovesTheFileAndASaveNotYetWritten() async throws {
+    let folder = try TemporaryFolder("WorkspaceStoreTests")
+    let problems = EventLog<StoreProblem>()
+    let writer = store(folder, problems: problems)
+    let written = try workspace()
+    let unwritten = try workspace(name: "Unwritten")
+    await writer.save(written)
+    await writer.flush()
+    await writer.save(unwritten)
+
+    await writer.delete(written.id)
+    await writer.delete(unwritten.id)
+    await writer.flush()
+
+    #expect(!FileManager.default.fileExists(atPath: file(of: written.id, in: folder).path))
+    #expect(!FileManager.default.fileExists(atPath: file(of: unwritten.id, in: folder).path))
+    #expect(await store(folder).load().workspaces.isEmpty)
+    // A workspace that was never written has no file, and that isn't a problem.
+    #expect(problems.all.isEmpty)
+}
+
 @Test func aWriteInterruptedBeforeTheRenameLeavesThePreviousFile() async throws {
     let folder = try TemporaryFolder("WorkspaceStoreTests")
     let previous = try workspace(name: "Before")

@@ -15,7 +15,9 @@ import os
 ///
 /// It saves every window's workspace and the session to its `WorkspaceStore`, once changes have
 /// stopped for `saveDelay`, and at launch rebuilds the windows the store kept
-/// (docs/decisions/0080-restore-at-launch.md).
+/// (docs/decisions/0080-restore-at-launch.md). A named workspace's file is kept when its window
+/// closes, as it was at close, and an unnamed one's is deleted
+/// (docs/decisions/0082-saved-workspaces.md).
 @MainActor
 public final class WorkspaceWindows {
     public let list = WorkspaceList()
@@ -38,6 +40,10 @@ public final class WorkspaceWindows {
     private let store: WorkspaceStore?
     /// The workspaces changed since they were last saved.
     private var unsaved: Set<ObjectIdentifier> = []
+    /// Saved workspaces whose windows closed since the last save, as they were at close.
+    private var unsavedClosed: [UUID: WorkspaceState] = [:]
+    /// Workspaces forgotten since the last save, whose files go.
+    private var unsavedDeletes: Set<UUID> = []
     /// The wait before the next save, while one is due.
     private var saveWait: Task<Void, Never>?
     /// The clock saves wait on. Tests give a manual one.
@@ -134,6 +140,7 @@ public final class WorkspaceWindows {
                 self?.operationsChanged(snapshots)
             }
         }
+        list.onForget = { [weak self] id in self?.forget(id) }
     }
 
     /// Cancels every file operation as the app quits, so a copy removes what it was writing and
@@ -237,6 +244,16 @@ public final class WorkspaceWindows {
         awaitsRestore = false
         // Changes noted while saves were held.
         defer { scheduleSave() }
+        let inSession = Set(contents.session?.workspaces ?? [])
+        for state in contents.workspaces.values where !inSession.contains(state.id) {
+            if state.name == nil {
+                // The file of a window a crash closed.
+                forget(state.id)
+            } else {
+                lastSaved[state.id] = state
+                list.addSaved(state)
+            }
+        }
         guard let session = contents.session else { return nil }
         let states = session.workspaces.compactMap { contents.workspaces[$0] }
         guard !states.isEmpty else { return nil }
@@ -263,6 +280,28 @@ public final class WorkspaceWindows {
         if showsWindows {
             controller.window?.makeKeyAndOrderFront(nil)
         }
+        return controller
+    }
+
+    /// Opens saved workspace `id`: a closed one in a window as it was at close, at its frame
+    /// moved onto a display if it is on none, and an open one's window made key. Returns the
+    /// workspace's window controller.
+    @discardableResult
+    public func open(savedWorkspace id: UUID) -> BrowserWindowController {
+        var frame: Rect?
+        let workspace = list.open(id) { state in
+            frame = state.frame
+            return restoredWorkspace(state)
+        }
+        if let frame {
+            makeController(for: workspace, frame: CGRect(frame))
+        }
+        let controller = controller(for: workspace)
+        if showsWindows {
+            controller.window?.makeKeyAndOrderFront(nil)
+        }
+        // The session's order changed.
+        scheduleSave()
         return controller
     }
 
@@ -402,7 +441,10 @@ public final class WorkspaceWindows {
         saveWait = nil
         firstUnsaved = nil
         guard let store, !awaitsRestore else { return }
-        var states: [WorkspaceState] = []
+        var states = Array(unsavedClosed.values)
+        unsavedClosed = [:]
+        let deletes = unsavedDeletes
+        unsavedDeletes = []
         for controller in controllers where unsaved.contains(ObjectIdentifier(controller.workspace))
         {
             guard !controller.workspace.isClosed, let state = state(of: controller),
@@ -415,12 +457,15 @@ public final class WorkspaceWindows {
         let session = currentSession
         let changedSession = session != lastSession ? session : nil
         lastSession = session
-        guard !states.isEmpty || changedSession != nil else { return }
+        guard !states.isEmpty || !deletes.isEmpty || changedSession != nil else { return }
         let previous = saving
         saving = Task {
             await previous?.value
             for state in states {
                 await store.save(state)
+            }
+            for id in deletes {
+                await store.delete(id)
             }
             if let changedSession {
                 await store.saveSession(changedSession)
@@ -601,9 +646,25 @@ public final class WorkspaceWindows {
         }
     }
 
+    /// Drops the workspace of `controller`, whose window is closing and whose tabs are still
+    /// open, unless they moved to another window. A saved one is kept as it is now, and saved if
+    /// that differs from what the store was last given.
     private func didClose(_ controller: BrowserWindowController) {
         controllers.removeAll { $0 === controller }
-        list.remove(controller.workspace)
+        var atClose: WorkspaceState?
+        list.windowClosed(
+            controller.workspace,
+            as: {
+                guard let state = state(of: controller) else {
+                    preconditionFailure("a closing browser window has no window")
+                }
+                atClose = state
+                return state
+            }())
+        if let atClose, lastSaved[atClose.id] != atClose {
+            lastSaved[atClose.id] = atClose
+            unsavedClosed[atClose.id] = atClose
+        }
         unsaved.remove(ObjectIdentifier(controller.workspace))
         for observer in windowObservers.removeValue(forKey: ObjectIdentifier(controller)) ?? [] {
             NotificationCenter.default.removeObserver(observer)
@@ -611,6 +672,14 @@ public final class WorkspaceWindows {
         if let window = controller.window {
             prompter.windowClosed(window)
         }
+        scheduleSave()
+    }
+
+    /// Has the file of workspace `id` deleted with the next save, and nothing more saved of it.
+    private func forget(_ id: UUID) {
+        lastSaved[id] = nil
+        unsavedClosed[id] = nil
+        unsavedDeletes.insert(id)
         scheduleSave()
     }
 

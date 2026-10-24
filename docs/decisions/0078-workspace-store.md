@@ -77,5 +77,5 @@ which M5a.2 does. A stray file in the workspaces folder that isn't a dot-file is
 reported at the next load. Only the workspaces folder is cleaned of leftovers: one of
 `session.json`'s, in the application support root, stays until something else cleans that
 folder. A file written by hand with a lowercase UUID or another number
-format doesn't re-encode to itself and is discarded. Nothing deletes a closed unnamed
-workspace's file yet; M5a.4 adds that.
+format doesn't re-encode to itself and is discarded. A closed unnamed workspace's file is
+deleted ([0082](0082-saved-workspaces.md)).
