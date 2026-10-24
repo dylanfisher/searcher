@@ -133,12 +133,8 @@ public final class WorkspaceWindows {
             information =
                 "Quitting stops them, and removes anything they were partway through writing."
         }
-        let alert = NSAlert()
-        alert.messageText = message
-        alert.informativeText = information
-        alert.addButton(withTitle: "Quit")
-        alert.addButton(withTitle: "Cancel")
-        return alert
+        return Dialog.alert(
+            message: message, information: information, buttons: ["Quit", Dialog.cancel])
     }
 
     /// Removes the drop folders of promises still on their way, as the app quits, waiting at

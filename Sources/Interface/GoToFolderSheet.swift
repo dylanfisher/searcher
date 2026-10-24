@@ -2,14 +2,13 @@ import AppKit
 import Base
 import Browser
 
-/// The Go to folder sheet: a path field over a pane's window. Return goes to the typed folder,
-/// expanded by `PathInput`, and Esc cancels. The sheet stays up until the folder lists: one that
-/// isn't there, or isn't a folder, shows why under the field and leaves the pane where it was.
+/// The Go to folder sheet: a `Dialog` alert over a pane's window with a path field as its
+/// accessory view. Return or Go goes to the typed folder, expanded by `PathInput`, and Esc or
+/// Cancel cancels. The sheet stays up until the folder lists: one that isn't there, or isn't a
+/// folder, shows why under the field and leaves the pane where it was.
 @MainActor
 final class GoToFolderSheet: NSObject, NSTextFieldDelegate {
-    let panel = NSPanel(
-        contentRect: NSRect(x: 0, y: 0, width: 440, height: 120), styleMask: [.titled],
-        backing: .buffered, defer: true)
+    let alert = Dialog.alert(message: "Go to the folder:", buttons: ["Go", Dialog.cancel])
     let field = NSTextField(string: "")
     /// Why the last folder typed couldn't be gone to; hidden until then.
     let messageLabel = NSTextField(wrappingLabelWithString: "")
@@ -17,6 +16,9 @@ final class GoToFolderSheet: NSObject, NSTextFieldDelegate {
     var onClose: (@MainActor () -> Void)?
     /// Signals a Return with nothing typed. Tests replace it.
     var beep: @MainActor () -> Void = { NSSound.beep() }
+
+    /// How wide the path field is: about 45 characters of path.
+    private static let fieldWidth: CGFloat = 320
 
     private let pane: Pane
     /// Where `~` starts.
@@ -29,6 +31,9 @@ final class GoToFolderSheet: NSObject, NSTextFieldDelegate {
         buildContent()
     }
 
+    /// The window shown as the sheet.
+    var panel: NSWindow { alert.window }
+
     func present(over window: NSWindow) {
         window.beginSheet(panel)
     }
@@ -40,7 +45,7 @@ final class GoToFolderSheet: NSObject, NSTextFieldDelegate {
             beep()
             return
         }
-        messageLabel.isHidden = true
+        showMessage(nil)
         pane.goToFolder(target) { [weak self] error in
             guard let self else { return }
             if let error {
@@ -76,13 +81,23 @@ final class GoToFolderSheet: NSObject, NSTextFieldDelegate {
     private func show(_ error: ListingError) {
         switch error.reason {
         case .notFound:
-            messageLabel.stringValue = "There’s no folder at “\(error.path)”."
+            showMessage("There’s no folder at “\(error.path)”.")
         case .notADirectory:
-            messageLabel.stringValue = "“\(error.path)” isn’t a folder."
+            showMessage("“\(error.path)” isn’t a folder.")
         case .privacyProtected, .permissionDenied, .unreachable, .other:
             preconditionFailure("the pane stayed for \(error), which it shows by moving")
         }
-        messageLabel.isHidden = false
+    }
+
+    /// Shows `text` under the field, or hides the line for nil, and fits the sheet to it.
+    private func showMessage(_ text: String?) {
+        let isHidden = text == nil
+        guard messageLabel.isHidden != isHidden || messageLabel.stringValue != (text ?? "") else {
+            return
+        }
+        messageLabel.stringValue = text ?? ""
+        messageLabel.isHidden = isHidden
+        layOut()
     }
 
     private func close() {
@@ -90,48 +105,45 @@ final class GoToFolderSheet: NSObject, NSTextFieldDelegate {
         onClose?()
     }
 
-    @objc private func goClicked(_ sender: NSButton) {
-        go()
+    @objc private func pressed(_ sender: NSButton) {
+        if sender === alert.buttons[0] { go() } else { cancel() }
     }
 
-    @objc private func cancelClicked(_ sender: NSButton) {
-        cancel()
+    /// Fits the alert to what shows, and keeps the keys on the field, which the alert's layout
+    /// gives to a button.
+    private func layOut() {
+        fitAccessory()
+        alert.layout()
+        panel.initialFirstResponder = field
+    }
+
+    /// Sizes the accessory view to the field and the line under it, if shown: the alert lays
+    /// out the accessory by its frame.
+    private func fitAccessory() {
+        guard let accessory = alert.accessoryView else {
+            preconditionFailure("the Go to folder alert has no accessory view")
+        }
+        accessory.setFrameSize(NSSize(width: Self.fieldWidth, height: accessory.fittingSize.height))
     }
 
     private func buildContent() {
-        let title = NSTextField(labelWithString: "Go to the folder:")
         field.delegate = self
         field.placeholderString = "~/Downloads"
         field.setAccessibilityLabel("Folder path")
         messageLabel.textColor = .systemRed
         messageLabel.isHidden = true
-        let cancelButton = NSButton(
-            title: "Cancel", target: self, action: #selector(cancelClicked(_:)))
-        cancelButton.keyEquivalent = "\u{1B}"
-        let goButton = NSButton(title: "Go", target: self, action: #selector(goClicked(_:)))
-        goButton.keyEquivalent = "\r"
-        let buttons = NSStackView()
-        buttons.setViews([cancelButton, goButton], in: .trailing)
-        let stack = NSStackView(views: [title, field, messageLabel, buttons])
+        let stack = NSStackView(views: [field, messageLabel])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 8
-        stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        let content = NSView()
-        content.addSubview(stack)
+        stack.spacing = 6
+        stack.detachesHiddenViews = true
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: content.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            field.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
+            field.widthAnchor.constraint(equalToConstant: Self.fieldWidth),
             messageLabel.widthAnchor.constraint(equalTo: field.widthAnchor),
-            buttons.widthAnchor.constraint(equalTo: field.widthAnchor),
-            content.widthAnchor.constraint(equalToConstant: 440),
         ])
-        stack.setCustomSpacing(16, after: messageLabel)
-        panel.contentView = content
+        alert.accessoryView = stack
+        fitAccessory()
+        Dialog.sheet(alert, target: self, action: #selector(pressed(_:)))
         panel.initialFirstResponder = field
     }
 }

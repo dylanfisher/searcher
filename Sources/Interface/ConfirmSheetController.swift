@@ -2,19 +2,11 @@ import AppKit
 import Browser
 
 /// The sheet that asks yes or no before something happens: a copy or move to the other pane
-/// ("Copy 2 items to “Folder”?"), or deleting items at once on a volume without a Trash. Return
-/// confirms and Esc cancels.
+/// ("Copy 2 items to “Folder”?"), or deleting items at once on a volume without a Trash. A
+/// `Dialog` alert: the confirm button is the default, which Return presses, and Esc cancels.
 @MainActor
 final class ConfirmSheetController: NSObject {
-    let panel = NSPanel(
-        contentRect: NSRect(x: 0, y: 0, width: 420, height: 140), styleMask: [.titled],
-        backing: .buffered, defer: true)
-    let messageLabel = NSTextField(wrappingLabelWithString: "")
-    /// What the question is about in more detail; hidden when the message says it all.
-    let detailLabel = NSTextField(wrappingLabelWithString: "")
-    let confirmButton = NSButton()
-    let cancelButton = NSButton()
-
+    let alert: NSAlert
     let request: ConfirmRequest
     /// Gets true for the confirm button or Return, false for Cancel or Esc.
     private let answer: @MainActor (Bool) -> Void
@@ -22,16 +14,22 @@ final class ConfirmSheetController: NSObject {
     init(request: ConfirmRequest, answer: @escaping @MainActor (Bool) -> Void) {
         self.request = request
         self.answer = answer
+        let (message, detail, confirmTitle) = Self.words(for: request)
+        let isDelete = if case .deleteImmediately = request { true } else { false }
+        alert = Dialog.alert(
+            message: message, information: detail, buttons: [confirmTitle, Dialog.cancel],
+            firstIsDestructive: isDelete)
         super.init()
-        buildContent()
+        Dialog.sheet(alert, target: self, action: #selector(pressed(_:)))
     }
 
-    @objc private func confirm(_ sender: NSButton) {
-        answer(true)
-    }
+    /// The window shown as the sheet.
+    var panel: NSWindow { alert.window }
+    var confirmButton: NSButton { alert.buttons[0] }
+    var cancelButton: NSButton { alert.buttons[1] }
 
-    @objc private func cancel(_ sender: NSButton) {
-        answer(false)
+    @objc private func pressed(_ sender: NSButton) {
+        answer(sender === confirmButton)
     }
 
     /// The message, the detail and the confirm button's title for `request`.
@@ -56,48 +54,5 @@ final class ConfirmSheetController: NSObject {
 
     private static func items(_ paths: [String]) -> String {
         OperationRowView.items(paths)
-    }
-
-    private func buildContent() {
-        let (message, detail, confirmTitle) = Self.words(for: request)
-        messageLabel.stringValue = message
-        messageLabel.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
-        detailLabel.stringValue = detail ?? ""
-        detailLabel.isHidden = detail == nil
-        confirmButton.title = confirmTitle
-        cancelButton.title = "Cancel"
-        for button in [confirmButton, cancelButton] {
-            button.bezelStyle = .push
-            button.target = self
-        }
-        confirmButton.action = #selector(confirm(_:))
-        confirmButton.keyEquivalent = "\r"
-        if case .deleteImmediately = request {
-            confirmButton.hasDestructiveAction = true
-        }
-        cancelButton.action = #selector(cancel(_:))
-        cancelButton.keyEquivalent = "\u{1B}"
-        let buttons = NSStackView()
-        buttons.setViews([cancelButton, confirmButton], in: .trailing)
-        let stack = NSStackView(views: [messageLabel, detailLabel, buttons])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 8
-        stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
-        stack.setCustomSpacing(16, after: detailLabel)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        let content = NSView()
-        content.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: content.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            buttons.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
-            messageLabel.widthAnchor.constraint(equalTo: buttons.widthAnchor),
-            detailLabel.widthAnchor.constraint(equalTo: buttons.widthAnchor),
-            content.widthAnchor.constraint(equalToConstant: 420),
-        ])
-        panel.contentView = content
     }
 }

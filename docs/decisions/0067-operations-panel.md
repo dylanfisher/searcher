@@ -31,6 +31,9 @@ other-pane confirm names nothing, and two Cmd-Shift-C presses ask two questions 
   nothing; Esc cancels. "Do the same for N more conflicts" shows only when more follow.
 - **Confirm sheet.** Return confirms, Esc cancels. Delete immediately says "Delete immediately?
   This can't be undone." and marks its button destructive.
+- **Both sheets are `NSAlert`s** made through `Dialog`, the conflict's apply-to-all box its
+  suppression button; their hand-built panels were replaced on 2026-10-23
+  ([0076](0076-dialogs.md)).
 - **The panel** sits under the panes of every window and lists every operation, from snapshots
   only; its buttons send pause, resume and cancel to the queue by ID. A finished operation leaves
   it, except one that failed, was refused or left part of an item behind: that row shows the

@@ -68,14 +68,14 @@ private func ask(_ request: ConfirmRequest, of fixture: Fixture, into returned: 
 
     #expect(fixture.presented.count == 1)
     let first = try #require(fixture.confirmSheet)
-    #expect(first.messageLabel.stringValue.contains("one"))
+    #expect(first.alert.messageText.contains("one"))
 
     first.confirmButton.performClick(nil)
     await settle { returned.confirms == [true] && fixture.presented.count == 2 }
 
     #expect(fixture.dismissed.count == 1)
     let second = try #require(fixture.confirmSheet)
-    #expect(second.messageLabel.stringValue.contains("two"))
+    #expect(second.alert.messageText.contains("two"))
     second.cancelButton.performClick(nil)
     await settle { returned.confirms == [true, false] }
     #expect(fixture.prompter.shown == nil)
