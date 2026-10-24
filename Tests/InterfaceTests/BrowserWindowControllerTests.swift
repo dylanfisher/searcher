@@ -1234,3 +1234,232 @@ func aModifiedPressInTheOtherPaneFocusesItAndLeavesTheSelectionToAppKit(
 
     #expect(press.table.selectedRowIndexes.isEmpty)
 }
+
+// MARK: Keys while the sidebar has them
+
+/// Focuses the sidebar from the focused pane, as View ▸ Focus Sidebar does, and returns its list.
+@MainActor
+private func keysToSidebar(in fixture: Fixture) throws -> NSOutlineView {
+    try fixture.keyTable.run(WorkspaceCommands.focusSidebar.id)
+    let outline = fixture.controller.sidebar.outlineView
+    #expect(fixture.window.firstResponder === outline)
+    return outline
+}
+
+/// The Edit menu item that sends `action`.
+@MainActor
+private func standardItem(_ action: Selector?, in menu: NSMenu) throws -> NSMenuItem {
+    try #require(
+        menu.items.lazy.compactMap(\.submenu).flatMap(\.items).first { $0.action == action })
+}
+
+/// Validates `item` where AppKit would, from the window's first responder, and sends it there.
+@MainActor
+private func choose(_ item: NSMenuItem, in window: NSWindow) throws -> NSResponder {
+    let taker = try #require(try receiver(of: item, in: window))
+    #expect(try #require(taker as? NSMenuItemValidation).validateMenuItem(item))
+    #expect(NSApplication.shared.sendAction(try #require(item.action), to: taker, from: item))
+    return taker
+}
+
+/// Names the window's workspace "Alpha" and adds a second, "Beta", so the sidebar lists two rows
+/// with Alpha selected.
+@MainActor
+private func addSidebarRows(to fixture: Fixture) throws {
+    let other = Workspace(
+        tab: Tab(
+            pane: Pane(
+                location: Location(path: "/root"),
+                service: ListingService(lister: StubLister(Fixture.folders)) { "Test Disk" },
+                systemActions: StubSystemActions(), settings: untouchedSettings())))
+    fixture.controller.workspaces.add(other)
+    let frame = Rect(x: 0, y: 0, width: 900, height: 600)
+    try fixture.controller.workspaces.save(fixture.workspace, as: "Alpha", frame: frame)
+    try fixture.controller.workspaces.save(other, as: "Beta", frame: frame)
+}
+
+@MainActor @Test func withTheKeysInTheSidebarPaneChordsActOnTheFocusedPane() async throws {
+    let fixture = try await Fixture()
+    let first = try #require(fixture.tab.panes[fixture.tab.layout.focused])
+    let secondID = try fixture.splitRight()
+    let second = try #require(fixture.tab.panes[secondID])
+    await settle { second.state.isLoaded }
+    let outline = try keysToSidebar(in: fixture)
+    let system = try #require(second.systemActions as? StubSystemActions)
+
+    // Selection: Command-A.
+    outline.keyDown(with: try keyEvent("a", modifiers: .command))
+    #expect(second.selection.contains(ExactName("a.txt")) && first.selection.isEmpty)
+    // A file command: Option-Command-C, Copy Path.
+    outline.keyDown(with: try keyEvent("c", characters: "ç", modifiers: [.option, .command]))
+    #expect(system.copiedTexts.last?.contains("/root/a.txt") == true)
+    // Navigation: Command-↑.
+    outline.keyDown(with: try arrow(NSUpArrowFunctionKey, .command))
+    #expect(second.location.path == "/" && first.location.path == "/root")
+    // View mode: Command-3.
+    outline.keyDown(with: try keyEvent("3", modifiers: .command))
+    #expect(second.viewMode == .column && first.viewMode == .list)
+
+    #expect(fixture.window.firstResponder === outline)
+    #expect(fixture.tab.focusedPane === second)
+}
+
+@MainActor @Test func withTheKeysInTheSidebarWindowAndSplitChordsActOnTheFocusedPane()
+    async throws
+{
+    let fixture = try await Fixture()
+    let firstTab = fixture.tab
+    let outline = try keysToSidebar(in: fixture)
+
+    // Window: Command-T.
+    outline.keyDown(with: try keyEvent("t", modifiers: .command))
+    #expect(fixture.workspace.tabs.count == 2 && fixture.tab !== firstTab)
+    // Split: Command-Shift-T.
+    outline.keyDown(with: try keyEvent("T", modifiers: [.command, .shift]))
+    #expect(fixture.tab.layout.panes.count == 2)
+    #expect(fixture.window.firstResponder === outline)
+    // Close Pane: Command-W, then the tab's last pane closes the tab.
+    outline.keyDown(with: try keyEvent("w", modifiers: .command))
+    outline.keyDown(with: try keyEvent("w", modifiers: .command))
+    #expect(fixture.workspace.tabs.map(\.id) == [firstTab.id])
+
+    #expect(fixture.window.firstResponder === outline)
+}
+
+@MainActor @Test func withTheKeysInTheSidebarAChordActsOnThePaneLeftWhenTheFocusedOneCloses()
+    async throws
+{
+    let fixture = try await Fixture()
+    let first = try #require(fixture.tab.panes[fixture.tab.layout.focused])
+    _ = try fixture.splitRight()
+    let outline = try keysToSidebar(in: fixture)
+
+    outline.keyDown(with: try keyEvent("w", modifiers: .command))
+    outline.keyDown(with: try arrow(NSUpArrowFunctionKey, .command))
+
+    #expect(fixture.tab.focusedPane === first)
+    #expect(first.location.path == "/")
+    #expect(fixture.window.firstResponder === outline)
+}
+
+@MainActor @Test func theSidebarKeepsItsOwnKeys() async throws {
+    let fixture = try await Fixture()
+    let pane = fixture.tab.focusedPane
+    let paneTable = try fixture.keyTable
+    // Rows to move to and type-select, so the list has no cause to beep.
+    try addSidebarRows(to: fixture)
+    let outline = try keysToSidebar(in: fixture)
+    let before = pane.selection
+
+    // ↓ and a letter move the list's selection, not the pane's, which has a.txt to type-select.
+    outline.keyDown(with: try arrow(NSDownArrowFunctionKey, []))
+    outline.keyDown(with: try keyEvent("a"))
+    #expect(pane.selection == before)
+    #expect(fixture.window.firstResponder === outline)
+
+    // Tab moves the keys along the key view loop, to the pane.
+    outline.keyDown(with: try keyEvent("\t"))
+    #expect(fixture.window.firstResponder === paneTable)
+}
+
+@MainActor @Test func withTheKeysInTheSidebarThePanesMenuItemsAreOnAndActOnIt() async throws {
+    let fixture = try await Fixture()
+    let pane = fixture.tab.focusedPane
+    let outline = try keysToSidebar(in: fixture)
+    outline.keyDown(with: try arrow(NSUpArrowFunctionKey, .command))
+    let menu = try MainMenuBuilder.build(appName: "Searcher", registry: AppCommands.registry())
+
+    // A command item: Back.
+    _ = try choose(try #require(menuItem(NavigationCommands.back.id, in: menu)), in: fixture.window)
+    #expect(pane.location.path == "/root")
+    await settle { pane.state.isLoaded }
+
+    // An Edit menu item: Select All, which the list would otherwise take for itself.
+    let taker = try choose(
+        try standardItem(MainMenuBuilder.selectAll.action, in: menu), in: fixture.window)
+    #expect(taker !== outline)
+    #expect(pane.selection.contains(ExactName("a.txt")))
+    // The other Edit menu items that run commands reach the window, which validates them as the
+    // pane's table does: off here, with no clipboard or undo history.
+    let paneTable = try #require(fixture.controller.paneViewController.keyView as? ListingTableView)
+    for action in [
+        MainMenuBuilder.undo, MainMenuBuilder.redo, MainMenuBuilder.cut, MainMenuBuilder.copy,
+        MainMenuBuilder.paste,
+    ] {
+        let item = try standardItem(action.action, in: menu)
+        let taker = try #require(try receiver(of: item, in: fixture.window))
+        #expect(taker === fixture.window || taker === fixture.controller, "\(action.title)")
+        let validation = try #require(taker as? NSMenuItemValidation)
+        #expect(validation.validateMenuItem(item) == paneTable.validateMenuItem(item))
+    }
+
+    // A size command with no key: Calculate All Sizes.
+    _ = try choose(
+        try #require(menuItem(SizeCommands.calculateAllSizes.id, in: menu)), in: fixture.window)
+    #expect(pane.settings.folderSizes)
+
+    // Quick Look previews from the list with the keys, so it is off here.
+    let quickLook = try #require(menuItem(ViewCommands.toggleQuickLook.id, in: menu))
+    #expect(!fixture.controller.validateMenuItem(quickLook))
+
+    #expect(fixture.window.firstResponder === outline)
+}
+
+/// The window passes the sidebar only the chords a pane command takes. Option-Q is no command's,
+/// so the list keeps it, as before; the list's own handling of it plays the alert sound, which a
+/// test can't silence, so this asks the window directly.
+@MainActor @Test func aChordNoPaneCommandTakesStaysWithTheSidebar() async throws {
+    let fixture = try await Fixture()
+    let paneTable = try fixture.keyTable
+    var paneBeeps = 0
+    paneTable.beep = { paneBeeps += 1 }
+    let outline = try #require(try keysToSidebar(in: fixture) as? SidebarOutline)
+
+    #expect(!outline.passKey(try keyEvent("q", characters: "œ", modifiers: .option)))
+    #expect(outline.passKey(try keyEvent("t", modifiers: .command)))
+
+    #expect(paneBeeps == 0)
+    #expect(fixture.workspace.tabs.count == 2)
+    #expect(fixture.window.firstResponder === outline)
+}
+
+private typealias SidebarOutline = WorkspaceSidebarViewController.SidebarOutlineView
+
+@MainActor @Test func withTheKeysInTheFilterFieldOnlyTheWindowCommandsReachThePane() async throws {
+    let fixture = try await Fixture()
+    let pane = fixture.tab.focusedPane
+    try fixture.press(try keyEvent("f", modifiers: .command))
+    let editor = try #require(fixture.window.firstResponder as? NSTextView)
+    let menu = try MainMenuBuilder.build(appName: "Searcher", registry: AppCommands.registry())
+
+    // The Edit menu's items stay the field's.
+    for action in MainMenuBuilder.actionsRunningCommands {
+        let item = try standardItem(action.action, in: menu)
+        #expect(try receiver(of: item, in: fixture.window) !== fixture.controller)
+        #expect(!fixture.controller.validateMenuItem(item), "\(action.title)")
+    }
+    // A pane command's item is off; a window command's is on.
+    let back = try #require(menuItem(NavigationCommands.back.id, in: menu))
+    let newTab = try #require(menuItem(WindowCommands.newTab.id, in: menu))
+    #expect(!fixture.controller.validateMenuItem(back))
+    #expect(fixture.controller.validateMenuItem(newTab))
+    // An Option chord types its character.
+    editor.keyDown(with: try keyEvent("c", characters: "ç", modifiers: .option))
+    #expect(editor.string == "ç")
+    #expect(pane.selection.isEmpty)
+}
+
+@MainActor @Test func cmd0InTheSidebarGivesTheKeysBackAndCmdSIsOnThere() async throws {
+    let fixture = try await Fixture()
+    let paneTable = try fixture.keyTable
+    let outline = try keysToSidebar(in: fixture)
+    let menu = try MainMenuBuilder.build(appName: "Searcher", registry: AppCommands.registry())
+    let save = try #require(menuItem(WorkspaceCommands.save.id, in: menu))
+
+    #expect(fixture.controller.validateMenuItem(save))
+
+    outline.keyDown(with: try keyEvent("0", modifiers: .command))
+
+    #expect(fixture.window.firstResponder === paneTable)
+    #expect(fixture.controller.showsSidebar)
+}

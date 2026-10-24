@@ -192,6 +192,17 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         window.setContentSize(NSSize(width: 900, height: 600))
         window.center()
         sidebar.onEscape = { [weak self] in self?.giveKeysBack() }
+        sidebar.outlineView.passKey = { [weak self] event in
+            guard let self, !isClosed, !workspace.isClosed else { return false }
+            let table = focusedTable
+            guard
+                KeyChord.candidates(for: event).contains(where: {
+                    table.registry.command(for: $0) != nil
+                })
+            else { return false }
+            table.keyDown(with: event)
+            return true
+        }
         sidebarResizeObserver = NotificationCenter.default.addObserver(
             forName: NSSplitView.didResizeSubviewsNotification, object: split.splitView,
             queue: nil
@@ -532,9 +543,13 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
 
     // MARK: Menu items from outside the panes' tables
 
-    /// The commands whose menu items work while the keys are outside every pane's table, as in
-    /// the filter field, the path bar or the tab strip under Full Keyboard Access. Other
-    /// commands' items stay off there, so the text-editing keys stay with a text field.
+    // With the keys outside every pane's table, as in the sidebar, the path bar or the tab strip
+    // under Full Keyboard Access, a command's menu item reaches the window, which runs it on the
+    // focused pane's table. In a text field only the window commands do
+    // (docs/decisions/0089-sidebar-key-routing.md).
+
+    /// The commands whose menu items work while a text field, such as the filter field, has the
+    /// keys. Other commands' items stay off there, so the text-editing keys stay with the field.
     private static let windowCommands: Set<CommandID> = [
         TilingCommands.closePane.id, WindowCommands.closeTab.id, WindowCommands.newTab.id,
         WindowCommands.nextTab.id, WindowCommands.previousTab.id, WindowCommands.newWindow.id,
@@ -545,21 +560,68 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         WorkspaceCommands.focusSidebar.id, WindowCommands.showPalette.id,
     ]
 
-    /// Runs a window or tab command's menu item on the focused pane's table. A table with the
-    /// keys takes the item first, since it is earlier in the responder chain.
+    /// Whether a text field, such as the filter or rename field, has the keys, through its field
+    /// editor.
+    var keysAreInText: Bool { window?.firstResponder is NSText }
+
+    /// Whether command `id`'s menu item runs from where the keys are now, outside every pane's
+    /// table. In a text field only the window commands do. Elsewhere every command does but
+    /// Quick Look, whose panel previews from the list that has the keys.
+    private func runsFromOutsideTheTables(_ id: CommandID) -> Bool {
+        if keysAreInText {
+            return Self.windowCommands.contains(id)
+        }
+        return id != ViewCommands.toggleQuickLook.id
+    }
+
+    /// Runs a command's menu item on the focused pane's table. A table with the keys takes the
+    /// item first, since it is earlier in the responder chain.
     @objc func runMenuCommand(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? CommandID, Self.windowCommands.contains(id)
-        else {
-            preconditionFailure("menu item \"\(sender.title)\" isn't a window command")
+        guard let id = sender.representedObject as? CommandID, runsFromOutsideTheTables(id) else {
+            preconditionFailure("menu item \"\(sender.title)\" can't run from outside the panes")
         }
         focusedTable.runMenuCommand(sender)
     }
 
+    /// Select All, Undo, Redo, Cut, Copy and Paste from the Edit menu, on the focused pane's
+    /// table. A text field and a table with the keys answer these first.
+    public override func selectAll(_ sender: Any?) {
+        focusedTable.selectAll(sender)
+    }
+
+    @objc func undo(_ sender: Any?) {
+        focusedTable.undo(sender)
+    }
+
+    @objc func redo(_ sender: Any?) {
+        focusedTable.redo(sender)
+    }
+
+    @objc func cut(_ sender: Any?) {
+        focusedTable.cut(sender)
+    }
+
+    @objc func copy(_ sender: Any?) {
+        focusedTable.copy(sender)
+    }
+
+    @objc func paste(_ sender: Any?) {
+        focusedTable.paste(sender)
+    }
+
     public func validateMenuItem(_ item: NSMenuItem) -> Bool {
-        guard item.action == #selector(runMenuCommand(_:)) else { return true }
-        guard !isClosed, let id = item.representedObject as? CommandID,
-            Self.windowCommands.contains(id)
-        else { return false }
+        let isStandard = MainMenuBuilder.actionsRunningCommands.contains {
+            $0.action == item.action
+        }
+        guard item.action == #selector(runMenuCommand(_:)) || isStandard else { return true }
+        guard !isClosed, !workspace.isClosed else { return false }
+        // A text field answers the Edit menu's actions itself, through its field editor and the
+        // window's undo manager; none reaches the panes from there.
+        if isStandard, keysAreInText { return false }
+        if !isStandard {
+            guard let id = item.representedObject as? CommandID, runsFromOutsideTheTables(id)
+            else { return false }
+        }
         return focusedTable.validateMenuItem(item)
     }
 
@@ -833,5 +895,42 @@ private final class BrowserWindow: NSWindow {
             didChangeFirstResponder()
         }
         return made
+    }
+
+    /// NSWindow answers Undo and Redo, ahead of its controller. A text field's typing is undone
+    /// here with the field editor's undo manager, as NSWindow does: the field editor doesn't
+    /// answer these actions itself. With the keys anywhere else outside the tables, such as in the sidebar,
+    /// they undo the focused pane's file operations, which the controller runs, as a table with
+    /// the keys does.
+    @objc func undo(_ sender: Any?) {
+        if controller.keysAreInText {
+            firstResponder?.undoManager?.undo()
+        } else {
+            controller.undo(sender)
+        }
+    }
+
+    @objc func redo(_ sender: Any?) {
+        if controller.keysAreInText {
+            firstResponder?.undoManager?.redo()
+        } else {
+            controller.redo(sender)
+        }
+    }
+
+    override func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        guard item.action == #selector(undo(_:)) || item.action == #selector(redo(_:)),
+            !controller.keysAreInText
+        else {
+            return super.validateMenuItem(item)
+        }
+        return controller.validateMenuItem(item)
+    }
+
+    private var controller: BrowserWindowController {
+        guard let controller = windowController as? BrowserWindowController else {
+            preconditionFailure("a browser window has no controller")
+        }
+        return controller
     }
 }

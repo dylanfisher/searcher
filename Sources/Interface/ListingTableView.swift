@@ -189,8 +189,9 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
         runCommand(on: MainMenuBuilder.selectAll)
     }
 
-    /// Undo and Redo from the Edit menu run the undo commands on their chords. A text field's
-    /// field editor answers these actions itself, so it keeps its own undo.
+    /// Undo and Redo from the Edit menu run the undo commands on their chords. A text field keeps
+    /// its own undo: no text field is inside the table, so these actions from a field editor go to
+    /// the window, which undoes the typing with its undo manager.
     @objc func undo(_ sender: Any?) {
         runCommand(on: MainMenuBuilder.undo)
     }
