@@ -41,11 +41,17 @@ other-pane confirm names nothing, and two Cmd-Shift-C presses ask two questions 
 - **Showing itself.** The panel shows when an operation is still unfinished 1 s after the panel
   first saw it, or finishes in trouble, and only in the most recently active window. A shorter
   operation that succeeds never shows it.
+- **Asking once.** Each operation asks to be shown at most once while it runs, by the 1 s wait
+  or the early estimate below, whichever comes first; the other is dropped. A panel the user
+  closes stays closed while that operation runs, as Finder's closed copy window stays closed. A
+  new operation, or one finishing in trouble, still asks. Until 2026-10-23 the wait started over
+  after it fired, so a closed panel came back every second.
 - **Showing early for a long copy** (2026-10-23, M4.23). A copy to a share showed the panel only
   after the 1 s wait. Now a running copy with a total is sampled on its first tick, and on each
   later tick the bytes left are divided by the rate since that sample; when that leaves 2 s or
-  more (`longEstimate`), the panel shows then, once, about 100 ms in (one snapshot interval).
-  Paused or stalled, sampling starts over. The rule uses the rate, not the size or the volume
+  more (`longEstimate`), the panel shows then, on the tick after the first sampled one, about
+  100 ms (one snapshot interval) after that sample rather than after the operation started; a
+  pre-scan comes first. Paused, stalled or not yet running, sampling starts over. The rule uses the rate, not the size or the volume
   kind: a same-volume copy of 6 GB is an APFS clone that ends in one tick, and a copy to a fast
   share can be quicker than one to a slow USB disk. 2 s rather than 1 s because the first tick's
   rate can be off by half, as a network write fills its buffers; at 2 s a copy estimated long
