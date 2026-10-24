@@ -76,7 +76,8 @@ struct RegressionReport {
         lines += unitChanged.map { "unit changed: \($0), not compared" }
         for miss in overBudget {
             lines.append(
-                "over budget: \(miss.name) p95 \(format(miss.p95)) \(miss.unit.rawValue), \(miss.limit)"
+                "over budget: \(miss.name) \(miss.floor == nil ? "p95" : "median") "
+                    + "\(format(miss.floor == nil ? miss.p95 : miss.median)) \(miss.unit.rawValue), \(miss.limit)"
             )
         }
         return lines.joined(separator: "\n")
