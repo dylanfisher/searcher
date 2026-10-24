@@ -1,3 +1,5 @@
+import Foundation
+
 /// A window's tabs, in strip order, and the selected one. A workspace always has a tab: closing
 /// the last one reports the workspace closed and leaves it in place, closed, and the caller drops
 /// the workspace. Its closed tab traps on use, as `Tab` describes.
@@ -7,12 +9,37 @@
 /// loads that are still waiting (docs/decisions/0048-pane-load-priority.md).
 @MainActor
 public final class Workspace {
-    public private(set) var tabs: [Tab]
-    public private(set) var selectedTab: Tab {
+    /// Names the workspace's file in `WorkspaceStore`, and its window in the session.
+    public let id: UUID
+    /// Nil for the workspace of a window that hasn't been named. `WorkspaceList` names it, so no
+    /// two saved workspaces share a name.
+    public internal(set) var name: String? {
         didSet {
-            if selectedTab !== oldValue { updatePanes() }
+            if name != oldValue { onChange?() }
         }
     }
+    /// Whether the window shows the workspace sidebar. Show Sidebar sets it, and the window when
+    /// the user drags the sidebar closed.
+    public var showsSidebar: Bool {
+        didSet {
+            if showsSidebar != oldValue { onChange?() }
+        }
+    }
+    public private(set) var tabs: [Tab] {
+        didSet { onChange?() }
+    }
+    public private(set) var selectedTab: Tab {
+        didSet {
+            if selectedTab !== oldValue {
+                updatePanes()
+                onChange?()
+            }
+        }
+    }
+    /// Runs after any change to what `WorkspaceState` keeps of the workspace: its name, whether
+    /// the sidebar shows, the tab strip, the selected tab, a tab's layout or a change in one of
+    /// its panes. Its window's owner sets it, to save the workspace once the changes stop.
+    public var onChange: (@MainActor () -> Void)?
     /// Whether the workspace's window is the key window. Only then does the selected tab's
     /// focused pane have the focus, so with two windows only the key one's loads go first. The
     /// window sets it.
@@ -21,6 +48,9 @@ public final class Workspace {
             if isActive != oldValue { updatePanes() }
         }
     }
+    /// The tabs' states just before closing the last tab or pane closed the workspace, when it
+    /// is a saved one; an unnamed one's state isn't kept once its window closes.
+    private var tabStatesBeforeClose: [TabState]?
     /// The pane last told it gained the focus, until it is told it lost it.
     private weak var focusedPane: Pane?
     /// Set once every tab moved to another workspace (`removeAllTabs`) or the workspace closed
@@ -28,10 +58,28 @@ public final class Workspace {
     /// nothing more.
     public private(set) var isClosed = false
 
-    public init(tab: Tab) {
-        tabs = [tab]
-        selectedTab = tab
-        watchFocus(of: tab)
+    /// A new, unnamed workspace of one tab. A new window shows the sidebar as the window it
+    /// opens from does, as in Finder, so its opener passes `showsSidebar`.
+    public convenience init(tab: Tab, showsSidebar: Bool = false) {
+        self.init(id: UUID(), name: nil, tabs: [tab], selectedTab: 0, showsSidebar: showsSidebar)
+    }
+
+    /// A workspace of `tabs`, in strip order, with the one at `selectedTab` selected, as
+    /// `WorkspaceState` keeps it.
+    ///
+    /// - Precondition: `tabs` isn't empty and `selectedTab` is one of its indices.
+    public init(id: UUID, name: String?, tabs: [Tab], selectedTab: Int, showsSidebar: Bool) {
+        precondition(
+            tabs.indices.contains(selectedTab),
+            "selected tab \(selectedTab) isn't one of the \(tabs.count) tabs")
+        self.id = id
+        self.name = name
+        self.showsSidebar = showsSidebar
+        self.tabs = tabs
+        self.selectedTab = tabs[selectedTab]
+        for tab in tabs {
+            watchFocus(of: tab)
+        }
         updatePanes()
     }
 
@@ -58,6 +106,7 @@ public final class Workspace {
     @discardableResult
     public func close(_ id: TabID) -> CloseResult {
         let index = index(of: id)
+        if tabs.count == 1, name != nil { tabStatesBeforeClose = tabStates }
         tabs[index].close()
         return remove(at: index)
     }
@@ -66,8 +115,18 @@ public final class Workspace {
     @discardableResult
     public func closePane() -> CloseResult {
         let tab = selectedTab
+        if tabs.count == 1, tab.panes.count == 1, name != nil {
+            tabStatesBeforeClose = tabStates
+        }
         guard tab.closePane() == .tab else { return .pane }
         return remove(at: index(of: tab.id))
+    }
+
+    /// The tabs as `WorkspaceState` keeps them, in strip order. Once closing its last tab or
+    /// pane closed a saved workspace, they are the tabs as they were just before, with the
+    /// closed tab's folders and selections, so it is kept as it was.
+    public var tabStates: [TabState] {
+        tabStatesBeforeClose ?? tabs.map(\.state)
     }
 
     /// Every pane in every tab.
@@ -137,8 +196,10 @@ public final class Workspace {
         return .tab
     }
 
+    /// Moves the loads' focus with the tab's, and passes on its changes.
     private func watchFocus(of tab: Tab) {
         tab.onFocusChange = { [weak self] in self?.updatePanes() }
+        tab.onChange = { [weak self] in self?.onChange?() }
     }
 
     /// Shows the selected tab's panes and hides every other tab's, then tells the selected tab's

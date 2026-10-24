@@ -67,6 +67,21 @@ enum BenchArguments: Equatable {
                     + "grid (B6), and ten panes opening W2 to the focused pane's first rows, "
                     + "\(UIBenchOptions.tenPaneOpens) times (B2, stalls counted); fails if an "
                     + "unfocused pane redraws during ↓; the CI run times it too"
+            case .restoredSession:
+                summary =
+                    "each launch restores a saved session of 3 windows × 2 tabs × 4 panes on W1, "
+                    + "one pane on W2, timed to every window on screen and the key window's "
+                    + "focused pane showing rows (B1); the CI run times it too"
+            case .restoredNetworkPane:
+                summary =
+                    "each launch lists --path once so the cache file keeps it, then restores a "
+                    + "window on it as a launch does, timed from the window shown to the frame "
+                    + "with its cached rows (B4)"
+            case .palette:
+                summary =
+                    "open the palette over \(UIBenchOptions.paletteCandidates) folders and type "
+                    + "\(UIBenchOptions.paletteQueries.count) queries, each key timed to the "
+                    + "frame with its results (B11)"
             }
             let path = scenario.needsPath ? " --path <dir>" : ""
             return "  \(scenario.rawValue)\(path)\n      \(summary)"

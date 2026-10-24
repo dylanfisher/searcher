@@ -33,8 +33,8 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
     #expect(
         prompter.conflicts.all == [
             ConflictRequest(
-                operation: id, source: FakeFiles.item("/S/a"), existing: FakeFiles.item("/A/a"),
-                remaining: 2)
+                operation: id, kind: .copy, source: FakeFiles.item("/S/a"),
+                existing: FakeFiles.item("/A/a"), remaining: 2)
         ])
     #expect(!files.events.all.contains { $0.hasPrefix("copy /S/a") || $0.hasPrefix("copy /S/c") })
     let state = try #require(watcher.state(of: id))
@@ -113,6 +113,7 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
     let move = await enqueue(queue, .move(["/A/in/notes.txt"], into: "/A/sorted"), watcher)
     #expect(await watcher.waitUntilFinished(move))
 
+    #expect(prompter.conflicts.all.map(\.kind) == [.move])
     #expect(files.events.all.contains("move /A/in/notes.txt to /A/sorted/notes 2.txt"))
     #expect(
         watcher.state(of: move)?.record.changes == [

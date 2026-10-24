@@ -16,6 +16,8 @@ Needs Swift 6.2 or later (Command Line Tools or Xcode).
 | Fix formatting | `./scripts/format` |
 | Full gate — format, build, tier rules, tests | `./scripts/check` |
 
+`./scripts/check --gentle` and `./scripts/test --gentle` (or `SEARCHER_GENTLE=1`) build with half the CPUs at lower priority so the machine stays usable ([0084](docs/decisions/0084-gentle-mode.md)).
+
 CI runs `./scripts/check` on every push.
 
 ## Layout

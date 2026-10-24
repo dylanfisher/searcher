@@ -22,6 +22,18 @@ public struct CommandContext {
     /// Shows the window's operations panel, or hides it. Only the window can; a context built
     /// without it traps when the command runs.
     public let toggleOperations: @MainActor () -> Void
+    /// Asks the user for a name for the window's workspace, and names it. Only the window can
+    /// ask; a context built without it traps when Name Workspace runs.
+    public let askForWorkspaceName: @MainActor () -> Void
+    /// Asks the user whether to delete the window's workspace, and deletes it on yes. Only the
+    /// window can ask; a context built without it traps when Delete Workspace runs.
+    public let askToDeleteWorkspace: @MainActor () -> Void
+    /// Moves the keys into the window's workspace sidebar, which shows. Only the window can; a
+    /// context built without it traps when Focus Sidebar runs.
+    public let focusSidebar: @MainActor () -> Void
+    /// Shows the command palette over the window. Only the window can; a context built without
+    /// it traps when Show Palette runs.
+    public let showPalette: @MainActor () -> Void
     /// The folder a click named, for Open in New Tab: a Cmd-double-clicked folder row or a
     /// Cmd-clicked path bar segment. Nil when a key or menu item runs a command.
     public let folder: Location?
@@ -37,6 +49,9 @@ public struct CommandContext {
     /// The app's undo history of file changes, for Undo and Redo. Nil where there is none; those
     /// commands are off then, and without `fileOperations`, which runs them.
     public let undoHistory: UndoHistory?
+    /// The command runs for a key held down, repeating, rather than pressed: a row key's
+    /// repeats are one step of the selection history with its press.
+    public let isKeyRepeat: Bool
     private let givenWorkspace: Workspace?
     private let givenWorkspaces: WorkspaceList?
 
@@ -63,11 +78,24 @@ public struct CommandContext {
         toggleOperations: @escaping @MainActor () -> Void = {
             preconditionFailure("this command context has no operations panel")
         },
+        askForWorkspaceName: @escaping @MainActor () -> Void = {
+            preconditionFailure("this command context can't ask for a workspace name")
+        },
+        askToDeleteWorkspace: @escaping @MainActor () -> Void = {
+            preconditionFailure("this command context can't ask to delete a workspace")
+        },
+        focusSidebar: @escaping @MainActor () -> Void = {
+            preconditionFailure("this command context has no sidebar")
+        },
+        showPalette: @escaping @MainActor () -> Void = {
+            preconditionFailure("this command context has no palette")
+        },
         folder: Location? = nil,
         fileOperations: FileOperationQueue? = nil,
         editName: (@MainActor () -> Void)? = nil,
         clipboard: CutState? = nil,
-        undoHistory: UndoHistory? = nil
+        undoHistory: UndoHistory? = nil,
+        isKeyRepeat: Bool = false
     ) {
         if let workspace {
             precondition(
@@ -83,11 +111,16 @@ public struct CommandContext {
         self.askForFolder = askForFolder
         self.showFilter = showFilter
         self.toggleOperations = toggleOperations
+        self.askForWorkspaceName = askForWorkspaceName
+        self.askToDeleteWorkspace = askToDeleteWorkspace
+        self.focusSidebar = focusSidebar
+        self.showPalette = showPalette
         self.folder = folder
         self.fileOperations = fileOperations
         self.editName = editName
         self.clipboard = clipboard
         self.undoHistory = undoHistory
+        self.isKeyRepeat = isKeyRepeat
     }
 
     /// The window's tabs. A context built for one pane, as the benches and pane tests build it,

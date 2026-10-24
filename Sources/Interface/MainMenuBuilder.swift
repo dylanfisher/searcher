@@ -128,6 +128,8 @@ public enum MainMenuBuilder {
             .command(WindowCommands.movePaneToNewWindow.id),
             .command(WindowCommands.mergeWindowIntoTab.id),
             .separator,
+            .command(WorkspaceCommands.name.id), .command(WorkspaceCommands.delete.id),
+            .separator,
             .command(WindowCommands.toggleOperations.id),
             .separator,
             // Cmd-W closes the pane, then the tab with its last pane, then the window with its
@@ -177,6 +179,9 @@ public enum MainMenuBuilder {
                 // has the keys; Undo and Redo then name the change they would undo or redo.
                 .standard(undo),
                 .standard(redo),
+                // Sublime Text's soft undo keys; they step through selections, not file changes.
+                .command(SelectionCommands.undoSelection.id),
+                .command(SelectionCommands.redoSelection.id),
                 .separator,
                 .standard(cut),
                 .standard(copy),
@@ -202,12 +207,17 @@ public enum MainMenuBuilder {
                 .separator,
                 .command(DualPaneCommands.sameFolderInOtherPane.id),
                 .command(NavigationCommands.goToFolder.id),
+                .command(WindowCommands.showPalette.id),
             ]
         ),
         Menu(
             title: "View",
             items: [
                 .command(ViewCommands.asList.id), .command(ViewCommands.asColumns.id),
+                .separator,
+                // Where Finder puts Hide Sidebar.
+                .command(WorkspaceCommands.toggleSidebar.id),
+                .command(WorkspaceCommands.focusSidebar.id),
                 .separator,
                 .command(ViewCommands.toggleHidden.id),
                 .command(ViewCommands.toggleFoldersFirst.id),

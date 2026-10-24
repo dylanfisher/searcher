@@ -14,9 +14,11 @@ private final class ThreeRows: NSObject, NSTableViewDataSource {
 /// A table with the app's commands, whose runner and type-select only record what they are asked
 /// to do. Row 1 is selected and several rows may be, so the table's own ↑, ↓ or select-all would
 /// change the selection. Type-select finds a match unless `matches` is false, and its query
-/// resets on `clock`.
+/// resets on `clock`. The table sits in a window that records the keys AppKit passes on to it,
+/// where a real window beeps.
 @MainActor
 private struct RecordingTable {
+    let window = KeyCatchingWindow()
     let table = ListingTableView()
     let rows = ThreeRows()
     let clock = ManualClock()
@@ -34,6 +36,8 @@ private struct RecordingTable {
             return matches
         }
         table.beep = { [log] in log.beeps += 1 }
+        table.frame = NSRect(x: 0, y: 0, width: 400, height: 300)
+        window.contentView?.addSubview(table)
         table.reloadData()
         table.selectRowIndexes([1], byExtendingSelection: false)
     }
@@ -91,7 +95,7 @@ private struct RecordingTable {
 @MainActor @Test func anUnboundModifiedKeyBeepsAndNeverReachesTheTable() throws {
     let recording = RecordingTable(registry: try AppCommands.registry())
     let unbound = [
-        try keyEvent("k", modifiers: .command), try keyEvent("n", modifiers: .control),
+        try keyEvent("j", modifiers: .command), try keyEvent("n", modifiers: .control),
         try keyEvent(
             functionKey(NSDownArrowFunctionKey), modifiers: arrowFlags.union([.option, .shift])),
     ]
@@ -297,7 +301,7 @@ private let quickLook = ViewCommands.toggleQuickLook
 
 @MainActor @Test func aCommandLetterWithNoCommandBeepsAndTypesNothing() throws {
     let recording = RecordingTable(registry: try AppCommands.registry())
-    recording.table.keyDown(with: try keyEvent("k", modifiers: .command))
+    recording.table.keyDown(with: try keyEvent("j", modifiers: .command))
 
     #expect(recording.queries.isEmpty)
     #expect(recording.beeps == 1)
@@ -344,8 +348,10 @@ private let quickLook = ViewCommands.toggleQuickLook
 @MainActor @Test func shiftSpaceWhileTypingIsNotTypeSelect() throws {
     let recording = RecordingTable(registry: try AppCommands.registry())
     recording.table.keyDown(with: try keyEvent("m"))
-    recording.table.keyDown(with: try keyEvent(" ", modifiers: .shift))
+    let shiftSpace = try keyEvent(" ", modifiers: .shift)
+    recording.table.keyDown(with: shiftSpace)
 
+    #expect(recording.window.unhandledKeys == [shiftSpace])
     #expect(recording.queries == ["m"])
     #expect(recording.ran.isEmpty)
 }

@@ -49,6 +49,14 @@ public final class PaneViewController: NSViewController {
         let didClosePane: @MainActor (CloseResult) -> Void
         /// Shows or hides the window's operations panel.
         let toggleOperations: @MainActor () -> Void
+        /// Asks for a name for the window's workspace.
+        let askForWorkspaceName: @MainActor () -> Void
+        /// Asks whether to delete the window's saved workspace.
+        let askToDeleteWorkspace: @MainActor () -> Void
+        /// Moves the keys into the window's workspace sidebar.
+        let focusSidebar: @MainActor () -> Void
+        /// Shows the command palette over the window.
+        let showPalette: @MainActor () -> Void
         /// Runs the file commands; nil where nothing answers its questions.
         let fileOperations: FileOperationQueue?
         /// The app's clipboard, for Cut, Copy and Paste; nil where there is none.
@@ -283,7 +291,9 @@ public final class PaneViewController: NSViewController {
             guard let self, let table else { return }
             table.registry = registry
         }
-        table.runCommand = { [weak self] id in self?.run(id) }
+        table.runCommand = { [weak self, weak table] id in
+            self?.run(id, isKeyRepeat: table?.runsKeyRepeat ?? false)
+        }
         table.openInNewTab = { [weak self] folder in self?.openInNewTab(folder) }
         table.canRunCommand = { [weak self] id in self?.canRun(id) ?? false }
         table.commandIsCurrent = { [weak self] id in self?.isCurrent(id) }
@@ -297,8 +307,8 @@ public final class PaneViewController: NSViewController {
         windowLink?.openWith.map { OpenWithMenu.Target(openWith: $0, pane: pane.commandPane) }
     }
 
-    private func run(_ id: CommandID, folder: Location? = nil) {
-        binding(for: id).run(context(folder: folder))
+    private func run(_ id: CommandID, folder: Location? = nil, isKeyRepeat: Bool = false) {
+        binding(for: id).run(context(folder: folder, isKeyRepeat: isKeyRepeat))
         windowLink?.didRunCommand()
     }
 
@@ -335,15 +345,16 @@ public final class PaneViewController: NSViewController {
 
     /// Commands act on `commandPane`, the focused column's pane in column mode. In a window the
     /// pane is the selected tab's focused pane, since the window keeps the first responder in it.
-    /// `folder` is the clicked folder for Open in New Tab.
-    private func context(folder: Location? = nil) -> CommandContext {
+    /// `folder` is the clicked folder for Open in New Tab; `isKeyRepeat` says the command's key is
+    /// held down.
+    private func context(folder: Location? = nil, isKeyRepeat: Bool = false) -> CommandContext {
         guard let link = windowLink else {
             return CommandContext(
                 pane: pane.commandPane,
                 toggleQuickLook: { [weak self] in self?.keyListing.quickLook.toggle() },
                 askForFolder: { [weak self] in self?.askForFolder() },
                 showFilter: { [weak self] in self?.showFilter() }, folder: folder,
-                editName: { [weak self] in self?.editName() })
+                editName: { [weak self] in self?.editName() }, isKeyRepeat: isKeyRepeat)
         }
         return CommandContext(
             pane: pane.commandPane, workspace: link.workspace, workspaces: link.workspaces,
@@ -352,10 +363,13 @@ public final class PaneViewController: NSViewController {
             toggleQuickLook: { [weak self] in self?.keyListing.quickLook.toggle() },
             askForFolder: { [weak self] in self?.askForFolder() },
             showFilter: { [weak self] in self?.showFilter() },
-            toggleOperations: link.toggleOperations, folder: folder,
+            toggleOperations: link.toggleOperations,
+            askForWorkspaceName: link.askForWorkspaceName,
+            askToDeleteWorkspace: link.askToDeleteWorkspace, focusSidebar: link.focusSidebar,
+            showPalette: link.showPalette, folder: folder,
             fileOperations: link.fileOperations,
             editName: { [weak self] in self?.editName() }, clipboard: link.clipboard,
-            undoHistory: link.undoHistory)
+            undoHistory: link.undoHistory, isKeyRepeat: isKeyRepeat)
     }
 
     /// Rename's hook. Rename is on only with a queue in the context, and the field renames
@@ -524,9 +538,16 @@ public final class PaneViewController: NSViewController {
         case .denied:
             accessDeniedView.isHidden = false
         case .failed(let error):
-            messageLabel.stringValue = error.description
+            messageLabel.stringValue =
+                pane.state.missingFolder.map(Self.missingMessage) ?? error.description
             messageLabel.isHidden = false
         }
+    }
+
+    /// The line over a pane whose folder isn't there, as a restored pane shows it after the
+    /// folder was deleted or its disk ejected.
+    static func missingMessage(_ path: String) -> String {
+        "The folder \(path) isn't there."
     }
 
     /// The spinner and note for the pane's state, or in column mode the focused column's: the

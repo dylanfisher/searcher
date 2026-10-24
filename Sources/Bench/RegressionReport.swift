@@ -75,9 +75,7 @@ struct RegressionReport {
         lines += missingCases.map { "not in this run: \($0)" }
         lines += unitChanged.map { "unit changed: \($0), not compared" }
         for miss in overBudget {
-            lines.append(
-                "over budget: \(miss.name) p95 \(format(miss.p95)) \(miss.unit.rawValue), \(miss.limit)"
-            )
+            lines.append(miss.missText())
         }
         return lines.joined(separator: "\n")
     }
@@ -250,11 +248,9 @@ extension RegressionReport {
             lines += missingCases.map { "not in this run: \($0)" }
             for item in cases where item.result.overBudget {
                 let miss = item.result
-                let budget = miss.budget.map(describe) ?? "none"
-                let label = item.enforced ? "over budget" : "over budget (report-only)"
                 lines.append(
-                    "\(label): \(miss.name) p95 \(format(miss.p95)) \(miss.unit.rawValue), budget \(budget)"
-                )
+                    miss.missText(
+                        prefix: item.enforced ? "over budget" : "over budget (report-only)"))
             }
             return lines.joined(separator: "\n")
         }

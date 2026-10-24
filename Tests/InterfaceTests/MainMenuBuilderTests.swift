@@ -164,15 +164,12 @@ private func buildMenu(_ registry: CommandRegistry) throws -> NSMenu {
 /// An unshown window holding a pane's table, whose commands only record, and a text field.
 @MainActor
 private struct TextFieldWindow {
-    let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled],
-        backing: .buffered, defer: true)
+    let window = KeyCatchingWindow()
     let table = ListingTableView()
     let field = NSTextField(string: "hello")
     let log = CommandLog()
 
     init() throws {
-        window.isReleasedWhenClosed = false
         table.registry = try AppCommands.registry()
         table.runCommand = { [log] in log.ids.append($0) }
         table.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name")))
@@ -197,8 +194,10 @@ private struct TextFieldWindow {
     }
     let selectAll = try item(for: try keyEvent("a", modifiers: .command), in: menu)
     #expect(editor.tryToPerform(try #require(selectAll.action), with: selectAll))
+    // With no main menu to take Cmd-A first, the key reaches the editor and ends at the window.
     editor.keyDown(with: try keyEvent("a", modifiers: .command))
 
+    #expect(setup.window.unhandledCommands.count == 1)
     #expect(editor.selectedRange() == NSRange(location: 0, length: 5))
     #expect(setup.log.ids.isEmpty)
 }
@@ -303,7 +302,8 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     let view = try #require(menu.items.first { $0.title == "View" }?.submenu)
     #expect(
         view.items.map(\.title) == [
-            "as List", "as Columns", "", "Show Hidden Files", "Folders First", "", "Sort by Name",
+            "as List", "as Columns", "", "Show Sidebar", "Focus Sidebar", "", "Show Hidden Files",
+            "Folders First", "", "Sort by Name",
             "Sort by Kind",
             "Sort by Date Modified", "Sort by Size", "", "Calculate All Sizes", "Calculate Sizes",
         ])
@@ -319,6 +319,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
                 windowNumber: 0, context: nil, characters: ">", charactersIgnoringModifiers: ">",
                 isARepeat: false, keyCode: 47)),
         try keyEvent("6", modifiers: [.control, .option, .command]),
+        try keyEvent("s", modifiers: [.option, .command]),
         try keyEvent("s", modifiers: [.control, .command]),
     ]
     for press in presses {
@@ -329,7 +330,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(
         log.ids == [
             ViewCommands.toggleHidden.id, ViewCommands.sortBySize.id,
-            SizeCommands.calculateSizes.id,
+            SizeCommands.calculateSizes.id, WorkspaceCommands.toggleSidebar.id,
         ])
 }
 
@@ -368,7 +369,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
         go.items.map(\.title) == [
             "Back", "Forward", "", "Open", "Open in New Tab", "Open in Other Pane",
             "Go to Parent", "", "Into Selected Folder", "To Parent Column", "",
-            "Same Folder in Other Pane", "Go to Folder…",
+            "Same Folder in Other Pane", "Go to Folder…", "Open Quickly…",
         ])
     let table = ListingTableView()
     let log = CommandLog()
@@ -475,7 +476,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
             "Split Down", "Columns", "Rows", "", "Focus Other Pane", "Focus Pane", "Move Pane",
             "Resize Pane",
             "Zoom Pane", "Unzoom Pane", "Equalize Panes", "", "Move Pane to New Window",
-            "Merge Window into Tab",
+            "Merge Window into Tab", "", "Name Workspace…", "Delete Workspace…",
             "", "Operations", "", "Close Pane",
         ])
     #expect(!allItems(menu).contains { $0.action == #selector(NSWindow.performClose(_:)) })
@@ -748,4 +749,26 @@ private func usKey(
     table.redo(redo)
 
     #expect(log.ids == [UndoCommands.undo.id, UndoCommands.redo.id])
+}
+
+/// Selection undo has its own items under Redo, on Sublime Text's soft undo keys, separate from
+/// the file Undo and Redo; they grey out while their commands would do nothing.
+@MainActor @Test func editMenuHasUndoAndRedoSelectionOnCmdUAndShiftCmdU() throws {
+    let registry = try AppCommands.registry()
+    let menu = try buildMenu(registry)
+    let edit = try #require(menu.items.first { $0.title == "Edit" }?.submenu)
+    let titles = edit.items.map(\.title)
+    let undo = try #require(edit.items.first { $0.title == "Undo Selection" })
+    let redo = try #require(edit.items.first { $0.title == "Redo Selection" })
+
+    #expect(Array(titles.prefix(4)) == ["Undo", "Redo", "Undo Selection", "Redo Selection"])
+    #expect(undo.keyEquivalent == "u" && undo.keyEquivalentModifierMask == .command)
+    #expect(redo.keyEquivalent == "u" && redo.keyEquivalentModifierMask == [.command, .shift])
+    #expect(undo.representedObject as? CommandID == SelectionCommands.undoSelection.id)
+    #expect(redo.representedObject as? CommandID == SelectionCommands.redoSelection.id)
+    let table = ListingTableView()
+    table.registry = registry
+    table.canRunCommand = { $0 == SelectionCommands.undoSelection.id }
+    #expect(table.validateMenuItem(undo))
+    #expect(!table.validateMenuItem(redo))
 }

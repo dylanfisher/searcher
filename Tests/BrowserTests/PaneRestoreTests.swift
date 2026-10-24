@@ -1,0 +1,332 @@
+import Base
+import BrowserTestSupport
+import Darwin
+import Foundation
+import TestSupport
+import Testing
+
+@testable import Browser
+
+private let bounds = Rect(x: 0, y: 0, width: 1200, height: 800)
+
+/// A pane state at `path` with `selection` selected, the cursor on `cursor`.
+private func saved(
+    _ path: String, selection: [String] = [], cursor: String? = nil,
+    viewMode: ViewMode = .list, sortedBy column: SortColumn = .name, ascending: Bool = true,
+    back: [String] = []
+) -> TabState.PaneState {
+    TabState.PaneState(
+        location: Location(path: path), viewMode: viewMode,
+        history: History(
+            back: back.map { History.Entry(location: Location(path: $0), selected: nil) },
+            forward: []),
+        selection: Set(selection.map(ExactName.init)), cursor: cursor.map(ExactName.init),
+        sortColumn: column, sortAscending: ascending)
+}
+
+@MainActor
+private func restored(
+    _ state: TabState.PaneState, lister: GatedLister
+) -> Pane {
+    Pane(
+        restoring: state, service: ListingService(lister: lister),
+        systemActions: StubSystemActions(), settings: untouchedSettings())
+}
+
+@MainActor @Test func restoredPaneSelectsItsSavedNamesAndDropsTheMissingOnes() async {
+    let lister = GatedLister([
+        "/r": .batches([[folder("docs"), file("a.txt"), file("b.txt")]])
+    ])
+    lister.releaseAll()
+    let pane = restored(
+        saved(
+            "/r", selection: ["a.txt", "gone.txt", "docs"], cursor: "a.txt", sortedBy: .size,
+            ascending: false, back: ["/"]),
+        lister: lister)
+
+    await settle { pane.state.isLoaded && pane.selection.isSettled }
+
+    #expect(pane.location == Location(path: "/r"))
+    #expect(pane.selection.members == .only([ExactName("a.txt"), ExactName("docs")]))
+    #expect(pane.selection.cursor == ExactName("a.txt"))
+    #expect(pane.sortColumn == .size)
+    #expect(!pane.sortAscending)
+    #expect(pane.canGoBack)
+    #expect(pane.history.backEntries.map(\.location) == [Location(path: "/")])
+}
+
+@MainActor @Test func restoredPaneWhoseFolderWasDeletedShowsTheMissingStateWithItsPath() async {
+    let lister = GatedLister([
+        "/r/gone": .failure(ListingError(path: "/r/gone", code: ENOENT))
+    ])
+    lister.releaseAll()
+    let pane = restored(saved("/r/gone", selection: ["a.txt"], cursor: "a.txt"), lister: lister)
+
+    await settle { pane.state.missingFolder != nil }
+
+    #expect(pane.state.missingFolder == "/r/gone")
+    // The pane stays at the saved folder rather than moving to another one.
+    #expect(pane.location == Location(path: "/r/gone"))
+}
+
+@MainActor @Test func aFolderThatIsAFileNowIsMissingToo() async {
+    let lister = GatedLister(["/r/x": .failure(ListingError(path: "/r/x", code: ENOTDIR))])
+    lister.releaseAll()
+    let pane = restored(saved("/r/x"), lister: lister)
+
+    await settle { pane.state.missingFolder != nil }
+
+    #expect(pane.state.missingFolder == "/r/x")
+}
+
+@MainActor @Test func aFolderTheAppCantReadIsNotMissing() async {
+    let lister = GatedLister(["/r/x": .failure(ListingError(path: "/r/x", code: EACCES))])
+    lister.releaseAll()
+    let pane = restored(saved("/r/x"), lister: lister)
+
+    await settle { pane.state.isFailed }
+
+    #expect(pane.state.missingFolder == nil)
+}
+
+@MainActor @Test func restoredColumnPaneOpensOneColumnOnItsFolderWithTheCursorSelected()
+    async throws
+{
+    let lister = GatedLister([
+        "/r": .batches([[folder("docs"), file("a.txt")]]),
+        "/r/docs": .batches([[file("inside.txt")]]),
+    ])
+    lister.releaseAll()
+    let pane = restored(saved("/r", cursor: "docs", viewMode: .column), lister: lister)
+
+    let trail = try #require(pane.columnTrail)
+    await settle { trail.columns.count == 2 }
+
+    #expect(pane.viewMode == .column)
+    #expect(trail.columns[0].pane.location == Location(path: "/r"))
+    #expect(trail.columns[0].pane.selection.cursor == ExactName("docs"))
+    pane.close()
+}
+
+@MainActor @Test func restoredTabHasTheSavedLayoutAndAPaneForEachLeaf() throws {
+    var layout = Layout()
+    let first = layout.focused
+    let split = layout.split(.horizontal, in: bounds)
+    let second = try #require(split)
+    layout.focus(first)
+    let state = TabState(
+        layout: layout, panes: [first: saved("/a"), second: saved("/b", viewMode: .column)])
+    let lister = GatedLister(["/a": .batches([[]]), "/b": .batches([[]])])
+
+    let tab = Tab(restoring: state) { restored($0, lister: lister) }
+
+    #expect(tab.layout == layout)
+    #expect(tab.focusedPane.location == Location(path: "/a"))
+    #expect(tab.panes[second]?.location == Location(path: "/b"))
+    #expect(tab.panes[second]?.viewMode == .column)
+    #expect(tab.state.layout == layout)
+    tab.close()
+}
+
+@MainActor @Test func restoredWorkspaceKeepsItsIDNameAndSelectedTab() {
+    let lister = GatedLister(["/a": .batches([[]]), "/b": .batches([[]])])
+    let one = Tab(pane: restored(saved("/a"), lister: lister))
+    let two = Tab(pane: restored(saved("/b"), lister: lister))
+    let id = UUID()
+
+    let workspace = Workspace(
+        id: id, name: "Project 1", tabs: [one, two], selectedTab: 1, showsSidebar: true)
+
+    #expect(workspace.id == id)
+    #expect(workspace.name == "Project 1")
+    #expect(workspace.showsSidebar)
+    #expect(workspace.tabs.map(\.id) == [one.id, two.id])
+    #expect(workspace.selectedTab === two)
+    #expect(one.focusedPane.isVisible == false)
+    workspace.closeAllTabs()
+}
+
+// MARK: Panes on a share
+
+/// A share mounted under `root`, standing in for `/Volumes/music`. Nothing is made there: the
+/// tests never mount anything, and the mount table and volume reads are stubs.
+private func share(under root: TemporaryFolder) -> VolumeIdentity {
+    VolumeIdentity(
+        device: "//dylan@nas.local/music",
+        mountPoint: root.url.appending(path: "Volumes/music").path, kind: .network)
+}
+
+private func cacheStore(_ root: TemporaryFolder, log: EventLog<String> = EventLog())
+    -> ListingCacheStore
+{
+    ListingCacheStore(
+        roots: StoreRoots(
+            caches: root.url.appending(path: "Caches"),
+            applicationSupport: root.url.appending(path: "Application Support")),
+        log: { log.append($0) }, clock: ManualClock())
+}
+
+/// Writes `entries` as the kept listing of `path` on `volume`, as the last session left it.
+private func writeCache(
+    _ entries: [DirectoryEntry], at path: String, on volume: VolumeIdentity,
+    under root: TemporaryFolder
+) async {
+    let store = cacheStore(root)
+    await store.save([path: ListingCache.Folder(entries: entries, listedAt: testDate)], for: volume)
+    await store.flush()
+}
+
+/// Writes bytes that aren't a property list where `volume`'s file goes.
+private func writeUndecodableCache(on volume: VolumeIdentity, under root: TemporaryFolder) throws
+    -> URL
+{
+    let url = cacheStore(root).url(for: volume)
+    try FileManager.default.createDirectory(
+        at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data("not a property list".utf8).write(to: url)
+    return url
+}
+
+/// A restored pane at `path` over a service whose mount table is `mounted` and whose volume
+/// reads are `volumeOf`.
+@MainActor
+private func restoredOnShare(
+    _ path: String, lister: GatedLister, cache: ListingCache, mounted: [VolumeIdentity],
+    volumeOf: @escaping @Sendable (String) throws(ListingError) -> VolumeIdentity
+) -> Pane {
+    Pane(
+        restoring: saved(path),
+        service: ListingService(
+            lister: lister, volumeOf: volumeOf, mountedVolumes: { mounted }, cache: cache),
+        systemActions: StubSystemActions(), settings: untouchedSettings())
+}
+
+@MainActor @Test func restoredPaneOnAShareShowsTheRowsReadAtRestoreThenItsOwnListing() async throws
+{
+    let root = try TemporaryFolder("PaneRestoreTests")
+    let share = share(under: root)
+    let album = share.mountPoint + "/Album"
+    await writeCache([file("a"), file("b")], at: album, on: share, under: root)
+    let cache = ListingCache(store: cacheStore(root))
+
+    await cache.restore(folders: [album], mountedVolumes: { [share] })
+    // Read at restore, with the session: the pane's load reads no file for them.
+    try FileManager.default.removeItem(at: cacheStore(root).url(for: share))
+    let lister = GatedLister([album: .batches([[file("a"), file("c")]])])
+    let pane = restoredOnShare(
+        album, lister: lister, cache: cache, mounted: [share], volumeOf: { _ in share })
+
+    // Cached rows while the read hasn't returned: the pane's view shows them with its spinner.
+    await settle { pane.state.isCachedRefreshing }
+    #expect(pane.state.names == ["a", "b"])
+    #expect(pane.state.listedAt == testDate)
+    #expect(await lister.waitForCall(album))
+
+    lister.release(album)
+    await settle { pane.state.isLoaded }
+    #expect(pane.state.names == ["a", "c"])
+}
+
+/// Holds a volume read until `gate` opens, at most `timeout`, as `statfs` on a mount point
+/// whose share went away can. A function of its own, so a stall blocked in it names it.
+@inline(never) private func waitForTheUnmountedShare(
+    _ gate: DispatchSemaphore, timeout: TimeInterval
+) {
+    guard gate.wait(timeout: .now() + timeout) == .success else { return }
+    // Open for every later read too.
+    gate.signal()
+}
+
+@MainActor @Test func restoredPaneOnAnUnmountedShareShowsItsCachedRowsOfflineWithoutAMainStall()
+    async throws
+{
+    let root = try TemporaryFolder("PaneRestoreTests")
+    let share = share(under: root)
+    let album = share.mountPoint + "/Album"
+    await writeCache([file("a"), file("b")], at: album, on: share, under: root)
+    let cache = ListingCache(store: cacheStore(root))
+    // The share isn't in the mount table.
+    await cache.restore(folders: [album], mountedVolumes: { [] })
+
+    let stalls = EventLog<Stall>()
+    let watchdog = StallWatchdog(
+        runLoop: CFRunLoopGetMain(), thread: ThreadStack.current(),
+        threshold: .milliseconds(50)
+    ) { stalls.append($0) }
+    watchdog.start()
+    let gate = DispatchSemaphore(value: 0)
+    let volumeReadsOnMain = EventLog<Bool>()
+    let lister = GatedLister([album: .blockForever])
+    lister.releaseAll()
+    let pane = restoredOnShare(album, lister: lister, cache: cache, mounted: []) {
+        path throws(ListingError) in
+        volumeReadsOnMain.append(Thread.isMainThread)
+        // Many times the stall threshold, so a read on the main thread would be a stall.
+        waitForTheUnmountedShare(gate, timeout: 1)
+        // What `statfs` says once the system has removed the mount point.
+        throw ListingError(path: path, code: ENOENT)
+    }
+
+    // The rows come while the volume read is held.
+    await settle { pane.state.isCachedRefreshing }
+    #expect(pane.state.names == ["a", "b"])
+    gate.signal()
+    await settle { pane.state.isOffline }
+    #expect(pane.state.names == ["a", "b"])
+    #expect(pane.state.listedAt == testDate)
+    #expect(pane.volumeName == "music")
+    #expect(pane.location == Location(path: album))
+    // One more pass, so the watchdog's end observer has run for the last one.
+    await drainMainQueue()
+    watchdog.stop()
+
+    #expect(!volumeReadsOnMain.all.isEmpty)
+    #expect(!volumeReadsOnMain.all.contains(true))
+    #expect(lister.calls.isEmpty)
+    let blocked = stalls.all.filter { stall in
+        stall.symbols.contains { $0.contains("waitForTheUnmountedShare") }
+    }
+    #expect(blocked.isEmpty, "\(blocked.map(\.duration))")
+}
+
+@MainActor @Test func anUndecodableCacheFileIsDeletedAndTheRestoredPaneLoadsNormally() async throws
+{
+    let root = try TemporaryFolder("PaneRestoreTests")
+    let share = share(under: root)
+    let album = share.mountPoint + "/Album"
+    let url = try writeUndecodableCache(on: share, under: root)
+    let log = EventLog<String>()
+    let cache = ListingCache(store: cacheStore(root, log: log))
+
+    await cache.restore(folders: [album], mountedVolumes: { [share] })
+
+    #expect(!FileManager.default.fileExists(atPath: url.path))
+    #expect(log.all.count == 1)
+    #expect(log.all.first?.contains(url.path) == true)
+    let lister = GatedLister([album: .batches([[folder("Scans"), file("01.flac")]])])
+    lister.releaseAll()
+    let pane = restoredOnShare(
+        album, lister: lister, cache: cache, mounted: [share], volumeOf: { _ in share })
+    await settle { pane.state.isLoaded }
+    #expect(pane.state.names == ["01.flac", "Scans"])
+}
+
+@MainActor @Test func anUndecodableFileOfAnUnmountedShareIsDeletedAndThePaneShowsItMissing()
+    async throws
+{
+    let root = try TemporaryFolder("PaneRestoreTests")
+    let share = share(under: root)
+    let album = share.mountPoint + "/Album"
+    let url = try writeUndecodableCache(on: share, under: root)
+    let cache = ListingCache(store: cacheStore(root))
+
+    await cache.restore(folders: [album], mountedVolumes: { [] })
+
+    #expect(!FileManager.default.fileExists(atPath: url.path))
+    let lister = GatedLister([:])
+    let pane = restoredOnShare(album, lister: lister, cache: cache, mounted: []) {
+        path throws(ListingError) in throw ListingError(path: path, code: ENOENT)
+    }
+    await settle { pane.state.missingFolder != nil }
+    #expect(pane.state.missingFolder == album)
+}

@@ -1,28 +1,23 @@
 import AppKit
 import Browser
 
-/// The sheet that asks what to do with an item whose name the destination folder already has:
-/// replace the one there, skip this item, or keep both, with each item's size and date as the
-/// plan read them. A box applies the answer to the operation's later conflicts, and shows only
-/// when there are some. Return keeps both, since it loses nothing; Esc cancels the operation.
+/// The sheet that asks what to do with an item whose name the destination folder already has,
+/// as Finder asks it: keep both, stop the operation, skip this item, or replace the one there,
+/// in one row with Replace the default (Return) and Stop on Esc. Under Finder's question are
+/// each item's size and date as the plan read them. "Apply to All" applies the answer to the
+/// operation's later conflicts, and shows only when there are some. A `Dialog.rowSheet`, since
+/// NSAlert would stack four buttons (docs/decisions/0076-dialogs.md).
 @MainActor
 final class ConflictSheetController: NSObject {
-    let panel = NSPanel(
-        contentRect: NSRect(x: 0, y: 0, width: 460, height: 200), styleMask: [.titled],
-        backing: .buffered, defer: true)
-    let messageLabel = NSTextField(wrappingLabelWithString: "")
-    let existingLabel = NSTextField(wrappingLabelWithString: "")
-    let sourceLabel = NSTextField(wrappingLabelWithString: "")
-    let applyToAllBox = NSButton(checkboxWithTitle: "", target: nil, action: nil)
-    let replaceButton = NSButton()
-    let skipButton = NSButton()
-    let keepBothButton = NSButton()
-    let cancelButton = NSButton()
-
+    let dialog: Dialog.RowSheet
+    let applyToAllBox = NSButton(checkboxWithTitle: "Apply to All", target: nil, action: nil)
     let request: ConflictRequest
-    /// Gets the answer, or nil for Cancel, once.
+    /// Gets the answer, or nil for Stop, once.
     private let answer: @MainActor (ConflictResolution?) -> Void
-    private let formatter: EntryCellFormatter
+
+    /// The buttons' titles, the default first and then leftwards, as `Dialog.rowSheet` takes
+    /// them.
+    private static let titles = ["Replace", "Skip", "Stop", "Keep Both"]
 
     init(
         request: ConflictRequest, formatter: EntryCellFormatter = .init(),
@@ -30,82 +25,58 @@ final class ConflictSheetController: NSObject {
     ) {
         self.request = request
         self.answer = answer
-        self.formatter = formatter
+        let name = Location(path: request.existing.path).name
+        applyToAllBox.isHidden = request.remaining == 0
+        dialog = Dialog.rowSheet(
+            message: "An item named “\(name)” already exists in this location.",
+            information: """
+                Do you want to replace it with the one you’re \(Self.verb(request.kind))?
+                The one there: \(Self.describe(request.existing, formatter))
+                The one coming in: \(Self.describe(request.source, formatter))
+                """,
+            buttons: Self.titles, escape: "Stop", checkbox: applyToAllBox)
         super.init()
-        buildContent()
+        dialog.send(#selector(pressed(_:)), to: self)
     }
 
-    @objc private func choose(_ sender: NSButton) {
-        let choice: ConflictResolution.Choice =
-            switch sender {
-            case replaceButton: .replace
-            case skipButton: .skip
-            case keepBothButton: .keepBoth
-            default: preconditionFailure("\(sender.title) isn't one of the conflict's choices")
-            }
-        answer(ConflictResolution(choice: choice, appliesToAll: applyToAllBox.state == .on))
+    /// The window shown as the sheet.
+    var panel: NSWindow { dialog.panel }
+    var replaceButton: NSButton { dialog.buttons[0] }
+    var skipButton: NSButton { dialog.buttons[1] }
+    var stopButton: NSButton { dialog.buttons[2] }
+    var keepBothButton: NSButton { dialog.buttons[3] }
+
+    @objc private func pressed(_ sender: NSButton) {
+        let choice: ConflictResolution.Choice
+        switch sender {
+        case replaceButton: choice = .replace
+        case skipButton: choice = .skip
+        case keepBothButton: choice = .keepBoth
+        case stopButton:
+            answer(nil)
+            return
+        default: preconditionFailure("\(sender.title) isn't one of the conflict's choices")
+        }
+        let appliesToAll = !applyToAllBox.isHidden && applyToAllBox.state == .on
+        answer(ConflictResolution(choice: choice, appliesToAll: appliesToAll))
     }
 
-    @objc private func cancel(_ sender: NSButton) {
-        answer(nil)
+    /// Finder's word for what the operation does to the incoming item.
+    private static func verb(_ kind: ConflictRequest.Kind) -> String {
+        switch kind {
+        case .copy: "copying"
+        case .move: "moving"
+        }
     }
 
     /// "1 KB, modified Today at 9:41 AM", or "Folder, modified …".
-    private func describe(_ item: ConflictRequest.Item) -> String {
+    private static func describe(
+        _ item: ConflictRequest.Item, _ formatter: EntryCellFormatter
+    ) -> String {
         let size =
             if item.isFolder { "Folder" } else if let bytes = item.bytes {
                 formatter.bytes(bytes)
             } else { "Item" }
         return "\(size), modified \(formatter.date(item.modified))"
-    }
-
-    private func buildContent() {
-        let name = Location(path: request.existing.path).name
-        let folder = Location(path: request.existing.path).parent?.name ?? "/"
-        messageLabel.stringValue = "An item named “\(name)” is already in “\(folder)”."
-        messageLabel.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
-        existingLabel.stringValue = "The one there: \(describe(request.existing))"
-        sourceLabel.stringValue = "The one coming in: \(describe(request.source))"
-        let more = request.remaining
-        applyToAllBox.title =
-            more == 1 ? "Do the same for 1 more conflict" : "Do the same for \(more) more conflicts"
-        applyToAllBox.isHidden = more == 0
-        for (button, title) in [
-            (cancelButton, "Cancel"), (skipButton, "Skip"), (replaceButton, "Replace"),
-            (keepBothButton, "Keep Both"),
-        ] {
-            button.title = title
-            button.bezelStyle = .push
-            button.target = self
-            button.action = #selector(choose(_:))
-        }
-        cancelButton.action = #selector(cancel(_:))
-        cancelButton.keyEquivalent = "\u{1B}"
-        keepBothButton.keyEquivalent = "\r"
-        let buttons = NSStackView()
-        buttons.setViews([cancelButton], in: .leading)
-        buttons.setViews([skipButton, replaceButton, keepBothButton], in: .trailing)
-        let stack = NSStackView(views: [
-            messageLabel, existingLabel, sourceLabel, applyToAllBox, buttons,
-        ])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 8
-        stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
-        stack.setCustomSpacing(16, after: applyToAllBox)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        let content = NSView()
-        content.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: content.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            buttons.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
-            messageLabel.widthAnchor.constraint(equalTo: buttons.widthAnchor),
-            content.widthAnchor.constraint(equalToConstant: 460),
-        ])
-        panel.contentView = content
-        panel.title = "Name in Use"
     }
 }

@@ -324,3 +324,153 @@ private func host(_ fixture: Fixture, width: CGFloat) -> NSView {
     fixture.controller.clear(FileOperationQueue.ID(3))
     #expect(emptied == 2)
 }
+
+@MainActor @Test func aRowsContentSitsAtTheSharedBarInset() throws {
+    let fixture = Fixture()
+    let container = host(fixture, width: 600)
+    fixture.controller.show([snapshot(1, .running)])
+    container.layoutSubtreeIfNeeded()
+    let row = try fixture.row(1)
+
+    let bar = row.convert(row.bar.bounds, from: row.bar)
+    let cancel = row.convert(row.cancelButton.bounds, from: row.cancelButton)
+    #expect(bar.minX == BarInset.horizontal)
+    #expect(row.bounds.maxX - cancel.maxX == BarInset.horizontal)
+}
+
+private let bigTotal = TreeSizeWalker.Total(bytes: 6_000_000_000, files: 700, isPartial: false)
+
+@MainActor @Test func aCopyEstimatedToRunLongShowsThePanelBeforeTheDelay() throws {
+    let fixture = Fixture()
+    fixture.controller.show([snapshot(1, .running, total: bigTotal)])
+    #expect(fixture.log.attention == 0)
+
+    // 100 MB a second leaves about a minute to go.
+    fixture.clock.advance(by: .milliseconds(100))
+    fixture.controller.show([
+        snapshot(1, .running, copied: CopyProgress(bytes: 10_000_000, files: 1), total: bigTotal)
+    ])
+    #expect(fixture.log.attention == 1)
+
+    // It asks once, not with every tick.
+    fixture.clock.advance(by: .milliseconds(100))
+    fixture.controller.show([
+        snapshot(1, .running, copied: CopyProgress(bytes: 20_000_000, files: 2), total: bigTotal)
+    ])
+    #expect(fixture.log.attention == 1)
+}
+
+@MainActor @Test func aBigCopyThatGoesFastNeverShowsThePanel() async throws {
+    let fixture = Fixture()
+    fixture.controller.show([snapshot(1, .running, total: bigTotal)])
+    await settle { fixture.clock.waitingSleeps == 1 }
+
+    // A clone on one volume: nearly all of it in the first tick.
+    fixture.clock.advance(by: .milliseconds(100))
+    fixture.controller.show([
+        snapshot(
+            1, .running, copied: CopyProgress(bytes: 5_500_000_000, files: 600), total: bigTotal)
+    ])
+    fixture.controller.show([snapshot(1, .done)])
+    fixture.controller.show([])
+    fixture.clock.advance(by: .seconds(2))
+    try? await Task.sleep(for: .milliseconds(20))
+
+    #expect(fixture.log.attention == 0)
+}
+
+@MainActor @Test func anOperationAsksOnceSoAClosedPanelStaysClosed() async throws {
+    let fixture = Fixture()
+    fixture.controller.show([snapshot(1, .running)])
+    await settle { fixture.clock.waitingSleeps == 1 }
+    fixture.clock.advance(by: .seconds(1))
+    await settle { fixture.log.attention == 1 }
+
+    // The user closes the panel; the operation goes on ticking.
+    fixture.controller.show([snapshot(1, .running)])
+    fixture.clock.advance(by: .seconds(1))
+    try? await Task.sleep(for: .milliseconds(20))
+    #expect(fixture.clock.waitingSleeps == 0)
+    #expect(fixture.log.attention == 1)
+
+    // Another operation still asks.
+    fixture.controller.show([snapshot(1, .running), snapshot(2, .running)])
+    await settle { fixture.clock.waitingSleeps == 1 }
+    fixture.clock.advance(by: .seconds(1))
+    await settle { fixture.log.attention == 2 }
+}
+
+@MainActor @Test func anEarlyAskReplacesTheOneSecondWait() async throws {
+    let fixture = Fixture()
+    fixture.controller.show([snapshot(1, .running, total: bigTotal)])
+    await settle { fixture.clock.waitingSleeps == 1 }
+    fixture.clock.advance(by: .milliseconds(100))
+    fixture.controller.show([
+        snapshot(1, .running, copied: CopyProgress(bytes: 10_000_000, files: 1), total: bigTotal)
+    ])
+    #expect(fixture.log.attention == 1)
+
+    fixture.clock.advance(by: .seconds(1))
+    fixture.controller.show([
+        snapshot(1, .running, copied: CopyProgress(bytes: 20_000_000, files: 2), total: bigTotal)
+    ])
+    try? await Task.sleep(for: .milliseconds(20))
+    #expect(fixture.log.attention == 1)
+}
+
+/// Shows a running copy of `total` bytes at the clock's time zero and then, 100 ms later, with
+/// `copied` of them done.
+@MainActor private func showTick(
+    _ fixture: Fixture, copied: Int64, of total: Int64, phase: OperationState.Phase = .running
+) {
+    let total = TreeSizeWalker.Total(bytes: total, files: 1, isPartial: false)
+    fixture.controller.show([snapshot(1, .running, total: total)])
+    fixture.clock.advance(by: .milliseconds(100))
+    fixture.controller.show([
+        snapshot(1, phase, copied: CopyProgress(bytes: copied, files: 0), total: total)
+    ])
+}
+
+@MainActor @Test func aCopyEstimatedJustUnderTwoSecondsWaits() {
+    let fixture = Fixture()
+    // 1 GB a second, 1.9 s to go.
+    showTick(fixture, copied: 100_000_000, of: 2_000_000_000)
+
+    #expect(fixture.log.attention == 0)
+}
+
+@MainActor @Test func aCopyEstimatedJustOverTwoSecondsAsks() {
+    let fixture = Fixture()
+    // 1 GB a second, 2.1 s to go.
+    showTick(fixture, copied: 100_000_000, of: 2_200_000_000)
+
+    #expect(fixture.log.attention == 1)
+}
+
+@MainActor @Test func aTickWithNoBytesMovedAsksNothing() {
+    let fixture = Fixture()
+    showTick(fixture, copied: 0, of: 6_000_000_000)
+    fixture.clock.advance(by: .milliseconds(100))
+    fixture.controller.show([snapshot(1, .running, total: bigTotal)])
+
+    #expect(fixture.log.attention == 0)
+}
+
+@MainActor @Test func aPauseStartsTheSamplingOver() {
+    let fixture = Fixture()
+    // Paused 100 ms in with 10 MB done: no rate is read across the pause.
+    showTick(fixture, copied: 10_000_000, of: 6_000_000_000, phase: .paused)
+    #expect(fixture.log.attention == 0)
+
+    // Resumed, it copies the rest at once.
+    fixture.clock.advance(by: .milliseconds(500))
+    fixture.controller.show([
+        snapshot(1, .running, copied: CopyProgress(bytes: 10_000_000, files: 0), total: bigTotal)
+    ])
+    fixture.clock.advance(by: .milliseconds(100))
+    fixture.controller.show([
+        snapshot(
+            1, .running, copied: CopyProgress(bytes: 5_900_000_000, files: 0), total: bigTotal)
+    ])
+    #expect(fixture.log.attention == 0)
+}

@@ -24,7 +24,8 @@ which asks before it stops a copy. The question must be testable without showing
   writing; "Quit while a file operation waits for an answer?" when only a question waits.
   Quit is the first button, so Return quits, and Cancel the second, which Esc presses, as in
   Terminal's question about running processes.
-- **Where it lives:** `WorkspaceWindows.quitAlert` builds the `NSAlert` and
+- **Where it lives:** `WorkspaceWindows.quitAlert` builds the `NSAlert` through `Dialog.alert`
+  ([0076](0076-dialogs.md)) and
   `shouldQuit(asking:)` decides, taking the call that shows it. Tests pass a closure and check
   the alert's text without showing it; the app delegate passes `runModal`. Quit then runs the
   existing cancel-and-clean path; Cancel answers `.terminateCancel` and leaves everything

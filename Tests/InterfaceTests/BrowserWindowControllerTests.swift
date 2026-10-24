@@ -698,9 +698,12 @@ private func usKey(
     fixture.window.sendEvent(try usKey("T", characters: "ˇ", keyCode: 17, [.option, .shift]))
     #expect(fixture.tab.panes.count == 3)
 
-    // Command is no part of the key now.
+    // Command is no part of the key now, so no command takes it and the table beeps.
+    var beeps = 0
+    try fixture.keyTable.beep = { beeps += 1 }
     try fixture.press(try usKey("T", characters: "ˇ", keyCode: 17, [.command, .option, .shift]))
     #expect(fixture.tab.panes.count == 3)
+    #expect(beeps == 1)
 }
 
 @MainActor @Test func ctrlTabSwitchesTabsThroughTheWindowFromTheTableAndTheFilterField()
@@ -857,4 +860,268 @@ private func copySnapshot(_ id: Int, _ phase: OperationState.Phase) -> FileOpera
     fixture.controller.showOperations([copySnapshot(1, .done)])
 
     #expect(!panel.isHidden)
+}
+
+// MARK: Workspace sidebar
+
+/// Control-Command-S.
+@MainActor
+private func sidebarKey() throws -> NSEvent {
+    try keyEvent("s", modifiers: [.command, .control])
+}
+
+@MainActor @Test func theSidebarKeyShowsAndHidesTheSidebarAndTheWorkspaceKeepsIt() async throws {
+    let fixture = try await Fixture()
+    var changes = 0
+    fixture.workspace.onChange = { changes += 1 }
+    #expect(!fixture.controller.showsSidebar && !fixture.workspace.showsSidebar)
+
+    try fixture.press(try sidebarKey())
+
+    #expect(fixture.controller.showsSidebar && fixture.workspace.showsSidebar)
+    #expect(changes == 1)
+    // The keys stay in the pane.
+    #expect(try fixture.keyTable === fixture.controller.paneViewController.keyView)
+
+    try fixture.press(try sidebarKey())
+
+    #expect(!fixture.controller.showsSidebar && !fixture.workspace.showsSidebar)
+    #expect(changes == 2)
+}
+
+@MainActor @Test func aWindowOpensWithItsWorkspacesSidebarShown() throws {
+    let pane = Pane(
+        location: Location(path: "/root"),
+        service: ListingService(lister: StubLister(Fixture.folders)) { "Test Disk" },
+        systemActions: StubSystemActions(), settings: untouchedSettings())
+    let workspace = Workspace(
+        id: UUID(), name: nil, tabs: [Tab(pane: pane)], selectedTab: 0, showsSidebar: true)
+    let list = WorkspaceList()
+    list.add(workspace)
+
+    let controller = BrowserWindowController(
+        workspace: workspace, workspaces: list, settings: untouchedSettings())
+
+    #expect(controller.showsSidebar)
+}
+
+@MainActor @Test func focusSidebarMovesTheKeysThereAndEscapeGivesThemBackToThePane()
+    async throws
+{
+    let fixture = try await Fixture()
+    let paneTable = try fixture.keyTable
+
+    paneTable.run(WorkspaceCommands.focusSidebar.id)
+
+    #expect(fixture.controller.showsSidebar && fixture.workspace.showsSidebar)
+    let outline = fixture.controller.sidebar.outlineView
+    #expect(fixture.window.firstResponder === outline)
+
+    outline.keyDown(with: try keyEvent("\u{1B}"))
+
+    #expect(fixture.window.firstResponder === paneTable)
+    // Esc hands the keys back and leaves the sidebar showing, as Finder's does.
+    #expect(fixture.controller.showsSidebar)
+}
+
+@MainActor @Test func hidingTheSidebarWhileItHasTheKeysGivesThemToThePane() async throws {
+    let fixture = try await Fixture()
+    let paneTable = try fixture.keyTable
+    paneTable.run(WorkspaceCommands.focusSidebar.id)
+    #expect(fixture.window.firstResponder === fixture.controller.sidebar.outlineView)
+
+    paneTable.run(WorkspaceCommands.toggleSidebar.id)
+
+    #expect(!fixture.controller.showsSidebar)
+    #expect(fixture.window.firstResponder === paneTable)
+}
+
+@MainActor @Test func theSidebarCommandsWorkFromTheMenuWhileTheSidebarHasTheKeys() async throws {
+    let fixture = try await Fixture()
+    try fixture.keyTable.run(WorkspaceCommands.focusSidebar.id)
+    let menu = try MainMenuBuilder.build(appName: "Searcher", registry: AppCommands.registry())
+    let item = try #require(menuItem(WorkspaceCommands.toggleSidebar.id, in: menu))
+    #expect(fixture.controller.validateMenuItem(item))
+    #expect(item.title == "Hide Sidebar")
+
+    fixture.controller.runMenuCommand(item)
+
+    #expect(!fixture.controller.showsSidebar)
+}
+
+@MainActor @Test func collapsingTheSidebarByItsDividerHidesItInTheWorkspace() async throws {
+    let fixture = try await Fixture()
+    try fixture.press(try sidebarKey())
+
+    fixture.controller.sidebarItem.isCollapsed = true
+    fixture.window.contentView?.layoutSubtreeIfNeeded()
+
+    #expect(!fixture.workspace.showsSidebar)
+}
+
+/// Collapses the sidebar as a command in a window on screen does, with the animation stepped by
+/// hand: the split view resizes while the item still reads open, then again once the animator
+/// has set it, then the animation ends.
+@MainActor @Test func theResizesOfACommandsAnimatedCollapseLeaveTheSidebarHidden() async throws {
+    let fixture = try await Fixture()
+    try fixture.press(try sidebarKey())
+    var change: (@MainActor () -> Void)?
+    var finish: (@MainActor () -> Void)?
+    fixture.controller.animateSidebar = {
+        change = $0
+        finish = $1
+    }
+    let split = try #require(fixture.controller.contentViewController as? NSSplitViewController)
+    let resize = { @MainActor in
+        NotificationCenter.default.post(
+            name: NSSplitView.didResizeSubviewsNotification, object: split.splitView)
+    }
+
+    fixture.workspace.showsSidebar = false
+    fixture.controller.setSidebarCollapsed(true, animated: true)
+    #expect(!fixture.controller.sidebarItem.isCollapsed)
+    resize()
+
+    #expect(!fixture.workspace.showsSidebar && !fixture.controller.showsSidebar)
+
+    let runChange = try #require(change)
+    runChange()
+    resize()
+    #expect(!fixture.workspace.showsSidebar)
+
+    fixture.controller.sidebarItem.isCollapsed = true
+    let runFinish = try #require(finish)
+    runFinish()
+
+    #expect(!fixture.workspace.showsSidebar && !fixture.controller.showsSidebar)
+    // A drag after the animation is the user's, and the workspace follows it.
+    fixture.controller.sidebarItem.isCollapsed = false
+    resize()
+    #expect(fixture.workspace.showsSidebar)
+}
+
+@MainActor @Test func tabAndShiftTabMoveBetweenTheSidebarAndTheFocusedPane() async throws {
+    let fixture = try await Fixture()
+    try fixture.press(try sidebarKey())
+    let outline = fixture.controller.sidebar.outlineView
+    let first = try fixture.keyTable
+
+    #expect(outline.nextKeyView === first)
+    #expect(first.previousKeyView === outline)
+
+    let second = try fixture.paneController(try fixture.splitRight()).keyView
+
+    #expect(outline.nextKeyView === second)
+    #expect(second.previousKeyView === outline)
+    #expect(first.nextKeyView !== outline)
+}
+
+// MARK: Palette
+
+/// A text field in `fixture`'s window outside every pane, to move the window's keys to while the
+/// palette shows: on screen they stay where they were, but a test must see them come back.
+@MainActor
+private func strayField(in fixture: Fixture) throws -> NSTextField {
+    let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 100, height: 22))
+    try #require(fixture.window.contentView).addSubview(field)
+    return field
+}
+
+/// Shows the palette over `fixture`'s window, moves the window's keys to a stray field, and
+/// presses Esc in the palette's field.
+@MainActor
+private func escapePalette(in fixture: Fixture) throws {
+    let panel = try #require(fixture.controller.palette?.window)
+    let editor = try #require(panel.firstResponder as? NSTextView)
+    #expect(editor.isFieldEditor)
+    #expect(fixture.window.makeFirstResponder(try strayField(in: fixture)))
+
+    editor.keyDown(with: try keyEvent("\u{1B}"))
+
+    #expect(fixture.controller.palette == nil)
+}
+
+@MainActor @Test func escInThePaletteGivesTheKeysBackToTheTableThatHadThem() async throws {
+    let fixture = try await Fixture()
+    let table = try fixture.keyTable
+    try fixture.press(try keyEvent("k", modifiers: .command))
+
+    try escapePalette(in: fixture)
+
+    #expect(fixture.window.firstResponder === table)
+}
+
+@MainActor @Test func escInThePaletteGivesTheKeysBackToTheSidebarThatHadThem() async throws {
+    let fixture = try await Fixture()
+    try fixture.press(try sidebarKey())
+    let outline = fixture.controller.sidebar.outlineView
+    #expect(fixture.window.makeFirstResponder(outline))
+    fixture.controller.showPalette()
+
+    try escapePalette(in: fixture)
+
+    #expect(fixture.window.firstResponder === outline)
+}
+
+@MainActor @Test func escInThePaletteGivesTheKeysBackToTheFilterFieldThatHadThem() async throws {
+    let fixture = try await Fixture()
+    try fixture.press(try keyEvent("f", modifiers: .command))
+    let filter = fixture.controller.paneViewController.filterBar.field
+    // The menu item runs Open Quickly with the keys in the field.
+    fixture.controller.showPalette()
+
+    try escapePalette(in: fixture)
+
+    let editor = try #require(fixture.window.firstResponder as? NSTextView)
+    #expect(editor.delegate === filter)
+}
+
+@MainActor @Test func cmdKAndCmdWInThePaletteCloseItAsKeyEquivalents() async throws {
+    for key in ["k", "w"] {
+        let fixture = try await Fixture()
+        let table = try fixture.keyTable
+        fixture.controller.showPalette()
+        let panel = try #require(fixture.controller.palette?.window)
+
+        #expect(panel.performKeyEquivalent(with: try keyEvent(key, modifiers: .command)))
+
+        #expect(fixture.controller.palette == nil, "Cmd-\(key)")
+        #expect(fixture.window.firstResponder === table)
+        #expect(fixture.workspace.tabs.count == 1)
+    }
+}
+
+@MainActor @Test func anotherCommandKeyInThePaletteDoesNothingAndDoesntBeep() async throws {
+    let fixture = try await Fixture()
+    fixture.controller.showPalette()
+    let panel = try #require(fixture.controller.palette?.window)
+    let editor = try #require(panel.firstResponder as? NSTextView)
+    let newTab = try keyEvent("t", modifiers: .command)
+
+    // The menu takes it next, where the item is off; then the field's editor gets it.
+    #expect(!panel.performKeyEquivalent(with: newTab))
+    editor.keyDown(with: newTab)
+
+    #expect(fixture.controller.palette != nil)
+    #expect(fixture.workspace.tabs.count == 1)
+}
+
+@MainActor @Test func thePaletteClosesWhenItLosesTheKeys() async throws {
+    let fixture = try await Fixture()
+    fixture.controller.showPalette()
+    let palette = try #require(fixture.controller.palette)
+
+    NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: palette.window)
+
+    #expect(fixture.controller.palette == nil)
+}
+
+@MainActor @Test func closingTheWindowClosesItsPalette() async throws {
+    let fixture = try await Fixture()
+    fixture.controller.showPalette()
+    #expect(fixture.controller.palette != nil)
+
+    fixture.window.close()
+
+    #expect(fixture.controller.palette == nil)
 }

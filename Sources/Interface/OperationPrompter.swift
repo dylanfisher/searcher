@@ -1,10 +1,11 @@
 import AppKit
 import Browser
 
-/// Answers a `FileOperationQueue`'s questions with sheets: `ConflictSheetController` for a name
-/// in use, `ConfirmSheetController` for the other-pane confirm and the delete-immediately
-/// question. One sheet shows at a time, on the window `window` gives, which is the most recently
-/// active one; questions asked meanwhile wait in order, and wait for a window if none is open.
+/// Answers a `FileOperationQueue`'s questions with `Dialog` sheets: `ConflictSheetController`
+/// for a name in use, `ConfirmSheetController` for the other-pane confirm and the
+/// delete-immediately question. One sheet shows at a time, on the window `window` gives,
+/// which is the most recently active one; questions asked meanwhile wait in order, and wait
+/// for a window if none is open.
 /// Nothing blocks: each question is an awaited call, so other windows keep their keys.
 ///
 /// A question about an operation a snapshot shows finished, cancelled from the panel or failed
@@ -17,7 +18,7 @@ final class OperationPrompter {
         case conflict(ConflictSheetController)
         case confirm(ConfirmSheetController)
 
-        var panel: NSPanel {
+        @MainActor var panel: NSWindow {
             switch self {
             case .conflict(let sheet): sheet.panel
             case .confirm(let sheet): sheet.panel

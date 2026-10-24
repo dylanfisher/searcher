@@ -80,11 +80,23 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
     /// `revisit` scenario: open a subfolder of `--path` listed before → frame with its cached
     /// rows (B4).
     public var revisit: [Double]
+    /// `restored-network-pane` scenario: a restored window on `--path` shown → frame with its
+    /// cached rows (B4), one per launch.
+    public var restoredCachedRows: [Double]
     /// `column-walk` scenario: each arrow key walking `--path` in column view → frame (B6).
     public var columnWalkKey: [Double]
     /// ↓ key → frame on W2, with the operations panel open, while the queue copies W8 to a disk
     /// image (B6). Only presses whose frame came before the copy finished.
     public var queueKeyDown: [Double]
+    /// `palette` scenario: a key typed in the palette's field → frame with the query's results,
+    /// ranked from `UIBenchOptions.paletteCandidates` items (B11).
+    public var paletteKey: [Double]
+    /// ↓ key → frame on W2 with the workspace sidebar shown, listing saved workspaces (B6).
+    public var sidebarDown: [Double]
+    /// The CI run's `restored-session` launches: process start → every restored window on screen
+    /// and the key window's focused pane showing rows (B1), one per launch. The scenario run on
+    /// its own keeps them in `launch`.
+    public var restoredSessionLaunch: [Double]
     /// Every run loop pass over the stall threshold (B10), all launches together.
     public var stalls: [Stall]
 
@@ -158,8 +170,9 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         foldersFirstToggle: [Double] = [], sortKey: [Double] = [], filterKey: [Double] = [],
         columnDown: [Double] = [], columnRight: [Double] = [], columnLeft: [Double] = [],
         splitDown: [Double] = [], gridDown: [Double] = [], tenPaneOpen: [Double] = [],
-        coldOpen: [Double] = [], revisit: [Double] = [], columnWalkKey: [Double] = [],
-        queueKeyDown: [Double] = [], stalls: [Stall] = []
+        coldOpen: [Double] = [], revisit: [Double] = [], restoredCachedRows: [Double] = [],
+        columnWalkKey: [Double] = [], queueKeyDown: [Double] = [], paletteKey: [Double] = [],
+        sidebarDown: [Double] = [], restoredSessionLaunch: [Double] = [], stalls: [Stall] = []
     ) {
         self.launch = launch
         self.openW1 = openW1
@@ -190,8 +203,12 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         self.tenPaneOpen = tenPaneOpen
         self.coldOpen = coldOpen
         self.revisit = revisit
+        self.restoredCachedRows = restoredCachedRows
         self.columnWalkKey = columnWalkKey
         self.queueKeyDown = queueKeyDown
+        self.paletteKey = paletteKey
+        self.sidebarDown = sidebarDown
+        self.restoredSessionLaunch = restoredSessionLaunch
         self.stalls = stalls
     }
 
@@ -226,9 +243,22 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         tenPaneOpen += other.tenPaneOpen
         coldOpen += other.coldOpen
         revisit += other.revisit
+        restoredCachedRows += other.restoredCachedRows
         columnWalkKey += other.columnWalkKey
         queueKeyDown += other.queueKeyDown
+        paletteKey += other.paletteKey
+        sidebarDown += other.sidebarDown
+        restoredSessionLaunch += other.restoredSessionLaunch
         stalls += other.stalls
+    }
+
+    /// Adds `other`, a `restored-session` launch's record, with its launch filed under
+    /// `restoredSessionLaunch`, so the CI run keeps it apart from its own launches.
+    public mutating func appendRestoredSession(_ other: UIBenchRecord) {
+        var restored = other
+        restored.restoredSessionLaunch += restored.launch
+        restored.launch = []
+        append(restored)
     }
 
     public func encoded() throws -> Data {

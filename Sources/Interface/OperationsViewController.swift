@@ -9,11 +9,16 @@ import Browser
 ///
 /// It asks to be shown (`onNeedsAttention`) when an operation is still unfinished
 /// `attentionDelay` after the panel first saw it, or finishes in trouble, so a short operation
-/// never brings it up (docs/decisions/0067-operations-panel.md).
+/// never brings it up. A copy whose rate so far leaves `longEstimate` or more to go asks at once,
+/// a tick after it is first sampled. Each operation asks at most once, so a panel the user closed
+/// stays closed until another operation asks (docs/decisions/0067-operations-panel.md).
 @MainActor
 final class OperationsViewController: NSViewController {
     /// How long an operation runs before the panel asks to be shown.
     static let attentionDelay: Duration = .seconds(1)
+    /// How much copying, estimated from the rate between two ticks, has the panel ask to be shown
+    /// before `attentionDelay`.
+    static let longEstimate: Duration = .seconds(2)
     /// The tallest the panel grows, about three rows; past it the rows scroll.
     static let maxHeight: CGFloat = 200
     /// The height of the line saying there are no operations.
@@ -50,6 +55,8 @@ final class OperationsViewController: NSViewController {
     private let formatter = EntryCellFormatter()
     /// Starts a wait of the given length on the clock, taking the deadline at once.
     private let startWait: @MainActor (Duration) -> @Sendable () async throws -> Void
+    /// The time on the clock since the panel was made.
+    private let elapsed: @MainActor () -> Duration
     private let stack = NSStackView()
     /// Holds `emptyLabel` as the panel's only row while there are no others.
     private let emptyRow = NSView()
@@ -61,6 +68,11 @@ final class OperationsViewController: NSViewController {
     private var waits: [FileOperationQueue.ID: Task<Void, Never>] = [:]
     /// Finished operations whose rows stay until cleared.
     private var kept: Set<FileOperationQueue.ID> = []
+    /// Each running copy's first tick with a total, to tell its rate from the next: when the
+    /// tick came, and the bytes copied by then.
+    private var samples: [FileOperationQueue.ID: (at: Duration, bytes: Int64)] = [:]
+    /// Unfinished operations the panel has asked to be shown for, by the wait or the estimate.
+    private var asked: Set<FileOperationQueue.ID> = []
 
     init<C: Clock<Duration>>(control: Control, clock: C = ContinuousClock()) {
         self.control = control
@@ -68,6 +80,8 @@ final class OperationsViewController: NSViewController {
             let deadline = clock.now.advanced(by: duration)
             return { try await clock.sleep(until: deadline, tolerance: nil) }
         }
+        let start = clock.now
+        elapsed = { start.duration(to: clock.now) }
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -95,10 +109,12 @@ final class OperationsViewController: NSViewController {
             row.show(snapshot)
             let phase = snapshot.state.phase
             if !phase.isFinished {
+                guard !asked.contains(id) else { continue }
                 if waits[id] == nil { waits[id] = wait(for: id) }
+                estimate(snapshot)
                 continue
             }
-            waits.removeValue(forKey: id)?.cancel()
+            forget(id)
             if OperationRowView.isTrouble(phase) {
                 if kept.insert(id).inserted { onNeedsAttention?() }
             } else {
@@ -106,7 +122,7 @@ final class OperationsViewController: NSViewController {
             }
         }
         for id in rows.keys where !listed.contains(id) && !kept.contains(id) {
-            waits.removeValue(forKey: id)?.cancel()
+            forget(id)
             removeRow(id)
         }
         showEmpty(wasEmpty: wasEmpty)
@@ -189,6 +205,42 @@ final class OperationsViewController: NSViewController {
         if rows.isEmpty, !wasEmpty { onEmptied?() }
     }
 
+    /// Drops the wait, sample and ask of a finished or vanished operation.
+    private func forget(_ id: FileOperationQueue.ID) {
+        waits.removeValue(forKey: id)?.cancel()
+        samples.removeValue(forKey: id)
+        asked.remove(id)
+    }
+
+    /// Asks to be shown for `id`, once: its wait and sampling stop.
+    private func ask(for id: FileOperationQueue.ID) {
+        asked.insert(id)
+        waits.removeValue(forKey: id)?.cancel()
+        samples.removeValue(forKey: id)
+        onNeedsAttention?()
+    }
+
+    /// Asks to be shown if the copy in `snapshot` has `longEstimate` or more to go at the rate
+    /// since its sample. Only a running copy with a total is sampled; a pause, or a tick without
+    /// bytes moving, starts the sampling over.
+    private func estimate(_ snapshot: FileOperationQueue.Snapshot) {
+        let id = snapshot.id
+        let progress = snapshot.state.progress
+        guard snapshot.state.phase == .running, let total = progress.total else {
+            samples.removeValue(forKey: id)
+            return
+        }
+        let now = elapsed()
+        let copied = progress.copied.bytes
+        guard let sample = samples[id], copied > sample.bytes, now > sample.at else {
+            samples[id] = (now, copied)
+            return
+        }
+        // Bytes left for each byte copied since the sample.
+        let ratio = Double(total.bytes - copied) / Double(copied - sample.bytes)
+        if (now - sample.at) * ratio >= Self.longEstimate { ask(for: id) }
+    }
+
     /// Asks to be shown if `id` is still unfinished once `attentionDelay` has passed.
     private func wait(for id: FileOperationQueue.ID) -> Task<Void, Never> {
         let wait = startWait(Self.attentionDelay)
@@ -200,10 +252,8 @@ final class OperationsViewController: NSViewController {
             } catch {
                 preconditionFailure("the clock failed a wait with \(error)")
             }
-            guard let self, !Task.isCancelled, waits.removeValue(forKey: id) != nil else {
-                return
-            }
-            onNeedsAttention?()
+            guard let self, !Task.isCancelled, waits[id] != nil else { return }
+            ask(for: id)
         }
     }
 }

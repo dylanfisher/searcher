@@ -5,18 +5,20 @@ import Browser
 /// a folder above the pane's reports it with the child on the way down, so the pane can select
 /// the folder it came from; Cmd-clicking any folder, the pane's own too, asks for it in a new tab.
 /// When the row doesn't fit, the folders between the ends shrink first. A segment under the mouse
-/// gets a rounded grey highlight, as in Finder's path bar.
+/// gets a rounded grey highlight and, if it was shrunk, its full width while the others give way,
+/// as in Finder's path bar. Which segment is under the mouse is read from the row as it lies with
+/// none expanded, so expanding one never moves the mouse onto another. A segment still shrunk has
+/// its full name as a tooltip.
 ///
 /// It shows only the location and volume name it's given, and no icons, so it makes no
 /// file-system call.
 @MainActor
 final class PathBarView: NSView {
-    static let height: CGFloat = 24
+    static let height: CGFloat = 28
     /// What VoiceOver calls the bar, before it reads the segments in it.
     static let label = "Path"
     /// The narrowest a segment gets before the ends shrink: about a letter and an ellipsis.
     static let minimumSegmentWidth: CGFloat = 32
-    private static let inset: CGFloat = 6
     /// How far the hover highlight reaches above and below a segment's title.
     private static let highlightOutset: CGFloat = 2
     /// Room on each side of a chevron, so it doesn't touch a highlight.
@@ -34,18 +36,29 @@ final class PathBarView: NSView {
 
     /// The location shown; nil until the first `show`.
     private(set) var location: Location?
-    private(set) var segments: [Segment] = []
+    private(set) var segments: [NSButton] = []
     private var rootVolumeName: String?
     private var ancestors: [Location] = []
     private var separators: [NSImageView] = []
 
     /// The index of the segment under the mouse, if any.
-    var hoveredSegment: Int? { segments.firstIndex(where: \.isHovered) }
+    private(set) var hoveredSegment: Int? {
+        didSet {
+            guard hoveredSegment != oldValue else { return }
+            needsDisplay = true
+            needsLayout = true
+        }
+    }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         // A row too long even at the minimum widths runs past the edge; keep it inside the bar.
         clipsToBounds = true
+        addTrackingArea(
+            NSTrackingArea(
+                rect: .zero,
+                options: [.mouseEnteredAndExited, .mouseMoved, .activeInActiveApp, .inVisibleRect],
+                owner: self))
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
         setAccessibilityLabel(Self.label)
@@ -65,19 +78,15 @@ final class PathBarView: NSView {
             view.removeFromSuperview()
         }
         ancestors = location.ancestors
+        hoveredSegment = nil
         segments = ancestors.enumerated().map { index, ancestor in
-            let button = Segment(
+            let button = NSButton(
                 title: index == 0 ? rootVolumeName : ancestor.name, target: self,
                 action: #selector(segmentClicked(_:)))
             button.isBordered = false
             button.font = Self.font
             button.lineBreakMode = .byTruncatingMiddle
             button.tag = index
-            button.addTrackingArea(
-                NSTrackingArea(
-                    rect: .zero,
-                    options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-                    owner: button))
             return button
         }
         guard
@@ -102,34 +111,75 @@ final class PathBarView: NSView {
         needsLayout = true
     }
 
-    override func layout() {
-        super.layout()
+    override func mouseEntered(with event: NSEvent) {
+        hover(at: convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        hover(at: convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        hoveredSegment = nil
+    }
+
+    /// Hovers the segment whose span holds `point` with no segment expanded, or none over a
+    /// separator or past the ends. Expanding a segment only shrinks the others, so its left edge
+    /// is at or left of where it lies unexpanded and its right edge at or right of it: the mouse
+    /// stays over the segment it expanded, and clicks reach that segment.
+    func hover(at point: NSPoint) {
+        let row = row(expanding: nil)
+        hoveredSegment = segments.indices.first {
+            point.x >= row.minXs[$0] && point.x < row.minXs[$0] + row.widths[$0]
+        }
+    }
+
+    /// The segments' widths and left edges with the one at `expanding` given its room, the
+    /// separators' sizes, and the segments' natural widths.
+    private func row(expanding: Int?) -> (
+        widths: [CGFloat], minXs: [CGFloat], separatorSizes: [NSSize], natural: [CGFloat]
+    ) {
         // A view's intrinsic size is its alignment rect, which can be smaller than the frame its
         // content needs, so each separator gets the frame around that rect.
         let separatorSizes = separators.map {
-            $0.frame(forAlignmentRect: NSRect(origin: .zero, size: $0.intrinsicContentSize)).size
+            let size = $0.frame(
+                forAlignmentRect: NSRect(origin: .zero, size: $0.intrinsicContentSize)
+            ).size
+            return NSSize(width: ceil(size.width) + 2 * Self.separatorPadding, height: size.height)
         }
-        let separatorWidths = separatorSizes.map { ceil($0.width) + 2 * Self.separatorPadding }
+        let natural = segments.map { ceil($0.intrinsicContentSize.width) }
         let widths = Self.widths(
-            natural: segments.map { ceil($0.intrinsicContentSize.width) },
-            available: bounds.width - 2 * Self.inset - separatorWidths.reduce(0, +),
-            minimum: Self.minimumSegmentWidth)
+            natural: natural,
+            available: bounds.width - 2 * BarInset.horizontal
+                - separatorSizes.map(\.width).reduce(0, +),
+            minimum: Self.minimumSegmentWidth, expanding: expanding)
+        var minXs: [CGFloat] = []
+        var x = BarInset.horizontal
+        for index in segments.indices {
+            if index > 0 {
+                x += separatorSizes[index - 1].width
+            }
+            minXs.append(x)
+            x += widths[index]
+        }
+        return (widths, minXs, separatorSizes, natural)
+    }
+
+    override func layout() {
+        super.layout()
+        let (widths, minXs, separatorSizes, natural) = row(expanding: hoveredSegment)
         let oldFrames = segments.map(\.frame)
         defer {
             // A highlight drawn at a segment's old frame would stay behind.
             if segments.map(\.frame) != oldFrames { needsDisplay = true }
         }
-        var x = Self.inset
         for (index, segment) in segments.enumerated() {
-            if index > 0 {
-                x += separatorWidths[index - 1]
-            }
+            segment.toolTip = widths[index] < natural[index] ? segment.title : nil
             // At its own height, so its baseline offset is where the title is drawn.
             let height = ceil(segment.intrinsicContentSize.height)
             segment.frame = NSRect(
-                x: x, y: floor((bounds.height - height) / 2), width: widths[index],
+                x: minXs[index], y: floor((bounds.height - height) / 2), width: widths[index],
                 height: height)
-            x += widths[index]
         }
         // Centered on the middle of a capital letter rather than on the bar, so the chevrons sit
         // level with the titles at any font size.
@@ -140,7 +190,7 @@ final class PathBarView: NSView {
             let height = ceil(separatorSizes[index].height)
             separator.frame = NSRect(
                 x: segments[index].frame.maxX, y: (textMiddle - height / 2).rounded(),
-                width: separatorWidths[index], height: height)
+                width: separatorSizes[index].width, height: height)
         }
     }
 
@@ -157,15 +207,17 @@ final class PathBarView: NSView {
 
     /// Each segment's width when `natural` must fit in `available`. The segments between the ends
     /// shrink to `minimum` first, the one nearest the root first, then the root, then the last.
-    /// Widths that still don't fit stay at the minimum, and the bar clips the row.
-    nonisolated static func widths(natural: [CGFloat], available: CGFloat, minimum: CGFloat)
-        -> [CGFloat]
-    {
+    /// Widths that still don't fit stay at the minimum, and the bar clips the row. The segment at
+    /// `expanding`, the hovered one, shrinks only after all the others are at the minimum.
+    nonisolated static func widths(
+        natural: [CGFloat], available: CGFloat, minimum: CGFloat, expanding: Int? = nil
+    ) -> [CGFloat] {
         var widths = natural
         var excess = natural.reduce(0, +) - available
         let order =
-            Array(natural.indices.dropFirst().dropLast()) + (natural.isEmpty ? [] : [0])
-            + (natural.count > 1 ? [natural.count - 1] : [])
+            (Array(natural.indices.dropFirst().dropLast()) + (natural.isEmpty ? [] : [0])
+            + (natural.count > 1 ? [natural.count - 1] : []))
+            .filter { $0 != expanding } + (expanding.map { [$0] } ?? [])
         for index in order where excess > 0 {
             let cut = min(excess, max(widths[index] - minimum, 0))
             widths[index] -= cut
@@ -182,22 +234,5 @@ final class PathBarView: NSView {
         }
         guard index < ancestors.count - 1 else { return }
         onSelect?(ancestors[index], ancestors[index + 1].name)
-    }
-
-    /// A folder in the bar. It tracks the mouse itself; the bar draws the highlight behind it, a
-    /// little taller than the title. A new path makes new segments, so a highlight never outlives
-    /// its folder.
-    final class Segment: NSButton {
-        private(set) var isHovered = false {
-            didSet { superview?.needsDisplay = true }
-        }
-
-        override func mouseEntered(with event: NSEvent) {
-            isHovered = true
-        }
-
-        override func mouseExited(with event: NSEvent) {
-            isHovered = false
-        }
     }
 }

@@ -7,7 +7,25 @@ import Foundation
 /// its own.
 @MainActor
 public final class Pane {
-    public private(set) var location: Location
+    public private(set) var location: Location {
+        didSet {
+            if location != oldValue { folderVisits?.visit(location) }
+        }
+    }
+    /// Counts a visit each time the pane moves to a folder, for the palette, once
+    /// `countVisits(in:countingThisFolder:)` sets it. Panes made from this one share it. A pane
+    /// without one, such as a column's, counts nothing; in column view the pane counts the
+    /// focused column's folder, which it follows.
+    public private(set) var folderVisits: FolderVisits?
+
+    /// Counts the pane's visits in `visits` from now on, and a visit to the folder it is in
+    /// unless `countingThisFolder` is false: a restored pane shows the folder it showed before,
+    /// which the user didn't go to. The pane's owner calls it once.
+    public func countVisits(in visits: FolderVisits, countingThisFolder: Bool = true) {
+        precondition(folderVisits == nil, "a pane's folder visits are set once")
+        folderVisits = visits
+        if countingThisFolder { visits.visit(location) }
+    }
     public private(set) var state = ListingState.loading {
         didSet {
             stateVersion += 1
@@ -79,6 +97,14 @@ public final class Pane {
     /// after any column changes. A column's pane reports to its trail here, so only the trail
     /// sets it.
     public var onChange: (@MainActor () -> Void)?
+    /// Runs when `onChange` does, for the tab holding the pane, so its workspace can save what
+    /// changed. The view owns `onChange`; the tab sets this.
+    var onTabChange: (@MainActor () -> Void)?
+
+    private func reportChange() {
+        onChange?()
+        onTabChange?()
+    }
 
     /// List or columns. Cmd-1 and Cmd-3 switch it.
     public private(set) var viewMode = ViewMode.list
@@ -95,7 +121,8 @@ public final class Pane {
     /// The folder's volume was unmounted, so the pane is offline and doesn't list the folder.
     private var volumeIsGone = false
 
-    let service: ListingService
+    /// Lists the pane's folders; the palette lists a typed path through it too.
+    public let service: ListingService
     /// The app-wide settings. The rows follow `showHidden` and `foldersFirst`: a change re-sorts
     /// them off the main actor, as a sort change does.
     public let settings: Settings
@@ -171,6 +198,24 @@ public final class Pane {
             viewMode: viewMode, rows: nil)
     }
 
+    /// A pane as `Tab.state` saved it: at its folder, in its view mode and sort, with its Back
+    /// and Forward history, listing the folder right away. The saved names are selected as the
+    /// rows bring them, and the full listing drops the ones the folder no longer has, as for any
+    /// selection made before its rows arrive. In column mode the one column at the folder
+    /// selects the saved cursor. A folder that isn't there shows the missing state
+    /// (`ListingState.missingFolder`).
+    public convenience init(
+        restoring saved: TabState.PaneState, service: ListingService,
+        systemActions: any SystemActions, settings: Settings
+    ) {
+        self.init(
+            location: saved.location, service: service, systemActions: systemActions,
+            settings: settings, sortedBy: saved.sortColumn, ascending: saved.sortAscending,
+            isFocused: false, selection: Selection(saved.selection, cursor: saved.cursor),
+            viewMode: saved.viewMode, rows: nil)
+        history = saved.history
+    }
+
     /// A pane that shows `rows`, a complete listing of `location` in list mode, and lists nothing
     /// until something asks it to; with no rows, it starts listing as above. In column mode the
     /// first column selects the selection's cursor.
@@ -213,6 +258,7 @@ public final class Pane {
             settings: settings, sortedBy: sorted.sortColumn, ascending: sorted.sortAscending,
             viewMode: viewMode)
         pane.folderSizes = folderSizes
+        if let folderVisits { pane.countVisits(in: folderVisits) }
         return pane
     }
 
@@ -236,6 +282,7 @@ public final class Pane {
             isFocused: rows != nil && takingFocus, selection: selected, viewMode: viewMode,
             rows: rows)
         pane.folderSizes = folderSizes
+        if let folderVisits { pane.countVisits(in: folderVisits) }
         pane.copiedFrom = self
         guard rows != nil else { return pane }
         pane.loadedAt = loadedAt
@@ -325,7 +372,7 @@ public final class Pane {
             viewMode = .column
             columnTrail = ColumnTrail(
                 owner: self, at: location, selecting: cursor, sortedLike: self)
-            onChange?()
+            reportChange()
         case .list:
             guard let trail = columnTrail else {
                 preconditionFailure("column mode without a trail")
@@ -345,7 +392,7 @@ public final class Pane {
     func trailDidChange() {
         guard let trail = columnTrail else { return }
         location = trail.focused.pane.location
-        onChange?()
+        reportChange()
     }
 
     /// Stops the pane's load, its folder monitor and anything pending for its rows, for good.
@@ -357,6 +404,7 @@ public final class Pane {
         columnTrail = nil
         containingTrail = nil
         onChange = nil
+        onTabChange = nil
         // Its closure can hold a command context, which holds this pane.
         namesToSelect = nil
     }
@@ -450,7 +498,7 @@ public final class Pane {
             // The new column lists the folder itself.
             pending.load.cancel()
             restartTrail()
-            onChange?()
+            reportChange()
             finish(nil)
             return
         }
@@ -481,7 +529,7 @@ public final class Pane {
             show(.loading, after: .loaded(complete: false))
             startLoad()
         }
-        onChange?()
+        reportChange()
     }
 
     /// Closes the columns and starts one at `location`, with the selection's cursor selected.
@@ -747,8 +795,9 @@ public final class Pane {
         }
         show(.loaded(listing), after: change, resolved: resolved, from: selectionVersion)
         selectNamesIfListed()
+        selectNextIfTrashLanded()
         startSortIfNeeded()
-        onChange?()
+        reportChange()
         startPatch()
         startSizeBatch()
     }
@@ -759,7 +808,7 @@ public final class Pane {
         sortColumn = column
         sortAscending = ascending
         startSortIfNeeded()
-        onChange?()
+        reportChange()
     }
 
     /// Takes the filter field's text at once and filters a copy of the rows off the main actor,
@@ -770,7 +819,7 @@ public final class Pane {
         filter = NameFilter(text)
         namesToSelect = nil
         startSortIfNeeded()
-        onChange?()
+        reportChange()
     }
 
     /// A view setting changed: the rows show or hide hidden entries, or put folders first, once
@@ -784,7 +833,7 @@ public final class Pane {
         }
         guard columnTrail == nil, !isClosed else { return }
         startSortIfNeeded()
-        onChange?()
+        reportChange()
     }
 
     /// Whether `listing` is in the pane's sort and shows what the settings ask for.
@@ -861,7 +910,8 @@ public final class Pane {
         guard version == stateVersion, isArranged(listing) else { return }
         show(state.showing(listing), after: change, resolved: resolved, from: selectionVersion)
         selectNamesIfListed()
-        onChange?()
+        selectNextIfTrashLanded()
+        reportChange()
     }
 
     /// Starts a load whose worker also resolves the selection, as it is now, against each listing
@@ -976,6 +1026,7 @@ public final class Pane {
             goOffline()
         }
         selectNamesIfListed()
+        selectNextIfTrashLanded()
         // A load that started before `setSort` arrives in the old sort, and shows in it until
         // this sort lands.
         startSortIfNeeded()
@@ -983,7 +1034,7 @@ public final class Pane {
             relistAfterLoad = false
             startLoad()
         }
-        onChange?()
+        reportChange()
     }
 
     /// The rows shown, as a slow or offline state keeps them.
@@ -1039,7 +1090,7 @@ public final class Pane {
         volumeIsGone = true
         cancelSizeWalks()
         goOffline()
-        onChange?()
+        reportChange()
     }
 
     /// A volume mounted at `location` or above it: lists the folder again, and asks for a new
@@ -1053,23 +1104,36 @@ public final class Pane {
         monitor = nil
         monitorGeneration += 1
         reload()
-        onChange?()
+        reportChange()
     }
 
     // MARK: - Selection
 
-    /// Selects what `selection` names, finding its rows in the listing shown.
-    public func select(_ selection: Selection) {
-        set(onMain { selection.resolved(in: state.listing, after: .sameEntries) })
+    /// Selects what `selection` names, finding its rows in the listing shown. `source` says
+    /// whether the change joins a run of changes in the selection history.
+    public func select(_ selection: Selection, as source: SelectionHistory.Source = .once) {
+        set(
+            onMain { selection.resolved(in: state.listing, after: .sameEntries) },
+            recordingAs: source)
     }
 
     /// Selects `rows` of the listing shown, as a click in the table gives them. They are named off
-    /// the main thread.
-    public func select(rows: IndexSet, cursor: ExactName?, anchor: ExactName?) {
+    /// the main thread. The rows, cursor and anchor already shown change nothing, so the table's
+    /// mouse-up report of what its mouse down reported is no second change.
+    public func select(
+        rows: IndexSet, cursor: ExactName?, anchor: ExactName?,
+        as source: SelectionHistory.Source = .once
+    ) {
         guard let listing = state.listing else {
             preconditionFailure("rows \(rows) were selected with no listing shown")
         }
-        set(Selection(rows: rows, in: listing, cursor: cursor, anchor: anchor))
+        if !selection.isProvisional, cursor == selection.cursor, anchor == selection.anchor,
+            rows == selection.rows(in: listing)
+        {
+            namesToSelect = nil
+            return
+        }
+        set(Selection(rows: rows, in: listing, cursor: cursor, anchor: anchor), recordingAs: source)
     }
 
     /// The selected rows of the listing shown. A provisional selection knows only the rows near
@@ -1118,16 +1182,22 @@ public final class Pane {
         wanted.selected?()
     }
 
-    /// Takes a selection already resolved against the listing shown.
-    private func set(_ selection: Selection) {
+    /// Takes a selection already resolved against the listing shown, keeping the one it replaces
+    /// in the selection history as made by `source`; nil for a step the history itself restores.
+    private func set(
+        _ selection: Selection, recordingAs source: SelectionHistory.Source? = .once
+    ) {
         // Selecting the rows already selected doesn't move the version, but is still the user's
         // choice over names a command is waiting to select.
         namesToSelect = nil
         guard selection != self.selection else { return }
+        if let source {
+            selectionHistory.record(self.selection, in: location, by: source)
+        }
         self.selection = selection
         selectionVersion += 1
         startSettlingIfNeeded()
-        onChange?()
+        reportChange()
     }
 
     /// Settles a copy of an unsettled selection off the main thread, one at a time. The pane
@@ -1179,7 +1249,10 @@ public final class Pane {
             return
         }
         selection = settled
-        onChange?()
+        // Settling moves no version, but a step can now equal the selection, which changes
+        // whether Undo and Redo Selection have a step left.
+        selectionStepsFound = StepsFound(state: -1, selection: -1)
+        reportChange()
     }
 
     /// Shows `state`, finding the selection's rows in its listing, which replaced the last one by
@@ -1227,15 +1300,19 @@ public final class Pane {
 
     /// Moves the cursor `delta` rows, stopping at the first and last row; see `Selection.moved`.
     /// A plain move selects the cursor's row alone; an extending one selects from the anchor.
-    public func moveSelection(by delta: Int, extending: Bool = false) {
+    /// `isKeyRepeat` says the key is held, so the move joins the key's step in the selection
+    /// history.
+    public func moveSelection(by delta: Int, extending: Bool = false, isKeyRepeat: Bool = false) {
         guard let listing = state.listing else { return }
-        set(onMain { selection.moved(by: delta, in: listing, extending: extending) })
+        set(
+            onMain { selection.moved(by: delta, in: listing, extending: extending) },
+            recordingAs: .move(by: delta, extending: extending, isRepeat: isKeyRepeat))
     }
 
     /// Moves the cursor `pages` screens of rows, `visibleRowCount` rows each.
-    public func moveSelection(byPages pages: Int) {
+    public func moveSelection(byPages pages: Int, isKeyRepeat: Bool = false) {
         // A pane squeezed below one row's height still moves a row per page.
-        moveSelection(by: pages * max(visibleRowCount, 1))
+        moveSelection(by: pages * max(visibleRowCount, 1), isKeyRepeat: isKeyRepeat)
     }
 
     public func selectFirstRow() {
@@ -1252,6 +1329,153 @@ public final class Pane {
     public func selectAll() {
         guard let listing = state.listing else { return }
         set(onMain { selection.all(in: listing) })
+    }
+
+    // MARK: - Selection undo
+
+    /// The selections before each change here, per folder, for Undo and Redo Selection. Tests
+    /// replace it with one on a clock they advance.
+    var selectionHistory = SelectionHistory()
+    /// `canUndoSelection` and `canRedoSelection` as last found, at the state and selection
+    /// versions they were found at. Menus ask on every key equivalent, and each answer resolves
+    /// steps against the rows; the history changes only with the selection version. Settling,
+    /// which moves neither version, drops them.
+    private var selectionStepsFound = StepsFound(state: -1, selection: -1)
+
+    private struct StepsFound {
+        let state: Int
+        let selection: Int
+        var back: Bool?
+        var forward: Bool?
+    }
+
+    /// Whether Undo Selection would change the selection: a step back here selects something
+    /// still listed other than the current selection.
+    public var canUndoSelection: Bool {
+        stepFound(\.back) { selectionHistory.canUndo(in: location, restoring: restorable) }
+    }
+
+    /// Whether Redo Selection would change the selection, as `canUndoSelection`.
+    public var canRedoSelection: Bool {
+        stepFound(\.forward) { selectionHistory.canRedo(in: location, restoring: restorable) }
+    }
+
+    /// Selects what was selected before the last change in this folder, with its cursor and
+    /// anchor, leaving out entries no longer listed. Skips steps that would select nothing
+    /// listed or what is selected now. Never navigates.
+    public func undoSelection() {
+        guard let step = selectionHistory.undo(selection, in: location, restoring: restorable)
+        else { return }
+        set(step, recordingAs: nil)
+    }
+
+    /// Selects what the last Undo Selection here stepped back from, skipping as it does.
+    public func redoSelection() {
+        guard let step = selectionHistory.redo(selection, in: location, restoring: restorable)
+        else { return }
+        set(step, recordingAs: nil)
+    }
+
+    /// `step` resolved against the rows shown, or nil when it would select nothing listed and
+    /// has no listed cursor, or would select what is selected now. A complete listing drops the
+    /// names it doesn't have. Work per entry of the step, on the main thread: a step is restored
+    /// at once, as a key's move is shown.
+    private func restorable(_ step: Selection) -> Selection? {
+        guard let listing = state.listing else { return nil }
+        let complete = if case .loaded = state { true } else { false }
+        let restored = onMain { step.resolved(in: listing, after: .loaded(complete: complete)) }
+        guard !restored.isEmpty || restored.cursorRow(in: listing) != nil,
+            restored != selection
+        else { return nil }
+        return restored
+    }
+
+    /// The answer kept in `selectionStepsFound` at `side`, or `find`'s, kept.
+    private func stepFound(
+        _ side: WritableKeyPath<StepsFound, Bool?>, _ find: () -> Bool
+    ) -> Bool {
+        var found = selectionStepsFound
+        if found.state != stateVersion || found.selection != selectionVersion {
+            found = StepsFound(state: stateVersion, selection: selectionVersion)
+        }
+        if let answer = found[keyPath: side] { return answer }
+        let answer = find()
+        found[keyPath: side] = answer
+        selectionStepsFound = found
+        return answer
+    }
+
+    // MARK: - The cursor after a trash
+
+    /// Set by Move to Trash: which trash it was, the cursor's entry, the entries after and before
+    /// the cursor's run of selected rows, and the selection version then. If the trashed entries
+    /// leave the rows before the selection changes otherwise, the cursor goes to the first of
+    /// those two still listed (`selectNextIfTrashLanded`).
+    private(set) var cursorAfterTrash:
+        (
+            trash: Int, selectionVersion: Int, cursor: ExactName, after: ExactName?,
+            before: ExactName?
+        )?
+    /// Counts the trashes `moveCursorPastSelectionOnceGone` noted.
+    private var trashCount = 0
+
+    /// Notes where the cursor goes once the selection, about to be trashed, leaves the rows: to
+    /// the row after the cursor's run of selected rows in the current sort, or the row before it
+    /// when the run ends the list. Does nothing on the press itself, since the rows go only when
+    /// the trash lands. Returns the trash's number, for `trashDidFinish`.
+    func moveCursorPastSelectionOnceGone() -> Int {
+        trashCount += 1
+        cursorAfterTrash = nil
+        guard let listing = state.listing, let cursor = selection.cursor,
+            let row = selection.cursorRow(in: listing),
+            let run = selectedRows.rangeView.first(where: { $0.contains(row) })
+        else { return trashCount }
+        cursorAfterTrash = (
+            trashCount, selectionVersion, cursor,
+            run.upperBound < listing.count ? ExactName(listing[run.upperBound].name) : nil,
+            run.lowerBound > 0 ? ExactName(listing[run.lowerBound - 1].name) : nil
+        )
+        return trashCount
+    }
+
+    /// Trash `trash` ended as `state` says. Unless it trashed or deleted the cursor's entry and
+    /// every other item, the cursor moves nowhere: a trash that failed, partly failed or was
+    /// cancelled at a question leaves nothing waiting for a row that may leave later for another
+    /// reason. A trash that worked keeps waiting, since the folder change it makes usually
+    /// arrives after it ends.
+    func trashDidFinish(_ trash: Int, _ state: OperationState) {
+        guard let pending = cursorAfterTrash, pending.trash == trash else { return }
+        let cursorPath = location.child(named: pending.cursor.name).path
+        let removedCursor = state.record.changes.contains { change in
+            switch change {
+            case .trashed(let path, _), .deleted(let path): path == cursorPath
+            case .created, .moved, .replaced, .putBack, .uncreated: false
+            }
+        }
+        if state.phase != .done || !removedCursor {
+            cursorAfterTrash = nil
+        }
+    }
+
+    /// Moves the cursor as `moveCursorPastSelectionOnceGone` noted, once the rows shown no longer
+    /// list the trashed cursor's entry and nothing is left selected. A selection changed since
+    /// the trash keeps the cursor where the user put it.
+    private func selectNextIfTrashLanded() {
+        guard let pending = cursorAfterTrash else { return }
+        guard pending.selectionVersion == selectionVersion else {
+            cursorAfterTrash = nil
+            return
+        }
+        guard let listing = state.listing, listing.row(named: pending.cursor.name) == nil,
+            selection.isEmpty
+        else { return }
+        cursorAfterTrash = nil
+        guard
+            let next = [pending.after, pending.before].compactMap({ $0 }).first(where: {
+                listing.row(named: $0.name) != nil
+            })
+        else { return }
+        select(Selection([next], cursor: next))
     }
 
     // MARK: - Folder sizes
@@ -1590,7 +1814,7 @@ public final class Pane {
         show(
             state.showing(listing), after: .sameEntries, resolved: resolved, from: selectionVersion)
         startSortIfNeeded()
-        onChange?()
+        reportChange()
     }
 
     /// `update` with `sizes` applied to its listing, on the load's worker, so a folder listed

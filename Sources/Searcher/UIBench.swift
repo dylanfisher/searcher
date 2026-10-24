@@ -15,7 +15,8 @@ import os
 /// keys (B8), then the keys of a filter query and the Esc that clears it (B7), then ↓ on W2 with
 /// the operations panel open while the queue copies W8 to a disk image the runner attached, so the
 /// copy crosses volumes and clones nothing (B6, and B10 from the copy's start to its end), then
-/// W2 in column view: ↓ through folder rows, each opening a column, and → and ← (B6), then ↓ in
+/// ↓ on W2 with the workspace sidebar shown, listing saved workspaces (B6), then W2 in column
+/// view: ↓ through folder rows, each opening a column, and → and ← (B6), then ↓ in
 /// the focused pane of a two-pane split and of a 4-pane grid (B6). Every launch ends by opening
 /// W2 in ten panes at once (B2), timed to the first frame after which the whole window, not only
 /// the focused pane, has nothing left to draw: the other panes' drawing can fall inside the
@@ -28,7 +29,9 @@ import os
 /// A launch for a scenario (`UIBenchOptions.Scenario`) times only that scenario's spans after
 /// the launch: column view on W2, the split cases on W2, or on a share's folder the runner names,
 /// opening subfolders cold (B3), opening them again to their cached rows (B4), or walking it in
-/// column view (B10).
+/// column view (B10), or typing palette queries over 50k folders (B11). The `restored-session`
+/// launch instead times the launch itself to a saved session's windows, rebuilt as a normal
+/// launch rebuilds them (B1).
 ///
 /// The window is never activated, so it never takes focus: it is ordered in front on the second
 /// display when there is one, and a window that isn't visible fails the run, since a covered
@@ -52,6 +55,8 @@ final class UIBench {
     static let filterQueryLength = 5
     /// ↓ presses at most in each column the `column-walk` scenario walks.
     static let columnWalkPresses = 100
+    /// Saved workspaces the sidebar lists while ↓ runs with it shown.
+    static let sidebarWorkspaces = 5
 
     /// The app's listing service in a bench launch.
     let service: ListingService
@@ -156,6 +161,14 @@ final class UIBench {
             fileOperations = makeQueue()
         }
         let settings = Settings(defaults: defaults)
+        if options.scenario == .restoredSession {
+            return try await restoreSession(
+                in: root, settings: settings, systemActions: systemActions)
+        }
+        if options.scenario == .restoredNetworkPane {
+            return try await restoreNetworkPane(
+                in: root, settings: settings, systemActions: systemActions)
+        }
         // The queue case opens and closes the panel with its key, around a copy that empties it.
         settings.hideEmptyOperationsPanel = false
         let controller = BrowserWindowController(
@@ -205,8 +218,390 @@ final class UIBench {
             for _ in 0..<UIBenchOptions.tenPaneOpens {
                 record.tenPaneOpen.append(try await openInTenPanes())
             }
+        case .palette:
+            try await typeInPalette()
+        case .restoredSession:
+            preconditionFailure("restored-session opens its own windows in restoreSession")
+        case .restoredNetworkPane:
+            preconditionFailure("restored-network-pane opens its own window in restoreNetworkPane")
         }
     }
+
+    // MARK: Palette
+
+    /// The `palette` scenario: opens the palette over the window with
+    /// `UIBenchOptions.paletteCandidates` folders added to its items, then types each of
+    /// `UIBenchOptions.paletteQueries` into its emptied field, each key timed from its timestamp
+    /// to the frame that shows the query's results (B11). The folders are made off the main
+    /// thread, untimed, before the palette opens, as a typed path's listing makes its items. The
+    /// panel is put over the window as Cmd-K puts it; the app stays inactive.
+    private func typeInPalette() async throws {
+        let items = await Task.detached { Self.paletteFolders() }.value
+        let controller = try requireController()
+        controller.showPalette(adding: [FixedPaletteSource(items: items)])
+        guard let palette = controller.palette, let panel = palette.window else {
+            throw Failure("the palette didn't open over the bench window")
+        }
+        let content = palette.viewController
+        // The first results, for the empty query, untimed; they may have shown already.
+        if content.shownQuery != "" {
+            try await paletteShows("", in: panel, content) {}
+        }
+        for query in UIBenchOptions.paletteQueries {
+            for length in 1...query.count {
+                let typed = String(query.prefix(length))
+                let event = try keyEvent(
+                    Key(characters: String(typed.suffix(1)), keyCode: 0, flags: []), in: panel)
+                let interval = begin(Self.paletteKeySpan)
+                record.paletteKey.append(
+                    try await paletteShows(
+                        typed, in: panel, content, timedFrom: event.timestamp, interval
+                    ) { panel.sendEvent(event) })
+            }
+            let delete = Key(characters: "\u{7F}", keyCode: 51, flags: [])
+            try await paletteShows("", in: panel, content) {
+                for _ in query {
+                    panel.sendEvent(try keyEvent(delete, in: panel))
+                }
+            }
+        }
+        palette.close()
+    }
+
+    private static let paletteKeySpan: StaticString = "palette key"
+
+    /// Runs `change`, then waits until the palette shows `query`'s results, and with `start`
+    /// times the frame that shows them, ending `interval` there.
+    @discardableResult
+    private func paletteShows(
+        _ query: String, in panel: NSWindow, _ content: PaletteViewController,
+        timedFrom start: TimeInterval? = nil, _ interval: OSSignpostIntervalState? = nil,
+        _ change: () throws -> Void
+    ) async throws -> Double {
+        guard panel.isVisible else { throw Failure("the palette's panel isn't on screen") }
+        return try await withCheckedThrowingContinuation { continuation in
+            content.onShow = { [self, weak content] in
+                guard let content, content.shownQuery == query else { return }
+                content.onShow = nil
+                guard let start, let interval else { return continuation.resume(returning: 0) }
+                timeFrame(from: start, in: panel, Self.paletteKeySpan, interval) {
+                    continuation.resume(returning: $0)
+                }
+            }
+            do {
+                try change()
+            } catch {
+                content.onShow = nil
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+
+    /// `UIBenchOptions.paletteCandidates` folders shaped like W3's package tree, as items the
+    /// palette ranks with every other source's.
+    private nonisolated static func paletteFolders() -> [PaletteItem] {
+        let packages = [
+            "react", "lodash", "babel-core", "webpack", "typescript", "eslint", "rxjs", "moment",
+            "express", "jest", "libxml", "postcss",
+        ]
+        let leaves = ["map", "index", "lib", "dist", "util", "test", "src"]
+        return (0..<UIBenchOptions.paletteCandidates).map { index in
+            let package = packages[index % packages.count]
+            let path =
+                "/w3/node_modules/\(package)-\(index / 1_000)/pkg/src/"
+                + "\(leaves[index % leaves.count])\(index)"
+            return PaletteItem(id: .folder(path: path), title: path) {}
+        }
+    }
+
+    // MARK: Restored session
+
+    /// Windows the `restored-session` launch rebuilds per window: W1 in every pane but one, which
+    /// is on W2.
+    static let restoredWindows = 3
+    static let restoredTabs = 2
+    /// Panes per tab, as a 2 × 2 grid.
+    static let restoredGrid = (columns: 2, rows: 2)
+
+    /// The `restored-session` launch's windows, kept for the rest of the launch.
+    private var restored: WorkspaceWindows?
+
+    /// The `restored-session` launch: writes a saved session into the temporary root's store,
+    /// as a quit would have left it, then reads it through the app's own store, off the main
+    /// actor, and rebuilds its windows through `WorkspaceWindows.restore`, as a launch does. B1
+    /// runs from the process start to the frame in which every window is on screen, with its
+    /// frame and tab strip, and the key window's focused pane shows rows. Writing the session is
+    /// inside that span, so the case times a little more than a launch does.
+    private func restoreSession(
+        in root: TempRoot, settings: Settings, systemActions: any SystemActions
+    ) async throws {
+        let roots = StoreRoots(
+            caches: root.folder.appending(path: "Caches"),
+            applicationSupport: root.folder.appending(path: "Application Support"))
+        let problems = OSAllocatedUnfairLock(initialState: [StoreProblem]())
+        let report: @Sendable (StoreProblem) -> Void = { problem in
+            problems.withLock { $0.append(problem) }
+        }
+        let (session, workspaces) = try restoredSessionFixture()
+        // Not synced to the disk: the app's own writes are, but a write that waits on the disk
+        // isn't part of the launch being timed.
+        let writer = WorkspaceStore(
+            roots: roots, report: report, write: { data, url in try data.write(to: url) })
+        for workspace in workspaces {
+            await writer.save(workspace)
+        }
+        await writer.saveSession(session)
+        await writer.flush()
+        let contents = await WorkspaceStore(roots: roots, report: report).load()
+        if let problem = problems.withLock({ $0.first }) {
+            throw Failure("the restored session's store reported a problem: \(problem)")
+        }
+        // A pasteboard of its own, so the bench never reads or writes the user's clipboard.
+        let pasteboard = NSPasteboard(
+            name: NSPasteboard.Name("searcher-bench-\(UUID().uuidString)"))
+        let windows = WorkspaceWindows(
+            service: service, systemActions: systemActions, settings: settings, folderSizes: nil,
+            clipboard: PasteboardFileClipboard(pasteboard: pasteboard), store: nil)
+        windows.showsWindows = false
+        restored = windows
+        guard let key = windows.restore(contents) else { throw Failure("nothing was restored") }
+        guard windows.controllers.count == workspaces.count else {
+            throw Failure(
+                "restored \(windows.controllers.count) of the \(workspaces.count) windows saved")
+        }
+        controller = key
+        key.paneViewController.onShow = { [weak self] in self?.paneShown() }
+        let shownWindows = try windows.list.workspaces.map { workspace in
+            guard
+                let window = windows.controllers.first(where: { $0.workspace === workspace })?
+                    .window
+            else { throw Failure("workspace \(workspace.id) has no window") }
+            return window
+        }
+        // Back to front, in front of other apps' windows, without activating the app or making
+        // a window key.
+        for window in shownWindows.reversed() {
+            window.orderFrontRegardless()
+        }
+        let window = try requireWindow()
+        window.makeFirstResponder(key.paneViewController.keyView)
+        LaunchWarmup.shared.start(after: window)
+        let shown: Result<Double, Failure> = await withCheckedContinuation { continuation in
+            whenShown = { [self] pane in
+                switch pane.state {
+                case .loading, .slow:
+                    return false
+                case .partial(let rows), .loaded(let rows), .cachedRefreshing(let rows, _):
+                    guard rows.count > 0 else { return false }
+                case .offline:
+                    continuation.resume(
+                        returning: .failure(Failure("\(pane.location.path) went offline")))
+                    return true
+                case .denied(let error), .failed(let error):
+                    continuation.resume(
+                        returning: .failure(
+                            Failure("\(pane.location.path) could not be listed: \(error)")))
+                    return true
+                }
+                timeFrame(from: processStart, in: window, UIBenchRecord.launchSpan, launchInterval)
+                {
+                    continuation.resume(returning: .success($0))
+                }
+                return true
+            }
+            // Rows that showed before the check was set.
+            paneShown()
+        }
+        record.launch.append(try shown.get())
+        let warmUpStart = ContinuousClock.now
+        for window in shownWindows {
+            try await waitUntilVisible(window)
+        }
+        await LaunchWarmup.shared.finished()
+        spans.append(TimedSpan(name: UIBenchRecord.warmUpSpan, start: warmUpStart, end: .now))
+    }
+
+    /// The session `restoreSession` writes, front window first: each window cascaded on the
+    /// bench's display, each tab a 2 × 2 grid on W1 with the second tab selected, and in the key
+    /// window, the front one, one unfocused pane of the selected tab on W2, so its load runs
+    /// beside the focused pane's.
+    private func restoredSessionFixture() throws -> (SessionState, [WorkspaceState]) {
+        let screens = NSScreen.screens
+        guard let screen = screens.count > 1 ? screens[1] : screens.first else {
+            throw Failure("no display to put the restored windows on")
+        }
+        let visible = screen.visibleFrame
+        let size = CGSize(width: 1000, height: 700)
+        let bounds = Rect(x: 0, y: 0, width: size.width, height: size.height)
+        var states: [WorkspaceState] = []
+        for window in 0..<Self.restoredWindows {
+            // The front window is the first, cascaded furthest down and right.
+            let step = CGFloat(Self.restoredWindows - 1 - window) * 40
+            let frame = CGRect(
+                x: visible.midX - size.width / 2 + step - 40,
+                y: visible.midY - size.height / 2 - step + 40, width: size.width,
+                height: size.height)
+            let tabs = try (0..<Self.restoredTabs).map { tab in
+                var layout = Layout()
+                guard
+                    layout.makeGrid(
+                        columns: Self.restoredGrid.columns, rows: Self.restoredGrid.rows,
+                        in: bounds) != nil
+                else { throw Failure("a \(size) window has no room for a 2 × 2 grid") }
+                let onW2 = window == 0 && tab == Self.restoredTabs - 1 ? layout.history.last : nil
+                let panes = Dictionary(
+                    uniqueKeysWithValues: layout.panes.map { id in
+                        let path = id == onW2 ? options.w2 : options.w1
+                        return (
+                            id,
+                            TabState.PaneState(
+                                location: Location(path: path), viewMode: .list,
+                                history: History(), selection: [], cursor: nil,
+                                sortColumn: .name, sortAscending: true)
+                        )
+                    })
+                return TabState(layout: layout, panes: panes)
+            }
+            states.append(
+                WorkspaceState(
+                    id: UUID(), name: nil, frame: Rect(frame), tabs: tabs,
+                    selectedTab: Self.restoredTabs - 1, showsSidebar: false))
+        }
+        let session = SessionState(workspaces: states.map(\.id), keyWindow: states[0].id)
+        return (session, states)
+    }
+
+    // MARK: Restored network pane
+
+    /// The `restored-network-pane` launch: lists `--path`, a folder on a share, once, untimed,
+    /// through a listing cache over a store in the temporary root, and writes the store's file,
+    /// as a session that showed the folder leaves it at quit. Then, as a launch does, reads a
+    /// saved session of one window on the folder, and the cache's volume files for its pane, off
+    /// the main actor, and rebuilds the window with `WorkspaceWindows.restore` over a new cache
+    /// and listing service. B4 runs from the window shown to the frame with its cached rows. The
+    /// folder's own rows first fail the run: the folder isn't on a network volume, or the cache
+    /// didn't keep it.
+    private func restoreNetworkPane(
+        in root: TempRoot, settings: Settings, systemActions: any SystemActions
+    ) async throws {
+        let path = options.w1
+        let roots = StoreRoots(
+            caches: root.folder.appending(path: "Caches"),
+            applicationSupport: root.folder.appending(path: "Application Support"))
+        let logged = OSAllocatedUnfairLock(initialState: [String]())
+        let log: @Sendable (String) -> Void = { line in logged.withLock { $0.append(line) } }
+        let filling = ListingCache(store: ListingCacheStore(roots: roots, log: log))
+        let listed: ListingUpdate = await withCheckedContinuation { continuation in
+            ListingService(cache: filling).load(Location(path: path)) { update in
+                switch update {
+                case .full, .failed, .volumeGone: continuation.resume(returning: update)
+                case .cached, .firstBatch, .slow, .gaveUp: break
+                }
+            }
+        }
+        guard case .full = listed else { throw Failure("listing \(path) ended \(listed)") }
+        await filling.flush()
+
+        let problems = OSAllocatedUnfairLock(initialState: [StoreProblem]())
+        let report: @Sendable (StoreProblem) -> Void = { problem in
+            problems.withLock { $0.append(problem) }
+        }
+        let layout = Layout()
+        let workspace = WorkspaceState(
+            id: UUID(), name: nil, frame: Rect(x: 0, y: 0, width: 1000, height: 700),
+            tabs: [
+                TabState(
+                    layout: layout,
+                    panes: [
+                        layout.focused: TabState.PaneState(
+                            location: Location(path: path), viewMode: .list, history: History(),
+                            selection: [], cursor: nil, sortColumn: .name, sortAscending: true)
+                    ])
+            ], selectedTab: 0, showsSidebar: false)
+        // Not synced to the disk, as in `restoreSession`.
+        let writer = WorkspaceStore(
+            roots: roots, report: report, write: { data, url in try data.write(to: url) })
+        await writer.save(workspace)
+        await writer.saveSession(SessionState(workspaces: [workspace.id], keyWindow: workspace.id))
+        await writer.flush()
+        let contents = await WorkspaceStore(roots: roots, report: report).load()
+        let cache = ListingCache(store: ListingCacheStore(roots: roots, log: log))
+        await cache.restore(contents)
+        if let problem = problems.withLock({ $0.first }) {
+            throw Failure("the restored session's store reported a problem: \(problem)")
+        }
+        if let line = logged.withLock({ $0.first }) {
+            throw Failure("the listing cache's store logged: \(line)")
+        }
+
+        // A pasteboard of its own, so the bench never reads or writes the user's clipboard.
+        let pasteboard = NSPasteboard(
+            name: NSPasteboard.Name("searcher-bench-\(UUID().uuidString)"))
+        let windows = WorkspaceWindows(
+            service: ListingService(cache: cache), systemActions: systemActions,
+            settings: settings, folderSizes: nil,
+            clipboard: PasteboardFileClipboard(pasteboard: pasteboard), store: nil)
+        windows.showsWindows = false
+        restored = windows
+        guard let key = windows.restore(contents) else { throw Failure("nothing was restored") }
+        controller = key
+        key.paneViewController.onShow = { [weak self] in self?.paneShown() }
+        let window = try requireWindow()
+        place(window)
+        // In front of other apps' windows, without activating the app or making it key.
+        window.orderFrontRegardless()
+        window.makeFirstResponder(key.paneViewController.keyView)
+        LaunchWarmup.shared.start(after: window)
+        // The launch, with the listing and the restore, ends as the window shows; its stalls
+        // are the launch's.
+        signposter.endInterval(UIBenchRecord.launchSpan, launchInterval)
+        spans.append(
+            TimedSpan(name: "\(UIBenchRecord.launchSpan)", start: spanStart, end: .now))
+        let start = FrameCommitTimer.now
+        let interval = begin(Self.restoredCachedRowsSpan)
+        let shown: Result<Double, Failure> = await withCheckedContinuation { continuation in
+            whenShown = { [self] pane in
+                switch pane.state {
+                case .loading, .slow:
+                    return false
+                case .cachedRefreshing(let rows, _):
+                    guard rows.count > 0 else {
+                        continuation.resume(
+                            returning: .failure(Failure("\(path)'s cached listing is empty")))
+                        return true
+                    }
+                case .partial, .loaded:
+                    continuation.resume(
+                        returning: .failure(
+                            Failure(
+                                "\(path) showed its own rows before cached ones: it isn't on a "
+                                    + "network volume, or the cache didn't keep it")))
+                    return true
+                case .offline:
+                    continuation.resume(returning: .failure(Failure("\(path) went offline")))
+                    return true
+                case .denied(let error), .failed(let error):
+                    continuation.resume(
+                        returning: .failure(Failure("\(path) could not be listed: \(error)")))
+                    return true
+                }
+                timeFrame(from: start, in: window, Self.restoredCachedRowsSpan, interval) {
+                    continuation.resume(returning: .success($0))
+                }
+                return true
+            }
+            // Rows that showed before the check was set.
+            paneShown()
+        }
+        record.restoredCachedRows.append(try shown.get())
+        let warmUpStart = ContinuousClock.now
+        try await waitUntilVisible(window)
+        await LaunchWarmup.shared.finished()
+        spans.append(TimedSpan(name: UIBenchRecord.warmUpSpan, start: warmUpStart, end: .now))
+    }
+
+    /// The span `restoreNetworkPane` times.
+    private static let restoredCachedRowsSpan: StaticString = "restored cached rows"
 
     /// Every span the CI run times after the launch.
     private func runCI() async throws {
@@ -234,6 +629,7 @@ final class UIBench {
         try await changeViewSettings()
         record.filterKey += try await typeFilter()
         record.queueKeyDown = try await pressDownWhileCopyingW8(options.keyPresses)
+        record.sidebarDown = try await pressDownWithSidebar(options.keyPresses)
         // It leaves the pane in column view with Folders First on.
         try await pressColumnKeys(options.keyPresses)
         // Last: they leave the window split.
@@ -392,6 +788,64 @@ final class UIBench {
             throw Failure("Cmd-Opt-L didn't close the operations panel")
         }
         return samples
+    }
+
+    /// Lists `sidebarWorkspaces` saved workspaces, shows the sidebar with its key, then presses ↓
+    /// `count` times on W2 (B6). A key in a pane runs no sidebar observer (decision 0086), so
+    /// this times what the shown sidebar adds to each frame. Hides the sidebar again, so the
+    /// cases after it have the window's full width.
+    private func pressDownWithSidebar(_ count: Int) async throws -> [Double] {
+        guard count > 0 else { return [] }
+        let controller = try requireController()
+        // Closed saved workspaces of the window's own tab, as a launch lists them.
+        let tabs = controller.workspace.tabs.map(\.state)
+        for number in 1...Self.sidebarWorkspaces {
+            try controller.workspaces.addSaved(
+                WorkspaceState(
+                    id: UUID(), name: "Bench \(number)",
+                    frame: Rect(x: 0, y: 0, width: 900, height: 600), tabs: tabs, selectedTab: 0,
+                    showsSidebar: false))
+        }
+        // The command's own chord, so the bench presses whatever the registry binds to it.
+        guard let chord = WorkspaceCommands.toggleSidebar.chords.first else {
+            throw Failure("\(WorkspaceCommands.toggleSidebar.title) has no chord to press")
+        }
+        let toggle = try Key.pressing(chord)
+        let width = try tabBounds().width
+        _ = try await press([toggle], "sidebar key")
+        guard controller.workspace.showsSidebar else {
+            throw Failure("\(chord) didn't show the sidebar")
+        }
+        try await waitUntilTabWidth("the sidebar to open") { $0 < width }
+        guard controller.window?.firstResponder === controller.paneViewController.keyView else {
+            throw Failure("showing the sidebar took the keys from the pane")
+        }
+        let samples = try await pressDown(count)
+        _ = try await press([toggle], "sidebar key")
+        try await waitUntilTabWidth("the sidebar to close") { $0 == width }
+        guard controller.window?.firstResponder === controller.paneViewController.keyView else {
+            throw Failure("hiding the sidebar left the keys outside the focused pane")
+        }
+        return samples
+    }
+
+    /// Waits until the tab's width meets `done` and stays the same over a drawn frame: the
+    /// sidebar's animation resizes it on every frame until it ends.
+    private func waitUntilTabWidth(
+        _ what: String, _ done: (Double) -> Bool
+    ) async throws {
+        let deadline = ContinuousClock.now + .seconds(2)
+        var last = try tabBounds().width
+        while true {
+            try await waitUntilDrawn()
+            let width = try tabBounds().width
+            if done(width), width == last { return }
+            last = width
+            guard ContinuousClock.now < deadline else {
+                throw Failure("waited 2 s for \(what); the panes are \(width) pt wide")
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
     }
 
     /// Presses ↓ `count` times on the list, each timed from the event's timestamp to the frame
@@ -1174,6 +1628,22 @@ final class UIBench {
         /// The key is read without Option, so "l".
         static let toggleOperations = Key(characters: "l", keyCode: 37, flags: [.command, .option])
 
+        /// A press of `chord`, a letter or punctuation key with modifiers. The key code is left at
+        /// 0: dispatch reads only the characters and the modifier flags
+        /// (`KeyChord.candidates(for:)`); only shifted punctuation reads the key itself.
+        static func pressing(_ chord: KeyChord) throws -> Key {
+            guard case .character(let character) = chord.key,
+                !(chord.modifiers.contains(.shift)
+                    && (character.isPunctuation || character.isSymbol))
+            else { throw Failure("the bench can't press \(chord) without its key code") }
+            var flags: NSEvent.ModifierFlags = []
+            if chord.modifiers.contains(.control) { flags.insert(.control) }
+            if chord.modifiers.contains(.option) { flags.insert(.option) }
+            if chord.modifiers.contains(.command) { flags.insert(.command) }
+            if chord.modifiers.contains(.shift) { flags.insert(.shift) }
+            return Key(characters: String(character), keyCode: 0, flags: flags)
+        }
+
         /// The character AppKit types for a function key such as `NSDownArrowFunctionKey`.
         private static func function(_ code: Int) -> String {
             String(Character(Unicode.Scalar(UInt32(code))!))
@@ -1607,4 +2077,17 @@ final class UIBench {
         let description: String
         init(_ description: String) { self.description = description }
     }
+}
+
+/// The `palette` scenario's folders, handed over on every key as a source that holds them in
+/// memory would.
+@MainActor
+private struct FixedPaletteSource: PaletteSource {
+    let items: [PaletteItem]
+
+    func gather(_ query: String, deliver: @escaping @MainActor ([PaletteItem]) -> Void) {
+        deliver(items)
+    }
+
+    func cancel() {}
 }

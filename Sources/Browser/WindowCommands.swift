@@ -3,7 +3,8 @@
 /// move a pane to a new one, and merge one into another. They change the model only; the windows
 /// show the result (docs/decisions/0054-tabs-in-window.md,
 /// docs/decisions/0057-windows-and-tear-out.md). Operations shows or hides the window's
-/// operations panel through the context.
+/// operations panel through the context, and Open Quickly shows the command palette
+/// (docs/decisions/0087-palette-window.md).
 public enum WindowCommands: CommandSet {
     /// Adds a tab after the selected one at the focused pane's folder, in its view mode and sort,
     /// and selects it.
@@ -52,18 +53,31 @@ public enum WindowCommands: CommandSet {
         id: CommandID("window.toggleOperations"), title: "Operations",
         chords: [KeyChord("l", modifiers: [.command, .option])])
 
+    /// Shows the command palette over the window: commands, saved workspaces, visited folders,
+    /// the folders open panes show and a typed path, to jump to or run.
+    public static let showPalette = Command(
+        id: CommandID("window.showPalette"), title: "Open Quickly…",
+        chords: [KeyChord("k", modifiers: .command)])
+
     public static var bindings: [CommandBinding] {
         [
+            CommandBinding(showPalette) { $0.showPalette() },
             CommandBinding(toggleOperations) { $0.toggleOperations() },
             CommandBinding(newWindow) { context in
                 let focused = context.tab.focusedPane
                 context.workspaces.add(
-                    Workspace(tab: Tab(pane: focused.newPane(at: focused.location))))
+                    Workspace(
+                        tab: Tab(pane: focused.newPane(at: focused.location)),
+                        showsSidebar: context.workspace.showsSidebar))
             },
             CommandBinding(
                 movePaneToNewWindow, isEnabled: { $0.workspace.paneCount > 1 },
                 run: { context in
-                    context.workspaces.add(Workspace(tab: context.workspace.removeFocusedPane()))
+                    let showsSidebar = context.workspace.showsSidebar
+                    context.workspaces.add(
+                        Workspace(
+                            tab: context.workspace.removeFocusedPane(),
+                            showsSidebar: showsSidebar))
                 }),
             CommandBinding(
                 mergeWindowIntoTab, isEnabled: { $0.workspaces.workspaces.count > 1 },

@@ -1,7 +1,7 @@
 /// The slowest copy rate a copy case may show, taken from a spike rather than the budget table:
 /// `Budget` holds the table's numbers alone, in ms and MB. A copy case's samples are the
-/// milliseconds each run took to copy `bytes`, so its p95, the slowest runs, is the rate judged,
-/// as the p95 is for the budgets.
+/// milliseconds each run took to copy `bytes`. S7's rate is a median of 5 runs and runs to an image
+/// swing about 2x, so the case's median is the rate judged, like with like; its p95 is reported.
 struct CopyFloor: Sendable, Equatable, Codable {
     /// Spike S7's `copyfile` with `COPYFILE_ALL | COPYFILE_CLONE`, the flags `FileCopier` uses,
     /// copying a 2 GiB file from the boot volume to an attached APFS image: 1197 MB/s in its

@@ -149,6 +149,21 @@ private let returnKey = "\r"
     #expect(fixture.field.isEditing)
 }
 
+/// Finder shows the field at once with a plain thin border; a focus ring would animate in.
+@MainActor @Test func theFieldHasNoFocusRingAndAPlainBorder() async throws {
+    let fixture = try await Fixture("song.flac")
+    defer { fixture.stop() }
+    await fixture.select("song.flac")
+
+    try fixture.press(returnKey)
+
+    let field = fixture.field.field
+    #expect(field.focusRingType == .none)
+    #expect(!field.isBezeled)
+    #expect(field.isBordered)
+    #expect(field.drawsBackground)
+}
+
 @MainActor @Test func aFolderNameIsSelectedWhole() async throws {
     let fixture = try await Fixture()
     defer { fixture.stop() }

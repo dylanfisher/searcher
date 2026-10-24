@@ -20,8 +20,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// never makes them.
     private lazy var windows = WorkspaceWindows(
         service: service, systemActions: systemActions, settings: settings,
-        folderSizes: folderSizes, clipboard: PasteboardFileClipboard(pasteboard: .general))
+        folderSizes: folderSizes, clipboard: PasteboardFileClipboard(pasteboard: .general),
+        store: workspaceStore, cache: cache)
     private let bench: UIBench?
+    /// The windows' workspaces and the session, in the user's application support folder; nil
+    /// in a bench launch.
+    private let workspaceStore: WorkspaceStore?
+    /// What `workspaceStore` reports it couldn't read or write, for the windows to show.
+    private let storeProblems: AsyncStream<StoreProblem>?
+    /// The store's read of the last session, then the listing cache's read of the volume files
+    /// its panes' folders are kept in, started as the app starts so they run off the main actor
+    /// while AppKit finishes launching; nil in a bench launch.
+    private let restoring: Task<WorkspaceStore.Contents, Never>?
+    /// The store's read of the palette's folder history, started beside the session's; nil in
+    /// a bench launch.
+    private let folderHistory: Task<FolderHistory, Never>?
 
     init(bench: UIBench?) {
         self.bench = bench
@@ -29,6 +42,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             cache = nil
             service = bench.service
             folderSizes = nil
+            workspaceStore = nil
+            storeProblems = nil
+            restoring = nil
+            folderHistory = nil
         } else {
             let roots: StoreRoots
             do {
@@ -49,13 +66,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 cache: FolderSizeCache(
                     store: store, debugLog: { dropLogger.debug("\($0, privacy: .public)") }),
                 log: { sizeLogger.error("\($0, privacy: .public)") })
+            let (problems, problemFeed) = AsyncStream.makeStream(of: StoreProblem.self)
+            storeProblems = problems
+            let workspaceStore = WorkspaceStore(roots: roots, report: { problemFeed.yield($0) })
+            self.workspaceStore = workspaceStore
+            restoring = Task {
+                let contents = await workspaceStore.load()
+                // Before any pane loads, so a restored pane on a share finds its rows in memory,
+                // and one on a share that isn't mounted finds them at all. Reads the cache's
+                // files and the mount table, never a share.
+                await cache.restore(contents)
+                return contents
+            }
+            folderHistory = Task { await workspaceStore.loadFolderHistory() }
         }
     }
 
-    /// Asks first while file operations are unfinished, and stays open on Cancel. Then cancels
-    /// the running file operations, so none leaves a partial item or a staging folder, and
-    /// writes the cache's unwritten saves before the app quits, so listings made in the last two
-    /// seconds outlive it. Quits after `quitLimit` whatever either is doing.
+    /// Asks first while file operations are unfinished, and stays open on Cancel. Then writes
+    /// the windows' workspaces and the session, so the next launch opens them as they are now,
+    /// cancels the running file operations, so none leaves a partial item or a staging folder,
+    /// and writes the cache's unwritten saves before the app quits, so listings made in the last
+    /// two seconds outlive it. Quits after `quitLimit` whatever any of them is doing.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // A bench launch has no cache and never makes the windows.
         guard let cache else { return .terminateNow }
@@ -66,6 +97,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let windows = windows
         Task {
             let limit = String(describing: Self.quitLimit)
+            // First: it takes a few small writes, and losing it loses the windows. Before the
+            // restore runs it writes nothing, so the session on disk stays for the next launch.
+            if windows.awaitsRestore {
+                Logger(category: "workspaces").notice(
+                    "quitting before the last session was restored; it stays as saved")
+            }
+            if !(await windows.saveBeforeQuit(by: deadline)) {
+                Logger(category: "workspaces").fault(
+                    "the windows weren't saved in \(limit, privacy: .public); quitting anyway")
+            }
             if !(await windows.cancelOperationsBeforeQuit(by: deadline)) {
                 Logger(category: "operations").fault(
                     "file operations didn't stop in \(limit, privacy: .public); quitting anyway")
@@ -80,7 +121,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         return .terminateLater
     }
 
-    /// How long quitting waits for file operations to stop and the listing cache to write.
+    /// How long quitting waits for the windows to be saved, file operations to stop and the
+    /// listing cache to write.
     private static let quitLimit: Duration = .seconds(2)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -91,9 +133,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         installMainMenu()
         VolumeNotifications.start()
-        let window = openHomeWindow()
-        NSApp.activate()
-        LaunchWarmup.shared.start(after: window)
+        guard let restoring, let folderHistory, let storeProblems else {
+            preconditionFailure("a launch that isn't a bench has no workspace store")
+        }
+        windows.follow(storeProblems: storeProblems)
+        // Until the restore runs, a quit or a window opened meanwhile saves nothing over the
+        // session being read.
+        windows.holdSavesUntilRestore()
+        Task {
+            // The store reads on its own actor, so the main thread waits on no file.
+            let contents = await restoring.value
+            let window = windows.restore(contents)?.window ?? openHomeWindow()
+            NSApp.activate()
+            LaunchWarmup.shared.start(after: window)
+        }
+        // The windows don't wait for it: visits counted before it arrives are added to it.
+        Task { windows.folderVisits.load(await folderHistory.value) }
     }
 
     /// Promised files still on their way when the app quits leave their hidden drop folders;
@@ -111,11 +166,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     /// A Dock click with no browser window open opens one. With a window open, even a minimized
-    /// one, AppKit's own handling brings it back.
+    /// one, AppKit's own handling brings it back. While the last session is being read, the
+    /// click waits for the restore, which opens the windows.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool)
         -> Bool
     {
-        guard bench == nil, windows.controllers.isEmpty else { return true }
+        guard bench == nil else { return true }
+        if windows.awaitsRestore { return false }
+        guard windows.opensWindowOnReopen else { return true }
         openHomeWindow()
         return false
     }

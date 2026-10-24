@@ -273,6 +273,42 @@ private func expectLeavesMatchPanes(_ tab: Tab) {
     tab.close()
 }
 
+/// A split copies the pane's sort; Select All in the copy selects every row.
+@MainActor @Test func tabStateKeepsEachPanesSelectionCursorAndSort() async throws {
+    let (tab, fixture) = makeTab()
+    await settle { fixture.pane.state.isLoaded }
+    fixture.select("a.txt", "docs")
+    fixture.pane.setSort(.size, ascending: false)
+    let held = try #require(tab.split(.horizontal, in: bounds))
+    held.selectAll()
+
+    let state = tab.state
+    let first = try #require(state.panes[tab.layout.history[1]])
+    #expect(first.selection == [ExactName("a.txt"), ExactName("docs")])
+    #expect(first.cursor == ExactName("docs"))
+    #expect(first.sortColumn == .size)
+    #expect(!first.sortAscending)
+    // Select All's selection names no entry, so the state lists the rows it holds.
+    let second = try #require(state.panes[tab.layout.focused])
+    #expect(second.selection == [ExactName("a.txt"), ExactName("docs")])
+    #expect(second.sortColumn == .size)
+    let decoded = try JSONDecoder().decode(TabState.self, from: JSONEncoder().encode(state))
+    #expect(decoded == state)
+    tab.close()
+}
+
+@MainActor @Test func tabStateNamesTheRowsOfAnAllExceptSelection() async throws {
+    let (tab, fixture) = makeTab()
+    await settle { fixture.pane.state.isLoaded }
+    fixture.pane.select(
+        Selection(.allExcept([ExactName("a.txt")]), cursor: ExactName("docs"), anchor: nil))
+
+    let pane = try #require(tab.state.panes[tab.layout.focused])
+    #expect(pane.selection == [ExactName("docs")])
+    #expect(pane.cursor == ExactName("docs"))
+    tab.close()
+}
+
 @MainActor @Test func tabStateWhosePanesDontMatchTheLayoutFailsToDecode() throws {
     let (one, _) = makeTab(held: true)
     let (other, _) = makeTab(held: true)

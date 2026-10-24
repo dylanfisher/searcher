@@ -45,6 +45,12 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
     /// Builds the context menu for a right-click on a row, or below the rows at -1. Set by the
     /// list's controller.
     var contextMenu: @MainActor (_ row: Int) -> NSMenu? = { _ in nil }
+    /// Whether the command running now came from a key held down, repeating. Set only while
+    /// `keyDown` runs it.
+    private(set) var runsKeyRepeat = false
+    /// Counts mouse presses in the table, so the selection changes of one press are one step of
+    /// the pane's selection history.
+    var pressCount = 0
     /// Signals a key that does nothing. Tests replace it.
     var beep: @MainActor () -> Void = { NSSound.beep() }
 
@@ -82,6 +88,8 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
                 return
             }
             if let command {
+                runsKeyRepeat = event.isARepeat
+                defer { runsKeyRepeat = false }
                 run(command.id)
                 return
             }
@@ -115,7 +123,8 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
     /// start of the pane's history, and so Undo, Redo, Cut, Copy and Paste. Its key still
     /// reaches `keyDown`, where the command does nothing. Other items sent here, such as Select
     /// All, stay enabled. Checks the item of the pane's current mode, such as "as Columns", and
-    /// gives Undo and Redo the titles that name the change.
+    /// gives an item whose command names what it would do its title now, such as Undo naming
+    /// the change or Hide Sidebar.
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if let action = [
             MainMenuBuilder.undo, MainMenuBuilder.redo, MainMenuBuilder.cut,
@@ -132,6 +141,9 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
         if let isCurrent = commandIsCurrent(id) {
             item.state = isCurrent ? .on : .off
         }
+        if let title = commandTitle(id) {
+            item.title = title
+        }
         return canRunCommand(id)
     }
 
@@ -140,6 +152,11 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
     override func menu(for event: NSEvent) -> NSMenu? {
         window?.makeFirstResponder(self)
         return contextMenu(row(at: convert(event.locationInWindow, from: nil)))
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        pressCount += 1
+        super.mouseDown(with: event)
     }
 
     override func becomeFirstResponder() -> Bool {

@@ -9,10 +9,13 @@ import Testing
 
 private let bounds = Rect(x: 0, y: 0, width: 1200, height: 800)
 
-/// A tab of one pane at `/r` whose load is held, so nothing finishes during a test.
+/// A tab of one pane at `/r` whose load is held, so nothing finishes during a test. It can
+/// navigate to `other`, whose load is held too.
 @MainActor
-private func heldTab() -> Tab {
-    Tab(pane: PaneFixture(at: "/r", folders: ["/r": []], held: true).pane)
+private func heldTab(leavingFor other: String? = nil) -> Tab {
+    var folders: [String: [DirectoryEntry]] = ["/r": []]
+    if let other { folders[other] = [] }
+    return Tab(pane: PaneFixture(at: "/r", folders: folders, held: true).pane)
 }
 
 @MainActor @Test func newWorkspaceSelectsItsOnlyTab() {
@@ -346,4 +349,39 @@ private func openPath(_ descriptor: Int32) -> String? {
     // The pane held the only copy of its listing.
     #expect(closed == nil)
     #expect(openPath(descriptor) != watched)
+}
+
+// MARK: Changes
+
+/// Each edit to what `WorkspaceState` keeps reports a change: the tabs, a tab's layout, and a
+/// pane's folder or selection, in a tab added later and in one moved in from another workspace.
+@MainActor @Test func workspaceReportsEachChangeToWhatItKeeps() async throws {
+    let fixture = PaneFixture(at: "/r", folders: ["/r": [file("a"), file("b")], "/s": []])
+    let workspace = Workspace(tab: Tab(pane: fixture.pane))
+    var changes = 0
+    workspace.onChange = { changes += 1 }
+    await settle { fixture.pane.state.isLoaded }
+    func expectChange(_ edit: () throws -> Void, sourceLocation: SourceLocation = #_sourceLocation)
+        rethrows
+    {
+        let before = changes
+        try edit()
+        #expect(changes > before, sourceLocation: sourceLocation)
+    }
+
+    expectChange { fixture.pane.select(Selection([ExactName("a")], cursor: ExactName("a"))) }
+    try expectChange { _ = try #require(workspace.selectedTab.split(.horizontal, in: bounds)) }
+    expectChange { workspace.selectedTab.setRatio(0.3, at: [], in: bounds) }
+    expectChange { workspace.selectedTab.toggleZoom() }
+    let added = heldTab(leavingFor: "/s")
+    expectChange { workspace.add(added) }
+    expectChange { added.focusedPane.navigate(to: Location(path: "/s")) }
+    expectChange { workspace.select(workspace.tabs[0].id) }
+    expectChange { workspace.move(added.id, to: 0) }
+    let other = Workspace(tab: heldTab(leavingFor: "/s"))
+    let moved = other.removeAllTabs()
+    expectChange { workspace.append(moved, selecting: moved[0].id) }
+    expectChange { moved[0].focusedPane.navigate(to: Location(path: "/s")) }
+    expectChange { workspace.close(added.id) }
+    workspace.closeAllTabs()
 }

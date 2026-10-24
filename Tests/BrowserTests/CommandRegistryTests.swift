@@ -68,6 +68,15 @@ private let open = Command(
     #expect(throws: CommandRegistry.Conflict.self) { try registry.register(second) }
     #expect(registry.command(for: CommandID("test.other")) == nil)
     #expect(registry.command(for: KeyChord(.left, modifiers: .command)) == nil)
+    #expect(registry.commands == [open])
+}
+
+@Test func commandsAreListedInTheOrderRegistered() throws {
+    var registry = CommandRegistry()
+    try registry.register(open)
+    try registry.register(goToParent)
+
+    #expect(registry.commands == [open, goToParent])
 }
 
 @Test func chordDescriptionListsModifiersInOneOrder() {

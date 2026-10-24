@@ -491,6 +491,121 @@ private final class NewFolderGate: @unchecked Sendable {
     }
 }
 
+// MARK: The cursor after a trash
+
+/// The real file system, except that a trash leaves the item where it is. The test removes it
+/// from the rows with a patch, as the folder monitor would once the item left.
+private var keepingTrashedItems: FileOperationQueue.FileSystem {
+    var fileSystem = FileOperationQueue.FileSystem.real
+    fileSystem.trash = { path in URL(fileURLWithPath: "/stub-trash/" + path) }
+    return fileSystem
+}
+
+/// A window over a folder of `a.txt` to `d.txt`, sorted by name, `ascending` or not.
+@MainActor
+private func fourFiles(ascending: Bool = true) async throws -> (Window, TemporaryFolder) {
+    let folder = try TemporaryFolder("FileCommandsTests")
+    try write("a.txt", "b.txt", "c.txt", "d.txt", in: folder.url.path)
+    let window = await Window(at: folder.url.path, fileSystem: keepingTrashedItems)
+    if !ascending {
+        window.pane.setSort(.name, ascending: false)
+        await settle { window.pane.state.listing?.ascending == false }
+    }
+    return (window, folder)
+}
+
+/// Removes `names` from the pane's rows, as the folder monitor reports a trash.
+@MainActor
+private func land(_ names: [String], in window: Window) async {
+    let version = window.pane.stateVersion
+    window.pane.apply(.patches(names.map { .remove(name: $0) }), at: window.pane.location)
+    await settle { window.pane.stateVersion != version }
+}
+
+@MainActor
+@Test(
+    arguments: [
+        // (sorted ascending, selected with the cursor on the last, rows trashed, now selected)
+        (true, ["b.txt"], "c.txt"),
+        (true, ["d.txt"], "c.txt"),
+        (true, ["b.txt", "c.txt"], "d.txt"),
+        (true, ["c.txt", "d.txt"], "b.txt"),
+        (false, ["c.txt"], "b.txt"),
+        (false, ["a.txt"], "b.txt"),
+    ])
+func aTrashedCursorRowHandsTheCursorToTheRowAfterItOnceItLeaves(
+    ascending: Bool, trashed: [String], next: String
+) async throws {
+    let (window, folder) = try await fourFiles(ascending: ascending)
+    defer { withExtendedLifetime(folder) {} }
+    window.pane.select(
+        Selection(Set(trashed.map(ExactName.init)), cursor: trashed.last.map(ExactName.init)))
+
+    try window.press(trash)
+    // Nothing moves on the press: the rows are still there.
+    #expect(window.pane.selection.cursor == ExactName(trashed.last!))
+
+    await land(trashed, in: window)
+
+    #expect(window.pane.selection == Selection([ExactName(next)], cursor: ExactName(next)))
+}
+
+@MainActor @Test func aCursorMovedBeforeTheTrashLandsStaysWhereTheUserPutIt() async throws {
+    let (window, folder) = try await fourFiles()
+    defer { withExtendedLifetime(folder) {} }
+    window.select("b.txt")
+    try window.press(trash)
+
+    window.select("a.txt")
+    await land(["b.txt"], in: window)
+
+    #expect(window.pane.selection == Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+}
+
+/// A click on another row and then on empty space before the trash lands empties the selection;
+/// it stays empty when the trashed row leaves.
+@MainActor @Test func aSelectionTheUserEmptiedBeforeTheTrashLandsStaysEmpty() async throws {
+    let (window, folder) = try await fourFiles()
+    defer { withExtendedLifetime(folder) {} }
+    window.select("b.txt")
+    try window.press(trash)
+
+    window.select("c.txt")
+    window.pane.select(Selection())
+    await land(["b.txt"], in: window)
+
+    #expect(window.pane.selection == Selection())
+}
+
+/// A trash that fails leaves nothing waiting, so the row leaving later for another reason, such
+/// as another app deleting it, leaves no cursor.
+@MainActor @Test func aFailedTrashLeavesNoCursorMoveForLater() async throws {
+    let folder = try TemporaryFolder("FileCommandsTests")
+    try write("a.txt", "b.txt", "c.txt", in: folder.url.path)
+    var fileSystem = FileOperationQueue.FileSystem.real
+    fileSystem.trash = { path throws(FileOperationError) in
+        throw FileOperationError(errno: EACCES, path: path)
+    }
+    let window = await Window(at: folder.url.path, fileSystem: fileSystem)
+    window.select("b.txt")
+
+    try window.press(trash)
+    await settle { window.pane.cursorAfterTrash == nil }
+    await land(["b.txt"], in: window)
+
+    #expect(window.pane.selection == Selection())
+}
+
+@MainActor @Test func aRowThatLeavesWithoutATrashLeavesNoCursor() async throws {
+    let (window, folder) = try await fourFiles()
+    defer { withExtendedLifetime(folder) {} }
+    window.select("b.txt")
+
+    await land(["b.txt"], in: window)
+
+    #expect(window.pane.selection == Selection())
+}
+
 // MARK: Trash on a volume
 
 /// Trashes only files the test makes on a disk image.

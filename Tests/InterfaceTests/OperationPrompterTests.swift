@@ -49,7 +49,8 @@ private func conflict(_ operation: Int) -> ConflictRequest {
     let item = ConflictRequest.Item(
         path: "/b/x.txt", isFolder: false, bytes: 1, modified: Date(timeIntervalSince1970: 0))
     return ConflictRequest(
-        operation: FileOperationQueue.ID(operation), source: item, existing: item, remaining: 0)
+        operation: FileOperationQueue.ID(operation), kind: .copy, source: item, existing: item,
+        remaining: 0)
 }
 
 @MainActor
@@ -68,14 +69,14 @@ private func ask(_ request: ConfirmRequest, of fixture: Fixture, into returned: 
 
     #expect(fixture.presented.count == 1)
     let first = try #require(fixture.confirmSheet)
-    #expect(first.messageLabel.stringValue.contains("one"))
+    #expect(first.alert.messageText.contains("one"))
 
     first.confirmButton.performClick(nil)
     await settle { returned.confirms == [true] && fixture.presented.count == 2 }
 
     #expect(fixture.dismissed.count == 1)
     let second = try #require(fixture.confirmSheet)
-    #expect(second.messageLabel.stringValue.contains("two"))
+    #expect(second.alert.messageText.contains("two"))
     second.cancelButton.performClick(nil)
     await settle { returned.confirms == [true, false] }
     #expect(fixture.prompter.shown == nil)
@@ -165,7 +166,7 @@ private func ask(_ request: ConfirmRequest, of fixture: Fixture, into returned: 
     Task { @MainActor in finished = await queue.perform(operation) }
     await settle { fixture.conflictSheet != nil }
 
-    try #require(fixture.conflictSheet).cancelButton.performClick(nil)
+    try #require(fixture.conflictSheet).stopButton.performClick(nil)
     await settle { finished != nil }
 
     #expect(finished?.phase == .cancelled(leftBehind: nil))

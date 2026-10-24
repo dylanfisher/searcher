@@ -1,0 +1,29 @@
+# shellcheck shell=bash
+# Sourced by scripts/check and scripts/test; not run directly.
+#
+# Gentle mode keeps the machine usable during a run. Enable it with `--gentle` as the
+# first argument or SEARCHER_GENTLE=1. It builds with half the logical CPUs (`--jobs`)
+# at utility priority; the test run is unchanged. Why, and what was rejected:
+# docs/decisions/0084-gentle-mode.md.
+#
+# swift_cmd <subcommand> [args...] runs `swift`; a build is throttled when gentle.
+
+if [ "${1:-}" = "--gentle" ]; then SEARCHER_GENTLE=1; shift; fi
+
+if [ "${SEARCHER_GENTLE:-}" = "1" ]; then
+  export SEARCHER_GENTLE
+  gentle_jobs=$(( $(sysctl -n hw.ncpu) / 2 ))
+  [ "$gentle_jobs" -ge 1 ] || gentle_jobs=1
+  swift_cmd() {
+    local sub="$1"; shift
+    if [ "$sub" = build ]; then taskpolicy -c utility swift build --jobs "$gentle_jobs" "$@"
+    else swift "$sub" "$@"; fi
+  }
+  # check sources this, then runs test, which sources it again: announce once.
+  if [ -z "${SEARCHER_GENTLE_ANNOUNCED:-}" ]; then
+    export SEARCHER_GENTLE_ANNOUNCED=1
+    echo "gentle mode: jobs $gentle_jobs, taskpolicy utility (build only)"
+  fi
+else
+  swift_cmd() { swift "$@"; }
+fi

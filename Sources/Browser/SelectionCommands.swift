@@ -1,6 +1,7 @@
 /// Row movement and selection: the arrows, Opt-, Ctrl-Shift- and Fn-arrows move the cursor and
 /// select its row alone, Shift-arrows extend the selection from the anchor, and Cmd-A selects
-/// every row. Type-to-select, which no chord runs, selects by name.
+/// every row. Type-to-select, which no chord runs, selects by name. Cmd-U and Shift-Cmd-U step
+/// back and forward through the pane's selections in the folder.
 public enum SelectionCommands: CommandSet {
     public static let selectNext = Command(
         id: CommandID("selection.next"), title: "Select Next Row", chords: [KeyChord(.down)])
@@ -33,18 +34,49 @@ public enum SelectionCommands: CommandSet {
         id: CommandID("selection.all"), title: "Select All",
         chords: [KeyChord("a", modifiers: .command)])
 
+    /// Sublime Text's soft undo: the selection before the last change in the folder, not a file
+    /// change (docs/decisions/0077-selection-history.md).
+    public static let undoSelection = Command(
+        id: CommandID("selection.undo"), title: "Undo Selection",
+        chords: [KeyChord("u", modifiers: .command)])
+    public static let redoSelection = Command(
+        id: CommandID("selection.redo"), title: "Redo Selection",
+        chords: [KeyChord("u", modifiers: [.command, .shift])])
+
     public static var bindings: [CommandBinding] {
         [
-            CommandBinding(selectNext) { $0.pane.moveSelection(by: 1) },
-            CommandBinding(selectPrevious) { $0.pane.moveSelection(by: -1) },
-            CommandBinding(extendDown) { $0.pane.moveSelection(by: 1, extending: true) },
-            CommandBinding(extendUp) { $0.pane.moveSelection(by: -1, extending: true) },
+            CommandBinding(
+                undoSelection, isEnabled: { $0.pane.canUndoSelection },
+                run: { $0.pane.undoSelection() }),
+            CommandBinding(
+                redoSelection, isEnabled: { $0.pane.canRedoSelection },
+                run: { $0.pane.redoSelection() }),
+            CommandBinding(selectNext) {
+                $0.pane.moveSelection(by: 1, isKeyRepeat: $0.isKeyRepeat)
+            },
+            CommandBinding(selectPrevious) {
+                $0.pane.moveSelection(by: -1, isKeyRepeat: $0.isKeyRepeat)
+            },
+            CommandBinding(extendDown) {
+                $0.pane.moveSelection(by: 1, extending: true, isKeyRepeat: $0.isKeyRepeat)
+            },
+            CommandBinding(extendUp) {
+                $0.pane.moveSelection(by: -1, extending: true, isKeyRepeat: $0.isKeyRepeat)
+            },
             CommandBinding(selectFirst) { $0.pane.selectFirstRow() },
             CommandBinding(selectLast) { $0.pane.selectLastRow() },
-            CommandBinding(tenRowsDown) { $0.pane.moveSelection(by: 10) },
-            CommandBinding(tenRowsUp) { $0.pane.moveSelection(by: -10) },
-            CommandBinding(pageDown) { $0.pane.moveSelection(byPages: 1) },
-            CommandBinding(pageUp) { $0.pane.moveSelection(byPages: -1) },
+            CommandBinding(tenRowsDown) {
+                $0.pane.moveSelection(by: 10, isKeyRepeat: $0.isKeyRepeat)
+            },
+            CommandBinding(tenRowsUp) {
+                $0.pane.moveSelection(by: -10, isKeyRepeat: $0.isKeyRepeat)
+            },
+            CommandBinding(pageDown) {
+                $0.pane.moveSelection(byPages: 1, isKeyRepeat: $0.isKeyRepeat)
+            },
+            CommandBinding(pageUp) {
+                $0.pane.moveSelection(byPages: -1, isKeyRepeat: $0.isKeyRepeat)
+            },
             CommandBinding(selectAll) { $0.pane.selectAll() },
         ]
     }
@@ -60,7 +92,7 @@ public enum SelectionCommands: CommandSet {
             let row = TypeSelect.firstRow(startingWith: query, in: listing)
         else { return false }
         let name = ExactName(listing[row].name)
-        context.pane.select(Selection([name], cursor: name))
+        context.pane.select(Selection([name], cursor: name), as: .typing)
         return true
     }
 }

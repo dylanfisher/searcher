@@ -157,14 +157,27 @@ public final class ListingService: Sendable {
         return load
     }
 
-    /// Runs on the load's `BlockingCallThread`. A folder under a mounted network volume gets its
-    /// cached rows before its own volume read, which blocks while the share doesn't answer.
+    /// Runs on the load's `BlockingCallThread`. A folder under a mounted network volume, or under
+    /// the mount point of a share a restored pane was on that isn't mounted, gets its cached rows
+    /// before its own volume read, which blocks while the share doesn't answer. For the share
+    /// that isn't mounted, the read then finds nothing there and the load ends `volumeGone`.
     private func place(_ load: ListingLoad) {
-        guard cache != nil, let mounted = mountedNetworkVolume(holding: load.location.path) else {
-            return readVolume(of: load, cachedFrom: nil)
+        guard let cache else { return readVolume(of: load, cachedFrom: nil) }
+        let path = load.location.path
+        if let mounted = mountedNetworkVolume(holding: path) {
+            return handCachedRows(of: load, on: mounted) {
+                self.readVolume(of: load, cachedFrom: mounted)
+            }
         }
-        handCachedRows(of: load, on: mounted) {
-            self.readVolume(of: load, cachedFrom: mounted)
+        let placed = Self.longestMount(holding: path, in: mountedVolumes())
+        guard let restored = cache.restoredVolume(holding: path),
+            restored.mountPoint.count > placed?.mountPoint.count ?? 0
+        else { return readVolume(of: load, cachedFrom: nil) }
+        // Remembered as a volume loads were on, so the read that finds nothing there reports
+        // the share gone rather than the folder.
+        networkVolumes.add(restored)
+        handCachedRows(of: load, on: restored) {
+            self.readVolume(of: load, cachedFrom: restored)
         }
     }
 
@@ -558,9 +571,9 @@ public final class ListingService: Sendable {
     }
 }
 
-/// The network volumes loads have been on, by mount point; the last one read at a mount point
-/// replaces the one before.
-private final class NetworkVolumes: @unchecked Sendable {
+/// Network volumes by mount point, such as those loads have been on; the last one added at a
+/// mount point replaces the one before.
+final class NetworkVolumes: @unchecked Sendable {
     // `lock` guards `byMountPoint`.
     private let lock = NSLock()
     private var byMountPoint: [String: VolumeIdentity] = [:]

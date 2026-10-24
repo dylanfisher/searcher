@@ -164,14 +164,14 @@ Calculate All Sizes is a view option, off by default, and folders show "--".
   (`SizeCommands.calculateAllSizes`, Finder's name) toggles it with a checkmark and persists it,
   as Folders First does. On, every list pane walks as before; off, the panes cancel running and
   waiting walks and drop the sizes shown. Kept sizes stay in `FolderSizeCache`.
-- **Calculate Sizes, ⌃⌘S** (`SizeCommands.calculateSizes`), replaces Recalculate Sizes. In a
+- **Calculate Sizes, ⌥⌘S** (`SizeCommands.calculateSizes`), replaces Recalculate Sizes. In a
   list pane it drops the kept sizes under the pane's folder with `recalculateSizes(under:)`, as
   Recalculate Sizes did, then walks the folder's subfolders. With the setting on that is all it
   does. With it off it walks them once, and the folder shows the sizes the cache keeps from then
   on; the pane side is in [0051](0051-folder-sizes-in-list.md)'s M4.22 amendment. It is off in
   column view, as before. One command because both cases mean "walk this folder now": with the
   setting off nothing is kept to recalculate, and two items for the same walk would differ only
-  by whether the setting is on. No other command has ⌃⌘S; Finder gives sizes no key.
+  by whether the setting is on. No other command has ⌥⌘S; Finder gives sizes no key.
 - **Throttled disk reads.** Each walk's `BlockingCallThread` calls
   `setiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_THREAD, IOPOL_THROTTLE)` before it reads
   (`FolderSizeService.throttleDiskReads()`), so a walk's reads wait while other I/O on the disk
@@ -199,3 +199,9 @@ other apps, by design; on an idle disk the throttle has no cost. A walk thread n
 QoS class, so the scheduler treats it as a legacy thread at priority 20 rather than a utility
 one, which can change which cores it runs on. The throttle applies to local disks; a share's
 reads go over the network and are paced by its one-walk cap as before.
+
+## Amendment: Calculate Sizes moves to Option-Command-S (2026-10-24)
+
+Calculate Sizes was on Control-Command-S. The sidebar takes that chord, as Finder's does
+([0086](0086-workspace-sidebar.md)), so Calculate Sizes is on Option-Command-S. No other command
+uses it and it is not a system-wide macOS shortcut.

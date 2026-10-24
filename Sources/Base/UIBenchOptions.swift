@@ -16,10 +16,29 @@ public struct UIBenchOptions: Sendable, Equatable {
         /// W2 in a split window: ↓ in the focused pane of two panes and of a 4-pane grid (B6),
         /// and ten panes opening W2 at once to the focused pane's first rows (B2).
         case splits
+        /// A cold launch restoring a saved session of 3 windows × 2 tabs × 4 panes on W1, one
+        /// pane on W2, to every window on screen and the key window's focused pane showing
+        /// rows (B1).
+        case restoredSession = "restored-session"
+        /// A launch restoring one window whose pane is on `--path`, a folder on a share, after
+        /// listing it once so the cache file holds it, to the frame with its cached rows (B4).
+        case restoredNetworkPane = "restored-network-pane"
+        /// The keys of palette queries over `paletteCandidates` folders, each to the frame that
+        /// shows its results (B11).
+        case palette
 
         /// Whether it times a real folder, `--path`, which it never defaults to.
-        public var needsPath: Bool { self != .columnKeys && self != .splits }
+        public var needsPath: Bool {
+            self != .columnKeys && self != .splits && self != .restoredSession
+                && self != .palette
+        }
     }
+
+    /// The items the `palette` scenario ranks on each key: B11's 50k candidates.
+    public static let paletteCandidates = 50_000
+    /// The queries the `palette` scenario types, each a key at a time into an empty field.
+    /// Letters most of its folders hold in order, so most candidates go through a full match.
+    public static let paletteQueries = ["srcmap", "nodpkg", "libidx", "srcmap", "nodpkg"]
 
     /// Times the `splits` scenario's one launch opens W2 in ten panes, for as many samples as the
     /// CI run's launches give, one each.

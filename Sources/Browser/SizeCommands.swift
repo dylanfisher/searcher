@@ -9,7 +9,7 @@ public enum SizeCommands: CommandSet {
         id: CommandID("size.calculateAll"), title: "Calculate All Sizes", chords: [])
     public static let calculateSizes = Command(
         id: CommandID("size.calculate"), title: "Calculate Sizes",
-        chords: [KeyChord("s", modifiers: [.control, .command])])
+        chords: [KeyChord("s", modifiers: [.option, .command])])
 
     public static var bindings: [CommandBinding] {
         [

@@ -46,11 +46,19 @@ private func copyReport(
         ])
 }
 
-@Test func copySlowerThanS7FailsTheRun() {
-    // 1 GB in 2 s is 500 MB/s, under S7's floor, at the p95.
-    let report = copyReport([1000, 1000, 2000])
+@Test func copyWithMedianUnderS7FailsTheRun() {
+    // 1 GB in 2 s is 500 MB/s, under S7's floor, at the median.
+    let report = copyReport([1000, 2000, 2000])
     #expect(!report.passed)
     #expect(report.overBudget.map(\.name) == ["copy"])
+}
+
+@Test func copyWithMedianOverS7PassesWhateverTheP95() {
+    // The median is 1000 MB/s, over the floor; the p95 is 500 MB/s, under it. S7's 792 is a
+    // median, so only the median is judged against it.
+    let report = copyReport([1000, 1000, 2000])
+    #expect(report.passed)
+    #expect(report.cases[0].p95 == 2000)
 }
 
 @Test func copyFasterThanS7Passes() {
@@ -59,15 +67,15 @@ private func copyReport(
 }
 
 @Test func copyCaseIsPrintedInMegabytesPerSecondAgainstS7() {
-    let text = line(for: copyReport([1000, 1000, 2000]).cases[0])
-    #expect(text.contains("median 1000.00 MB/s"), "\(text)")
+    let text = line(for: copyReport([1000, 2000, 2000]).cases[0])
+    #expect(text.contains("median 500.00 MB/s"), "\(text)")
     #expect(text.contains("p95 500.00 MB/s"), "\(text)")
     #expect(text.contains("floor S7 \(CopyFloor.s7.megabytesPerSecond) MB/s"), "\(text)")
     #expect(text.contains("OVER BUDGET"), "\(text)")
 }
 
 @Test func copySlowerThanS7OnCIIsReportedAndPasses() {
-    let report = copyReport([1000, 1000, 2000], environment: ["CI": "true"])
+    let report = copyReport([1000, 2000, 2000], environment: ["CI": "true"])
     #expect(report.passed)
     let text = line(for: report.cases[0])
     #expect(text.contains("p95 500.00 MB/s"), "\(text)")
@@ -81,4 +89,17 @@ private func copyReport(
 @Test func copyFasterThanS7OnCIIsNotMarked() {
     let text = line(for: copyReport([900, 1000, 1000], environment: ["CI": "true"]).cases[0])
     #expect(!text.contains("UNDER FLOOR"), "\(text)")
+}
+
+@Test func copyMissNamesTheMedianWhereverItIsPrinted() throws {
+    let copy = copyReport([2000, 2000, 3000])
+    let text = copy.cases[0].missText()
+    #expect(text.hasPrefix("over budget: copy median 2000"), "\(text)")
+    #expect(!text.contains("p95"), "\(text)")
+    let regression = RegressionReport(previous: nil, current: copy)
+    #expect(regression.text.contains("over budget: copy median"), "\(regression.text)")
+    let budgeted = BenchReport.Case(
+        name: "open", budget: try Budget.named("B10"), unit: .milliseconds,
+        samples: Samples([1000]))
+    #expect(budgeted.missText().hasPrefix("over budget: open p95 1000"), "\(budgeted.missText())")
 }

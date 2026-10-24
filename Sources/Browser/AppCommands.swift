@@ -10,6 +10,7 @@ public enum AppCommands {
         TilingCommands.self,
         DualPaneCommands.self,
         WindowCommands.self,
+        WorkspaceCommands.self,
         FileCommands.self,
         ClipboardCommands.self,
         UndoCommands.self,

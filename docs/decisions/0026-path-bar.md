@@ -34,22 +34,34 @@ name can't ride in the listing itself.
 - **Truncation.** The segments between the ends shrink first, the one nearest the root first,
   each down to 32 points; then the root, then the pane's folder. Titles truncate in the middle. A
   row too long even then is clipped at the bar's edge.
-- **Layout.** The list and the bar are pinned with constraints, the bar 24 points tall along the
-  pane's bottom. The pane's container starts at zero size, where frames set for autoresizing
-  can't hold the bar's height, and the list ended up 24 points taller than the pane.
+- **A truncated segment under the mouse** gets its full width, as in Finder's path bar: the bar
+  lays the row out again with that segment shrinking last, so the others give way in the usual
+  order and the row's ends stay put. The change is instant, with no animation. Which segment is
+  hovered is read from the mouse's x against the row with nothing expanded, never against the
+  row as it lies, so it depends on the mouse alone. Reading it from the expanded row oscillated:
+  expanding one segment could move the next under a still mouse, AppKit then reported the mouse
+  over that one, it expanded, and the first came back. Each segment still truncated after layout
+  has its full name as a tooltip, and the others have none (added 2026-10-23, M4.23).
+- **Inset.** The row starts 9 points from the bar's sides, `BarInset.horizontal`, which the
+  operations panel's rows share, so the first folder lines up with their text (2026-10-23; it
+  was 6 points).
+- **Layout.** The list and the bar are pinned with constraints, the bar 28 points tall along the
+  pane's bottom (24 until 2026-10-23, when Dylan asked for more room above and below). The pane's
+  container starts at zero size, where frames set for autoresizing can't hold the bar's height,
+  and the list ended up 24 points taller than the pane.
 - **Separators.** Each is the SF Symbol `chevron.right` at the titles' point size, small scale,
   in the tertiary label color, as in Finder's path bar. It is centered on the middle of a capital
   letter, measured from the first segment's baseline, rather than on the bar, so it stays level
   with the titles at any font size. Its frame is the one around its intrinsic size taken as an
   alignment rect. The "›" text labels this replaced were given their intrinsic width, 5 points,
   while the glyph needs 9 with the label's insets, so the glyph was clipped.
-- **Hover.** Each segment has its own tracking area (entered and exited, in the visible rect,
-  while the app is active) and keeps whether the mouse is over it. The bar draws a rounded
+- **Hover.** The bar has one tracking area (entered, exited and moved, in the visible rect,
+  while the app is active; until 2026-10-23 each segment had its own) and keeps which segment
+  the mouse is over; a separator or the ends hover none. The bar draws a rounded
   `quaternaryLabelColor` rectangle behind that segment, 2 points taller than the title above and
   below, as Finder does; the color is darker grey in light mode and lighter in dark. Segments keep
   their intrinsic height, because a taller button draws its title lower than its baseline offset
-  reports, which put the chevrons off center. A new path replaces the segments, which clears the
-  highlight.
+  reports, which put the chevrons off center. A new path clears the highlight.
 
 ## Alternatives considered
 
@@ -63,12 +75,22 @@ name can't ride in the listing itself.
   rows aren't there, which is what the plan rules out.
 - **Route the click through the command registry** — not yet: no command takes a target folder.
   M3.6a's open-in-new-tab command is where a path command would join the registry.
+- **A short animation for the expanding segment** — rejected: the segments would slide under the
+  mouse, and a tooltip or click mid-slide lands on a moving target.
+- **A tooltip only, no expanding** — rejected: Finder expands, and the tooltip waits for the
+  hover delay.
+- **A tracking area per segment** — replaced: each segment reported the mouse against its
+  current frame, so an expansion that moved a neighbor under the mouse handed the hover on.
 
 ## Consequences
 
 Every load, including a reload and a monitor's re-list, costs one more call off the main thread.
 A folder that fails to list moves the bar to it, so the bar and the error line agree. Until the
 first update of a pane lands, the bar is empty.
+
+A segment hovers while the mouse is inside its span in the unexpanded row, so the highlight can
+change while the mouse is still over the expanded segment's text, at the point where the next
+segment's unexpanded span starts.
 
 ## Open questions for Dylan
 

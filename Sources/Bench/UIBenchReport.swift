@@ -15,6 +15,8 @@ struct UIBenchReport {
     /// ↓ presses in the first launch, the count docs/performance.md times B6 over. Also the ↓
     /// presses through W2's first column in column view, and in the focused pane of a split.
     static let keyPresses = 500
+    /// Keys the `palette` scenario types: every letter of `UIBenchOptions.paletteQueries`.
+    static let paletteKeys = UIBenchOptions.paletteQueries.map(\.count).reduce(0, +)
     /// A launch that takes longer than this, in seconds, is stuck and is stopped.
     static let launchTimeout = 120
 
@@ -25,9 +27,13 @@ struct UIBenchReport {
     }
 
     /// A scenario is one launch: each times a span many times over, or opens folders that are
-    /// cold only once.
+    /// cold only once. A restored session times the launch itself, and a restored network pane
+    /// its restore, once per launch, so they launch as often as the CI run.
     static func launches(for scenario: UIBenchOptions.Scenario?) -> Int {
-        scenario == nil ? launches : 1
+        switch scenario {
+        case nil, .restoredSession, .restoredNetworkPane: launches
+        case .columnKeys, .cold, .revisit, .columnWalk, .splits, .palette: 1
+        }
     }
 
     /// The ↓ presses launch `launch` (from 0) of a run makes: the CI run's first launch and the
@@ -41,6 +47,10 @@ struct UIBenchReport {
     /// longest stall.
     let cases: [BenchReport.Case]
     static let copyStallCase = "longest stall while a W8 copy runs"
+    /// B1 with restored windows, in the `restored-session` scenario and in the CI run, which
+    /// times that scenario's launches after its own, so the history follows one case.
+    static let restoredSessionCase =
+        "launch → restored windows, key window's focused pane rows frame"
     /// Longest first.
     let stalls: [UIBenchRecord.Stall]
     /// B10 when stalls fail the run, nil when they are reported only.
@@ -90,7 +100,9 @@ struct UIBenchReport {
                     ("W2 sort key → frame", "B8", record.sortKey),
                     ("W2 filter key → frame", "B7", record.filterKey),
                     ("W2 ↓ key while a W8 copy runs → frame", "B6", record.queueKeyDown),
+                    ("W2 ↓ key with the sidebar shown → frame", "B6", record.sidebarDown),
                 ] + columnKeys + splits
+                + [(Self.restoredSessionCase, "B1", record.restoredSessionLaunch)]
         case .columnKeys:
             spans = columnKeys
         case .splits:
@@ -101,6 +113,19 @@ struct UIBenchReport {
             spans = [("revisit → cached rows frame", "B4", record.revisit)]
         case .columnWalk:
             spans = [("column walk key → frame", "B6", record.columnWalkKey)]
+        case .restoredSession:
+            spans = [(Self.restoredSessionCase, "B1", record.launch)]
+        case .restoredNetworkPane:
+            spans = [
+                ("restored window shown → cached rows frame", "B4", record.restoredCachedRows)
+            ]
+        case .palette:
+            spans = [
+                (
+                    "palette keystroke → frame, \(UIBenchOptions.paletteCandidates) candidates",
+                    "B11", record.paletteKey
+                )
+            ]
         }
         var cases = try spans.map { span in
             guard !span.samples.isEmpty else { throw NoSamples(span: span.name) }
