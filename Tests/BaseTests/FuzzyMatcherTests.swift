@@ -55,6 +55,11 @@ func aMissingLetterIsNoMatch(query: String) {
     #expect(matchedTexts("本", "日ʜʬ") == nil)
 }
 
+@Test func aLetterInsideAFoldedLigatureHighlightsTheLigature() {
+    #expect(matchedTexts("f", "ﬁle") == ["ﬁ"])
+    #expect(matchedTexts("il", "ﬁle") == ["ﬁl"])
+}
+
 @Test func aRunIsOneRange() {
     #expect(matchedTexts("down", "My Downloads") == ["Down"])
 }
@@ -113,14 +118,17 @@ private func score(_ query: String, _ candidate: String) -> Int? {
     FuzzyMatcher(query).score(FuzzyMatcher.Candidate(candidate))
 }
 
-/// Folder and app names a file-browser palette sees: initials of one name beat a prefix run.
-@Test func initialsOfOneNameRankAboveAPrefixRun() {
+/// Folder and app names a file-browser palette sees: initials of one name beat a prefix run of
+/// one or two letters, and from three letters the prefix wins.
+@Test func initialsOfOneNameRankAboveAShortPrefixRun() {
     #expect(
         ranked("gh", ["ghost", "Library/Highlights", "github", "GitHub"])
             == ["GitHub", "ghost", "github", "Library/Highlights"])
     #expect(
-        ranked("mvd", ["mvdir", "Movies/Downloads", "my-video-downloads"])
-            == ["my-video-downloads", "mvdir", "Movies/Downloads"])
+        ranked("mvd", ["Movies/Downloads", "my-video-downloads"])
+            == ["my-video-downloads", "Movies/Downloads"])
+    #expect(
+        ranked("mvd", ["mvdir", "my-video-downloads"]) == ["mvdir", "my-video-downloads"])
 }
 
 @Test func initialsInDifferentPathComponentsAreNotAChain() {
@@ -147,6 +155,59 @@ private func score(_ query: String, _ candidate: String) -> Int? {
     #expect(ranked("ab", ["ax-bx", "abc", "ab"]) == ["ab", "ax-bx", "abc"])
     #expect(ranked("docs", ["dx-ox-cx-sx", "projects/docs"]) == ["projects/docs", "dx-ox-cx-sx"])
     #expect(matchedTexts("docs", "docs/x/docs") == ["docs"])
+}
+
+/// Command and folder names: a typed prefix of three or more letters beats initials, and
+/// initials still win for one or two letters.
+@Test func aPrefixOfThreeLettersBeatsInitials() {
+    #expect(ranked("cop", ["Copy to Other Pane", "Copy"]) == ["Copy", "Copy to Other Pane"])
+    #expect(
+        ranked("pro", ["pdf-reader-online", "Projects/pdf-reader-online", "Projects"])
+            == ["Projects", "Projects/pdf-reader-online", "pdf-reader-online"])
+    #expect(
+        ranked("nw", ["New Tab", "New File", "Open in New Tab", "New Window"]).first
+            == "New Window")
+    #expect(
+        ranked("dp", ["Duplicate", "Desktop", "Toggle Dual Pane"]).first == "Toggle Dual Pane")
+}
+
+/// Scores as numbers, so a change to any bonus or penalty fails here.
+@Test(arguments: [
+    ("ab", "xab", 6),  // run
+    ("ab", "axb", 7),  // component start, gap inside a word
+    ("ab", "axxxxb", 7),
+    ("b", "x-bc", 8),  // word start
+    ("b", "x/bc", 10),  // component start
+    ("b", "aBc", 8),  // camel case
+    ("b", "ABc", 0),
+    ("ab", "a-xb", -5),  // gap into a later word
+    ("ab", "a-xxb", -6),
+    ("ab", "ax-xx-bx", 18),  // initials chain
+    ("ab", "a-xx-bx", 1),  // one-letter word, no chain
+    ("ab", "x/ab", 22),  // whole component, two letters
+    ("ab", "x/abc", 16),  // two-letter prefix: a run
+    ("abc", "abcd", 28),  // three-letter prefix
+    ("abc", "x/abc", 37),  // whole component, three letters
+    ("prj1", "Project 1", 4),
+    ("prj1", "pr-junk-1", 1),
+    ("gh", "GitHub", 18),
+    ("gh", "ghost", 16),
+])
+func scoresAreTheseNumbers(query: String, candidate: String, expected: Int) {
+    #expect(score(query, candidate) == expected)
+}
+
+/// Pairs one point apart, so moving newWordPenalty, gapBytePenalty or gapOpenPenalty by one in
+/// either direction ties them and the tie-break flips the order.
+@Test func rankingsOnePointApart() {
+    // newWordPenalty: 4 against 3, and 4 against 4 broken by length.
+    #expect(ranked("prj1", ["pr-ju-1", "Project 1"]) == ["Project 1", "pr-ju-1"])
+    #expect(ranked("prj1", ["Project 1", "pr-j-1"]) == ["pr-j-1", "Project 1"])
+    #expect(ranked("ab", ["a-bc", "x-axb"]) == ["x-axb", "a-bc"])
+    // gapBytePenalty: 4 against 3, the longer text first.
+    #expect(ranked("ab", ["a--bc", "a-bcxx"]) == ["a-bcxx", "a--bc"])
+    // gapOpenPenalty: 7 against 6, the later candidate first.
+    #expect(ranked("ab", ["xab", "axb"]) == ["axb", "xab"])
 }
 
 @Test func eachBonusAndPenaltyCounts() throws {
@@ -258,18 +319,19 @@ private func bruteForceScore(_ query: String, _ text: String) -> Int? {
         }
     }
     place(0, from: 0, [])
-    // The query as a whole path component.
+    // The query as a prefix of a path component, or as a whole one.
     let letters = query.count { $0 & 0xC0 != 0x80 }
     let m = query.count
     for start in units.indices
     where position(start) == .componentStart && start + m <= units.count
-        && (start + m == units.count || byte(start + m) == UInt8(ascii: "/"))
         && (0..<m).allSatisfy({ byte(start + $0) == query[$0] })
     {
-        let exact =
+        let isWhole = start + m == units.count || byte(start + m) == UInt8(ascii: "/")
+        let prefix =
             Int(M.componentStartBonus) + Int(M.runBonus) * (letters - 1)
-            + Int(M.exactComponentBonus) * letters
-        best = max(best ?? exact, exact)
+            + (letters >= M.prefixLetters ? Int(M.prefixBonus) * letters : 0)
+            + (isWhole ? Int(M.exactComponentBonus) * letters : 0)
+        best = max(best ?? prefix, prefix)
     }
     return best
 }
@@ -281,7 +343,7 @@ private func bruteForceScore(_ query: String, _ text: String) -> Int? {
         return Int(state >> 33) % bound
     }
     let textLetters = Array("aAbBx-/ é日ab-/")
-    let queryLetters = Array("abé日-")
+    let queryLetters = Array("abé日-/")
     for _ in 0..<20_000 {
         let text = String((0..<(1 + next(10))).map { _ in textLetters[next(textLetters.count)] })
         let query = String((0..<(1 + next(3))).map { _ in queryLetters[next(queryLetters.count)] })
