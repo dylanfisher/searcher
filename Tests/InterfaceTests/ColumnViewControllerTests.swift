@@ -26,10 +26,13 @@ private struct Fixture {
     let pane: Pane
     let controller: ColumnViewController
 
-    init(width: Double = 800, iconCache: TypeIconCache = TypeIconCache { _ in NSImage() }) async {
+    init(
+        width: Double = 800, iconCache: TypeIconCache = TypeIconCache { _ in NSImage() },
+        folders: [String: [DirectoryEntry]] = tree
+    ) async {
         pane = Pane(
             location: Location(path: "/r"),
-            service: ListingService(lister: StubLister(tree), rootVolumeName: { "Test Disk" }),
+            service: ListingService(lister: StubLister(folders), rootVolumeName: { "Test Disk" }),
             systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true,
             viewMode: .column)
         let controller = ColumnViewController(pane: pane, iconCache: iconCache, formatter: .init())
@@ -443,4 +446,76 @@ private struct LoadingThirdColumn {
     // → on a file does nothing.
     fixture.trail.moveRight()
     #expect(fixture.trail.focusedIndex == 2)
+}
+
+/// `/r` holding a file with a long name that has no spaces to wrap at.
+private let longName = String(repeating: "a", count: 120) + ".txt"
+
+/// A file in `/r` that has no size, as a socket has none.
+private let socket = DirectoryEntry(
+    name: "socket", type: .other, size: nil, modified: testDate, isHidden: false,
+    isDataless: false)
+
+@MainActor @Test func everyFieldStaysInsideThePreviewWidth() async throws {
+    var folders = tree
+    folders["/r"] = [file(longName)]
+    let fixture = await Fixture(folders: folders)
+    await fixture.select(longName, inColumn: 0)
+    let view = try #require(fixture.controller.previewView)
+
+    view.summaryField.stringValue =
+        "Portable Document Format (PDF) – 12.3 MB" + String(repeating: " and more", count: 6)
+    fixture.controller.view.layoutSubtreeIfNeeded()
+
+    let fields = try #require(view.accessibilityChildren() as? [NSTextField])
+    #expect(fields.count == 7)
+    // Laid out, and the name wrapped onto more than one line.
+    #expect(view.summaryField.frame.width > 100)
+    #expect(view.nameField.frame.height > 2 * view.summaryField.frame.height)
+    for field in fields {
+        let frame = field.convert(field.bounds, to: view)
+        #expect(frame.minX >= 0, "\(field.stringValue)")
+        #expect(frame.maxX <= view.bounds.width, "\(field.stringValue)")
+    }
+}
+
+@MainActor @Test func aPreviewTallerThanTheColumnScrollsVertically() async throws {
+    var folders = tree
+    folders["/r"] = [file(longName)]
+    let fixture = await Fixture(folders: folders)
+    await fixture.select(longName, inColumn: 0)
+    let view = try #require(fixture.controller.previewView)
+
+    fixture.controller.view.frame.size.height = 150
+    fixture.controller.view.layoutSubtreeIfNeeded()
+
+    let scrollView = view.scrollView
+    let document = try #require(scrollView.documentView)
+    #expect(scrollView.hasVerticalScroller)
+    #expect(!scrollView.hasHorizontalScroller)
+    #expect(document.frame.height > scrollView.contentSize.height)
+    let bottom = view.modifiedField.convert(view.modifiedField.bounds, to: document)
+    #expect(document.bounds.contains(bottom))
+}
+
+/// As Finder shows a socket: its kind, and no Size row.
+@MainActor @Test func aFileWithoutASizeShowsItsKindAndNoSizeRow() async throws {
+    var folders = tree
+    folders["/r"] = [file("a.txt"), socket]
+    let fixture = await Fixture(folders: folders)
+
+    await fixture.select("socket", inColumn: 0)
+
+    let view = try #require(fixture.controller.previewView)
+    let kind = try #require(fixture.trail.preview?.kind.text)
+    #expect(view.summaryField.stringValue == kind)
+    #expect(view.sizeField.isHidden)
+    let fields = try #require(view.accessibilityChildren() as? [NSTextField])
+    #expect(!fields.contains { $0 === view.sizeField })
+
+    await fixture.select("a.txt", inColumn: 0)
+
+    #expect(!view.sizeField.isHidden)
+    let shown = try #require(view.accessibilityChildren() as? [NSTextField])
+    #expect(shown.contains { $0 === view.sizeField })
 }

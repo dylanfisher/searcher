@@ -18,12 +18,19 @@ listing doesn't make.
 - **The preview is part of the trail, not a column.** `ColumnTrail.preview` is a
   `ColumnPreview`: the file's location, its `DirectoryEntry` and its `EntryKind`, all from the
   last column's listing. It is set when the last column's selection is one entry that isn't a
-  folder, and nil for a folder (which opens its column, as before), several rows or none. It
+  folder or a link, and nil for a folder (which opens its column, as before), a link, several
+  rows or none. It
   holds no `Pane`, lists, watches and takes the keys for nothing, so → on a file still does
   nothing.
 - **It follows the listing.** The trail recomputes it on each change the last column reports, so
   a patch to the file's size or date shows at once, and a removal, which drops the name from the
   selection, clears it. A rename shows the new name when the selection follows it.
+- **Links show no preview; special files do.** Open treats a link to a folder as its folder
+  (`Pane.openLink`), so such a link shows no preview, as a folder doesn't. Telling a link to a
+  folder from a link to a file takes a read, which the preview never makes, so no link shows
+  one; a link to a file loses Finder's preview until a read off the main thread (CV.3) can tell
+  them apart. A socket, device or FIFO shows a preview with its kind and no Size row, as Finder
+  shows one.
 - **Packages follow the trail.** The preview shows for what the trail doesn't open as a column.
   The listing reports a package such as an app as a folder, and Open and the trail treat it as
   one, so a package opens a column and shows no preview, unchanged by this step.
@@ -35,7 +42,9 @@ listing doesn't make.
 - **Layout follows Finder's preview.** The icon at the top, the name below it centered and
   wrapping, the kind and size in secondary text, then an Information section with Size and
   Modified rows, titles right-aligned in secondary text. Colors are system colors, so it follows
-  light and dark mode.
+  light and dark mode. Each field is held to the column's width: a long name wraps, breaking
+  inside a word that has no space, and a long kind or date truncates. In a window shorter than
+  the fields they scroll vertically, in a scroll view with no horizontal scrolling of its own.
 - **Scrolling.** The column view scrolls when the focus, the column count or whether a preview
   shows changes. The focused column's right-hand neighbor, kept in view where it fits, is the
   next column or, from the last column, the preview.

@@ -16,8 +16,8 @@ public final class ColumnTrail {
     unowned let owner: Pane
 
     public var focused: Column { columns[focusedIndex] }
-    /// The one file selected in the last column, shown to its right; nil for a folder, several
-    /// rows or none. It isn't a column: it lists, watches and takes the keys for nothing.
+    /// The one file selected in the last column, shown to its right; nil for a folder, a link,
+    /// several rows or none. It isn't a column: it lists, watches and takes the keys for nothing.
     public private(set) var preview: ColumnPreview?
 
     /// One column at `location` with `name` selected, sorted like `model`: the owner when the
@@ -126,12 +126,14 @@ public final class ColumnTrail {
 
     /// Previews the one file selected in the last column, as its listing has it now, so a patch
     /// to the file shows and a removal, which drops it from the selection, clears the preview.
-    /// A folder has its own column instead, and several rows or none show nothing.
+    /// A folder has its own column instead, and several rows or none show nothing. A link shows
+    /// nothing: Open treats a link to a folder as the folder, and telling one from a link to a
+    /// file takes a read.
     private func updatePreview() {
         var next: ColumnPreview?
         if let pane = columns.last?.pane, let listing = pane.state.listing,
             let row = pane.selection.cursorRow(in: listing),
-            listing[row].type != .directory,
+            listing[row].type != .directory, listing[row].type != .symbolicLink,
             pane.selection.rows(in: listing) == IndexSet(integer: row)
         {
             let entry = listing[row]
