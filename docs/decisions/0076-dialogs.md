@@ -1,4 +1,4 @@
-# 0076. Dialogs: one NSAlert path, sheets on the window they're about
+# 0076. Dialogs: one Dialog path, NSAlert sheets on the window they're about
 
 - **Date:** 2026-10-23
 - **Status:** accepted
@@ -17,11 +17,20 @@ keep what they did: one sheet at a time, queued, never blocking other windows
 
 ## Decision
 
-- **Every dialog is an `NSAlert`, built by `Dialog.alert`:** message text, informative text,
-  the app icon NSAlert puts in by default, and buttons in the order given. The first is the
-  default, which NSAlert places rightmost (or on top when it stacks three or more buttons) and
-  gives Return; `Dialog.cancel` ("Cancel") gets Esc. A button that loses data is marked with
-  `hasDestructiveAction`: Delete in delete-immediately, Replace in the conflict sheet.
+- **Every dialog goes through `Dialog`, and is an `NSAlert` from `Dialog.alert` wherever its
+  buttons fit NSAlert's layout:** message text, informative text, the app icon NSAlert puts in
+  by default, and buttons in the order given. The first is the default, which NSAlert places
+  rightmost (or on top when it stacks three or more buttons) and gives Return; NSAlert gives
+  Esc to the button titled `Dialog.cancel` ("Cancel"). Delete in delete-immediately is marked
+  with `hasDestructiveAction`.
+- **One exception, the name-conflict sheet, is a `Dialog.rowSheet`.** Finder asks this question
+  with four buttons in one row, and NSAlert stacks three or more buttons vertically on macOS 11
+  and later, so Finder parity needs a sheet NSAlert can't make. `rowSheet` lays it out like a
+  classic alert, from one place: the app icon at 64 pt on the left, the message bold at the
+  system size and the information at the small size in a 300 pt column, a checkbox under the
+  text when given, 20 pt margins, the buttons in a row along the bottom 12 pt apart with the
+  default rightmost, and the window sized to fit. The button it names for Esc takes the keys
+  under full keyboard access, as Cancel does in NSAlert.
 - **A question about a window's contents is a sheet on that window**, readied by
   `Dialog.sheet`: the alert's buttons send their action to the owner instead of ending the
   alert, and `NSAlert.layout()` sizes the window to its text, accessory view and buttons. The
@@ -29,11 +38,19 @@ keep what they did: one sheet at a time, queued, never blocking other windows
   keeps its queue and its `present` and `dismiss` hooks, and Go to folder decides when it
   closes. The quit question is not about one window, so it stays app-modal (`runModal`), built
   by `Dialog.alert` like the rest.
-- **Extra controls go in the alert, not in a new layout.** The conflict sheet's "Do the same for
-  N more conflicts" is the alert's suppression button with that title, shown only when more
-  follow; both items' size and date are two lines of informative text. Go to folder's path
-  field, with the reason line under it, is the accessory view; the reason line takes no room
-  while hidden, and showing or hiding it lays the alert out again.
+- **The conflict sheet as Finder asks it:** "An item named “X” already exists in this
+  location.", then "Do you want to replace it with the one you’re adding?", and the buttons
+  Keep Both, Stop, Skip, Replace from left to right. Replace is the default (Return), as in
+  Finder, and is not styled destructive, as Finder's isn't; Stop takes Esc and cancels the
+  operation. "Apply to All" shows only when more conflicts follow. Where it differs from
+  Finder: Finder says "the one you’re copying" or "moving", but a `ConflictRequest` doesn't
+  say which, so it says "adding"; Finder shows Skip only when several items are copied, but
+  the request counts only the conflicts still to come, so Skip always shows, which keeps the
+  last of several conflicts skippable; and both items' size and date stay as two lines under
+  the question, since they fit the layout and Finder offers no other way to compare them.
+- **Extra controls in an alert go in the alert.** Go to folder's path field, with the reason
+  line under it, is the accessory view; the reason line takes no room while hidden, and
+  showing or hiding it lays the alert out again.
 - **Keys:** the first responder is what NSAlert picks. With full keyboard access off, buttons
   never take focus, nothing shows a ring, Return presses the default and Esc presses Cancel.
   With it on, NSAlert focuses Cancel, so Space cancels and Return still confirms, as in every
@@ -53,9 +70,11 @@ keep what they did: one sheet at a time, queued, never blocking other windows
 - **`beginSheetModal(for:completionHandler:)`** — rejected: the alert would end on every press,
   and Go to folder must stay up while its folder lists or after it fails. Retargeting the
   buttons keeps one path for both kinds of sheet.
-- **A custom sheet for the conflict, with the buttons in one row as Finder lays them out** —
-  rejected: NSAlert stacks three or more buttons on macOS 11 and later, which is the system's
-  layout for this many choices, and both items' details fit in informative text.
+- **The conflict as an NSAlert with stacked buttons** — the first choice, replaced the same
+  day: Finder keeps its four buttons in one row with Replace the default, and Finder parity is
+  the rule for behavior questions.
+- **Pass the operation's kind in `ConflictRequest` to say "copying" or "moving"** — not now:
+  it changes the queue in Browser for one word.
 - **Make the default button the first responder** — rejected: NSAlert focuses Cancel under full
   keyboard access so Space never confirms by accident; overriding that would make this app's
   alerts behave unlike the system's.
@@ -63,6 +82,7 @@ keep what they did: one sheet at a time, queued, never blocking other windows
 ## Consequences
 
 A new question calls `Dialog.alert`, then `Dialog.sheet` if it goes on a window, and gets the
-platform's look and keys without layout code. Tests check an alert's text, buttons and key
-equivalents without showing it. NSAlert's narrow width wraps long lines, such as the conflict's
-item details; a wider alert would need an accessory view to set its width.
+platform's look and keys without layout code; only a question whose buttons must stay in one
+row uses `Dialog.rowSheet`, whose layout numbers are copied from the system and won't follow
+it if Apple changes the alert. Tests check each dialog's text, buttons, order and key
+equivalents without showing it.
