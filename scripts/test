@@ -9,9 +9,19 @@ source scripts/gentle
 # Command Line Tools ship the Swift Testing macro plugin in a subdirectory the
 # default build system misses on a cold build ("plugin for module
 # 'TestingMacros' not found"). Point at it explicitly when it exists.
-plugins="$(dirname "$(xcrun --find swift)")/../lib/swift/host/plugins/testing"
+swift_bin="$(xcrun --find swift)"
+plugins="$(dirname "$swift_bin")/../lib/swift/host/plugins/testing"
 flags=()
 [ -d "$plugins" ] && flags=(-Xswiftc -plugin-path -Xswiftc "$plugins")
+
+# Tests never play the alert sound: the BeepInterpose dylib replaces it and fails the test that
+# made it. dyld only interposes from an image loaded at launch, so the dylib is inserted into
+# the test processes, and only those, not the builds. It runs the toolchain's `swift`, not
+# /usr/bin/swift, because the system shim drops DYLD_* variables.
+# Reason: docs/decisions/0083-silent-tests.md.
+swift_cmd build "${flags[@]}" --product BeepInterpose
+beep_interpose="$(swift build --show-bin-path)/libBeepInterpose.dylib"
+swift_test() { DYLD_INSERT_LIBRARIES="$beep_interpose" "$swift_bin" test "$@"; }
 
 # The interface tests run one at a time, everything else in parallel. Reason and
 # measurements: docs/decisions/0064-serial-interface-tests.md. A focused run (any
@@ -22,11 +32,14 @@ serial="InterfaceTests"
 [ -z "${SEARCHER_GENTLE:-}" ] || swift_cmd build --build-tests "${flags[@]}"
 
 if [ $# -gt 0 ]; then
-  [ -n "${SEARCHER_GENTLE:-}" ] || exec swift test "${flags[@]}" "$@"
-  swift_cmd test "${flags[@]}" "$@"; exit $?
+  if [ -z "${SEARCHER_GENTLE:-}" ]; then
+    export DYLD_INSERT_LIBRARIES="$beep_interpose"
+    exec "$swift_bin" test "${flags[@]}" "$@"
+  fi
+  swift_test "${flags[@]}" "$@"; exit $?
 fi
 
 status=0
-swift_cmd test "${flags[@]}" --skip "$serial" || status=1
-swift_cmd test "${flags[@]}" --filter "$serial" --no-parallel || status=1
+swift_test "${flags[@]}" --skip "$serial" || status=1
+swift_test "${flags[@]}" --filter "$serial" --no-parallel || status=1
 exit "$status"
