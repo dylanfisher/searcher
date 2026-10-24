@@ -566,9 +566,10 @@ private final class WindowFixture {
     #expect(setup.controller.status.spinner.isHidden)
 
     // a.txt, b.txt, docs: the third row opens a second column, and → moves the keys into it.
+    // The column opens once the keys pause.
     for _ in 0..<3 { try setup.press(NSDownArrowFunctionKey) }
+    await settle { setup.pane.columnTrail?.columns.count == 2 }
     await setup.waitForColumns()
-    #expect(setup.pane.columnTrail?.columns.count == 2)
     try setup.press(NSRightArrowFunctionKey)
 
     let second = try #require(setup.controller.columnViewController.columnControllers.last)
@@ -801,6 +802,8 @@ private final class WindowFixture {
 
     try setup.press("d")
     #expect(first.tableView.typeSelect.query == "d")
+    // The folder typed to opens its column once the keys pause.
+    await settle { setup.pane.columnTrail?.columns.count == 2 }
     await setup.waitForColumns()
     let second = try #require(columns.columnControllers.last)
     #expect(second !== first)

@@ -76,4 +76,6 @@ makes a new column controller and table, starts that column's folder monitor at 
 closing the column before stops its monitor on the main thread through `Pane.close`. M2.11
 measures this in its column-view B6 case. If it misses the budget, the first fix to try is
 starting a column's monitor only after its first rows land, so a column passed over by a held
-key never starts one.
+key never starts one. (Superseded 2026-10-24: a key-made selection opens its column only once the
+keys pause, so a held key makes no column, and no monitor, per row; monitors still start with
+their column, see [0094](0094-column-open-delay.md).)

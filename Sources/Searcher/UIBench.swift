@@ -1236,10 +1236,11 @@ final class UIBench {
     }
 
     /// Times W2 in column view: `count` ↓ presses in its first column, sorted with Folders First
-    /// so each ↓ moves onto a folder and opens that folder's column, then → and ← alternating
-    /// `rowCommandPresses` times between the first column and the last folder's. W2's folders
-    /// are empty, so → moves the keys into an empty column. Checks the cursor, the columns and
-    /// the focus.
+    /// so each ↓ moves onto a folder, faster than the column-open pause, as a held key does, so
+    /// each times the selection's frame and only the last folder opens its column; then, once it
+    /// has, → and ← alternating `rowCommandPresses` times between the first column and the last
+    /// folder's. W2's folders are empty, so → moves the keys into an empty column. Checks the
+    /// cursor, the columns and the focus.
     private func pressColumnKeys(_ count: Int) async throws {
         guard count > 0 else { return }
         let pane = try requirePane()
@@ -1266,6 +1267,9 @@ final class UIBench {
         record.columnDown = try await press(
             Array(repeating: Key.down, count: count), "column key down")
         try expectCursor(atRow: count, in: first, after: "\(count) ↓ presses in column view")
+        // The presses come faster than the column-open pause, as a held key's do, so each timed
+        // the selection's frame; only the folder they stop on opens its column, after the pause.
+        try await waitForColumns(2, in: trail)
         guard trail.columns.count == 2,
             trail.columns[1].pane.location == first.location.child(named: listing[count].name)
         else {
@@ -1527,9 +1531,10 @@ final class UIBench {
 
     /// Opens `folder` in column view, sorted with Folders First, and walks it as a held key
     /// does: from its first row, ↓ to the last folder among its first `columnWalkPresses` rows,
-    /// each folder row opening a column whose folder lists while the next key comes; then → into
-    /// that folder once its rows land, ↓ through up to `columnWalkPresses` of them, and ← back.
-    /// Each key is timed to its frame (B6); the stalls of the walk are what it is for (B10).
+    /// faster than the column-open pause, so only that last folder opens its column, after the
+    /// pause; then → into that folder once its rows land, ↓ through up to `columnWalkPresses` of
+    /// them, and ← back. Each key is timed to its frame (B6); the stalls of the walk are what it
+    /// is for (B10).
     private func walkColumns(_ folder: String) async throws {
         _ = try await open(folder, "open share")
         try await waitUntilLoaded()
@@ -1559,6 +1564,7 @@ final class UIBench {
         record.columnWalkKey += try await press(
             Array(repeating: Key.down, count: lastFolder), "column walk key")
         try expectCursor(atRow: lastFolder, in: first, after: "\(lastFolder) ↓ presses in the walk")
+        try await waitForColumns(2, in: trail)
         guard trail.columns.count == 2 else {
             throw Failure(
                 "↓ onto \(listing[lastFolder].name) should open its column alone, but the columns "
@@ -1946,6 +1952,20 @@ final class UIBench {
             }
             guard ContinuousClock.now < deadline else {
                 throw Failure("\(pane.location.path) did not finish loading in 30 s")
+            }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
+    /// Waits for `trail` to show `count` columns, as it does once the keys pause for
+    /// `ColumnTrail.openDelay`.
+    private func waitForColumns(_ count: Int, in trail: ColumnTrail) async throws {
+        let deadline = ContinuousClock.now + .seconds(30)
+        while trail.columns.count != count {
+            guard ContinuousClock.now < deadline else {
+                throw Failure(
+                    "column view did not reach \(count) columns in 30 s: "
+                        + "\(trail.columns.map(\.pane.location.path))")
             }
             try await Task.sleep(for: .milliseconds(5))
         }
