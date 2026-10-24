@@ -177,6 +177,9 @@ public enum MainMenuBuilder {
                 // has the keys; Undo and Redo then name the change they would undo or redo.
                 .standard(undo),
                 .standard(redo),
+                // Sublime Text's soft undo keys; they step through selections, not file changes.
+                .command(SelectionCommands.undoSelection.id),
+                .command(SelectionCommands.redoSelection.id),
                 .separator,
                 .standard(cut),
                 .standard(copy),

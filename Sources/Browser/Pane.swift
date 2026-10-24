@@ -747,6 +747,7 @@ public final class Pane {
         }
         show(.loaded(listing), after: change, resolved: resolved, from: selectionVersion)
         selectNamesIfListed()
+        selectNextIfTrashLanded()
         startSortIfNeeded()
         onChange?()
         startPatch()
@@ -861,6 +862,7 @@ public final class Pane {
         guard version == stateVersion, isArranged(listing) else { return }
         show(state.showing(listing), after: change, resolved: resolved, from: selectionVersion)
         selectNamesIfListed()
+        selectNextIfTrashLanded()
         onChange?()
     }
 
@@ -976,6 +978,7 @@ public final class Pane {
             goOffline()
         }
         selectNamesIfListed()
+        selectNextIfTrashLanded()
         // A load that started before `setSort` arrives in the old sort, and shows in it until
         // this sort lands.
         startSortIfNeeded()
@@ -1058,18 +1061,31 @@ public final class Pane {
 
     // MARK: - Selection
 
-    /// Selects what `selection` names, finding its rows in the listing shown.
-    public func select(_ selection: Selection) {
-        set(onMain { selection.resolved(in: state.listing, after: .sameEntries) })
+    /// Selects what `selection` names, finding its rows in the listing shown. `source` says
+    /// whether the change joins a run of changes in the selection history.
+    public func select(_ selection: Selection, as source: SelectionHistory.Source = .once) {
+        set(
+            onMain { selection.resolved(in: state.listing, after: .sameEntries) },
+            recordingAs: source)
     }
 
     /// Selects `rows` of the listing shown, as a click in the table gives them. They are named off
-    /// the main thread.
-    public func select(rows: IndexSet, cursor: ExactName?, anchor: ExactName?) {
+    /// the main thread. The rows, cursor and anchor already shown change nothing, so the table's
+    /// mouse-up report of what its mouse down reported is no second change.
+    public func select(
+        rows: IndexSet, cursor: ExactName?, anchor: ExactName?,
+        as source: SelectionHistory.Source = .once
+    ) {
         guard let listing = state.listing else {
             preconditionFailure("rows \(rows) were selected with no listing shown")
         }
-        set(Selection(rows: rows, in: listing, cursor: cursor, anchor: anchor))
+        if !selection.isProvisional, cursor == selection.cursor, anchor == selection.anchor,
+            rows == selection.rows(in: listing)
+        {
+            namesToSelect = nil
+            return
+        }
+        set(Selection(rows: rows, in: listing, cursor: cursor, anchor: anchor), recordingAs: source)
     }
 
     /// The selected rows of the listing shown. A provisional selection knows only the rows near
@@ -1118,12 +1134,18 @@ public final class Pane {
         wanted.selected?()
     }
 
-    /// Takes a selection already resolved against the listing shown.
-    private func set(_ selection: Selection) {
+    /// Takes a selection already resolved against the listing shown, keeping the one it replaces
+    /// in the selection history as made by `source`; nil for a step the history itself restores.
+    private func set(
+        _ selection: Selection, recordingAs source: SelectionHistory.Source? = .once
+    ) {
         // Selecting the rows already selected doesn't move the version, but is still the user's
         // choice over names a command is waiting to select.
         namesToSelect = nil
         guard selection != self.selection else { return }
+        if let source {
+            selectionHistory.record(self.selection, in: location, by: source)
+        }
         self.selection = selection
         selectionVersion += 1
         startSettlingIfNeeded()
@@ -1229,7 +1251,9 @@ public final class Pane {
     /// A plain move selects the cursor's row alone; an extending one selects from the anchor.
     public func moveSelection(by delta: Int, extending: Bool = false) {
         guard let listing = state.listing else { return }
-        set(onMain { selection.moved(by: delta, in: listing, extending: extending) })
+        set(
+            onMain { selection.moved(by: delta, in: listing, extending: extending) },
+            recordingAs: .move(by: delta, extending: extending))
     }
 
     /// Moves the cursor `pages` screens of rows, `visibleRowCount` rows each.
@@ -1252,6 +1276,98 @@ public final class Pane {
     public func selectAll() {
         guard let listing = state.listing else { return }
         set(onMain { selection.all(in: listing) })
+    }
+
+    // MARK: - Selection undo
+
+    /// The selections before each change here, per folder, for Undo and Redo Selection. Tests
+    /// replace it with one on a clock they advance.
+    var selectionHistory = SelectionHistory()
+
+    public var canUndoSelection: Bool {
+        state.listing != nil && selectionHistory.canUndo(in: location)
+    }
+
+    public var canRedoSelection: Bool {
+        state.listing != nil && selectionHistory.canRedo(in: location)
+    }
+
+    /// Selects what was selected before the last change in this folder, with its cursor and
+    /// anchor. Entries no longer listed are left out. Never navigates.
+    public func undoSelection() {
+        guard state.listing != nil,
+            let step = selectionHistory.undo(selection, in: location)
+        else { return }
+        restore(step)
+    }
+
+    /// Selects what the last Undo Selection here stepped back from.
+    public func redoSelection() {
+        guard state.listing != nil,
+            let step = selectionHistory.redo(selection, in: location)
+        else { return }
+        restore(step)
+    }
+
+    /// Shows a step provisionally, the rows near its cursor, and settles it off the main thread,
+    /// as a selection changed while a load landed is: finding a large step's rows is work per
+    /// entry. A complete listing drops the names it doesn't have.
+    private func restore(_ step: Selection) {
+        guard let listing = state.listing else { return }
+        let complete = if case .loaded = state { true } else { false }
+        set(
+            onMain {
+                step.provisional(
+                    in: listing, after: .loaded(complete: complete),
+                    radius: max(visibleRowCount, 1))
+            }, recordingAs: nil)
+    }
+
+    // MARK: - The cursor after a trash
+
+    /// Set by Move to Trash: the cursor's entry, the entries after and before the cursor's run of
+    /// selected rows, and the selection version then. If the trashed entries leave the rows
+    /// before the selection changes otherwise, the cursor goes to the first of those two still
+    /// listed (`selectNextIfTrashLanded`).
+    private var cursorAfterTrash:
+        (selectionVersion: Int, cursor: ExactName, after: ExactName?, before: ExactName?)?
+
+    /// Notes where the cursor goes once the selection, about to be trashed, leaves the rows: to
+    /// the row after the cursor's run of selected rows in the current sort, or the row before it
+    /// when the run ends the list. Does nothing on the press itself, since the rows go only when
+    /// the trash lands.
+    func moveCursorPastSelectionOnceGone() {
+        cursorAfterTrash = nil
+        guard let listing = state.listing, let cursor = selection.cursor,
+            let row = selection.cursorRow(in: listing),
+            let run = selectedRows.rangeView.first(where: { $0.contains(row) })
+        else { return }
+        cursorAfterTrash = (
+            selectionVersion, cursor,
+            run.upperBound < listing.count ? ExactName(listing[run.upperBound].name) : nil,
+            run.lowerBound > 0 ? ExactName(listing[run.lowerBound - 1].name) : nil
+        )
+    }
+
+    /// Moves the cursor as `moveCursorPastSelectionOnceGone` noted, once the rows shown no longer
+    /// list the trashed cursor's entry and nothing is left selected. A selection changed since
+    /// the trash keeps the cursor where the user put it.
+    private func selectNextIfTrashLanded() {
+        guard let pending = cursorAfterTrash else { return }
+        guard pending.selectionVersion == selectionVersion else {
+            cursorAfterTrash = nil
+            return
+        }
+        guard let listing = state.listing, listing.row(named: pending.cursor.name) == nil,
+            selection.isEmpty
+        else { return }
+        cursorAfterTrash = nil
+        guard
+            let next = [pending.after, pending.before].compactMap({ $0 }).first(where: {
+                listing.row(named: $0.name) != nil
+            })
+        else { return }
+        select(Selection([next], cursor: next))
     }
 
     // MARK: - Folder sizes

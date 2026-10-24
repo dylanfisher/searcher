@@ -7,7 +7,9 @@ import Foundation
 /// the selected tab's `Layout.otherPane`, only once the user confirms, and are off with one pane.
 /// New Folder, Duplicate and a rename select what they made once the pane lists it, unless the
 /// selection changed first (docs/decisions/0066-file-commands.md). New Folder then edits the new
-/// folder's name, as Rename does (docs/decisions/0068-inline-rename.md).
+/// folder's name, as Rename does (docs/decisions/0068-inline-rename.md). Once Move to Trash
+/// lands, the cursor goes to the row after what it trashed, unless the selection changed first
+/// (docs/decisions/0077-selection-history.md).
 public enum FileCommands: CommandSet {
     public static let moveToTrash = Command(
         id: CommandID("file.moveToTrash"), title: "Move to Trash",
@@ -50,6 +52,7 @@ public enum FileCommands: CommandSet {
                     guard canChangeSelection(context), let queue = context.fileOperations else {
                         return
                     }
+                    context.pane.moveCursorPastSelectionOnceGone()
                     queue.submit(.trash(selectedPaths(in: context.pane)))
                 }),
             CommandBinding(
