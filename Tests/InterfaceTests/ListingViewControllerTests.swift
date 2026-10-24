@@ -440,6 +440,26 @@ private final class PressedTableView: ListingTableView {
     #expect(!pane.canUndoSelection)
 }
 
+/// The table reports by row the selection a key or command made by name; the same rows, cursor
+/// and anchor are no change and no step.
+@MainActor @Test func aReportOfTheSelectionANamedSelectionShowsChangesNothing() async throws {
+    let table = PressedTableView()
+    let controller = await controller(showing: [file("a"), file("b"), file("c")], tableView: table)
+    let pane = controller.pane
+    pane.select(Selection([ExactName("a")], cursor: ExactName("a")))
+    pane.select(Selection([ExactName("b")], cursor: ExactName("b")))
+    #expect(table.selectedRowIndexes == [1])
+    let version = pane.selectionVersion
+
+    table.pressUp()
+
+    #expect(pane.selectionVersion == version)
+    #expect(pane.selection == Selection([ExactName("b")], cursor: ExactName("b")))
+    pane.undoSelection()
+    #expect(pane.selection == Selection([ExactName("a")], cursor: ExactName("a")))
+    #expect(!pane.canUndoSelection)
+}
+
 /// A press on a row of a multi-row selection leaves the selection to the table until mouse up,
 /// so a drag takes every selected row; the mouse-down report changes nothing.
 @MainActor @Test func aPressInsideTheSelectionKeepsItForADrag() async throws {

@@ -562,6 +562,40 @@ func aTrashedCursorRowHandsTheCursorToTheRowAfterItOnceItLeaves(
     #expect(window.pane.selection == Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
 }
 
+/// A click on another row and then on empty space before the trash lands empties the selection;
+/// it stays empty when the trashed row leaves.
+@MainActor @Test func aSelectionTheUserEmptiedBeforeTheTrashLandsStaysEmpty() async throws {
+    let (window, folder) = try await fourFiles()
+    defer { withExtendedLifetime(folder) {} }
+    window.select("b.txt")
+    try window.press(trash)
+
+    window.select("c.txt")
+    window.pane.select(Selection())
+    await land(["b.txt"], in: window)
+
+    #expect(window.pane.selection == Selection())
+}
+
+/// A trash that fails leaves nothing waiting, so the row leaving later for another reason, such
+/// as another app deleting it, leaves no cursor.
+@MainActor @Test func aFailedTrashLeavesNoCursorMoveForLater() async throws {
+    let folder = try TemporaryFolder("FileCommandsTests")
+    try write("a.txt", "b.txt", "c.txt", in: folder.url.path)
+    var fileSystem = FileOperationQueue.FileSystem.real
+    fileSystem.trash = { path throws(FileOperationError) in
+        throw FileOperationError(errno: EACCES, path: path)
+    }
+    let window = await Window(at: folder.url.path, fileSystem: fileSystem)
+    window.select("b.txt")
+
+    try window.press(trash)
+    await settle { window.pane.cursorAfterTrash == nil }
+    await land(["b.txt"], in: window)
+
+    #expect(window.pane.selection == Selection())
+}
+
 @MainActor @Test func aRowThatLeavesWithoutATrashLeavesNoCursor() async throws {
     let (window, folder) = try await fourFiles()
     defer { withExtendedLifetime(folder) {} }

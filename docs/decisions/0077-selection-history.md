@@ -19,24 +19,35 @@ Undo (⌘Z) stays file changes only ([0072](0072-undo.md)).
   nothing to step to. They are `SelectionCommands`, held per pane in `SelectionHistory`, apart
   from `UndoHistory`.
 - **What a step is:** each change of the pane's selection (`Pane.set`) keeps the selection it
-  replaced. Changes the pane makes itself (resolving, settling, leaving a folder) aren't steps.
-  A new change ends the way forward. A selection with nothing selected and no cursor isn't kept,
-  so the empty selection a trash leaves isn't a step.
-- **Runs:** changes from one source, each within 1 s of the last (`TypeSelect.resetInterval`),
-  are one step. The sources are a row key's move (by its row count and whether it extends, so
-  ↓ held is one run and ↓ then ↑ two), a type-to-select query (the same 1 s ends a query), and
-  one mouse press in the table (counted in `ListingTableView.mouseDown`, so a drag across rows
-  is one step). Every other change is a step of its own. AppKit's key-repeat flag isn't used:
-  the command layer doesn't see the event, and taps of ↓ less than a second apart count as one
-  run too.
+  replaced. That includes selections the app makes: the cursor moved after a trash, and what
+  paste, New Folder, Duplicate, a rename or a drop select once listed. Changes the pane makes
+  while keeping the selection (resolving it against a reload, patch or sort, settling it,
+  leaving a folder) aren't steps. A new change ends the way forward. A selection with nothing
+  selected and no cursor isn't kept, so the empty selection a trash leaves isn't a step.
+- **Runs:** some changes join the step before them.
+  - A row key's repeats, sent while it is held (`NSEvent.isARepeat`, carried to the command as
+    `CommandContext.isKeyRepeat`), join the step of that key's press, however long they go on.
+    Each separate press is a step of its own, as each move is in Sublime Text, so three taps
+    of ↓ are three steps. A repeat joins only the same key's move (row count and whether it
+    extends).
+  - One mouse press in the table is one step, whatever it selects while the button is down and
+    however long it pauses. Presses are counted in `ListingTableView.mouseDown`.
+  - A type-to-select query is one step until a pause of 1 s, the pause that ends the query
+    (`TypeSelect.resetInterval`).
+  - Every other change is a step of its own.
 - **Per folder:** each folder has its own steps, kept for the 20 folders changed most
   recently, 100 steps each. ⌘U never navigates: in a folder with no steps it does nothing, and
   back in a folder its steps are still there. A split's or a column's pane starts with none.
-- **Restoring:** a step is shown provisionally and settled off the main thread, as a selection
-  changed under a landing load is, so a large one costs the main thread one screen of rows. A
-  complete listing drops the names it no longer has; the cursor is dropped with its entry.
-  Steps are kept by name without the listing Select All saw; a step taken before its click was
-  named keeps its rows and that listing until it is restored.
+- **Restoring and skipping:** a step is resolved against the rows shown; a complete listing
+  drops the names it no longer has, and the cursor goes with its entry. A step that would then
+  select nothing listed and has no listed cursor, or would select just what is selected now,
+  is skipped and dropped, and ⌘U goes on to the next. The items grey out when no step is left
+  that would change the selection. Steps are kept by name without the listing Select All saw;
+  a step taken before its click was named keeps its rows and that listing until it is
+  restored.
+- **Cost:** resolving a step is work per entry on the main thread, as a key's move is shown at
+  once. The menus ask whether a step is left on each key equivalent, so the pane keeps the
+  answer until its rows or selection change.
 
 ### The cursor after a trash
 
@@ -46,7 +57,11 @@ the rows no longer list the cursor's entry and nothing is left selected, the cur
 selection go to the row after, or the row before when the run ended the list. A run is the
 cursor's block of adjacent selected rows; with several blocks, the row after the cursor's. Any
 other change of the selection between the press and the landing cancels it, so a cursor the
-user moved stays. A row that leaves without a trash, such as one deleted in another app, still
+user moved, or a selection emptied with a click on empty space, stays. When the trash ends, it
+stays waiting only if the trash worked and trashed or deleted the cursor's entry: its folder
+change usually arrives after the operation ends. A trash that failed, partly failed or was
+cancelled at a question cancels it, so a row that leaves later for another reason moves
+nothing. A row that leaves without a trash, such as one deleted in another app, still
 leaves no cursor. A trash that falls back to deleting immediately runs through the same press.
 
 Finder wasn't checked on this machine (the build agent doesn't drive other apps). As recalled,
