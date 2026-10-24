@@ -26,10 +26,18 @@ Recursive search and Spotlight are a separate feature (M5b.3) and stay out.
   Spotlight's does. Colours are the system's label colours, so light and dark both follow
   the appearance. A sheet would block the window and look like a question
   ([0076](0076-dialogs.md)).
-- **Keys.** The field keeps the keys; ↑, ↓, Page Up and Page Down move the selection, Return or
-  a click runs the selected row, Esc closes. The palette closes before an item runs, so the item
-  runs with the keys back in the window's focused pane, and it closes when it loses the keys, as
-  Spotlight does. Cmd-A and the other editing keys reach the field's editor through the Edit menu.
+- **Keys.** The field keeps the keys; ↑, ↓, Page Up and Page Down move the selection, Return
+  (or Option- or Shift-Return) or a click runs the selected row, Esc closes. Closing gives the
+  keys back to whatever had them when the palette opened (the pane's table, the sidebar or the
+  filter field), as Xcode's Open Quickly does; the palette closes before an item runs, so the
+  item runs from there. It closes when it loses the keys, as Spotlight does. Cmd-K again closes
+  it, and so does Cmd-W, as in Open Quickly: the panel takes those chords as key equivalents
+  before the menu bar, whose command items are off while the panel has the keys. Any other
+  Command key the field doesn't use does nothing, without a beep. Cmd-A and the other editing
+  keys reach the field's editor through the Edit menu.
+- **Commands that can never run from the palette are left out**, in one set,
+  `CommandSource.unlisted`: Open in New Tab (it needs a clicked folder), Open Quickly itself,
+  and the row keys, which move a selection the palette covers.
 - **Off commands are listed greyed and don't run.** Return on one beeps. The macOS menu search
   in the Help menu lists an item that is off greyed rather than hiding it, and that is the system's
   own command search; hiding would make a command seem missing when the window's state turns it
@@ -41,7 +49,9 @@ Recursive search and Spotlight are a separate feature (M5b.3) and stay out.
   `WorkspaceWindows.open(savedWorkspace:)`, the sidebar's path.
 - **Folder visits.** `FolderVisits`, one per app, counts a visit each time a pane's location
   changes (navigation, Back and Forward, column view following its focused column) and once for
-  each pane given it: a new window, tab, split or restored pane. `WorkspaceWindows` gives it to
+  each new pane: a new window, tab or split. A restored pane counts only where it goes next: it
+  shows what it showed before, and counting it would add a visit to every restored folder on
+  every launch. `WorkspaceWindows` gives it to
   the panes it makes; panes made from those share it. The stored history is read off the main
   actor beside the session's read and is not waited for: visits counted before it arrives are
   added to it, and nothing is saved until then, so a launch can't write over it. Saves go through
@@ -61,8 +71,7 @@ Recursive search and Spotlight are a separate feature (M5b.3) and stay out.
 
 ## Consequences
 
-The palette lists every registered command, including the row keys and Open in New Tab, which is
-always off from the palette (it needs a clicked folder). Arrowing through column view counts a
+Arrowing through column view counts a
 visit per folder entered, which ranks folders browsed that way higher than ones opened once from
 a list; frecency's decay bounds it. B11 end to end (key → frame with results, 50k candidates) is
 the UI bench's `palette` scenario, over synthetic folders shaped like W3's package tree, since the

@@ -147,6 +147,20 @@ private func frame(of controller: BrowserWindowController) throws -> CGRect {
     #expect(restored.selection.cursor == ExactName("b.txt"))
 }
 
+@MainActor @Test func restoredPanesCountNoVisitUntilTheyMove() async throws {
+    let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
+    let saving = makeWindows(store: diskStore(folder))
+    saving.open(at: Location(path: "/root"))
+    #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
+
+    let restoring = makeWindows(store: nil)
+    let key = try #require(restoring.restore(await diskStore(folder).load()))
+    #expect(restoring.folderVisits.history.folders.isEmpty)
+    key.workspace.selectedTab.focusedPane.navigate(to: Location(path: "/root/docs"))
+
+    #expect(restoring.folderVisits.history.folders.keys.sorted() == ["/root/docs"])
+}
+
 // MARK: Frames
 
 @MainActor @Test func frameOnADisplayNoLongerAttachedLandsOnScreen() {

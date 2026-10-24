@@ -414,17 +414,42 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
                 run: { [weak self] id in self?.runFromPalette(id) }),
         ]
         let controller = PaletteWindowController(palette: Palette(sources: sources + extra))
+        let registry = focusedTable.registry
+        controller.closingChords = Set(
+            [WindowCommands.showPalette.id, TilingCommands.closePane.id].flatMap {
+                registry.command(for: $0)?.chords ?? []
+            })
+        // Where the keys were, to give them back there: a field's editor stands in for the field.
+        var keys = window.firstResponder
+        if let editor = keys as? NSTextView, editor.isFieldEditor,
+            let field = editor.delegate as? NSResponder
+        {
+            keys = field
+        }
         controller.viewController.isEnabled = { [weak self] item in
             guard case .command(let id) = item.id else { return true }
             return self?.canRunFromPalette(id) ?? false
         }
-        controller.onClose = { [weak self, weak controller] in
+        controller.onClose = { [weak self, weak controller, weak keys] in
             guard let self, palette === controller else { return }
             palette = nil
-            giveKeysBack()
+            giveKeys(backTo: keys)
         }
         palette = controller
         controller.show(over: window)
+    }
+
+    /// Gives the keys back to `responder`, which had them when the palette opened: the focused
+    /// pane's table, the sidebar or the filter field. One that has left the window or is
+    /// hidden gives them to the focused pane.
+    private func giveKeys(backTo responder: NSResponder?) {
+        guard !isClosed, !workspace.isClosed, let window else { return }
+        if let view = responder as? NSView, view.window === window,
+            !view.isHiddenOrHasHiddenAncestor, window.makeFirstResponder(view)
+        {
+            return
+        }
+        giveKeysBack()
     }
 
     private func canRunFromPalette(_ id: CommandID) -> Bool {

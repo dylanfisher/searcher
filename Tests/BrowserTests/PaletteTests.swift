@@ -380,3 +380,26 @@ private final class HeldSource: PaletteSource {
     #expect(results.isEmpty)
     #expect(checks.all.count == 2)
 }
+
+@MainActor @Test func commandsThatCantRunFromThePaletteAreLeftOutOfIt() throws {
+    let registry = try AppCommands.registry()
+    var listed: [PaletteItem] = []
+
+    CommandSource(registry: { registry }, run: { _ in }).gather("") { listed = $0 }
+
+    let ids = Set(
+        listed.compactMap { item -> CommandID? in
+            guard case .command(let id) = item.id else { return nil }
+            return id
+        })
+    #expect(ids == Set(registry.commands.map(\.id)).subtracting(CommandSource.unlisted))
+    typealias Rows = SelectionCommands
+    let rowKeys = [
+        Rows.selectNext, Rows.selectPrevious, Rows.selectFirst, Rows.selectLast, Rows.extendDown,
+        Rows.extendUp, Rows.tenRowsDown, Rows.tenRowsUp, Rows.pageDown, Rows.pageUp,
+    ]
+    #expect(
+        CommandSource.unlisted
+            == Set(
+                ([WindowCommands.openInNewTab, WindowCommands.showPalette] + rowKeys).map(\.id)))
+}

@@ -23,7 +23,7 @@ private func count(_ path: String, in visits: FolderVisits) -> Int {
     let visits = FolderVisits(store: nil, now: { now })
     let pane = fixture.pane
 
-    pane.folderVisits = visits
+    pane.countVisits(in: visits)
     #expect(count("/root", in: visits) == 1)
 
     pane.navigate(to: Location(path: "/root/docs"))
@@ -39,7 +39,7 @@ private func count(_ path: String, in visits: FolderVisits) -> Int {
 @MainActor @Test func panesMadeFromAPaneCountTheirFolderInTheSameVisits() async throws {
     let fixture = await PaneFixture.loaded()
     let visits = FolderVisits(store: nil, now: { now })
-    fixture.pane.folderVisits = visits
+    fixture.pane.countVisits(in: visits)
 
     let tab = fixture.pane.newPane(at: Location(path: "/root/docs"))
     let split = fixture.pane.copy(takingFocus: false)
@@ -53,7 +53,7 @@ private func count(_ path: String, in visits: FolderVisits) -> Int {
     let fixture = await PaneFixture.loaded()
     let visits = FolderVisits(store: nil, now: { now })
     let pane = fixture.pane
-    pane.folderVisits = visits
+    pane.countVisits(in: visits)
     pane.setViewMode(.column)
     let trail = try #require(pane.columnTrail)
     await settle { trail.focused.pane.state.isLoaded }
@@ -92,4 +92,17 @@ private func count(_ path: String, in visits: FolderVisits) -> Int {
 
     #expect(await store.loadFolderHistory() == visits.history)
     #expect(visits.history.folders.count == 3)
+}
+
+@MainActor @Test func aRestoredPaneCountsOnlyTheFoldersItMovesTo() async throws {
+    let fixture = await PaneFixture.loaded()
+    let visits = FolderVisits(store: nil, now: { now })
+    let pane = fixture.pane
+
+    pane.countVisits(in: visits, countingThisFolder: false)
+    #expect(visits.history.folders.isEmpty)
+    pane.navigate(to: Location(path: "/root/docs"))
+
+    #expect(visits.history.folders.keys.sorted() == ["/root/docs"])
+    #expect(pane.folderVisits === visits)
 }

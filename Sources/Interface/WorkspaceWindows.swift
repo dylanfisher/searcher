@@ -230,7 +230,7 @@ public final class WorkspaceWindows {
         let pane = Pane(
             location: location, service: service, systemActions: systemActions, settings: settings)
         pane.folderSizes = folderSizes
-        pane.folderVisits = folderVisits
+        pane.countVisits(in: folderVisits)
         let workspace = Workspace(
             tab: Tab(pane: pane), showsSidebar: list.workspaces.first?.showsSidebar ?? false)
         list.add(workspace)
@@ -377,7 +377,7 @@ public final class WorkspaceWindows {
                     restoring: saved, service: service, systemActions: systemActions,
                     settings: settings)
                 pane.folderSizes = folderSizes
-                pane.folderVisits = folderVisits
+                pane.countVisits(in: folderVisits, countingThisFolder: false)
                 return pane
             }
         }

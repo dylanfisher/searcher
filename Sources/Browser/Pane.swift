@@ -12,15 +12,19 @@ public final class Pane {
             if location != oldValue { folderVisits?.visit(location) }
         }
     }
-    /// Counts a visit each time the pane shows a folder, for the palette, and one for the folder
-    /// it is in when set. The pane's owner sets it once; panes made from this one share it. A
-    /// pane without one, such as a column's, counts nothing; in column view the pane counts the
+    /// Counts a visit each time the pane moves to a folder, for the palette, once
+    /// `countVisits(in:countingThisFolder:)` sets it. Panes made from this one share it. A pane
+    /// without one, such as a column's, counts nothing; in column view the pane counts the
     /// focused column's folder, which it follows.
-    public var folderVisits: FolderVisits? {
-        didSet {
-            precondition(oldValue == nil, "a pane's folder visits are set once")
-            folderVisits?.visit(location)
-        }
+    public private(set) var folderVisits: FolderVisits?
+
+    /// Counts the pane's visits in `visits` from now on, and a visit to the folder it is in
+    /// unless `countingThisFolder` is false: a restored pane shows the folder it showed before,
+    /// which the user didn't go to. The pane's owner calls it once.
+    public func countVisits(in visits: FolderVisits, countingThisFolder: Bool = true) {
+        precondition(folderVisits == nil, "a pane's folder visits are set once")
+        folderVisits = visits
+        if countingThisFolder { visits.visit(location) }
     }
     public private(set) var state = ListingState.loading {
         didSet {
@@ -254,7 +258,7 @@ public final class Pane {
             settings: settings, sortedBy: sorted.sortColumn, ascending: sorted.sortAscending,
             viewMode: viewMode)
         pane.folderSizes = folderSizes
-        pane.folderVisits = folderVisits
+        if let folderVisits { pane.countVisits(in: folderVisits) }
         return pane
     }
 
@@ -278,7 +282,7 @@ public final class Pane {
             isFocused: rows != nil && takingFocus, selection: selected, viewMode: viewMode,
             rows: rows)
         pane.folderSizes = folderSizes
-        pane.folderVisits = folderVisits
+        if let folderVisits { pane.countVisits(in: folderVisits) }
         pane.copiedFrom = self
         guard rows != nil else { return pane }
         pane.loadedAt = loadedAt
