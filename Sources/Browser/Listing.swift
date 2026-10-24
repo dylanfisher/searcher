@@ -296,7 +296,7 @@ public struct Listing: Sendable {
         var kindIndexes = [Int32]()
         kindIndexes.reserveCapacity(entries.count)
         for entry in entries {
-            let pathExtension = EntryKind.pathExtension(of: entry.name)
+            let pathExtension = Base.pathExtension(of: entry.name)
             let key = Key(fileType: entry.type, pathExtension: pathExtension)
             if let index = seen[key] {
                 kindIndexes.append(index)
@@ -372,7 +372,7 @@ public struct Listing: Sendable {
     ) {
         let position = index(named: entry.name, key: key).position
         let index = Int32(entries.count)
-        let kind = EntryKind(entry.type, pathExtension: EntryKind.pathExtension(of: entry.name))
+        let kind = EntryKind(entry.type, pathExtension: pathExtension(of: entry.name))
         let kindIndex = kindIndex(of: kind)
         entries.append(entry)
         keys.append(key)
