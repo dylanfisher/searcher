@@ -224,21 +224,37 @@ private func makeFolder(_ path: String) throws {
     walks.releaseAll()
     let sizes = service(walks) { _ in ListingService.listerVolume }
     let log = EventLog<(String, SizeResult)>()
-    let utility = await BlockingCallThread.run(qos: .utility) {
-        (FolderSizeService.threadPriority(), getiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_THREAD))
+    let utilityIOPolicy = await BlockingCallThread.run(qos: .utility) {
+        getiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_THREAD)
+    }
+    let defaultPriority = await BlockingCallThread.run(qos: .default) {
+        FolderSizeService.threadPriority()
     }
 
     request(sizes, folder.url.path, into: log)
 
     #expect(await log.wait { $0.count == 1 })
     // Utility QoS alone leaves the thread's policy at the default; its tier isn't the throttled one.
-    #expect(utility.1 == IOPOL_DEFAULT)
-    #expect(
-        walks.starts == [
-            FakeWalks.Start(
-                path: folder.url.path, ioPolicy: IOPOL_THROTTLE, priority: utility.0,
-                onBlockingCallThread: true)
-        ])
+    #expect(utilityIOPolicy == IOPOL_DEFAULT)
+    let start = try #require(walks.starts.first)
+    #expect(walks.starts.count == 1)
+    #expect(start.path == folder.url.path)
+    #expect(start.ioPolicy == IOPOL_THROTTLE)
+    #expect(start.onBlockingCallThread)
+    // The policy takes the thread's QoS and raises its priority to the default's; a walk is below
+    // that. The kernel's number for a utility thread moves under load, so it isn't compared.
+    #expect(start.priority < defaultPriority)
+}
+
+@Test func throttlingDiskReadsKeepsTheThreadsPriority() async {
+    for qos in [QualityOfService.utility, .userInitiated] {
+        let priorities = await BlockingCallThread.run(qos: qos) {
+            let before = FolderSizeService.threadPriority()
+            FolderSizeService.throttleDiskReads()
+            return (before, FolderSizeService.threadPriority())
+        }
+        #expect(priorities.0 == priorities.1)
+    }
 }
 
 @Test func aShareRunsOneWalkAtATime() async throws {
