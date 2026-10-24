@@ -263,9 +263,10 @@ private func isBold(_ title: NSAttributedString, at offset: Int) -> Bool {
     #expect(blur?.material == .popover)
     #expect(blur?.blendingMode == .behindWindow)
     #expect(blur?.state == .active)
-    #expect(blur?.wantsLayer == true)
-    #expect(blur?.layer?.cornerRadius == PaletteViewController.cornerRadius)
-    #expect(blur?.layer?.masksToBounds == true)
+    let radius = PaletteViewController.cornerRadius
+    #expect(blur?.maskImage?.capInsets.top == radius)
+    #expect(blur?.maskImage?.capInsets.left == radius)
+    #expect(blur?.maskImage?.resizingMode == .stretch)
 }
 
 @MainActor @Test func thePanelIsBorderlessClearAndShadowed() throws {

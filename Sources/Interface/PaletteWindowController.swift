@@ -78,6 +78,7 @@ public final class PaletteWindowController: NSWindowController, NSWindowDelegate
         guard parent.isVisible else { return }
         parent.addChildWindow(panel, ordered: .above)
         panel.makeKeyAndOrderFront(nil)
+        panel.invalidateShadow()
     }
 
     /// Closes the panel once.

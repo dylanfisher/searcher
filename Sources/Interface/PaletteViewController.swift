@@ -36,6 +36,18 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
     static let width: CGFloat = 640
     /// The panel's corner radius, as Spotlight's search window rounds its corners.
     static let cornerRadius: CGFloat = 20
+    private static let maskImage: NSImage = {
+        let edge = cornerRadius * 2 + 1
+        let image = NSImage(size: NSSize(width: edge, height: edge), flipped: false) { rect in
+            NSColor.black.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: cornerRadius, yRadius: cornerRadius).fill()
+            return true
+        }
+        image.capInsets = NSEdgeInsets(
+            top: cornerRadius, left: cornerRadius, bottom: cornerRadius, right: cornerRadius)
+        image.resizingMode = .stretch
+        return image
+    }()
     private static let fieldHeight: CGFloat = 60
     static var height: CGFloat {
         fieldHeight + 1 + CGFloat(visibleRows) * PaletteCellView.rowHeight + 2 * listInset
@@ -60,10 +72,9 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
         background.material = .popover
         background.blendingMode = .behindWindow
         background.state = .active
-        background.wantsLayer = true
-        background.layer?.cornerRadius = Self.cornerRadius
-        background.layer?.cornerCurve = .continuous
-        background.layer?.masksToBounds = true
+        // A mask image, not a layer mask, so the window server's blur and the window's shadow
+        // take the rounded shape.
+        background.maskImage = Self.maskImage
 
         let glass = NSImageView(
             image: NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)
