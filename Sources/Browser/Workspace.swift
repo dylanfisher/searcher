@@ -11,8 +11,9 @@ import Foundation
 public final class Workspace {
     /// Names the workspace's file in `WorkspaceStore`, and its window in the session.
     public let id: UUID
-    /// Nil for the workspace of a window that hasn't been named. `WorkspaceList` names it, so no
-    /// two saved workspaces share a name.
+    /// The name of the saved workspace the window is linked to, which has the same ID; nil for a
+    /// window that isn't linked to one. `WorkspaceList` sets it, so no two saved workspaces share
+    /// a name.
     public internal(set) var name: String? {
         didSet {
             if name != oldValue { onChange?() }
@@ -48,9 +49,6 @@ public final class Workspace {
             if isActive != oldValue { updatePanes() }
         }
     }
-    /// The tabs' states just before closing the last tab or pane closed the workspace, when it
-    /// is a saved one; an unnamed one's state isn't kept once its window closes.
-    private var tabStatesBeforeClose: [TabState]?
     /// The pane last told it gained the focus, until it is told it lost it.
     private weak var focusedPane: Pane?
     /// Set once every tab moved to another workspace (`removeAllTabs`) or the workspace closed
@@ -106,7 +104,6 @@ public final class Workspace {
     @discardableResult
     public func close(_ id: TabID) -> CloseResult {
         let index = index(of: id)
-        if tabs.count == 1, name != nil { tabStatesBeforeClose = tabStates }
         tabs[index].close()
         return remove(at: index)
     }
@@ -115,18 +112,38 @@ public final class Workspace {
     @discardableResult
     public func closePane() -> CloseResult {
         let tab = selectedTab
-        if tabs.count == 1, tab.panes.count == 1, name != nil {
-            tabStatesBeforeClose = tabStates
-        }
         guard tab.closePane() == .tab else { return .pane }
         return remove(at: index(of: tab.id))
     }
 
-    /// The tabs as `WorkspaceState` keeps them, in strip order. Once closing its last tab or
-    /// pane closed a saved workspace, they are the tabs as they were just before, with the
-    /// closed tab's folders and selections, so it is kept as it was.
-    public var tabStates: [TabState] {
-        tabStatesBeforeClose ?? tabs.map(\.state)
+    /// The workspace as `WorkspaceState` keeps it, in a window at `frame`.
+    public func state(frame: Rect) -> WorkspaceState {
+        WorkspaceState(
+            id: id, name: name, frame: frame, tabs: tabs.map(\.state),
+            selectedTab: index(of: selectedTab.id), showsSidebar: showsSidebar)
+    }
+
+    /// Replaces every tab with `tabs`, selecting the one at `selectedTab`, as loading a saved
+    /// workspace's snapshot into its open window does. The tabs it had close, panes and all.
+    ///
+    /// - Precondition: `tabs` isn't empty and `selectedTab` is one of its indices.
+    public func reload(tabs newTabs: [Tab], selectedTab index: Int, showsSidebar: Bool) {
+        precondition(!isClosed, "workspace \(id) is closed, so it can't reload")
+        precondition(
+            newTabs.indices.contains(index),
+            "selected tab \(index) isn't one of the \(newTabs.count) tabs")
+        // The focused pane closes with its tab, so it isn't told it lost the focus.
+        focusedPane = nil
+        for tab in tabs where !tab.isClosed {
+            tab.close()
+        }
+        for tab in newTabs {
+            watchFocus(of: tab)
+        }
+        tabs = newTabs
+        self.showsSidebar = showsSidebar
+        // A new tab, so this shows the new panes and focuses the selected one's.
+        selectedTab = newTabs[index]
     }
 
     /// Every pane in every tab.

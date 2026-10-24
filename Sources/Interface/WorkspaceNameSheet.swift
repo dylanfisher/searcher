@@ -1,11 +1,12 @@
 import AppKit
 import Browser
 
-/// The sheet that names a window's workspace, or renames it: a `Dialog` alert over the window
-/// with a name field as its accessory view, holding the current name. Return or Name names the
-/// workspace through `WorkspaceList`, and Esc or Cancel leaves it as it was. A name another saved
-/// workspace has keeps the sheet up and says which, as Finder does for a file name that's taken
-/// (docs/decisions/0082-saved-workspaces.md).
+/// The sheet that saves a window's workspace under a name, or renames the saved one: a `Dialog`
+/// alert over the window with a name field as its accessory view, holding the current name.
+/// Return or Save saves the workspace through `WorkspaceList`, Rename renames it, and Esc or
+/// Cancel leaves it as it was. A name another saved workspace has keeps the sheet up and says
+/// which, as Finder does for a file name that's taken (docs/decisions/0082-saved-workspaces.md,
+/// docs/decisions/0088-workspace-snapshots.md).
 @MainActor
 final class WorkspaceNameSheet: NSObject, NSTextFieldDelegate {
     let alert: NSAlert
@@ -22,15 +23,22 @@ final class WorkspaceNameSheet: NSObject, NSTextFieldDelegate {
 
     private let workspace: Workspace
     private let list: WorkspaceList
+    /// The window's frame, which a save keeps.
+    private let frame: @MainActor () -> Rect
+    /// Whether the workspace was saved when the sheet opened, so the sheet renames it.
+    private let renames: Bool
 
-    init(workspace: Workspace, list: WorkspaceList) {
+    init(workspace: Workspace, list: WorkspaceList, frame: @escaping @MainActor () -> Rect) {
         self.workspace = workspace
         self.list = list
+        self.frame = frame
+        renames = workspace.name != nil
         if let name = workspace.name {
             alert = Dialog.alert(
                 message: "Rename the workspace “\(name)”:", buttons: ["Rename", Dialog.cancel])
         } else {
-            alert = Dialog.alert(message: "Name this workspace:", buttons: ["Name", Dialog.cancel])
+            alert = Dialog.alert(
+                message: "Save this workspace as:", buttons: ["Save", Dialog.cancel])
         }
         field = NSTextField(string: workspace.name ?? "")
         super.init()
@@ -44,10 +52,14 @@ final class WorkspaceNameSheet: NSObject, NSTextFieldDelegate {
         window.beginSheet(panel)
     }
 
-    /// Names the workspace as typed, and closes the sheet unless the name is refused.
+    /// Saves or renames the workspace as typed, and closes the sheet unless the name is refused.
     func confirm() {
         do {
-            try list.name(workspace, as: field.stringValue)
+            if renames {
+                try list.rename(workspace, as: field.stringValue)
+            } else {
+                try list.save(workspace, as: field.stringValue, frame: frame())
+            }
         } catch .empty {
             beep()
             return

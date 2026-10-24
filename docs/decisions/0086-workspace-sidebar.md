@@ -2,6 +2,9 @@
 
 - **Date:** 2026-10-24
 - **Status:** accepted
+- **2026-10-24:** Focus Sidebar has Command-0 and gives the keys back when pressed in the
+  sidebar, and opening a saved workspace whose window is open loads its snapshot into it; see
+  [0088](0088-workspace-snapshots.md).
 
 ## Context
 

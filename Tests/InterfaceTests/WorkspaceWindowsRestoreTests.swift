@@ -106,7 +106,7 @@ private func frame(of controller: BrowserWindowController) throws -> CGRect {
 
     let restoring = makeWindows(store: nil)
     let key = restoring.restore(
-        WorkspaceStore.Contents(session: session, workspaces: saved.workspaces))
+        WorkspaceStore.Contents(session: session, workspaces: saved.workspaces, snapshots: [:]))
 
     #expect(restoring.controllers.map(\.workspace.id) == [kept.workspace.id])
     // The key window's workspace didn't load, so the front one is key.
@@ -116,7 +116,9 @@ private func frame(of controller: BrowserWindowController) throws -> CGRect {
 @MainActor @Test func noSessionRestoresNoWindow() {
     let restoring = makeWindows(store: nil)
 
-    #expect(restoring.restore(WorkspaceStore.Contents(session: nil, workspaces: [:])) == nil)
+    #expect(
+        restoring.restore(WorkspaceStore.Contents(session: nil, workspaces: [:], snapshots: [:]))
+            == nil)
     #expect(restoring.controllers.isEmpty)
 }
 
@@ -125,7 +127,8 @@ private func frame(of controller: BrowserWindowController) throws -> CGRect {
     let session = SessionState(workspaces: [UUID()], keyWindow: nil)
 
     #expect(
-        restoring.restore(WorkspaceStore.Contents(session: session, workspaces: [:])) == nil)
+        restoring.restore(
+            WorkspaceStore.Contents(session: session, workspaces: [:], snapshots: [:])) == nil)
     #expect(restoring.controllers.isEmpty)
 }
 
@@ -287,12 +290,14 @@ private final class SavingFixture {
         windows.saveClock = WorkspaceWindows.SaveClock(clock)
     }
 
-    /// The files the windows have handed the store since the last call, written now.
+    /// The files the windows have handed the store since the last call, written now, by path
+    /// under the application support root, such as `workspaces/<id>.json`.
     func handed() async -> [String] {
         await store.flush()
         let all = writes.all
         defer { seen = all.count }
-        return all[seen...].map { $0.1.lastPathComponent }
+        let root = roots(folder).applicationSupport.path + "/"
+        return all[seen...].map { String($0.1.path.dropFirst(root.count)) }
     }
 
     /// The files handed once the windows hand any, waiting up to 5 seconds.
@@ -334,7 +339,7 @@ private final class SavingFixture {
     #expect(waiting.isEmpty, "\(waiting)")
     fixture.clock.advance(by: .milliseconds(100))
     let files = await fixture.handedOnceSaved()
-    #expect(Set(files) == ["\(id.uuidString).json", "session.json"], "\(files)")
+    #expect(Set(files) == ["workspaces/\(id.uuidString).json", "session.json"], "\(files)")
 }
 
 @MainActor @Test func changesThatKeepComingAreSavedAfterTheLongestWait() async throws {
@@ -443,7 +448,7 @@ private func savedSession(in folder: TemporaryFolder) async -> WorkspaceStore.Co
     let launching = makeWindows(store: nil)
     launching.holdSavesUntilRestore()
 
-    launching.restore(WorkspaceStore.Contents(session: nil, workspaces: [:]))
+    launching.restore(WorkspaceStore.Contents(session: nil, workspaces: [:], snapshots: [:]))
 
     #expect(launching.opensWindowOnReopen)
 }
@@ -478,22 +483,52 @@ private func savedSession(in folder: TemporaryFolder) async -> WorkspaceStore.Co
 
 // MARK: Saved workspaces
 
-@MainActor @Test func closingANamedWindowKeepsItsFileAndAnUnnamedOneDeletesIts() async throws {
+/// A frame on the test's screen, so a restore or a reload keeps it as saved.
+private let savedFrame = CGRect(x: 100, y: 200, width: 900, height: 600)
+private let movedFrame = CGRect(x: 300, y: 250, width: 1000, height: 640)
+
+/// `controller`'s focused pane, once its folder is loaded.
+@MainActor
+private func loadedPane(of controller: BrowserWindowController) async -> Pane {
+    let pane = controller.workspace.selectedTab.focusedPane
+    await settle { pane.state.isLoaded }
+    return pane
+}
+
+/// A window at `/root` saved as "Project 1" at `savedFrame`.
+@MainActor
+private func savedWindow(in windows: WorkspaceWindows) async throws -> BrowserWindowController {
+    let controller = windows.open(at: Location(path: "/root"))
+    try #require(controller.window).setFrame(savedFrame, display: false)
+    _ = await loadedPane(of: controller)
+    try controller.saveWorkspace(as: "Project 1")
+    return controller
+}
+
+/// Moves `controller`'s window and its pane to `/root/docs`, as using it after a save does.
+@MainActor
+private func drift(_ controller: BrowserWindowController) async throws {
+    try #require(controller.window).setFrame(movedFrame, display: false)
+    controller.workspace.selectedTab.focusedPane.navigate(to: Location(path: "/root/docs"))
+    _ = await loadedPane(of: controller)
+}
+
+@MainActor @Test func closingANamedWindowKeepsItsSnapshotAndDeletesTheWindowsFile() async throws {
     let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
     let windows = makeWindows(store: diskStore(folder))
-    let named = windows.open(at: Location(path: "/root"))
+    let named = try await savedWindow(in: windows)
     let unnamed = windows.open(at: Location(path: "/root"))
-    try windows.list.name(named.workspace, as: "Project 1")
     #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
-    #expect(await diskStore(folder).load().workspaces.count == 2)
+    let saved = await diskStore(folder).load()
+    #expect(saved.workspaces.count == 2 && Array(saved.snapshots.keys) == [named.workspace.id])
 
     try #require(named.window).close()
     try #require(unnamed.window).close()
     #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
 
     let onDisk = await diskStore(folder).load()
-    #expect(Array(onDisk.workspaces.keys) == [named.workspace.id])
-    #expect(onDisk.workspaces[named.workspace.id]?.name == "Project 1")
+    #expect(onDisk.workspaces.isEmpty)
+    #expect(onDisk.snapshots == saved.snapshots)
     // The last window closed, so the next launch opens the home window.
     #expect(onDisk.session == SessionState(workspaces: [], keyWindow: nil))
     #expect(
@@ -502,72 +537,268 @@ private func savedSession(in folder: TemporaryFolder) async -> WorkspaceStore.Co
         ])
 }
 
-@MainActor @Test func aNamedWorkspaceReopensAsItWasAtClose() async throws {
+@MainActor @Test func goingToAnOpenSavedWorkspaceLoadsItsSnapshotIntoItsWindow() async throws {
+    let windows = makeWindows(store: nil)
+    let controller = try await savedWindow(in: windows)
+    let id = controller.workspace.id
+    let other = windows.open(at: Location(path: "/root"))
+    try await drift(controller)
+    let firstTab = controller.workspace.selectedTab
+    controller.workspace.add(
+        Tab(pane: firstTab.focusedPane.newPane(at: Location(path: "/root/docs"))))
+    _ = try #require(controller.workspace.selectedTab.split(.horizontal, in: Rect(savedFrame)))
+
+    let opened = windows.open(savedWorkspace: id)
+
+    #expect(opened === controller)
+    #expect(windows.controllers.count == 2)
+    #expect(windows.list.workspaces.map(\.id) == [id, other.workspace.id])
+    #expect(controller.workspace.tabs.count == 1)
+    #expect(controller.workspace.selectedTab.panes.count == 1)
+    #expect(firstTab.isClosed)
+    let pane = await loadedPane(of: controller)
+    #expect(pane.location == Location(path: "/root"))
+    #expect(try frame(of: controller) == savedFrame)
+    #expect(controller.paneViewController.pane === pane)
+    #expect(controller.window?.firstResponder === controller.paneViewController.keyView)
+    #expect(
+        windows.list.snapshots[id]?.tabs.first?.panes.values.first?.location
+            == Location(path: "/root"))
+}
+
+/// A window of one pane, and one of two tabs whose first has two panes, each reload from their
+/// snapshots, and the closed panes and tabs are left alone after.
+@MainActor @Test func reloadingOnePaneOrSeveralTabsAndSplitsClosesWhatWasThere() async throws {
+    let windows = makeWindows(store: nil)
+    let single = try await savedWindow(in: windows)
+    let several = windows.open(at: Location(path: "/root"))
+    let first = several.workspace.selectedTab
+    _ = try #require(first.split(.horizontal, in: Rect(savedFrame)))
+    several.workspace.add(Tab(pane: first.focusedPane.newPane(at: Location(path: "/root/docs"))))
+    try several.saveWorkspace(as: "Project 2")
+    let savedLayouts = several.workspace.tabs.map(\.layout)
+    several.showWorkspace()
+    single.workspace.selectedTab.focusedPane.navigate(to: Location(path: "/root/docs"))
+    try #require(several.window?.firstResponder as? ListingTableView).run(
+        WindowCommands.closeTab.id)
+    #expect(several.workspace.tabs.count == 1)
+
+    windows.open(savedWorkspace: single.workspace.id)
+    windows.open(savedWorkspace: several.workspace.id)
+    // Twice, so a reload closes what the last one made.
+    windows.open(savedWorkspace: several.workspace.id)
+
+    #expect(single.workspace.selectedTab.focusedPane.location == Location(path: "/root"))
+    #expect(several.workspace.tabs.map(\.layout) == savedLayouts)
+    #expect(several.workspace.tabs[0].panes.count == 2)
+    for controller in [single, several] {
+        let table = try #require(controller.window?.firstResponder as? ListingTableView)
+        table.run(TilingCommands.closePane.id)
+    }
+    #expect(windows.controllers.map(\.workspace.id) == [several.workspace.id])
+}
+
+/// The snapshot keeps the pane IDs it had; a pane of it that moved to another window keeps its
+/// views there when the snapshot loads again.
+@MainActor @Test func reloadingLeavesAPaneThatMovedToAnotherWindowWhereItIs() async throws {
+    let windows = makeWindows(store: nil)
+    let controller = windows.open(at: Location(path: "/root"))
+    _ = try #require(controller.workspace.selectedTab.split(.horizontal, in: Rect(savedFrame)))
+    controller.showWorkspace()
+    try controller.saveWorkspace(as: "Project 1")
+    let table = try #require(controller.window?.firstResponder as? ListingTableView)
+    table.run(WindowCommands.movePaneToNewWindow.id)
+    let moved = try #require(windows.controllers.first { $0 !== controller })
+    let movedPane = moved.workspace.selectedTab.focusedPane
+
+    windows.open(savedWorkspace: controller.workspace.id)
+
+    #expect(controller.workspace.selectedTab.panes.count == 2)
+    #expect(moved.paneViewController.pane === movedPane)
+    for id in controller.workspace.selectedTab.layout.panes {
+        let pane = try #require(controller.workspace.selectedTab.panes[id])
+        #expect(controller.paneViewController(for: id)?.pane === pane)
+    }
+}
+
+@MainActor @Test func closingANamedWindowLeavesItsSnapshotAsSaved() async throws {
     let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
     let windows = makeWindows(store: diskStore(folder))
-    let controller = windows.open(at: Location(path: "/root"))
+    let controller = try await savedWindow(in: windows)
     let id = controller.workspace.id
-    try windows.list.name(controller.workspace, as: "Project 1")
     #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
     // Changed just before the close, within the save delay.
-    let atClose = CGRect(x: 300, y: 250, width: 1000, height: 640)
-    try #require(controller.window).setFrame(atClose, display: false)
-    controller.workspace.selectedTab.focusedPane.navigate(to: Location(path: "/root/docs"))
+    try await drift(controller)
     try #require(controller.window).close()
 
     let reopened = windows.open(savedWorkspace: id)
 
     #expect(reopened !== controller)
     #expect(reopened.workspace.id == id && reopened.workspace.name == "Project 1")
-    #expect(try frame(of: reopened) == atClose)
-    #expect(reopened.workspace.selectedTab.focusedPane.location == Location(path: "/root/docs"))
+    #expect(try frame(of: reopened) == savedFrame)
+    #expect(reopened.workspace.selectedTab.focusedPane.location == Location(path: "/root"))
     #expect(windows.list.closed.isEmpty)
     #expect(windows.list.workspaces.first === reopened.workspace)
     #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
-    #expect(await diskStore(folder).load().workspaces[id]?.frame == Rect(atClose))
+    #expect(await diskStore(folder).load().snapshots[id]?.frame == Rect(savedFrame))
 }
 
-/// Names a window's workspace at `/root/docs` with `inside.txt` selected, closes its only tab
-/// with `key`, reopens it and checks it is as it was just before the close.
+/// Saves a window's workspace at `/root`, moves to `/root/docs` and selects `inside.txt`,
+/// closes its only tab with `key`, reopens it and checks it is as saved.
 @MainActor
-private func expectReopenedAsBeforeClosing(with key: NSEvent) async throws {
+private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
     let windows = makeWindows(store: nil)
-    let controller = windows.open(at: Location(path: "/root/docs"))
+    let controller = try await savedWindow(in: windows)
     let id = controller.workspace.id
+    try await drift(controller)
     let pane = controller.workspace.selectedTab.focusedPane
-    await settle { pane.state.isLoaded }
     pane.select(Selection([ExactName("inside.txt")], cursor: ExactName("inside.txt")))
-    try windows.list.name(controller.workspace, as: "Project 1")
     let table = try #require(controller.window?.firstResponder as? ListingTableView)
 
     table.keyDown(with: key)
 
     #expect(windows.controllers.isEmpty)
     let reopened = windows.open(savedWorkspace: id)
-    let restored = reopened.workspace.selectedTab.focusedPane
-    await settle { restored.state.isLoaded && restored.selection.isSettled }
-    #expect(restored.location == Location(path: "/root/docs"))
-    #expect(restored.selection.members == .only([ExactName("inside.txt")]))
-    #expect(restored.selection.cursor == ExactName("inside.txt"))
+    let restored = await loadedPane(of: reopened)
+    #expect(restored.location == Location(path: "/root"))
+    #expect(restored.selection.members == .only([]))
 }
 
-@MainActor @Test func closingTheLastPaneKeepsTheWorkspaceAsItWasBefore() async throws {
-    try await expectReopenedAsBeforeClosing(with: try keyEvent("w", modifiers: .command))
+@MainActor @Test func closingTheLastPaneLeavesTheSnapshotAsSaved() async throws {
+    try await expectReopenedAsSaved(closingWith: try keyEvent("w", modifiers: .command))
 }
 
-@MainActor @Test func closingTheLastTabKeepsTheWorkspaceAsItWasBefore() async throws {
-    try await expectReopenedAsBeforeClosing(
-        with: try keyEvent("w", characters: "W", modifiers: [.command, .shift]))
+@MainActor @Test func closingTheLastTabLeavesTheSnapshotAsSaved() async throws {
+    try await expectReopenedAsSaved(
+        closingWith: try keyEvent("w", characters: "W", modifiers: [.command, .shift]))
+}
+
+@MainActor @Test func commandSOnAnUnsavedWindowAsksForAName() async throws {
+    let windows = makeWindows(store: nil)
+    let controller = windows.open(at: Location(path: "/root"))
+    let table = try #require(controller.window?.firstResponder as? ListingTableView)
+
+    table.keyDown(with: try keyEvent("s", modifiers: .command))
+
+    let sheet = try #require(controller.nameSheet)
+    #expect(sheet.alert.buttons.map(\.title) == ["Save", Dialog.cancel])
+    #expect(windows.list.snapshots.isEmpty)
+    sheet.cancel()
+}
+
+@MainActor @Test func commandSOnASavedWindowOverwritesItsSnapshotWithoutAsking() async throws {
+    let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
+    let windows = makeWindows(store: diskStore(folder))
+    let controller = try await savedWindow(in: windows)
+    let id = controller.workspace.id
+    try await drift(controller)
+    let table = try #require(controller.window?.firstResponder as? ListingTableView)
+
+    table.keyDown(with: try keyEvent("s", modifiers: .command))
+
+    #expect(controller.nameSheet == nil)
+    let snapshot = try #require(windows.list.snapshots[id])
+    #expect(snapshot.frame == Rect(movedFrame))
+    #expect(snapshot.tabs.first?.panes.values.first?.location == Location(path: "/root/docs"))
+    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await diskStore(folder).load().snapshots[id] == snapshot)
+}
+
+@MainActor @Test func theEditedDotShowsADriftFromTheSnapshotUntilASaveOrAReload() async throws {
+    let fixture = try SavingFixture()
+    let windows = fixture.windows
+    let controller = try await savedWindow(in: windows)
+    let unnamed = windows.open(at: Location(path: "/root"))
+    let window = try #require(controller.window)
+    #expect(!window.isDocumentEdited)
+    /// Lets the windows' save run once the loads the changes started have ended, so no change
+    /// comes after the save wait ends.
+    func save() async {
+        for pane in [controller, unnamed].map(\.workspace.selectedTab.focusedPane) {
+            await settle { pane.state.isLoaded }
+        }
+        await fixture.waitForSaveWait()
+        fixture.clock.advance(by: windows.saveDelay)
+        _ = await fixture.handedOnceSaved()
+    }
+
+    try await drift(controller)
+    unnamed.workspace.selectedTab.focusedPane.navigate(to: Location(path: "/root/docs"))
+    await save()
+    #expect(window.isDocumentEdited)
+    #expect(unnamed.window?.isDocumentEdited == false)
+
+    try controller.saveWorkspace()
+    #expect(!window.isDocumentEdited)
+
+    controller.workspace.selectedTab.focusedPane.navigate(to: Location(path: "/root"))
+    await save()
+    #expect(window.isDocumentEdited)
+
+    windows.open(savedWorkspace: controller.workspace.id)
+    #expect(!window.isDocumentEdited)
+}
+
+@MainActor @Test func aRenameKeepsTheEditedDotOfADriftedWindow() async throws {
+    let fixture = try SavingFixture()
+    let controller = try await savedWindow(in: fixture.windows)
+    try await drift(controller)
+    await fixture.waitForSaveWait()
+    fixture.clock.advance(by: fixture.windows.saveDelay)
+    _ = await fixture.handedOnceSaved()
+    #expect(controller.window?.isDocumentEdited == true)
+
+    try fixture.windows.list.rename(controller.workspace, as: "Project 2")
+
+    #expect(controller.window?.isDocumentEdited == true)
+    #expect(fixture.windows.list.snapshots[controller.workspace.id]?.name == "Project 2")
+}
+
+@MainActor @Test func aRelaunchKeepsTheWindowsLinkAndItsDrift() async throws {
+    let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
+    let saving = makeWindows(store: diskStore(folder))
+    let controller = try await savedWindow(in: saving)
+    let id = controller.workspace.id
+    try await drift(controller)
+    #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
+
+    let restoring = makeWindows(store: diskStore(folder))
+    restoring.holdSavesUntilRestore()
+    let restored = try #require(restoring.restore(await diskStore(folder).load()))
+
+    #expect(restored.workspace.id == id && restored.workspace.name == "Project 1")
+    #expect(restored.workspace.selectedTab.focusedPane.location == Location(path: "/root/docs"))
+    #expect(try frame(of: restored) == movedFrame)
+    #expect(restored.window?.isDocumentEdited == true)
+    #expect(restoring.list.saved == [WorkspaceList.Saved(id: id, name: "Project 1", isOpen: true)])
+
+    restoring.open(savedWorkspace: id)
+
+    #expect(restored.workspace.selectedTab.focusedPane.location == Location(path: "/root"))
+    #expect(try frame(of: restored) == savedFrame)
+    #expect(restored.window?.isDocumentEdited == false)
+}
+
+@MainActor @Test func aRelaunchedWindowAsSavedShowsNoEditedDot() async throws {
+    let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
+    let saving = makeWindows(store: diskStore(folder))
+    _ = try await savedWindow(in: saving)
+    #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
+
+    let restoring = makeWindows(store: diskStore(folder))
+    restoring.holdSavesUntilRestore()
+    let restored = try #require(restoring.restore(await diskStore(folder).load()))
+
+    #expect(restored.workspace.name == "Project 1")
+    #expect(restored.window?.isDocumentEdited == false)
 }
 
 @MainActor @Test func aClosedNamedWorkspaceOutlivesALaunch() async throws {
     let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
     let saving = makeWindows(store: diskStore(folder))
-    let controller = saving.open(at: Location(path: "/root"))
+    let controller = try await savedWindow(in: saving)
     let id = controller.workspace.id
-    try saving.list.name(controller.workspace, as: "Project 1")
-    let atClose = CGRect(x: 300, y: 250, width: 1000, height: 640)
-    try #require(controller.window).setFrame(atClose, display: false)
+    try #require(controller.window).setFrame(movedFrame, display: false)
     try #require(controller.window).close()
     #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
 
@@ -579,37 +810,36 @@ private func expectReopenedAsBeforeClosing(with key: NSEvent) async throws {
 
     let reopened = restoring.open(savedWorkspace: id)
 
-    #expect(try frame(of: reopened) == atClose)
+    #expect(try frame(of: reopened) == savedFrame)
 }
 
-@MainActor @Test func namingWaitsForTheLaunchsRestore() throws {
+@MainActor @Test func savingWaitsForTheLaunchsRestore() throws {
     let windows = makeWindows(store: nil)
     windows.holdSavesUntilRestore()
     // A window opened while the session is read, as New Window opens one.
     let early = windows.open(at: Location(path: "/root"))
 
     #expect(throws: WorkspaceList.NameRefusal.loading) {
-        try windows.list.name(early.workspace, as: "Project 1")
+        try early.saveWorkspace(as: "Project 1")
     }
-    windows.restore(WorkspaceStore.Contents(session: nil, workspaces: [:]))
-    try windows.list.name(early.workspace, as: "Project 1")
+    windows.restore(WorkspaceStore.Contents(session: nil, workspaces: [:], snapshots: [:]))
+    try early.saveWorkspace(as: "Project 1")
     #expect(early.workspace.name == "Project 1")
 }
 
 @MainActor @Test func aClosedWorkspaceNamedLikeAnOpenOneIsRenamedAtLaunch() async throws {
     let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
     let saving = makeWindows(store: diskStore(folder))
-    let open = saving.open(at: Location(path: "/root"))
-    try saving.list.name(open.workspace, as: "Project 1")
+    let open = try await savedWindow(in: saving)
     #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
     let saved = await diskStore(folder).load()
-    let openState = try #require(saved.workspaces[open.workspace.id])
-    // As a hand edit or an older build could leave it: a closed one of the same name.
+    let openState = try #require(saved.snapshots[open.workspace.id])
+    // As a hand edit could leave it: a closed one of the same name.
     let twin = WorkspaceState(
         id: UUID(), name: "project 1", frame: openState.frame, tabs: openState.tabs,
         selectedTab: 0, showsSidebar: false)
     let writer = diskStore(folder)
-    await writer.save(twin)
+    await writer.saveSnapshot(twin)
     await writer.flush()
 
     let restoring = makeWindows(store: diskStore(folder))
@@ -622,69 +852,33 @@ private func expectReopenedAsBeforeClosing(with key: NSEvent) async throws {
             WorkspaceList.Saved(id: twin.id, name: "project 1 2", isOpen: false),
         ])
     #expect(await restoring.saveBeforeQuit(by: .now + .seconds(5)))
-    let onDisk = await diskStore(folder).load().workspaces
+    let onDisk = await diskStore(folder).load().snapshots
     #expect(onDisk[open.workspace.id]?.name == "Project 1")
     #expect(onDisk[twin.id]?.name == "project 1 2")
     #expect(onDisk[twin.id]?.tabs == twin.tabs)
 }
 
-/// The renamed window is restored as its file has it in every other way, so only the new name
-/// makes it differ from what was read.
-@MainActor @Test func anOpenWindowRenamedAtLaunchIsSavedThoughNothingElseChanged() async throws {
+/// The front window keeps its name and the back one, renamed, is saved under the new name,
+/// both its snapshot and its window, though nothing else changed.
+@MainActor @Test func twoOpenWindowsWithTheSameNameAreRenamedAtLaunch() async throws {
     let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
     let saving = makeWindows(store: diskStore(folder))
-    let back = saving.open(at: Location(path: "/root"))
+    let back = try await savedWindow(in: saving)
     let front = saving.open(at: Location(path: "/root"))
-    // On the test's screen, so the restore keeps the frames as saved.
-    try #require(back.window).setFrame(
-        CGRect(x: 100, y: 200, width: 900, height: 600), display: false)
-    try #require(front.window).setFrame(
-        CGRect(x: 1100, y: 200, width: 900, height: 600), display: false)
-    for controller in [back, front] {
-        let pane = controller.workspace.selectedTab.focusedPane
-        await settle { pane.state.isLoaded }
-    }
-    try saving.list.name(back.workspace, as: "Project 1")
+    try #require(front.window).setFrame(movedFrame, display: false)
+    _ = await loadedPane(of: front)
+    try front.saveWorkspace(as: "Other")
     #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
     let saved = await diskStore(folder).load()
-    let frontState = try #require(saved.workspaces[front.workspace.id])
-    let clash = WorkspaceState(
-        id: frontState.id, name: "Project 1", frame: frontState.frame, tabs: frontState.tabs,
-        selectedTab: frontState.selectedTab, showsSidebar: frontState.showsSidebar)
     let writer = diskStore(folder)
-    await writer.save(clash)
+    // As a hand edit could leave it: the front window renamed to the back one's name.
+    await writer.saveSnapshot(
+        try #require(saved.snapshots[front.workspace.id]).renamed("Project 1"))
     await writer.flush()
 
     let restoring = makeWindows(store: diskStore(folder))
     restoring.holdSavesUntilRestore()
     restoring.restore(await diskStore(folder).load())
-    #expect(await restoring.saveBeforeQuit(by: .now + .seconds(5)))
-
-    let onDisk = await diskStore(folder).load().workspaces
-    #expect(onDisk[front.workspace.id]?.name == "Project 1")
-    #expect(onDisk[back.workspace.id]?.name == "Project 1 2")
-}
-
-@MainActor @Test func twoOpenWindowsWithTheSameNameAreRenamedAtLaunch() async throws {
-    let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
-    let saving = makeWindows(store: diskStore(folder))
-    let back = saving.open(at: Location(path: "/root"))
-    let front = saving.open(at: Location(path: "/root"))
-    try saving.list.name(back.workspace, as: "Project 1")
-    try saving.list.name(front.workspace, as: "Other")
-    #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
-    let saved = await diskStore(folder).load()
-    // As a hand edit could leave it: the front window renamed to the back one's name.
-    let frontState = try #require(saved.workspaces[front.workspace.id])
-    let clash = WorkspaceState(
-        id: frontState.id, name: "Project 1", frame: frontState.frame, tabs: frontState.tabs,
-        selectedTab: frontState.selectedTab, showsSidebar: frontState.showsSidebar)
-    var workspaces = saved.workspaces
-    workspaces[clash.id] = clash
-
-    let restoring = makeWindows(store: diskStore(folder))
-    restoring.holdSavesUntilRestore()
-    restoring.restore(WorkspaceStore.Contents(session: saved.session, workspaces: workspaces))
 
     #expect(
         restoring.list.saved == [
@@ -692,15 +886,34 @@ private func expectReopenedAsBeforeClosing(with key: NSEvent) async throws {
             WorkspaceList.Saved(id: back.workspace.id, name: "Project 1 2", isOpen: true),
         ])
     #expect(await restoring.saveBeforeQuit(by: .now + .seconds(5)))
-    let onDisk = await diskStore(folder).load().workspaces
-    #expect(onDisk[back.workspace.id]?.name == "Project 1 2")
+    let onDisk = await diskStore(folder).load()
+    #expect(onDisk.snapshots[front.workspace.id]?.name == "Project 1")
+    #expect(onDisk.snapshots[back.workspace.id]?.name == "Project 1 2")
+    #expect(onDisk.workspaces[back.workspace.id]?.name == "Project 1 2")
 }
 
-@MainActor @Test func openingASavedWorkspaceThatIsOpenFocusesItsWindow() throws {
+@MainActor @Test func aWindowWhoseSnapshotIsGoneComesBackUnsaved() async throws {
+    let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
+    let saving = makeWindows(store: diskStore(folder))
+    let controller = try await savedWindow(in: saving)
+    #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
+    let saved = await diskStore(folder).load()
+
+    let restoring = makeWindows(store: nil)
+    let restored = try #require(
+        restoring.restore(
+            WorkspaceStore.Contents(
+                session: saved.session, workspaces: saved.workspaces, snapshots: [:])))
+
+    #expect(restored.workspace.id == controller.workspace.id)
+    #expect(restored.workspace.name == nil)
+    #expect(restoring.list.saved.isEmpty)
+}
+
+@MainActor @Test func openingASavedWorkspaceThatIsOpenFocusesItsWindow() async throws {
     let windows = makeWindows(store: nil)
-    let named = windows.open(at: Location(path: "/root"))
+    let named = try await savedWindow(in: windows)
     let other = windows.open(at: Location(path: "/root"))
-    try windows.list.name(named.workspace, as: "Project 1")
 
     let opened = windows.open(savedWorkspace: named.workspace.id)
 
@@ -710,12 +923,11 @@ private func expectReopenedAsBeforeClosing(with key: NSEvent) async throws {
     #expect(named.workspace.isActive && !other.workspace.isActive)
 }
 
-@MainActor @Test func deletingAWorkspaceRemovesItsFileAndClosesItsWindow() async throws {
+@MainActor @Test func deletingAWorkspaceRemovesItsFilesAndClosesItsWindow() async throws {
     let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
     let windows = makeWindows(store: diskStore(folder))
-    let named = windows.open(at: Location(path: "/root"))
+    let named = try await savedWindow(in: windows)
     let other = windows.open(at: Location(path: "/root"))
-    try windows.list.name(named.workspace, as: "Project 1")
     #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
 
     named.deleteWorkspace()
@@ -725,25 +937,25 @@ private func expectReopenedAsBeforeClosing(with key: NSEvent) async throws {
     #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
     let onDisk = await diskStore(folder).load()
     #expect(Array(onDisk.workspaces.keys) == [other.workspace.id])
+    #expect(onDisk.snapshots.isEmpty)
     #expect(
         onDisk.session
             == SessionState(workspaces: [other.workspace.id], keyWindow: other.workspace.id))
 }
 
-@MainActor @Test func restoreListsClosedNamedWorkspacesAndDeletesStrayUnnamedOnes() async throws {
+@MainActor @Test func restoreListsClosedSnapshotsAndDeletesStrayWindowFiles() async throws {
     let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
     let saving = makeWindows(store: diskStore(folder))
-    let named = saving.open(at: Location(path: "/root"))
+    let named = try await savedWindow(in: saving)
     let stray = saving.open(at: Location(path: "/root"))
     let kept = saving.open(at: Location(path: "/root"))
-    try saving.list.name(named.workspace, as: "Project 1")
     #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
     let saved = await diskStore(folder).load()
     #expect(saved.workspaces[stray.workspace.id] != nil)
     // As a crash leaves it: a file for each window, and a session of one.
     let contents = WorkspaceStore.Contents(
         session: SessionState(workspaces: [kept.workspace.id], keyWindow: kept.workspace.id),
-        workspaces: saved.workspaces)
+        workspaces: saved.workspaces, snapshots: saved.snapshots)
 
     let restoring = makeWindows(store: diskStore(folder))
     restoring.holdSavesUntilRestore()
@@ -756,25 +968,22 @@ private func expectReopenedAsBeforeClosing(with key: NSEvent) async throws {
         ])
     #expect(await restoring.saveBeforeQuit(by: .now + .seconds(5)))
     let onDisk = await diskStore(folder).load()
-    #expect(Set(onDisk.workspaces.keys) == [named.workspace.id, kept.workspace.id])
+    #expect(Array(onDisk.workspaces.keys) == [kept.workspace.id])
+    #expect(Array(onDisk.snapshots.keys) == [named.workspace.id])
 }
 
-@MainActor @Test func closingAndReopeningAnUnchangedNamedWorkspaceSavesOnlyTheSession()
-    async throws
-{
+/// Closing and reopening a saved workspace writes its window's file and the session, never
+/// its snapshot.
+@MainActor @Test func closingAndReopeningASavedWorkspaceWritesNoSnapshot() async throws {
     let fixture = try SavingFixture()
-    let controller = fixture.windows.open(at: Location(path: "/root"))
+    let controller = try await savedWindow(in: fixture.windows)
     let id = controller.workspace.id
-    // On the test's screen, so reopening keeps the frame as it was at close.
-    try #require(controller.window).setFrame(
-        CGRect(x: 100, y: 200, width: 900, height: 600), display: false)
-    let pane = controller.workspace.selectedTab.focusedPane
-    await settle { pane.state.isLoaded }
-    try fixture.windows.list.name(controller.workspace, as: "Project 1")
     await fixture.waitForSaveWait()
     fixture.clock.advance(by: fixture.windows.saveDelay)
-    #expect(!(await fixture.handedOnceSaved()).isEmpty)
+    let saved = await fixture.handedOnceSaved()
+    #expect(saved.contains("snapshots/\(id.uuidString).json"), "\(saved)")
 
+    try await drift(controller)
     try #require(controller.window).close()
     await fixture.waitForSaveWait()
     fixture.clock.advance(by: fixture.windows.saveDelay)
@@ -782,13 +991,11 @@ private func expectReopenedAsBeforeClosing(with key: NSEvent) async throws {
     #expect(handed == ["session.json"], "\(handed)")
 
     let reopened = fixture.windows.open(savedWorkspace: id)
-    let restored = reopened.workspace.selectedTab.focusedPane
-
-    await settle { restored.state.isLoaded }
+    _ = await loadedPane(of: reopened)
     await fixture.waitForSaveWait()
     fixture.clock.advance(by: fixture.windows.saveDelay)
     let reopenHanded = await fixture.handedOnceSaved()
-    #expect(reopenHanded == ["session.json"], "\(reopenHanded)")
+    #expect(Set(reopenHanded) == ["workspaces/\(id.uuidString).json", "session.json"])
 }
 
 @MainActor @Test func theDeleteQuestionNamesTheWorkspaceAndCannotBeUndone() {
@@ -805,7 +1012,7 @@ private func expectReopenedAsBeforeClosing(with key: NSEvent) async throws {
     let front = windows.open(at: Location(path: "/root"))
     let named = windows.open(at: Location(path: "/root"))
     let id = named.workspace.id
-    try windows.list.name(named.workspace, as: "Project 1")
+    try named.saveWorkspace(as: "Project 1")
     try #require(named.window).close()
     let outline = front.sidebar.outlineView
     let row = try #require(
@@ -869,7 +1076,7 @@ private func survivesTheCap(_ path: String, in cache: ListingCache) async -> Boo
     let cache = ListingCache(entryCap: 4, store: nil)
     let windows = makeWindows(store: diskStore(folder), cache: cache)
     let controller = windows.open(at: Location(path: "/root"))
-    try windows.list.name(controller.workspace, as: "Project 1")
+    try controller.saveWorkspace(as: "Project 1")
     #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
 
     #expect(await survivesTheCap("/root", in: cache))
@@ -882,7 +1089,7 @@ private func survivesTheCap(_ path: String, in cache: ListingCache) async -> Boo
     let cache = ListingCache(entryCap: 4, store: nil)
     let windows = makeWindows(store: diskStore(folder), cache: cache)
     let controller = windows.open(at: Location(path: "/root"))
-    try windows.list.name(controller.workspace, as: "Project 1")
+    try controller.saveWorkspace(as: "Project 1")
     #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
     controller.workspace.selectedTab.focusedPane.navigate(to: Location(path: "/root/docs"))
     #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))

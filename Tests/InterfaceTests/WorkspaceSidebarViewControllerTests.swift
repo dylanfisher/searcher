@@ -8,6 +8,8 @@ import Testing
 
 @testable import Interface
 
+private let frame = Rect(x: 0, y: 0, width: 900, height: 600)
+
 /// A list of two open workspaces, "beta" and "Alpha", one closed saved workspace, "Gamma", and
 /// an unnamed open one, which is the window's own; and a sidebar for that window that is never
 /// shown, with the IDs it opens counted.
@@ -38,10 +40,10 @@ private final class Fixture {
         for workspace in [alpha, beta, own] {
             list.add(workspace)
         }
-        try list.name(beta, as: "beta")
-        try list.name(alpha, as: "Alpha")
+        try list.save(beta, as: "beta", frame: frame)
+        try list.save(alpha, as: "Alpha", frame: frame)
         gamma = WorkspaceState(
-            id: UUID(), name: "Gamma", frame: Rect(x: 0, y: 0, width: 900, height: 600),
+            id: UUID(), name: "Gamma", frame: frame,
             tabs: alpha.tabs.map(\.state), selectedTab: 0, showsSidebar: false)
         try list.addSaved(gamma)
         sidebar = WorkspaceSidebarViewController(workspace: own, list: list)
@@ -133,7 +135,7 @@ private final class Fixture {
 @MainActor @Test func aRenameInTheModelUpdatesTheRow() throws {
     let fixture = try Fixture()
 
-    try fixture.list.name(fixture.alpha, as: "Zeta")
+    try fixture.list.rename(fixture.alpha, as: "Zeta")
 
     #expect(try fixture.names == ["beta", "Gamma", "Zeta"])
 }
@@ -142,7 +144,7 @@ private final class Fixture {
     let fixture = try Fixture()
     #expect(fixture.outline.selectedRow == -1)
 
-    try fixture.list.name(fixture.own, as: "Delta")
+    try fixture.list.save(fixture.own, as: "Delta", frame: frame)
 
     #expect(try fixture.names == ["Alpha", "beta", "Delta", "Gamma"])
     #expect(fixture.outline.selectedRow == (try fixture.row(of: "Delta")))
@@ -150,11 +152,8 @@ private final class Fixture {
 
 @MainActor @Test func closingAndOpeningASavedWorkspaceMovesItsMark() throws {
     let fixture = try Fixture()
-    let state = WorkspaceState(
-        id: fixture.beta.id, name: "beta", frame: Rect(x: 0, y: 0, width: 900, height: 600),
-        tabs: fixture.beta.tabs.map(\.state), selectedTab: 0, showsSidebar: false)
 
-    fixture.list.windowClosed(fixture.beta, as: state)
+    fixture.list.windowClosed(fixture.beta)
 
     #expect(try fixture.cells.map(\.showsOpen) == [true, false, false])
 
@@ -168,7 +167,7 @@ private final class Fixture {
     #expect(fixture.window.makeFirstResponder(fixture.outline))
     fixture.outline.selectRowIndexes([try fixture.row(of: "beta")], byExtendingSelection: false)
 
-    try fixture.list.name(fixture.alpha, as: "Zeta")
+    try fixture.list.rename(fixture.alpha, as: "Zeta")
 
     #expect(try fixture.names == ["beta", "Gamma", "Zeta"])
     #expect(fixture.outline.selectedRow == (try fixture.row(of: "beta")))
@@ -179,7 +178,7 @@ private final class Fixture {
     throws
 {
     let fixture = try Fixture()
-    try fixture.list.name(fixture.own, as: "Delta")
+    try fixture.list.save(fixture.own, as: "Delta", frame: frame)
     #expect(fixture.window.makeFirstResponder(fixture.outline))
     fixture.outline.selectRowIndexes([try fixture.row(of: "Gamma")], byExtendingSelection: false)
 

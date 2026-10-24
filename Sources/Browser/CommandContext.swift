@@ -22,14 +22,19 @@ public struct CommandContext {
     /// Shows the window's operations panel, or hides it. Only the window can; a context built
     /// without it traps when the command runs.
     public let toggleOperations: @MainActor () -> Void
-    /// Asks the user for a name for the window's workspace, and names it. Only the window can
-    /// ask; a context built without it traps when Name Workspace runs.
+    /// Asks the user for a name for the window's workspace: for an unsaved one, the name to save
+    /// it under; for a saved one, a new name. Only the window can ask; a context built without it
+    /// traps when Save Workspace or Rename Workspace asks.
     public let askForWorkspaceName: @MainActor () -> Void
+    /// Saves the window's saved workspace as the window has it now, without asking. Only the
+    /// window knows its frame; a context built without it traps when Save Workspace saves.
+    public let saveWorkspace: @MainActor () -> Void
     /// Asks the user whether to delete the window's workspace, and deletes it on yes. Only the
     /// window can ask; a context built without it traps when Delete Workspace runs.
     public let askToDeleteWorkspace: @MainActor () -> Void
-    /// Moves the keys into the window's workspace sidebar, which shows. Only the window can; a
-    /// context built without it traps when Focus Sidebar runs.
+    /// Moves the keys into the window's workspace sidebar, which shows, or back to the focused
+    /// pane when the sidebar has them. Only the window can; a context built without it traps when
+    /// Focus Sidebar runs.
     public let focusSidebar: @MainActor () -> Void
     /// Shows the command palette over the window. Only the window can; a context built without
     /// it traps when Show Palette runs.
@@ -81,6 +86,9 @@ public struct CommandContext {
         askForWorkspaceName: @escaping @MainActor () -> Void = {
             preconditionFailure("this command context can't ask for a workspace name")
         },
+        saveWorkspace: @escaping @MainActor () -> Void = {
+            preconditionFailure("this command context can't save a workspace")
+        },
         askToDeleteWorkspace: @escaping @MainActor () -> Void = {
             preconditionFailure("this command context can't ask to delete a workspace")
         },
@@ -112,6 +120,7 @@ public struct CommandContext {
         self.showFilter = showFilter
         self.toggleOperations = toggleOperations
         self.askForWorkspaceName = askForWorkspaceName
+        self.saveWorkspace = saveWorkspace
         self.askToDeleteWorkspace = askToDeleteWorkspace
         self.focusSidebar = focusSidebar
         self.showPalette = showPalette

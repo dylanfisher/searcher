@@ -173,14 +173,15 @@ public actor ListingCache {
         await keepFiles(read)
     }
 
-    /// `restore(folders:mountedVolumes:)` with the folder of every pane in `contents`' workspaces,
-    /// saved and open alike, as the launch reads them.
+    /// `restore(folders:mountedVolumes:)` with the folder of every pane in `contents`' windows
+    /// and snapshots, as the launch reads them.
     public func restore(
         _ contents: WorkspaceStore.Contents,
         mountedVolumes: @escaping @Sendable () -> [VolumeIdentity] = VolumeIdentity.mounted
     ) async {
         await restore(
-            folders: Self.folders(of: Array(contents.workspaces.values)),
+            folders: Self.folders(
+                of: Array(contents.workspaces.values) + Array(contents.snapshots.values)),
             mountedVolumes: mountedVolumes)
     }
 

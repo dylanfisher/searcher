@@ -756,7 +756,7 @@ private func type(_ query: String, in controller: BrowserWindowController) async
 @MainActor @Test func thePalettesSavedWorkspaceOpensThroughTheWindows() async throws {
     let fixture = try await Fixture()
     let named = try #require(fixture.windows.controllers.first)
-    try fixture.windows.list.name(named.workspace, as: "Project 1")
+    try named.saveWorkspace(as: "Project 1")
     let other = try await fixture.open()
     #expect(fixture.windows.list.workspaces.first === other.workspace)
     try fixture.press(try keyEvent("k", modifiers: .command), in: other)

@@ -924,6 +924,32 @@ private func sidebarKey() throws -> NSEvent {
     #expect(fixture.controller.showsSidebar)
 }
 
+/// Command-0 shows a hidden sidebar and moves the keys into it; pressed there, from its menu
+/// item as the menu bar runs it, it gives them back to the pane and leaves the sidebar showing.
+@MainActor @Test func commandZeroMovesTheKeysToTheSidebarAndBack() async throws {
+    let fixture = try await Fixture()
+    let paneTable = try fixture.keyTable
+    #expect(!fixture.controller.showsSidebar)
+
+    try fixture.press(try keyEvent("0", modifiers: .command))
+
+    let outline = fixture.controller.sidebar.outlineView
+    #expect(fixture.controller.showsSidebar && fixture.window.firstResponder === outline)
+
+    let menu = try MainMenuBuilder.build(appName: "Searcher", registry: AppCommands.registry())
+    let item = try #require(menuItem(WorkspaceCommands.focusSidebar.id, in: menu))
+    #expect(item.keyEquivalent == "0" && item.keyEquivalentModifierMask == .command)
+    #expect(fixture.controller.validateMenuItem(item))
+    fixture.controller.runMenuCommand(item)
+
+    #expect(fixture.window.firstResponder === paneTable)
+    #expect(fixture.controller.showsSidebar)
+
+    fixture.controller.runMenuCommand(item)
+
+    #expect(fixture.window.firstResponder === outline)
+}
+
 @MainActor @Test func hidingTheSidebarWhileItHasTheKeysGivesThemToThePane() async throws {
     let fixture = try await Fixture()
     let paneTable = try fixture.keyTable
