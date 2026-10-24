@@ -167,3 +167,62 @@ private func pathBar(
 
     #expect(bar.hoveredSegment == nil)
 }
+
+@MainActor @Test func theRowStartsAtTheSharedBarInset() {
+    let bar = pathBar(showing: "/Users/dylan/Projects")
+
+    #expect(bar.segments.first?.frame.minX == BarInset.horizontal)
+}
+
+/// A bar `cut` points too narrow for its row, so its middle folders truncate, and each
+/// segment's natural width.
+@MainActor private func truncatedPathBar(cut: CGFloat = 120) -> (PathBarView, [CGFloat]) {
+    let path = "/Users/dylan/a fairly long folder name/another fairly long folder name/Projects"
+    let wide = pathBar(showing: path, width: 4000)
+    let natural = wide.segments.map(\.frame.width)
+    let rowWidth = (wide.segments.last?.frame.maxX ?? 0) + BarInset.horizontal
+    return (pathBar(showing: path, width: rowWidth - cut), natural)
+}
+
+@MainActor @Test func aHoveredTruncatedSegmentTakesItsFullWidthAndTheOthersGiveWay() throws {
+    let (bar, natural) = truncatedPathBar()
+    let truncated = try #require(
+        bar.segments.indices.last { bar.segments[$0].frame.width < natural[$0] })
+    let end = bar.segments.last?.frame.maxX
+
+    bar.segments[truncated].mouseEntered(with: try mouseEvent(.mouseEntered))
+    bar.layoutSubtreeIfNeeded()
+
+    #expect(bar.segments[truncated].frame.width == natural[truncated])
+    #expect(bar.segments.last?.frame.maxX == end)
+    #expect(
+        bar.segments.indices.contains {
+            $0 != truncated && bar.segments[$0].frame.width < natural[$0]
+        })
+
+    bar.segments[truncated].mouseExited(with: try mouseEvent(.mouseExited))
+    bar.layoutSubtreeIfNeeded()
+    #expect(bar.segments[truncated].frame.width < natural[truncated])
+}
+
+@MainActor @Test func onlyTruncatedSegmentsHaveATooltipWithTheirFullName() {
+    let (bar, natural) = truncatedPathBar()
+
+    for (index, segment) in bar.segments.enumerated() {
+        let isTruncated = segment.frame.width < natural[index]
+        #expect(segment.toolTip == (isTruncated ? segment.title : nil))
+    }
+    #expect(bar.segments.contains { $0.toolTip != nil })
+    #expect(bar.segments.contains { $0.toolTip == nil })
+}
+
+@Test func anExpandedSegmentKeepsItsWidthWhileTheOthersShrink() {
+    // The second middle segment keeps its 80; the first middle one, then the root, give way.
+    #expect(
+        PathBarView.widths(natural: [50, 80, 80, 60], available: 200, minimum: 30, expanding: 2)
+            == [30, 30, 80, 60])
+    // It gives way last, once every other segment is at the minimum.
+    #expect(
+        PathBarView.widths(natural: [50, 80, 80, 60], available: 140, minimum: 30, expanding: 2)
+            == [30, 30, 50, 30])
+}
