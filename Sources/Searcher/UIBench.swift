@@ -364,7 +364,9 @@ final class UIBench {
             clipboard: PasteboardFileClipboard(pasteboard: pasteboard), store: nil)
         windows.showsWindows = false
         restored = windows
-        guard let key = windows.restore(contents) else { throw Failure("nothing was restored") }
+        guard let key = await windows.restore(contents) else {
+            throw Failure("nothing was restored")
+        }
         guard windows.controllers.count == workspaces.count else {
             throw Failure(
                 "restored \(windows.controllers.count) of the \(workspaces.count) windows saved")
@@ -478,9 +480,10 @@ final class UIBench {
     /// as a session that showed the folder leaves it at quit. Then, as a launch does, reads a
     /// saved session of one window on the folder, and the cache's volume files for its pane, off
     /// the main actor, and rebuilds the window with `WorkspaceWindows.restore` over a new cache
-    /// and listing service. B4 runs from the window shown to the frame with its cached rows. The
-    /// folder's own rows first fail the run: the folder isn't on a network volume, or the cache
-    /// didn't keep it.
+    /// and listing service. The pane must have rows as its window is shown: its cached ones, or
+    /// its own if they came first. B4 runs from the window shown to the frame with those rows,
+    /// the first frame of a fresh process. A folder the cache didn't keep, as one that isn't on
+    /// a network volume, fails the run.
     private func restoreNetworkPane(
         in root: TempRoot, settings: Settings, systemActions: any SystemActions
     ) async throws {
@@ -501,6 +504,13 @@ final class UIBench {
         }
         guard case .full = listed else { throw Failure("listing \(path) ended \(listed)") }
         await filling.flush()
+        let volume = try await BlockingCallThread.run { () throws(ListingError) in
+            try VolumeIdentity(path: path)
+        }
+        guard await filling.folder(at: path, on: volume) != nil else {
+            throw Failure(
+                "the cache didn't keep \(path), on \(volume.mountPoint), a \(volume.kind) volume")
+        }
 
         let problems = OSAllocatedUnfairLock(initialState: [StoreProblem]())
         let report: @Sendable (StoreProblem) -> Void = { problem in
@@ -543,11 +553,21 @@ final class UIBench {
             clipboard: PasteboardFileClipboard(pasteboard: pasteboard), store: nil)
         windows.showsWindows = false
         restored = windows
-        guard let key = windows.restore(contents) else { throw Failure("nothing was restored") }
+        guard let key = await windows.restore(contents) else {
+            throw Failure("nothing was restored")
+        }
         controller = key
         key.paneViewController.onShow = { [weak self] in self?.paneShown() }
         let window = try requireWindow()
         place(window)
+        // The restore waited for the cached rows, so the window's first frame has rows.
+        let pane = key.workspace.selectedTab.focusedPane
+        switch pane.state {
+        case .cachedRefreshing(let rows, _), .loaded(let rows):
+            guard rows.count > 0 else { throw Failure("\(path) has no rows to show") }
+        case .loading, .partial, .slow, .offline, .denied, .failed:
+            throw Failure("\(path) was \(pane.state), not its cached rows, as its window was shown")
+        }
         // In front of other apps' windows, without activating the app or making it key.
         window.orderFrontRegardless()
         window.makeFirstResponder(key.paneViewController.keyView)
@@ -564,18 +584,16 @@ final class UIBench {
                 switch pane.state {
                 case .loading, .slow:
                     return false
-                case .cachedRefreshing(let rows, _):
+                case .cachedRefreshing(let rows, _), .loaded(let rows):
                     guard rows.count > 0 else {
                         continuation.resume(
-                            returning: .failure(Failure("\(path)'s cached listing is empty")))
+                            returning: .failure(Failure("\(path)'s listing is empty")))
                         return true
                     }
-                case .partial, .loaded:
+                case .partial:
                     continuation.resume(
                         returning: .failure(
-                            Failure(
-                                "\(path) showed its own rows before cached ones: it isn't on a "
-                                    + "network volume, or the cache didn't keep it")))
+                            Failure("\(path) showed its own first batch in place of cached rows")))
                     return true
                 case .offline:
                     continuation.resume(returning: .failure(Failure("\(path) went offline")))

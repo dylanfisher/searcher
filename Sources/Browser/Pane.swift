@@ -216,6 +216,19 @@ public final class Pane {
         history = saved.history
     }
 
+    /// Returns once the rows the listing cache keeps for the pane's folder, or for each column's
+    /// in column mode, have reached the pane, or the cache had none (`ListingLoad`'s
+    /// `cachedRowsHanded()`). It never waits on a folder's volume.
+    public func cachedRowsHanded() async {
+        guard let trail = columnTrail else {
+            await load?.cachedRowsHanded()
+            return
+        }
+        for column in trail.columns {
+            await column.pane.cachedRowsHanded()
+        }
+    }
+
     /// A pane that shows `rows`, a complete listing of `location` in list mode, and lists nothing
     /// until something asks it to; with no rows, it starts listing as above. In column mode the
     /// first column selects the selection's cursor.

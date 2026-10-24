@@ -28,6 +28,10 @@ public final class ListingLoad: @unchecked Sendable {
     /// Runs when `priority` is set, so the service can start a waiting load that was raised.
     let onPriorityChange: @Sendable () -> Void
 
+    /// Whether `cachedRowsHanded()` has returned, and the calls waiting for it.
+    @MainActor private var cachedLookupEnded = false
+    @MainActor private var cachedLookupWaiters: [CheckedContinuation<Void, Never>] = []
+
     // `lock` guards `cancelled`, `storedVolume` and `storedPriority`.
     private let lock = NSLock()
     private var cancelled = false
@@ -57,6 +61,10 @@ public final class ListingLoad: @unchecked Sendable {
         lock.withLock { cancelled = true }
         // Its slow and give-up timers stop with it, whether it ran, waits or is being placed.
         stall.finish {}
+        // A cancelled load hands nothing more, so `cachedRowsHanded()` has nothing to wait for.
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated { self.endCachedLookup() }
+        }
     }
 
     public var isCancelled: Bool {
@@ -74,6 +82,25 @@ public final class ListingLoad: @unchecked Sendable {
             lock.withLock { storedPriority = newValue }
             onPriorityChange()
         }
+    }
+
+    /// Returns once the cache has been asked for the folder's rows before its volume is read, and
+    /// the rows it had, if any, have reached the load's `onUpdate`. It never waits on the folder's
+    /// volume: a load the service doesn't ask the cache for first, as for a local folder or with
+    /// no cache, returns once it is placed, and a cancelled one once it is cancelled. A restore waits for it before showing its windows, so
+    /// their first frame has the cached rows (docs/decisions/0081-restored-network-panes.md).
+    @MainActor public func cachedRowsHanded() async {
+        guard !cachedLookupEnded else { return }
+        await withCheckedContinuation { cachedLookupWaiters.append($0) }
+    }
+
+    /// Ends `cachedRowsHanded()`. The service queues it on the main queue after the cached rows'
+    /// hand-off, so those reach `onUpdate` first.
+    @MainActor func endCachedLookup() {
+        cachedLookupEnded = true
+        let waiters = cachedLookupWaiters
+        cachedLookupWaiters = []
+        for waiter in waiters { waiter.resume() }
     }
 
     /// The volume the folder is on, once the service has read it; nil until then. The service
