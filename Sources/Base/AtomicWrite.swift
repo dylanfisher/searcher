@@ -13,7 +13,7 @@ public enum AtomicWrite {
             !Thread.isMainThread, "AtomicWrite does file-system I/O; call it off the main thread")
         // In the same folder, so the rename stays on one volume and can't turn into a copy.
         let partial = url.deletingLastPathComponent()
-            .appending(path: ".\(url.lastPathComponent).partial-\(UUID().uuidString)")
+            .appending(path: ".\(url.lastPathComponent)\(partialMarker)\(UUID().uuidString)")
         do {
             try data.write(to: partial, options: .withoutOverwriting)
             try beforeRename()
@@ -32,6 +32,17 @@ public enum AtomicWrite {
             throw error
         }
     }
+
+    /// Whether `name` is one of the temporary files `write` makes. A crash between its write and
+    /// its rename leaves one behind, which a store can delete.
+    public static func isPartial(_ name: String) -> Bool {
+        guard name.hasPrefix("."), let marker = name.range(of: partialMarker, options: .backwards)
+        else { return false }
+        return marker.lowerBound > name.index(after: name.startIndex)
+            && UUID(uuidString: String(name[marker.upperBound...])) != nil
+    }
+
+    private static let partialMarker = ".partial-"
 
     public struct Failed: Error, CustomStringConvertible {
         public let description: String

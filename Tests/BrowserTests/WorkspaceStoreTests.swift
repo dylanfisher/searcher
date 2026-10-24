@@ -148,6 +148,47 @@ private func onePaneTab() -> TabState {
     #expect(await store(folder).load().workspaces[id]?.name == "Edit 10")
 }
 
+@Test func aSaveAfterAFlushWaitsTheWholeDelay() async throws {
+    let folder = try TemporaryFolder("WorkspaceStoreTests")
+    let clock = ManualClock()
+    let writes = EventLog<String?>()
+    let writer = store(folder, clock: clock) { data, url in
+        let state = try JSONDecoder().decode(WorkspaceState.self, from: data)
+        writes.append(state.name)
+        try AtomicWrite.write(data, to: url)
+    }
+    let id = UUID()
+    let half = WorkspaceStore.writeDelay / 2
+    await writer.save(try workspace(id, name: "Flushed"))
+    clock.advance(by: half)
+    await writer.flush()
+    await writer.save(try workspace(id, name: "Later"))
+
+    // The wait the first save started ends here; the flush made it moot.
+    clock.advance(by: half)
+    #expect(await !writes.wait(timeout: 0.2) { $0.count > 1 })
+    clock.advance(by: half)
+    #expect(await writes.wait { $0.count > 1 })
+    #expect(writes.all == ["Flushed", "Later"])
+}
+
+@Test func aSessionKeepsAWorkspaceWhoseFileIsMissing() async throws {
+    let folder = try TemporaryFolder("WorkspaceStoreTests")
+    let saved = try workspace()
+    let missing = UUID()
+    let session = SessionState(workspaces: [missing, saved.id], keyWindow: missing)
+    let writer = store(folder)
+    await writer.save(saved)
+    await writer.saveSession(session)
+    await writer.flush()
+
+    let problems = EventLog<StoreProblem>()
+    let loaded = await store(folder, problems: problems).load()
+    #expect(loaded.session == session)
+    #expect(loaded.workspaces == [saved.id: saved])
+    #expect(problems.all.isEmpty)
+}
+
 @Test func aWorkspaceLoadSeesASaveNotYetWritten() async throws {
     let folder = try TemporaryFolder("WorkspaceStoreTests")
     let writer = store(folder)
@@ -268,6 +309,40 @@ private func editJSON(_ data: Data, _ edit: (inout [String: Any]) throws -> Void
     #expect(problems.all.map(\.kind) == [.discarded, .discarded])
     #expect(
         try FileManager.default.contentsOfDirectory(atPath: workspacesFolder(folder).path) == [])
+}
+
+/// A write's temporary file, as a crash between its write and rename leaves it, is deleted
+/// without a report; a dot-file such as Finder's is left alone.
+@Test func aWritesLeftoverIsDeletedQuietlyAndDotFilesAreIgnored() async throws {
+    let folder = try TemporaryFolder("WorkspaceStoreTests")
+    let saved = try workspace()
+    struct Interrupted: Error {}
+    let kept = folder.url.appending(path: "kept")
+    let leftover = EventLog<String>()
+    let crashing = store(folder) { data, url in
+        try AtomicWrite.write(data, to: url) {
+            let names = try FileManager.default.contentsOfDirectory(
+                atPath: url.deletingLastPathComponent().path)
+            let partial = try #require(names.first)
+            leftover.append(partial)
+            try FileManager.default.copyItem(
+                at: url.deletingLastPathComponent().appending(path: partial), to: kept)
+            throw Interrupted()
+        }
+    }
+    await crashing.save(saved)
+    await crashing.flush()
+    let partial = workspacesFolder(folder).appending(path: try #require(leftover.all.first))
+    try FileManager.default.moveItem(at: kept, to: partial)
+    let finder = workspacesFolder(folder).appending(path: ".DS_Store")
+    try Data("finder".utf8).write(to: finder)
+
+    let problems = EventLog<StoreProblem>()
+    let loaded = await store(folder, problems: problems).load()
+    #expect(loaded.workspaces.isEmpty)
+    #expect(problems.all.isEmpty)
+    #expect(!FileManager.default.fileExists(atPath: partial.path))
+    #expect(FileManager.default.fileExists(atPath: finder.path))
 }
 
 @Test func aDamagedSessionIsDeletedAndReportedAndTheWorkspacesStillLoad() async throws {

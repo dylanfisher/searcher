@@ -297,6 +297,18 @@ private func expectLeavesMatchPanes(_ tab: Tab) {
     tab.close()
 }
 
+@MainActor @Test func tabStateNamesTheRowsOfAnAllExceptSelection() async throws {
+    let (tab, fixture) = makeTab()
+    await settle { fixture.pane.state.isLoaded }
+    fixture.pane.select(
+        Selection(.allExcept([ExactName("a.txt")]), cursor: ExactName("docs"), anchor: nil))
+
+    let pane = try #require(tab.state.panes[tab.layout.focused])
+    #expect(pane.selection == [ExactName("docs")])
+    #expect(pane.cursor == ExactName("docs"))
+    tab.close()
+}
+
 @MainActor @Test func tabStateWhosePanesDontMatchTheLayoutFailsToDecode() throws {
     let (one, _) = makeTab(held: true)
     let (other, _) = makeTab(held: true)

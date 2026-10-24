@@ -26,3 +26,22 @@ import Testing
     #expect(try String(contentsOf: file, encoding: .utf8) == "old")
     #expect(try FileManager.default.contentsOfDirectory(atPath: folder.url.path) == ["report.json"])
 }
+
+@Test func onlyTheTemporaryFilesWriteMakesCountAsPartial() throws {
+    let folder = try TemporaryFolder("AtomicWriteTests")
+    let file = folder.url.appending(path: "report.json")
+    struct Interrupted: Error {}
+    var partial: String?
+    #expect(throws: Interrupted.self) {
+        try AtomicWrite.write(Data("new".utf8), to: file) {
+            partial = try FileManager.default.contentsOfDirectory(atPath: folder.url.path).first
+            throw Interrupted()
+        }
+    }
+
+    #expect(AtomicWrite.isPartial(try #require(partial)))
+    #expect(!AtomicWrite.isPartial("report.json"))
+    #expect(!AtomicWrite.isPartial(".DS_Store"))
+    #expect(!AtomicWrite.isPartial(".report.json.partial-not-a-uuid"))
+    #expect(!AtomicWrite.isPartial("report.json.partial-\(UUID().uuidString)"))
+}

@@ -24,8 +24,8 @@ on screen, with frames and tab strips set and the key window's focused pane show
   the tabs as `TabState`, the selected tab's index and whether the sidebar shows. `TabState`
   adds per pane the selection by name, the cursor, the sort column and direction. Not kept: the
   scroll offset, the filter, hidden files (a setting, not per pane), the rows and the selection
-  history (record 0077). `SessionState`: the open workspaces' IDs, front window first, and
-  the key window's.
+  history ([0077](0077-selection-history.md)). `SessionState`: the open workspaces' IDs, front
+  window first, and the key window's.
 - **Selection by name.** `Tab.state` takes a settled selection of names as it is, so a pane
   still loading keeps the names it will select. Any other selection, such as Select All's
   "every row but these", is stored as the selected rows' names: a restored Select All then
@@ -37,10 +37,18 @@ on screen, with frames and tab strips set and the key window's focused pane show
   that don't match the layout's leaves, a key window not in the session, a workspace listed
   twice. A workspace file not named `<its id>.json`, and any other file in the folder, is
   deleted and reported too. The other files still load.
+- **Leftovers and dot-files.** A crash between `AtomicWrite`'s write and rename leaves its
+  temporary file in the workspaces folder; the load deletes it without a report, since the file
+  it was to replace is still there. `AtomicWrite.isPartial` is the one test of that name. Any
+  other dot-file, such as Finder's `.DS_Store`, is left alone and not reported.
+- **A session naming a missing workspace.** `load()` returns the session as saved. A workspace
+  whose file is missing or was discarded is absent from `workspaces`; a discard was reported
+  already. M5a.2 skips each ID with no workspace, and the next session it saves drops it.
 - **Writes.** A save is written one second after the first unwritten one
   (`WorkspaceStore.writeDelay`), so the saves in between go out in the same write, one per
   file, through `AtomicWrite` on the store's actor. A write interrupted before the rename leaves
-  the previous file. `flush()` writes at once, for quitting. A load sees saves not yet written.
+  the previous file. `flush()` writes at once, for quitting, and cancels the pending wait, so a
+  save after it waits the whole delay. A load sees saves not yet written.
   The store's file calls trap on the main thread (`dispatchPrecondition`). The clock is injected.
 - **Problems.** `StoreProblem` names the file, the kind (unreadable, discarded, undeletable,
   unwritten) and the error, and its description is the sentence to show. The store reports each
@@ -65,7 +73,9 @@ on screen, with frames and tab strips set and the key window's focused pane show
 ## Consequences
 
 A save in the second before the app is killed is lost unless the app calls `flush()` on quit,
-which M5a.2 does. A `.DS_Store` or other stray file in the workspaces folder is deleted and
-reported at the next load. A file written by hand with a lowercase UUID or another number
+which M5a.2 does. A stray file in the workspaces folder that isn't a dot-file is deleted and
+reported at the next load. Only the workspaces folder is cleaned of leftovers: one of
+`session.json`'s, in the application support root, stays until something else cleans that
+folder. A file written by hand with a lowercase UUID or another number
 format doesn't re-encode to itself and is discarded. Nothing deletes a closed unnamed
 workspace's file yet; M5a.4 adds that.
