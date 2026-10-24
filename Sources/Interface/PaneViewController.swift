@@ -527,9 +527,16 @@ public final class PaneViewController: NSViewController {
         case .denied:
             accessDeniedView.isHidden = false
         case .failed(let error):
-            messageLabel.stringValue = error.description
+            messageLabel.stringValue =
+                pane.state.missingFolder.map(Self.missingMessage) ?? error.description
             messageLabel.isHidden = false
         }
+    }
+
+    /// The line over a pane whose folder isn't there, as a restored pane shows it after the
+    /// folder was deleted or its disk ejected.
+    static func missingMessage(_ path: String) -> String {
+        "The folder \(path) isn't there."
     }
 
     /// The spinner and note for the pane's state, or in column mode the focused column's: the

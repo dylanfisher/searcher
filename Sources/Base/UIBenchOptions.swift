@@ -16,9 +16,15 @@ public struct UIBenchOptions: Sendable, Equatable {
         /// W2 in a split window: ↓ in the focused pane of two panes and of a 4-pane grid (B6),
         /// and ten panes opening W2 at once to the focused pane's first rows (B2).
         case splits
+        /// A cold launch restoring a saved session of 3 windows × 2 tabs × 4 panes on W1, one
+        /// pane on W2, to every window on screen and the key window's focused pane showing
+        /// rows (B1).
+        case restoredSession = "restored-session"
 
         /// Whether it times a real folder, `--path`, which it never defaults to.
-        public var needsPath: Bool { self != .columnKeys && self != .splits }
+        public var needsPath: Bool {
+            self != .columnKeys && self != .splits && self != .restoredSession
+        }
     }
 
     /// Times the `splits` scenario's one launch opens W2 in ten panes, for as many samples as the

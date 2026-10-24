@@ -25,9 +25,10 @@ struct UIBenchReport {
     }
 
     /// A scenario is one launch: each times a span many times over, or opens folders that are
-    /// cold only once.
+    /// cold only once. A restored session times the launch itself, once per launch, so it
+    /// launches as often as the CI run.
     static func launches(for scenario: UIBenchOptions.Scenario?) -> Int {
-        scenario == nil ? launches : 1
+        scenario == nil || scenario == .restoredSession ? launches : 1
     }
 
     /// The ↓ presses launch `launch` (from 0) of a run makes: the CI run's first launch and the
@@ -101,6 +102,13 @@ struct UIBenchReport {
             spans = [("revisit → cached rows frame", "B4", record.revisit)]
         case .columnWalk:
             spans = [("column walk key → frame", "B6", record.columnWalkKey)]
+        case .restoredSession:
+            spans = [
+                (
+                    "launch → restored windows, key window's focused pane rows frame", "B1",
+                    record.launch
+                )
+            ]
         }
         var cases = try spans.map { span in
             guard !span.samples.isEmpty else { throw NoSamples(span: span.name) }

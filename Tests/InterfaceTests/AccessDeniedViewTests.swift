@@ -80,6 +80,14 @@ func otherFailuresShowTheErrorTextNotTheDeniedView(path: String) async {
     #expect(fixture.controller.messageLabel.stringValue.contains(path))
 }
 
+@MainActor @Test func aMissingFolderShowsTheMissingStateWithItsPath() async {
+    let fixture = DeniedFixture(at: "/root/gone")
+    await settle { fixture.pane.state.hasEnded }
+
+    #expect(fixture.controller.messageLabel.stringValue == "The folder /root/gone isn't there.")
+    #expect(fixture.pane.location == Location(path: "/root/gone"))
+}
+
 @MainActor @Test func cmdUpFromADeniedFolderGoesBackAndHidesTheView() async throws {
     let fixture = DeniedFixture(at: "/root/Mail")
     await settle { fixture.pane.state.hasEnded }
