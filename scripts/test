@@ -21,7 +21,10 @@ serial="InterfaceTests"
 # Gentle mode builds the tests at low priority first; the run below stays at normal priority.
 [ -z "${SEARCHER_GENTLE:-}" ] || swift_cmd build --build-tests "${flags[@]}"
 
-if [ $# -gt 0 ]; then swift_cmd test "${flags[@]}" "$@"; exit $?; fi
+if [ $# -gt 0 ]; then
+  [ -n "${SEARCHER_GENTLE:-}" ] || exec swift test "${flags[@]}" "$@"
+  swift_cmd test "${flags[@]}" "$@"; exit $?
+fi
 
 status=0
 swift_cmd test "${flags[@]}" --skip "$serial" || status=1
