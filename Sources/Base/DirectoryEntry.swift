@@ -6,9 +6,17 @@ public struct DirectoryEntry: Equatable, Sendable {
     public enum FileType: Sendable {
         case regular
         case directory
+        /// A folder Finder shows as one file, such as an app or an RTFD document: its extension
+        /// names a package type, or it has the bundle bit. It opens as a file does and sorts with
+        /// the files (docs/decisions/0093-packages-are-files.md).
+        case package
         case symbolicLink
         /// Devices, sockets and FIFOs.
         case other
+
+        /// Whether it is a folder on disk: a folder or a package. Sizes are walked and file URLs
+        /// end in a slash by this; what Open and column view do goes by the case itself.
+        public var isFolderOnDisk: Bool { self == .directory || self == .package }
     }
 
     public let name: String

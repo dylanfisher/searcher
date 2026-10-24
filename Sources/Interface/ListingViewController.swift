@@ -1,6 +1,7 @@
 import AppKit
 import Browser
 import Quartz
+import UniformTypeIdentifiers
 
 /// A pane's entries in a view-based table: name with its type's icon, and a cloud badge when the
 /// entry isn't downloaded; size, date modified and kind. A header click sorts the pane by that
@@ -466,9 +467,10 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             for: ClipboardCommands.fileURL(of: listing[row], in: pane.location))
     }
 
-    /// What a drop does where it is: into the folder of a folder row it is on, else into the
-    /// pane's folder, for which the whole list is highlighted. Reads only the drag's pasteboard,
-    /// the listing and the mount table, so it makes no file-system call.
+    /// What a drop does where it is: into the folder of a folder row it is on, to the app of an
+    /// app's row, which opens the files, else into the pane's folder, for which the whole list is
+    /// highlighted; a package that isn't an app takes nothing, as a file doesn't. Reads only the
+    /// drag's pasteboard, the listing and the mount table, so it makes no file-system call.
     public func tableView(
         _ tableView: NSTableView, validateDrop info: any NSDraggingInfo, proposedRow row: Int,
         proposedDropOperation dropOperation: NSTableView.DropOperation
@@ -482,6 +484,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             return operation.dragOperation(allowed: info.draggingSourceOperationMask)
         case .promises:
             return .copy
+        case .open:
+            return .generic
         }
     }
 
@@ -515,6 +519,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
                 await FilePromiseReceiver.receive(
                     promises, into: folder, from: app, selectingIn: pane, queue: queue)
             }
+        case .open(let urls, let application):
+            pane.systemActions.open(urls, withApplicationAt: application)
         }
         return true
     }
@@ -527,6 +533,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             case files([String], DropOperation)
             /// File promises, which always copy.
             case promises
+            /// File URLs dropped on the app at a URL, which opens them.
+            case open([URL], withApplicationAt: URL)
         }
 
         let folder: String
@@ -542,14 +550,27 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         guard fileOperations != nil, let mountTable else { return nil }
         var folder = pane.location
         var target: Pane? = pane
-        if dropOperation == .on, let listing, row >= 0, row < listing.count,
-            listing.kind(atRow: row).type == .folder
-        {
-            folder = pane.location.child(named: listing[row].name)
-            target = nil
+        var app: Location?
+        if dropOperation == .on, let listing, row >= 0, row < listing.count {
+            let kind = listing.kind(atRow: row).type
+            if kind == .folder {
+                folder = pane.location.child(named: listing[row].name)
+                target = nil
+            } else if listing[row].type == .package, kind.conforms(to: .application) {
+                app = pane.location.child(named: listing[row].name)
+            }
         }
         let pasteboard = info.draggingPasteboard
-        let paths = PasteboardFileClipboard(pasteboard: pasteboard).fileURLs().map(\.path)
+        let urls = PasteboardFileClipboard(pasteboard: pasteboard).fileURLs()
+        let paths = urls.map(\.path)
+        if let app {
+            // Files dropped on an app open with it, as in Finder; nothing goes into the app.
+            guard !paths.isEmpty, !paths.contains(app.path) else { return nil }
+            let application = URL(fileURLWithPath: app.path, isDirectory: true)
+            return Drop(
+                folder: folder.path, pane: nil, content: .open(urls, withApplicationAt: application)
+            )
+        }
         if !paths.isEmpty {
             guard
                 let operation = DropOperation(

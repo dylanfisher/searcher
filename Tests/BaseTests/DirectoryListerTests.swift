@@ -23,6 +23,11 @@ import Testing
     try FileManager.default.createSymbolicLink(
         atPath: path + "/broken link", withDestinationPath: "missing")
     #expect(mkfifo(path + "/fifo", 0o644) == 0)
+    for name in ["App.app", "Notes.rtfd", "Kit.framework", "Bundled"] {
+        try FileManager.default.createDirectory(
+            at: folder.url.appending(path: name), withIntermediateDirectories: false)
+    }
+    try setBundleBit(path + "/Bundled")
     // Long names fill the small buffer below after a handful of entries, so the listing takes
     // many getattrlistbulk calls.
     for index in 0..<300 {
@@ -54,6 +59,54 @@ import Testing
     }
     #expect(listed.count == 3)
     #expect(try lister.entry(named: "gone", inDirectory: folder.url.path) == nil)
+}
+
+/// Sets the bundle bit in the Finder info of the folder at `path`, as `SetFile -a B` does.
+private func setBundleBit(_ path: String) throws {
+    var request = attrlist()
+    request.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
+    request.commonattr = attrgroup_t(ATTR_CMN_FNDRINFO)
+    // A folder's Finder flags are the big-endian UInt16 at offset 8; kHasBundle is 0x2000.
+    var info = [UInt8](repeating: 0, count: 32)
+    info[8] = 0x20
+    guard setattrlist(path, &request, &info, info.count, 0) == 0 else {
+        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    }
+}
+
+@Test func packagesListAsFinderSeesThemWhetherListedOrReadAlone() throws {
+    let folder = try TemporaryFolder("DirectoryListerTests")
+    let path = folder.url.path
+    let folders = [
+        "App.app", "Notes.rtfd", "Plugin.bundle", "Report.pages", "Kit.framework", "plain",
+        "Bundled", "Dotted.name",
+    ]
+    for name in folders {
+        try FileManager.default.createDirectory(
+            at: folder.url.appending(path: name), withIntermediateDirectories: false)
+    }
+    try setBundleBit(path + "/Bundled")
+    // A file with a package's extension is still a file.
+    try Data().write(to: folder.url.appending(path: "file.app"))
+
+    var listed: [DirectoryEntry] = []
+    try DirectoryLister().list(path) { listed += $0 }
+
+    let types = Dictionary(uniqueKeysWithValues: listed.map { ($0.name, $0.type) })
+    #expect(
+        types == [
+            "App.app": .package, "Notes.rtfd": .package, "Plugin.bundle": .package,
+            "Report.pages": .package, "Kit.framework": .directory, "plain": .directory,
+            "Bundled": .package, "Dotted.name": .directory, "file.app": .regular,
+        ])
+    for name in folders {
+        let isPackage = try folder.url.appending(path: name)
+            .resourceValues(forKeys: [.isPackageKey]).isPackage
+        #expect((types[name] == .package) == isPackage, "\(name)")
+    }
+    for entry in listed {
+        #expect(try DirectoryLister().entry(named: entry.name, inDirectory: path) == entry)
+    }
 }
 
 @Test func firstBatchArrivesBeforeListingEnds() throws {
@@ -316,6 +369,7 @@ private func expectHiddenFlagAgreesWithFileManager(_ path: String) throws {
 private func fileManagerListing(_ folder: URL) throws -> [DirectoryEntry] {
     let keys: Set<URLResourceKey> = [
         .nameKey, .fileResourceTypeKey, .fileSizeKey, .contentModificationDateKey,
+        .isPackageKey,
     ]
     let urls = try FileManager.default.contentsOfDirectory(
         at: folder, includingPropertiesForKeys: Array(keys))
@@ -324,7 +378,7 @@ private func fileManagerListing(_ folder: URL) throws -> [DirectoryEntry] {
         let type: DirectoryEntry.FileType =
             switch try #require(values.fileResourceType) {
             case .regular: .regular
-            case .directory: .directory
+            case .directory: try #require(values.isPackage as Bool?) ? .package : .directory
             case .symbolicLink: .symbolicLink
             default: .other
             }

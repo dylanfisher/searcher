@@ -163,8 +163,11 @@ private func names(in folder: String) throws -> Set<String> {
     try write("a.txt", in: folder.url.path)
     try FileManager.default.createDirectory(
         atPath: folder.url.path + "/docs", withIntermediateDirectories: false)
+    // A package is a folder on disk, and Finder writes its URL with the slash too.
+    try FileManager.default.createDirectory(
+        atPath: folder.url.path + "/App.app", withIntermediateDirectories: false)
     let window = await Window(at: folder.url.path)
-    window.select("a.txt", "docs")
+    window.select("a.txt", "docs", "App.app")
 
     try window.press(copy)
 
@@ -172,9 +175,10 @@ private func names(in folder: String) throws -> Set<String> {
         Set(window.clipboard.clipboard.fileURLs().map(\.absoluteString)) == [
             URL(fileURLWithPath: folder.url.path + "/a.txt", isDirectory: false).absoluteString,
             URL(fileURLWithPath: folder.url.path + "/docs/", isDirectory: true).absoluteString,
+            URL(fileURLWithPath: folder.url.path + "/App.app/", isDirectory: true).absoluteString,
         ])
     try window.press(cut)
-    #expect(window.clipboard.cutNames(in: window.pane.location) == ["a.txt", "docs"])
+    #expect(window.clipboard.cutNames(in: window.pane.location) == ["a.txt", "docs", "App.app"])
 }
 
 @MainActor @Test func cutMarksTheSelectedFilesAsCutUntilTheClipboardChanges() async throws {

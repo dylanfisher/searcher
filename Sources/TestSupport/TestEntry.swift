@@ -17,3 +17,10 @@ public func folder(_ name: String) -> DirectoryEntry {
         name: name, type: .directory, size: nil, modified: testDate, isHidden: false,
         isDataless: false)
 }
+
+/// A package, such as an app, modified at `testDate`.
+public func package(_ name: String) -> DirectoryEntry {
+    DirectoryEntry(
+        name: name, type: .package, size: nil, modified: testDate, isHidden: false,
+        isDataless: false)
+}

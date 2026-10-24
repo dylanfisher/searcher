@@ -584,9 +584,26 @@ public final class Pane {
 
     /// Opens the selected folder in this pane, or hands the selected files to the system. With
     /// several entries selected, folders are skipped and symbolic links count as files, which the
-    /// system resolves. A single selected link opens as what it points at does (`openLink`).
+    /// system resolves. A single selected link opens as what it points at does (`openLink`). A
+    /// package is a file here (docs/decisions/0093-packages-are-files.md).
     public func openSelection() {
         openSelection(foldersIn: nil)
+    }
+
+    /// The one selected entry when it is a package; nil for any other selection.
+    public var selectedPackage: DirectoryEntry? {
+        let entries = selectedEntries
+        guard entries.count == 1, entries[0].type == .package else { return nil }
+        return entries[0]
+    }
+
+    /// Shows the one selected package's contents as a folder, as Finder's Show Package Contents
+    /// does: in this pane, or in a column right of this one when it is a column. Does nothing for
+    /// any other selection.
+    public func showPackageContents() {
+        guard let package = selectedPackage else { return }
+        if let trail = containingTrail { return trail.openPackage(named: package.name, from: self) }
+        navigate(to: location.child(named: package.name))
     }
 
     /// Opens a single selected folder in `other`, which must not be a column. Any other
@@ -1689,7 +1706,7 @@ public final class Pane {
             var missing: [ExactName: Listing.FolderSizeUpdate] = [:]
             for row in 0..<listing.count {
                 let entry = listing[row]
-                guard entry.type == .directory else { continue }
+                guard entry.type.isFolderOnDisk else { continue }
                 let name = ExactName(entry.name)
                 if let update = known[name], update.modified == entry.modified {
                     if listing.folderSize(atRow: row) != update.value { missing[name] = update }
@@ -1894,7 +1911,7 @@ public final class Pane {
         in listing: Listing, from folderSizes: FolderSizeService?, under folder: Location
     ) -> [ExactName: Listing.FolderSizeUpdate] {
         guard let folderSizes else { return [:] }
-        let folders = (0..<listing.count).map { listing[$0] }.filter { $0.type == .directory }
+        let folders = (0..<listing.count).map { listing[$0] }.filter { $0.type.isFolderOnDisk }
         let asked = folders.map { (path: folder.child(named: $0.name).path, modified: $0.modified) }
         var found: [ExactName: Listing.FolderSizeUpdate] = [:]
         for (entry, size) in zip(folders, folderSizes.keptSizes(of: asked)) {

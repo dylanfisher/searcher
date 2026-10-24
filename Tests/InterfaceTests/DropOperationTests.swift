@@ -145,15 +145,16 @@ private final class DraggingInfo: NSObject, @preconcurrency NSDraggingInfo {
     func resetSpringLoading() {}
 }
 
-/// A pane over a real temporary folder holding `a.txt` and the folder `sub`, in a window that
-/// is never shown, with a queue of its own that traps on any question, and a second folder
-/// `elsewhere` to drag from. `/` is the only volume unless a test says otherwise.
+/// A pane over a real temporary folder holding `a.txt` and the folder `sub`, and the packages
+/// `Tool.app` and `Notes.rtfd` when `packages` is true, in a window that is never shown, with a
+/// queue of its own that traps on any question, and a second folder `elsewhere` to drag from. `/` is the only volume unless a test says otherwise.
 @MainActor
 private final class Fixture {
     let root: TemporaryFolder
     let window = NSWindow(
         contentRect: NSRect(x: 0, y: 0, width: 800, height: 400), styleMask: [.titled],
         backing: .buffered, defer: true)
+    let actions = StubSystemActions()
     let pane: Pane
     let controller: PaneViewController
     let queue: FileOperationQueue
@@ -165,7 +166,7 @@ private final class Fixture {
     var list: ListingViewController { controller.listingViewController }
     var table: ListingTableView { list.tableView }
 
-    init(otherVolume: Bool = false) async throws {
+    init(otherVolume: Bool = false, packages: Bool = false) async throws {
         root = try TemporaryFolder("DropOperationTests")
         let folder = root.url.appending(path: "pane")
         let elsewhere = root.url.appending(path: "elsewhere")
@@ -176,9 +177,13 @@ private final class Fixture {
         for name in ["x.txt", "y.txt"] {
             try Data(name.utf8).write(to: elsewhere.appending(path: name))
         }
+        for name in packages ? ["Tool.app", "Notes.rtfd"] : [] {
+            try FileManager.default.createDirectory(
+                at: folder.appending(path: name), withIntermediateDirectories: false)
+        }
         pane = Pane(
             location: Location(path: folder.path), service: ListingService(),
-            systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true)
+            systemActions: actions, settings: untouchedSettings(), isFocused: true)
         controller = PaneViewController(
             pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
             tableView: ListingTableView(), monitorsFolders: true)
@@ -349,6 +354,53 @@ private final class Fixture {
 
     try await Task.sleep(for: .milliseconds(100))
     #expect(fixture.operations.isEmpty)
+}
+
+/// Finder opens files dropped on an app with that app, and moves nothing into the app.
+@MainActor @Test func aDropOnAnAppRowOpensTheFilesWithTheApp() async throws {
+    let fixture = try await Fixture(packages: true)
+    defer { fixture.stop() }
+    let sources = ["x.txt", "y.txt"].map { fixture.elsewhere.appending(path: $0) }
+    let info = fixture.drag(sources)
+    let row = try fixture.row("Tool.app")
+
+    #expect(fixture.validate(info, row: row, .on) == .generic)
+    #expect(fixture.accept(info, row: row, .on))
+
+    let opened = fixture.actions.openedWithApp
+    #expect(opened.map { $0.urls.map(\.path) } == [sources.map(\.path)])
+    #expect(opened.map(\.application.path) == [fixture.folder.path + "/Tool.app"])
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(fixture.operations.isEmpty)
+    #expect(fixture.exists(sources[0]))
+}
+
+/// A package that isn't an app is a file: a drop on its row goes to the pane's folder, as a drop
+/// on a file's row does, and nothing goes inside it.
+@MainActor @Test func aDropOnAnotherPackagesRowTargetsThePanesFolder() async throws {
+    let fixture = try await Fixture(packages: true)
+    defer { fixture.stop() }
+    let source = fixture.elsewhere.appending(path: "x.txt")
+    let info = fixture.drag([source])
+    let row = try fixture.row("Notes.rtfd")
+
+    #expect(fixture.validate(info, row: row, .on) == .move)
+    #expect(fixture.accept(info, row: row, .on))
+
+    await settle { fixture.exists(fixture.folder.appending(path: "x.txt")) }
+    #expect(fixture.operations == [.move([source.path], into: fixture.folder.path)])
+    #expect(fixture.actions.openedWithApp.isEmpty)
+}
+
+/// An app dragged onto its own row opens nothing.
+@MainActor @Test func anAppDroppedOnItselfIsRefused() async throws {
+    let fixture = try await Fixture(packages: true)
+    defer { fixture.stop() }
+    let info = fixture.drag([fixture.folder.appending(path: "Tool.app")])
+
+    #expect(fixture.validate(info, row: try fixture.row("Tool.app"), .on) == [])
+    #expect(!fixture.accept(info, row: try fixture.row("Tool.app"), .on))
+    #expect(fixture.actions.openedWithApp.isEmpty)
 }
 
 @MainActor @Test func aListWithoutAQueueTakesNoDrop() async throws {

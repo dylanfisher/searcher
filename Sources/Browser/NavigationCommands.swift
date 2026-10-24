@@ -4,6 +4,11 @@ public enum NavigationCommands: CommandSet {
     public static let open = Command(
         id: CommandID("navigation.open"), title: "Open",
         chords: [KeyChord(.down, modifiers: .command), KeyChord("o", modifiers: .command)])
+    /// Browses into the one selected package as a folder, which Open never does: Open hands a
+    /// package to its app, as Finder does.
+    public static let showPackageContents = Command(
+        id: CommandID("navigation.showPackageContents"), title: "Show Package Contents",
+        chords: [])
     public static let goToParent = Command(
         id: CommandID("navigation.goToParent"), title: "Go to Parent",
         chords: [KeyChord(.up, modifiers: .command)])
@@ -20,6 +25,9 @@ public enum NavigationCommands: CommandSet {
     public static var bindings: [CommandBinding] {
         [
             CommandBinding(open) { $0.pane.openSelection() },
+            CommandBinding(
+                showPackageContents, isEnabled: { $0.pane.selectedPackage != nil },
+                run: { $0.pane.showPackageContents() }),
             CommandBinding(goToParent) { $0.pane.goToParent() },
             CommandBinding(back, isEnabled: { $0.pane.canGoBack }, run: { $0.pane.goBack() }),
             CommandBinding(

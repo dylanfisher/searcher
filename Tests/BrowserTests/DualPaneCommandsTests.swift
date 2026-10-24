@@ -192,6 +192,23 @@ private func isEnabled(_ command: Command, in workspace: Workspace) -> Bool {
     #expect(isEnabled(DualPaneCommands.openInOtherPane, in: fixture.workspace))
 }
 
+/// A package is a file here, as Open in Other Pane is off for a file.
+@MainActor @Test func openInOtherPaneIsOffForAPackage() async throws {
+    let fixture = PaneFixture(
+        at: "/root",
+        folders: ["/root": [package("App.app"), file("a.txt")], "/root/App.app": [file("x")]])
+    await settle { fixture.pane.state.isLoaded }
+    let workspace = Workspace(tab: Tab(pane: fixture.pane))
+    fixture.select("App.app")
+
+    #expect(!isEnabled(DualPaneCommands.openInOtherPane, in: workspace))
+    try press(openInOtherPane, in: workspace)
+
+    #expect(workspace.selectedTab.panes.count == 1)
+    #expect(fixture.pane.location.path == "/root")
+    #expect(fixture.actions.openedFiles.isEmpty)
+}
+
 @MainActor @Test func openInOtherPaneWithOneLeafSplitsRightAndKeepsFocus() async throws {
     let fixture = await Fixture.make()
     let first = fixture.tab.layout.focused

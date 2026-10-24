@@ -415,7 +415,7 @@ private struct StoredFolder: Codable {
 /// reports it.
 private struct StoredEntry: Codable {
     enum FileType: String, Codable {
-        case regular, directory, symbolicLink, other
+        case regular, directory, package, symbolicLink, other
     }
 
     let name: String
@@ -438,6 +438,7 @@ private struct StoredEntry: Codable {
             switch entry.type {
             case .regular: .regular
             case .directory: .directory
+            case .package: .package
             case .symbolicLink: .symbolicLink
             case .other: .other
             }
@@ -465,6 +466,7 @@ private struct StoredEntry: Codable {
             switch type {
             case .regular: .regular
             case .directory: .directory
+            case .package: .package
             case .symbolicLink: .symbolicLink
             case .other: .other
             }

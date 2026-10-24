@@ -4,10 +4,12 @@ import Foundation
 /// A pane's columns in column mode, from the leftmost folder down to the folder selected in the
 /// last one, and which column keys act on. The column to the right of each one shows the folder
 /// selected in it: selecting another folder truncates the columns to its right and adds one for
-/// it, and selecting anything else truncates them. A truncated column stops its load and its
-/// folder monitor (0041-column-model.md). One file selected in the last column is its `preview`
-/// (0090-preview-column.md). A selection made by keys is followed once the keys pause for
-/// `openDelay`; a click's at once (0094-column-open-delay.md).
+/// it, and selecting anything else truncates them. A package is a file here, except that the
+/// column Show Package Contents opens for it stays while it stays selected. A truncated column
+/// stops its load and its folder monitor (0041-column-model.md). One file or package selected
+/// in the last column is its `preview` (0090-preview-column.md, 0093-packages-are-files.md). A
+/// selection made by keys is followed once the keys pause for `openDelay`; a click's at once
+/// (0094-column-open-delay.md).
 @MainActor
 public final class ColumnTrail {
     /// How long the keys have to pause before the columns right of a key-made selection follow
@@ -23,8 +25,8 @@ public final class ColumnTrail {
     unowned let owner: Pane
 
     public var focused: Column { columns[focusedIndex] }
-    /// The one file selected in the last column, shown to its right; nil for a folder, a link,
-    /// several rows or none. It isn't a column: it lists, watches and takes the keys for nothing.
+    /// The one file or package selected in the last column, shown to its right; nil for a
+    /// folder, a link, several rows or none. It isn't a column: it lists, watches and takes the keys for nothing.
     public private(set) var preview: ColumnPreview?
 
     /// One column at `location` with `name` selected, sorted like `model`: the owner when the
@@ -92,6 +94,22 @@ public final class ColumnTrail {
     func openFolder(from pane: Pane) {
         guard let index = index(of: pane) else { return }
         follow(columns[index])
+        if index != focusedIndex { focus(index) }
+        moveRight()
+    }
+
+    /// Show Package Contents on the package `name` in `pane`'s column: adds the package's column
+    /// right of it and moves into it, as Open does for a folder. The column stays while the
+    /// package stays selected (`follow`).
+    func openPackage(named name: String, from pane: Pane) {
+        guard let index = index(of: pane) else { return }
+        // A command opens at once: the column stops waiting for the keys to pause.
+        follow(columns[index])
+        columns.append(
+            makeColumn(
+                at: pane.location.child(named: name), selecting: nil, sortedLike: pane,
+                isFocused: false))
+        updatePreview()
         if index != focusedIndex { focus(index) }
         moveRight()
     }
@@ -198,7 +216,8 @@ public final class ColumnTrail {
 
     /// Previews the one file selected in the last column, as its listing has it now, so a patch
     /// to the file shows and a removal, which drops it from the selection, clears the preview.
-    /// A folder has its own column instead, and several rows or none show nothing. A link shows
+    /// A package previews as a file does. A folder has its own column instead, and several rows
+    /// or none show nothing. A link shows
     /// nothing: Open treats a link to a folder as the folder, and telling one from a link to a
     /// file takes a read. While the last column waits for the keys to pause, a preview of
     /// another file is cleared and the new one waits too.
@@ -242,15 +261,20 @@ public final class ColumnTrail {
         let cursorRow = pane.selection.cursorRow(in: listing)
         if cursorRow == nil, !pane.state.showsCompleteListing { return false }
         var folder: String?
-        if let cursorRow, listing[cursorRow].type == .directory,
-            pane.selection.rows(in: listing) == IndexSet(integer: cursorRow)
-        {
-            folder = listing[cursorRow].name
+        var package: String?
+        if let cursorRow, pane.selection.rows(in: listing) == IndexSet(integer: cursorRow) {
+            switch listing[cursorRow].type {
+            case .directory: folder = listing[cursorRow].name
+            case .package: package = listing[cursorRow].name
+            case .regular, .symbolicLink, .other: break
+            }
         }
-        let next = folder.map { pane.location.child(named: $0) }
-        if let next, index + 1 < columns.count, columns[index + 1].pane.location == next {
+        // A package opens no column, but keeps the one Show Package Contents opened for it.
+        let kept = (folder ?? package).map { pane.location.child(named: $0) }
+        if let kept, index + 1 < columns.count, columns[index + 1].pane.location == kept {
             return false
         }
+        let next = folder.map { pane.location.child(named: $0) }
         truncate(after: index)
         guard let next else { return false }
         if opening {

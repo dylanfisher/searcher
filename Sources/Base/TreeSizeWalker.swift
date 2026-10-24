@@ -51,9 +51,9 @@ public struct TreeSizeWalker: Sendable {
                     }
                     bytes += size
                     files += 1
-                case .directory where entry.isDataless:
+                case .directory where entry.isDataless, .package where entry.isDataless:
                     isPartial = true
-                case .directory:
+                case .directory, .package:
                     subfolders.append(folder + "/" + entry.name)
                 case .symbolicLink, .other:
                     files += 1

@@ -148,11 +148,15 @@ func aSubfolderErrorIsHandledByItsCode(code: Int32, expected: TreeSizeWalker.Sub
         name: "not downloaded.bin", type: .regular, size: 700, modified: testDate,
         isHidden: false, isDataless: true)
 
-    let local = tally.count([folder("local"), file("one", size: 5)], in: "/root")
-    #expect(local == ["/root/local"])
+    let local = tally.count(
+        [folder("local"), package("App.app"), file("one", size: 5)], in: "/root")
+    #expect(local == ["/root/local", "/root/App.app"])
     #expect(!tally.isPartial)
 
-    let subfolders = tally.count([cloud, notDownloaded], in: "/root")
+    let cloudPackage = DirectoryEntry(
+        name: "cloud.rtfd", type: .package, size: nil, modified: testDate, isHidden: false,
+        isDataless: true)
+    let subfolders = tally.count([cloud, cloudPackage, notDownloaded], in: "/root")
     #expect(subfolders.isEmpty)
     #expect(tally.isPartial)
     // A file that isn't downloaded still has its logical size, which reading it doesn't need.

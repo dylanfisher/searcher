@@ -452,6 +452,23 @@ private func heldSortQueue() -> DispatchQueue {
     #expect(fixture.pane.location == Location(path: "/root"))
 }
 
+@MainActor @Test func openOnAPackageHandsItToTheSystemAsAFile() async throws {
+    let root = try TemporaryFolder("PaneTests")
+    try FileManager.default.createDirectory(
+        at: root.url.appending(path: "App.app/Contents"), withIntermediateDirectories: true)
+    let actions = StubSystemActions()
+    let pane = Pane(
+        location: Location(path: root.url.path), service: ListingService(),
+        systemActions: actions, settings: untouchedSettings())
+    await settle { pane.state.isLoaded }
+    pane.select(Selection([ExactName("App.app")], cursor: ExactName("App.app")))
+
+    pane.openSelection()
+
+    #expect(actions.openedFiles.map(\.path) == [root.url.path + "/App.app"])
+    #expect(pane.location.path == root.url.path)
+}
+
 /// A pane over a temporary folder holding `folder` (with `inside.txt`), `file.txt`, links to
 /// each, a link to the folder's link, a broken link and a link to itself, loaded.
 @MainActor
