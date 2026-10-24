@@ -12,14 +12,15 @@ private func share(_ name: String) -> VolumeIdentity {
 private let listing = ListingCache.Folder(
     entries: [file("a"), folder("b")], listedAt: Date(timeIntervalSinceReferenceDate: 1_000))
 
-private func store(_ folder: TemporaryFolder, log: EventLog<String> = EventLog())
-    -> ListingCacheStore
-{
+private func store(
+    _ folder: TemporaryFolder, log: EventLog<String> = EventLog(),
+    byteCap: Int = ListingCacheStore.defaultByteCap
+) -> ListingCacheStore {
     ListingCacheStore(
         roots: StoreRoots(
             caches: folder.url.appending(path: "Caches"),
             applicationSupport: folder.url.appending(path: "Application Support")),
-        log: { log.append($0) }, clock: ManualClock())
+        log: { log.append($0) }, byteCap: byteCap, clock: ManualClock())
 }
 
 @Test func anInsertDuringASlowReadWinsOverTheFile() async {
@@ -227,6 +228,26 @@ private func folder(of count: Int, at seconds: Double) -> ListingCache.Folder {
 
     #expect(reads.all == [false])
     #expect(await cache.folder(at: "/fake/a/x", on: share("a")) == listing)
+}
+
+@Test func aRestoredPanesVolumeFileOutlivesTheByteCap() async throws {
+    let temporary = try TemporaryFolder("ListingCacheTests")
+    let writer = store(temporary)
+    await writer.save(["/fake/a/x": listing], for: share("a"))
+    await writer.flush()
+    let file = writer.url(for: share("a"))
+    try FileManager.default.setAttributes(
+        [.modificationDate: Date(timeIntervalSinceNow: -3600)], ofItemAtPath: file.path)
+    let size = try FileManager.default.attributesOfItem(atPath: file.path)[.size] as! Int
+
+    // Room for one volume's file, not two.
+    let cache = ListingCache(store: store(temporary, byteCap: size + size / 2))
+    await cache.restore(folders: ["/fake/a/x"], mountedVolumes: { [share("a")] })
+    await cache.insert(listing, at: "/fake/b/x", on: share("b"))
+    await cache.flush()
+
+    #expect(FileManager.default.fileExists(atPath: file.path))
+    #expect(!FileManager.default.fileExists(atPath: writer.url(for: share("b")).path))
 }
 
 @Test func aRestoreKeepsTheFolderOfEveryPaneInTheStoredWorkspaces() async {

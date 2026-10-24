@@ -20,8 +20,9 @@ found. The entry cap and the store's 50 MB cap could drop the folders a saved wo
 - **Read with the session.** The launch's task that reads `WorkspaceStore` then calls
   `ListingCache.restore` with the folder of every pane of every stored workspace, before the
   windows are built. It reads the kernel's mount table (`getmntinfo` with `MNT_NOWAIT`, which
-  asks no volume) on a `BlockingCallThread`, and the cache files, which are local. No share is
-  read before the window shows; B1 includes decoding the restored panes' volume files.
+  asks no volume) on a `BlockingCallThread`, and the cache files, which are local. The windows
+  wait for this read: they are built only once it ends, so B1 includes reading and decoding
+  the restored panes' volume files. No share is read before the windows show.
 - **Mounted shares.** A folder the mount table places on a network volume has that volume's file
   read into memory, so the pane's lookup finds it without a file read.
 - **Shares that aren't mounted.** A cache file is now named
