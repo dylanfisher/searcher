@@ -30,7 +30,7 @@ final class ConflictSheetController: NSObject {
         dialog = Dialog.rowSheet(
             message: "An item named “\(name)” already exists in this location.",
             information: """
-                Do you want to replace it with the one you’re adding?
+                Do you want to replace it with the one you’re \(Self.verb(request.kind))?
                 The one there: \(Self.describe(request.existing, formatter))
                 The one coming in: \(Self.describe(request.source, formatter))
                 """,
@@ -59,6 +59,14 @@ final class ConflictSheetController: NSObject {
         }
         let appliesToAll = !applyToAllBox.isHidden && applyToAllBox.state == .on
         answer(ConflictResolution(choice: choice, appliesToAll: appliesToAll))
+    }
+
+    /// Finder's word for what the operation does to the incoming item.
+    private static func verb(_ kind: ConflictRequest.Kind) -> String {
+        switch kind {
+        case .copy: "copying"
+        case .move: "moving"
+        }
     }
 
     /// "1 KB, modified Today at 9:41 AM", or "Folder, modified …".

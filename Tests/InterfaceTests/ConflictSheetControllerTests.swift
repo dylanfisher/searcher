@@ -12,9 +12,9 @@ private final class Answers {
 
 private let modified = Date(timeIntervalSince1970: 1_600_000_000)
 
-private func request(remaining: Int) -> ConflictRequest {
+private func request(remaining: Int, kind: ConflictRequest.Kind = .copy) -> ConflictRequest {
     ConflictRequest(
-        operation: FileOperationQueue.ID(4),
+        operation: FileOperationQueue.ID(4), kind: kind,
         source: ConflictRequest.Item(
             path: "/src/report.pdf", isFolder: false, bytes: 2_000_000, modified: modified),
         existing: ConflictRequest.Item(
@@ -25,9 +25,11 @@ private func request(remaining: Int) -> ConflictRequest {
 
 /// A conflict sheet that is never shown, logging its answers.
 @MainActor
-private func sheet(remaining: Int = 2) -> (ConflictSheetController, Answers) {
+private func sheet(remaining: Int = 2, kind: ConflictRequest.Kind = .copy)
+    -> (ConflictSheetController, Answers)
+{
     let answers = Answers()
-    let sheet = ConflictSheetController(request: request(remaining: remaining)) {
+    let sheet = ConflictSheetController(request: request(remaining: remaining, kind: kind)) {
         answers.given.append($0)
     }
     return (sheet, answers)
@@ -71,7 +73,7 @@ private func sheet(remaining: Int = 2) -> (ConflictSheetController, Answers) {
         sheet.dialog.messageLabel.stringValue
             == "An item named “report.pdf” already exists in this location.")
     #expect(lines.count == 3)
-    #expect(lines[0] == "Do you want to replace it with the one you’re adding?")
+    #expect(lines[0] == "Do you want to replace it with the one you’re copying?")
     #expect(lines[1].contains(formatter.bytes(1_000)))
     #expect(lines[1].contains(formatter.date(modified.addingTimeInterval(-86_400))))
     #expect(lines[2].contains(formatter.bytes(2_000_000)))
@@ -109,4 +111,12 @@ private func sheet(remaining: Int = 2) -> (ConflictSheetController, Answers) {
 
     #expect(replacedAnswers.given == [ConflictResolution(choice: .replace, appliesToAll: false)])
     #expect(stoppedAnswers.given == [nil])
+}
+
+@MainActor @Test func aMoveAsksAboutTheOneYoureMoving() {
+    let (sheet, _) = sheet(kind: .move)
+
+    #expect(
+        sheet.dialog.informationLabel.stringValue.hasPrefix(
+            "Do you want to replace it with the one you’re moving?\n"))
 }

@@ -22,7 +22,14 @@ public struct ConflictRequest: Equatable, Sendable {
         }
     }
 
+    /// Whether the operation copies or moves its items, which the question names.
+    public enum Kind: Equatable, Sendable {
+        case copy
+        case move
+    }
+
     public let operation: FileOperationQueue.ID
+    public let kind: Kind
     /// The item being copied or moved.
     public let source: Item
     /// The item of the same name already in the destination folder.
@@ -31,8 +38,11 @@ public struct ConflictRequest: Equatable, Sendable {
     /// applies to all would answer too.
     public let remaining: Int
 
-    public init(operation: FileOperationQueue.ID, source: Item, existing: Item, remaining: Int) {
+    public init(
+        operation: FileOperationQueue.ID, kind: Kind, source: Item, existing: Item, remaining: Int
+    ) {
         self.operation = operation
+        self.kind = kind
         self.source = source
         self.existing = existing
         self.remaining = remaining

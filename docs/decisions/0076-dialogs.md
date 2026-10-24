@@ -39,14 +39,14 @@ keep what they did: one sheet at a time, queued, never blocking other windows
   closes. The quit question is not about one window, so it stays app-modal (`runModal`), built
   by `Dialog.alert` like the rest.
 - **The conflict sheet as Finder asks it:** "An item named “X” already exists in this
-  location.", then "Do you want to replace it with the one you’re adding?", and the buttons
-  Keep Both, Stop, Skip, Replace from left to right. Replace is the default (Return), as in
-  Finder, and is not styled destructive, as Finder's isn't; Stop takes Esc and cancels the
-  operation. "Apply to All" shows only when more conflicts follow. Where it differs from
-  Finder: Finder says "the one you’re copying" or "moving", but a `ConflictRequest` doesn't
-  say which, so it says "adding"; Finder shows Skip only when several items are copied, but
-  the request counts only the conflicts still to come, so Skip always shows, which keeps the
-  last of several conflicts skippable; and both items' size and date stay as two lines under
+  location.", then "Do you want to replace it with the one you’re copying?" ("moving?" for a
+  move; only copies and moves plan conflicts, and `ConflictRequest.kind` says which), and the
+  buttons Keep Both, Stop, Skip, Replace from left to right. Replace is the default (Return),
+  as in Finder, and is not styled destructive, as Finder's isn't; Stop takes Esc and cancels
+  the operation. "Apply to All" shows only when more conflicts follow. Where it differs from
+  Finder: Finder shows Skip only when several items are copied, but the request counts only
+  the conflicts still to come, so Skip always shows, which keeps the last of several conflicts
+  skippable; and both items' size and date stay as two lines under
   the question, since they fit the layout and Finder offers no other way to compare them.
 - **Extra controls in an alert go in the alert.** Go to folder's path field, with the reason
   line under it, is the accessory view; the reason line takes no room while hidden, and
@@ -73,8 +73,6 @@ keep what they did: one sheet at a time, queued, never blocking other windows
 - **The conflict as an NSAlert with stacked buttons** — the first choice, replaced the same
   day: Finder keeps its four buttons in one row with Replace the default, and Finder parity is
   the rule for behavior questions.
-- **Pass the operation's kind in `ConflictRequest` to say "copying" or "moving"** — not now:
-  it changes the queue in Browser for one word.
 - **Make the default button the first responder** — rejected: NSAlert focuses Cancel under full
   keyboard access so Space never confirms by accident; overriding that would make this app's
   alerts behave unlike the system's.
