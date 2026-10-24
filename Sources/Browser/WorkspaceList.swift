@@ -22,6 +22,12 @@ public final class WorkspaceList {
     public var awaitsRestore = false
     /// Workspaces `merge` took the tabs of, until their windows close.
     private var merged: Set<ObjectIdentifier> = []
+    private var savedObservers: [SavedObserver] = []
+
+    private struct SavedObserver {
+        weak var owner: AnyObject?
+        let handler: @MainActor () -> Void
+    }
 
     /// A saved workspace as a list of them shows it.
     public struct Saved: Equatable, Sendable {
@@ -71,6 +77,20 @@ public final class WorkspaceList {
         }
     }
 
+    /// Runs `handler` after each change that may change `saved`, for as long as `owner` exists:
+    /// a workspace named, renamed, added, opened, closed, merged or deleted. Making one active
+    /// changes nothing there, so it runs none.
+    public func observeSaved(for owner: AnyObject, _ handler: @escaping @MainActor () -> Void) {
+        savedObservers.append(SavedObserver(owner: owner, handler: handler))
+    }
+
+    private func savedMayHaveChanged() {
+        savedObservers.removeAll { $0.owner == nil }
+        for observer in savedObservers {
+            observer.handler()
+        }
+    }
+
     /// Puts `workspace` first and makes it the active one.
     public func add(_ workspace: Workspace) {
         precondition(
@@ -78,6 +98,7 @@ public final class WorkspaceList {
             "the workspace of tab \(workspace.selectedTab.id) is in the list already")
         workspaces.insert(workspace, at: 0)
         activate(workspace)
+        savedMayHaveChanged()
     }
 
     /// Moves `workspace` first and makes it the only active one, as its window becomes key.
@@ -99,6 +120,7 @@ public final class WorkspaceList {
         guard !trimmed.isEmpty else { throw .empty }
         try checkFree(trimmed, for: workspace.id)
         workspace.name = trimmed
+        savedMayHaveChanged()
     }
 
     /// Lists `state`, a named workspace whose window is closed, as saved, as the launch finds it.
@@ -111,6 +133,7 @@ public final class WorkspaceList {
             !saved.contains { $0.id == state.id }, "workspace \(state.id) is listed already")
         try checkFree(name, for: state.id)
         closed.append(state)
+        savedMayHaveChanged()
     }
 
     /// `name`, or the first of "`name` 2", "`name` 3" and so on that no saved workspace but `id`
@@ -147,6 +170,7 @@ public final class WorkspaceList {
         let wasMerged = merged.remove(ObjectIdentifier(workspace)) != nil
         guard wasMerged || contains(workspace) else { return }
         workspaces.removeAll { $0 === workspace }
+        defer { savedMayHaveChanged() }
         guard workspace.name != nil else {
             onForget?(workspace.id)
             return
@@ -189,6 +213,7 @@ public final class WorkspaceList {
             closed.remove(at: index)
         }
         onForget?(id)
+        savedMayHaveChanged()
     }
 
     /// Appends every tab of `source`, in order, to the most recently active other workspace,
@@ -205,6 +230,7 @@ public final class WorkspaceList {
         workspaces.removeAll { $0 === source }
         merged.insert(ObjectIdentifier(source))
         activate(target)
+        savedMayHaveChanged()
     }
 
     /// What two names are compared by: case-insensitively, as an APFS volume compares file names.

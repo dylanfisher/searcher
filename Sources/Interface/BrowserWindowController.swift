@@ -9,12 +9,15 @@ import Quartz
 /// in the most recently active window when one runs past a second. With
 /// `Settings.hideEmptyOperationsPanel` on, a panel that showed itself hides once its last row
 /// leaves; one the user opened stays until the user closes it
-/// (docs/decisions/0067-operations-panel.md).
+/// (docs/decisions/0067-operations-panel.md). Left of all that, the workspace sidebar lists the
+/// saved workspaces while the workspace says it shows; dragging it closed hides it there too
+/// (docs/decisions/0086-workspace-sidebar.md).
 ///
 /// Commands change the workspace, and the window shows the result after each one. The window's
 /// first responder stays in the selected tab's focused pane: a command that moves the focus moves
 /// the first responder, and a click or the key view loop that moves the first responder into
-/// another pane focuses that pane. A tab that isn't selected keeps its views, out of the window
+/// another pane focuses that pane, and Focus Sidebar moves it into the sidebar until Esc gives it
+/// back. A tab that isn't selected keeps its views, out of the window
 /// (docs/decisions/0054-tabs-in-window.md). A pane or tab moved in from another window brings its
 /// pane view controllers with it (docs/decisions/0057-windows-and-tear-out.md).
 @MainActor
@@ -59,6 +62,12 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// Set once the workspace closed with its last tab or the window closed; the window shows
     /// nothing after that.
     private var isClosed = false
+    /// The saved workspaces, left of the panes.
+    let sidebar: WorkspaceSidebarViewController
+    /// The sidebar's place in the window's split view, collapsed while it is hidden.
+    let sidebarItem: NSSplitViewItem
+    /// Watches the split view's resizes, by which a drag of the divider collapses the sidebar.
+    private var sidebarResizeObserver: (any NSObjectProtocol)?
 
     /// A tab's layout view and a view controller for each of its panes.
     private final class TabViews {
@@ -100,12 +109,16 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// window's view controller for a pane that moved into `workspace`. `fileOperations` runs
     /// the file commands, which are off without it; the clipboard commands are off without
     /// `clipboard`, drops without `fileOperations` and `mountTable`, Undo and Redo without
-    /// `undoHistory`, and Open With without `openWith`.
+    /// `undoHistory`, and Open With without `openWith`. The sidebar opens a saved workspace with
+    /// `openSavedWorkspace`.
     init(
         workspace: Workspace, workspaces: WorkspaceList, settings: Settings,
         fileOperations: FileOperationQueue? = nil, clipboard: CutState? = nil,
         mountTable: MountTable? = nil, undoHistory: UndoHistory? = nil, openWith: OpenWith? = nil,
-        takePaneController: @escaping @MainActor (PaneID) -> PaneViewController? = { _ in nil }
+        takePaneController: @escaping @MainActor (PaneID) -> PaneViewController? = { _ in nil },
+        openSavedWorkspace: @escaping @MainActor (UUID) -> Void = { id in
+            preconditionFailure("this window can't open saved workspace \(id)")
+        }
     ) {
         // The window has its own tab strip; AppKit's tabs would add a second kind of tab and
         // their items in the Window menu.
@@ -137,6 +150,9 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         let content = NSView()
         panesOverOperations = tabHost.bottomAnchor.constraint(equalTo: operations.view.topAnchor)
         panesToBottom = tabHost.bottomAnchor.constraint(equalTo: content.bottomAnchor)
+        sidebar = WorkspaceSidebarViewController(workspace: workspace, list: workspaces)
+        sidebar.open = openSavedWorkspace
+        sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
         super.init(window: window)
         for view in [tabStrip.view, tabHost, operations.view] {
             view.translatesAutoresizingMaskIntoConstraints = false
@@ -155,8 +171,22 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             operations.view.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             operations.view.bottomAnchor.constraint(equalTo: content.bottomAnchor),
         ])
-        window.contentView = content
+        let main = NSViewController()
+        main.view = content
+        sidebarItem.isCollapsed = !workspace.showsSidebar
+        let split = NSSplitViewController()
+        split.splitViewItems = [sidebarItem, NSSplitViewItem(viewController: main)]
+        window.contentViewController = split
+        // Setting the content view controller sizes the window to it.
+        window.setContentSize(NSSize(width: 900, height: 600))
         window.center()
+        sidebar.onEscape = { [weak self] in self?.giveKeysBack() }
+        sidebarResizeObserver = NotificationCenter.default.addObserver(
+            forName: NSSplitView.didResizeSubviewsNotification, object: split.splitView,
+            queue: nil
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.sidebarDidResize() }
+        }
         operations.onNeedsAttention = { [weak self] in self?.operationNeedsAttention() }
         operations.onEmptied = { [weak self] in self?.hideEmptyOperations() }
         settings.observe(for: self) { [weak self] in self?.settingsChanged() }
@@ -211,6 +241,9 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// saved workspace as it is at close.
     public func windowWillClose(_ notification: Notification) {
         isClosed = true
+        if let sidebarResizeObserver {
+            NotificationCenter.default.removeObserver(sidebarResizeObserver)
+        }
         onClose?(self)
         workspace.closeAllTabs()
     }
@@ -268,6 +301,46 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         onCommand?()
     }
 
+    // MARK: Sidebar
+
+    /// Whether the sidebar shows, or is on its way to showing.
+    var showsSidebar: Bool { !sidebarItem.isCollapsed }
+
+    /// Shows or hides the sidebar as the workspace says, animated in a window on screen. Keys in
+    /// a sidebar that hides go back to the focused pane once the window shows its workspace.
+    private func showSidebar() {
+        let collapsed = !workspace.showsSidebar
+        guard sidebarItem.isCollapsed != collapsed else { return }
+        if window?.isVisible == true {
+            sidebarItem.animator().isCollapsed = collapsed
+        } else {
+            sidebarItem.isCollapsed = collapsed
+        }
+    }
+
+    /// Shows the sidebar, which the command has the workspace show, and moves the keys into it.
+    private func focusSidebar() {
+        showSidebar()
+        window?.makeFirstResponder(sidebar.outlineView)
+    }
+
+    /// Esc in the sidebar: the focused pane takes the keys back.
+    private func giveKeysBack() {
+        guard !isClosed, !workspace.isClosed else { return }
+        window?.makeFirstResponder(paneViewController.keyView)
+    }
+
+    /// The split view resized: a drag of its divider may have collapsed or opened the sidebar,
+    /// which the workspace keeps.
+    private func sidebarDidResize() {
+        guard !isClosed, !workspace.isClosed, workspace.showsSidebar == sidebarItem.isCollapsed
+        else { return }
+        workspace.showsSidebar = !sidebarItem.isCollapsed
+        if sidebarItem.isCollapsed {
+            moveKeys(to: paneViewController)
+        }
+    }
+
     // MARK: Operations panel
 
     /// Shows the queue's latest snapshots in the panel.
@@ -317,7 +390,8 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         WindowCommands.nextTab.id, WindowCommands.previousTab.id, WindowCommands.newWindow.id,
         WindowCommands.movePaneToNewWindow.id, WindowCommands.mergeWindowIntoTab.id,
         WindowCommands.toggleOperations.id, WorkspaceCommands.name.id,
-        WorkspaceCommands.delete.id,
+        WorkspaceCommands.delete.id, WorkspaceCommands.toggleSidebar.id,
+        WorkspaceCommands.focusSidebar.id,
     ]
 
     /// Runs a window or tab command's menu item on the focused pane's table. A table with the
@@ -371,6 +445,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// views here too, selected or not, while that window can still hand its views over.
     func showWorkspace() {
         guard !isClosed, !workspace.isClosed else { return }
+        showSidebar()
         let open = Set(workspace.tabs.map(\.id))
         for (id, views) in tabViews where !open.contains(id) {
             views.layoutView.removeFromSuperview()
@@ -454,6 +529,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             toggleOperations: { [weak self] in self?.toggleOperations() },
             askForWorkspaceName: { [weak self] in self?.askForWorkspaceName() },
             askToDeleteWorkspace: { [weak self] in self?.askToDeleteWorkspace() },
+            focusSidebar: { [weak self] in self?.focusSidebar() },
             fileOperations: fileOperations, clipboard: clipboard, mountTable: mountTable,
             undoHistory: undoHistory, openWith: openWith,
             didRunCommand: { [weak self] in
@@ -524,11 +600,12 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     }
 
     /// Makes `controller`'s table first responder unless something in its pane already is, such
-    /// as its filter field.
+    /// as its filter field, or the sidebar has the keys while it shows.
     private func moveKeys(to controller: PaneViewController) {
         guard let window else { return }
         if let responder = window.firstResponder as? NSView,
             responder.isDescendant(of: controller.view)
+                || (workspace.showsSidebar && responder.isDescendant(of: sidebar.view))
         {
             return
         }

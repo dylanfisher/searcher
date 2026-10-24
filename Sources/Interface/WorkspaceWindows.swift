@@ -641,7 +641,8 @@ public final class WorkspaceWindows {
             fileOperations: fileOperations,
             clipboard: clipboard, mountTable: mountTable, undoHistory: undoHistory,
             openWith: openWith,
-            takePaneController: { [weak self] id in self?.takePaneController(id) })
+            takePaneController: { [weak self] id in self?.takePaneController(id) },
+            openSavedWorkspace: { [weak self] id in self?.open(savedWorkspace: id) })
         controller.onCommand = { [weak self] in self?.showList() }
         controller.onClose = { [weak self] closed in self?.didClose(closed) }
         controller.operations.onClear = { [weak self] id in self?.clearOperation(id) }

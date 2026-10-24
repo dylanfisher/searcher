@@ -302,7 +302,8 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     let view = try #require(menu.items.first { $0.title == "View" }?.submenu)
     #expect(
         view.items.map(\.title) == [
-            "as List", "as Columns", "", "Show Hidden Files", "Folders First", "", "Sort by Name",
+            "as List", "as Columns", "", "Show Sidebar", "Focus Sidebar", "", "Show Hidden Files",
+            "Folders First", "", "Sort by Name",
             "Sort by Kind",
             "Sort by Date Modified", "Sort by Size", "", "Calculate All Sizes", "Calculate Sizes",
         ])
@@ -319,6 +320,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
                 isARepeat: false, keyCode: 47)),
         try keyEvent("6", modifiers: [.control, .option, .command]),
         try keyEvent("s", modifiers: [.control, .command]),
+        try keyEvent("s", characters: "ß", modifiers: [.option, .command]),
     ]
     for press in presses {
         let item = try item(for: press, in: menu)
@@ -328,7 +330,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(
         log.ids == [
             ViewCommands.toggleHidden.id, ViewCommands.sortBySize.id,
-            SizeCommands.calculateSizes.id,
+            SizeCommands.calculateSizes.id, WorkspaceCommands.toggleSidebar.id,
         ])
 }
 
