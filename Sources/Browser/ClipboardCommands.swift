@@ -83,7 +83,7 @@ public enum ClipboardCommands: CommandSet {
     public static func fileURL(of entry: DirectoryEntry, in folder: Location) -> URL {
         URL(
             fileURLWithPath: folder.child(named: entry.name).path,
-            isDirectory: entry.type == .directory)
+            isDirectory: entry.type.isFolderOnDisk)
     }
 
     /// Whether Copy and Cut can run: there is a clipboard and a selection.

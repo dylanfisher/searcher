@@ -1,6 +1,7 @@
 import Base
 import Foundation
 import Testing
+import UniformTypeIdentifiers
 
 @testable import Browser
 
@@ -13,6 +14,12 @@ private func file(_ name: String, size: Int64 = 0, modified: TimeInterval = 0) -
 private func folder(_ name: String, modified: TimeInterval = 0) -> DirectoryEntry {
     DirectoryEntry(
         name: name, type: .directory, size: nil, modified: Date(timeIntervalSince1970: modified),
+        isHidden: false, isDataless: false)
+}
+
+private func package(_ name: String, modified: TimeInterval = 0) -> DirectoryEntry {
+    DirectoryEntry(
+        name: name, type: .package, size: nil, modified: Date(timeIntervalSince1970: modified),
         isHidden: false, isDataless: false)
 }
 
@@ -149,11 +156,21 @@ private let everyOrder: [(SortColumn, Bool)] = SortColumn.allCases.flatMap { col
     #expect(EntryKind.descriptionCount(of: .mp3) == 1)
 }
 
-@Test func kindFollowsTypeAndExtension() {
-    let listing = Listing([folder("Mail.app"), folder("photos.jpg"), file("README")])
-    #expect(listing.kind(atRow: 0).type.conforms(to: .application))
-    #expect(listing.kind(atRow: 1).type == .folder)
-    #expect(listing.kind(atRow: 2).type == .data)
+@Test func kindFollowsTypeAndExtension() throws {
+    let listing = Listing([
+        package("Mail.app"), folder("photos.jpg"), file("README"), folder("Kit.app"),
+        package("Bundled"),
+    ])
+    func kind(_ name: String) throws -> UTType {
+        listing.kind(atRow: try #require(listing.row(named: name))).type
+    }
+    #expect(try kind("Mail.app").conforms(to: .application))
+    #expect(try kind("photos.jpg") == .folder)
+    #expect(try kind("README") == .data)
+    // The lister names packages, so a folder is a folder whatever its extension.
+    #expect(try kind("Kit.app") == .folder)
+    // A package by its bundle bit alone has no type of its own.
+    #expect(try kind("Bundled") == .package)
     for row in 0..<listing.count {
         #expect(listing.kind(atRow: row).text.first?.isUppercase == true)
     }
@@ -342,7 +359,7 @@ private let shownNames: Set = ["b", "a.txt", "docs"]
     // "Mail.app" is a package, which Finder sorts with the files.
     let entries = [
         file("b", size: 5, modified: 3), folder("d", modified: 9), file("a", size: 1, modified: 1),
-        folder("c", modified: 2), folder("Mail.app", modified: 4), file("f", size: 9, modified: 5),
+        folder("c", modified: 2), package("Mail.app", modified: 4), file("f", size: 9, modified: 5),
         folder("e", modified: 2),
     ]
     let folders: Set = ["c", "d", "e"]
@@ -455,6 +472,24 @@ private func folderSizes(_ listing: Listing) -> [Listing.FolderSizeValue?] {
 
     #expect(names(listing) == ["f", "a"])
     #expect(folderSizes(listing) == [nil, nil])
+}
+
+@Test func aPackageTakesItsWalkedSizeAndKeepsItThroughAPatchAsAFolderDoes() {
+    var listing = sorted([package("App.app", modified: 10), file("f", size: 5)], .size)
+
+    listing.applyFolderSizes(exact(["App.app": walked(1_000, modified: 10)]))
+    listing.update(package("App.app", modified: 10))
+
+    #expect(names(listing) == ["f", "App.app"])
+    #expect(folderSizes(listing) == [nil, .size(bytes: 1_000, isPartial: false)])
+}
+
+@Test func foldersFirstSortsPackagesWithTheFiles() {
+    let entries = [package("Zed.app"), folder("b"), file("a.txt"), package("Bundled")]
+
+    let listing = arranged(entries, .name, ascending: true, foldersFirst: true)
+
+    #expect(names(listing) == ["b", "a.txt", "Bundled", "Zed.app"])
 }
 
 @Test func aFailedWalkIsKeptAsFailed() {

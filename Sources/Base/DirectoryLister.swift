@@ -62,7 +62,8 @@ public struct DirectoryLister: Lister {
         request.commonattr =
             attrgroup_t(ATTR_CMN_RETURNED_ATTRS) | attrgroup_t(ATTR_CMN_ERROR)
             | attrgroup_t(ATTR_CMN_NAME) | attrgroup_t(ATTR_CMN_OBJTYPE)
-            | attrgroup_t(ATTR_CMN_MODTIME) | attrgroup_t(ATTR_CMN_FLAGS)
+            | attrgroup_t(ATTR_CMN_MODTIME) | attrgroup_t(ATTR_CMN_FNDRINFO)
+            | attrgroup_t(ATTR_CMN_FLAGS)
         if skipsMountPoints { request.dirattr = attrgroup_t(ATTR_DIR_MOUNTSTATUS) }
         request.fileattr = attrgroup_t(ATTR_FILE_DATALENGTH)
 
@@ -96,7 +97,7 @@ public struct DirectoryLister: Lister {
             if errno == ENOENT { return nil }
             throw ListingError(path: path + "/" + name, code: errno)
         }
-        return entry(named: name, info: info)
+        return try entry(named: name, at: path + "/" + name, info: info)
     }
 
     /// Reads one `getattrlistbulk` record. Attributes are packed in bitmap order and only those
@@ -140,6 +141,12 @@ public struct DirectoryLister: Lister {
             modified = field.loadUnaligned(as: timespec.self)
             field += MemoryLayout<timespec>.size
         }
+        // The Finder info's bundle bit makes a folder a package whatever its name.
+        var hasBundleBit = false
+        if returned.commonattr & attrgroup_t(ATTR_CMN_FNDRINFO) != 0 {
+            hasBundleBit = PackageRule.hasBundleBit(field)
+            field += PackageRule.finderInfoSize
+        }
         // A file system without flags leaves them out, and XNU's `stat` reports 0 for it too, so
         // stat'ing the entry would cost a call per entry for the same answer. APFS, HFS+, FAT32,
         // exFAT, SMB and devfs all return them.
@@ -167,7 +174,10 @@ public struct DirectoryLister: Lister {
         else {
             return try stat(name, in: fd, path: path).map { ($0, isMountPoint) }
         }
-        let type = fileType(objectType)
+        var type = fileType(objectType)
+        if type == .directory, hasBundleBit || PackageRule.isPackage(named: name) {
+            type = .package
+        }
         let entry = DirectoryEntry(
             name: name, type: type, size: type == .regular ? dataLength : nil,
             modified: date(modified), isHidden: flags & UInt32(UF_HIDDEN) != 0,
@@ -181,17 +191,25 @@ public struct DirectoryLister: Lister {
             if errno == ENOENT { return nil }
             throw ListingError(path: path + "/" + name, code: errno)
         }
-        return entry(named: name, info: info)
+        return try entry(named: name, at: path + "/" + name, info: info)
     }
 
-    private func entry(named name: String, info: Darwin.stat) -> DirectoryEntry {
-        let type: DirectoryEntry.FileType =
-            switch info.st_mode & S_IFMT {
-            case S_IFREG: .regular
-            case S_IFDIR: .directory
-            case S_IFLNK: .symbolicLink
-            default: .other
+    /// The entry `info` describes, named `name`, at `path`; nil if it was removed since. A
+    /// folder whose name doesn't say it is a package has its Finder info read for the bundle bit.
+    private func entry(named name: String, at path: String, info: Darwin.stat) throws
+        -> DirectoryEntry?
+    {
+        let type: DirectoryEntry.FileType
+        switch info.st_mode & S_IFMT {
+        case S_IFREG: type = .regular
+        case S_IFDIR:
+            guard let isPackage = try PackageRule.isPackage(folderAt: path, named: name) else {
+                return nil
             }
+            type = isPackage ? .package : .directory
+        case S_IFLNK: type = .symbolicLink
+        default: type = .other
+        }
         return DirectoryEntry(
             name: name, type: type, size: type == .regular ? info.st_size : nil,
             modified: date(info.st_mtimespec), isHidden: info.st_flags & UInt32(UF_HIDDEN) != 0,

@@ -106,6 +106,68 @@ private func press(_ chord: KeyChord, on pane: Pane) throws {
     #expect(paths(fixture.pane) == ["/r"])
 }
 
+/// A pane at `/p` in column mode over `/p`, holding a package `App.app` and a folder `docs`.
+@MainActor
+private func packageColumns() async -> PaneFixture {
+    let fixture = PaneFixture(
+        at: "/p",
+        folders: [
+            "/p": [package("App.app"), folder("docs")], "/p/App.app": [folder("Contents")],
+            "/p/App.app/Contents": [file("Info.plist")], "/p/docs": [file("x.txt")],
+        ])
+    await settle { fixture.pane.state.isLoaded }
+    fixture.pane.setViewMode(.column)
+    await settle { trail(fixture.pane).focused.pane.state.isLoaded }
+    return fixture
+}
+
+@MainActor @Test func selectingAPackageAddsNoColumnPreviewsItAndRightDoesNothing() async throws {
+    let fixture = await packageColumns()
+    let first = trail(fixture.pane).columns[0]
+    select("docs", in: first)
+    #expect(paths(fixture.pane) == ["/p", "/p/docs"])
+
+    select("App.app", in: first)
+    await drainMainQueue()
+    #expect(paths(fixture.pane) == ["/p"])
+    #expect(trail(fixture.pane).preview?.location == Location(path: "/p/App.app"))
+    #expect(trail(fixture.pane).preview?.entry == package("App.app"))
+
+    try press(KeyChord(.right), on: fixture.pane)
+    #expect(paths(fixture.pane) == ["/p"])
+    #expect(trail(fixture.pane).focusedIndex == 0)
+    #expect(fixture.actions.openedFiles.isEmpty)
+}
+
+@MainActor @Test func showPackageContentsAddsThePackagesColumnAndMovesIntoItUntilAnotherSelection()
+    async throws
+{
+    let fixture = await packageColumns()
+    let first = trail(fixture.pane).columns[0]
+    select("App.app", in: first)
+    let binding = try #require(
+        AppCommands.bindings.first { $0.command == NavigationCommands.showPackageContents })
+
+    binding.run(CommandContext(pane: fixture.pane.commandPane))
+
+    #expect(paths(fixture.pane) == ["/p", "/p/App.app"])
+    #expect(trail(fixture.pane).focusedIndex == 1)
+    #expect(trail(fixture.pane).preview == nil)
+    await settle { trail(fixture.pane).columns[1].pane.state.isLoaded }
+    select("Contents", in: trail(fixture.pane).columns[1])
+    #expect(paths(fixture.pane) == ["/p", "/p/App.app", "/p/App.app/Contents"])
+
+    // A change in the package's own column keeps the package's column while it stays selected.
+    first.pane.reload()
+    await settle { first.pane.state.isLoaded }
+    #expect(paths(fixture.pane).prefix(2) == ["/p", "/p/App.app"])
+
+    select("docs", in: first)
+    #expect(paths(fixture.pane) == ["/p", "/p/docs"])
+    select("App.app", in: first)
+    #expect(paths(fixture.pane) == ["/p"])
+}
+
 @MainActor @Test func selectingAFolderTruncatesTheColumnsToItsRight() async {
     let fixture = await columnPane()
     let first = trail(fixture.pane).columns[0]

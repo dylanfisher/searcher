@@ -969,6 +969,17 @@ private func folderSize(_ name: String, in pane: Pane) -> Listing.FolderSizeValu
     await settle { (try? sizeText(controller)) == ["4 MB", "≥ 2 MB", "500 bytes"] }
 }
 
+/// Finder shows a package's size as it shows a folder's.
+@MainActor @Test func aPackageShowsPendingTextThenItsWalkedSize() async throws {
+    let walks = HeldWalks()
+    let controller = await sizedController(showing: [package("Logic.logicx")], walks: walks)
+    #expect(try sizeText(controller) == [EntryCellFormatter.pendingSize])
+
+    walks.release("/folder/Logic.logicx", bytes: 4_000_000)
+
+    await settle { (try? sizeText(controller)) == ["4 MB"] }
+}
+
 @MainActor @Test func aFailedWalkShowsNoSizeAndAReloadAsksAgain() async throws {
     let walks = HeldWalks()
     let clock = ManualClock()

@@ -32,8 +32,9 @@ listing doesn't make.
   them apart. A socket, device or FIFO shows a preview with its kind and no Size row, as Finder
   shows one.
 - **Packages follow the trail.** The preview shows for what the trail doesn't open as a column.
-  The listing reports a package such as an app as a folder, and Open and the trail treat it as
-  one, so a package opens a column and shows no preview, unchanged by this step.
+  A package such as an app is a file to Open and the trail
+  ([0093](0093-packages-are-files.md)), so it opens no column and shows the preview, with no
+  Size row: its size is a walked folder size, which the preview doesn't show yet.
 - **One view, refilled.** `ColumnViewController` makes `ColumnPreviewView` the first time a file
   is previewed, keeps it in the columns' document view, hides it when there is no preview and
   refills its fields only when the preview changes. It sits right of the last column's separator,
@@ -61,8 +62,9 @@ listing doesn't make.
   selection settles. Until then the preview shows the type icon.
 - **Build the preview view on each selection** — rejected: a held ↓ through files would make a
   view hierarchy per row, against B6.
-- **Show the preview for a package** — not done here: it would change what Open and the trail do
-  with packages, which no step has decided.
+- **Show the preview for a package** — left out of this step, which didn't decide what Open and
+  the trail do with packages; [0093](0093-packages-are-files.md) made them files, and they
+  preview.
 
 ## Consequences
 

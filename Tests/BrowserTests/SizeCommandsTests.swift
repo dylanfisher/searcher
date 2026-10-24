@@ -174,6 +174,33 @@ private func albumsSize(_ pane: Pane) -> Listing.FolderSizeValue? {
         AppCommands.sets.contains { ObjectIdentifier($0) == ObjectIdentifier(SizeCommands.self) })
 }
 
+@MainActor @Test func aPackageIsWalkedAndARevisitShowsItsKeptSizeAsAFolderDoes() async throws {
+    let walks = CountedWalks()
+    let pane = PaneFixture(
+        at: "/music",
+        folders: ["/music": [package("Song.band"), folder("Albums")], "/music/Albums": []]
+    ).pane
+    pane.folderSizes = walks.service()
+    await settle { pane.state.isLoaded }
+    func bandSize() -> Listing.FolderSizeValue? {
+        guard let listing = pane.state.listing, let row = listing.row(named: "Song.band") else {
+            return nil
+        }
+        return listing.folderSize(atRow: row)
+    }
+
+    try binding(SizeCommands.calculateSizes).run(CommandContext(pane: pane))
+    await settle { bandSize() == .size(bytes: 1, isPartial: false) }
+    pane.navigate(to: Location(path: "/music/Albums"))
+    await settle { pane.location.path == "/music/Albums" && pane.state.isLoaded }
+    pane.goBack()
+
+    await settle {
+        pane.location.path == "/music" && bandSize() == .size(bytes: 1, isPartial: false)
+    }
+    #expect(walks.count("/music/Song.band") == 1)
+}
+
 @MainActor @Test func folderSizesAreOffByDefaultAndNoFolderIsWalked() async throws {
     let walks = CountedWalks()
     let pane = PaneFixture(at: "/music", folders: ["/music": [folder("Albums")]]).pane

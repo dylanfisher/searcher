@@ -163,6 +163,7 @@ public enum MainMenuBuilder {
                 .command(FileCommands.moveToOtherPane.id),
                 .separator,
                 .openWith,
+                .command(NavigationCommands.showPackageContents.id),
                 // Space is its key.
                 .commandWithoutKey(ViewCommands.toggleQuickLook.id),
                 .command(SystemCommands.revealInFinder.id),

@@ -110,6 +110,21 @@ private func selectedNames(_ pane: Pane) -> Set<String> {
     #expect(error?.description.contains(FileCommands.duplicate.id.rawValue) == true)
 }
 
+/// Finder's row menu has Show Package Contents right after Open With.
+@MainActor @Test func theRowMenuShowsPackageContentsAfterOpenWith() throws {
+    let items = ContextMenuBuilder.rowItems
+    let openWith = try #require(
+        items.firstIndex {
+            if case .openWith = $0 { return true }
+            return false
+        })
+    guard case .command(let id) = items[openWith + 1] else {
+        Issue.record("Open With isn't followed by a command")
+        return
+    }
+    #expect(id == NavigationCommands.showPackageContents.id)
+}
+
 @MainActor @Test func itemsDisableWithTheirCommands() throws {
     let table = ListingTableView()
     table.canRunCommand = { $0 == FileCommands.duplicate.id }

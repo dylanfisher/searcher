@@ -429,7 +429,8 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(
         file.items.map(\.title) == [
             "New Window", "New Folder", "New Tab", "Close Tab", "", "Rename", "Duplicate",
-            "Copy to Other Pane", "Move to Other Pane", "", "Open With", "Quick Look",
+            "Copy to Other Pane", "Move to Other Pane", "", "Open With",
+            "Show Package Contents", "Quick Look",
             "Reveal in Finder",
             "Open Terminal Here", "", "Move to Trash", "", "Filter",
         ])

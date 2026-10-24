@@ -243,7 +243,7 @@ public struct Listing: Sendable {
         var changed = false
         for (exact, update) in updates {
             guard let index = index(named: exact.name, key: NameSortKey(exact.name)).found,
-                entries[index].type == .directory, entries[index].modified == update.modified,
+                entries[index].type.isFolderOnDisk, entries[index].modified == update.modified,
                 folderSizes[index] != update.value
             else { continue }
             folderSizes[index] = update.value
@@ -274,7 +274,7 @@ public struct Listing: Sendable {
     /// Whether `new` is the folder `old` was, with the same modification date, so its walked
     /// size still holds.
     private static func isSameFolder(_ old: DirectoryEntry, _ new: DirectoryEntry) -> Bool {
-        old.type == .directory && new.type == .directory && old.modified == new.modified
+        old.type.isFolderOnDisk && new.type.isFolderOnDisk && old.modified == new.modified
     }
 
     /// Removes the entry named `name` and its row, and returns it; nil if there is none.

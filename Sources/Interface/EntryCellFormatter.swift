@@ -41,7 +41,7 @@ public struct EntryCellFormatter {
         awaitsFolderSizes: Bool
     ) -> String {
         if let size = entry.size { return sizes.string(fromByteCount: size) }
-        guard showsFolderSizes, entry.type == .directory else { return Self.noSize }
+        guard showsFolderSizes, entry.type.isFolderOnDisk else { return Self.noSize }
         switch folderSize {
         case nil: return awaitsFolderSizes ? Self.pendingSize : Self.noSize
         case .failed: return Self.noSize
