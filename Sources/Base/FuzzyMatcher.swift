@@ -119,8 +119,9 @@ public struct FuzzyMatcher: Sendable {
     /// so the prefix needs more than 2 * (L - 1) over L letters: 2 per letter is the least that
     /// beats every chain from three letters on.
     static let prefixBonus: Int32 = 2
-    /// Below this many letters a prefix scores as a run, so "gh" can still find "GitHub" before
-    /// "ghost".
+    /// The fewest letters that earn the prefix bonus: 3, not 1 or 2, so two-letter initials
+    /// still win over a prefix, as "gh" ranks "GitHub" above "ghost". A shorter prefix scores
+    /// as a plain run.
     static let prefixLetters = 3
     /// Per letter, for a query that is a whole path component, on top of any prefix bonus. On
     /// its own it must beat a chain of one or two letters, 2 * (L - 1) / L more: 2 is the least

@@ -69,9 +69,8 @@ read as initials.
   folded byte's character offset in an `[Int32]` so the match's ranges point at the original
   characters ("e" highlights the "é" of "Résumé"). A letter matched inside a character that
   folds to several highlights the whole character: "f" in "ﬁle" highlights "ﬁ". Matching is
-  per byte, but a UTF-8
-  continuation byte in the query must directly follow its lead byte and adds nothing, so a
-  character matches whole and scores as one letter.
+  per byte, but a UTF-8 continuation byte in the query must directly follow its lead byte and
+  adds nothing, so a character matches whole and scores as one letter.
 - **Allocation.** `best(_:limit:)` keeps its tables in one scratch per call, grown to the longest
   candidate, so after the first few candidates scoring allocates nothing. The top `limit` sit in
   a sorted array with binary insertion; ranges, the only per-result allocation, are built for
