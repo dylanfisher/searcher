@@ -26,7 +26,9 @@ public actor WorkspaceStore {
     /// Workspaces not yet written, by ID.
     private var pending: [UUID: WorkspaceState] = [:]
     private var pendingSession: SessionState?
-    private var writeScheduled = false
+    /// The wait for the next write, cancelled by a `flush` that writes first, so a save after
+    /// the flush waits the whole delay.
+    private var scheduledWrite: Task<Void, Never>?
 
     /// A store in `roots.applicationSupport`. `report` gets each file that couldn't be read,
     /// written or decoded. `write` replaces a file's contents; tests pass one that records its
@@ -61,15 +63,18 @@ public actor WorkspaceStore {
     }
 
     private func scheduleWrite() {
-        guard !writeScheduled else { return }
-        writeScheduled = true
+        guard scheduledWrite == nil else { return }
         let wait = startWait(Self.writeDelay)
-        Task {
+        scheduledWrite = Task {
             do {
                 try await wait()
+            } catch is CancellationError {
+                return
             } catch {
                 preconditionFailure("the clock failed a wait with \(error)")
             }
+            // A flush between the wait's end and this point cancelled it; both run on the actor.
+            guard !Task.isCancelled else { return }
             flush()
         }
     }
@@ -77,7 +82,8 @@ public actor WorkspaceStore {
     /// Writes every save not yet written, at once, as quitting needs.
     public func flush() {
         dispatchPrecondition(condition: .notOnQueue(.main))
-        writeScheduled = false
+        scheduledWrite?.cancel()
+        scheduledWrite = nil
         let workspaces = pending
         let session = pendingSession
         pending = [:]
@@ -112,7 +118,9 @@ public actor WorkspaceStore {
 
     /// The session and every workspace: the latest saves, written or not. A file that isn't in
     /// the one stored shape, or a workspace file not named for its workspace's ID, is deleted
-    /// and reported, and loads as missing.
+    /// and reported, and loads as missing. In the workspaces folder, an unfinished write left by
+    /// a crash is deleted without a report, and other dot-files are left alone. The session is
+    /// returned as saved, even when it names a workspace that didn't load.
     public func load() -> Contents {
         dispatchPrecondition(condition: .notOnQueue(.main))
         var workspaces: [UUID: WorkspaceState] = [:]
@@ -127,6 +135,12 @@ public actor WorkspaceStore {
         }
         for name in names {
             let url = folder.appending(path: name)
+            if AtomicWrite.isPartial(name) {
+                removeLeftover(url)
+                continue
+            }
+            // Such as Finder's .DS_Store, which isn't the store's to delete.
+            if name.hasPrefix(".") { continue }
             guard let workspace = read(WorkspaceState.self, from: url) else { continue }
             guard url == self.url(for: workspace.id) else {
                 discard(url, because: "it holds workspace \(workspace.id)")
@@ -170,6 +184,20 @@ public actor WorkspaceStore {
     /// The file `id`'s workspace is kept in.
     nonisolated func url(for id: UUID) -> URL {
         folder.appending(path: "\(id.uuidString).json")
+    }
+
+    /// Deletes a write's temporary file that a crash left. It held nothing the user lost, since
+    /// the file it was to replace is still there, so only a failure to delete it is reported.
+    private func removeLeftover(_ url: URL) {
+        do {
+            try FileManager.default.removeItem(at: url)
+        } catch {
+            report(
+                StoreProblem(
+                    file: url, kind: .undeletable,
+                    reason: "it's an unfinished write left by a crash; deleting it failed: \(error)"
+                ))
+        }
     }
 
     private func discard(_ url: URL, because reason: String) {
