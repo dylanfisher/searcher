@@ -12,7 +12,8 @@ Needs Swift 6.2 or later (Command Line Tools or Xcode).
 |---|---|
 | Bootstrap, install the commit hook | `./scripts/setup` |
 | Run the app | `./scripts/dev` |
-| Run tests | `./scripts/test` |
+| Run tests (skipped when nothing changed since they last passed) | `./scripts/test` |
+| Run the tests for what you changed | `./scripts/test --changed` |
 | Fix formatting | `./scripts/format` |
 | Full gate — format, build, tier rules, tests | `./scripts/check` |
 

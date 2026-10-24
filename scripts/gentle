@@ -1,29 +1,64 @@
 # shellcheck shell=bash
-# Sourced by scripts/check and scripts/test; not run directly.
+# Sourced by the scripts that build or test; not run directly.
+#
+# swift_cmd <subcommand> [args...] runs `swift`. Every build and test run gets the same flags, so
+# check's steps, the bundle and the tests share one build instead of each rebuilding what the
+# previous one built with different settings.
+#
+# It uses the native build system, because the default one (swiftbuild) rebuilds every module on
+# about half of all runs with Command Line Tools: it picks one of two toolchain IDs at random,
+# and each switch is a new build description. Reason and measurements:
+# docs/decisions/0092-native-build-system.md.
 #
 # Gentle mode keeps the machine usable during a run. Enable it with `--gentle` as the
 # first argument or SEARCHER_GENTLE=1. It builds with half the logical CPUs (`--jobs`)
 # at utility priority; the test run is unchanged. Why, and what was rejected:
 # docs/decisions/0084-gentle-mode.md.
-#
-# swift_cmd <subcommand> [args...] runs `swift`; a build is throttled when gentle.
 
 if [ "${1:-}" = "--gentle" ]; then SEARCHER_GENTLE=1; shift; fi
+
+swift_bin="$(xcrun --find swift)"
+# The native build system adds the Testing framework only to test targets, and TestSupport
+# imports it too. Xcode keeps it in the platform; Command Line Tools have no platform.
+if platform="$(xcrun --show-sdk-platform-path 2>/dev/null)"; then
+  testing_frameworks="$platform/Developer/Library/Frameworks"
+else
+  testing_frameworks="$(xcode-select -p)/Library/Developer/Frameworks"
+fi
+if [ ! -d "$testing_frameworks/Testing.framework" ]; then
+  echo "Testing.framework is not in $testing_frameworks" >&2
+  exit 1
+fi
+swift_flags=(--build-system native
+  -Xswiftc -F -Xswiftc "$testing_frameworks"
+  -Xlinker -F -Xlinker "$testing_frameworks" -Xlinker -rpath -Xlinker "$testing_frameworks")
+# Command Line Tools ship the Swift Testing macro plugin in a subdirectory the
+# build misses on a cold build ("plugin for module 'TestingMacros' not found").
+# Point at it explicitly when it exists.
+testing_plugins="$(dirname "$swift_bin")/../lib/swift/host/plugins/testing"
+if [ -d "$testing_plugins" ]; then
+  swift_flags+=(-Xswiftc -plugin-path -Xswiftc "$testing_plugins")
+fi
 
 if [ "${SEARCHER_GENTLE:-}" = "1" ]; then
   export SEARCHER_GENTLE
   gentle_jobs=$(( $(sysctl -n hw.ncpu) / 2 ))
   [ "$gentle_jobs" -ge 1 ] || gentle_jobs=1
-  swift_cmd() {
-    local sub="$1"; shift
-    if [ "$sub" = build ]; then taskpolicy -c utility swift build --jobs "$gentle_jobs" "$@"
-    else swift "$sub" "$@"; fi
-  }
   # check sources this, then runs test, which sources it again: announce once.
   if [ -z "${SEARCHER_GENTLE_ANNOUNCED:-}" ]; then
     export SEARCHER_GENTLE_ANNOUNCED=1
     echo "gentle mode: jobs $gentle_jobs, taskpolicy utility (build only)"
   fi
-else
-  swift_cmd() { swift "$@"; }
 fi
+
+# SwiftPM warns that the native build system is deprecated on every call; the decision above
+# covers it, so that one line is dropped.
+swift_cmd() {
+  local sub="$1"; shift
+  if [ "$sub" = build ] && [ -n "${gentle_jobs:-}" ]; then
+    set -- taskpolicy -c utility "$swift_bin" build "${swift_flags[@]}" --jobs "$gentle_jobs" "$@"
+  else
+    set -- "$swift_bin" "$sub" "${swift_flags[@]}" "$@"
+  fi
+  "$@" 2> >(grep -vF "'--build-system native' has been deprecated" >&2)
+}
