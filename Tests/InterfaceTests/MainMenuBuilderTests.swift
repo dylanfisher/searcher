@@ -164,15 +164,12 @@ private func buildMenu(_ registry: CommandRegistry) throws -> NSMenu {
 /// An unshown window holding a pane's table, whose commands only record, and a text field.
 @MainActor
 private struct TextFieldWindow {
-    let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled],
-        backing: .buffered, defer: true)
+    let window = KeyCatchingWindow()
     let table = ListingTableView()
     let field = NSTextField(string: "hello")
     let log = CommandLog()
 
     init() throws {
-        window.isReleasedWhenClosed = false
         table.registry = try AppCommands.registry()
         table.runCommand = { [log] in log.ids.append($0) }
         table.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name")))
@@ -197,8 +194,10 @@ private struct TextFieldWindow {
     }
     let selectAll = try item(for: try keyEvent("a", modifiers: .command), in: menu)
     #expect(editor.tryToPerform(try #require(selectAll.action), with: selectAll))
+    // With no main menu to take Cmd-A first, the key reaches the editor and ends at the window.
     editor.keyDown(with: try keyEvent("a", modifiers: .command))
 
+    #expect(setup.window.unhandledCommands.count == 1)
     #expect(editor.selectedRange() == NSRange(location: 0, length: 5))
     #expect(setup.log.ids.isEmpty)
 }

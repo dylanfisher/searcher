@@ -698,9 +698,12 @@ private func usKey(
     fixture.window.sendEvent(try usKey("T", characters: "ˇ", keyCode: 17, [.option, .shift]))
     #expect(fixture.tab.panes.count == 3)
 
-    // Command is no part of the key now.
+    // Command is no part of the key now, so no command takes it and the table beeps.
+    var beeps = 0
+    try fixture.keyTable.beep = { beeps += 1 }
     try fixture.press(try usKey("T", characters: "ˇ", keyCode: 17, [.command, .option, .shift]))
     #expect(fixture.tab.panes.count == 3)
+    #expect(beeps == 1)
 }
 
 @MainActor @Test func ctrlTabSwitchesTabsThroughTheWindowFromTheTableAndTheFilterField()
