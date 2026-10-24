@@ -9,11 +9,15 @@ import Browser
 ///
 /// It asks to be shown (`onNeedsAttention`) when an operation is still unfinished
 /// `attentionDelay` after the panel first saw it, or finishes in trouble, so a short operation
-/// never brings it up (docs/decisions/0067-operations-panel.md).
+/// never brings it up. A copy whose rate so far leaves `longEstimate` or more to go asks at once,
+/// a tick or two after it starts (docs/decisions/0067-operations-panel.md).
 @MainActor
 final class OperationsViewController: NSViewController {
     /// How long an operation runs before the panel asks to be shown.
     static let attentionDelay: Duration = .seconds(1)
+    /// How much copying, estimated from the rate between two ticks, has the panel ask to be shown
+    /// before `attentionDelay`.
+    static let longEstimate: Duration = .seconds(2)
     /// The tallest the panel grows, about three rows; past it the rows scroll.
     static let maxHeight: CGFloat = 200
     /// The height of the line saying there are no operations.
@@ -50,6 +54,8 @@ final class OperationsViewController: NSViewController {
     private let formatter = EntryCellFormatter()
     /// Starts a wait of the given length on the clock, taking the deadline at once.
     private let startWait: @MainActor (Duration) -> @Sendable () async throws -> Void
+    /// The time on the clock since the panel was made.
+    private let elapsed: @MainActor () -> Duration
     private let stack = NSStackView()
     /// Holds `emptyLabel` as the panel's only row while there are no others.
     private let emptyRow = NSView()
@@ -61,6 +67,15 @@ final class OperationsViewController: NSViewController {
     private var waits: [FileOperationQueue.ID: Task<Void, Never>] = [:]
     /// Finished operations whose rows stay until cleared.
     private var kept: Set<FileOperationQueue.ID> = []
+    /// Each running copy's first tick with a total, to tell its rate from the next.
+    private var estimates: [FileOperationQueue.ID: Estimate] = [:]
+
+    private enum Estimate {
+        /// When the tick came, and the bytes copied by then.
+        case sample(at: Duration, bytes: Int64)
+        /// The copy was estimated long and the panel asked to be shown.
+        case asked
+    }
 
     init<C: Clock<Duration>>(control: Control, clock: C = ContinuousClock()) {
         self.control = control
@@ -68,6 +83,8 @@ final class OperationsViewController: NSViewController {
             let deadline = clock.now.advanced(by: duration)
             return { try await clock.sleep(until: deadline, tolerance: nil) }
         }
+        let start = clock.now
+        elapsed = { start.duration(to: clock.now) }
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -96,9 +113,11 @@ final class OperationsViewController: NSViewController {
             let phase = snapshot.state.phase
             if !phase.isFinished {
                 if waits[id] == nil { waits[id] = wait(for: id) }
+                estimate(snapshot)
                 continue
             }
             waits.removeValue(forKey: id)?.cancel()
+            estimates.removeValue(forKey: id)
             if OperationRowView.isTrouble(phase) {
                 if kept.insert(id).inserted { onNeedsAttention?() }
             } else {
@@ -107,6 +126,7 @@ final class OperationsViewController: NSViewController {
         }
         for id in rows.keys where !listed.contains(id) && !kept.contains(id) {
             waits.removeValue(forKey: id)?.cancel()
+            estimates.removeValue(forKey: id)
             removeRow(id)
         }
         showEmpty(wasEmpty: wasEmpty)
@@ -187,6 +207,30 @@ final class OperationsViewController: NSViewController {
     private func showEmpty(wasEmpty: Bool) {
         emptyRow.isHidden = !rows.isEmpty
         if rows.isEmpty, !wasEmpty { onEmptied?() }
+    }
+
+    /// Asks to be shown, once, if the copy in `snapshot` has `longEstimate` or more to go at the
+    /// rate since its last sample. Only a running copy with a total is sampled; a pause, or a
+    /// phase without bytes moving, starts the sampling over.
+    private func estimate(_ snapshot: FileOperationQueue.Snapshot) {
+        let id = snapshot.id
+        if case .asked = estimates[id] { return }
+        let progress = snapshot.state.progress
+        guard snapshot.state.phase == .running, let total = progress.total else {
+            estimates.removeValue(forKey: id)
+            return
+        }
+        let now = elapsed()
+        let copied = progress.copied.bytes
+        guard case .sample(let then, let bytes) = estimates[id], copied > bytes, now > then
+        else {
+            estimates[id] = .sample(at: now, bytes: copied)
+            return
+        }
+        let left = (now - then) * (Double(total.bytes - copied) / Double(copied - bytes))
+        guard left >= Self.longEstimate else { return }
+        estimates[id] = .asked
+        onNeedsAttention?()
     }
 
     /// Asks to be shown if `id` is still unfinished once `attentionDelay` has passed.

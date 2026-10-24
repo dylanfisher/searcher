@@ -41,12 +41,26 @@ other-pane confirm names nothing, and two Cmd-Shift-C presses ask two questions 
 - **Showing itself.** The panel shows when an operation is still unfinished 1 s after the panel
   first saw it, or finishes in trouble, and only in the most recently active window. A shorter
   operation that succeeds never shows it.
+- **Showing early for a long copy** (2026-10-23, M4.23). A copy to a share showed the panel only
+  after the 1 s wait. Now a running copy with a total is sampled on its first tick, and on each
+  later tick the bytes left are divided by the rate since that sample; when that leaves 2 s or
+  more (`longEstimate`), the panel shows then, once, about 100 ms in (one snapshot interval).
+  Paused or stalled, sampling starts over. The rule uses the rate, not the size or the volume
+  kind: a same-volume copy of 6 GB is an APFS clone that ends in one tick, and a copy to a fast
+  share can be quicker than one to a slow USB disk. 2 s rather than 1 s because the first tick's
+  rate can be off by half, as a network write fills its buffers; at 2 s a copy estimated long
+  still runs about 1 s after the panel shows, so it doesn't flicker. A copy estimated shorter,
+  and anything without bytes to count (trash, rename, a pre-scan still running), waits the 1 s
+  as before.
 - **Hiding when empty.** `Settings.hideEmptyOperationsPanel`, on by default, as Finder shows
   no panel while idle: a panel that showed itself hides when its last row leaves, cleared or
   finished, and shows again by the rule above. A panel the user opened with Operations stays,
   empty or not, until the user closes it, so a copy ending in another window never closes it.
   Turning the setting on while an empty panel that showed itself is up hides it. Off, the empty
   panel stays and says "No operations".
+- **Insets.** Each row sits 9 pt from the panel's sides, `BarInset.horizontal`, shared with the
+  path bar so its first folder lines up with the rows' text, and 9 pt above and below (12 and 6
+  until 2026-10-23, when Dylan asked for less across and more up and down).
 - **Size.** The panel is as tall as its rows, up to 200 pt (about three rows), past which they
   scroll; with no rows it is one line saying so. Its height comes from the rows' constraints, so
   it grows and shrinks a row at a time and the panes give up only that room. A progress tick
@@ -74,6 +88,9 @@ other-pane confirm names nothing, and two Cmd-Shift-C presses ask two questions 
   not, can turn the setting off.
 - **Hiding every empty panel** — rejected: every window gets every snapshot, so a copy ending
   in one window would close a panel the user opened in another.
+- **Show at once for a big total or a network volume** — rejected: the snapshots carry neither
+  rate nor volume kind, a big same-volume copy is a clone that ends at once, and a fast share
+  copies a few hundred MB in under a second.
 - **Failed rows kept per window** — rejected: a window opened later wouldn't list a failure,
   and one reported with no window open would be lost.
 

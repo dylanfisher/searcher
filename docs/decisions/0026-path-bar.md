@@ -34,9 +34,19 @@ name can't ride in the listing itself.
 - **Truncation.** The segments between the ends shrink first, the one nearest the root first,
   each down to 32 points; then the root, then the pane's folder. Titles truncate in the middle. A
   row too long even then is clipped at the bar's edge.
-- **Layout.** The list and the bar are pinned with constraints, the bar 24 points tall along the
-  pane's bottom. The pane's container starts at zero size, where frames set for autoresizing
-  can't hold the bar's height, and the list ended up 24 points taller than the pane.
+- **A truncated segment under the mouse** gets its full width, as in Finder's path bar: the bar
+  lays the row out again with that segment shrinking last, so the others give way in the usual
+  order and the row's ends stay put. The change is instant, with no animation, so the segments
+  never move under a mouse that's still. The segment's left edge can only move left and its
+  right edge only right, so the mouse stays over it. Each segment still truncated after layout
+  has its full name as a tooltip, and the others have none (added 2026-10-23, M4.23).
+- **Inset.** The row starts 9 points from the bar's sides, `BarInset.horizontal`, which the
+  operations panel's rows share, so the first folder lines up with their text (2026-10-23; it
+  was 6 points).
+- **Layout.** The list and the bar are pinned with constraints, the bar 28 points tall along the
+  pane's bottom (24 until 2026-10-23, when Dylan asked for more room above and below). The pane's
+  container starts at zero size, where frames set for autoresizing can't hold the bar's height,
+  and the list ended up 24 points taller than the pane.
 - **Separators.** Each is the SF Symbol `chevron.right` at the titles' point size, small scale,
   in the tertiary label color, as in Finder's path bar. It is centered on the middle of a capital
   letter, measured from the first segment's baseline, rather than on the bar, so it stays level
@@ -64,11 +74,21 @@ name can't ride in the listing itself.
 - **Route the click through the command registry** — not yet: no command takes a target folder.
   M3.6a's open-in-new-tab command is where a path command would join the registry.
 
+- **A short animation for the expanding segment** — rejected: the segments would slide under the
+  mouse, and a tooltip or click mid-slide lands on a moving target.
+- **A tooltip only, no expanding** — rejected: Finder expands, and the tooltip waits for the
+  hover delay.
+
 ## Consequences
 
 Every load, including a reload and a monitor's re-list, costs one more call off the main thread.
 A folder that fails to list moves the bar to it, so the bar and the error line agree. Until the
 first update of a pane lands, the bar is empty.
+
+Moving the mouse from an expanded segment into a truncated neighbor lays the row out again, and
+the segments to its right can grow back as the one it left shrinks. In a crowded row that can put
+the neighbor's new right edge left of the mouse, so the segment after it takes the hover. It
+settles on whichever segment is under the mouse after the next move.
 
 ## Open questions for Dylan
 
