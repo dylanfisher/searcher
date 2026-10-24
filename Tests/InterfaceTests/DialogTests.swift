@@ -67,3 +67,63 @@ private final class Presses: NSObject {
         #expect(button.frame.width > 0)
     }
 }
+
+/// A row sheet with Finder's conflict buttons.
+@MainActor
+private func rowSheet(checkbox: NSButton? = nil, information: String = "More.")
+    -> Dialog.RowSheet
+{
+    Dialog.rowSheet(
+        message: "Replace?", information: information,
+        buttons: ["Replace", "Skip", "Stop", "Keep Both"], escape: "Stop", checkbox: checkbox)
+}
+
+/// Where `view` is in its window, so views in different stacks compare.
+@MainActor
+private func frameInWindow(_ view: NSView) -> NSRect {
+    view.convert(view.bounds, to: nil)
+}
+
+/// Where `view`'s content edges are in its window: a checkbox's frame is wider than its box,
+/// and the stack lines views up by these.
+@MainActor
+private func alignmentInWindow(_ view: NSView) -> NSRect {
+    view.convert(view.alignmentRect(forFrame: view.bounds), to: nil)
+}
+
+@MainActor @Test func aRowSheetPutsTheDefaultRightmostInOneRow() {
+    let sheet = rowSheet()
+    let row = sheet.buttons.sorted { frameInWindow($0).minX < frameInWindow($1).minX }
+
+    #expect(row.map(\.title) == ["Keep Both", "Stop", "Skip", "Replace"])
+    #expect(Set(row.map { frameInWindow($0).minY }).count == 1)
+    #expect(sheet.buttons.map(\.keyEquivalent) == ["\r", "", "\u{1B}", ""])
+    #expect(sheet.panel.initialFirstResponder === sheet.buttons[2])
+}
+
+/// Laid out like an alert: the app icon at alert size, the message bold at the system size
+/// and the information at the small size, the window as big as its content.
+@MainActor @Test func aRowSheetLooksLikeAnAlertAndFitsItsContent() throws {
+    let short = rowSheet()
+    let long = rowSheet(information: String(repeating: "A longer explanation. ", count: 20))
+    let content = try #require(short.panel.contentView)
+
+    #expect(short.icon.frame.size == NSSize(width: 64, height: 64))
+    #expect(short.icon.imageScaling == .scaleProportionallyUpOrDown)
+    #expect(short.messageLabel.font == .boldSystemFont(ofSize: NSFont.systemFontSize))
+    #expect(short.informationLabel.font == .systemFont(ofSize: NSFont.smallSystemFontSize))
+    #expect(content.frame.size == content.fittingSize)
+    #expect(short.panel.frame.height < long.panel.frame.height)
+    #expect(short.panel.frame.height < 200)
+}
+
+@MainActor @Test func aRowSheetsCheckboxSitsUnderTheTextOnlyWhenShown() {
+    let box = NSButton(checkboxWithTitle: "Apply to All", target: nil, action: nil)
+    let with = rowSheet(checkbox: box)
+    let without = rowSheet()
+
+    #expect(box.window === with.panel)
+    #expect(alignmentInWindow(box).minX == alignmentInWindow(with.messageLabel).minX)
+    #expect(frameInWindow(box).maxY < frameInWindow(with.informationLabel).minY)
+    #expect(with.panel.frame.height > without.panel.frame.height)
+}

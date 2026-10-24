@@ -165,7 +165,7 @@ private func ask(_ request: ConfirmRequest, of fixture: Fixture, into returned: 
     Task { @MainActor in finished = await queue.perform(operation) }
     await settle { fixture.conflictSheet != nil }
 
-    try #require(fixture.conflictSheet).cancelButton.performClick(nil)
+    try #require(fixture.conflictSheet).stopButton.performClick(nil)
     await settle { finished != nil }
 
     #expect(finished?.phase == .cancelled(leftBehind: nil))

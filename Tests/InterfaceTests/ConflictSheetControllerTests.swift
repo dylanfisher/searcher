@@ -53,58 +53,60 @@ private func sheet(remaining: Int = 2) -> (ConflictSheetController, Answers) {
     #expect(kept.given == [ConflictResolution(choice: .keepBoth, appliesToAll: false)])
 }
 
-@MainActor @Test func cancelAnswersNothing() {
+@MainActor @Test func stopAnswersNothing() {
     let (sheet, answers) = sheet()
 
-    sheet.cancelButton.performClick(nil)
+    sheet.stopButton.performClick(nil)
 
     #expect(answers.given == [nil])
 }
 
-@MainActor @Test func theSheetShowsBothItemsSizeAndDate() {
+/// Finder's question, with both items' size and date under it.
+@MainActor @Test func theSheetAsksAsFinderDoesAndShowsBothItems() {
     let (sheet, _) = sheet()
     let formatter = EntryCellFormatter()
-    let lines = sheet.alert.informativeText.split(separator: "\n").map(String.init)
+    let lines = sheet.dialog.informationLabel.stringValue.split(separator: "\n").map(String.init)
 
-    #expect(sheet.alert.messageText.contains("“report.pdf”"))
-    #expect(sheet.alert.messageText.contains("“dst”"))
-    #expect(lines.count == 2)
-    #expect(lines[0].contains(formatter.bytes(1_000)))
-    #expect(lines[0].contains(formatter.date(modified.addingTimeInterval(-86_400))))
-    #expect(lines[1].contains(formatter.bytes(2_000_000)))
-    #expect(lines[1].contains(formatter.date(modified)))
+    #expect(
+        sheet.dialog.messageLabel.stringValue
+            == "An item named “report.pdf” already exists in this location.")
+    #expect(lines.count == 3)
+    #expect(lines[0] == "Do you want to replace it with the one you’re adding?")
+    #expect(lines[1].contains(formatter.bytes(1_000)))
+    #expect(lines[1].contains(formatter.date(modified.addingTimeInterval(-86_400))))
+    #expect(lines[2].contains(formatter.bytes(2_000_000)))
+    #expect(lines[2].contains(formatter.date(modified)))
 }
 
 @MainActor @Test func applyToAllShowsOnlyWhenMoreConflictsFollow() {
     let (last, _) = sheet(remaining: 0)
     let (more, _) = sheet(remaining: 3)
 
-    #expect(!last.alert.showsSuppressionButton)
-    #expect(more.alert.showsSuppressionButton)
-    #expect(more.applyToAllBox === more.alert.suppressionButton)
-    #expect(more.applyToAllBox.title.contains("3"))
+    #expect(last.applyToAllBox.isHidden)
+    #expect(!more.applyToAllBox.isHidden)
+    #expect(more.applyToAllBox.title == "Apply to All")
 }
 
-@MainActor @Test func theConflictSheetIsAnAlertWithKeepBothAsTheDefault() {
+/// Finder's row, left to right: Keep Both, Stop, Skip, Replace. Replace is the default and
+/// takes Return; Stop takes Esc.
+@MainActor @Test func theButtonsAreFindersRowWithReplaceAsTheDefault() {
     let (sheet, _) = sheet()
+    let row = sheet.dialog.buttons.sorted { $0.frame.minX < $1.frame.minX }
 
-    #expect(sheet.panel === sheet.alert.window)
-    #expect(
-        sheet.alert.buttons == [
-            sheet.keepBothButton, sheet.replaceButton, sheet.skipButton, sheet.cancelButton,
-        ])
-    #expect(sheet.keepBothButton.keyEquivalent == "\r")
-    #expect(sheet.cancelButton.keyEquivalent == "\u{1B}")
-    #expect(sheet.replaceButton.hasDestructiveAction)
+    #expect(row.map(\.title) == ["Keep Both", "Stop", "Skip", "Replace"])
+    #expect(row == [sheet.keepBothButton, sheet.stopButton, sheet.skipButton, sheet.replaceButton])
+    #expect(Set(row.map(\.frame.minY)).count == 1)
+    #expect(row.map(\.keyEquivalent) == ["", "\u{1B}", "", "\r"])
+    #expect(row.allSatisfy { $0.window === sheet.panel })
 }
 
-@MainActor @Test func returnKeepsBothAndEscCancels() throws {
-    let (kept, keptAnswers) = sheet()
-    let (cancelled, cancelledAnswers) = sheet()
+@MainActor @Test func returnReplacesAndEscStops() throws {
+    let (replaced, replacedAnswers) = sheet()
+    let (stopped, stoppedAnswers) = sheet()
 
-    #expect(kept.panel.performKeyEquivalent(with: try keyEvent("\r")))
-    #expect(cancelled.panel.performKeyEquivalent(with: try keyEvent("\u{1B}")))
+    #expect(replaced.panel.performKeyEquivalent(with: try keyEvent("\r")))
+    #expect(stopped.panel.performKeyEquivalent(with: try keyEvent("\u{1B}")))
 
-    #expect(keptAnswers.given == [ConflictResolution(choice: .keepBoth, appliesToAll: false)])
-    #expect(cancelledAnswers.given == [nil])
+    #expect(replacedAnswers.given == [ConflictResolution(choice: .replace, appliesToAll: false)])
+    #expect(stoppedAnswers.given == [nil])
 }
