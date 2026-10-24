@@ -106,7 +106,9 @@ private func timed(_ name: String, budget: String? = nil, median: Double) throws
 
 /// One complete UI bench run: every span the same in each launch, and ↓ at `keyDown` ms, which is
 /// then its p95. B6 is 16 ms.
-private func uiRun(keyDown: Double, launches: Int = UIBenchReport.launches) -> UIBenchRecord {
+private func uiRun(
+    keyDown: Double, restoredSession: Double = 300, launches: Int = UIBenchReport.launches
+) -> UIBenchRecord {
     UIBenchRecord(
         launch: Array(repeating: 200, count: launches),
         openW1: Array(repeating: 10, count: launches),
@@ -133,7 +135,9 @@ private func uiRun(keyDown: Double, launches: Int = UIBenchReport.launches) -> U
         splitDown: Array(repeating: 5, count: UIBenchReport.keyPresses),
         gridDown: Array(repeating: 5, count: UIBenchReport.keyPresses),
         tenPaneOpen: Array(repeating: 70, count: launches),
-        queueKeyDown: Array(repeating: 5, count: UIBenchReport.keyPresses))
+        queueKeyDown: Array(repeating: 5, count: UIBenchReport.keyPresses),
+        sidebarDown: Array(repeating: 5, count: UIBenchReport.keyPresses),
+        restoredSessionLaunch: Array(repeating: restoredSession, count: launches))
 }
 
 /// Judges one CI run per ↓ p95 in order, each against the history the one before it kept, and
@@ -207,6 +211,32 @@ private func keyDownEnforced(_ report: RegressionReport.UI) -> Bool? {
     let unsteady = try judgeUI([10, 10], branch: "main").history
     let restarted = try judgeUI([10, 10], branch: "feature", from: unsteady)
     #expect(keyDownEnforced(restarted) == false)
+}
+
+@Test func theRestoredSessionAndSidebarCasesAreJudgedUnderTheHistoryRules() throws {
+    let names = [UIBenchReport.restoredSessionCase, "W2 ↓ key with the sidebar shown → frame"]
+    var history: RegressionReport.UIHistory?
+    var runs: [RegressionReport.UI] = []
+    // Over B1's 500 ms in every run: report-only until three runs are within 10%, then failing.
+    for restoredSession in [600, 620, 640, 650.0] {
+        let run = try RegressionReport.UI(
+            previous: history, current: uiRun(keyDown: 5, restoredSession: restoredSession),
+            branch: "m0")
+        history = run.history
+        runs.append(run)
+    }
+    for name in names {
+        #expect(runs[1].history.cases.first { $0.name == name }?.enforced == false)
+        #expect(runs[2].history.cases.first { $0.name == name }?.enforced == true)
+    }
+    #expect(runs[1].passed)
+    #expect(
+        runs[1].text.contains("over budget (report-only): \(UIBenchReport.restoredSessionCase)"),
+        "\(runs[1].text)")
+    #expect(!runs[3].passed)
+    #expect(
+        runs[3].text.contains("over budget: \(UIBenchReport.restoredSessionCase)"),
+        "\(runs[3].text)")
 }
 
 @Test func missingUIHistoryIsStated() throws {

@@ -71,7 +71,7 @@ enum BenchArguments: Equatable {
                 summary =
                     "each launch restores a saved session of 3 windows × 2 tabs × 4 panes on W1, "
                     + "one pane on W2, timed to every window on screen and the key window's "
-                    + "focused pane showing rows (B1)"
+                    + "focused pane showing rows (B1); the CI run times it too"
             case .restoredNetworkPane:
                 summary =
                     "each launch lists --path once so the cache file keeps it, then restores a "

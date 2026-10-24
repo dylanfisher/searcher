@@ -57,3 +57,22 @@ import Testing
     let record = UIBenchRecord(splitDown: [1.5], gridDown: [2], tenPaneOpen: [70])
     #expect(try UIBenchRecord.decode(record.encoded()) == record)
 }
+
+@Test func appendKeepsTheSidebarAndRestoredSessionSamples() throws {
+    var record = UIBenchRecord(sidebarDown: [1], restoredSessionLaunch: [2])
+    record.append(UIBenchRecord(sidebarDown: [3], restoredSessionLaunch: [4]))
+    #expect(record == UIBenchRecord(sidebarDown: [1, 3], restoredSessionLaunch: [2, 4]))
+    #expect(try UIBenchRecord.decode(record.encoded()) == record)
+}
+
+@Test func aRestoredSessionLaunchInTheCIRunIsFiledUnderItsOwnSpan() {
+    var record = UIBenchRecord(launch: [200], openW1: [10])
+    record.appendRestoredSession(
+        UIBenchRecord(
+            launch: [300], stalls: [UIBenchRecord.Stall(milliseconds: 60, span: "launch")]))
+    #expect(
+        record
+            == UIBenchRecord(
+                launch: [200], openW1: [10], restoredSessionLaunch: [300],
+                stalls: [UIBenchRecord.Stall(milliseconds: 60, span: "launch")]))
+}

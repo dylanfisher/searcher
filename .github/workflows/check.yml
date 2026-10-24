@@ -74,7 +74,9 @@ jobs:
           exit $status
 
   # Times the app's UI on the runner (B1, B2, B6, B8, stalls), with W8's 2 GB
-  # variant copied to a disk image for the queue cases. Its own job, so a
+  # variant copied to a disk image for the queue cases, then B1 in 20 more
+  # launches that each restore a 3-window session (the restored-session
+  # scenario, about a minute more), all in one record. Its own job, so a
   # UI run that can't finish doesn't hide the harness results. A UI case is
   # report-only until its p95 stays within 10% across three consecutive runs on
   # one branch; from then on its p95 over budget fails the job. The history that

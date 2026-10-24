@@ -228,6 +228,16 @@ func pathScenarioWithoutAPathFails(_ scenario: Scenario) {
     }
 }
 
+@Test func helpSaysWhichScenariosTheCIRunTimesToo() {
+    // Each scenario is a line with its name, then a line with its summary.
+    let lines = BenchArguments.scenarioHelp.split(separator: "\n").dropFirst()
+    let timedByCI = zip(lines.enumerated(), lines.dropFirst()).compactMap { pair, summary in
+        pair.offset.isMultiple(of: 2) && summary.contains("the CI run times it too")
+            ? pair.element.trimmingCharacters(in: .whitespaces) : nil
+    }
+    #expect(timedByCI == ["column-keys", "splits", "restored-session"])
+}
+
 /// A restored session gives one B1 sample per launch, and a restored network pane one B4
 /// sample, so they launch as often as the CI run.
 @Test func scenarioRunsOneLaunchAndKeepsItsOwnRecord() {

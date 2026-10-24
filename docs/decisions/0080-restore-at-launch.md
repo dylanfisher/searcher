@@ -74,3 +74,21 @@ wait plus the store's write delay. Closing the last window and then quitting sav
 session, so the next launch opens the home window. The `restored-session` UI bench scenario
 times B1 with 3 windows × 2 tabs × 4 panes; it writes the fixture in the same launch, unsynced,
 so it times slightly more than a real launch.
+
+## Amendment: the restored session in CI (2026-10-24)
+
+The CI run (`./scripts/bench --ui`) now makes the `restored-session` scenario's 20 launches after
+its own 20 and keeps their samples in the same `.build/bench-ui.json`, under their own field
+(`UIBenchRecord.restoredSessionLaunch`) and case, "launch → restored windows, key window's
+focused pane rows frame", which the scenario run names the same way. `compare-ui` therefore
+judges it under the same history as every other UI case: report-only until its p95 stays within
+10% across three runs on one branch, then failing over B1's 500 ms. The cold launch's own B1 case
+keeps only the CI run's launches.
+
+- **Alternatives considered.** A separate workflow step that runs the scenario and a `compare-ui`
+  that merges a second record — rejected: a second file to download, upload and check for
+  completeness, and a second argument to `compare-ui`, for the same history. A separate history
+  for the scenario — rejected: two histories would need two artifacts or a merged format.
+- **Cost.** About a minute more in the bench-ui job: a restored-session launch takes 1 to 3 s,
+  as the bench window's launches do ([0022](0022-ui-bench-mode.md)), plus a cold process start.
+  The job keeps its 20-minute timeout. Running `--ui` locally costs the same minute more.

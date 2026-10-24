@@ -99,11 +99,14 @@ func runCompareUI(previous: String, current: String, branch: String) throws -> B
 /// Launches the app bundle at `app` in its UI bench mode `UIBenchReport.launches(for:)` times,
 /// each a new process, so every launch is a cold launch (B1) with a warm file-system cache. The
 /// first launch also presses ↓ `UIBenchReport.keyPresses` times, in the list, while the queue
-/// copies `w8` to the disk image mounted at `image`, in column view and in two split layouts.
-/// A scenario is one launch that times only its own spans, on `folder` when it needs a real one.
-/// Each launch writes its samples to `UIBenchReport.path(for:)`; the runner reads them after it
-/// exits and writes all of them back there. Returns whether every span is within budget, and for
-/// `column-walk` whether no stall came after the launch; other runs report stalls only.
+/// copies `w8` to the disk image mounted at `image`, with the sidebar shown, in column view and
+/// in two split layouts. The CI run then launches the `restored-session` scenario as often, its
+/// B1 samples kept apart from its own launches, so CI judges B1 with restored windows too
+/// (docs/decisions/0080-restore-at-launch.md). A scenario is one launch that times only its own
+/// spans, on `folder` when it needs a real one. Each launch writes its samples to
+/// `UIBenchReport.path(for:)`; the runner reads them after it exits and writes all of them back
+/// there. Returns whether every span is within budget, and for `column-walk` whether no stall
+/// came after the launch; other runs report stalls only.
 func runUI(
     app: String, folder: String?, scenario: UIBenchOptions.Scenario?, image: String?,
     w8 workload: Fixture.Workload
@@ -128,28 +131,42 @@ func runUI(
     }
     // One prefix per run, so a launch that had to be stopped can be cleaned up after.
     let tempPrefix = "searcher-bench-ui-\(ProcessInfo.processInfo.processIdentifier)"
-    var record = UIBenchRecord()
-    for launch in 0..<UIBenchReport.launches(for: scenario) {
+    var number = 0
+    /// Runs one launch of `launchScenario` and returns the samples it wrote.
+    func launch(_ launchScenario: UIBenchOptions.Scenario?, keyPresses: Int) throws
+        -> UIBenchRecord
+    {
+        number += 1
+        let ciRun = launchScenario == nil
         let options = UIBenchOptions(
             output: output.path, w1: folder ?? Fixture(.w1).path.path,
-            w2: folder ?? Fixture(.w2).path.path,
-            keyPresses: UIBenchReport.keyPresses(launch: launch, scenario: scenario),
-            tempPrefix: tempPrefix,
-            scenario: scenario, folders: folders,
-            w8: scenario == nil ? w8.path.path : nil, image: scenario == nil ? image : nil)
+            w2: folder ?? Fixture(.w2).path.path, keyPresses: keyPresses, tempPrefix: tempPrefix,
+            scenario: launchScenario, folders: folders,
+            w8: ciRun ? w8.path.path : nil, image: ciRun ? image : nil)
         // A launch that fails before writing must not leave the last one's samples to be read.
         if FileManager.default.fileExists(atPath: output.path) {
             try FileManager.default.removeItem(at: output)
         }
         do {
             try launchOnce(
-                executable, arguments: options.arguments + stallArguments, number: launch + 1)
+                executable, arguments: options.arguments + stallArguments, number: number)
         } catch {
             // A launch cleans up after itself, even on SIGTERM; one killed harder can't.
             try TempRoot.removeAll(prefix: tempPrefix)
             throw error
         }
-        record.append(try UIBenchRecord.decode(Data(contentsOf: output)))
+        return try UIBenchRecord.decode(Data(contentsOf: output))
+    }
+    var record = UIBenchRecord()
+    for index in 0..<UIBenchReport.launches(for: scenario) {
+        record.append(
+            try launch(
+                scenario, keyPresses: UIBenchReport.keyPresses(launch: index, scenario: scenario)))
+    }
+    if scenario == nil {
+        for _ in 0..<UIBenchReport.launches(for: .restoredSession) {
+            record.appendRestoredSession(try launch(.restoredSession, keyPresses: 0))
+        }
     }
     try AtomicWrite.write(try record.encoded(), to: output)
     print("wrote \(recordPath)")

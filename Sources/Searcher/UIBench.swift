@@ -15,7 +15,8 @@ import os
 /// keys (B8), then the keys of a filter query and the Esc that clears it (B7), then ↓ on W2 with
 /// the operations panel open while the queue copies W8 to a disk image the runner attached, so the
 /// copy crosses volumes and clones nothing (B6, and B10 from the copy's start to its end), then
-/// W2 in column view: ↓ through folder rows, each opening a column, and → and ← (B6), then ↓ in
+/// ↓ on W2 with the workspace sidebar shown, listing saved workspaces (B6), then W2 in column
+/// view: ↓ through folder rows, each opening a column, and → and ← (B6), then ↓ in
 /// the focused pane of a two-pane split and of a 4-pane grid (B6). Every launch ends by opening
 /// W2 in ten panes at once (B2), timed to the first frame after which the whole window, not only
 /// the focused pane, has nothing left to draw: the other panes' drawing can fall inside the
@@ -54,6 +55,8 @@ final class UIBench {
     static let filterQueryLength = 5
     /// ↓ presses at most in each column the `column-walk` scenario walks.
     static let columnWalkPresses = 100
+    /// Saved workspaces the sidebar lists while ↓ runs with it shown.
+    static let sidebarWorkspaces = 5
 
     /// The app's listing service in a bench launch.
     let service: ListingService
@@ -626,6 +629,7 @@ final class UIBench {
         try await changeViewSettings()
         record.filterKey += try await typeFilter()
         record.queueKeyDown = try await pressDownWhileCopyingW8(options.keyPresses)
+        record.sidebarDown = try await pressDownWithSidebar(options.keyPresses)
         // It leaves the pane in column view with Folders First on.
         try await pressColumnKeys(options.keyPresses)
         // Last: they leave the window split.
@@ -784,6 +788,64 @@ final class UIBench {
             throw Failure("Cmd-Opt-L didn't close the operations panel")
         }
         return samples
+    }
+
+    /// Lists `sidebarWorkspaces` saved workspaces, shows the sidebar with its key, then presses ↓
+    /// `count` times on W2 (B6). A key in a pane runs no sidebar observer (decision 0086), so
+    /// this times what the shown sidebar adds to each frame. Hides the sidebar again, so the
+    /// cases after it have the window's full width.
+    private func pressDownWithSidebar(_ count: Int) async throws -> [Double] {
+        guard count > 0 else { return [] }
+        let controller = try requireController()
+        // Closed saved workspaces of the window's own tab, as a launch lists them.
+        let tabs = controller.workspace.tabs.map(\.state)
+        for number in 1...Self.sidebarWorkspaces {
+            try controller.workspaces.addSaved(
+                WorkspaceState(
+                    id: UUID(), name: "Bench \(number)",
+                    frame: Rect(x: 0, y: 0, width: 900, height: 600), tabs: tabs, selectedTab: 0,
+                    showsSidebar: false))
+        }
+        // The command's own chord, so the bench presses whatever the registry binds to it.
+        guard let chord = WorkspaceCommands.toggleSidebar.chords.first else {
+            throw Failure("\(WorkspaceCommands.toggleSidebar.title) has no chord to press")
+        }
+        let toggle = try Key.pressing(chord)
+        let width = try tabBounds().width
+        _ = try await press([toggle], "sidebar key")
+        guard controller.workspace.showsSidebar else {
+            throw Failure("\(chord) didn't show the sidebar")
+        }
+        try await waitUntilTabWidth("the sidebar to open") { $0 < width }
+        guard controller.window?.firstResponder === controller.paneViewController.keyView else {
+            throw Failure("showing the sidebar took the keys from the pane")
+        }
+        let samples = try await pressDown(count)
+        _ = try await press([toggle], "sidebar key")
+        try await waitUntilTabWidth("the sidebar to close") { $0 == width }
+        guard controller.window?.firstResponder === controller.paneViewController.keyView else {
+            throw Failure("hiding the sidebar left the keys outside the focused pane")
+        }
+        return samples
+    }
+
+    /// Waits until the tab's width meets `done` and stays the same over a drawn frame: the
+    /// sidebar's animation resizes it on every frame until it ends.
+    private func waitUntilTabWidth(
+        _ what: String, _ done: (Double) -> Bool
+    ) async throws {
+        let deadline = ContinuousClock.now + .seconds(2)
+        var last = try tabBounds().width
+        while true {
+            try await waitUntilDrawn()
+            let width = try tabBounds().width
+            if done(width), width == last { return }
+            last = width
+            guard ContinuousClock.now < deadline else {
+                throw Failure("waited 2 s for \(what); the panes are \(width) pt wide")
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
     }
 
     /// Presses ↓ `count` times on the list, each timed from the event's timestamp to the frame
@@ -1565,6 +1627,22 @@ final class UIBench {
         static let escape = Key(characters: "\u{1B}", keyCode: 53, flags: [])
         /// The key is read without Option, so "l".
         static let toggleOperations = Key(characters: "l", keyCode: 37, flags: [.command, .option])
+
+        /// A press of `chord`, a letter or punctuation key with modifiers. The key code is left at
+        /// 0: dispatch reads only the characters and the modifier flags
+        /// (`KeyChord.candidates(for:)`); only shifted punctuation reads the key itself.
+        static func pressing(_ chord: KeyChord) throws -> Key {
+            guard case .character(let character) = chord.key,
+                !(chord.modifiers.contains(.shift)
+                    && (character.isPunctuation || character.isSymbol))
+            else { throw Failure("the bench can't press \(chord) without its key code") }
+            var flags: NSEvent.ModifierFlags = []
+            if chord.modifiers.contains(.control) { flags.insert(.control) }
+            if chord.modifiers.contains(.option) { flags.insert(.option) }
+            if chord.modifiers.contains(.command) { flags.insert(.command) }
+            if chord.modifiers.contains(.shift) { flags.insert(.shift) }
+            return Key(characters: String(character), keyCode: 0, flags: flags)
+        }
 
         /// The character AppKit types for a function key such as `NSDownArrowFunctionKey`.
         private static func function(_ code: Int) -> String {

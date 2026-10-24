@@ -23,7 +23,9 @@ private func underBudget() -> UIBenchRecord {
         columnRight: Array(repeating: 6, count: 100), columnLeft: Array(repeating: 6, count: 100),
         splitDown: Array(repeating: 5, count: 500), gridDown: Array(repeating: 5, count: 500),
         tenPaneOpen: Array(repeating: 70, count: 20),
-        queueKeyDown: Array(repeating: 5, count: 500), stalls: [])
+        queueKeyDown: Array(repeating: 5, count: 500),
+        sidebarDown: Array(repeating: 5, count: 500),
+        restoredSessionLaunch: Array(repeating: 300, count: 20), stalls: [])
 }
 
 @Test func filterKeysAreTheirOwnB7Case() throws {
@@ -53,7 +55,7 @@ private func underBudget() -> UIBenchRecord {
     var record = underBudget()
     record.pageDown = Array(repeating: 25, count: 200)
     let report = try UIBenchReport(record: record, scenario: nil)
-    #expect(report.cases.filter { $0.budget?.id == "B6" }.count == 19)
+    #expect(report.cases.filter { $0.budget?.id == "B6" }.count == 20)
     #expect(report.overBudget.map(\.name) == ["W2 Fn-↓ key → frame"])
 }
 
@@ -105,6 +107,33 @@ private func underBudget() -> UIBenchRecord {
     let report = try UIBenchReport(record: record, scenario: nil)
     #expect(report.overBudget.map(\.name) == ["W2 two-pane split ↓ key → frame"])
     #expect(report.overBudget.map { $0.budget?.id } == ["B6"])
+}
+
+@Test func keysWithTheSidebarShownAreTheirOwnB6Case() throws {
+    var record = underBudget()
+    // 30 of 500 over 16 ms puts the p95 over.
+    record.sidebarDown = Array(repeating: 4, count: 470) + Array(repeating: 25, count: 30)
+    let report = try UIBenchReport(record: record, scenario: nil)
+    #expect(report.overBudget.map(\.name) == ["W2 ↓ key with the sidebar shown → frame"])
+    #expect(report.overBudget.map { $0.budget?.id } == ["B6"])
+    #expect(report.overBudget.first?.samples.count == 500)
+}
+
+@Test func theCIRunTimesTheRestoredSessionAsItsOwnB1Case() throws {
+    var record = underBudget()
+    record.restoredSessionLaunch = Array(repeating: 300, count: 18) + [600, 700]
+    let report = try UIBenchReport(record: record, scenario: nil)
+    #expect(report.overBudget.map(\.name) == [UIBenchReport.restoredSessionCase])
+    #expect(report.overBudget.map { $0.budget?.id } == ["B1"])
+    #expect(report.overBudget.first?.samples.count == 20)
+    // The cold launch's own B1 case is judged on its own samples.
+    #expect(report.cases.first { $0.name == "launch → first window frame" }?.p95 == 210)
+}
+
+@Test func theCIRunAndTheScenarioNameTheRestoredSessionCaseAlike() throws {
+    let scenario = try UIBenchReport(
+        record: UIBenchRecord(launch: [300]), scenario: .restoredSession)
+    #expect(scenario.cases.map(\.name) == [UIBenchReport.restoredSessionCase])
 }
 
 @Test func gridKeysAreJudgedOnTheGridSamplesAlone() throws {

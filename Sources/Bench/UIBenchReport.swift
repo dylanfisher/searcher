@@ -47,6 +47,10 @@ struct UIBenchReport {
     /// longest stall.
     let cases: [BenchReport.Case]
     static let copyStallCase = "longest stall while a W8 copy runs"
+    /// B1 with restored windows, in the `restored-session` scenario and in the CI run, which
+    /// times that scenario's launches after its own, so the history follows one case.
+    static let restoredSessionCase =
+        "launch → restored windows, key window's focused pane rows frame"
     /// Longest first.
     let stalls: [UIBenchRecord.Stall]
     /// B10 when stalls fail the run, nil when they are reported only.
@@ -96,7 +100,9 @@ struct UIBenchReport {
                     ("W2 sort key → frame", "B8", record.sortKey),
                     ("W2 filter key → frame", "B7", record.filterKey),
                     ("W2 ↓ key while a W8 copy runs → frame", "B6", record.queueKeyDown),
+                    ("W2 ↓ key with the sidebar shown → frame", "B6", record.sidebarDown),
                 ] + columnKeys + splits
+                + [(Self.restoredSessionCase, "B1", record.restoredSessionLaunch)]
         case .columnKeys:
             spans = columnKeys
         case .splits:
@@ -108,12 +114,7 @@ struct UIBenchReport {
         case .columnWalk:
             spans = [("column walk key → frame", "B6", record.columnWalkKey)]
         case .restoredSession:
-            spans = [
-                (
-                    "launch → restored windows, key window's focused pane rows frame", "B1",
-                    record.launch
-                )
-            ]
+            spans = [(Self.restoredSessionCase, "B1", record.launch)]
         case .restoredNetworkPane:
             spans = [
                 ("restored window shown → cached rows frame", "B4", record.restoredCachedRows)
