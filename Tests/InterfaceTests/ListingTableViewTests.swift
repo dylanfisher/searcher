@@ -95,7 +95,7 @@ private struct RecordingTable {
 @MainActor @Test func anUnboundModifiedKeyBeepsAndNeverReachesTheTable() throws {
     let recording = RecordingTable(registry: try AppCommands.registry())
     let unbound = [
-        try keyEvent("k", modifiers: .command), try keyEvent("n", modifiers: .control),
+        try keyEvent("j", modifiers: .command), try keyEvent("n", modifiers: .control),
         try keyEvent(
             functionKey(NSDownArrowFunctionKey), modifiers: arrowFlags.union([.option, .shift])),
     ]
@@ -301,7 +301,7 @@ private let quickLook = ViewCommands.toggleQuickLook
 
 @MainActor @Test func aCommandLetterWithNoCommandBeepsAndTypesNothing() throws {
     let recording = RecordingTable(registry: try AppCommands.registry())
-    recording.table.keyDown(with: try keyEvent("k", modifiers: .command))
+    recording.table.keyDown(with: try keyEvent("j", modifiers: .command))
 
     #expect(recording.queries.isEmpty)
     #expect(recording.beeps == 1)

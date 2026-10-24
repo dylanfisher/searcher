@@ -1015,3 +1015,22 @@ private func sidebarKey() throws -> NSEvent {
     #expect(second.previousKeyView === outline)
     #expect(first.nextKeyView !== outline)
 }
+
+@MainActor @Test func escInThePaletteClosesItAndGivesTheKeysBackToTheFocusedPanesTable()
+    async throws
+{
+    let fixture = try await Fixture()
+    let table = try fixture.keyTable
+    try fixture.press(try keyEvent("k", modifiers: .command))
+    let palette = try #require(fixture.controller.palette)
+    let panel = try #require(palette.window)
+    let editor = try #require(panel.firstResponder as? NSTextView)
+    #expect(editor.isFieldEditor)
+    // On screen the keys go to the panel; this window never shows, so take them from the table.
+    fixture.window.makeFirstResponder(nil)
+
+    editor.keyDown(with: try keyEvent("\u{1B}"))
+
+    #expect(fixture.controller.palette == nil)
+    #expect(fixture.window.firstResponder === table)
+}

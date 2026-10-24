@@ -23,12 +23,22 @@ public struct UIBenchOptions: Sendable, Equatable {
         /// A launch restoring one window whose pane is on `--path`, a folder on a share, after
         /// listing it once so the cache file holds it, to the frame with its cached rows (B4).
         case restoredNetworkPane = "restored-network-pane"
+        /// The keys of palette queries over `paletteCandidates` folders, each to the frame that
+        /// shows its results (B11).
+        case palette
 
         /// Whether it times a real folder, `--path`, which it never defaults to.
         public var needsPath: Bool {
             self != .columnKeys && self != .splits && self != .restoredSession
+                && self != .palette
         }
     }
+
+    /// The items the `palette` scenario ranks on each key: B11's 50k candidates.
+    public static let paletteCandidates = 50_000
+    /// The queries the `palette` scenario types, each a key at a time into an empty field.
+    /// Letters most of its folders hold in order, so most candidates go through a full match.
+    public static let paletteQueries = ["srcmap", "nodpkg", "libidx", "srcmap", "nodpkg"]
 
     /// Times the `splits` scenario's one launch opens W2 in ten panes, for as many samples as the
     /// CI run's launches give, one each.

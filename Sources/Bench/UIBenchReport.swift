@@ -15,6 +15,8 @@ struct UIBenchReport {
     /// ↓ presses in the first launch, the count docs/performance.md times B6 over. Also the ↓
     /// presses through W2's first column in column view, and in the focused pane of a split.
     static let keyPresses = 500
+    /// Keys the `palette` scenario types: every letter of `UIBenchOptions.paletteQueries`.
+    static let paletteKeys = UIBenchOptions.paletteQueries.map(\.count).reduce(0, +)
     /// A launch that takes longer than this, in seconds, is stuck and is stopped.
     static let launchTimeout = 120
 
@@ -30,7 +32,7 @@ struct UIBenchReport {
     static func launches(for scenario: UIBenchOptions.Scenario?) -> Int {
         switch scenario {
         case nil, .restoredSession, .restoredNetworkPane: launches
-        case .columnKeys, .cold, .revisit, .columnWalk, .splits: 1
+        case .columnKeys, .cold, .revisit, .columnWalk, .splits, .palette: 1
         }
     }
 
@@ -115,6 +117,13 @@ struct UIBenchReport {
         case .restoredNetworkPane:
             spans = [
                 ("restored window shown → cached rows frame", "B4", record.restoredCachedRows)
+            ]
+        case .palette:
+            spans = [
+                (
+                    "palette keystroke → frame, \(UIBenchOptions.paletteCandidates) candidates",
+                    "B11", record.paletteKey
+                )
             ]
         }
         var cases = try spans.map { span in

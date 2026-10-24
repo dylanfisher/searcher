@@ -77,6 +77,11 @@ enum BenchArguments: Equatable {
                     "each launch lists --path once so the cache file keeps it, then restores a "
                     + "window on it as a launch does, timed from the window shown to the frame "
                     + "with its cached rows (B4)"
+            case .palette:
+                summary =
+                    "open the palette over \(UIBenchOptions.paletteCandidates) folders and type "
+                    + "\(UIBenchOptions.paletteQueries.count) queries, each key timed to the "
+                    + "frame with its results (B11)"
             }
             let path = scenario.needsPath ? " --path <dir>" : ""
             return "  \(scenario.rawValue)\(path)\n      \(summary)"

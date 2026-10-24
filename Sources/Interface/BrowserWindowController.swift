@@ -11,7 +11,9 @@ import Quartz
 /// leaves; one the user opened stays until the user closes it
 /// (docs/decisions/0067-operations-panel.md). Left of all that, the workspace sidebar lists the
 /// saved workspaces while the workspace says it shows; dragging it closed hides it there too
-/// (docs/decisions/0086-workspace-sidebar.md).
+/// (docs/decisions/0086-workspace-sidebar.md). Open Quickly shows the command palette over the
+/// window, and Esc there gives the keys back to the focused pane
+/// (docs/decisions/0087-palette-window.md).
 ///
 /// Commands change the workspace, and the window shows the result after each one. The window's
 /// first responder stays in the selected tab's focused pane: a command that moves the focus moves
@@ -45,6 +47,11 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     let undoHistory: UndoHistory?
     /// The app's Open With cache; nil in a window the UI bench opens, where Open With is off.
     let openWith: OpenWith?
+    /// The folders the app's panes have visited, for the palette; nil in a window the UI bench
+    /// opens, whose palette lists no visited folder.
+    let folderVisits: FolderVisits?
+    /// The palette while it shows over the window.
+    public private(set) var palette: PaletteWindowController?
     /// The operations panel under the panes, hidden until shown.
     let operations: OperationsViewController
     /// Ends the panes at the panel while it shows, and at the window's bottom while it doesn't.
@@ -109,12 +116,13 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// window's view controller for a pane that moved into `workspace`. `fileOperations` runs
     /// the file commands, which are off without it; the clipboard commands are off without
     /// `clipboard`, drops without `fileOperations` and `mountTable`, Undo and Redo without
-    /// `undoHistory`, and Open With without `openWith`. The sidebar opens a saved workspace with
-    /// `openSavedWorkspace`.
+    /// `undoHistory`, and Open With without `openWith`. The sidebar and the palette open a saved
+    /// workspace with `openSavedWorkspace`; the palette lists the folders in `folderVisits`.
     init(
         workspace: Workspace, workspaces: WorkspaceList, settings: Settings,
         fileOperations: FileOperationQueue? = nil, clipboard: CutState? = nil,
         mountTable: MountTable? = nil, undoHistory: UndoHistory? = nil, openWith: OpenWith? = nil,
+        folderVisits: FolderVisits? = nil,
         takePaneController: @escaping @MainActor (PaneID) -> PaneViewController? = { _ in nil },
         openSavedWorkspace: @escaping @MainActor (UUID) -> Void = { id in
             preconditionFailure("this window can't open saved workspace \(id)")
@@ -142,6 +150,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         self.mountTable = mountTable
         self.undoHistory = undoHistory
         self.openWith = openWith
+        self.folderVisits = folderVisits
         self.settings = settings
         hidesEmptyOperations = settings.hideEmptyOperationsPanel
         operations = OperationsViewController(
@@ -241,6 +250,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// saved workspace as it is at close.
     public func windowWillClose(_ notification: Notification) {
         isClosed = true
+        palette?.close()
         if let sidebarResizeObserver {
             NotificationCenter.default.removeObserver(sidebarResizeObserver)
         }
@@ -373,6 +383,61 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         }
     }
 
+    // MARK: Palette
+
+    /// Shows the palette over the window, with the keys in its field, unless it already shows.
+    /// It lists the saved workspaces, the visited folders and the folders open panes show, the
+    /// folders of a typed path, and the commands of the focused pane's table, a command that is
+    /// off there greyed; then `extra`'s items, which the UI bench adds. A folder opens in the
+    /// focused pane, a command runs as its key would, and a saved workspace opens or comes to
+    /// the front.
+    public func showPalette(adding extra: [any PaletteSource] = []) {
+        guard palette == nil, !isClosed, !workspace.isClosed, let window else { return }
+        let workspace = workspace
+        let focusedPane: @MainActor @Sendable () -> Pane = { workspace.selectedTab.focusedPane }
+        let visits = folderVisits
+        let history: @MainActor () -> FolderHistory = { visits?.history ?? FolderHistory() }
+        let home = NSHomeDirectory()
+        let sources: [any PaletteSource] = [
+            WorkspaceSource(list: workspaces) { [weak self] id in self?.sidebar.open(id) },
+            FolderSource(
+                history: history, workspaces: workspaces, focusedPane: focusedPane, home: home),
+            PathSource(
+                service: focusedPane().service, history: history, focusedPane: focusedPane,
+                home: home),
+            CommandSource(
+                registry: { [weak self] in
+                    // The window closes its palette as it closes.
+                    guard let self else { preconditionFailure("the palette outlived its window") }
+                    return focusedTable.registry
+                },
+                run: { [weak self] id in self?.runFromPalette(id) }),
+        ]
+        let controller = PaletteWindowController(palette: Palette(sources: sources + extra))
+        controller.viewController.isEnabled = { [weak self] item in
+            guard case .command(let id) = item.id else { return true }
+            return self?.canRunFromPalette(id) ?? false
+        }
+        controller.onClose = { [weak self, weak controller] in
+            guard let self, palette === controller else { return }
+            palette = nil
+            giveKeysBack()
+        }
+        palette = controller
+        controller.show(over: window)
+    }
+
+    private func canRunFromPalette(_ id: CommandID) -> Bool {
+        !isClosed && !workspace.isClosed && focusedTable.canRunCommand(id)
+    }
+
+    /// Runs a command the palette chose on the focused pane's table, as its key would, if it
+    /// can still run once the palette has closed.
+    private func runFromPalette(_ id: CommandID) {
+        guard canRunFromPalette(id) else { return }
+        focusedTable.run(id)
+    }
+
     // MARK: Operations panel
 
     /// Shows the queue's latest snapshots in the panel.
@@ -423,7 +488,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         WindowCommands.movePaneToNewWindow.id, WindowCommands.mergeWindowIntoTab.id,
         WindowCommands.toggleOperations.id, WorkspaceCommands.name.id,
         WorkspaceCommands.delete.id, WorkspaceCommands.toggleSidebar.id,
-        WorkspaceCommands.focusSidebar.id,
+        WorkspaceCommands.focusSidebar.id, WindowCommands.showPalette.id,
     ]
 
     /// Runs a window or tab command's menu item on the focused pane's table. A table with the
@@ -564,6 +629,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             askForWorkspaceName: { [weak self] in self?.askForWorkspaceName() },
             askToDeleteWorkspace: { [weak self] in self?.askToDeleteWorkspace() },
             focusSidebar: { [weak self] in self?.focusSidebar() },
+            showPalette: { [weak self] in self?.showPalette() },
             fileOperations: fileOperations, clipboard: clipboard, mountTable: mountTable,
             undoHistory: undoHistory, openWith: openWith,
             didRunCommand: { [weak self] in

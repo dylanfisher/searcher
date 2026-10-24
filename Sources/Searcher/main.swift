@@ -32,6 +32,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// its panes' folders are kept in, started as the app starts so they run off the main actor
     /// while AppKit finishes launching; nil in a bench launch.
     private let restoring: Task<WorkspaceStore.Contents, Never>?
+    /// The store's read of the palette's folder history, started beside the session's; nil in
+    /// a bench launch.
+    private let folderHistory: Task<FolderHistory, Never>?
 
     init(bench: UIBench?) {
         self.bench = bench
@@ -42,6 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             workspaceStore = nil
             storeProblems = nil
             restoring = nil
+            folderHistory = nil
         } else {
             let roots: StoreRoots
             do {
@@ -74,6 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 await cache.restore(contents)
                 return contents
             }
+            folderHistory = Task { await workspaceStore.loadFolderHistory() }
         }
     }
 
@@ -128,7 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         installMainMenu()
         VolumeNotifications.start()
-        guard let restoring, let storeProblems else {
+        guard let restoring, let folderHistory, let storeProblems else {
             preconditionFailure("a launch that isn't a bench has no workspace store")
         }
         windows.follow(storeProblems: storeProblems)
@@ -142,6 +147,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             NSApp.activate()
             LaunchWarmup.shared.start(after: window)
         }
+        // The windows don't wait for it: visits counted before it arrives are added to it.
+        Task { windows.folderVisits.load(await folderHistory.value) }
     }
 
     /// Promised files still on their way when the app quits leave their hidden drop folders;
