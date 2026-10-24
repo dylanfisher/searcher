@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Run the test suite. Passes through any extra args to the test runner,
 # so `./scripts/test path/to/file` works for a focused run.
+# `--gentle` (first argument) or SEARCHER_GENTLE=1 throttles it: see scripts/gentle.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source scripts/gentle
 
 # Command Line Tools ship the Swift Testing macro plugin in a subdirectory the
 # default build system misses on a cold build ("plugin for module
@@ -16,9 +18,12 @@ flags=()
 # args) is a single swift test call; it picks its own tests, so there is no split.
 serial="InterfaceTests"
 
-if [ $# -gt 0 ]; then exec swift test "${flags[@]}" "$@"; fi
+# Gentle mode builds the tests at low priority first; the run below stays at normal priority.
+[ -z "${SEARCHER_GENTLE:-}" ] || swift_cmd build --build-tests "${flags[@]}"
+
+if [ $# -gt 0 ]; then swift_cmd test "${flags[@]}" "$@"; exit $?; fi
 
 status=0
-swift test "${flags[@]}" --skip "$serial" || status=1
-swift test "${flags[@]}" --filter "$serial" --no-parallel || status=1
+swift_cmd test "${flags[@]}" --skip "$serial" || status=1
+swift_cmd test "${flags[@]}" --filter "$serial" --no-parallel || status=1
 exit "$status"
