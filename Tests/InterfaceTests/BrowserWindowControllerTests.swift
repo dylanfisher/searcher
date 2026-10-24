@@ -1125,3 +1125,86 @@ private func escapePalette(in fixture: Fixture) throws {
 
     #expect(fixture.controller.palette == nil)
 }
+
+/// Two panes side by side with the right one focused, and a press on the left pane's second row.
+@MainActor
+private struct PressFixture {
+    let fixture: Fixture
+    let leftPane: Pane
+    let rightPane: Pane
+    let table: ListingTableView
+
+    init() async throws {
+        let fixture = try await Fixture()
+        let left = fixture.tab.layout.focused
+        let right = try fixture.splitRight()
+        let leftPane = try #require(fixture.tab.panes[left])
+        let rightPane = try #require(fixture.tab.panes[right])
+        await settle { leftPane.state.isLoaded && rightPane.state.isLoaded }
+        #expect(rightPane.isFocused && !leftPane.isFocused)
+        self.fixture = fixture
+        self.leftPane = leftPane
+        self.rightPane = rightPane
+        table = try #require(try fixture.paneController(left).keyView as? ListingTableView)
+    }
+
+    /// A mouse down on the left table's `row`.
+    func mouseDown(
+        on row: Int, modifiers: NSEvent.ModifierFlags = [], type: NSEvent.EventType = .leftMouseDown
+    ) throws -> NSEvent {
+        let point = table.convert(NSPoint(x: 20, y: table.rect(ofRow: row).midY), to: nil)
+        return try #require(
+            NSEvent.mouseEvent(
+                with: type, location: point, modifierFlags: modifiers, timestamp: 0,
+                windowNumber: fixture.window.windowNumber, context: nil, eventNumber: 0,
+                clickCount: 1, pressure: 1))
+    }
+
+    /// Whether the left pane has the focus and its table the keys, which is what AppKit draws a
+    /// selection emphasized by (a window that is shown and key aside).
+    var isFocusedWithKeys: Bool {
+        leftPane.isFocused && !rightPane.isFocused && fixture.window.firstResponder === table
+    }
+}
+
+@MainActor @Test func aMouseDownInTheOtherPaneSelectsAndFocusesBeforeMouseUp() async throws {
+    let press = try await PressFixture()
+
+    press.table.selectOnFirstPress(try press.mouseDown(on: 1))
+
+    #expect(press.isFocusedWithKeys)
+    #expect(press.table.selectedRowIndexes == [1])
+    let listing = try #require(press.leftPane.state.listing)
+    #expect(press.leftPane.selection.rows(in: listing) == [1])
+}
+
+@MainActor @Test(arguments: [NSEvent.ModifierFlags.shift, .command, .control])
+func aModifiedPressInTheOtherPaneFocusesItAndLeavesTheSelectionToAppKit(
+    modifiers: NSEvent.ModifierFlags
+) async throws {
+    let press = try await PressFixture()
+
+    press.table.selectOnFirstPress(try press.mouseDown(on: 1, modifiers: modifiers))
+
+    #expect(press.isFocusedWithKeys)
+    #expect(press.table.selectedRowIndexes.isEmpty)
+}
+
+@MainActor @Test func aPressOnASelectedRowLeavesTheSelectionForADrag() async throws {
+    let press = try await PressFixture()
+    press.table.selectRowIndexes([0, 1], byExtendingSelection: false)
+
+    press.table.selectOnFirstPress(try press.mouseDown(on: 1))
+
+    #expect(press.isFocusedWithKeys)
+    #expect(press.table.selectedRowIndexes == [0, 1])
+}
+
+@MainActor @Test func aPressInTheFocusedPaneIsLeftToAppKit() async throws {
+    let press = try await PressFixture()
+    #expect(press.fixture.window.makeFirstResponder(press.table))
+
+    press.table.selectOnFirstPress(try press.mouseDown(on: 1))
+
+    #expect(press.table.selectedRowIndexes.isEmpty)
+}
