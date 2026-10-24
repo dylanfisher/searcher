@@ -72,6 +72,8 @@ public final class WorkspaceWindows {
     private let systemActions: any SystemActions
     private let settings: Settings
     private let folderSizes: FolderSizeService?
+    /// Told the folders of the stored workspaces as they change; nil keeps none.
+    private let cache: ListingCache?
     /// The one queue every window's file commands run through.
     let fileOperations: FileOperationQueue
     /// Asks the queue's questions with sheets on the most recently active window.
@@ -101,13 +103,15 @@ public final class WorkspaceWindows {
     /// Windows whose workspaces and session are saved to `store`; nil saves nothing.
     public init(
         service: ListingService, systemActions: any SystemActions, settings: Settings,
-        folderSizes: FolderSizeService?, clipboard: any FileClipboard, store: WorkspaceStore?
+        folderSizes: FolderSizeService?, clipboard: any FileClipboard, store: WorkspaceStore?,
+        cache: ListingCache? = nil
     ) {
         self.store = store
         self.service = service
         self.systemActions = systemActions
         self.settings = settings
         self.folderSizes = folderSizes
+        self.cache = cache
         self.clipboard = CutState(clipboard: clipboard)
         let openWithLogger = Logger(category: "openWith")
         openWith = OpenWith(
@@ -515,6 +519,8 @@ public final class WorkspaceWindows {
         let changedSession = session != lastSession ? session : nil
         lastSession = session
         guard !states.isEmpty || !deletes.isEmpty || changedSession != nil else { return }
+        let kept = ListingCache.folders(of: Array(lastSaved.values))
+        let cache = cache
         let previous = saving
         saving = Task {
             await previous?.value
@@ -526,6 +532,10 @@ public final class WorkspaceWindows {
             }
             if let changedSession {
                 await store.saveSession(changedSession)
+            }
+            // The folders every stored workspace holds now, as the launch keeps them.
+            if !states.isEmpty || !deletes.isEmpty {
+                await cache?.keep(folders: kept)
             }
         }
     }

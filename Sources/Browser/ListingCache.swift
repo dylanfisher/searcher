@@ -142,10 +142,29 @@ public actor ListingCache {
         _ contents: WorkspaceStore.Contents,
         mountedVolumes: @escaping @Sendable () -> [VolumeIdentity] = VolumeIdentity.mounted
     ) async {
-        let folders = contents.workspaces.values.flatMap(\.tabs).flatMap { tab in
-            tab.panes.values.map(\.location.path)
+        await restore(
+            folders: Self.folders(of: Array(contents.workspaces.values)),
+            mountedVolumes: mountedVolumes)
+    }
+
+    /// The folder of every pane in `workspaces`.
+    public static func folders(of workspaces: [WorkspaceState]) -> Set<String> {
+        Set(workspaces.flatMap(\.tabs).flatMap { $0.panes.values.map(\.location.path) })
+    }
+
+    /// Replaces the folders the caps leave with `folders`, as the stored workspaces change during
+    /// the session, and keeps the files of the volumes in memory or restored that hold them.
+    /// Reads nothing: a folder's volume is in memory once a pane has listed it.
+    public func keep(folders: Set<String>) async {
+        keptFolders = folders
+        var held = Set(
+            volumes.compactMap { volume, stored in
+                stored.keys.contains(where: folders.contains) ? volume : nil
+            })
+        for path in folders {
+            if let restored = restoredVolumes.volume(holding: path) { held.insert(restored) }
         }
-        await restore(folders: Set(folders), mountedVolumes: mountedVolumes)
+        await keepFiles(held)
     }
 
     /// The volume `restore` found in the store for `path`, which the mount table didn't place:

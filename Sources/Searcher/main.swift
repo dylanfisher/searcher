@@ -21,7 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private lazy var windows = WorkspaceWindows(
         service: service, systemActions: systemActions, settings: settings,
         folderSizes: folderSizes, clipboard: PasteboardFileClipboard(pasteboard: .general),
-        store: workspaceStore)
+        store: workspaceStore, cache: cache)
     private let bench: UIBench?
     /// The windows' workspaces and the session, in the user's application support folder; nil
     /// in a bench launch.

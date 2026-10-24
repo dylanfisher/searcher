@@ -55,14 +55,14 @@ found. The entry cap and the store's 50 MB cap could drop the folders a saved wo
 - **Show the window before the cache read ends** — rejected: the pane on an unmounted share
   would load before its volume is known and show missing, and a mounted pane's rows would wait
   for the decode inside its load anyway.
-- **Keep the folders of saved workspaces as they change during the session** — not done here:
-  it needs `WorkspaceWindows` to tell the cache on each save, which M5a.4's files own. The
-  launch's set is the folders the next launch restores, unless the user moved since.
+- **Keep the folders of saved workspaces only as of the launch** — rejected: a workspace named,
+  or a pane moved, during the session went unprotected until the next launch. Each save that
+  writes or deletes a workspace now gives the cache the folders of every stored workspace
+  (`ListingCache.keep(folders:)`), computed as the launch computes them.
 
 ## Consequences
 
 The first launch after this change discards every cache file, so network folders list once
 without cached rows. A folder on the startup disk at an unmounted share's path shows the
 share's cached rows until its own listing lands. A pane on a
-share that is mounted elsewhere, as `/Volumes/music-1`, shows offline with the old rows. A
-folder a user moved to during the session isn't kept through the caps until the next launch.
+share that is mounted elsewhere, as `/Volumes/music-1`, shows offline with the old rows.
