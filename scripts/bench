@@ -30,13 +30,15 @@
 #                         non-zero when an enforced case is over budget or the record
 #                         is missing or doesn't hold one run's 20 launches
 #   --ui                  build the release Searcher.app and time its UI in 20 new
-#                         processes (B1, B2, B6, B7, B8, B10; B6 in column view, in
-#                         splits and while the queue copies W8 to a disk image with
-#                         the operations panel open, B10 over that copy, B2 in ten
-#                         panes too) instead of the harness cases; writes
-#                         .build/bench-ui.json. W8 is 10 GB and needs about 20.5 GB
-#                         free in $TMPDIR the first time, 10.5 GB once built. With
-#                         --path, the folder is opened as both W1 and W2. The window opens
+#                         processes (B1, B2, B6, B7, B8, B10; B6 with the sidebar
+#                         shown, in column view, in splits and while the queue copies
+#                         W8 to a disk image with the operations panel open, B10 over
+#                         that copy, B2 in ten panes too), then B1 in 20 more that
+#                         each restore a saved session, as restored-session does,
+#                         instead of the harness cases; writes .build/bench-ui.json.
+#                         W8 is 10 GB and needs about 20.5 GB free in $TMPDIR the
+#                         first time, 10.5 GB once built. With --path, the folder is
+#                         opened as both W1 and W2. The window opens
 #                         in the background on the second display if there is one and
 #                         never takes focus; a run whose window is covered fails saying
 #                         so. The bundle is built at .build/bench/Searcher.app.

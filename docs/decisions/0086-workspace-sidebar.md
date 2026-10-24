@@ -75,3 +75,16 @@ show it as saved. With no saved workspace the sidebar shows only its group row.
 Dylan decided the sidebar takes Finder's chord, Control-Command-S. Calculate Sizes moved to
 Option-Command-S ([0043](0043-folder-sizes.md)); no other command uses it and it is not a
 system-wide macOS shortcut. The Context and the bullet above describe the chord as first built.
+
+## Amendment: B6 with the sidebar shown (2026-10-24)
+
+The CI run's key launch now lists five saved workspaces, shows the sidebar by pressing the chord
+`WorkspaceCommands.toggleSidebar` declares, read from the command so a later chord change can't
+leave the bench pressing another command's keys, waits for its animation to end, presses ↓ 500
+times on W2, a B6 case of its own ("W2 ↓ key with the sidebar shown → frame"), then hides it
+again so the cases after it have the window's full width. It runs after the queue case and
+before column view, in the plain `--ui` run CI makes, with no scenario of its own: one launch's
+500 presses add about 10 s. Like any new UI case it is report-only until its p95 stays within
+10% across three CI runs. The sidebar is no longer "still to be measured", but the run doesn't
+check that the sidebar draws nothing during the presses, as the splits cases check the unfocused
+panes.
