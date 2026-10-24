@@ -37,6 +37,13 @@ public struct WorkspaceState: Codable, Equatable, Sendable {
             showsSidebar: showsSidebar)
     }
 
+    /// The same state in a window at `frame`.
+    public func moved(to frame: Rect) -> WorkspaceState {
+        WorkspaceState(
+            id: id, name: name, frame: frame, tabs: tabs, selectedTab: selectedTab,
+            showsSidebar: showsSidebar)
+    }
+
     // MARK: Coding
 
     private enum CodingKeys: String, CodingKey {

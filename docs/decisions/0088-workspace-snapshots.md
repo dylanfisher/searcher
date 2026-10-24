@@ -36,11 +36,19 @@ and for a Focus Sidebar chord ([0086](0086-workspace-sidebar.md) gave it none). 
 - **Going to a saved workspace** (sidebar click or Return, palette item,
   `WorkspaceWindows.open(savedWorkspace:)`): with no window linked it opens one from the
   snapshot, as before; with one linked it brings it forward and, if its state differs from the
-  snapshot, loads the snapshot into it: `Workspace.reload` closes every tab it had, panes and
-  all, and puts in tabs rebuilt from the snapshot, and the window takes the snapshot's frame. The
-  rebuilt panes are new, so their selection history starts empty; the undo history holds file
-  operations only ([0072](0072-undo.md)) and is untouched. A window whose state equals its
-  snapshot isn't reloaded, so its panes keep their scroll positions and histories.
+  snapshot, shows the snapshot in it. When only the frame differs, the window moves to the
+  snapshot's frame and keeps its panes, scroll positions and histories. Otherwise
+  `Workspace.reload` closes every tab it had, panes and all, and puts in tabs rebuilt from the
+  snapshot, and the window takes the snapshot's frame. The rebuilt panes are new, so their
+  selection history starts empty; the undo history holds file operations only
+  ([0072](0072-undo.md)) and is untouched. A window as the snapshot has it is left alone. In
+  every case the keys go to the window's focused pane, from the sidebar too.
+- **A frame shown as saved reads as saved.** A snapshot's frame is moved onto a display, and
+  shrunk to fit one, when it is on none ([0080](0080-restore-at-launch.md)), so the window can't
+  always be at it. Where showing a snapshot put the window is remembered per window; while the
+  window is still there, and while it is in full screen, its frame counts as the snapshot's.
+  Without this a window saved on a display since removed would show the edited dot for good and
+  reload on every go-to. A save at the window's own frame drops what was remembered.
 - **Pane IDs repeat.** A snapshot keeps its panes' IDs, so a pane that moved to another window
   (Move Pane to New Window) can share an ID with a pane the snapshot rebuilds. A window hands a
   pane's view controller over only to that same pane (`handOver(_:of:)`), not to any pane with
@@ -50,7 +58,7 @@ and for a Focus Sidebar chord ([0086](0086-workspace-sidebar.md) gave it none). 
   path uses. The save path sets it when it reads a window's state, `saveDelay` after the changes
   stop, so the dot costs no extra `Tab.state` read; Save Workspace, a rename and a reload set it
   at once. Frame, tabs, layouts, folders, selections, sorts and the sidebar all count, as the
-  snapshot keeps them.
+  snapshot keeps them, the frame as the bullet above reads it.
 - **Launch.** Session restore is unchanged: each window comes back from its window file, as it
   was at quit. A window is linked when a snapshot with its ID loaded, and takes the snapshot's
   name; one whose snapshot is gone comes back unsaved. The edited dot shows when the restored

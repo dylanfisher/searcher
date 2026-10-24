@@ -739,6 +739,74 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
     #expect(!window.isDocumentEdited)
 }
 
+/// The display the snapshot was saved on is gone, so its window opens moved onto the one left:
+/// shown as saved, with no edited dot, and going to it again changes nothing.
+@MainActor @Test func aSnapshotFrameMovedOntoTheDisplayShowsNoDotAndReloadsNothing() async throws {
+    let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
+    let windows = makeWindows(store: diskStore(folder))
+    let controller = try await savedWindow(in: windows)
+    let id = controller.workspace.id
+    try #require(controller.window).close()
+    windows.screens = { [CGRect(x: 0, y: 0, width: 800, height: 500)] }
+
+    let reopened = windows.open(savedWorkspace: id)
+    _ = await loadedPane(of: reopened)
+    let placed = try frame(of: reopened)
+    #expect(placed != savedFrame)
+    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(reopened.window?.isDocumentEdited == false)
+    let tab = reopened.workspace.selectedTab
+
+    windows.open(savedWorkspace: id)
+
+    #expect(reopened.workspace.selectedTab === tab && !tab.isClosed)
+    #expect(try frame(of: reopened) == placed)
+    #expect(reopened.window?.isDocumentEdited == false)
+}
+
+@MainActor @Test func aWindowThatOnlyMovedShowsTheDotAndGoingBackOnlyMovesIt() async throws {
+    let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
+    let windows = makeWindows(store: diskStore(folder))
+    let controller = try await savedWindow(in: windows)
+    let tab = controller.workspace.selectedTab
+    let pane = tab.focusedPane
+    try #require(controller.window).setFrame(movedFrame, display: false)
+    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(controller.window?.isDocumentEdited == true)
+
+    windows.open(savedWorkspace: controller.workspace.id)
+
+    #expect(try frame(of: controller) == savedFrame)
+    #expect(controller.workspace.selectedTab === tab && !tab.isClosed)
+    #expect(tab.focusedPane === pane)
+    #expect(controller.window?.isDocumentEdited == false)
+}
+
+@MainActor @Test func goingToASavedWorkspaceGivesTheKeysToItsFocusedPane() async throws {
+    let windows = makeWindows(store: nil)
+    let controller = try await savedWindow(in: windows)
+    let window = try #require(controller.window)
+    try #require(window.firstResponder as? ListingTableView).run(
+        WorkspaceCommands.focusSidebar.id)
+    // Saved with the sidebar showing, so going to it reloads nothing.
+    try controller.saveWorkspace()
+    #expect(window.firstResponder === controller.sidebar.outlineView)
+
+    windows.open(savedWorkspace: controller.workspace.id)
+
+    #expect(window.firstResponder === controller.paneViewController.keyView)
+
+    try #require(window.firstResponder as? ListingTableView).run(
+        WorkspaceCommands.focusSidebar.id)
+    controller.workspace.selectedTab.focusedPane.navigate(to: Location(path: "/root/docs"))
+    let tab = controller.workspace.selectedTab
+
+    windows.open(savedWorkspace: controller.workspace.id)
+
+    #expect(tab.isClosed)
+    #expect(window.firstResponder === controller.paneViewController.keyView)
+}
+
 @MainActor @Test func aRenameKeepsTheEditedDotOfADriftedWindow() async throws {
     let fixture = try SavingFixture()
     let controller = try await savedWindow(in: fixture.windows)
@@ -1095,6 +1163,18 @@ private func survivesTheCap(_ path: String, in cache: ListingCache) async -> Boo
     #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
 
     #expect(await survivesTheCap("/root/docs", in: cache))
+}
+
+@MainActor @Test func aSnapshotsFolderIsKeptAfterItsWindowMovesOn() async throws {
+    let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
+    let cache = ListingCache(entryCap: 4, store: nil)
+    let windows = makeWindows(store: diskStore(folder), cache: cache)
+    let controller = windows.open(at: Location(path: "/root"))
+    try controller.saveWorkspace(as: "Project 1")
+    controller.workspace.selectedTab.focusedPane.navigate(to: Location(path: "/root/docs"))
+    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+
+    #expect(await survivesTheCap("/root", in: cache))
 }
 
 @MainActor @Test func aFolderNoWorkspaceHoldsAnymoreIsNoLongerKeptAfterTheSave() async throws {

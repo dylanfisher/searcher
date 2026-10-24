@@ -392,8 +392,9 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         window?.makeFirstResponder(sidebar.outlineView)
     }
 
-    /// Esc in the sidebar: the focused pane takes the keys back.
-    private func giveKeysBack() {
+    /// Gives the keys to the focused pane, as Esc in the sidebar does and as going to a saved
+    /// workspace does.
+    func giveKeysBack() {
         guard !isClosed, !workspace.isClosed else { return }
         window?.makeFirstResponder(paneViewController.keyView)
     }

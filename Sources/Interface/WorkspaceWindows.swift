@@ -48,6 +48,10 @@ public final class WorkspaceWindows {
     private var unsavedDeletes: Set<UUID> = []
     /// Saved workspaces deleted since the last save, whose snapshots' files go.
     private var unsavedSnapshotDeletes: Set<UUID> = []
+    /// Where showing its snapshot put an open saved workspace's window, by ID, when that may
+    /// differ from the snapshot's frame: moved onto a display, or shrunk to fit one. While the
+    /// window is still there, its frame reads as the snapshot's.
+    private var snapshotFramesShown: [UUID: Rect] = [:]
     /// The wait before the next save, while one is due.
     private var saveWait: Task<Void, Never>?
     /// The clock saves wait on. Tests give a manual one.
@@ -336,16 +340,23 @@ public final class WorkspaceWindows {
             lastSaved[state.id] = contents.workspaces[state.id]
             list.add(workspace)
             makeController(for: workspace, frame: CGRect(state.frame))
-            controller(for: workspace).window?.isDocumentEdited =
-                linked[state.id].map { $0 != state } ?? false
+            guard let window = controller(for: workspace).window else {
+                preconditionFailure("a browser window controller has no window")
+            }
+            if let snapshot = linked[state.id] {
+                if state.frame == snapshot.frame {
+                    snapshotFramesShown[state.id] = Rect(window.frame)
+                }
+                window.isDocumentEdited = differs(state, in: window, from: snapshot)
+            }
         }
         guard let key = workspaces[keyID] else { preconditionFailure("the key workspace is gone") }
         return controller(for: key)
     }
 
     /// Opens saved workspace `id` from its snapshot: a closed one in a new window, at its frame
-    /// moved onto a display if it is on none; an open one's window made key, with the snapshot
-    /// loaded into it if the window has changed since. Returns the workspace's window
+    /// moved onto a display if it is on none; an open one's window made key, as the snapshot
+    /// has it. Either way the keys go to the focused pane. Returns the workspace's window
     /// controller.
     @discardableResult
     public func open(savedWorkspace id: UUID) -> BrowserWindowController {
@@ -358,32 +369,56 @@ public final class WorkspaceWindows {
             makeController(for: workspace, frame: CGRect(frame))
         }
         let controller = controller(for: workspace)
-        if frame == nil {
-            reloadIfChanged(controller)
+        guard let window = controller.window else {
+            preconditionFailure("a browser window controller has no window")
         }
+        if frame != nil {
+            snapshotFramesShown[id] = Rect(window.frame)
+        } else {
+            showSnapshot(in: controller)
+        }
+        controller.giveKeysBack()
         if showsWindows {
-            controller.window?.makeKeyAndOrderFront(nil)
+            window.makeKeyAndOrderFront(nil)
         }
         // The session's order changed.
         scheduleSave()
         return controller
     }
 
-    /// Loads saved workspace `controller`'s snapshot into its window, unless the window is as
-    /// the snapshot has it: its tabs, panes and sidebar, and its frame moved onto a display if it
-    /// is on none. The tabs it had close; the new panes start with no selection history.
-    private func reloadIfChanged(_ controller: BrowserWindowController) {
+    /// Shows saved workspace `controller`'s snapshot in its window, where the window differs
+    /// from it. Only the frame differing moves the window to the snapshot's frame, moved onto a
+    /// display if it is on none, and leaves the panes as they are. Anything else loads the
+    /// snapshot's tabs, panes and sidebar as well: the tabs it had close, and the new panes start
+    /// with no selection history. A window in full screen keeps its frame.
+    private func showSnapshot(in controller: BrowserWindowController) {
         let workspace = controller.workspace
         guard let snapshot = list.snapshots[workspace.id], let window = controller.window else {
             preconditionFailure("workspace \(workspace.id) has no snapshot or no window")
         }
-        guard workspace.state(frame: Rect(window.frame)) != snapshot else { return }
-        workspace.reload(
-            tabs: restoredTabs(snapshot), selectedTab: snapshot.selectedTab,
-            showsSidebar: snapshot.showsSidebar)
-        window.setFrame(Self.placed(CGRect(snapshot.frame), on: screens()), display: false)
-        controller.showWorkspace()
+        let state = workspace.state(frame: Rect(window.frame))
+        guard differs(state, in: window, from: snapshot) else { return }
+        if state.moved(to: snapshot.frame) != snapshot {
+            workspace.reload(
+                tabs: restoredTabs(snapshot), selectedTab: snapshot.selectedTab,
+                showsSidebar: snapshot.showsSidebar)
+            controller.showWorkspace()
+        }
+        if !window.styleMask.contains(.fullScreen) {
+            window.setFrame(Self.placed(CGRect(snapshot.frame), on: screens()), display: false)
+            snapshotFramesShown[workspace.id] = Rect(window.frame)
+        }
         window.isDocumentEdited = false
+    }
+
+    /// Whether `state`, the workspace of `window`, differs from its snapshot. Its frame counts as
+    /// the snapshot's while the window is in full screen, or where showing the snapshot put it.
+    private func differs(
+        _ state: WorkspaceState, in window: NSWindow, from snapshot: WorkspaceState
+    ) -> Bool {
+        let asShown =
+            window.styleMask.contains(.fullScreen) || snapshotFramesShown[state.id] == state.frame
+        return (asShown ? state.moved(to: snapshot.frame) : state) != snapshot
     }
 
     /// `state`, renamed to the next free name if one of `names` is its name, which is logged.
@@ -563,8 +598,10 @@ public final class WorkspaceWindows {
             guard !controller.workspace.isClosed, let state = state(of: controller) else {
                 continue
             }
-            controller.window?.isDocumentEdited =
-                list.snapshots[state.id].map { $0 != state } ?? false
+            if let window = controller.window {
+                window.isDocumentEdited =
+                    list.snapshots[state.id].map { differs(state, in: window, from: $0) } ?? false
+            }
             guard lastSaved[state.id] != state else { continue }
             lastSaved[state.id] = state
             states.append(state)
@@ -780,6 +817,7 @@ public final class WorkspaceWindows {
         controllers.removeAll { $0 === controller }
         list.windowClosed(controller.workspace)
         forgetWindow(controller.workspace.id)
+        snapshotFramesShown[controller.workspace.id] = nil
         unsaved.remove(ObjectIdentifier(controller.workspace))
         for observer in windowObservers.removeValue(forKey: ObjectIdentifier(controller)) ?? [] {
             NotificationCenter.default.removeObserver(observer)
@@ -809,8 +847,15 @@ public final class WorkspaceWindows {
     /// from it.
     private func snapshotChanged(_ snapshot: WorkspaceState) {
         unsavedSnapshots[snapshot.id] = snapshot
-        if let controller = controllers.first(where: { $0.workspace.id == snapshot.id }) {
-            controller.window?.isDocumentEdited = state(of: controller) != snapshot
+        if let controller = controllers.first(where: { $0.workspace.id == snapshot.id }),
+            let window = controller.window, let state = state(of: controller)
+        {
+            // A save keeps the window's own frame, so where showing the last snapshot put the
+            // window no longer stands for it.
+            if state.frame == snapshot.frame {
+                snapshotFramesShown[snapshot.id] = nil
+            }
+            window.isDocumentEdited = differs(state, in: window, from: snapshot)
         }
         scheduleSave()
     }
