@@ -18,9 +18,23 @@ private func historyFile(_ folder: TemporaryFolder) -> URL {
 }
 
 private func store(
-    _ folder: TemporaryFolder, problems: EventLog<StoreProblem> = EventLog()
+    _ folder: TemporaryFolder, problems: EventLog<StoreProblem> = EventLog(),
+    clock: ManualClock = ManualClock(),
+    write: @escaping @Sendable (Data, URL) throws -> Void = { try AtomicWrite.write($0, to: $1) }
 ) -> WorkspaceStore {
-    WorkspaceStore(roots: roots(folder), report: { problems.append($0) }, clock: ManualClock())
+    WorkspaceStore(
+        roots: roots(folder), report: { problems.append($0) }, clock: clock, write: write)
+}
+
+/// Writes `json` as the history file and loads it.
+private func load(
+    _ json: String, in folder: TemporaryFolder, problems: EventLog<StoreProblem>
+) async throws -> FolderHistory {
+    let file = historyFile(folder)
+    try FileManager.default.createDirectory(
+        at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data(json.utf8).write(to: file)
+    return await store(folder, problems: problems).loadFolderHistory()
 }
 
 @Test func frecencyIsVisitsWeightedByHowLongAgoTheLastOneWas() {
@@ -114,4 +128,80 @@ private func store(
 
     #expect(await store(folder, problems: problems).loadFolderHistory() == FolderHistory())
     #expect(problems.all.isEmpty)
+}
+
+@Test func historyIsStoredAsASortedListOfFolders() async throws {
+    let folder = try TemporaryFolder()
+    var history = FolderHistory()
+    history.visit(Location(path: "/b"), at: Date(timeIntervalSinceReferenceDate: 10))
+    history.visit(Location(path: "/a"), at: Date(timeIntervalSinceReferenceDate: 0))
+    let writer = store(folder)
+
+    await writer.saveFolderHistory(history)
+    await writer.flush()
+
+    let stored = try String(contentsOf: historyFile(folder), encoding: .utf8)
+    #expect(
+        stored
+            == #"{"folders":[{"count":1,"last":0,"path":"\/a"},{"count":1,"last":10,"path":"\/b"}]}"#
+    )
+}
+
+@Test func tenHistorySavesWithinTheDelayMakeOneWriteOffTheMainThread() async throws {
+    let folder = try TemporaryFolder()
+    let clock = ManualClock()
+    let writes = EventLog<Bool>()
+    let writer = store(folder, clock: clock) { data, url in
+        writes.append(Thread.isMainThread)
+        try AtomicWrite.write(data, to: url)
+    }
+    var history = FolderHistory()
+    for visit in 1...10 {
+        history.visit(Location(path: "/f\(visit)"), at: start)
+        await writer.saveFolderHistory(history)
+    }
+
+    #expect(await !writes.wait(timeout: 0.2) { !$0.isEmpty })
+    clock.advance(by: WorkspaceStore.writeDelay)
+    #expect(await writes.wait { !$0.isEmpty })
+    #expect(await !writes.wait(timeout: 0.2) { $0.count > 1 })
+    #expect(writes.all == [false])
+    #expect(await store(folder).loadFolderHistory() == history)
+}
+
+@Test(arguments: [
+    ("a count of 0", #"{"folders":[{"count":0,"last":0,"path":"/a"}]}"#),
+    (
+        "a path twice",
+        #"{"folders":[{"count":1,"last":0,"path":"/a"},{"count":2,"last":0,"path":"/a"}]}"#
+    ),
+    ("a relative path", #"{"folders":[{"count":1,"last":0,"path":"a"}]}"#),
+    (
+        "folders out of order",
+        #"{"folders":[{"count":1,"last":0,"path":"/b"},{"count":1,"last":0,"path":"/a"}]}"#
+    ),
+])
+func aHistoryBreakingItsRulesIsDeletedAndReported(rule: String, json: String) async throws {
+    let folder = try TemporaryFolder()
+    let problems = EventLog<StoreProblem>()
+
+    let loaded = try await load(json, in: folder, problems: problems)
+
+    #expect(loaded == FolderHistory(), "\(rule)")
+    #expect(!FileManager.default.fileExists(atPath: historyFile(folder).path))
+    #expect(problems.all.map(\.kind) == [.discarded])
+}
+
+@Test func aHistoryOfMoreThanTheCapIsDeletedAndReported() async throws {
+    let folder = try TemporaryFolder()
+    let problems = EventLog<StoreProblem>()
+    let entries = (0...FolderHistory.mostFolders).map { index in
+        #"{"count":1,"last":0,"path":"/f\#(String(format: "%05d", index))"}"#
+    }
+
+    let loaded = try await load(
+        #"{"folders":["# + entries.joined(separator: ",") + "]}", in: folder, problems: problems)
+
+    #expect(loaded == FolderHistory())
+    #expect(problems.all.map(\.kind) == [.discarded])
 }

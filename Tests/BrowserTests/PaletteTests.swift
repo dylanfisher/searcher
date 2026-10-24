@@ -27,13 +27,16 @@ private final class PaletteFixture {
         var registry = CommandRegistry()
     }
 
-    init(homeFolder: [DirectoryEntry] = []) throws {
+    /// A `heldHome` listing of the home folder waits until the test releases it.
+    init(homeFolder: [DirectoryEntry] = [], heldHome: Bool = false) throws {
         lister = GatedLister([
             "/root": .batches([[file("a.txt")]]),
             "\(home)/projects": .batches([[]]),
             home: .batches([homeFolder]),
         ])
-        lister.releaseAll()
+        lister.release("/root")
+        lister.release("\(home)/projects")
+        if !heldHome { lister.release(home) }
         let service = ListingService(lister: lister)
         pane = Pane(
             location: Location(path: "/root"), service: service,
@@ -68,9 +71,9 @@ private final class PaletteFixture {
         palette = Palette(sources: sources)
     }
 
-    func visit(_ path: String, times: Int = 1) {
+    func visit(_ path: String, times: Int = 1, at date: Date = now) {
         for _ in 0..<times {
-            state.history.visit(Location(path: path), at: now)
+            state.history.visit(Location(path: path), at: date)
         }
     }
 
@@ -229,4 +232,151 @@ private final class HeldSource: PaletteSource {
 
     let goTo = try fixture.result(titled: NavigationCommands.goToFolder.title)
     #expect(goTo.item.chord == NavigationCommands.goToFolder.chords.first)
+}
+
+@MainActor @Test func frecencyLiftsAFolderPastASlightlyBetterMatch() async throws {
+    let fixture = try PaletteFixture()
+    // "gh" scores 18 in "GitHub" by initials and 16 in "ghost" by a run.
+    let github = try #require(FuzzyMatcher("gh").score(FuzzyMatcher.Candidate("~/GitHub")))
+    let ghost = try #require(FuzzyMatcher("gh").score(FuzzyMatcher.Candidate("~/ghost")))
+    #expect((1...4).contains(github - ghost))
+    fixture.visit("\(home)/GitHub", at: now - 30 * 86_400)
+    fixture.visit("\(home)/ghost", times: 10)
+
+    await fixture.search("gh")
+
+    let titles = fixture.titles
+    #expect(
+        try #require(titles.firstIndex(of: "~/ghost")) < #require(titles.firstIndex(of: "~/GitHub"))
+    )
+}
+
+@Test func inABucketTheMoreFrecentFolderOfAnEqualMatchRanksFirst() {
+    // Both get the largest frecency bonus and score alike; they are handed over least frecent
+    // first.
+    let item = { (name: String, frecency: Double) in
+        PaletteItem(id: .folder(path: "/\(name)"), title: "~/\(name)", frecency: frecency) {}
+    }
+    let results = Palette.rank([[item("alpha", 20), item("alphb", 30)]], for: "alp", limit: 10)
+
+    #expect(results.map(\.item.title) == ["~/alphb", "~/alpha"])
+}
+
+@MainActor @Test func dotFoldersShowOnlyOnceADotIsTypedButFlagHiddenOnesAlways() async throws {
+    let library = DirectoryEntry(
+        name: "Library", type: .directory, size: nil, modified: testDate, isHidden: true,
+        isDataless: false)
+    let fixture = try PaletteFixture(homeFolder: [folder(".config"), folder("config"), library])
+
+    fixture.palette.setQuery("~/c")
+    await settle { fixture.titles.contains("~/config") }
+    #expect(!fixture.titles.contains("~/.config"))
+
+    fixture.palette.setQuery("~/.c")
+    await settle { fixture.titles.contains("~/.config") }
+
+    fixture.palette.setQuery("~/Li")
+    await settle { fixture.titles.contains("~/Library") }
+}
+
+@MainActor @Test func closingThePaletteStopsAPathListing() async throws {
+    let fixture = try PaletteFixture(homeFolder: [folder("Documents")], heldHome: true)
+
+    await fixture.search("~/Do")
+    await settle { fixture.lister.calls.contains { $0.path == home } }
+    fixture.palette.close()
+    fixture.lister.release(home)
+    await settle { fixture.lister.batchesDelivered >= 1 }
+    await drainMainQueue()
+    await drainMainQueue()
+
+    #expect(!fixture.titles.contains("~/Documents"))
+}
+
+@MainActor @Test func anotherQueryStopsAPathListing() async throws {
+    let fixture = try PaletteFixture(homeFolder: [folder("Documents")], heldHome: true)
+
+    await fixture.search("~/Do")
+    await settle { fixture.lister.calls.contains { $0.path == home } }
+    await fixture.search("Do")
+    fixture.lister.release(home)
+    await settle { fixture.lister.batchesDelivered >= 1 }
+    await drainMainQueue()
+    await drainMainQueue()
+
+    // Back to the path: its folder is listed again rather than handed over from the stopped load.
+    #expect(!fixture.titles.contains("~/Documents"))
+    fixture.palette.setQuery("~/Do")
+    await settle { fixture.titles.contains("~/Documents") }
+    #expect(fixture.lister.calls.filter { $0.path == home }.count == 2)
+}
+
+@Test func aSlowOrGivenUpLoadKeepsThePathsFolders() {
+    let maker = PathSource.ItemMaker(
+        location: Location(path: home), typed: "~/", history: FolderHistory(), now: now,
+        focusedPane: { preconditionFailure("nothing is chosen") })
+
+    #expect(maker.items(for: .slow(rootVolumeName: "Mac", volumeName: "Mac")) == nil)
+    #expect(maker.items(for: .gaveUp(rootVolumeName: "Mac", volumeName: "Mac")) == nil)
+}
+
+@Test func aFullListingReusesTheItemsOfItsFirstBatch() async {
+    let maker = PathSource.ItemMaker(
+        location: Location(path: home), typed: "~/", history: FolderHistory(), now: now,
+        focusedPane: { preconditionFailure("nothing is chosen") })
+    let listing = { (names: [String]) in
+        await Task.detached { Listing(names.map(folder) + [file("x.txt")]) }.value
+    }
+    let first = await listing(["a", "b"])
+    let full = await listing(["a", "b", "c", "d"])
+
+    let firstItems = maker.items(for: .firstBatch(first, rootVolumeName: "Mac"))
+    let fullItems = maker.items(for: .full(full, rootVolumeName: "Mac"))
+
+    #expect(firstItems?.shown.map { $0.title } == ["~/a", "~/b"])
+    #expect(fullItems?.shown.map { $0.title } == ["~/a", "~/b", "~/c", "~/d"])
+    #expect(maker.madeCount == 4)
+}
+
+@MainActor @Test func aFolderPastTheHistorysCapIsNotListed() async throws {
+    let fixture = try PaletteFixture()
+    fixture.visit("/stale-folder", at: now - 30 * 86_400)
+    for index in 0..<FolderHistory.mostFolders {
+        fixture.visit("/kept\(index)")
+    }
+
+    await fixture.search("stale-folder")
+    #expect(!fixture.titles.contains("/stale-folder"))
+    await fixture.search("kept999")
+    #expect(fixture.titles.first == "/kept999")
+}
+
+@MainActor @Test func aNewQueryCancelsTheRankingItReplaces() async throws {
+    let fixture = try PaletteFixture()
+
+    fixture.palette.setQuery("a")
+    let first = fixture.palette.ranking
+    fixture.palette.setQuery("ab")
+
+    #expect(first?.isCancelled == true)
+    await settle { !fixture.palette.isRanking }
+}
+
+@Test func aCancelledRankingStopsBetweenBuckets() {
+    let items = [
+        PaletteItem(id: .workspace(UUID()), title: "abc") {},
+        PaletteItem(id: .folder(path: "/abc"), title: "/abc") {},
+        PaletteItem(id: .command(CommandID("test.abc")), title: "abc") {},
+    ]
+    let checks = EventLog<Int>()
+
+    let results = Palette.rank(
+        [items], for: "abc", limit: 10,
+        isCancelled: {
+            checks.append(checks.all.count)
+            return checks.all.count > 1
+        })
+
+    #expect(results.isEmpty)
+    #expect(checks.all.count == 2)
 }

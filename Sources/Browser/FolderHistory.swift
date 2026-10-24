@@ -10,7 +10,7 @@ public struct FolderHistory: Codable, Equatable, Sendable {
     public static let mostFolders = 1_000
 
     /// One folder's visits.
-    public struct Visits: Codable, Equatable, Sendable {
+    public struct Visits: Equatable, Sendable {
         public let count: Int
         public let last: Date
     }
@@ -19,6 +19,54 @@ public struct FolderHistory: Codable, Equatable, Sendable {
     public private(set) var folders: [String: Visits] = [:]
 
     public init() {}
+
+    /// Stored as a list of folders sorted by path, so the same history always writes the same
+    /// bytes and a path can't be listed twice unseen.
+    private enum CodingKeys: String, CodingKey {
+        case folders
+    }
+
+    private struct StoredFolder: Codable {
+        let path: String
+        let count: Int
+        let last: Date
+    }
+
+    /// Throws for a file that breaks the history's rules, which the store then discards: more
+    /// than `mostFolders` folders, a path that isn't absolute, listed twice or out of order, or
+    /// a count under 1.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let stored = try container.decode([StoredFolder].self, forKey: .folders)
+        func broken(_ reason: String) -> DecodingError {
+            .dataCorruptedError(forKey: .folders, in: container, debugDescription: reason)
+        }
+        guard stored.count <= Self.mostFolders else {
+            throw broken("it lists \(stored.count) folders, more than \(Self.mostFolders)")
+        }
+        var previous: String?
+        for folder in stored {
+            guard folder.path.hasPrefix("/") else {
+                throw broken("\(folder.path) isn't an absolute path")
+            }
+            guard folder.count >= 1 else {
+                throw broken("\(folder.path) has a visit count of \(folder.count)")
+            }
+            if let previous, folder.path <= previous {
+                throw broken("\(folder.path) is listed twice or out of order")
+            }
+            previous = folder.path
+            folders[folder.path] = Visits(count: folder.count, last: folder.last)
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(
+            folders.sorted { $0.key < $1.key }.map {
+                StoredFolder(path: $0.key, count: $0.value.count, last: $0.value.last)
+            }, forKey: .folders)
+    }
 
     /// Counts a visit to `location` at `date`.
     public mutating func visit(_ location: Location, at date: Date) {

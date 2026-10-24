@@ -4,10 +4,11 @@ import Foundation
 /// For a query that starts with `/` or `~` and holds a `/`, the folders in the typed parent: the
 /// text up to the last `/`, expanded by `PathInput`. They are listed through `ListingService`,
 /// off the main actor, and matched by the name typed after that `/`. Each title is the typed
-/// parent followed by the folder's name, and choosing one shows it in the focused pane. Hidden
-/// folders are listed only once the typed name starts with a dot, as Finder's Go to Folder
-/// does. A streaming source: the parent is listed once while the typed name changes, and the
-/// folders found so far are handed over on every key.
+/// parent followed by the folder's name, and choosing one shows it in the focused pane. A folder
+/// whose name starts with a dot is listed only once the typed name does too; one hidden by its
+/// flag, such as `~/Library`, is always listed, as Finder's Go to Folder completes it. A
+/// streaming source: the parent is listed once while the typed name changes, and the folders
+/// found so far are handed over on every key.
 @MainActor
 public final class PathSource: PaletteSource {
     private let service: ListingService
@@ -20,7 +21,7 @@ public final class PathSource: PaletteSource {
     /// Hands over the items for the latest query.
     private var deliver: (@MainActor ([PaletteItem]) -> Void)?
     /// Whether the latest query's typed name starts with a dot.
-    private var showsHidden = false
+    private var showsDotFolders = false
 
     private final class Parent {
         let typed: String
@@ -33,11 +34,74 @@ public final class PathSource: PaletteSource {
         }
     }
 
-    /// One listing's folders as items, made on the load's thread.
+    /// One listing's folders as items.
     struct Items: Sendable {
+        /// The folders whose names don't start with a dot.
         var shown: [PaletteItem] = []
-        /// `shown` and the hidden folders.
+        /// Every folder.
         var all: [PaletteItem] = []
+    }
+
+    /// Makes one load's items on its thread, keeping each folder's item for the updates after,
+    /// so a full listing after a first batch or cached rows prepares only the folders new to it.
+    final class ItemMaker: @unchecked Sendable {
+        private let location: Location
+        private let typed: String
+        private let history: FolderHistory
+        private let now: Date
+        private let focusedPane: @MainActor @Sendable () -> Pane
+        // `lock` guards `made` and `storedMadeCount`.
+        private let lock = NSLock()
+        private var made: [String: PaletteItem] = [:]
+        private var storedMadeCount = 0
+
+        init(
+            location: Location, typed: String, history: FolderHistory, now: Date,
+            focusedPane: @escaping @MainActor @Sendable () -> Pane
+        ) {
+            self.location = location
+            self.typed = typed
+            self.history = history
+            self.now = now
+            self.focusedPane = focusedPane
+        }
+
+        /// How many items were prepared so far.
+        var madeCount: Int { lock.withLock { storedMadeCount } }
+
+        /// The folders `update` lists, as items; none for a load that failed, and nil for one
+        /// that is only slow, which keeps the folders found before.
+        func items(for update: ListingUpdate) -> Items? {
+            let listing: Listing
+            switch update {
+            case .cached(let cached, _, _): listing = cached
+            case .firstBatch(let batch, _): listing = batch
+            case .full(let full, _): listing = full
+            case .failed, .volumeGone: return Items()
+            case .slow, .gaveUp: return nil
+            }
+            return lock.withLock {
+                var items = Items()
+                for entry in listing.entries where entry.type == .directory {
+                    let item = made[entry.name] ?? makeItem(named: entry.name)
+                    items.all.append(item)
+                    if !entry.name.hasPrefix(".") { items.shown.append(item) }
+                }
+                return items
+            }
+        }
+
+        private func makeItem(named name: String) -> PaletteItem {
+            let folder = location.child(named: name)
+            let focusedPane = focusedPane
+            let item = PaletteItem(
+                id: .folder(path: folder.path), title: typed + name,
+                frecency: history.frecency(of: folder, at: now), matchOffset: typed.utf8.count
+            ) { focusedPane().navigate(to: folder) }
+            made[name] = item
+            storedMadeCount += 1
+            return item
+        }
     }
 
     /// `focusedPane` is the pane a chosen folder is shown in.
@@ -67,13 +131,13 @@ public final class PathSource: PaletteSource {
             parent = list(typed)
         }
         self.deliver = deliver
-        showsHidden = name.hasPrefix(".")
+        showsDotFolders = name.hasPrefix(".")
         handOver()
     }
 
     private func handOver() {
         guard let parent, let deliver else { return }
-        deliver(showsHidden ? parent.items.all : parent.items.shown)
+        deliver(showsDotFolders ? parent.items.all : parent.items.shown)
     }
 
     public func cancel() {
@@ -88,24 +152,11 @@ public final class PathSource: PaletteSource {
         else {
             preconditionFailure("\"\(typed)\" holds a / but names no folder")
         }
-        let history = history()
-        let now = now()
-        let focusedPane = focusedPane
+        let maker = ItemMaker(
+            location: location, typed: typed, history: history(), now: now(),
+            focusedPane: focusedPane)
         let load = service.load(
-            location, priority: .focused,
-            prepare: { update -> Items? in
-                let listing: Listing
-                switch update {
-                case .cached(let cached, _, _): listing = cached
-                case .firstBatch(let batch, _): listing = batch
-                case .full(let full, _): listing = full
-                case .failed, .volumeGone: return Items()
-                case .slow, .gaveUp: return nil
-                }
-                return Self.items(
-                    in: listing, of: location, typed: typed, history: history, now: now,
-                    focusedPane: focusedPane)
-            },
+            location, priority: .focused, prepare: { maker.items(for: $0) },
             onUpdate: { [weak self] items in
                 // A cancelled load hands over nothing more, so this is the parent's load.
                 guard let self, let items, let parent = self.parent else { return }
@@ -114,23 +165,5 @@ public final class PathSource: PaletteSource {
                 handOver()
             })
         return Parent(typed: typed, load: load)
-    }
-
-    /// The folders of `listing` as items. Runs on the load's thread.
-    private nonisolated static func items(
-        in listing: Listing, of location: Location, typed: String, history: FolderHistory,
-        now: Date, focusedPane: @escaping @MainActor @Sendable () -> Pane
-    ) -> Items {
-        var items = Items()
-        for entry in listing.entries where entry.type == .directory {
-            let folder = location.child(named: entry.name)
-            let item = PaletteItem(
-                id: .folder(path: folder.path), title: typed + entry.name,
-                frecency: history.frecency(of: folder, at: now), matchOffset: typed.utf8.count
-            ) { focusedPane().navigate(to: folder) }
-            items.all.append(item)
-            if !entry.isHidden && !entry.name.hasPrefix(".") { items.shown.append(item) }
-        }
-        return items
     }
 }
