@@ -1,5 +1,6 @@
-import Base
 import Testing
+
+@testable import Base
 
 /// The texts of `candidate`'s matched ranges.
 private func matchedTexts(_ query: String, _ candidate: String) -> [String]? {
@@ -105,4 +106,160 @@ func aMissingLetterIsNoMatch(query: String) {
         golden[5], golden[2], "dictionary", golden[6], golden[0], golden[4], golden[3], golden[1],
     ]
     #expect(ranked("doc", shuffled) == golden)
+}
+
+/// `query`'s score against `candidate`.
+private func score(_ query: String, _ candidate: String) -> Int? {
+    FuzzyMatcher(query).score(FuzzyMatcher.Candidate(candidate))
+}
+
+/// Folder and app names a file-browser palette sees: initials of one name beat a prefix run.
+@Test func initialsOfOneNameRankAboveAPrefixRun() {
+    #expect(
+        ranked("gh", ["ghost", "Library/Highlights", "github", "GitHub"])
+            == ["GitHub", "ghost", "github", "Library/Highlights"])
+    #expect(
+        ranked("mvd", ["mvdir", "Movies/Downloads", "my-video-downloads"])
+            == ["my-video-downloads", "mvdir", "Movies/Downloads"])
+}
+
+@Test func initialsInDifferentPathComponentsAreNotAChain() {
+    #expect(ranked("dl", ["Desktop/lib", "Downloads"]) == ["Downloads", "Desktop/lib"])
+}
+
+@Test func aGapInsideAWordCostsTheSameWhateverItsLength() {
+    #expect(ranked("dl", ["Deleted Items", "Downloads"]) == ["Downloads", "Deleted Items"])
+    #expect(score("ab", "axb") == score("ab", "axxxxb"))
+}
+
+/// Sessions has the same leading S and a shorter word, so it ties Screenshots and ranks first by
+/// length; only frecency (M5a.6) can put Screenshots first. Both beat a match inside a word.
+@Test func ssRanksScreenshotsAboveAssets() {
+    #expect(
+        ranked("ss", ["assets", "Sessions", "Screenshots"])
+            == ["Sessions", "Screenshots", "assets"])
+}
+
+@Test func eachBonusAndPenaltyCounts() throws {
+    typealias M = FuzzyMatcher
+    #expect(score("ab", "xab") == Int(M.runBonus))
+    #expect(score("ab", "axb") == Int(M.componentStartBonus - M.gapOpenPenalty))
+    #expect(score("b", "x-b") == Int(M.wordStartBonus))
+    #expect(score("b", "x/b") == Int(M.componentStartBonus))
+    // Into a later word: the gap's bytes count, and so does the new word.
+    let intoLaterWord = try #require(score("ab", "a-xb"))
+    #expect(
+        intoLaterWord
+            == Int(
+                M.componentStartBonus - M.gapOpenPenalty - 2 * M.gapBytePenalty
+                    - M.newWordPenalty))
+    #expect(score("ab", "a-xxb") == intoLaterWord - Int(M.gapBytePenalty))
+    // An initials chain keeps each word-start bonus with no gap cost.
+    #expect(score("ab", "a-xx-bx") == Int(M.componentStartBonus + M.wordStartBonus))
+}
+
+@Test func aRunRanksAboveAGap() {
+    #expect(ranked("ab", ["xaxb", "xab"]) == ["xab", "xaxb"])
+}
+
+@Test func aCapitalAfterALowercaseLetterStartsAWord() {
+    #expect(ranked("b", ["abc", "aBc"]) == ["aBc", "abc"])
+    #expect(score("b", "aBc") == Int(FuzzyMatcher.wordStartBonus))
+    #expect(score("b", "ABc") == 0)
+}
+
+@Test func equalScoresAndLengthsKeepTheCandidateOrder() {
+    #expect(ranked("ab", ["yab", "xab"]) == ["yab", "xab"])
+    #expect(ranked("ab", ["xab", "yab"]) == ["xab", "yab"])
+}
+
+/// The best score over every placement of the query's bytes, computed from the rules in
+/// `FuzzyMatcher`'s documentation one placement at a time: a prefix of initials in one
+/// component scores its word-start bonuses, and the rest scores by runs, gaps and new words.
+private func bruteForceScore(_ query: String, _ text: String) -> Int? {
+    typealias M = FuzzyMatcher
+    let query = Array(NameSortKey.fold(query).utf8)
+    let units = FuzzyMatcher.Candidate(text).units
+    guard !query.isEmpty else { return 0 }
+    let byte = { (j: Int) in UInt8(truncatingIfNeeded: units[j]) }
+    let position = { (j: Int) in M.Position(rawValue: UInt8(units[j] >> 8))! }
+    let starts = { (j: Int) in position(j) == .wordStart || position(j) == .componentStart }
+    let bonus = { (j: Int) -> Int in
+        switch position(j) {
+        case .componentStart: Int(M.componentStartBonus)
+        case .wordStart: Int(M.wordStartBonus)
+        case .inWord, .separator: 0
+        }
+    }
+    let isContinuation = { (i: Int) in query[i] & 0xC0 == 0x80 }
+    var best: Int?
+    func score(_ placement: [Int]) {
+        for i in placement.indices.dropFirst() where isContinuation(i) {
+            guard placement[i] == placement[i - 1] + 1 else { return }
+        }
+        // The longest prefix that is an initials chain.
+        var chainEnd = starts(placement[0]) ? 0 : -1
+        var chainScore = bonus(placement[0])
+        var chainScores = [chainScore]
+        if chainEnd == 0 {
+            for i in placement.indices.dropFirst() {
+                let (k, j) = (placement[i - 1], placement[i])
+                if isContinuation(i) {
+                    chainEnd = i
+                } else if position(j) == .wordStart
+                    && !(k + 1...j).contains(where: { position($0) == .componentStart })
+                {
+                    chainScore += bonus(j)
+                    chainEnd = i
+                } else {
+                    break
+                }
+                chainScores.append(chainScore)
+            }
+        }
+        for split in 0...max(chainEnd, 0) {
+            var total = split <= chainEnd ? chainScores[split] : bonus(placement[0])
+            for i in (split + 1)..<max(split + 1, placement.count) {
+                let (k, j) = (placement[i - 1], placement[i])
+                if isContinuation(i) {
+                    continue
+                } else if j == k + 1 {
+                    total += Int(M.runBonus)
+                } else if !(k + 1...j).contains(where: starts) {
+                    total -= Int(M.gapOpenPenalty)
+                } else {
+                    total +=
+                        bonus(j) - Int(M.gapOpenPenalty) - Int(M.gapBytePenalty) * (j - k - 1)
+                        - Int(M.newWordPenalty)
+                }
+            }
+            best = max(best ?? total, total)
+        }
+    }
+    func place(_ i: Int, from start: Int, _ placement: [Int]) {
+        guard i < query.count else { return score(placement) }
+        for j in start..<units.count where byte(j) == query[i] {
+            place(i + 1, from: j + 1, placement + [j])
+        }
+    }
+    place(0, from: 0, [])
+    return best
+}
+
+@Test func scoresAgreeWithABruteForceSearch() {
+    var state: UInt64 = 42
+    func next(_ bound: Int) -> Int {
+        state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+        return Int(state >> 33) % bound
+    }
+    let textLetters = Array("aAbBx-/ é日ab-/")
+    let queryLetters = Array("abé日-")
+    for _ in 0..<20_000 {
+        let text = String((0..<(1 + next(10))).map { _ in textLetters[next(textLetters.count)] })
+        let query = String((0..<(1 + next(3))).map { _ in queryLetters[next(queryLetters.count)] })
+        let candidate = FuzzyMatcher.Candidate(text)
+        let expected = bruteForceScore(query, text)
+        #expect(FuzzyMatcher(query).score(candidate) == expected, "\(query) in \(text)")
+        #expect(FuzzyMatcher(query).match(candidate)?.score == expected, "\(query) in \(text)")
+    }
 }
