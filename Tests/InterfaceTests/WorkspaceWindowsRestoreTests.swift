@@ -785,3 +785,39 @@ private func expectReopenedAsBeforeClosing(with key: NSEvent) async throws {
     #expect(alert.buttons.map(\.title) == ["Delete", Dialog.cancel])
     #expect(alert.buttons[0].hasDestructiveAction)
 }
+
+@MainActor @Test func returnOnASidebarRowReopensItsClosedWorkspace() throws {
+    let windows = makeWindows(store: nil)
+    let front = windows.open(at: Location(path: "/root"))
+    let named = windows.open(at: Location(path: "/root"))
+    let id = named.workspace.id
+    try windows.list.name(named.workspace, as: "Project 1")
+    try #require(named.window).close()
+    let outline = front.sidebar.outlineView
+    let row = try #require(
+        (0..<outline.numberOfRows).first { outline.level(forRow: $0) > 0 })
+    outline.selectRowIndexes([row], byExtendingSelection: false)
+
+    outline.keyDown(with: try keyEvent("\r"))
+
+    #expect(windows.controllers.count == 2)
+    #expect(windows.list.workspaces.first?.id == id)
+    #expect(windows.controllers.contains { $0.workspace.id == id })
+}
+
+@MainActor @Test func theSidebarsVisibilityIsSavedAndRestored() async throws {
+    let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
+    let saving = makeWindows(store: diskStore(folder))
+    let controller = saving.open(at: Location(path: "/root"))
+    let table = try #require(controller.window?.firstResponder as? ListingTableView)
+    table.keyDown(with: try keyEvent("s", characters: "ß", modifiers: [.command, .option]))
+    #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
+    let contents = await diskStore(folder).load()
+    #expect(contents.workspaces[controller.workspace.id]?.showsSidebar == true)
+
+    let restoring = makeWindows(store: diskStore(folder))
+    restoring.holdSavesUntilRestore()
+    let restored = try #require(restoring.restore(contents))
+
+    #expect(restored.showsSidebar)
+}

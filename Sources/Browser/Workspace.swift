@@ -18,8 +18,13 @@ public final class Workspace {
             if name != oldValue { onChange?() }
         }
     }
-    /// Kept as restored, so saving the workspace again doesn't lose it.
-    public let showsSidebar: Bool
+    /// Whether the window shows the workspace sidebar. Show Sidebar sets it, and the window when
+    /// the user drags the sidebar closed.
+    public var showsSidebar: Bool {
+        didSet {
+            if showsSidebar != oldValue { onChange?() }
+        }
+    }
     public private(set) var tabs: [Tab] {
         didSet { onChange?() }
     }
@@ -31,9 +36,9 @@ public final class Workspace {
             }
         }
     }
-    /// Runs after any change to what `WorkspaceState` keeps of the workspace: its name, the tab
-    /// strip, the selected tab, a tab's layout or a change in one of its panes. Its window's
-    /// owner sets it, to save the workspace once the changes stop.
+    /// Runs after any change to what `WorkspaceState` keeps of the workspace: its name, whether
+    /// the sidebar shows, the tab strip, the selected tab, a tab's layout or a change in one of
+    /// its panes. Its window's owner sets it, to save the workspace once the changes stop.
     public var onChange: (@MainActor () -> Void)?
     /// Whether the workspace's window is the key window. Only then does the selected tab's
     /// focused pane have the focus, so with two windows only the key one's loads go first. The

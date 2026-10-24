@@ -123,7 +123,8 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
     /// start of the pane's history, and so Undo, Redo, Cut, Copy and Paste. Its key still
     /// reaches `keyDown`, where the command does nothing. Other items sent here, such as Select
     /// All, stay enabled. Checks the item of the pane's current mode, such as "as Columns", and
-    /// gives Undo and Redo the titles that name the change.
+    /// gives an item whose command names what it would do its title now, such as Undo naming
+    /// the change or Hide Sidebar.
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if let action = [
             MainMenuBuilder.undo, MainMenuBuilder.redo, MainMenuBuilder.cut,
@@ -139,6 +140,9 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
         }
         if let isCurrent = commandIsCurrent(id) {
             item.state = isCurrent ? .on : .off
+        }
+        if let title = commandTitle(id) {
+            item.title = title
         }
         return canRunCommand(id)
     }

@@ -28,6 +28,9 @@ public struct CommandContext {
     /// Asks the user whether to delete the window's workspace, and deletes it on yes. Only the
     /// window can ask; a context built without it traps when Delete Workspace runs.
     public let askToDeleteWorkspace: @MainActor () -> Void
+    /// Moves the keys into the window's workspace sidebar, which shows. Only the window can; a
+    /// context built without it traps when Focus Sidebar runs.
+    public let focusSidebar: @MainActor () -> Void
     /// The folder a click named, for Open in New Tab: a Cmd-double-clicked folder row or a
     /// Cmd-clicked path bar segment. Nil when a key or menu item runs a command.
     public let folder: Location?
@@ -78,6 +81,9 @@ public struct CommandContext {
         askToDeleteWorkspace: @escaping @MainActor () -> Void = {
             preconditionFailure("this command context can't ask to delete a workspace")
         },
+        focusSidebar: @escaping @MainActor () -> Void = {
+            preconditionFailure("this command context has no sidebar")
+        },
         folder: Location? = nil,
         fileOperations: FileOperationQueue? = nil,
         editName: (@MainActor () -> Void)? = nil,
@@ -101,6 +107,7 @@ public struct CommandContext {
         self.toggleOperations = toggleOperations
         self.askForWorkspaceName = askForWorkspaceName
         self.askToDeleteWorkspace = askToDeleteWorkspace
+        self.focusSidebar = focusSidebar
         self.folder = folder
         self.fileOperations = fileOperations
         self.editName = editName
