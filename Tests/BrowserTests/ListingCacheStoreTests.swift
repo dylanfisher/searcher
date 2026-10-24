@@ -295,3 +295,76 @@ func aFileThatDoesNotDecodeIsDeletedAndLoggedAndMisses(_ damage: StoreDamage) as
     await writer.flush()
     #expect(log.all.count == 2)
 }
+
+@Test func aKeptVolumesFileOutlivesTheByteCap() async throws {
+    let folder = try TemporaryFolder("ListingCacheStoreTests")
+    let volumes = (0..<3).map {
+        VolumeIdentity(device: "//nas/share\($0)", mountPoint: "/fake/share\($0)", kind: .network)
+    }
+    let probe = store(folder)
+    await probe.save(["/a": album], for: volumes[0])
+    await probe.flush()
+    let fileSize =
+        try FileManager.default.attributesOfItem(
+            atPath: probe.url(for: volumes[0]).path)[.size] as! Int
+
+    // Room for two files of this size, not three.
+    let writer = store(folder, byteCap: fileSize * 2 + fileSize / 2)
+    await writer.keep([volumes[0]])
+    await writer.save(["/a": album], for: volumes[1])
+    await writer.flush()
+    try FileManager.default.setAttributes(
+        [.modificationDate: Date(timeIntervalSinceNow: -3600)],
+        ofItemAtPath: writer.url(for: volumes[0]).path)
+    try FileManager.default.setAttributes(
+        [.modificationDate: Date(timeIntervalSinceNow: -1800)],
+        ofItemAtPath: writer.url(for: volumes[1]).path)
+    await writer.save(["/a": album], for: volumes[2])
+    await writer.flush()
+
+    #expect(FileManager.default.fileExists(atPath: writer.url(for: volumes[0]).path))
+    #expect(!FileManager.default.fileExists(atPath: writer.url(for: volumes[1]).path))
+    #expect(FileManager.default.fileExists(atPath: writer.url(for: volumes[2]).path))
+}
+
+@Test func aPathIsPlacedOnTheVolumeWithTheLongestMountPointHoldingIt() async throws {
+    let folder = try TemporaryFolder("ListingCacheStoreTests")
+    let outer = VolumeIdentity(device: "//nas/all", mountPoint: "/fake/x", kind: .network)
+    let older = VolumeIdentity(device: "//nas/old", mountPoint: "/fake/x/Music", kind: .network)
+    let newer = VolumeIdentity(device: "//nas/new", mountPoint: "/fake/x/Music", kind: .network)
+    let writer = store(folder)
+    for volume in [outer, older, newer] {
+        await writer.save(["\(volume.mountPoint)/Album": album], for: volume)
+    }
+    await writer.flush()
+    try FileManager.default.setAttributes(
+        [.modificationDate: Date(timeIntervalSinceNow: -3600)],
+        ofItemAtPath: writer.url(for: older).path)
+
+    let reader = store(folder)
+    let found = await reader.volume(holding: "/fake/x/Music/Album/Disc 1")
+    #expect(found?.volume == newer)
+    #expect(found?.folders == ["/fake/x/Music/Album": album])
+    #expect(await reader.volume(holding: "/fake/x/Photos")?.volume == outer)
+    #expect(await reader.volume(holding: "/fake/y") == nil)
+}
+
+@Test func aFileNotNamedForAVolumeIsDeletedAtTheNextWrite() async throws {
+    let folder = try TemporaryFolder("ListingCacheStoreTests")
+    let writer = store(folder)
+    await writer.save(["/Music/Album": album], for: share)
+    await writer.flush()
+    let stray = writer.url(for: share).deletingLastPathComponent()
+        .appending(path: String(repeating: "0", count: 64) + ".plist")
+    try FileManager.default.copyItem(at: writer.url(for: share), to: stray)
+
+    let log = EventLog<String>()
+    let next = store(folder, log: log)
+    await next.save(["/Music/Album": album], for: share)
+    await next.flush()
+
+    #expect(!FileManager.default.fileExists(atPath: stray.path))
+    #expect(FileManager.default.fileExists(atPath: writer.url(for: share).path))
+    #expect(log.all.count == 1)
+    #expect(log.all.first?.contains(stray.path) == true)
+}

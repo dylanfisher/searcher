@@ -161,6 +161,10 @@ final class UIBench {
             return try await restoreSession(
                 in: root, settings: settings, systemActions: systemActions)
         }
+        if options.scenario == .restoredNetworkPane {
+            return try await restoreNetworkPane(
+                in: root, settings: settings, systemActions: systemActions)
+        }
         // The queue case opens and closes the panel with its key, around a copy that empties it.
         settings.hideEmptyOperationsPanel = false
         let controller = BrowserWindowController(
@@ -212,6 +216,8 @@ final class UIBench {
             }
         case .restoredSession:
             preconditionFailure("restored-session opens its own windows in restoreSession")
+        case .restoredNetworkPane:
+            preconditionFailure("restored-network-pane opens its own window in restoreNetworkPane")
         }
     }
 
@@ -371,6 +377,138 @@ final class UIBench {
         let session = SessionState(workspaces: states.map(\.id), keyWindow: states[0].id)
         return (session, states)
     }
+
+    // MARK: Restored network pane
+
+    /// The `restored-network-pane` launch: lists `--path`, a folder on a share, once, untimed,
+    /// through a listing cache over a store in the temporary root, and writes the store's file,
+    /// as a session that showed the folder leaves it at quit. Then, as a launch does, reads a
+    /// saved session of one window on the folder, and the cache's volume files for its pane, off
+    /// the main actor, and rebuilds the window with `WorkspaceWindows.restore` over a new cache
+    /// and listing service. B4 runs from the window shown to the frame with its cached rows. The
+    /// folder's own rows first fail the run: the folder isn't on a network volume, or the cache
+    /// didn't keep it.
+    private func restoreNetworkPane(
+        in root: TempRoot, settings: Settings, systemActions: any SystemActions
+    ) async throws {
+        let path = options.w1
+        let roots = StoreRoots(
+            caches: root.folder.appending(path: "Caches"),
+            applicationSupport: root.folder.appending(path: "Application Support"))
+        let logged = OSAllocatedUnfairLock(initialState: [String]())
+        let log: @Sendable (String) -> Void = { line in logged.withLock { $0.append(line) } }
+        let filling = ListingCache(store: ListingCacheStore(roots: roots, log: log))
+        let listed: ListingUpdate = await withCheckedContinuation { continuation in
+            ListingService(cache: filling).load(Location(path: path)) { update in
+                switch update {
+                case .full, .failed, .volumeGone: continuation.resume(returning: update)
+                case .cached, .firstBatch, .slow, .gaveUp: break
+                }
+            }
+        }
+        guard case .full = listed else { throw Failure("listing \(path) ended \(listed)") }
+        await filling.flush()
+
+        let problems = OSAllocatedUnfairLock(initialState: [StoreProblem]())
+        let report: @Sendable (StoreProblem) -> Void = { problem in
+            problems.withLock { $0.append(problem) }
+        }
+        let layout = Layout()
+        let workspace = WorkspaceState(
+            id: UUID(), name: nil, frame: Rect(x: 0, y: 0, width: 1000, height: 700),
+            tabs: [
+                TabState(
+                    layout: layout,
+                    panes: [
+                        layout.focused: TabState.PaneState(
+                            location: Location(path: path), viewMode: .list, history: History(),
+                            selection: [], cursor: nil, sortColumn: .name, sortAscending: true)
+                    ])
+            ], selectedTab: 0, showsSidebar: false)
+        // Not synced to the disk, as in `restoreSession`.
+        let writer = WorkspaceStore(
+            roots: roots, report: report, write: { data, url in try data.write(to: url) })
+        await writer.save(workspace)
+        await writer.saveSession(SessionState(workspaces: [workspace.id], keyWindow: workspace.id))
+        await writer.flush()
+        let contents = await WorkspaceStore(roots: roots, report: report).load()
+        let cache = ListingCache(store: ListingCacheStore(roots: roots, log: log))
+        await cache.restore(contents)
+        if let problem = problems.withLock({ $0.first }) {
+            throw Failure("the restored session's store reported a problem: \(problem)")
+        }
+        if let line = logged.withLock({ $0.first }) {
+            throw Failure("the listing cache's store logged: \(line)")
+        }
+
+        // A pasteboard of its own, so the bench never reads or writes the user's clipboard.
+        let pasteboard = NSPasteboard(
+            name: NSPasteboard.Name("searcher-bench-\(UUID().uuidString)"))
+        let windows = WorkspaceWindows(
+            service: ListingService(cache: cache), systemActions: systemActions,
+            settings: settings, folderSizes: nil,
+            clipboard: PasteboardFileClipboard(pasteboard: pasteboard), store: nil)
+        windows.showsWindows = false
+        restored = windows
+        guard let key = windows.restore(contents) else { throw Failure("nothing was restored") }
+        controller = key
+        key.paneViewController.onShow = { [weak self] in self?.paneShown() }
+        let window = try requireWindow()
+        place(window)
+        // In front of other apps' windows, without activating the app or making it key.
+        window.orderFrontRegardless()
+        window.makeFirstResponder(key.paneViewController.keyView)
+        LaunchWarmup.shared.start(after: window)
+        // The launch, with the listing and the restore, ends as the window shows; its stalls
+        // are the launch's.
+        signposter.endInterval(UIBenchRecord.launchSpan, launchInterval)
+        spans.append(
+            TimedSpan(name: "\(UIBenchRecord.launchSpan)", start: spanStart, end: .now))
+        let start = FrameCommitTimer.now
+        let interval = begin(Self.restoredCachedRowsSpan)
+        let shown: Result<Double, Failure> = await withCheckedContinuation { continuation in
+            whenShown = { [self] pane in
+                switch pane.state {
+                case .loading, .slow:
+                    return false
+                case .cachedRefreshing(let rows, _):
+                    guard rows.count > 0 else {
+                        continuation.resume(
+                            returning: .failure(Failure("\(path)'s cached listing is empty")))
+                        return true
+                    }
+                case .partial, .loaded:
+                    continuation.resume(
+                        returning: .failure(
+                            Failure(
+                                "\(path) showed its own rows before cached ones: it isn't on a "
+                                    + "network volume, or the cache didn't keep it")))
+                    return true
+                case .offline:
+                    continuation.resume(returning: .failure(Failure("\(path) went offline")))
+                    return true
+                case .denied(let error), .failed(let error):
+                    continuation.resume(
+                        returning: .failure(Failure("\(path) could not be listed: \(error)")))
+                    return true
+                }
+                timeFrame(from: start, in: window, Self.restoredCachedRowsSpan, interval) {
+                    continuation.resume(returning: .success($0))
+                }
+                return true
+            }
+            // Rows that showed before the check was set.
+            paneShown()
+        }
+        record.restoredCachedRows.append(try shown.get())
+        let warmUpStart = ContinuousClock.now
+        try await waitUntilVisible(window)
+        await LaunchWarmup.shared.finished()
+        spans.append(TimedSpan(name: UIBenchRecord.warmUpSpan, start: warmUpStart, end: .now))
+    }
+
+    /// The span `restoreNetworkPane` times.
+    private static let restoredCachedRowsSpan: StaticString = "restored cached rows"
 
     /// Every span the CI run times after the launch.
     private func runCI() async throws {

@@ -4,10 +4,12 @@ import Foundation
 
 /// Keeps `ListingCache`'s volumes on disk, with `FolderSizeCache`'s sizes on each: one binary
 /// plist per network volume in `<caches root>/listings/`, at most `byteCap` bytes in all, the
-/// least recently written file dropped first. Saves are written `writeDelay` after the first
-/// unwritten one, so a burst of loads costs one write per volume. A file that doesn't decode to
-/// the one stored shape is deleted and logged, and reads as empty. See
-/// docs/decisions/0039-listing-cache.md and docs/decisions/0043-folder-sizes.md.
+/// least recently written file dropped first, except the files of volumes a saved workspace
+/// shows (`keep`). Saves are written `writeDelay` after the first unwritten one, so a burst of
+/// loads costs one write per volume. A file that doesn't decode to the one stored shape, or
+/// isn't named as a volume's file is, is deleted and logged, and reads as empty. See
+/// docs/decisions/0039-listing-cache.md, docs/decisions/0043-folder-sizes.md and
+/// docs/decisions/0081-restored-network-panes.md.
 public actor ListingCacheStore {
     /// The default for `byteCap`.
     public static let defaultByteCap = 50_000_000
@@ -30,6 +32,8 @@ public actor ListingCacheStore {
     private var writeScheduled = false
     /// Volumes whose last save encoded to more than `byteCap`, logged once until one fits.
     private var oversized: Set<VolumeIdentity> = []
+    /// Volumes whose files `trim` leaves, however far over `byteCap`.
+    private var kept: Set<VolumeIdentity> = []
 
     /// A store in `roots.caches/listings`. `log` gets a line for each file discarded, dropped or
     /// not written. `write` replaces a file's contents; tests pass one that records its calls.
@@ -86,6 +90,54 @@ public actor ListingCacheStore {
         }
     }
 
+    /// Keeps the files of `volumes`, those of a saved workspace's folders, through `byteCap`,
+    /// in place of the volumes kept before.
+    public func keep(_ volumes: Set<VolumeIdentity>) {
+        kept = volumes
+    }
+
+    /// The volume whose file was written for the longest mount point holding `path`, and its
+    /// folders, for a path the mount table doesn't place on a volume, as when a share a pane was
+    /// restored on isn't mounted. Of the volumes mounted there one after the other, the one
+    /// written last. Nil when there is no such file, or when it doesn't decode, which deletes it.
+    /// Reads no volume, only the names in the store's folder and the file.
+    public func volume(holding path: String) -> (
+        volume: VolumeIdentity, folders: [String: ListingCache.Folder]
+    )? {
+        let files: [(url: URL, modified: Date)]
+        do {
+            files = try FileManager.default.contentsOfDirectory(
+                at: folder, includingPropertiesForKeys: [.contentModificationDateKey]
+            ).map { url in
+                guard
+                    let modified = try url.resourceValues(
+                        forKeys: [.contentModificationDateKey]).contentModificationDate
+                else { throw MissingAttributes(path: url.path) }
+                return (url, modified)
+            }
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return nil
+        } catch {
+            log("looking in \(folder.path) for the volume of \(path) failed: \(error)")
+            return nil
+        }
+        for mountPoint in Location(path: path).ancestors.reversed().map(\.path) {
+            let prefix = Self.digest(mountPoint) + "-"
+            let candidates = files.filter { $0.url.lastPathComponent.hasPrefix(prefix) }
+                .sorted { $0.modified > $1.modified }
+            for candidate in candidates {
+                guard let stored = read(candidate.url) else { continue }
+                let volume = VolumeIdentity(
+                    device: stored.device, mountPoint: stored.mountPoint, kind: .network)
+                if sizes[volume] == nil {
+                    sizes[volume] = stored.sizes.mapValues(\.record)
+                }
+                return (volume, pending[volume] ?? stored.folders.mapValues(\.folder))
+            }
+        }
+        return nil
+    }
+
     /// The folders kept for `volume`: the latest save, written or not. Empty when there is no file,
     /// or when the file doesn't decode, which deletes it.
     public func load(_ volume: VolumeIdentity) -> [String: ListingCache.Folder] {
@@ -105,7 +157,12 @@ public actor ListingCacheStore {
     /// The volume's file, decoded; nil when there is none, or when it doesn't decode, which
     /// deletes it.
     private func read(_ volume: VolumeIdentity) -> StoredVolume? {
-        let url = url(for: volume)
+        read(url(for: volume))
+    }
+
+    /// The file at `url`, decoded; nil when there is none, or when it doesn't decode or holds a
+    /// volume whose file it isn't, which deletes it.
+    private func read(_ url: URL) -> StoredVolume? {
         do {
             let data: Data
             do {
@@ -114,7 +171,9 @@ public actor ListingCacheStore {
                 return nil
             }
             let stored = try PropertyListDecoder().decode(StoredVolume.self, from: data)
-            guard stored.device == volume.device, stored.mountPoint == volume.mountPoint else {
+            let volume = VolumeIdentity(
+                device: stored.device, mountPoint: stored.mountPoint, kind: .network)
+            guard self.url(for: volume).lastPathComponent == url.lastPathComponent else {
                 throw WrongVolume(device: stored.device, mountPoint: stored.mountPoint)
             }
             return stored
@@ -176,14 +235,31 @@ public actor ListingCacheStore {
         try write(data, url)
     }
 
-    /// The file `volume`'s folders are kept in. Named by a hash of the device and mount point,
-    /// which can be longer than a file name allows.
+    /// The file `volume`'s folders are kept in. Named by a hash of the mount point, so the files
+    /// of a mount point can be found without its device, then a hash of the device and mount
+    /// point, which together can be longer than a file name allows.
     nonisolated func url(for volume: VolumeIdentity) -> URL {
-        let digest = SHA256.hash(data: Data("\(volume.device)\0\(volume.mountPoint)".utf8))
-        return folder.appending(path: digest.map { String(format: "%02x", $0) }.joined() + ".plist")
+        folder.appending(
+            path: Self.digest(volume.mountPoint) + "-"
+                + Self.digest("\(volume.device)\0\(volume.mountPoint)") + ".plist")
     }
 
-    /// Deletes the least recently written files until the folder fits `byteCap`.
+    /// `text`'s SHA-256 in hexadecimal.
+    private static func digest(_ text: String) -> String {
+        SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Whether `name` has the shape `url(for:)` gives a file's name: two digests joined by `-`.
+    private static func isVolumeFileName(_ name: String) -> Bool {
+        guard name.hasSuffix(".plist") else { return false }
+        let stem = Array(name.utf8.dropLast(".plist".utf8.count))
+        let hex = Set("0123456789abcdef".utf8)
+        return stem.count == 129 && stem[64] == UInt8(ascii: "-")
+            && stem.enumerated().allSatisfy { $0.offset == 64 || hex.contains($0.element) }
+    }
+
+    /// Deletes every file not named as a volume's file is, then the least recently written files
+    /// until the folder fits `byteCap`, leaving the files of `kept` volumes.
     private func trim() {
         let keys: [URLResourceKey] = [.fileSizeKey, .contentModificationDateKey]
         do {
@@ -195,9 +271,16 @@ public actor ListingCacheStore {
                 else { throw MissingAttributes(path: url.path) }
                 return (url: url, size: size, modified: modified)
             }
+            for file in files where !Self.isVolumeFileName(file.url.lastPathComponent) {
+                try FileManager.default.removeItem(at: file.url)
+                log("discarded \(file.url.path), which isn't named as a cached listing file is")
+            }
+            files.removeAll { !Self.isVolumeFileName($0.url.lastPathComponent) }
             files.sort { $0.modified < $1.modified }
             var total = files.reduce(0) { $0 + $1.size }
-            for file in files where total > byteCap {
+            let keptNames = Set(kept.map { url(for: $0).lastPathComponent })
+            for file in files
+            where total > byteCap && !keptNames.contains(file.url.lastPathComponent) {
                 try FileManager.default.removeItem(at: file.url)
                 total -= file.size
                 log("dropped \(file.url.path) to keep cached listings under \(byteCap) bytes")

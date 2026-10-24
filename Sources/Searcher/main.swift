@@ -28,8 +28,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let workspaceStore: WorkspaceStore?
     /// What `workspaceStore` reports it couldn't read or write, for the windows to show.
     private let storeProblems: AsyncStream<StoreProblem>?
-    /// The store's read of the last session, started as the app starts so it runs off the main
-    /// actor while AppKit finishes launching; nil in a bench launch.
+    /// The store's read of the last session, then the listing cache's read of the volume files
+    /// its panes' folders are kept in, started as the app starts so they run off the main actor
+    /// while AppKit finishes launching; nil in a bench launch.
     private let restoring: Task<WorkspaceStore.Contents, Never>?
 
     init(bench: UIBench?) {
@@ -65,7 +66,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             storeProblems = problems
             let workspaceStore = WorkspaceStore(roots: roots, report: { problemFeed.yield($0) })
             self.workspaceStore = workspaceStore
-            restoring = Task { await workspaceStore.load() }
+            restoring = Task {
+                let contents = await workspaceStore.load()
+                // Before any pane loads, so a restored pane on a share finds its rows in memory,
+                // and one on a share that isn't mounted finds them at all. Reads the cache's
+                // files and the mount table, never a share.
+                await cache.restore(contents)
+                return contents
+            }
         }
     }
 

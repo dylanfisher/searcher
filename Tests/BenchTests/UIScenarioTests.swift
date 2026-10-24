@@ -30,6 +30,8 @@ private func samples(for scenario: Scenario, atFraction fraction: Double) throws
         record.tenPaneOpen = try at("B2.W2", 20)
     case .restoredSession:
         record.launch = try at("B1", UIBenchReport.launches)
+    case .restoredNetworkPane:
+        record.restoredCachedRows = try at("B4", UIBenchReport.launches)
     }
     return record
 }
@@ -56,7 +58,9 @@ func scenarioOverBudgetFailsNamingEachCase(_ scenario: Scenario) throws {
             .cases.compactMap { $0.budget?.id }
     }
     #expect(
-        budgets == [["B6", "B6", "B6"], ["B3"], ["B4"], ["B6"], ["B6", "B6", "B2.W2"], ["B1"]])
+        budgets == [
+            ["B6", "B6", "B6"], ["B3"], ["B4"], ["B6"], ["B6", "B6", "B2.W2"], ["B1"], ["B4"],
+        ])
 }
 
 @Test func restoredSessionTimesEachLaunchToTheRestoredWindows() throws {
@@ -74,6 +78,28 @@ func scenarioOverBudgetFailsNamingEachCase(_ scenario: Scenario) throws {
         try BenchArguments.parse(["--ui", "/b/Searcher.app", "--scenario", "restored-session"])
             == .ui(app: "/b/Searcher.app", folder: nil, scenario: .restoredSession))
     #expect(UIBenchReport.keyPresses(launch: 0, scenario: .restoredSession) == 0)
+}
+
+@Test func restoredNetworkPaneTimesEachLaunchToTheCachedRows() throws {
+    let report = try UIBenchReport(
+        record: try samples(for: .restoredNetworkPane, atFraction: 0.5),
+        scenario: .restoredNetworkPane)
+    #expect(report.cases.map(\.name) == ["restored window shown → cached rows frame"])
+    #expect(report.cases[0].samples.count == UIBenchReport.launches)
+    #expect(UIBenchReport.launches(for: .restoredNetworkPane) == UIBenchReport.launches)
+    #expect(UIBenchReport.keyPresses(launch: 0, scenario: .restoredNetworkPane) == 0)
+}
+
+@Test func restoredNetworkPaneParsesWithItsPath() throws {
+    let folder = FileManager.default.temporaryDirectory.path
+    #expect(
+        try BenchArguments.parse(
+            ["--ui", "/b/Searcher.app", "--scenario", "restored-network-pane", "--path", folder])
+            == .ui(app: "/b/Searcher.app", folder: folder, scenario: .restoredNetworkPane))
+    let options = UIBenchOptions(
+        output: "/o.json", w1: folder, w2: folder, keyPresses: 0, tempPrefix: "p",
+        scenario: .restoredNetworkPane, folders: [])
+    #expect(UIBenchOptions(arguments: ["Searcher"] + options.arguments) == options)
 }
 
 @Test func scenarioReportsOnlyItsOwnSpans() throws {
@@ -126,7 +152,9 @@ func scenarioOverBudgetFailsNamingEachCase(_ scenario: Scenario) throws {
     #expect(!report.passed)
 }
 
-@Test(arguments: [Scenario.columnKeys, .cold, .revisit, .splits, .restoredSession])
+@Test(arguments: [
+    Scenario.columnKeys, .cold, .revisit, .splits, .restoredSession, .restoredNetworkPane,
+])
 func otherScenariosReportStallsOnly(_ scenario: Scenario) throws {
     var record = try samples(for: scenario, atFraction: 0.5)
     record.stalls = [UIBenchRecord.Stall(milliseconds: 60, span: "between spans")]
@@ -143,7 +171,7 @@ func otherScenariosReportStallsOnly(_ scenario: Scenario) throws {
     } throws: { error in
         String(describing: error)
             == "unknown scenario warm; the scenarios are column-keys, cold, revisit, column-walk, "
-            + "splits, restored-session"
+            + "splits, restored-session, restored-network-pane"
     }
 }
 
@@ -152,7 +180,8 @@ func otherScenariosReportStallsOnly(_ scenario: Scenario) throws {
         try BenchArguments.parse(["--ui", "/b/Searcher.app", "--scenario"])
     } throws: { error in
         String(describing: error).contains(
-            "column-keys, cold, revisit, column-walk, splits, restored-session")
+            "column-keys, cold, revisit, column-walk, splits, restored-session, restored-network-pane"
+        )
     }
 }
 
@@ -164,7 +193,7 @@ func otherScenariosReportStallsOnly(_ scenario: Scenario) throws {
     }
 }
 
-@Test(arguments: [Scenario.cold, .revisit, .columnWalk])
+@Test(arguments: [Scenario.cold, .revisit, .columnWalk, .restoredNetworkPane])
 func pathScenarioWithoutAPathFails(_ scenario: Scenario) {
     #expect {
         try BenchArguments.parse(["--ui", "/b/Searcher.app", "--scenario", scenario.rawValue])
@@ -196,12 +225,13 @@ func pathScenarioWithoutAPathFails(_ scenario: Scenario) {
     }
 }
 
-/// A restored session gives one B1 sample per launch, so it launches as often as the CI run.
+/// A restored session gives one B1 sample per launch, and a restored network pane one B4
+/// sample, so they launch as often as the CI run.
 @Test func scenarioRunsOneLaunchAndKeepsItsOwnRecord() {
     #expect(UIBenchReport.launches(for: nil) == UIBenchReport.launches)
     #expect(UIBenchReport.launches(for: .restoredSession) == UIBenchReport.launches)
     for scenario in Scenario.allCases {
-        if scenario != .restoredSession {
+        if scenario != .restoredSession && scenario != .restoredNetworkPane {
             #expect(UIBenchReport.launches(for: scenario) == 1)
         }
         #expect(UIBenchReport.path(for: scenario) != UIBenchReport.path)

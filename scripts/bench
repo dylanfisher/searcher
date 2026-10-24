@@ -44,11 +44,12 @@
 #                         free the first time
 #   --ui --scenario <name>
 #                         one launch that times one scenario instead, and writes
-#                         .build/bench-ui-<name>.json. cold, revisit and column-walk time
-#                         a share's folder and need --path, which never has a default.
-#                         cold: once per mount; run before revisit. A second cold run on
-#                         the same mount passes with warm numbers. --help lists the
-#                         scenarios
+#                         .build/bench-ui-<name>.json. cold, revisit, column-walk and
+#                         restored-network-pane time a share's folder and need --path,
+#                         which never has a default. restored-network-pane and
+#                         restored-session launch 20 times. cold: once per mount; run
+#                         before revisit. A second cold run on the same mount passes
+#                         with warm numbers. --help lists the scenarios
 #   --help                print this, then the scenarios
 set -euo pipefail
 cd "$(dirname "$0")/.."
