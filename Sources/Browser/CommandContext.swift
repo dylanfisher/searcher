@@ -37,6 +37,9 @@ public struct CommandContext {
     /// The app's undo history of file changes, for Undo and Redo. Nil where there is none; those
     /// commands are off then, and without `fileOperations`, which runs them.
     public let undoHistory: UndoHistory?
+    /// The command runs for a key held down, repeating, rather than pressed: a row key's
+    /// repeats are one step of the selection history with its press.
+    public let isKeyRepeat: Bool
     private let givenWorkspace: Workspace?
     private let givenWorkspaces: WorkspaceList?
 
@@ -67,7 +70,8 @@ public struct CommandContext {
         fileOperations: FileOperationQueue? = nil,
         editName: (@MainActor () -> Void)? = nil,
         clipboard: CutState? = nil,
-        undoHistory: UndoHistory? = nil
+        undoHistory: UndoHistory? = nil,
+        isKeyRepeat: Bool = false
     ) {
         if let workspace {
             precondition(
@@ -88,6 +92,7 @@ public struct CommandContext {
         self.editName = editName
         self.clipboard = clipboard
         self.undoHistory = undoHistory
+        self.isKeyRepeat = isKeyRepeat
     }
 
     /// The window's tabs. A context built for one pane, as the benches and pane tests build it,

@@ -45,6 +45,9 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
     /// Builds the context menu for a right-click on a row, or below the rows at -1. Set by the
     /// list's controller.
     var contextMenu: @MainActor (_ row: Int) -> NSMenu? = { _ in nil }
+    /// Whether the command running now came from a key held down, repeating. Set only while
+    /// `keyDown` runs it.
+    private(set) var runsKeyRepeat = false
     /// Counts mouse presses in the table, so the selection changes of one press are one step of
     /// the pane's selection history.
     var pressCount = 0
@@ -85,6 +88,8 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
                 return
             }
             if let command {
+                runsKeyRepeat = event.isARepeat
+                defer { runsKeyRepeat = false }
                 run(command.id)
                 return
             }

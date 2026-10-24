@@ -51,16 +51,32 @@ public enum SelectionCommands: CommandSet {
             CommandBinding(
                 redoSelection, isEnabled: { $0.pane.canRedoSelection },
                 run: { $0.pane.redoSelection() }),
-            CommandBinding(selectNext) { $0.pane.moveSelection(by: 1) },
-            CommandBinding(selectPrevious) { $0.pane.moveSelection(by: -1) },
-            CommandBinding(extendDown) { $0.pane.moveSelection(by: 1, extending: true) },
-            CommandBinding(extendUp) { $0.pane.moveSelection(by: -1, extending: true) },
+            CommandBinding(selectNext) {
+                $0.pane.moveSelection(by: 1, isKeyRepeat: $0.isKeyRepeat)
+            },
+            CommandBinding(selectPrevious) {
+                $0.pane.moveSelection(by: -1, isKeyRepeat: $0.isKeyRepeat)
+            },
+            CommandBinding(extendDown) {
+                $0.pane.moveSelection(by: 1, extending: true, isKeyRepeat: $0.isKeyRepeat)
+            },
+            CommandBinding(extendUp) {
+                $0.pane.moveSelection(by: -1, extending: true, isKeyRepeat: $0.isKeyRepeat)
+            },
             CommandBinding(selectFirst) { $0.pane.selectFirstRow() },
             CommandBinding(selectLast) { $0.pane.selectLastRow() },
-            CommandBinding(tenRowsDown) { $0.pane.moveSelection(by: 10) },
-            CommandBinding(tenRowsUp) { $0.pane.moveSelection(by: -10) },
-            CommandBinding(pageDown) { $0.pane.moveSelection(byPages: 1) },
-            CommandBinding(pageUp) { $0.pane.moveSelection(byPages: -1) },
+            CommandBinding(tenRowsDown) {
+                $0.pane.moveSelection(by: 10, isKeyRepeat: $0.isKeyRepeat)
+            },
+            CommandBinding(tenRowsUp) {
+                $0.pane.moveSelection(by: -10, isKeyRepeat: $0.isKeyRepeat)
+            },
+            CommandBinding(pageDown) {
+                $0.pane.moveSelection(byPages: 1, isKeyRepeat: $0.isKeyRepeat)
+            },
+            CommandBinding(pageUp) {
+                $0.pane.moveSelection(byPages: -1, isKeyRepeat: $0.isKeyRepeat)
+            },
             CommandBinding(selectAll) { $0.pane.selectAll() },
         ]
     }

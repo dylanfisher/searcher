@@ -122,6 +122,38 @@ private struct Fixture {
     #expect(fixture.table.selectedRowIndexes == [1])
 }
 
+/// ↓ as AppKit sends it, first pressed or repeating while held.
+@MainActor
+private func downKey(isARepeat: Bool) throws -> NSEvent {
+    let down = functionKey(NSDownArrowFunctionKey)
+    return try #require(
+        NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: arrowFlags, timestamp: 0,
+            windowNumber: 0, context: nil, characters: down, charactersIgnoringModifiers: down,
+            isARepeat: isARepeat, keyCode: 125))
+}
+
+/// The table hands a key's repeat flag to the command, so a held ↓ is one selection step and
+/// each separate press its own.
+@MainActor @Test func aHeldArrowIsOneSelectionStepAndEachPressItsOwn() async throws {
+    let fixture = Fixture()
+    await settle { fixture.pane.state.isLoaded }
+    fixture.pane.select(Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+
+    fixture.table.keyDown(with: try downKey(isARepeat: false))
+    fixture.table.keyDown(with: try downKey(isARepeat: true))
+    #expect(fixture.pane.selection.cursor == ExactName("docs"))
+    fixture.pane.undoSelection()
+    #expect(fixture.pane.selection.cursor == ExactName("a.txt"))
+    #expect(!fixture.pane.canUndoSelection)
+
+    fixture.table.keyDown(with: try downKey(isARepeat: false))
+    fixture.table.keyDown(with: try downKey(isARepeat: false))
+    fixture.pane.undoSelection()
+    #expect(fixture.pane.selection.cursor == ExactName("b.txt"))
+    #expect(fixture.pane.canUndoSelection)
+}
+
 @MainActor @Test func cmdDownOpensTheSelectedFolderAndCmdUpGoesBack() async throws {
     let fixture = Fixture()
     await settle { fixture.pane.state.isLoaded }

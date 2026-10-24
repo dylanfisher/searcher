@@ -52,8 +52,13 @@ public enum FileCommands: CommandSet {
                     guard canChangeSelection(context), let queue = context.fileOperations else {
                         return
                     }
-                    context.pane.moveCursorPastSelectionOnceGone()
-                    queue.submit(.trash(selectedPaths(in: context.pane)))
+                    let pane = context.pane
+                    let trash = pane.moveCursorPastSelectionOnceGone()
+                    let finished = queue.submit(.trash(selectedPaths(in: pane)))
+                    Task { [weak pane] in
+                        let state = await finished.value
+                        pane?.trashDidFinish(trash, state)
+                    }
                 }),
             CommandBinding(
                 newFolder, isEnabled: { $0.fileOperations != nil },

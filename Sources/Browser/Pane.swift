@@ -1249,17 +1249,19 @@ public final class Pane {
 
     /// Moves the cursor `delta` rows, stopping at the first and last row; see `Selection.moved`.
     /// A plain move selects the cursor's row alone; an extending one selects from the anchor.
-    public func moveSelection(by delta: Int, extending: Bool = false) {
+    /// `isKeyRepeat` says the key is held, so the move joins the key's step in the selection
+    /// history.
+    public func moveSelection(by delta: Int, extending: Bool = false, isKeyRepeat: Bool = false) {
         guard let listing = state.listing else { return }
         set(
             onMain { selection.moved(by: delta, in: listing, extending: extending) },
-            recordingAs: .move(by: delta, extending: extending))
+            recordingAs: .move(by: delta, extending: extending, isRepeat: isKeyRepeat))
     }
 
     /// Moves the cursor `pages` screens of rows, `visibleRowCount` rows each.
-    public func moveSelection(byPages pages: Int) {
+    public func moveSelection(byPages pages: Int, isKeyRepeat: Bool = false) {
         // A pane squeezed below one row's height still moves a row per page.
-        moveSelection(by: pages * max(visibleRowCount, 1))
+        moveSelection(by: pages * max(visibleRowCount, 1), isKeyRepeat: isKeyRepeat)
     }
 
     public func selectFirstRow() {
@@ -1283,70 +1285,124 @@ public final class Pane {
     /// The selections before each change here, per folder, for Undo and Redo Selection. Tests
     /// replace it with one on a clock they advance.
     var selectionHistory = SelectionHistory()
+    /// `canUndoSelection` and `canRedoSelection` as last found, at the state and selection
+    /// versions they were found at. Menus ask on every key equivalent, and each answer resolves
+    /// steps against the rows; the history changes only with the selection version.
+    private var selectionStepsFound = StepsFound(state: -1, selection: -1)
 
-    public var canUndoSelection: Bool {
-        state.listing != nil && selectionHistory.canUndo(in: location)
+    private struct StepsFound {
+        let state: Int
+        let selection: Int
+        var back: Bool?
+        var forward: Bool?
     }
 
+    /// Whether Undo Selection would change the selection: a step back here selects something
+    /// still listed other than the current selection.
+    public var canUndoSelection: Bool {
+        stepFound(\.back) { selectionHistory.canUndo(in: location, restoring: restorable) }
+    }
+
+    /// Whether Redo Selection would change the selection, as `canUndoSelection`.
     public var canRedoSelection: Bool {
-        state.listing != nil && selectionHistory.canRedo(in: location)
+        stepFound(\.forward) { selectionHistory.canRedo(in: location, restoring: restorable) }
     }
 
     /// Selects what was selected before the last change in this folder, with its cursor and
-    /// anchor. Entries no longer listed are left out. Never navigates.
+    /// anchor, leaving out entries no longer listed. Skips steps that would select nothing
+    /// listed or what is selected now. Never navigates.
     public func undoSelection() {
-        guard state.listing != nil,
-            let step = selectionHistory.undo(selection, in: location)
+        guard let step = selectionHistory.undo(selection, in: location, restoring: restorable)
         else { return }
-        restore(step)
+        set(step, recordingAs: nil)
     }
 
-    /// Selects what the last Undo Selection here stepped back from.
+    /// Selects what the last Undo Selection here stepped back from, skipping as it does.
     public func redoSelection() {
-        guard state.listing != nil,
-            let step = selectionHistory.redo(selection, in: location)
+        guard let step = selectionHistory.redo(selection, in: location, restoring: restorable)
         else { return }
-        restore(step)
+        set(step, recordingAs: nil)
     }
 
-    /// Shows a step provisionally, the rows near its cursor, and settles it off the main thread,
-    /// as a selection changed while a load landed is: finding a large step's rows is work per
-    /// entry. A complete listing drops the names it doesn't have.
-    private func restore(_ step: Selection) {
-        guard let listing = state.listing else { return }
+    /// `step` resolved against the rows shown, or nil when it would select nothing listed and
+    /// has no listed cursor, or would select what is selected now. A complete listing drops the
+    /// names it doesn't have. Work per entry of the step, on the main thread: a step is restored
+    /// at once, as a key's move is shown.
+    private func restorable(_ step: Selection) -> Selection? {
+        guard let listing = state.listing else { return nil }
         let complete = if case .loaded = state { true } else { false }
-        set(
-            onMain {
-                step.provisional(
-                    in: listing, after: .loaded(complete: complete),
-                    radius: max(visibleRowCount, 1))
-            }, recordingAs: nil)
+        let restored = onMain { step.resolved(in: listing, after: .loaded(complete: complete)) }
+        guard !restored.isEmpty || restored.cursorRow(in: listing) != nil,
+            restored != selection
+        else { return nil }
+        return restored
+    }
+
+    /// The answer kept in `selectionStepsFound` at `side`, or `find`'s, kept.
+    private func stepFound(
+        _ side: WritableKeyPath<StepsFound, Bool?>, _ find: () -> Bool
+    ) -> Bool {
+        var found = selectionStepsFound
+        if found.state != stateVersion || found.selection != selectionVersion {
+            found = StepsFound(state: stateVersion, selection: selectionVersion)
+        }
+        if let answer = found[keyPath: side] { return answer }
+        let answer = find()
+        found[keyPath: side] = answer
+        selectionStepsFound = found
+        return answer
     }
 
     // MARK: - The cursor after a trash
 
-    /// Set by Move to Trash: the cursor's entry, the entries after and before the cursor's run of
-    /// selected rows, and the selection version then. If the trashed entries leave the rows
-    /// before the selection changes otherwise, the cursor goes to the first of those two still
-    /// listed (`selectNextIfTrashLanded`).
-    private var cursorAfterTrash:
-        (selectionVersion: Int, cursor: ExactName, after: ExactName?, before: ExactName?)?
+    /// Set by Move to Trash: which trash it was, the cursor's entry, the entries after and before
+    /// the cursor's run of selected rows, and the selection version then. If the trashed entries
+    /// leave the rows before the selection changes otherwise, the cursor goes to the first of
+    /// those two still listed (`selectNextIfTrashLanded`).
+    private(set) var cursorAfterTrash:
+        (
+            trash: Int, selectionVersion: Int, cursor: ExactName, after: ExactName?,
+            before: ExactName?
+        )?
+    /// Counts the trashes `moveCursorPastSelectionOnceGone` noted.
+    private var trashCount = 0
 
     /// Notes where the cursor goes once the selection, about to be trashed, leaves the rows: to
     /// the row after the cursor's run of selected rows in the current sort, or the row before it
     /// when the run ends the list. Does nothing on the press itself, since the rows go only when
-    /// the trash lands.
-    func moveCursorPastSelectionOnceGone() {
+    /// the trash lands. Returns the trash's number, for `trashDidFinish`.
+    func moveCursorPastSelectionOnceGone() -> Int {
+        trashCount += 1
         cursorAfterTrash = nil
         guard let listing = state.listing, let cursor = selection.cursor,
             let row = selection.cursorRow(in: listing),
             let run = selectedRows.rangeView.first(where: { $0.contains(row) })
-        else { return }
+        else { return trashCount }
         cursorAfterTrash = (
-            selectionVersion, cursor,
+            trashCount, selectionVersion, cursor,
             run.upperBound < listing.count ? ExactName(listing[run.upperBound].name) : nil,
             run.lowerBound > 0 ? ExactName(listing[run.lowerBound - 1].name) : nil
         )
+        return trashCount
+    }
+
+    /// Trash `trash` ended as `state` says. Unless it trashed or deleted the cursor's entry and
+    /// every other item, the cursor moves nowhere: a trash that failed, partly failed or was
+    /// cancelled at a question leaves nothing waiting for a row that may leave later for another
+    /// reason. A trash that worked keeps waiting, since the folder change it makes usually
+    /// arrives after it ends.
+    func trashDidFinish(_ trash: Int, _ state: OperationState) {
+        guard let pending = cursorAfterTrash, pending.trash == trash else { return }
+        let cursorPath = location.child(named: pending.cursor.name).path
+        let removedCursor = state.record.changes.contains { change in
+            switch change {
+            case .trashed(let path, _), .deleted(let path): path == cursorPath
+            case .created, .moved, .replaced, .putBack, .uncreated: false
+            }
+        }
+        if state.phase != .done || !removedCursor {
+            cursorAfterTrash = nil
+        }
     }
 
     /// Moves the cursor as `moveCursorPastSelectionOnceGone` noted, once the rows shown no longer

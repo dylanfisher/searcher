@@ -27,11 +27,11 @@ private func names(_ rows: ClosedRange<Int>) -> Set<ExactName> {
 }
 
 @MainActor
-private func run(_ chord: KeyChord, in fixture: PaneFixture) throws {
+private func run(_ chord: KeyChord, in fixture: PaneFixture, isKeyRepeat: Bool = false) throws {
     let registry = try AppCommands.registry()
     let command = try #require(registry.command(for: chord), "nothing is bound to \(chord)")
     let binding = try #require(AppCommands.bindings.first { $0.command == command })
-    binding.run(CommandContext(pane: fixture.pane))
+    binding.run(CommandContext(pane: fixture.pane, isKeyRepeat: isKeyRepeat))
 }
 
 @MainActor
@@ -363,26 +363,39 @@ private func isEnabled(_ chord: KeyChord, in fixture: PaneFixture) throws -> Boo
     #expect(try !isEnabled(shiftCommandU, in: fixture))
 }
 
-@MainActor @Test func aHeldDownArrowIsOneStepAndAPauseStartsAnother() async throws {
+@MainActor @Test func threeTapsOfDownAreThreeSteps() async throws {
+    let fixture = await rows25()
+    put(fixture, at: 2)
+
+    for _ in 0..<3 {
+        try run(down, in: fixture)
+    }
+
+    for row in [4, 3, 2] {
+        try run(commandU, in: fixture)
+        await settle { fixture.pane.selection.isSettled }
+        #expect(fixture.pane.selection == Selection([name(row)], cursor: name(row)))
+    }
+    #expect(try !isEnabled(commandU, in: fixture))
+}
+
+@MainActor @Test func aHeldDownArrowIsOneStepHoweverLongItRepeats() async throws {
     let fixture = await rows25()
     let clock = ManualClock()
     fixture.pane.selectionHistory = SelectionHistory(clock: clock)
     put(fixture, at: 2)
 
-    for _ in 0..<5 {
-        try run(down, in: fixture)
-        clock.advance(by: .milliseconds(35))
-    }
-    clock.advance(by: .seconds(2))
     try run(down, in: fixture)
-    #expect(fixture.pane.selection.cursor == name(8))
+    for _ in 0..<4 {
+        clock.advance(by: .seconds(2))
+        try run(down, in: fixture, isKeyRepeat: true)
+    }
+    #expect(fixture.pane.selection.cursor == name(7))
 
     try run(commandU, in: fixture)
     await settle { fixture.pane.selection.isSettled }
-    #expect(fixture.pane.selection == Selection([name(7)], cursor: name(7)))
-    try run(commandU, in: fixture)
-    await settle { fixture.pane.selection.isSettled }
     #expect(fixture.pane.selection == Selection([name(2)], cursor: name(2)))
+    #expect(try !isEnabled(commandU, in: fixture))
 }
 
 @MainActor @Test func aTypeToSelectBurstIsOneStep() async throws {
@@ -414,6 +427,41 @@ private func isEnabled(_ chord: KeyChord, in fixture: PaneFixture) throws -> Boo
 
     #expect(fixture.pane.selection.members == .only([name(3)]))
     #expect(fixture.pane.selection.rows(in: try #require(fixture.pane.state.listing)) == [3])
+}
+
+@MainActor @Test func commandUSkipsAStepWhoseEntriesAreAllGone() async throws {
+    let fixture = await rows25()
+    put(fixture, at: 3)
+    put(fixture, at: 10)
+    put(fixture, at: 12)
+    let version = fixture.pane.stateVersion
+    fixture.pane.apply(.patches([.remove(name: "r10")]), at: fixture.pane.location)
+    await settle { fixture.pane.stateVersion != version }
+
+    try run(commandU, in: fixture)
+    await settle { fixture.pane.selection.isSettled }
+    #expect(fixture.pane.selection == Selection([name(3)], cursor: name(3)))
+    #expect(try !isEnabled(commandU, in: fixture))
+
+    try run(shiftCommandU, in: fixture)
+    await settle { fixture.pane.selection.isSettled }
+    #expect(fixture.pane.selection == Selection([name(12)], cursor: name(12)))
+}
+
+/// A step that would select what is selected now, here because its other entry left the
+/// folder, is no step: with nothing else, Cmd-U is off and does nothing.
+@MainActor @Test func commandUSkipsAStepThatWouldRestoreTheCurrentSelection() async throws {
+    let fixture = await rows25()
+    fixture.pane.select(Selection(names(3...4), cursor: name(3), anchor: name(3)))
+    put(fixture, at: 3)
+    let version = fixture.pane.stateVersion
+    fixture.pane.apply(.patches([.remove(name: "r04")]), at: fixture.pane.location)
+    await settle { fixture.pane.stateVersion != version }
+    let selectionVersion = fixture.pane.selectionVersion
+
+    #expect(try !isEnabled(commandU, in: fixture))
+    try run(commandU, in: fixture)
+    #expect(fixture.pane.selectionVersion == selectionVersion)
 }
 
 /// Each folder keeps its own steps, so Cmd-U never navigates: in a folder with none it does
