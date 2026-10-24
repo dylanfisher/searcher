@@ -464,6 +464,29 @@ private func isEnabled(_ chord: KeyChord, in fixture: PaneFixture) throws -> Boo
     #expect(fixture.pane.selectionVersion == selectionVersion)
 }
 
+/// A click's rows settle off the main thread into the selection a step already holds, which
+/// changes no version; Cmd-U, asked before, is off once they settle.
+@MainActor @Test func commandUIsOffOnceAClickSettlesIntoItsOnlyStep() async throws {
+    let fixture = await rows25()
+    let pane = fixture.pane
+    put(fixture, at: 5)
+    put(fixture, at: 3)
+    let version = pane.stateVersion
+    pane.apply(.patches([.remove(name: "r05")]), at: pane.location)
+    await settle { pane.stateVersion != version }
+    pane.select(Selection())
+    let naming = DispatchQueue(label: "naming")
+    naming.suspend()
+    pane.settleQueue = naming
+
+    pane.select(rows: [3], cursor: name(3), anchor: name(3))
+    #expect(try isEnabled(commandU, in: fixture))
+    naming.resume()
+    await settle { pane.selection.isSettled }
+
+    #expect(try !isEnabled(commandU, in: fixture))
+}
+
 /// Each folder keeps its own steps, so Cmd-U never navigates: in a folder with none it does
 /// nothing, and back in the first folder it steps through that folder's.
 @MainActor @Test func selectionUndoStaysInTheFolderAndEachFolderKeepsItsSteps() async throws {
