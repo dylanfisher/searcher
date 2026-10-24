@@ -84,7 +84,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let windows = windows
         Task {
             let limit = String(describing: Self.quitLimit)
-            // First: it takes a few small writes, and losing it loses the windows.
+            // First: it takes a few small writes, and losing it loses the windows. Before the
+            // restore runs it writes nothing, so the session on disk stays for the next launch.
+            if windows.awaitsRestore {
+                Logger(category: "workspaces").notice(
+                    "quitting before the last session was restored; it stays as saved")
+            }
             if !(await windows.saveBeforeQuit(by: deadline)) {
                 Logger(category: "workspaces").fault(
                     "the windows weren't saved in \(limit, privacy: .public); quitting anyway")
@@ -119,6 +124,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             preconditionFailure("a launch that isn't a bench has no workspace store")
         }
         windows.follow(storeProblems: storeProblems)
+        // Until the restore runs, a quit or a window opened meanwhile saves nothing over the
+        // session being read.
+        windows.holdSavesUntilRestore()
         Task {
             // The store reads on its own actor, so the main thread waits on no file.
             let contents = await restoring.value
@@ -143,11 +151,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     /// A Dock click with no browser window open opens one. With a window open, even a minimized
-    /// one, AppKit's own handling brings it back.
+    /// one, AppKit's own handling brings it back. While the last session is being read, the
+    /// click waits for the restore, which opens the windows.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool)
         -> Bool
     {
-        guard bench == nil, windows.controllers.isEmpty else { return true }
+        guard bench == nil else { return true }
+        if windows.awaitsRestore { return false }
+        guard windows.opensWindowOnReopen else { return true }
         openHomeWindow()
         return false
     }

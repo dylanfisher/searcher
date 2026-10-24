@@ -244,6 +244,196 @@ private func frame(of controller: BrowserWindowController) throws -> CGRect {
     #expect(session == SessionState(workspaces: [kept.workspace.id], keyWindow: kept.workspace.id))
 }
 
+/// Polls `condition` for up to 5 seconds.
+@MainActor
+private func waitUntil(_ condition: () -> Bool) async -> Bool {
+    let deadline = ContinuousClock.now + .seconds(5)
+    while !condition() {
+        guard ContinuousClock.now < deadline else { return false }
+        try? await Task.sleep(for: .milliseconds(2))
+    }
+    return true
+}
+
+/// Windows whose saves wait on a manual clock, saving to a store that records its writes and
+/// whose own write delay never passes.
+@MainActor
+private final class SavingFixture {
+    let folder: TemporaryFolder
+    let writes = EventLog<(Data, URL)>()
+    let clock = ManualClock()
+    let store: WorkspaceStore
+    let windows: WorkspaceWindows
+    private var seen = 0
+
+    init() throws {
+        folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
+        store = recordingStore(folder, writes: writes)
+        windows = makeWindows(store: store)
+        windows.saveClock = WorkspaceWindows.SaveClock(clock)
+    }
+
+    /// The files the windows have handed the store since the last call, written now.
+    func handed() async -> [String] {
+        await store.flush()
+        let all = writes.all
+        defer { seen = all.count }
+        return all[seen...].map { $0.1.lastPathComponent }
+    }
+
+    /// The files handed once the windows hand any, waiting up to 5 seconds.
+    func handedOnceSaved() async -> [String] {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while ContinuousClock.now < deadline {
+            let files = await handed()
+            if !files.isEmpty { return files }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        Issue.record("nothing was saved in 5 s")
+        return []
+    }
+
+    /// Waits for the save wait to be asleep on the clock.
+    func waitForSaveWait(sourceLocation: SourceLocation = #_sourceLocation) async {
+        let clock = clock
+        #expect(await waitUntil { clock.waitingSleeps == 1 }, sourceLocation: sourceLocation)
+    }
+}
+
+@MainActor @Test func eachChangeExtendsTheSaveWait() async throws {
+    let fixture = try SavingFixture()
+    let controller = fixture.windows.open(at: Location(path: "/root"))
+    let id = controller.workspace.id
+    let pane = controller.workspace.selectedTab.focusedPane
+    await settle { pane.state.isLoaded }
+    await fixture.waitForSaveWait()
+    let unsaved = await fixture.handed()
+    #expect(unsaved.isEmpty, "\(unsaved)")
+
+    fixture.clock.advance(by: .milliseconds(400))
+    controller.workspace.selectedTab.toggleZoom()
+    fixture.clock.advance(by: .milliseconds(400))
+
+    // 500 ms after the first change, but only 400 after the last: the wait sleeps again.
+    await fixture.waitForSaveWait()
+    let waiting = await fixture.handed()
+    #expect(waiting.isEmpty, "\(waiting)")
+    fixture.clock.advance(by: .milliseconds(100))
+    let files = await fixture.handedOnceSaved()
+    #expect(Set(files) == ["\(id.uuidString).json", "session.json"], "\(files)")
+}
+
+@MainActor @Test func changesThatKeepComingAreSavedAfterTheLongestWait() async throws {
+    let fixture = try SavingFixture()
+    let controller = fixture.windows.open(at: Location(path: "/root"))
+    let pane = controller.workspace.selectedTab.focusedPane
+    await settle { pane.state.isLoaded }
+    await fixture.waitForSaveWait()
+
+    // A change every 400 ms, each inside the last one's 500 ms, up to 4.8 s.
+    for _ in 0..<12 {
+        fixture.clock.advance(by: .milliseconds(400))
+        controller.workspace.selectedTab.toggleZoom()
+        await fixture.waitForSaveWait()
+    }
+    let unsaved = await fixture.handed()
+    #expect(unsaved.isEmpty, "\(unsaved)")
+    // 5.2 s: 400 ms after the last change, past the 5 s cap.
+    fixture.clock.advance(by: .milliseconds(400))
+
+    #expect(!(await fixture.handedOnceSaved()).isEmpty)
+}
+
+@MainActor @Test func aChangeThatLeavesTheStateAsSavedWritesNothing() async throws {
+    let fixture = try SavingFixture()
+    let controller = fixture.windows.open(at: Location(path: "/root"))
+    let pane = controller.workspace.selectedTab.focusedPane
+    await settle { pane.state.isLoaded }
+    await fixture.waitForSaveWait()
+    fixture.clock.advance(by: fixture.windows.saveDelay)
+    #expect(!(await fixture.handedOnceSaved()).isEmpty)
+
+    // Listing the folder again changes the pane's rows, not what is saved of it.
+    let version = pane.stateVersion
+    pane.reload()
+    await settle { pane.stateVersion != version && pane.state.isLoaded }
+    await fixture.waitForSaveWait()
+    fixture.clock.advance(by: fixture.windows.saveDelay)
+    let clock = fixture.clock
+    #expect(await waitUntil { clock.waitingSleeps == 0 })
+    try await Task.sleep(for: .milliseconds(100))
+
+    let unsaved = await fixture.handed()
+    #expect(unsaved.isEmpty, "\(unsaved)")
+}
+
+@MainActor @Test func restoringThenQuittingWritesNothing() async throws {
+    let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
+    let saving = makeWindows(store: diskStore(folder))
+    let controller = saving.open(at: Location(path: "/root"))
+    // On the test's screen, so the restore keeps the frame as saved.
+    try #require(controller.window).setFrame(
+        CGRect(x: 100, y: 200, width: 900, height: 600), display: false)
+    #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
+    let fixture = try SavingFixture()
+
+    fixture.windows.restore(await diskStore(folder).load())
+    #expect(await fixture.windows.saveBeforeQuit(by: .now + .seconds(5)))
+
+    let unsaved = await fixture.handed()
+    #expect(unsaved.isEmpty, "\(unsaved)")
+}
+
+// MARK: Before the restore
+
+/// A disk store in `folder` holding a session of one window at `/root`, and what it loads.
+@MainActor
+private func savedSession(in folder: TemporaryFolder) async -> WorkspaceStore.Contents {
+    let saving = makeWindows(store: diskStore(folder))
+    saving.open(at: Location(path: "/root"))
+    #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
+    return await diskStore(folder).load()
+}
+
+@MainActor @Test func quitBeforeTheRestoreLeavesTheSavedSessionAsItWas() async throws {
+    let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
+    let saved = await savedSession(in: folder)
+    let launching = makeWindows(store: diskStore(folder))
+    launching.holdSavesUntilRestore()
+    // A window opened while the session is read, as New Window opens one.
+    launching.open(at: Location(path: "/root"))
+
+    #expect(await launching.saveBeforeQuit(by: .now + .seconds(5)))
+
+    let onDisk = await diskStore(folder).load()
+    #expect(onDisk == saved)
+}
+
+@MainActor @Test func aDockClickBeforeTheRestoreWaitsForIt() async throws {
+    let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
+    let saved = await savedSession(in: folder)
+    let launching = makeWindows(store: diskStore(folder))
+    launching.holdSavesUntilRestore()
+
+    #expect(!launching.opensWindowOnReopen)
+    #expect(await launching.saveBeforeQuit(by: .now + .seconds(5)))
+    let onDisk = await diskStore(folder).load()
+    #expect(onDisk == saved)
+
+    launching.restore(saved)
+    #expect(launching.controllers.map(\.workspace.id) == saved.session?.workspaces)
+    #expect(!launching.opensWindowOnReopen)
+}
+
+@MainActor @Test func aDockClickAfterNothingWasRestoredOpensAWindow() {
+    let launching = makeWindows(store: nil)
+    launching.holdSavesUntilRestore()
+
+    launching.restore(WorkspaceStore.Contents(session: nil, workspaces: [:]))
+
+    #expect(launching.opensWindowOnReopen)
+}
+
 // MARK: Problems
 
 @MainActor @Test func storeProblemsShowInOneAlertNamingEachFile() {
