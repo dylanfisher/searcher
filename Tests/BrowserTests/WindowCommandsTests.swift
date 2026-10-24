@@ -203,3 +203,19 @@ private func list(_ workspaces: Workspace...) -> WorkspaceList {
     #expect(workspaces.workspaces.count == 1 && workspaces.workspaces[0] === target)
     #expect(target.tabs.count == 2 && target.tabs[1] === moved)
 }
+
+@MainActor @Test func cmdKResolvesToShowPaletteWhichAsksTheWindowToShowIt() async throws {
+    let registry = try AppCommands.registry()
+    #expect(
+        registry.command(for: KeyChord("k", modifiers: .command))?.id
+            == WindowCommands.showPalette.id)
+    let fixture = await PaneFixture.loaded()
+    let shown = EventLog<Bool>()
+    let binding = try #require(
+        WindowCommands.bindings.first { $0.command == WindowCommands.showPalette })
+
+    binding.run(CommandContext(pane: fixture.pane, showPalette: { shown.append(true) }))
+
+    #expect(shown.all == [true])
+    #expect(binding.isEnabled == nil)
+}

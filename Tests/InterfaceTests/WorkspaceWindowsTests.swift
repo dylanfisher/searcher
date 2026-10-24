@@ -714,3 +714,55 @@ private func stopEverything(_ windows: WorkspaceWindows) async {
 
     #expect(!fixture.windows.open(at: Location(path: "/root")).showsSidebar)
 }
+
+// MARK: Palette
+
+/// Replaces the text of the field in `controller`'s palette with `query`, as typing would, and
+/// waits until its rows show.
+@MainActor
+private func type(_ query: String, in controller: BrowserWindowController) async throws {
+    let palette = try #require(controller.palette)
+    let editor = try #require(palette.window?.firstResponder as? NSTextView)
+    editor.insertText(
+        query, replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+    await settle { palette.viewController.shownQuery == query }
+}
+
+@MainActor @Test func eachPaneCountsItsFolderAndEachFolderItMovesTo() async throws {
+    let fixture = try await Fixture()
+    let pane = try #require(fixture.windows.controllers.first).workspace.selectedTab.focusedPane
+
+    pane.navigate(to: Location(path: "/root/docs"))
+
+    let folders = fixture.windows.folderVisits.history.folders
+    #expect(folders["/root"]?.count == 1)
+    #expect(folders["/root/docs"]?.count == 1)
+}
+
+@MainActor @Test func thePalettesVisitedFolderShowsInTheFocusedPane() async throws {
+    let fixture = try await Fixture()
+    let first = try #require(fixture.windows.controllers.first)
+    first.workspace.selectedTab.focusedPane.navigate(to: Location(path: "/root/docs"))
+    let second = try await fixture.open()
+    try fixture.press(try keyEvent("k", modifiers: .command), in: second)
+
+    try await type("docs", in: second)
+    try #require(second.palette).viewController.runSelected()
+
+    #expect(second.palette == nil)
+    #expect(second.workspace.selectedTab.focusedPane.location == Location(path: "/root/docs"))
+}
+
+@MainActor @Test func thePalettesSavedWorkspaceOpensThroughTheWindows() async throws {
+    let fixture = try await Fixture()
+    let named = try #require(fixture.windows.controllers.first)
+    try fixture.windows.list.name(named.workspace, as: "Project 1")
+    let other = try await fixture.open()
+    #expect(fixture.windows.list.workspaces.first === other.workspace)
+    try fixture.press(try keyEvent("k", modifiers: .command), in: other)
+
+    try await type("proj", in: other)
+    try #require(other.palette).viewController.runSelected()
+
+    #expect(fixture.windows.list.workspaces.first === named.workspace)
+}

@@ -369,7 +369,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
         go.items.map(\.title) == [
             "Back", "Forward", "", "Open", "Open in New Tab", "Open in Other Pane",
             "Go to Parent", "", "Into Selected Folder", "To Parent Column", "",
-            "Same Folder in Other Pane", "Go to Folder…",
+            "Same Folder in Other Pane", "Go to Folder…", "Open Quickly…",
         ])
     let table = ListingTableView()
     let log = CommandLog()

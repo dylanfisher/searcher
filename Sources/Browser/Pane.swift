@@ -7,7 +7,21 @@ import Foundation
 /// its own.
 @MainActor
 public final class Pane {
-    public private(set) var location: Location
+    public private(set) var location: Location {
+        didSet {
+            if location != oldValue { folderVisits?.visit(location) }
+        }
+    }
+    /// Counts a visit each time the pane shows a folder, for the palette, and one for the folder
+    /// it is in when set. The pane's owner sets it once; panes made from this one share it. A
+    /// pane without one, such as a column's, counts nothing; in column view the pane counts the
+    /// focused column's folder, which it follows.
+    public var folderVisits: FolderVisits? {
+        didSet {
+            precondition(oldValue == nil, "a pane's folder visits are set once")
+            folderVisits?.visit(location)
+        }
+    }
     public private(set) var state = ListingState.loading {
         didSet {
             stateVersion += 1
@@ -103,7 +117,8 @@ public final class Pane {
     /// The folder's volume was unmounted, so the pane is offline and doesn't list the folder.
     private var volumeIsGone = false
 
-    let service: ListingService
+    /// Lists the pane's folders; the palette lists a typed path through it too.
+    public let service: ListingService
     /// The app-wide settings. The rows follow `showHidden` and `foldersFirst`: a change re-sorts
     /// them off the main actor, as a sort change does.
     public let settings: Settings
@@ -239,6 +254,7 @@ public final class Pane {
             settings: settings, sortedBy: sorted.sortColumn, ascending: sorted.sortAscending,
             viewMode: viewMode)
         pane.folderSizes = folderSizes
+        pane.folderVisits = folderVisits
         return pane
     }
 
@@ -262,6 +278,7 @@ public final class Pane {
             isFocused: rows != nil && takingFocus, selection: selected, viewMode: viewMode,
             rows: rows)
         pane.folderSizes = folderSizes
+        pane.folderVisits = folderVisits
         pane.copiedFrom = self
         guard rows != nil else { return pane }
         pane.loadedAt = loadedAt

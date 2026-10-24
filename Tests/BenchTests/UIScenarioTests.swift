@@ -32,6 +32,8 @@ private func samples(for scenario: Scenario, atFraction fraction: Double) throws
         record.launch = try at("B1", UIBenchReport.launches)
     case .restoredNetworkPane:
         record.restoredCachedRows = try at("B4", UIBenchReport.launches)
+    case .palette:
+        record.paletteKey = try at("B11", UIBenchReport.paletteKeys)
     }
     return record
 }
@@ -60,6 +62,7 @@ func scenarioOverBudgetFailsNamingEachCase(_ scenario: Scenario) throws {
     #expect(
         budgets == [
             ["B6", "B6", "B6"], ["B3"], ["B4"], ["B6"], ["B6", "B6", "B2.W2"], ["B1"], ["B4"],
+            ["B11"],
         ])
 }
 
@@ -153,7 +156,7 @@ func scenarioOverBudgetFailsNamingEachCase(_ scenario: Scenario) throws {
 }
 
 @Test(arguments: [
-    Scenario.columnKeys, .cold, .revisit, .splits, .restoredSession, .restoredNetworkPane,
+    Scenario.columnKeys, .cold, .revisit, .splits, .restoredSession, .restoredNetworkPane, .palette,
 ])
 func otherScenariosReportStallsOnly(_ scenario: Scenario) throws {
     var record = try samples(for: scenario, atFraction: 0.5)
@@ -171,7 +174,7 @@ func otherScenariosReportStallsOnly(_ scenario: Scenario) throws {
     } throws: { error in
         String(describing: error)
             == "unknown scenario warm; the scenarios are column-keys, cold, revisit, column-walk, "
-            + "splits, restored-session, restored-network-pane"
+            + "splits, restored-session, restored-network-pane, palette"
     }
 }
 
@@ -180,8 +183,8 @@ func otherScenariosReportStallsOnly(_ scenario: Scenario) throws {
         try BenchArguments.parse(["--ui", "/b/Searcher.app", "--scenario"])
     } throws: { error in
         String(describing: error).contains(
-            "column-keys, cold, revisit, column-walk, splits, restored-session, restored-network-pane"
-        )
+            "column-keys, cold, revisit, column-walk, splits, restored-session, restored-network-pane, "
+                + "palette")
     }
 }
 
@@ -250,4 +253,24 @@ func pathScenarioWithoutAPathFails(_ scenario: Scenario) {
     #expect(UIBenchReport.keyPresses(launch: 0, scenario: .columnKeys) == UIBenchReport.keyPresses)
     #expect(UIBenchReport.keyPresses(launch: 0, scenario: .splits) == UIBenchReport.keyPresses)
     #expect(UIBenchReport.keyPresses(launch: 0, scenario: .cold) == 0)
+}
+
+@Test func paletteTimesEachKeyToItsFrameWithoutAPath() throws {
+    #expect(
+        try BenchArguments.parse(["--ui", "/b/Searcher.app", "--scenario", "palette"])
+            == .ui(app: "/b/Searcher.app", folder: nil, scenario: .palette))
+    let options = UIBenchOptions(
+        output: "/o.json", w1: "/w1", w2: "/w2", keyPresses: 0, tempPrefix: "p",
+        scenario: .palette, folders: [])
+    #expect(UIBenchOptions(arguments: ["Searcher"] + options.arguments) == options)
+    let report = try UIBenchReport(
+        record: try samples(for: .palette, atFraction: 0.5), scenario: .palette)
+    #expect(
+        report.cases.map(\.name) == [
+            "palette keystroke → frame, \(UIBenchOptions.paletteCandidates) candidates"
+        ])
+    #expect(report.cases[0].budget?.id == "B11")
+    #expect(UIBenchReport.launches(for: .palette) == 1)
+    #expect(UIBenchReport.keyPresses(launch: 0, scenario: .palette) == 0)
+    #expect(UIBenchOptions.paletteCandidates == 50_000)
 }

@@ -82,6 +82,9 @@ public final class WorkspaceWindows {
     public let clipboard: CutState
     /// Every mounted volume, which every window's drops check.
     let mountTable = MountTable()
+    /// The folders every window's panes visit, saved to the store, for the palette. The app
+    /// hands it the stored history once read.
+    public let folderVisits: FolderVisits
     /// The app's undo history, fed every operation as it finishes.
     let undoHistory = UndoHistory(log: { message in
         Logger(category: "undo").error("\(message, privacy: .public)")
@@ -112,6 +115,7 @@ public final class WorkspaceWindows {
         self.settings = settings
         self.folderSizes = folderSizes
         self.cache = cache
+        folderVisits = FolderVisits(store: store)
         self.clipboard = CutState(clipboard: clipboard)
         let openWithLogger = Logger(category: "openWith")
         openWith = OpenWith(
@@ -226,6 +230,7 @@ public final class WorkspaceWindows {
         let pane = Pane(
             location: location, service: service, systemActions: systemActions, settings: settings)
         pane.folderSizes = folderSizes
+        pane.folderVisits = folderVisits
         let workspace = Workspace(
             tab: Tab(pane: pane), showsSidebar: list.workspaces.first?.showsSidebar ?? false)
         list.add(workspace)
@@ -372,6 +377,7 @@ public final class WorkspaceWindows {
                     restoring: saved, service: service, systemActions: systemActions,
                     settings: settings)
                 pane.folderSizes = folderSizes
+                pane.folderVisits = folderVisits
                 return pane
             }
         }
@@ -651,7 +657,7 @@ public final class WorkspaceWindows {
             workspace: workspace, workspaces: list, settings: settings,
             fileOperations: fileOperations,
             clipboard: clipboard, mountTable: mountTable, undoHistory: undoHistory,
-            openWith: openWith,
+            openWith: openWith, folderVisits: folderVisits,
             takePaneController: { [weak self] id in self?.takePaneController(id) },
             openSavedWorkspace: { [weak self] id in self?.open(savedWorkspace: id) })
         controller.onCommand = { [weak self] in self?.showList() }

@@ -88,6 +88,9 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
     /// ↓ key → frame on W2, with the operations panel open, while the queue copies W8 to a disk
     /// image (B6). Only presses whose frame came before the copy finished.
     public var queueKeyDown: [Double]
+    /// `palette` scenario: a key typed in the palette's field → frame with the query's results,
+    /// ranked from `UIBenchOptions.paletteCandidates` items (B11).
+    public var paletteKey: [Double]
     /// Every run loop pass over the stall threshold (B10), all launches together.
     public var stalls: [Stall]
 
@@ -162,7 +165,8 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         columnDown: [Double] = [], columnRight: [Double] = [], columnLeft: [Double] = [],
         splitDown: [Double] = [], gridDown: [Double] = [], tenPaneOpen: [Double] = [],
         coldOpen: [Double] = [], revisit: [Double] = [], restoredCachedRows: [Double] = [],
-        columnWalkKey: [Double] = [], queueKeyDown: [Double] = [], stalls: [Stall] = []
+        columnWalkKey: [Double] = [], queueKeyDown: [Double] = [], paletteKey: [Double] = [],
+        stalls: [Stall] = []
     ) {
         self.launch = launch
         self.openW1 = openW1
@@ -196,6 +200,7 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         self.restoredCachedRows = restoredCachedRows
         self.columnWalkKey = columnWalkKey
         self.queueKeyDown = queueKeyDown
+        self.paletteKey = paletteKey
         self.stalls = stalls
     }
 
@@ -233,6 +238,7 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         restoredCachedRows += other.restoredCachedRows
         columnWalkKey += other.columnWalkKey
         queueKeyDown += other.queueKeyDown
+        paletteKey += other.paletteKey
         stalls += other.stalls
     }
 

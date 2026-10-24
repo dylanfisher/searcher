@@ -75,6 +75,31 @@ extension KeyChord {
         }
     }
 
+    /// The chord as a menu draws its key equivalent, such as "⇧⌘W": the modifiers in the order
+    /// macOS draws them, ⌃ ⌥ ⇧ ⌘, then the key. The palette shows it beside a command.
+    var symbols: String {
+        let held: [(Modifiers, String)] = [
+            (.control, "⌃"), (.option, "⌥"), (.shift, "⇧"), (.command, "⌘"),
+        ]
+        let key: String =
+            switch key {
+            case .character(let character): character.uppercased()
+            case .up: "↑"
+            case .down: "↓"
+            case .left: "←"
+            case .right: "→"
+            case .pageUp: "⇞"
+            case .pageDown: "⇟"
+            case .tab: "⇥"
+            case .return: "↩"
+            case .delete: "⌫"
+            case .space: "Space"
+            case .escape: "⎋"
+            case .function(let number): "F\(number)"
+            }
+        return held.filter { modifiers.contains($0.0) }.map(\.1).joined() + key
+    }
+
     var keyEquivalentModifierMask: NSEvent.ModifierFlags {
         var mask: NSEvent.ModifierFlags = []
         if modifiers.contains(.control) { mask.insert(.control) }

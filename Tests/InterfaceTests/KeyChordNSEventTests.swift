@@ -162,3 +162,15 @@ let arrowFlags: NSEvent.ModifierFlags = [.numericPad, .function]
 @MainActor @Test func deleteIsTheBackspaceKeyEquivalent() {
     #expect(KeyChord(.delete, modifiers: .command).keyEquivalent == "\u{8}")
 }
+
+@MainActor @Test func symbolsSpellTheChordAsAMenuDrawsIt() {
+    #expect(KeyChord("k", modifiers: .command).symbols == "⌘K")
+    #expect(KeyChord("w", modifiers: [.command, .shift]).symbols == "⇧⌘W")
+    #expect(KeyChord("1", modifiers: [.control, .option, .command]).symbols == "⌃⌥⌘1")
+    #expect(KeyChord(.tab, modifiers: [.control, .shift]).symbols == "⌃⇧⇥")
+    #expect(KeyChord(.down, modifiers: .command).symbols == "⌘↓")
+    #expect(KeyChord(.delete, modifiers: .command).symbols == "⌘⌫")
+    #expect(KeyChord(.return).symbols == "↩")
+    #expect(KeyChord(.space).symbols == "Space")
+    #expect(KeyChord(.function(5)).symbols == "F5")
+}
