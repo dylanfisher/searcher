@@ -1,17 +1,10 @@
+# shellcheck shell=bash
 # Sourced by scripts/check and scripts/test; not run directly.
 #
-# Gentle mode leaves the machine usable while the suite runs. Enable it with
-# `--gentle` as the first argument or SEARCHER_GENTLE=1. macOS cannot pin a
-# process to N cores, so the build (the long, heavy phase) is limited to half the
-# logical CPUs with `--jobs` and runs under `taskpolicy -c utility` (lower
-# priority, still free to use P-cores when idle). The test run is left alone:
-# capping Swift Testing's width (SWT_EXPERIMENTAL_MAXIMUM_PARALLELIZATION_WIDTH)
-# made aLocalChangeEventUnderAFolderDropsItsSize and footprintGrowsWithTouchedMemory
-# fail in 2 of 4 runs, and the priority policies break priority-asserting tests: under utility the
-# process's default QoS drops with it, which fails FolderSizeServiceTests'
-# priority comparison every run, and `-c background` (E-cores only, throttled
-# I/O) also fails StallWatchdogTests and takes longer; `nice` fails the thread
-# priority and footprint tests.
+# Gentle mode keeps the machine usable during a run. Enable it with `--gentle` as the
+# first argument or SEARCHER_GENTLE=1. It builds with half the logical CPUs (`--jobs`)
+# at utility priority; the test run is unchanged. Why, and what was rejected:
+# docs/decisions/0084-gentle-mode.md.
 #
 # swift_cmd <subcommand> [args...] runs `swift`; a build is throttled when gentle.
 
@@ -24,7 +17,7 @@ if [ "${SEARCHER_GENTLE:-}" = "1" ]; then
   swift_cmd() {
     local sub="$1"; shift
     if [ "$sub" = build ]; then taskpolicy -c utility swift build --jobs "$gentle_jobs" "$@"
-    else swift "$sub" --jobs "$gentle_jobs" "$@"; fi
+    else swift "$sub" "$@"; fi
   }
   # check sources this, then runs test, which sources it again: announce once.
   if [ -z "${SEARCHER_GENTLE_ANNOUNCED:-}" ]; then
