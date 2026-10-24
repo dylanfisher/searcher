@@ -23,22 +23,23 @@ extension BenchCase {
     }
 
     /// Copies `source` into `folder` under its own name and returns the milliseconds the copy
-    /// took, then removes the copy and flushes `folder`'s volume, untimed.
+    /// took, then flushes the copy to disk, removes it and flushes `folder` for the removal, untimed.
     static func timeCopy(_ source: String, into folder: String) async throws -> Double {
         let destination = folder + "/" + (source as NSString).lastPathComponent
         return try await BlockingCallThread.run { () throws -> Double in
             let start = ContinuousClock.now
             _ = try FileCopier().copy(source, to: destination)
             let elapsed = milliseconds(.now - start)
+            try flush(destination)
             try FileManager.default.removeItem(atPath: destination)
             try flush(folder)
             return elapsed
         }
     }
 
-    /// Writes everything buffered for `folder`'s volume to the disk.
-    static func flush(_ folder: String) throws {
-        let descriptor = open(folder, O_RDONLY)
+    /// Writes everything buffered for the file or folder at `path` to the disk.
+    static func flush(_ path: String) throws {
+        let descriptor = open(path, O_RDONLY)
         guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         defer { close(descriptor) }
         guard fcntl(descriptor, F_FULLFSYNC) == 0 else {
