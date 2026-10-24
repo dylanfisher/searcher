@@ -244,16 +244,10 @@ public final class WorkspaceWindows {
         awaitsRestore = false
         // Changes noted while saves were held.
         defer { scheduleSave() }
-        let inSession = Set(contents.session?.workspaces ?? [])
-        for state in contents.workspaces.values where !inSession.contains(state.id) {
-            if state.name == nil {
-                // The file of a window a crash closed.
-                forget(state.id)
-            } else {
-                lastSaved[state.id] = state
-                list.addSaved(state)
-            }
-        }
+        list.awaitsRestore = false
+        // After the open windows, so a closed workspace named like an open one is the one
+        // dropped.
+        defer { listClosedWorkspaces(of: contents) }
         guard let session = contents.session else { return nil }
         let states = session.workspaces.compactMap { contents.workspaces[$0] }
         guard !states.isEmpty else { return nil }
@@ -305,6 +299,44 @@ public final class WorkspaceWindows {
         return controller
     }
 
+    /// Lists the named workspaces of `contents` that aren't open as saved, in name order, and
+    /// has the files of unnamed ones deleted: they belong to windows a crash closed, or to a
+    /// session that didn't load, and can't be restored. A named one whose name another saved
+    /// workspace has is logged and deleted, so the names stay unique.
+    private func listClosedWorkspaces(of contents: WorkspaceStore.Contents) {
+        let open = Set(list.workspaces.map(\.id))
+        let closed = contents.workspaces.values.filter { !open.contains($0.id) }
+        for state in closed.sorted(by: Self.nameOrder) {
+            guard state.name != nil else {
+                forget(state.id)
+                continue
+            }
+            do {
+                try list.addSaved(state)
+                lastSaved[state.id] = state
+            } catch {
+                Logger(category: "workspaces").error(
+                    "deleting saved workspace \(state.id, privacy: .public): \(error.description, privacy: .public)"
+                )
+                forget(state.id)
+            }
+        }
+    }
+
+    /// Unnamed first, then by name as Finder sorts, then by ID, so which of two same-named
+    /// workspaces is kept doesn't depend on the order the files were read.
+    private static func nameOrder(_ a: WorkspaceState, _ b: WorkspaceState) -> Bool {
+        switch (a.name, b.name) {
+        case (nil, nil): return a.id.uuidString < b.id.uuidString
+        case (nil, _): return true
+        case (_, nil): return false
+        case (let x?, let y?):
+            let order = x.localizedStandardCompare(y)
+            return order == .orderedSame
+                ? a.id.uuidString < b.id.uuidString : order == .orderedAscending
+        }
+    }
+
     private func restoredWorkspace(_ state: WorkspaceState) -> Workspace {
         let tabs = state.tabs.map { tab in
             Tab(restoring: tab) { saved in
@@ -349,6 +381,7 @@ public final class WorkspaceWindows {
     /// Holds every save until `restore` runs, for a launch that reads the last session first.
     public func holdSavesUntilRestore() {
         awaitsRestore = true
+        list.awaitsRestore = true
     }
 
     /// Whether a Dock click with no window showing should open one: not while the last session
@@ -501,7 +534,7 @@ public final class WorkspaceWindows {
         else { return nil }
         return WorkspaceState(
             id: workspace.id, name: workspace.name, frame: Rect(window.frame),
-            tabs: workspace.tabs.map(\.state), selectedTab: selected,
+            tabs: workspace.tabStates, selectedTab: selected,
             showsSidebar: workspace.showsSidebar)
     }
 

@@ -32,8 +32,8 @@ public final class Workspace {
         }
     }
     /// Runs after any change to what `WorkspaceState` keeps of the workspace: its name, the tab
-    /// strip, the selected tab, a tab's layout or a change in one of its panes. Its window's owner sets
-    /// it, to save the workspace once the changes stop.
+    /// strip, the selected tab, a tab's layout or a change in one of its panes. Its window's
+    /// owner sets it, to save the workspace once the changes stop.
     public var onChange: (@MainActor () -> Void)?
     /// Whether the workspace's window is the key window. Only then does the selected tab's
     /// focused pane have the focus, so with two windows only the key one's loads go first. The
@@ -43,6 +43,8 @@ public final class Workspace {
             if isActive != oldValue { updatePanes() }
         }
     }
+    /// The tabs' states just before closing the last tab or pane closed the workspace.
+    private var tabStatesBeforeClose: [TabState]?
     /// The pane last told it gained the focus, until it is told it lost it.
     private weak var focusedPane: Pane?
     /// Set once every tab moved to another workspace (`removeAllTabs`) or the workspace closed
@@ -97,6 +99,7 @@ public final class Workspace {
     @discardableResult
     public func close(_ id: TabID) -> CloseResult {
         let index = index(of: id)
+        if tabs.count == 1 { tabStatesBeforeClose = tabStates }
         tabs[index].close()
         return remove(at: index)
     }
@@ -105,8 +108,16 @@ public final class Workspace {
     @discardableResult
     public func closePane() -> CloseResult {
         let tab = selectedTab
+        if tabs.count == 1, tab.panes.count == 1 { tabStatesBeforeClose = tabStates }
         guard tab.closePane() == .tab else { return .pane }
         return remove(at: index(of: tab.id))
+    }
+
+    /// The tabs as `WorkspaceState` keeps them, in strip order. Once closing its last tab or
+    /// pane closed the workspace, they are the tabs as they were just before, with the closed
+    /// tab's folders and selections, so a saved workspace is kept as it was.
+    public var tabStates: [TabState] {
+        tabStatesBeforeClose ?? tabs.map(\.state)
     }
 
     /// Every pane in every tab.

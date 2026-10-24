@@ -513,6 +513,39 @@ private func savedSession(in folder: TemporaryFolder) async -> WorkspaceStore.Co
     #expect(await diskStore(folder).load().workspaces[id]?.frame == Rect(atClose))
 }
 
+/// Names a window's workspace at `/root/docs` with `inside.txt` selected, closes its only tab
+/// with `key`, reopens it and checks it is as it was just before the close.
+@MainActor
+private func expectReopenedAsBeforeClosing(with key: NSEvent) async throws {
+    let windows = makeWindows(store: nil)
+    let controller = windows.open(at: Location(path: "/root/docs"))
+    let id = controller.workspace.id
+    let pane = controller.workspace.selectedTab.focusedPane
+    await settle { pane.state.isLoaded }
+    pane.select(Selection([ExactName("inside.txt")], cursor: ExactName("inside.txt")))
+    try windows.list.name(controller.workspace, as: "Project 1")
+    let table = try #require(controller.window?.firstResponder as? ListingTableView)
+
+    table.keyDown(with: key)
+
+    #expect(windows.controllers.isEmpty)
+    let reopened = windows.open(savedWorkspace: id)
+    let restored = reopened.workspace.selectedTab.focusedPane
+    await settle { restored.state.isLoaded && restored.selection.isSettled }
+    #expect(restored.location == Location(path: "/root/docs"))
+    #expect(restored.selection.members == .only([ExactName("inside.txt")]))
+    #expect(restored.selection.cursor == ExactName("inside.txt"))
+}
+
+@MainActor @Test func closingTheLastPaneKeepsTheWorkspaceAsItWasBefore() async throws {
+    try await expectReopenedAsBeforeClosing(with: try keyEvent("w", modifiers: .command))
+}
+
+@MainActor @Test func closingTheLastTabKeepsTheWorkspaceAsItWasBefore() async throws {
+    try await expectReopenedAsBeforeClosing(
+        with: try keyEvent("w", characters: "W", modifiers: [.command, .shift]))
+}
+
 @MainActor @Test func aClosedNamedWorkspaceOutlivesALaunch() async throws {
     let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
     let saving = makeWindows(store: diskStore(folder))
@@ -533,6 +566,48 @@ private func savedSession(in folder: TemporaryFolder) async -> WorkspaceStore.Co
     let reopened = restoring.open(savedWorkspace: id)
 
     #expect(try frame(of: reopened) == atClose)
+}
+
+@MainActor @Test func namingWaitsForTheLaunchsRestore() throws {
+    let windows = makeWindows(store: nil)
+    windows.holdSavesUntilRestore()
+    // A window opened while the session is read, as New Window opens one.
+    let early = windows.open(at: Location(path: "/root"))
+
+    #expect(throws: WorkspaceList.NameRefusal.loading) {
+        try windows.list.name(early.workspace, as: "Project 1")
+    }
+    windows.restore(WorkspaceStore.Contents(session: nil, workspaces: [:]))
+    try windows.list.name(early.workspace, as: "Project 1")
+    #expect(early.workspace.name == "Project 1")
+}
+
+@MainActor @Test func aClosedWorkspaceNamedLikeAnOpenOneIsDroppedAtLaunch() async throws {
+    let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
+    let saving = makeWindows(store: diskStore(folder))
+    let open = saving.open(at: Location(path: "/root"))
+    try saving.list.name(open.workspace, as: "Project 1")
+    #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
+    let saved = await diskStore(folder).load()
+    let openState = try #require(saved.workspaces[open.workspace.id])
+    // As a hand edit or an older build could leave it: a closed one of the same name.
+    let twin = WorkspaceState(
+        id: UUID(), name: "project 1", frame: openState.frame, tabs: openState.tabs,
+        selectedTab: 0, showsSidebar: false)
+    let writer = diskStore(folder)
+    await writer.save(twin)
+    await writer.flush()
+
+    let restoring = makeWindows(store: diskStore(folder))
+    restoring.holdSavesUntilRestore()
+    restoring.restore(await diskStore(folder).load())
+
+    #expect(
+        restoring.list.saved == [
+            WorkspaceList.Saved(id: open.workspace.id, name: "Project 1", isOpen: true)
+        ])
+    #expect(await restoring.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(Array(await diskStore(folder).load().workspaces.keys) == [open.workspace.id])
 }
 
 @MainActor @Test func openingASavedWorkspaceThatIsOpenFocusesItsWindow() throws {

@@ -17,6 +17,9 @@ public final class WorkspaceList {
     /// Gets the ID of each workspace whose file is no longer wanted: an unnamed one whose window
     /// closed, and a deleted one. The windows' owner sets it, to delete the file.
     public var onForget: (@MainActor (UUID) -> Void)?
+    /// Set while the launch hasn't listed the saved workspaces yet. Naming is refused meanwhile,
+    /// since a closed saved workspace's name isn't known until then.
+    public var awaitsRestore = false
     /// Workspaces `merge` took the tabs of, until their windows close.
     private var merged: Set<ObjectIdentifier> = []
 
@@ -40,12 +43,15 @@ public final class WorkspaceList {
         case empty
         /// Another saved workspace has the name, as it is spelled there, in any case.
         case taken(String)
+        /// The launch hasn't listed the saved workspaces yet.
+        case loading
 
         public var description: String {
             switch self {
             case .empty: "A workspace name can’t be empty."
             case .taken(let name):
                 "The name “\(name)” is already taken. Please choose a different name."
+            case .loading: "Saved workspaces are still loading. Try again in a moment."
             }
         }
     }
@@ -86,23 +92,33 @@ public final class WorkspaceList {
 
     /// Names `workspace`, which makes it a saved one, or renames it. The name is trimmed of white
     /// space at both ends. A name that is empty, or that another saved workspace has in any case,
-    /// is refused and leaves the workspace as it was.
+    /// is refused and leaves the workspace as it was, as is any name while `awaitsRestore`.
     public func name(_ workspace: Workspace, as name: String) throws(NameRefusal) {
+        guard !awaitsRestore else { throw .loading }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw .empty }
-        let key = Self.key(trimmed)
-        if let taken = saved.first(where: { $0.id != workspace.id && Self.key($0.name) == key }) {
-            throw .taken(taken.name)
-        }
+        try checkFree(trimmed, for: workspace.id)
         workspace.name = trimmed
     }
 
     /// Lists `state`, a named workspace whose window is closed, as saved, as the launch finds it.
-    public func addSaved(_ state: WorkspaceState) {
-        precondition(state.name != nil, "workspace \(state.id) has no name, so it isn't saved")
+    /// One whose name another saved workspace has is refused, as naming refuses it.
+    public func addSaved(_ state: WorkspaceState) throws(NameRefusal) {
+        guard let name = state.name else {
+            preconditionFailure("workspace \(state.id) has no name, so it isn't saved")
+        }
         precondition(
             !saved.contains { $0.id == state.id }, "workspace \(state.id) is listed already")
+        try checkFree(name, for: state.id)
         closed.append(state)
+    }
+
+    /// Throws when a saved workspace other than `id` has `name`, in any case.
+    private func checkFree(_ name: String, for id: UUID) throws(NameRefusal) {
+        let key = Self.key(name)
+        if let taken = saved.first(where: { $0.id != id && Self.key($0.name) == key }) {
+            throw .taken(taken.name)
+        }
     }
 
     /// Drops `workspace`, whose window closed. A named one stays saved as `state`, what it was at

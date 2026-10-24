@@ -30,6 +30,10 @@ step adds the model, the files and the commands on the window's own workspace.
   is decided the same way when its window closes, so a named one stays saved with the tabs it
   had. `BrowserWindowController` now tells its owner of the close before closing the tabs, so
   the state at close can be read; a change made within the save delay before the close is kept.
+  When Close Pane on the last pane or Close Tab on the last tab closes the window, the state
+  kept is the workspace just before that command, with the closed tab's folders and
+  selections, as Finder keeps a window as it was: `Workspace` takes its tabs' states before it
+  closes the last one (`tabStates`).
 - **Open.** `WorkspaceList.open` activates an open workspace, or rebuilds a closed one from its
   state; `WorkspaceWindows.open(savedWorkspace:)` then makes the window, at its saved frame moved
   onto a display if needed, or makes the open one's window key. It takes an ID, so it is not a
@@ -48,12 +52,20 @@ step adds the model, the files and the commands on the window's own workspace.
   handed again. `WorkspaceStore.delete` drops an unwritten save of the workspace and deletes its
   file; a missing file is not a problem, and a failure is a `StoreProblem` of kind `unforgotten`.
 - **At launch** a named workspace that isn't in the session is listed as closed, and an unnamed
-  one, which a crash left, has its file deleted.
+  one, which a crash left, has its file deleted. If `session.json` doesn't decode, no workspace
+  is open, so every unnamed file is deleted: none of them could be restored anyway. A closed
+  workspace whose name an open one, or another closed one, already has is logged and deleted, so
+  names stay unique; the open one is kept, and between closed ones the first in name and ID
+  order.
+- **No naming before the launch's restore.** Until the restore lists the closed saved
+  workspaces, their names aren't known, so `WorkspaceList.name` refuses with "Saved workspaces
+  are still loading. Try again in a moment.", which the name sheet shows. The wait is the
+  store's read, a few milliseconds.
 
 ## Alternatives considered
 
-- **Keep a merged named workspace's entry only if it wasn't merged** — rejected: merging closes
-  its window, and closing a saved workspace's window keeps it everywhere else.
+- **Forget a named workspace when Merge Window into Tab takes its tabs** — rejected: merging
+  closes its window, and closing a saved workspace's window keeps it everywhere else.
 - **Delete without asking** — rejected: Delete closes the window and loses the layout, and the
   undo history holds file operations only.
 - **Show the name in the window title** — not done: the title follows Finder's folder title, and
@@ -65,4 +77,5 @@ step adds the model, the files and the commands on the window's own workspace.
 
 A saved workspace can be reopened only through `WorkspaceWindows.open(savedWorkspace:)` until
 the palette and sidebar land. A window opened by New Window while the launch is still reading
-the store can take a name that a closed saved workspace has; the launch then lists both.
+the store can't be named until the restore has run. A file edited by hand to repeat a name
+loses that workspace at the next launch, with a log line.
