@@ -104,3 +104,16 @@ private final class Fixture {
     #expect(fixture.workspace.name == nil)
     #expect(fixture.closes == 1)
 }
+
+@MainActor @Test func nameBeforeTheSavedWorkspacesAreListedSaysWhy() {
+    let fixture = Fixture()
+    fixture.list.awaitsRestore = true
+    let sheet = fixture.sheet()
+
+    sheet.field.stringValue = "Project 1"
+    sheet.confirm()
+
+    #expect(fixture.workspace.name == nil)
+    #expect(fixture.closes == 0)
+    #expect(sheet.messageLabel.stringValue == WorkspaceList.NameRefusal.loading.description)
+}

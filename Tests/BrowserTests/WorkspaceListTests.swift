@@ -296,11 +296,37 @@ private func savingList(_ count: Int) async -> (WorkspaceList, [Workspace], Even
         id: UUID(), name: "Project 1", frame: Rect(x: 0, y: 0, width: 800, height: 500),
         tabs: workspaces[0].tabs.map(\.state), selectedTab: 0, showsSidebar: false)
 
-    list.addSaved(closed)
+    try list.addSaved(closed)
 
     #expect(list.closed == [closed])
     #expect(list.saved == [WorkspaceList.Saved(id: closed.id, name: "Project 1", isOpen: false)])
     #expect(throws: WorkspaceList.NameRefusal.taken("Project 1")) {
         try list.name(workspaces[0], as: "Project 1")
     }
+}
+
+@MainActor @Test func namingIsRefusedUntilTheSavedWorkspacesAreListed() async throws {
+    let (list, workspaces, _) = await savingList(1)
+    list.awaitsRestore = true
+
+    #expect(throws: WorkspaceList.NameRefusal.loading) {
+        try list.name(workspaces[0], as: "Project 1")
+    }
+    #expect(workspaces[0].name == nil)
+    list.awaitsRestore = false
+    try list.name(workspaces[0], as: "Project 1")
+    #expect(workspaces[0].name == "Project 1")
+}
+
+@MainActor @Test func aRestoredClosedWorkspaceWhoseNameIsTakenIsRefused() async throws {
+    let (list, workspaces, _) = await savingList(1)
+    try list.name(workspaces[0], as: "Project 1")
+    let closed = WorkspaceState(
+        id: UUID(), name: "project 1", frame: Rect(x: 0, y: 0, width: 800, height: 500),
+        tabs: workspaces[0].tabs.map(\.state), selectedTab: 0, showsSidebar: false)
+
+    #expect(throws: WorkspaceList.NameRefusal.taken("Project 1")) {
+        try list.addSaved(closed)
+    }
+    #expect(list.closed.isEmpty)
 }
