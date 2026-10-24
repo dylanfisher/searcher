@@ -143,6 +143,7 @@ private func onePaneTab() -> TabState {
     #expect(await !writes.wait(timeout: 0.2) { !$0.isEmpty })
     clock.advance(by: WorkspaceStore.writeDelay)
     #expect(await writes.wait { !$0.isEmpty })
+    await writer.flush()  // Behind the write that is running, so the folder is idle when removed.
     #expect(await !writes.wait(timeout: 0.2) { $0.count > 1 })
     #expect(writes.all == [false])
     #expect(await store(folder).load().workspaces[id]?.name == "Edit 10")
@@ -169,6 +170,9 @@ private func onePaneTab() -> TabState {
     #expect(await !writes.wait(timeout: 0.2) { $0.count > 1 })
     clock.advance(by: half)
     #expect(await writes.wait { $0.count > 1 })
+    // The log gets the write before the write is done; flush waits behind it, so the folder
+    // isn't being written when the test removes it (removing it then fails with code 513).
+    await writer.flush()
     #expect(writes.all == ["Flushed", "Later"])
 }
 
