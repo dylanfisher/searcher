@@ -37,6 +37,15 @@ commands on one chord. Each window already stored whether its sidebar shows
   showing. While the sidebar has the keys, a command that redraws the window leaves them there,
   and hiding the sidebar moves them to the pane. Both commands' menu items work with the keys in
   the sidebar.
+- **Drags and animations.** A drag of the divider that collapses or opens the sidebar sets
+  `Workspace.showsSidebar`. The split view also resizes all through a command's animated
+  collapse, with `isCollapsed` read at any point of the way, so the window ignores resizes
+  until that animation's completion runs, then reads the final state once.
+- **New windows follow the front window,** as Finder's do: New Window, Move Pane to New Window
+  and a window opened at a folder show the sidebar if the most recently active window does.
+- **Tab and Shift-Tab.** The window puts the sidebar's list into the key view loop just before
+  the focused pane's key view, and moves it when the focus moves, so Shift-Tab in the pane and
+  Tab in the sidebar go between the two. A hidden sidebar is passed over.
 - **Option-Command-S for Show Sidebar.** Control-Command-S stays Calculate Sizes.
   Option-Command-S was Finder's Hide Sidebar chord in earlier macOS versions, and nothing here
   used it. Giving the sidebar Finder's current chord means moving Calculate Sizes, which is
@@ -58,7 +67,7 @@ commands on one chord. Each window already stored whether its sidebar shows
 
 ## Consequences
 
-New windows open with the sidebar hidden, as `Workspace(tab:)` makes them; restored and reopened
-windows show it as saved. With no saved workspace the sidebar shows only its group row. If
+With no window open, a new window opens with the sidebar hidden; restored and reopened windows
+show it as saved. With no saved workspace the sidebar shows only its group row. If
 Calculate Sizes moves off Control-Command-S, `WorkspaceCommands.toggleSidebar` can take it in a
 one-line change.

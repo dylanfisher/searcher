@@ -162,3 +162,31 @@ private final class Fixture {
 
     #expect(try fixture.names == ["Alpha", "beta"])
 }
+
+@MainActor @Test func aRenameWhileTheSidebarHasTheKeysKeepsTheSelectionAndTheKeys() throws {
+    let fixture = try Fixture()
+    #expect(fixture.window.makeFirstResponder(fixture.outline))
+    fixture.outline.selectRowIndexes([try fixture.row(of: "beta")], byExtendingSelection: false)
+
+    try fixture.list.name(fixture.alpha, as: "Zeta")
+
+    #expect(try fixture.names == ["beta", "Gamma", "Zeta"])
+    #expect(fixture.outline.selectedRow == (try fixture.row(of: "beta")))
+    #expect(fixture.window.firstResponder === fixture.outline)
+}
+
+@MainActor @Test func deletingTheSelectedWorkspaceElsewhereSelectsTheWindowsOwnAndKeepsTheKeys()
+    throws
+{
+    let fixture = try Fixture()
+    try fixture.list.name(fixture.own, as: "Delta")
+    #expect(fixture.window.makeFirstResponder(fixture.outline))
+    fixture.outline.selectRowIndexes([try fixture.row(of: "Gamma")], byExtendingSelection: false)
+
+    // As Delete Workspace in another window does.
+    fixture.list.delete(fixture.gamma.id)
+
+    #expect(try fixture.names == ["Alpha", "beta", "Delta"])
+    #expect(fixture.outline.selectedRow == (try fixture.row(of: "Delta")))
+    #expect(fixture.window.firstResponder === fixture.outline)
+}

@@ -58,9 +58,10 @@ public final class Workspace {
     /// nothing more.
     public private(set) var isClosed = false
 
-    /// A new, unnamed workspace of one tab.
-    public convenience init(tab: Tab) {
-        self.init(id: UUID(), name: nil, tabs: [tab], selectedTab: 0, showsSidebar: false)
+    /// A new, unnamed workspace of one tab. A new window shows the sidebar as the window it
+    /// opens from does, as in Finder, so its opener passes `showsSidebar`.
+    public convenience init(tab: Tab, showsSidebar: Bool = false) {
+        self.init(id: UUID(), name: nil, tabs: [tab], selectedTab: 0, showsSidebar: showsSidebar)
     }
 
     /// A workspace of `tabs`, in strip order, with the one at `selectedTab` selected, as
