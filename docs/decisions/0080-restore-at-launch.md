@@ -36,7 +36,11 @@ from its load and from writes in the background, and they must reach the user.
   calls `WorkspaceWindows.restore`, which builds the windows from the session, front window
   first in the list, skipping each ID whose workspace didn't load. The key window's panes are
   made first and its workspace made active, so its focused pane's load is asked for first. No
-  session, or none of its workspaces, opens the home window as before.
+  session, or none of its workspaces, opens the home window as before. Until `restore` runs,
+  nothing is saved (`holdSavesUntilRestore`): a quit in that moment writes nothing, so the
+  session on disk stays for the next launch, and a Dock click waits for the restore instead of
+  opening a home window. The session as restored is taken as saved, so the first save after
+  launch doesn't write it again.
 - **Panes** start as saved: folder, view mode, sort, Back and Forward, and the selection by
   name, which the existing load path resolves as the rows arrive; a full listing drops names
   that are gone. A column-mode pane restores one column at its folder with the saved cursor,
@@ -66,7 +70,7 @@ from its load and from writes in the background, and they must reach the user.
 ## Consequences
 
 A crash loses the changes of the last 1.5 s, or up to 6 s while changes keep coming: the save
-wait plus the store's write delay. The
-`restored-session` UI bench scenario times B1 with 3 windows × 2 tabs × 4 panes; it writes the
-fixture in the same launch, unsynced, so it times slightly more than a real launch. A Dock click
-in the moment before the session is read opens a home window beside the restored ones.
+wait plus the store's write delay. Closing the last window and then quitting saves an empty
+session, so the next launch opens the home window. The `restored-session` UI bench scenario
+times B1 with 3 windows × 2 tabs × 4 panes; it writes the fixture in the same launch, unsynced,
+so it times slightly more than a real launch.

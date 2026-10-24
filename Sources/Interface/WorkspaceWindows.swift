@@ -40,8 +40,15 @@ public final class WorkspaceWindows {
     private var unsaved: Set<ObjectIdentifier> = []
     /// The wait before the next save, while one is due.
     private var saveWait: Task<Void, Never>?
-    /// When the first change not yet saved came.
-    private var firstUnsaved: ContinuousClock.Instant?
+    /// The clock saves wait on. Tests give a manual one.
+    var saveClock = SaveClock(ContinuousClock())
+    /// When the first change not yet saved came, on `saveClock`.
+    private var firstUnsaved: Duration?
+    /// When the last change came, on `saveClock`.
+    private var lastChange: Duration?
+    /// Set from `holdSavesUntilRestore` until `restore` runs: nothing is saved meanwhile, so a
+    /// quit or a window opened before the last session is read can't write over it.
+    public private(set) var awaitsRestore = false
     /// The saves handed to the store, each after the one before it, so an older state never
     /// lands after a newer one.
     private var saving: Task<Void, Never>?
@@ -226,6 +233,10 @@ public final class WorkspaceWindows {
     /// doesn't hold the windows back.
     @discardableResult
     public func restore(_ contents: WorkspaceStore.Contents) -> BrowserWindowController? {
+        // Decided now, whatever is restored: saves from here on keep the windows as they are.
+        awaitsRestore = false
+        // Changes noted while saves were held.
+        defer { scheduleSave() }
         guard let session = contents.session else { return nil }
         let states = session.workspaces.compactMap { contents.workspaces[$0] }
         guard !states.isEmpty else { return nil }
@@ -246,6 +257,8 @@ public final class WorkspaceWindows {
         }
         guard let key = workspaces[keyID] else { preconditionFailure("the key workspace is gone") }
         list.activate(key)
+        // The session as restored, so the first save after launch doesn't write it again.
+        lastSession = currentSession
         let controller = controller(for: key)
         if showsWindows {
             controller.window?.makeKeyAndOrderFront(nil)
@@ -294,9 +307,21 @@ public final class WorkspaceWindows {
 
     // MARK: Saving
 
+    /// Holds every save until `restore` runs, for a launch that reads the last session first.
+    public func holdSavesUntilRestore() {
+        awaitsRestore = true
+    }
+
+    /// Whether a Dock click with no window showing should open one: not while the last session
+    /// is still being read, since restoring it opens the windows.
+    public var opensWindowOnReopen: Bool {
+        controllers.isEmpty && !awaitsRestore
+    }
+
     /// Saves every change not yet saved and writes the store's saves at once, as the app quits,
     /// waiting until `deadline` at most. Returns whether the writes finished in time; with no
-    /// store there is nothing to write.
+    /// store there is nothing to write. Before `restore` runs it saves nothing, so the session
+    /// on disk stays the one the launch was reading.
     public func saveBeforeQuit(by deadline: ContinuousClock.Instant) async -> Bool {
         guard let store else { return true }
         saveChanges()
@@ -343,14 +368,15 @@ public final class WorkspaceWindows {
     /// coming.
     private func scheduleSave() {
         guard store != nil else { return }
-        let now = ContinuousClock.now
+        let now = saveClock.now()
         lastChange = now
         if firstUnsaved == nil { firstUnsaved = now }
-        guard saveWait == nil else { return }
+        guard !awaitsRestore, saveWait == nil else { return }
+        let clock = saveClock
         saveWait = Task { [weak self] in
-            while let due = self?.saveDue, ContinuousClock.now < due {
+            while let due = self?.saveDue, clock.now() < due {
                 do {
-                    try await Task.sleep(until: due, clock: .continuous)
+                    try await clock.sleep(due)
                 } catch is CancellationError {
                     // A save before quitting ran first.
                     return
@@ -362,11 +388,8 @@ public final class WorkspaceWindows {
         }
     }
 
-    /// When the change last noted.
-    private var lastChange: ContinuousClock.Instant?
-
-    /// When the next save is due, while changes wait for one.
-    private var saveDue: ContinuousClock.Instant? {
+    /// When the next save is due on `saveClock`, while changes wait for one.
+    private var saveDue: Duration? {
         guard let lastChange, let firstUnsaved else { return nil }
         return min(lastChange + saveDelay, firstUnsaved + Self.longestSaveWait)
     }
@@ -378,7 +401,7 @@ public final class WorkspaceWindows {
         saveWait?.cancel()
         saveWait = nil
         firstUnsaved = nil
-        guard let store else { return }
+        guard let store, !awaitsRestore else { return }
         var states: [WorkspaceState] = []
         for controller in controllers where unsaved.contains(ObjectIdentifier(controller.workspace))
         {
@@ -389,10 +412,7 @@ public final class WorkspaceWindows {
             states.append(state)
         }
         unsaved = []
-        let shown = list.workspaces.filter { workspace in
-            controllers.contains { $0.workspace === workspace }
-        }
-        let session = SessionState(workspaces: shown.map(\.id), keyWindow: shown.first?.id)
+        let session = currentSession
         let changedSession = session != lastSession ? session : nil
         lastSession = session
         guard !states.isEmpty || changedSession != nil else { return }
@@ -405,6 +425,26 @@ public final class WorkspaceWindows {
             if let changedSession {
                 await store.saveSession(changedSession)
             }
+        }
+    }
+
+    /// The windows, most recently active first; the first is the key window.
+    private var currentSession: SessionState {
+        let shown = list.workspaces.filter { workspace in
+            controllers.contains { $0.workspace === workspace }
+        }
+        return SessionState(workspaces: shown.map(\.id), keyWindow: shown.first?.id)
+    }
+
+    /// Elapsed time on a clock, and a sleep until an elapsed time, for the save wait.
+    struct SaveClock: Sendable {
+        let now: @Sendable () -> Duration
+        let sleep: @Sendable (Duration) async throws -> Void
+
+        init<C: Clock<Duration>>(_ clock: C) {
+            let start = clock.now
+            now = { start.duration(to: clock.now) }
+            sleep = { try await clock.sleep(until: start.advanced(by: $0), tolerance: nil) }
         }
     }
 
