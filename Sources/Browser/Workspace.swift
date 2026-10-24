@@ -1,3 +1,5 @@
+import Foundation
+
 /// A window's tabs, in strip order, and the selected one. A workspace always has a tab: closing
 /// the last one reports the workspace closed and leaves it in place, closed, and the caller drops
 /// the workspace. Its closed tab traps on use, as `Tab` describes.
@@ -7,12 +9,27 @@
 /// loads that are still waiting (docs/decisions/0048-pane-load-priority.md).
 @MainActor
 public final class Workspace {
-    public private(set) var tabs: [Tab]
+    /// Names the workspace's file in `WorkspaceStore`, and its window in the session.
+    public let id: UUID
+    /// Nil for the workspace of a window that hasn't been named.
+    public let name: String?
+    /// Kept as restored, so saving the workspace again doesn't lose it.
+    public let showsSidebar: Bool
+    public private(set) var tabs: [Tab] {
+        didSet { onChange?() }
+    }
     public private(set) var selectedTab: Tab {
         didSet {
-            if selectedTab !== oldValue { updatePanes() }
+            if selectedTab !== oldValue {
+                updatePanes()
+                onChange?()
+            }
         }
     }
+    /// Runs after any change to what `WorkspaceState` keeps of the workspace's tabs: the strip,
+    /// the selected tab, a tab's layout or a change in one of its panes. Its window's owner sets
+    /// it, to save the workspace once the changes stop.
+    public var onChange: (@MainActor () -> Void)?
     /// Whether the workspace's window is the key window. Only then does the selected tab's
     /// focused pane have the focus, so with two windows only the key one's loads go first. The
     /// window sets it.
@@ -28,10 +45,27 @@ public final class Workspace {
     /// nothing more.
     public private(set) var isClosed = false
 
-    public init(tab: Tab) {
-        tabs = [tab]
-        selectedTab = tab
-        watchFocus(of: tab)
+    /// A new, unnamed workspace of one tab.
+    public convenience init(tab: Tab) {
+        self.init(id: UUID(), name: nil, tabs: [tab], selectedTab: 0, showsSidebar: false)
+    }
+
+    /// A workspace of `tabs`, in strip order, with the one at `selectedTab` selected, as
+    /// `WorkspaceState` keeps it.
+    ///
+    /// - Precondition: `tabs` isn't empty and `selectedTab` is one of its indices.
+    public init(id: UUID, name: String?, tabs: [Tab], selectedTab: Int, showsSidebar: Bool) {
+        precondition(
+            tabs.indices.contains(selectedTab),
+            "selected tab \(selectedTab) isn't one of the \(tabs.count) tabs")
+        self.id = id
+        self.name = name
+        self.showsSidebar = showsSidebar
+        self.tabs = tabs
+        self.selectedTab = tabs[selectedTab]
+        for tab in tabs {
+            watchFocus(of: tab)
+        }
         updatePanes()
     }
 
@@ -137,8 +171,10 @@ public final class Workspace {
         return .tab
     }
 
+    /// Moves the loads' focus with the tab's, and passes on its changes.
     private func watchFocus(of tab: Tab) {
         tab.onFocusChange = { [weak self] in self?.updatePanes() }
+        tab.onChange = { [weak self] in self?.onChange?() }
     }
 
     /// Shows the selected tab's panes and hides every other tab's, then tells the selected tab's

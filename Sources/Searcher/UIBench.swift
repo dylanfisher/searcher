@@ -28,7 +28,8 @@ import os
 /// A launch for a scenario (`UIBenchOptions.Scenario`) times only that scenario's spans after
 /// the launch: column view on W2, the split cases on W2, or on a share's folder the runner names,
 /// opening subfolders cold (B3), opening them again to their cached rows (B4), or walking it in
-/// column view (B10).
+/// column view (B10). The `restored-session` launch instead times the launch itself to a saved
+/// session's windows, rebuilt as a normal launch rebuilds them (B1).
 ///
 /// The window is never activated, so it never takes focus: it is ordered in front on the second
 /// display when there is one, and a window that isn't visible fails the run, since a covered
@@ -156,6 +157,10 @@ final class UIBench {
             fileOperations = makeQueue()
         }
         let settings = Settings(defaults: defaults)
+        if options.scenario == .restoredSession {
+            return try await restoreSession(
+                in: root, settings: settings, systemActions: systemActions)
+        }
         // The queue case opens and closes the panel with its key, around a copy that empties it.
         settings.hideEmptyOperationsPanel = false
         let controller = BrowserWindowController(
@@ -205,7 +210,166 @@ final class UIBench {
             for _ in 0..<UIBenchOptions.tenPaneOpens {
                 record.tenPaneOpen.append(try await openInTenPanes())
             }
+        case .restoredSession:
+            preconditionFailure("restored-session opens its own windows in restoreSession")
         }
+    }
+
+    // MARK: Restored session
+
+    /// Windows the `restored-session` launch rebuilds per window: W1 in every pane but one, which
+    /// is on W2.
+    static let restoredWindows = 3
+    static let restoredTabs = 2
+    /// Panes per tab, as a 2 × 2 grid.
+    static let restoredGrid = (columns: 2, rows: 2)
+
+    /// The `restored-session` launch's windows, kept for the rest of the launch.
+    private var restored: WorkspaceWindows?
+
+    /// The `restored-session` launch: writes a saved session into the temporary root's store,
+    /// as a quit would have left it, then reads it through the app's own store, off the main
+    /// actor, and rebuilds its windows through `WorkspaceWindows.restore`, as a launch does. B1
+    /// runs from the process start to the frame in which every window is on screen, with its
+    /// frame and tab strip, and the key window's focused pane shows rows. Writing the session is
+    /// inside that span, so the case times a little more than a launch does.
+    private func restoreSession(
+        in root: TempRoot, settings: Settings, systemActions: any SystemActions
+    ) async throws {
+        let roots = StoreRoots(
+            caches: root.folder.appending(path: "Caches"),
+            applicationSupport: root.folder.appending(path: "Application Support"))
+        let problems = OSAllocatedUnfairLock(initialState: [StoreProblem]())
+        let report: @Sendable (StoreProblem) -> Void = { problem in
+            problems.withLock { $0.append(problem) }
+        }
+        let (session, workspaces) = try restoredSessionFixture()
+        // Not synced to the disk: the app's own writes are, but a write that waits on the disk
+        // isn't part of the launch being timed.
+        let writer = WorkspaceStore(
+            roots: roots, report: report, write: { data, url in try data.write(to: url) })
+        for workspace in workspaces {
+            await writer.save(workspace)
+        }
+        await writer.saveSession(session)
+        await writer.flush()
+        let contents = await WorkspaceStore(roots: roots, report: report).load()
+        if let problem = problems.withLock({ $0.first }) {
+            throw Failure("the restored session's store reported a problem: \(problem)")
+        }
+        // A pasteboard of its own, so the bench never reads or writes the user's clipboard.
+        let pasteboard = NSPasteboard(
+            name: NSPasteboard.Name("searcher-bench-\(UUID().uuidString)"))
+        let windows = WorkspaceWindows(
+            service: service, systemActions: systemActions, settings: settings, folderSizes: nil,
+            clipboard: PasteboardFileClipboard(pasteboard: pasteboard), store: nil)
+        windows.showsWindows = false
+        restored = windows
+        guard let key = windows.restore(contents) else { throw Failure("nothing was restored") }
+        guard windows.controllers.count == workspaces.count else {
+            throw Failure(
+                "restored \(windows.controllers.count) of the \(workspaces.count) windows saved")
+        }
+        controller = key
+        key.paneViewController.onShow = { [weak self] in self?.paneShown() }
+        let shownWindows = try windows.list.workspaces.map { workspace in
+            guard
+                let window = windows.controllers.first(where: { $0.workspace === workspace })?
+                    .window
+            else { throw Failure("workspace \(workspace.id) has no window") }
+            return window
+        }
+        // Back to front, in front of other apps' windows, without activating the app or making
+        // a window key.
+        for window in shownWindows.reversed() {
+            window.orderFrontRegardless()
+        }
+        let window = try requireWindow()
+        window.makeFirstResponder(key.paneViewController.keyView)
+        LaunchWarmup.shared.start(after: window)
+        let shown: Result<Double, Failure> = await withCheckedContinuation { continuation in
+            whenShown = { [self] pane in
+                switch pane.state {
+                case .loading, .slow:
+                    return false
+                case .partial(let rows), .loaded(let rows), .cachedRefreshing(let rows, _):
+                    guard rows.count > 0 else { return false }
+                case .offline:
+                    continuation.resume(
+                        returning: .failure(Failure("\(pane.location.path) went offline")))
+                    return true
+                case .denied(let error), .failed(let error):
+                    continuation.resume(
+                        returning: .failure(
+                            Failure("\(pane.location.path) could not be listed: \(error)")))
+                    return true
+                }
+                timeFrame(from: processStart, in: window, UIBenchRecord.launchSpan, launchInterval)
+                {
+                    continuation.resume(returning: .success($0))
+                }
+                return true
+            }
+            // Rows that showed before the check was set.
+            paneShown()
+        }
+        record.launch.append(try shown.get())
+        let warmUpStart = ContinuousClock.now
+        for window in shownWindows {
+            try await waitUntilVisible(window)
+        }
+        await LaunchWarmup.shared.finished()
+        spans.append(TimedSpan(name: UIBenchRecord.warmUpSpan, start: warmUpStart, end: .now))
+    }
+
+    /// The session `restoreSession` writes, front window first: each window cascaded on the
+    /// bench's display, each tab a 2 × 2 grid on W1 with the second tab selected, and in the key
+    /// window, the front one, one unfocused pane of the selected tab on W2, so its load runs
+    /// beside the focused pane's.
+    private func restoredSessionFixture() throws -> (SessionState, [WorkspaceState]) {
+        let screens = NSScreen.screens
+        guard let screen = screens.count > 1 ? screens[1] : screens.first else {
+            throw Failure("no display to put the restored windows on")
+        }
+        let visible = screen.visibleFrame
+        let size = CGSize(width: 1000, height: 700)
+        let bounds = Rect(x: 0, y: 0, width: size.width, height: size.height)
+        var states: [WorkspaceState] = []
+        for window in 0..<Self.restoredWindows {
+            // The front window is the first, cascaded furthest down and right.
+            let step = CGFloat(Self.restoredWindows - 1 - window) * 40
+            let frame = CGRect(
+                x: visible.midX - size.width / 2 + step - 40,
+                y: visible.midY - size.height / 2 - step + 40, width: size.width,
+                height: size.height)
+            let tabs = try (0..<Self.restoredTabs).map { tab in
+                var layout = Layout()
+                guard
+                    layout.makeGrid(
+                        columns: Self.restoredGrid.columns, rows: Self.restoredGrid.rows,
+                        in: bounds) != nil
+                else { throw Failure("a \(size) window has no room for a 2 × 2 grid") }
+                let onW2 = window == 0 && tab == Self.restoredTabs - 1 ? layout.history.last : nil
+                let panes = Dictionary(
+                    uniqueKeysWithValues: layout.panes.map { id in
+                        let path = id == onW2 ? options.w2 : options.w1
+                        return (
+                            id,
+                            TabState.PaneState(
+                                location: Location(path: path), viewMode: .list,
+                                history: History(), selection: [], cursor: nil,
+                                sortColumn: .name, sortAscending: true)
+                        )
+                    })
+                return TabState(layout: layout, panes: panes)
+            }
+            states.append(
+                WorkspaceState(
+                    id: UUID(), name: nil, frame: Rect(frame), tabs: tabs,
+                    selectedTab: Self.restoredTabs - 1, showsSidebar: false))
+        }
+        let session = SessionState(workspaces: states.map(\.id), keyWindow: states[0].id)
+        return (session, states)
     }
 
     /// Every span the CI run times after the launch.

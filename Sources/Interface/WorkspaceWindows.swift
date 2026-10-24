@@ -12,14 +12,49 @@ import os
 /// (docs/decisions/0067-operations-panel.md). Every window cuts, copies and pastes through one
 /// `CutState`, so a cut in one window pastes as a move in another. Every operation that finishes
 /// goes into one `UndoHistory`, so Undo in any window undoes the last change made in any of them.
+///
+/// It saves every window's workspace and the session to its `WorkspaceStore`, once changes have
+/// stopped for `saveDelay`, and at launch rebuilds the windows the store kept
+/// (docs/decisions/0080-restore-at-launch.md).
 @MainActor
 public final class WorkspaceWindows {
     public let list = WorkspaceList()
     /// The open windows' controllers, in the order they opened. A controller is dropped as its
     /// window closes.
     public private(set) var controllers: [BrowserWindowController] = []
-    /// Whether new windows are put on screen. Tests turn it off.
-    var showsWindows = true
+    /// Whether new windows are put on screen. Tests turn it off, and the UI bench, which orders
+    /// its windows in without making one key.
+    public var showsWindows = true
+    /// The visible frames of the attached displays, the main one first. Tests give their own.
+    var screens: () -> [CGRect] = { NSScreen.screens.map(\.visibleFrame) }
+    /// How long the windows' state is left unread after the last change, so a run of changes,
+    /// such as a load's batches, a drag or held arrow keys, reads each workspace's state once
+    /// it ends. `Tab.state` costs work per selected row.
+    var saveDelay: Duration = .milliseconds(500)
+    /// The longest a change waits for the changes after it to stop, so a folder whose sizes or
+    /// patches keep coming is still saved.
+    private static let longestSaveWait: Duration = .seconds(5)
+    /// Where the windows are saved; nil saves nothing, as in the UI bench.
+    private let store: WorkspaceStore?
+    /// The workspaces changed since they were last saved.
+    private var unsaved: Set<ObjectIdentifier> = []
+    /// The wait before the next save, while one is due.
+    private var saveWait: Task<Void, Never>?
+    /// When the first change not yet saved came.
+    private var firstUnsaved: ContinuousClock.Instant?
+    /// The saves handed to the store, each after the one before it, so an older state never
+    /// lands after a newer one.
+    private var saving: Task<Void, Never>?
+    /// What was last handed to the store, so a change that leaves a workspace or the session as
+    /// it was saves nothing.
+    private var lastSaved: [UUID: WorkspaceState] = [:]
+    private var lastSession: SessionState?
+    /// Each window's observers of its frame and key changes, until it closes.
+    private var windowObservers: [ObjectIdentifier: [any NSObjectProtocol]] = [:]
+    /// Store problems not yet shown, in the order they came.
+    private var unshownProblems: [StoreProblem] = []
+    /// Set while the problems' alert shows; problems that come meanwhile wait for it to close.
+    private var showsProblems = false
     private let service: ListingService
     private let systemActions: any SystemActions
     private let settings: Settings
@@ -50,10 +85,12 @@ public final class WorkspaceWindows {
     /// Ends the stream of finished operations to the undo history when the windows go away.
     private nonisolated let finishedFeed: AsyncStream<FileOperationQueue.Snapshot>.Continuation
 
+    /// Windows whose workspaces and session are saved to `store`; nil saves nothing.
     public init(
         service: ListingService, systemActions: any SystemActions, settings: Settings,
-        folderSizes: FolderSizeService?, clipboard: any FileClipboard
+        folderSizes: FolderSizeService?, clipboard: any FileClipboard, store: WorkspaceStore?
     ) {
+        self.store = store
         self.service = service
         self.systemActions = systemActions
         self.settings = settings
@@ -177,6 +214,259 @@ public final class WorkspaceWindows {
         return controller(for: workspace)
     }
 
+    // MARK: Restoring
+
+    /// Opens a window for each workspace of `contents`' session that loaded, in the session's
+    /// order, each at its saved frame moved onto a display if it is on none, with its tabs,
+    /// layouts, folders, view modes, sorts, histories and selections. A session ID with no
+    /// workspace is skipped (docs/decisions/0078-workspace-store.md). The key window's workspace
+    /// is made active, so its focused pane's load goes first, and its window is made key when
+    /// windows are shown. Returns the key window's controller, or nil when there was nothing to
+    /// restore. Every pane lists its folder off the main thread, so a slow or missing one
+    /// doesn't hold the windows back.
+    @discardableResult
+    public func restore(_ contents: WorkspaceStore.Contents) -> BrowserWindowController? {
+        guard let session = contents.session else { return nil }
+        let states = session.workspaces.compactMap { contents.workspaces[$0] }
+        guard !states.isEmpty else { return nil }
+        let keyID =
+            session.keyWindow.flatMap { id in states.first { $0.id == id }?.id } ?? states[0].id
+        // The key window's panes are made first, so their loads are asked for first.
+        let ordered = states.filter { $0.id == keyID } + states.filter { $0.id != keyID }
+        let workspaces = Dictionary(
+            uniqueKeysWithValues: ordered.map { ($0.id, restoredWorkspace($0)) })
+        // Back to front, so the front window is opened last and comes first in the list.
+        for state in states.reversed() {
+            guard let workspace = workspaces[state.id] else {
+                preconditionFailure("workspace \(state.id) wasn't made")
+            }
+            lastSaved[state.id] = state
+            list.add(workspace)
+            makeController(for: workspace, frame: CGRect(state.frame))
+        }
+        guard let key = workspaces[keyID] else { preconditionFailure("the key workspace is gone") }
+        list.activate(key)
+        let controller = controller(for: key)
+        if showsWindows {
+            controller.window?.makeKeyAndOrderFront(nil)
+        }
+        return controller
+    }
+
+    private func restoredWorkspace(_ state: WorkspaceState) -> Workspace {
+        let tabs = state.tabs.map { tab in
+            Tab(restoring: tab) { saved in
+                let pane = Pane(
+                    restoring: saved, service: service, systemActions: systemActions,
+                    settings: settings)
+                pane.folderSizes = folderSizes
+                return pane
+            }
+        }
+        return Workspace(
+            id: state.id, name: state.name, tabs: tabs, selectedTab: state.selectedTab,
+            showsSidebar: state.showsSidebar)
+    }
+
+    /// The height of a window's title bar that must be on a display for the window to stay
+    /// where it was saved, and the width of it, so the user can still drag it.
+    private static let reachableTitleBar = CGSize(width: 100, height: 22)
+
+    /// Where a window saved at `frame` opens, given the displays' visible frames, main first: at
+    /// `frame` while enough of its title bar is on one of them to drag it, else centered on the
+    /// main display and no larger than it, as for a window last shown on a display that is no
+    /// longer attached.
+    static func placed(_ frame: CGRect, on screens: [CGRect]) -> CGRect {
+        let titleBar = CGRect(
+            x: frame.minX, y: frame.maxY - reachableTitleBar.height, width: frame.width,
+            height: reachableTitleBar.height)
+        let reachable = screens.contains { screen in
+            let shown = screen.intersection(titleBar)
+            return !shown.isNull && shown.width >= reachableTitleBar.width
+                && shown.height >= reachableTitleBar.height
+        }
+        guard !reachable, let main = screens.first else { return frame }
+        let width = min(frame.width, main.width)
+        let height = min(frame.height, main.height)
+        return CGRect(
+            x: main.midX - width / 2, y: main.midY - height / 2, width: width, height: height)
+    }
+
+    // MARK: Saving
+
+    /// Saves every change not yet saved and writes the store's saves at once, as the app quits,
+    /// waiting until `deadline` at most. Returns whether the writes finished in time; with no
+    /// store there is nothing to write.
+    public func saveBeforeQuit(by deadline: ContinuousClock.Instant) async -> Bool {
+        guard let store else { return true }
+        saveChanges()
+        let saving = saving
+        return await FirstToFinish.run(by: deadline, clock: .continuous) {
+            await saving?.value
+            await store.flush()
+        }
+    }
+
+    /// Has the window's moves, resizes and key changes saved, and its workspace's changes.
+    private func watch(_ controller: BrowserWindowController) {
+        let workspace = controller.workspace
+        workspace.onChange = { [weak self, weak workspace] in
+            guard let self, let workspace else { return }
+            workspaceChanged(workspace)
+        }
+        workspaceChanged(workspace)
+        guard let window = controller.window else {
+            preconditionFailure("a browser window controller has no window")
+        }
+        let names: [Notification.Name] = [
+            NSWindow.didMoveNotification, NSWindow.didResizeNotification,
+            NSWindow.didBecomeKeyNotification,
+        ]
+        windowObservers[ObjectIdentifier(controller)] = names.map { name in
+            NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) {
+                [weak self, weak workspace] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let workspace else { return }
+                    self.workspaceChanged(workspace)
+                }
+            }
+        }
+    }
+
+    private func workspaceChanged(_ workspace: Workspace) {
+        unsaved.insert(ObjectIdentifier(workspace))
+        scheduleSave()
+    }
+
+    /// Saves once no change has come for `saveDelay`, or `longestSaveWait` after the first
+    /// change not yet saved. One wait serves every change: it sleeps again while changes keep
+    /// coming.
+    private func scheduleSave() {
+        guard store != nil else { return }
+        let now = ContinuousClock.now
+        lastChange = now
+        if firstUnsaved == nil { firstUnsaved = now }
+        guard saveWait == nil else { return }
+        saveWait = Task { [weak self] in
+            while let due = self?.saveDue, ContinuousClock.now < due {
+                do {
+                    try await Task.sleep(until: due, clock: .continuous)
+                } catch is CancellationError {
+                    // A save before quitting ran first.
+                    return
+                } catch {
+                    preconditionFailure("a sleep failed with \(error)")
+                }
+            }
+            self?.saveChanges()
+        }
+    }
+
+    /// When the change last noted.
+    private var lastChange: ContinuousClock.Instant?
+
+    /// When the next save is due, while changes wait for one.
+    private var saveDue: ContinuousClock.Instant? {
+        guard let lastChange, let firstUnsaved else { return nil }
+        return min(lastChange + saveDelay, firstUnsaved + Self.longestSaveWait)
+    }
+
+    /// Hands the store each changed workspace's state and the session, when they differ from
+    /// what it was last given. A workspace whose window closed or whose tabs moved away is left
+    /// as last saved.
+    private func saveChanges() {
+        saveWait?.cancel()
+        saveWait = nil
+        firstUnsaved = nil
+        guard let store else { return }
+        var states: [WorkspaceState] = []
+        for controller in controllers where unsaved.contains(ObjectIdentifier(controller.workspace))
+        {
+            guard !controller.workspace.isClosed, let state = state(of: controller),
+                lastSaved[state.id] != state
+            else { continue }
+            lastSaved[state.id] = state
+            states.append(state)
+        }
+        unsaved = []
+        let shown = list.workspaces.filter { workspace in
+            controllers.contains { $0.workspace === workspace }
+        }
+        let session = SessionState(workspaces: shown.map(\.id), keyWindow: shown.first?.id)
+        let changedSession = session != lastSession ? session : nil
+        lastSession = session
+        guard !states.isEmpty || changedSession != nil else { return }
+        let previous = saving
+        saving = Task {
+            await previous?.value
+            for state in states {
+                await store.save(state)
+            }
+            if let changedSession {
+                await store.saveSession(changedSession)
+            }
+        }
+    }
+
+    /// The workspace of `controller` as the store keeps it, with its window's frame.
+    private func state(of controller: BrowserWindowController) -> WorkspaceState? {
+        let workspace = controller.workspace
+        guard let window = controller.window,
+            let selected = workspace.tabs.firstIndex(where: { $0 === workspace.selectedTab })
+        else { return nil }
+        return WorkspaceState(
+            id: workspace.id, name: workspace.name, frame: Rect(window.frame),
+            tabs: workspace.tabs.map(\.state), selectedTab: selected,
+            showsSidebar: workspace.showsSidebar)
+    }
+
+    // MARK: Store problems
+
+    /// Shows each problem the store reports, from its loads and its background writes alike, in
+    /// an alert on the front window. Problems that come while the alert shows, or while no
+    /// window can take it, wait and show together. Each is logged as it comes.
+    public func follow(storeProblems problems: AsyncStream<StoreProblem>) {
+        Task { [weak self] in
+            for await problem in problems {
+                Logger(category: "workspaces").error(
+                    "\(problem.description, privacy: .public)")
+                self?.unshownProblems.append(problem)
+                // Problems reported together, as one load reports them, go in one alert.
+                await Task.yield()
+                self?.showStoreProblems()
+            }
+        }
+    }
+
+    /// Shows the waiting problems on the front window, unless the alert already shows or the
+    /// window has a sheet up, such as a question about a file operation.
+    private func showStoreProblems() {
+        guard !unshownProblems.isEmpty, !showsProblems, let window = frontWindow,
+            window.attachedSheet == nil
+        else { return }
+        let alert = storeProblemAlert(unshownProblems)
+        unshownProblems = []
+        showsProblems = true
+        alert.beginSheetModal(for: window) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.showsProblems = false
+                self?.showStoreProblems()
+            }
+        }
+    }
+
+    /// The alert for `problems`: each one's sentence, which names its file, and an OK button.
+    func storeProblemAlert(_ problems: [StoreProblem]) -> NSAlert {
+        precondition(!problems.isEmpty, "an alert for no store problems")
+        let message =
+            problems.count == 1
+            ? "A saved window couldn't be kept as it was."
+            : "\(problems.count) saved windows couldn't be kept as they were."
+        return Dialog.alert(
+            message: message, information: problems.map(\.description).joined(separator: "\n\n"),
+            buttons: ["OK"])
+    }
+
     /// Shows the list after a command: opens a window for each new workspace, shows every open
     /// one again, which takes in tabs merged into it, then closes the windows whose workspace
     /// left the list. Merged tabs take their views before their old window closes.
@@ -194,9 +484,13 @@ public final class WorkspaceWindows {
         for controller in controllers where !open.contains(ObjectIdentifier(controller.workspace)) {
             controller.closeWindow()
         }
+        // A command can change the windows' order or close one, which the session keeps.
+        scheduleSave()
     }
 
-    private func makeController(for workspace: Workspace) {
+    /// Makes `workspace`'s window: at `frame`, moved onto a display if it is on none, or
+    /// cascaded from the most recently active window.
+    private func makeController(for workspace: Workspace, frame: CGRect? = nil) {
         // The window it opens from, most recently active, which it cascades from.
         let front = list.workspaces.first { $0 !== workspace }.flatMap { other in
             controllers.first { $0.workspace === other }
@@ -215,15 +509,19 @@ public final class WorkspaceWindows {
         guard let window = controller.window else {
             preconditionFailure("a browser window controller has no window")
         }
-        if let front {
+        if let frame {
+            window.setFrame(Self.placed(frame, on: screens()), display: false)
+        } else if let front {
             window.setFrameTopLeftPoint(
                 window.cascadeTopLeft(from: NSPoint(x: front.frame.minX, y: front.frame.maxY)))
         }
+        watch(controller)
         if showsWindows {
             controller.showWindow(nil)
         }
         // A question asked while no window was open.
         prompter.showNext()
+        showStoreProblems()
     }
 
     /// The view controller another window has for pane `id`, which moved, taken out of it.
@@ -266,9 +564,14 @@ public final class WorkspaceWindows {
     private func didClose(_ controller: BrowserWindowController) {
         controllers.removeAll { $0 === controller }
         list.remove(controller.workspace)
+        unsaved.remove(ObjectIdentifier(controller.workspace))
+        for observer in windowObservers.removeValue(forKey: ObjectIdentifier(controller)) ?? [] {
+            NotificationCenter.default.removeObserver(observer)
+        }
         if let window = controller.window {
             prompter.windowClosed(window)
         }
+        scheduleSave()
     }
 
     private func controller(for workspace: Workspace) -> BrowserWindowController {

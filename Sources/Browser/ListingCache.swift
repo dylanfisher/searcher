@@ -118,26 +118,7 @@ public actor ListingCache {
     public nonisolated func flush<C: Clock<Duration>>(by deadline: C.Instant, clock: C) async
         -> Bool
     {
-        let race = FirstToFinish()
-        return await withCheckedContinuation { continuation in
-            Task {
-                await self.flush()
-                race.end(with: true)
-            }
-            race.start(
-                continuation,
-                deadline: Task {
-                    do {
-                        try await clock.sleep(until: deadline, tolerance: nil)
-                    } catch is CancellationError {
-                        // The flush finished first.
-                        return
-                    } catch {
-                        preconditionFailure("the clock failed a wait with \(error)")
-                    }
-                    race.end(with: false)
-                })
-        }
+        await FirstToFinish.run(by: deadline, clock: clock) { await self.flush() }
     }
 
     /// The folders kept for `volume`, read from the store when it isn't in memory, and marks the
@@ -222,14 +203,43 @@ private final class StartedInserts: @unchecked Sendable {
 /// Resumes a continuation with the result of some work, such as a flush, or of its deadline,
 /// whichever ends first, and cancels the deadline's wait if the work wins. Work that loses
 /// keeps going.
-final class FirstToFinish: @unchecked Sendable {
+public final class FirstToFinish: @unchecked Sendable {
     // `lock` guards everything below.
     private let lock = NSLock()
     private var continuation: CheckedContinuation<Bool, Never>?
     private var deadline: Task<Void, Never>?
     private var result: Bool?
 
-    func start(
+    private init() {}
+
+    /// Runs `work` and returns true once it ends, or false once `deadline` on `clock` passes
+    /// first, as quitting needs of work that may hang on a share. Work that loses keeps going.
+    public static func run<C: Clock<Duration>>(
+        by deadline: C.Instant, clock: C, _ work: @escaping @Sendable () async -> Void
+    ) async -> Bool {
+        let race = FirstToFinish()
+        return await withCheckedContinuation { continuation in
+            Task {
+                await work()
+                race.end(with: true)
+            }
+            race.start(
+                continuation,
+                deadline: Task {
+                    do {
+                        try await clock.sleep(until: deadline, tolerance: nil)
+                    } catch is CancellationError {
+                        // The work finished first.
+                        return
+                    } catch {
+                        preconditionFailure("the clock failed a wait with \(error)")
+                    }
+                    race.end(with: false)
+                })
+        }
+    }
+
+    private func start(
         _ continuation: CheckedContinuation<Bool, Never>, deadline: Task<Void, Never>
     ) {
         let result: Bool? = lock.withLock {
@@ -245,7 +255,7 @@ final class FirstToFinish: @unchecked Sendable {
         continuation.resume(returning: result)
     }
 
-    func end(with result: Bool) {
+    private func end(with result: Bool) {
         let (continuation, deadline): (CheckedContinuation<Bool, Never>?, Task<Void, Never>?) =
             lock.withLock {
                 guard self.result == nil else { return (nil, nil) }

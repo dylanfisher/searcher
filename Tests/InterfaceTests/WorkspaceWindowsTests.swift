@@ -39,7 +39,7 @@ private struct Fixture {
         windows = WorkspaceWindows(
             service: ListingService(lister: lister) { "Test Disk" },
             systemActions: StubSystemActions(), settings: untouchedSettings(), folderSizes: nil,
-            clipboard: MemoryClipboard())
+            clipboard: MemoryClipboard(), store: nil)
         windows.showsWindows = false
         try await open()
     }
@@ -665,7 +665,8 @@ private func stopEverything(_ windows: WorkspaceWindows) async {
     }
     let windows = WorkspaceWindows(
         service: ListingService(), systemActions: StubSystemActions(),
-        settings: untouchedSettings(), folderSizes: nil, clipboard: MemoryClipboard())
+        settings: untouchedSettings(), folderSizes: nil, clipboard: MemoryClipboard(),
+        store: nil)
     windows.showsWindows = false
     let controller = windows.open(at: Location(path: root))
     let window = try #require(controller.window)

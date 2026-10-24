@@ -8,11 +8,19 @@
 @MainActor
 public final class Tab {
     public let id = TabID()
-    public private(set) var layout: Layout
-    public private(set) var panes: [PaneID: Pane]
+    public private(set) var layout: Layout {
+        didSet { onChange?() }
+    }
+    public private(set) var panes: [PaneID: Pane] {
+        didSet { watchPanes() }
+    }
     /// Runs after an edit that may focus another pane or add one: focus, split, a grid, and
     /// closing a pane. Its workspace sets it, to move the focus of the panes' loads.
     var onFocusChange: (@MainActor () -> Void)?
+    /// Runs after any change to what `state` holds: a layout edit, or a change in one of the
+    /// panes. Its workspace sets it, to save the change. Reading `state` costs work per selected
+    /// row, so whoever saves reads it once changes stop, not on each one.
+    var onChange: (@MainActor () -> Void)?
     /// Set once `closePane` reported `.tab`, `removeFocusedPane` took the last pane, or `close`
     /// ran.
     public private(set) var isClosed = false
@@ -22,6 +30,23 @@ public final class Tab {
     public init(pane: Pane, id: PaneID = PaneID()) {
         layout = Layout(pane: id)
         panes = [id: pane]
+        watchPanes()
+    }
+
+    /// A tab as `state` saved it: its layout, with ratios, focus, focus history and zoom, and
+    /// for each leaf the pane `makePane` restores from the leaf's saved state.
+    public init(restoring state: TabState, panes makePane: (TabState.PaneState) -> Pane) {
+        layout = state.layout
+        panes = state.panes.mapValues(makePane)
+        watchPanes()
+    }
+
+    /// Has each pane report its changes to the tab. A pane that moves to another tab is watched
+    /// by that one from then on.
+    private func watchPanes() {
+        for pane in panes.values {
+            pane.onTabChange = { [weak self] in self?.onChange?() }
+        }
     }
 
     public var focusedPane: Pane {

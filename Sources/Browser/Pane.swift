@@ -79,6 +79,14 @@ public final class Pane {
     /// after any column changes. A column's pane reports to its trail here, so only the trail
     /// sets it.
     public var onChange: (@MainActor () -> Void)?
+    /// Runs when `onChange` does, for the tab holding the pane, so its workspace can save what
+    /// changed. The view owns `onChange`; the tab sets this.
+    var onTabChange: (@MainActor () -> Void)?
+
+    private func reportChange() {
+        onChange?()
+        onTabChange?()
+    }
 
     /// List or columns. Cmd-1 and Cmd-3 switch it.
     public private(set) var viewMode = ViewMode.list
@@ -169,6 +177,24 @@ public final class Pane {
             settings: settings, sortedBy: column, ascending: ascending, isFocused: isFocused,
             selection: name.map { Selection([$0], cursor: $0) } ?? Selection(),
             viewMode: viewMode, rows: nil)
+    }
+
+    /// A pane as `Tab.state` saved it: at its folder, in its view mode and sort, with its Back
+    /// and Forward history, listing the folder right away. The saved names are selected as the
+    /// rows bring them, and the full listing drops the ones the folder no longer has, as for any
+    /// selection made before its rows arrive. In column mode the one column at the folder
+    /// selects the saved cursor. A folder that isn't there shows the missing state
+    /// (`ListingState.missingFolder`).
+    public convenience init(
+        restoring saved: TabState.PaneState, service: ListingService,
+        systemActions: any SystemActions, settings: Settings
+    ) {
+        self.init(
+            location: saved.location, service: service, systemActions: systemActions,
+            settings: settings, sortedBy: saved.sortColumn, ascending: saved.sortAscending,
+            isFocused: false, selection: Selection(saved.selection, cursor: saved.cursor),
+            viewMode: saved.viewMode, rows: nil)
+        history = saved.history
     }
 
     /// A pane that shows `rows`, a complete listing of `location` in list mode, and lists nothing
@@ -325,7 +351,7 @@ public final class Pane {
             viewMode = .column
             columnTrail = ColumnTrail(
                 owner: self, at: location, selecting: cursor, sortedLike: self)
-            onChange?()
+            reportChange()
         case .list:
             guard let trail = columnTrail else {
                 preconditionFailure("column mode without a trail")
@@ -345,7 +371,7 @@ public final class Pane {
     func trailDidChange() {
         guard let trail = columnTrail else { return }
         location = trail.focused.pane.location
-        onChange?()
+        reportChange()
     }
 
     /// Stops the pane's load, its folder monitor and anything pending for its rows, for good.
@@ -357,6 +383,7 @@ public final class Pane {
         columnTrail = nil
         containingTrail = nil
         onChange = nil
+        onTabChange = nil
         // Its closure can hold a command context, which holds this pane.
         namesToSelect = nil
     }
@@ -450,7 +477,7 @@ public final class Pane {
             // The new column lists the folder itself.
             pending.load.cancel()
             restartTrail()
-            onChange?()
+            reportChange()
             finish(nil)
             return
         }
@@ -481,7 +508,7 @@ public final class Pane {
             show(.loading, after: .loaded(complete: false))
             startLoad()
         }
-        onChange?()
+        reportChange()
     }
 
     /// Closes the columns and starts one at `location`, with the selection's cursor selected.
@@ -749,7 +776,7 @@ public final class Pane {
         selectNamesIfListed()
         selectNextIfTrashLanded()
         startSortIfNeeded()
-        onChange?()
+        reportChange()
         startPatch()
         startSizeBatch()
     }
@@ -760,7 +787,7 @@ public final class Pane {
         sortColumn = column
         sortAscending = ascending
         startSortIfNeeded()
-        onChange?()
+        reportChange()
     }
 
     /// Takes the filter field's text at once and filters a copy of the rows off the main actor,
@@ -771,7 +798,7 @@ public final class Pane {
         filter = NameFilter(text)
         namesToSelect = nil
         startSortIfNeeded()
-        onChange?()
+        reportChange()
     }
 
     /// A view setting changed: the rows show or hide hidden entries, or put folders first, once
@@ -785,7 +812,7 @@ public final class Pane {
         }
         guard columnTrail == nil, !isClosed else { return }
         startSortIfNeeded()
-        onChange?()
+        reportChange()
     }
 
     /// Whether `listing` is in the pane's sort and shows what the settings ask for.
@@ -863,7 +890,7 @@ public final class Pane {
         show(state.showing(listing), after: change, resolved: resolved, from: selectionVersion)
         selectNamesIfListed()
         selectNextIfTrashLanded()
-        onChange?()
+        reportChange()
     }
 
     /// Starts a load whose worker also resolves the selection, as it is now, against each listing
@@ -986,7 +1013,7 @@ public final class Pane {
             relistAfterLoad = false
             startLoad()
         }
-        onChange?()
+        reportChange()
     }
 
     /// The rows shown, as a slow or offline state keeps them.
@@ -1042,7 +1069,7 @@ public final class Pane {
         volumeIsGone = true
         cancelSizeWalks()
         goOffline()
-        onChange?()
+        reportChange()
     }
 
     /// A volume mounted at `location` or above it: lists the folder again, and asks for a new
@@ -1056,7 +1083,7 @@ public final class Pane {
         monitor = nil
         monitorGeneration += 1
         reload()
-        onChange?()
+        reportChange()
     }
 
     // MARK: - Selection
@@ -1149,7 +1176,7 @@ public final class Pane {
         self.selection = selection
         selectionVersion += 1
         startSettlingIfNeeded()
-        onChange?()
+        reportChange()
     }
 
     /// Settles a copy of an unsettled selection off the main thread, one at a time. The pane
@@ -1204,7 +1231,7 @@ public final class Pane {
         // Settling moves no version, but a step can now equal the selection, which changes
         // whether Undo and Redo Selection have a step left.
         selectionStepsFound = StepsFound(state: -1, selection: -1)
-        onChange?()
+        reportChange()
     }
 
     /// Shows `state`, finding the selection's rows in its listing, which replaced the last one by
@@ -1766,7 +1793,7 @@ public final class Pane {
         show(
             state.showing(listing), after: .sameEntries, resolved: resolved, from: selectionVersion)
         startSortIfNeeded()
-        onChange?()
+        reportChange()
     }
 
     /// `update` with `sizes` applied to its listing, on the load's worker, so a folder listed

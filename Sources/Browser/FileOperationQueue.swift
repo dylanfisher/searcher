@@ -373,26 +373,7 @@ public actor FileOperationQueue {
     public nonisolated func cancelAll<C: Clock<Duration>>(by deadline: C.Instant, clock: C) async
         -> Bool
     {
-        let race = FirstToFinish()
-        return await withCheckedContinuation { continuation in
-            Task {
-                await self.cancelAllAndWait()
-                race.end(with: true)
-            }
-            race.start(
-                continuation,
-                deadline: Task {
-                    do {
-                        try await clock.sleep(until: deadline, tolerance: nil)
-                    } catch is CancellationError {
-                        // Every operation finished first.
-                        return
-                    } catch {
-                        preconditionFailure("the clock failed a wait with \(error)")
-                    }
-                    race.end(with: false)
-                })
-        }
+        await FirstToFinish.run(by: deadline, clock: clock) { await self.cancelAllAndWait() }
     }
 
     /// The volume mounted at `mountPoint` is about to unmount. Every unfinished operation with a

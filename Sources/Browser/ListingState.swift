@@ -59,6 +59,18 @@ public enum ListingState: Sendable {
         }
     }
 
+    /// The path of a folder that isn't there, for the missing state: it was deleted or moved, a
+    /// file has its name now, or it is on a volume that isn't mounted. The pane stays at that path
+    /// and shows it rather than moving to a folder that is there, so a restored pane keeps its
+    /// place until the folder comes back. Nil for every other state.
+    public var missingFolder: String? {
+        guard case .failed(let error) = self else { return nil }
+        switch error.reason {
+        case .notFound, .notADirectory: return error.path
+        case .privacyProtected, .permissionDenied, .unreachable, .other: return nil
+        }
+    }
+
     /// The rows shown are a full listing read by the pane's own loads, so a name they lack isn't
     /// in the folder.
     public var showsCompleteListing: Bool {
