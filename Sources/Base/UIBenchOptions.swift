@@ -20,6 +20,9 @@ public struct UIBenchOptions: Sendable, Equatable {
         /// pane on W2, to every window on screen and the key window's focused pane showing
         /// rows (B1).
         case restoredSession = "restored-session"
+        /// A launch restoring one window whose pane is on `--path`, a folder on a share, after
+        /// listing it once so the cache file holds it, to the frame with its cached rows (B4).
+        case restoredNetworkPane = "restored-network-pane"
 
         /// Whether it times a real folder, `--path`, which it never defaults to.
         public var needsPath: Bool {

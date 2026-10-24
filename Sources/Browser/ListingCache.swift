@@ -3,10 +3,11 @@ import Foundation
 
 /// Listings of folders on network volumes, kept so a folder revisited shows its rows before the
 /// share answers. Memory holds the `volumeCap` most recently used volumes, and at most `entryCap`
-/// entries across them; `store`, when there is one, keeps every volume on disk and reads a volume
-/// back on its first use. Folders on local
-/// volumes are never kept: listing them again is about as fast as reading a cache. See
-/// docs/decisions/0039-listing-cache.md.
+/// entries across them, except the folders of saved workspaces (`restore`), which stay;
+/// `store`, when there is one, keeps every volume on disk and reads a volume back on its first
+/// use. Folders on local volumes are never kept: listing them again is about as fast as reading
+/// a cache. See docs/decisions/0039-listing-cache.md and
+/// docs/decisions/0081-restored-network-panes.md.
 public actor ListingCache {
     /// One folder's entries and when they were listed. Sort keys and folded names aren't kept;
     /// `Listing` builds them from the entries.
@@ -33,6 +34,13 @@ public actor ListingCache {
     private let load: (@Sendable (VolumeIdentity) async -> [String: Folder])?
     private let save: @Sendable ([String: Folder], VolumeIdentity) async -> Void
     private let flushStore: @Sendable () async -> Void
+    /// The store's volume for a path the mount table doesn't place; nil when there is no store.
+    private let findVolume: (@Sendable (String) async -> (VolumeIdentity, [String: Folder])?)?
+    private let keepFiles: @Sendable (Set<VolumeIdentity>) async -> Void
+    /// The folders of saved workspaces' panes, which the entry and volume caps leave in memory.
+    private var keptFolders: Set<String> = []
+    /// The volumes `restore` found in the store for folders the mount table didn't place.
+    private let restoredVolumes = NetworkVolumes()
     /// Folders by path, for each volume in memory.
     private var volumes: [VolumeIdentity: [String: Folder]] = [:]
     /// Volumes in memory, least recently used first.
@@ -47,13 +55,16 @@ public actor ListingCache {
         store: ListingCacheStore?
     ) {
         var load: (@Sendable (VolumeIdentity) async -> [String: Folder])?
+        var findVolume: (@Sendable (String) async -> (VolumeIdentity, [String: Folder])?)?
         if let store {
             load = { volume in await store.load(volume) }
+            findVolume = { path in await store.volume(holding: path) }
         }
         self.init(
             volumeCap: volumeCap, entryCap: entryCap, load: load,
             save: { folders, volume in await store?.save(folders, for: volume) },
-            flush: { await store?.flush() })
+            flush: { await store?.flush() }, findVolume: findVolume,
+            keepFiles: { volumes in await store?.keep(volumes) })
     }
 
     /// A cache over the given store calls, so a test can hold a read.
@@ -61,7 +72,9 @@ public actor ListingCache {
         volumeCap: Int = defaultVolumeCap, entryCap: Int = defaultEntryCap,
         load: (@Sendable (VolumeIdentity) async -> [String: Folder])?,
         save: @escaping @Sendable ([String: Folder], VolumeIdentity) async -> Void,
-        flush: @escaping @Sendable () async -> Void
+        flush: @escaping @Sendable () async -> Void,
+        findVolume: (@Sendable (String) async -> (VolumeIdentity, [String: Folder])?)? = nil,
+        keepFiles: @escaping @Sendable (Set<VolumeIdentity>) async -> Void = { _ in }
     ) {
         precondition(volumeCap > 0, "a listing cache needs room for a volume, got \(volumeCap)")
         precondition(entryCap > 0, "a listing cache needs room for an entry, got \(entryCap)")
@@ -70,6 +83,8 @@ public actor ListingCache {
         self.load = load
         self.save = save
         flushStore = flush
+        self.findVolume = findVolume
+        self.keepFiles = keepFiles
     }
 
     /// The folder at `path` on `volume`, or nil if none is kept. Reads the volume's file the
@@ -77,6 +92,66 @@ public actor ListingCache {
     public func folder(at path: String, on volume: VolumeIdentity) async -> Folder? {
         guard volume.kind == .network else { return nil }
         return await folders(on: volume)[path]
+    }
+
+    /// Takes `folders`, the folders of the saved workspaces' panes, as the ones the caps leave,
+    /// in memory and on disk, and reads the volume files holding them into memory, so restored
+    /// panes find their rows without a file read. A folder the mount table places on a network
+    /// volume is read for that volume. One it places on no volume past a shorter mount point,
+    /// as on a share that isn't mounted, is read for the volume whose file names the longest
+    /// mount point holding it, which `restoredVolume(holding:)` then gives. Asks no volume:
+    /// `mountedVolumes` is the kernel's mount table, read on a `BlockingCallThread` without
+    /// waiting on any volume, and the files are the store's.
+    public func restore(
+        folders: Set<String>,
+        mountedVolumes: @escaping @Sendable () -> [VolumeIdentity] = VolumeIdentity.mounted
+    ) async {
+        keptFolders = folders
+        guard load != nil, let findVolume else { return }
+        let mounted = await BlockingCallThread.run { mountedVolumes() }
+        var read: Set<VolumeIdentity> = []
+        for path in folders.sorted() {
+            let placed = mounted.filter { isPath(path, atOrUnder: $0.mountPoint) }
+                .max { $0.mountPoint.count < $1.mountPoint.count }
+            if let placed, placed.kind == .network {
+                _ = await self.folders(on: placed)
+                read.insert(placed)
+                continue
+            }
+            let shorter = placed?.mountPoint.count ?? 0
+            if let found = restoredVolumes.volume(holding: path),
+                found.mountPoint.count > shorter
+            {
+                continue
+            }
+            guard let (volume, stored) = await findVolume(path),
+                volume.mountPoint.count > shorter
+            else { continue }
+            // An insert during the read has newer folders than the file.
+            keep(stored.merging(volumes[volume] ?? [:]) { _, inserted in inserted }, for: volume)
+            touch(volume)
+            restoredVolumes.add(volume)
+            read.insert(volume)
+        }
+        await keepFiles(read)
+    }
+
+    /// `restore(folders:mountedVolumes:)` with the folder of every pane in `contents`' workspaces,
+    /// saved and open alike, as the launch reads them.
+    public func restore(
+        _ contents: WorkspaceStore.Contents,
+        mountedVolumes: @escaping @Sendable () -> [VolumeIdentity] = VolumeIdentity.mounted
+    ) async {
+        let folders = contents.workspaces.values.flatMap(\.tabs).flatMap { tab in
+            tab.panes.values.map(\.location.path)
+        }
+        await restore(folders: Set(folders), mountedVolumes: mountedVolumes)
+    }
+
+    /// The volume `restore` found in the store for `path`, which the mount table didn't place:
+    /// the share a restored pane was on, if it isn't mounted. Nil for any other path.
+    public nonisolated func restoredVolume(holding path: String) -> VolumeIdentity? {
+        restoredVolumes.volume(holding: path)
     }
 
     /// Keeps `folder` as the listing of `path` on `volume`, replacing any it had, and saves the
@@ -150,23 +225,33 @@ public actor ListingCache {
 
     /// Marks `volume`, which is in memory, most recently used, and drops the least recently used
     /// volumes past either cap. When `volume` alone holds more than `entryCap` entries, its least
-    /// recently listed folders go, down to one folder, which stays however large it is.
+    /// recently listed folders go, down to one folder, which stays however large it is. Kept
+    /// folders, and the volumes holding them, stay past both caps.
     private func touch(_ volume: VolumeIdentity) {
         recency.removeAll { $0 == volume }
         recency.append(volume)
-        while recency.count > volumeCap {
-            drop(recency.removeFirst())
+        while recency.count > volumeCap, let next = leastRecentlyUsedDroppable() {
+            drop(recency.remove(at: next))
         }
-        while recency.count > 1, entryCount > entryCap {
-            drop(recency.removeFirst())
+        while entryCount > entryCap, let next = leastRecentlyUsedDroppable() {
+            drop(recency.remove(at: next))
         }
         guard entryCount > entryCap, var folders = volumes[volume] else { return }
-        for (path, folder) in folders.sorted(by: { $0.value.listedAt < $1.value.listedAt }) {
+        for (path, folder) in folders.sorted(by: { $0.value.listedAt < $1.value.listedAt })
+        where !keptFolders.contains(path) {
             guard folders.count > 1, entryCount > entryCap else { break }
             entryCounts[volume, default: 0] -= folder.entries.count
             folders[path] = nil
         }
         volumes[volume] = folders
+    }
+
+    /// The index in `recency` of the least recently used volume holding no kept folder, other
+    /// than the one in use, which is last.
+    private func leastRecentlyUsedDroppable() -> Int? {
+        recency.dropLast().firstIndex { volume in
+            !(volumes[volume]?.keys.contains(where: keptFolders.contains) ?? false)
+        }
     }
 
     private var entryCount: Int {

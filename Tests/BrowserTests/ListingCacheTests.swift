@@ -193,3 +193,58 @@ private func folder(of count: Int, at seconds: Double) -> ListingCache.Folder {
     let reread = ListingCache(store: store(temporary))
     #expect(await reread.folder(at: "/fake/a/x", on: share("a")) == listing)
 }
+
+@Test func aSavedWorkspacesFoldersOutliveTheEntryCap() async {
+    let cache = ListingCache(entryCap: 4, store: nil)
+    await cache.restore(folders: ["/fake/a/kept"], mountedVolumes: { [] })
+    await cache.insert(folder(of: 2, at: 1), at: "/fake/a/kept", on: share("a"))
+    await cache.insert(folder(of: 2, at: 2), at: "/fake/a/y", on: share("a"))
+    await cache.insert(folder(of: 2, at: 3), at: "/fake/a/z", on: share("a"))
+    // Past the cap again, with a, which holds the kept folder, the least recently used volume.
+    await cache.insert(folder(of: 2, at: 4), at: "/fake/b/x", on: share("b"))
+
+    #expect(await cache.folder(at: "/fake/b/x", on: share("b")) != nil)
+    #expect(await cache.folder(at: "/fake/a/kept", on: share("a")) != nil)
+    // The least recently listed folder that isn't kept went instead.
+    #expect(await cache.folder(at: "/fake/a/y", on: share("a")) == nil)
+    #expect(await cache.folder(at: "/fake/a/z", on: share("a")) != nil)
+}
+
+@Test func aRestoreReadsTheMountedVolumesHoldingTheFoldersOffTheMainThread() async throws {
+    let temporary = try TemporaryFolder("ListingCacheTests")
+    let writer = ListingCache(store: store(temporary))
+    await writer.insert(listing, at: "/fake/a/x", on: share("a"))
+    await writer.flush()
+    let reads = EventLog<Bool>()
+
+    let cache = ListingCache(store: store(temporary))
+    await cache.restore(folders: ["/fake/a/x", "/Users/dylan"]) {
+        reads.append(Thread.isMainThread)
+        return [share("a")]
+    }
+    try FileManager.default.removeItem(
+        at: temporary.url.appending(path: "Caches/listings"))
+
+    #expect(reads.all == [false])
+    #expect(await cache.folder(at: "/fake/a/x", on: share("a")) == listing)
+}
+
+@Test func aRestoreKeepsTheFolderOfEveryPaneInTheStoredWorkspaces() async {
+    let cache = ListingCache(entryCap: 2, store: nil)
+    let layout = Layout()
+    let pane = TabState.PaneState(
+        location: Location(path: "/fake/a/kept"), viewMode: .list, history: History(),
+        selection: [], cursor: nil, sortColumn: .name, sortAscending: true)
+    let saved = WorkspaceState(
+        id: UUID(), name: "Albums", frame: Rect(x: 0, y: 0, width: 800, height: 600),
+        tabs: [TabState(layout: layout, panes: [layout.focused: pane])], selectedTab: 0,
+        showsSidebar: false)
+
+    await cache.restore(
+        WorkspaceStore.Contents(session: nil, workspaces: [saved.id: saved]),
+        mountedVolumes: { [] })
+    await cache.insert(folder(of: 2, at: 1), at: "/fake/a/kept", on: share("a"))
+    await cache.insert(folder(of: 2, at: 2), at: "/fake/a/other", on: share("a"))
+
+    #expect(await cache.folder(at: "/fake/a/kept", on: share("a")) != nil)
+}

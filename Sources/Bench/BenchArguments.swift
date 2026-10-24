@@ -72,6 +72,11 @@ enum BenchArguments: Equatable {
                     "each launch restores a saved session of 3 windows × 2 tabs × 4 panes on W1, "
                     + "one pane on W2, timed to every window on screen and the key window's "
                     + "focused pane showing rows (B1)"
+            case .restoredNetworkPane:
+                summary =
+                    "each launch lists --path once so the cache file keeps it, then restores a "
+                    + "window on it as a launch does, timed from the window shown to the frame "
+                    + "with its cached rows (B4)"
             }
             let path = scenario.needsPath ? " --path <dir>" : ""
             return "  \(scenario.rawValue)\(path)\n      \(summary)"

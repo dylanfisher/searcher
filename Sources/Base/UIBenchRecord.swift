@@ -80,6 +80,9 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
     /// `revisit` scenario: open a subfolder of `--path` listed before → frame with its cached
     /// rows (B4).
     public var revisit: [Double]
+    /// `restored-network-pane` scenario: a restored window on `--path` shown → frame with its
+    /// cached rows (B4), one per launch.
+    public var restoredCachedRows: [Double]
     /// `column-walk` scenario: each arrow key walking `--path` in column view → frame (B6).
     public var columnWalkKey: [Double]
     /// ↓ key → frame on W2, with the operations panel open, while the queue copies W8 to a disk
@@ -158,8 +161,8 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         foldersFirstToggle: [Double] = [], sortKey: [Double] = [], filterKey: [Double] = [],
         columnDown: [Double] = [], columnRight: [Double] = [], columnLeft: [Double] = [],
         splitDown: [Double] = [], gridDown: [Double] = [], tenPaneOpen: [Double] = [],
-        coldOpen: [Double] = [], revisit: [Double] = [], columnWalkKey: [Double] = [],
-        queueKeyDown: [Double] = [], stalls: [Stall] = []
+        coldOpen: [Double] = [], revisit: [Double] = [], restoredCachedRows: [Double] = [],
+        columnWalkKey: [Double] = [], queueKeyDown: [Double] = [], stalls: [Stall] = []
     ) {
         self.launch = launch
         self.openW1 = openW1
@@ -190,6 +193,7 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         self.tenPaneOpen = tenPaneOpen
         self.coldOpen = coldOpen
         self.revisit = revisit
+        self.restoredCachedRows = restoredCachedRows
         self.columnWalkKey = columnWalkKey
         self.queueKeyDown = queueKeyDown
         self.stalls = stalls
@@ -226,6 +230,7 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         tenPaneOpen += other.tenPaneOpen
         coldOpen += other.coldOpen
         revisit += other.revisit
+        restoredCachedRows += other.restoredCachedRows
         columnWalkKey += other.columnWalkKey
         queueKeyDown += other.queueKeyDown
         stalls += other.stalls
