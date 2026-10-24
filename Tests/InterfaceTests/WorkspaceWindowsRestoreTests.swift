@@ -72,7 +72,7 @@ private func frame(of controller: BrowserWindowController) throws -> CGRect {
     #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
 
     let restoring = makeWindows(store: nil)
-    let key = try #require(restoring.restore(await diskStore(folder).load()))
+    let key = try #require(await restoring.restore(diskStore(folder).load()))
 
     #expect(restoring.list.workspaces.map(\.id) == [front.workspace.id, back.workspace.id])
     #expect(key.workspace.id == front.workspace.id)
@@ -105,7 +105,7 @@ private func frame(of controller: BrowserWindowController) throws -> CGRect {
     let session = SessionState(workspaces: [missing, kept.workspace.id], keyWindow: missing)
 
     let restoring = makeWindows(store: nil)
-    let key = restoring.restore(
+    let key = await restoring.restore(
         WorkspaceStore.Contents(session: session, workspaces: saved.workspaces, snapshots: [:]))
 
     #expect(restoring.controllers.map(\.workspace.id) == [kept.workspace.id])
@@ -113,21 +113,22 @@ private func frame(of controller: BrowserWindowController) throws -> CGRect {
     #expect(key?.workspace.id == kept.workspace.id)
 }
 
-@MainActor @Test func noSessionRestoresNoWindow() {
+@MainActor @Test func noSessionRestoresNoWindow() async {
     let restoring = makeWindows(store: nil)
 
     #expect(
-        restoring.restore(WorkspaceStore.Contents(session: nil, workspaces: [:], snapshots: [:]))
+        await restoring.restore(
+            WorkspaceStore.Contents(session: nil, workspaces: [:], snapshots: [:]))
             == nil)
     #expect(restoring.controllers.isEmpty)
 }
 
-@MainActor @Test func aSessionOfOnlyMissingWorkspacesRestoresNoWindow() {
+@MainActor @Test func aSessionOfOnlyMissingWorkspacesRestoresNoWindow() async {
     let restoring = makeWindows(store: nil)
     let session = SessionState(workspaces: [UUID()], keyWindow: nil)
 
     #expect(
-        restoring.restore(
+        await restoring.restore(
             WorkspaceStore.Contents(session: session, workspaces: [:], snapshots: [:])) == nil)
     #expect(restoring.controllers.isEmpty)
 }
@@ -142,7 +143,7 @@ private func frame(of controller: BrowserWindowController) throws -> CGRect {
     #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
 
     let restoring = makeWindows(store: nil)
-    let key = try #require(restoring.restore(await diskStore(folder).load()))
+    let key = try #require(await restoring.restore(diskStore(folder).load()))
     let restored = key.workspace.selectedTab.focusedPane
     await settle { restored.state.isLoaded && restored.selection.isSettled }
 
@@ -157,7 +158,7 @@ private func frame(of controller: BrowserWindowController) throws -> CGRect {
     #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
 
     let restoring = makeWindows(store: nil)
-    let key = try #require(restoring.restore(await diskStore(folder).load()))
+    let key = try #require(await restoring.restore(diskStore(folder).load()))
     #expect(restoring.folderVisits.history.folders.isEmpty)
     key.workspace.selectedTab.focusedPane.navigate(to: Location(path: "/root/docs"))
 
@@ -396,7 +397,7 @@ private final class SavingFixture {
     #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
     let fixture = try SavingFixture()
 
-    fixture.windows.restore(await diskStore(folder).load())
+    await fixture.windows.restore(diskStore(folder).load())
     #expect(await fixture.windows.saveBeforeQuit(by: .now + .seconds(5)))
 
     let unsaved = await fixture.handed()
@@ -439,16 +440,16 @@ private func savedSession(in folder: TemporaryFolder) async -> WorkspaceStore.Co
     let onDisk = await diskStore(folder).load()
     #expect(onDisk == saved)
 
-    launching.restore(saved)
+    await launching.restore(saved)
     #expect(launching.controllers.map(\.workspace.id) == saved.session?.workspaces)
     #expect(!launching.opensWindowOnReopen)
 }
 
-@MainActor @Test func aDockClickAfterNothingWasRestoredOpensAWindow() {
+@MainActor @Test func aDockClickAfterNothingWasRestoredOpensAWindow() async {
     let launching = makeWindows(store: nil)
     launching.holdSavesUntilRestore()
 
-    launching.restore(WorkspaceStore.Contents(session: nil, workspaces: [:], snapshots: [:]))
+    await launching.restore(WorkspaceStore.Contents(session: nil, workspaces: [:], snapshots: [:]))
 
     #expect(launching.opensWindowOnReopen)
 }
@@ -832,7 +833,7 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
 
     let restoring = makeWindows(store: diskStore(folder))
     restoring.holdSavesUntilRestore()
-    let restored = try #require(restoring.restore(await diskStore(folder).load()))
+    let restored = try #require(await restoring.restore(diskStore(folder).load()))
 
     #expect(restored.workspace.id == id && restored.workspace.name == "Project 1")
     #expect(restored.workspace.selectedTab.focusedPane.location == Location(path: "/root/docs"))
@@ -855,7 +856,7 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
 
     let restoring = makeWindows(store: diskStore(folder))
     restoring.holdSavesUntilRestore()
-    let restored = try #require(restoring.restore(await diskStore(folder).load()))
+    let restored = try #require(await restoring.restore(diskStore(folder).load()))
 
     #expect(restored.workspace.name == "Project 1")
     #expect(restored.window?.isDocumentEdited == false)
@@ -872,7 +873,7 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
 
     let restoring = makeWindows(store: diskStore(folder))
     restoring.holdSavesUntilRestore()
-    #expect(restoring.restore(await diskStore(folder).load()) == nil)
+    #expect(await restoring.restore(diskStore(folder).load()) == nil)
     #expect(
         restoring.list.saved == [WorkspaceList.Saved(id: id, name: "Project 1", isOpen: false)])
 
@@ -881,7 +882,7 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
     #expect(try frame(of: reopened) == savedFrame)
 }
 
-@MainActor @Test func savingWaitsForTheLaunchsRestore() throws {
+@MainActor @Test func savingWaitsForTheLaunchsRestore() async throws {
     let windows = makeWindows(store: nil)
     windows.holdSavesUntilRestore()
     // A window opened while the session is read, as New Window opens one.
@@ -890,7 +891,7 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
     #expect(throws: WorkspaceList.NameRefusal.loading) {
         try early.saveWorkspace(as: "Project 1")
     }
-    windows.restore(WorkspaceStore.Contents(session: nil, workspaces: [:], snapshots: [:]))
+    await windows.restore(WorkspaceStore.Contents(session: nil, workspaces: [:], snapshots: [:]))
     try early.saveWorkspace(as: "Project 1")
     #expect(early.workspace.name == "Project 1")
 }
@@ -912,7 +913,7 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
 
     let restoring = makeWindows(store: diskStore(folder))
     restoring.holdSavesUntilRestore()
-    restoring.restore(await diskStore(folder).load())
+    await restoring.restore(diskStore(folder).load())
 
     #expect(
         restoring.list.saved == [
@@ -946,7 +947,7 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
 
     let restoring = makeWindows(store: diskStore(folder))
     restoring.holdSavesUntilRestore()
-    restoring.restore(await diskStore(folder).load())
+    await restoring.restore(diskStore(folder).load())
 
     #expect(
         restoring.list.saved == [
@@ -969,7 +970,7 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
 
     let restoring = makeWindows(store: nil)
     let restored = try #require(
-        restoring.restore(
+        await restoring.restore(
             WorkspaceStore.Contents(
                 session: saved.session, workspaces: saved.workspaces, snapshots: [:])))
 
@@ -1027,7 +1028,7 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
 
     let restoring = makeWindows(store: diskStore(folder))
     restoring.holdSavesUntilRestore()
-    restoring.restore(contents)
+    await restoring.restore(contents)
 
     #expect(restoring.controllers.map(\.workspace.id) == [kept.workspace.id])
     #expect(
@@ -1106,7 +1107,7 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
 
     let restoring = makeWindows(store: diskStore(folder))
     restoring.holdSavesUntilRestore()
-    let restored = try #require(restoring.restore(contents))
+    let restored = try #require(await restoring.restore(contents))
 
     #expect(restored.showsSidebar)
 }
@@ -1188,4 +1189,128 @@ private func survivesTheCap(_ path: String, in cache: ListingCache) async -> Boo
     #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
 
     #expect(await !survivesTheCap("/root", in: cache))
+}
+
+// MARK: Cached rows in the first frame
+
+/// Windows over `cache`, whose service places every folder on `share` from its mount table and
+/// lists with `lister`. Each volume read waits for `volumeGate` and notes in `volumeReads`
+/// whether it ran on the main thread.
+@MainActor
+private func windowsOnShare(
+    _ share: VolumeIdentity, lister: GatedLister, cache: ListingCache,
+    volumeGate: DispatchSemaphore, volumeReads: EventLog<Bool>
+) -> WorkspaceWindows {
+    let service = ListingService(
+        lister: lister, rootVolumeName: { "Test Disk" },
+        volumeOf: { _ throws(ListingError) in
+            volumeReads.append(Thread.isMainThread)
+            volumeGate.wait()
+            // Open for every later read too.
+            volumeGate.signal()
+            return share
+        },
+        mountedVolumes: { [share] }, cache: cache)
+    let windows = WorkspaceWindows(
+        service: service, systemActions: StubSystemActions(), settings: untouchedSettings(),
+        folderSizes: nil, clipboard: MemoryClipboard(), store: nil, cache: cache)
+    windows.showsWindows = false
+    windows.screens = { [screen] }
+    return windows
+}
+
+/// A session of one window of one pane at `path`, in list view.
+private func oneWindowSession(at path: String) -> WorkspaceStore.Contents {
+    let layout = Layout()
+    let workspace = WorkspaceState(
+        id: UUID(), name: nil, frame: Rect(x: 0, y: 0, width: 1000, height: 700),
+        tabs: [
+            TabState(
+                layout: layout,
+                panes: [
+                    layout.focused: TabState.PaneState(
+                        location: Location(path: path), viewMode: .list, history: History(),
+                        selection: [], cursor: nil, sortColumn: .name, sortAscending: true)
+                ])
+        ], selectedTab: 0, showsSidebar: false)
+    return WorkspaceStore.Contents(
+        session: SessionState(workspaces: [workspace.id], keyWindow: workspace.id),
+        workspaces: [workspace.id: workspace], snapshots: [:])
+}
+
+@MainActor @Test func aRestoredPaneOnAShareHasItsCachedRowsBeforeItsWindowIsShown() async throws {
+    let music = share("music")
+    let album = "/music/Album"
+    let cache = ListingCache(store: nil)
+    await cache.insert(
+        ListingCache.Folder(entries: [file("b"), file("a")], listedAt: testDate), at: album,
+        on: music)
+    await cache.restore(folders: [album], mountedVolumes: { [music] })
+    let lister = GatedLister([album: .batches([[file("a"), file("c")]])])
+    // The share doesn't answer until the test lets it, so the restore can't wait for it.
+    let volumeGate = DispatchSemaphore(value: 0)
+    let volumeReads = EventLog<Bool>()
+    let windows = windowsOnShare(
+        music, lister: lister, cache: cache, volumeGate: volumeGate, volumeReads: volumeReads)
+
+    let restored = try #require(await windows.restore(oneWindowSession(at: album)))
+
+    // Nothing has run on the main queue since: these are the rows the window first shows.
+    let pane = restored.workspace.selectedTab.focusedPane
+    guard case .cachedRefreshing(let rows, let listedAt) = pane.state else {
+        Issue.record("the pane was \(pane.state) as its window was shown")
+        volumeGate.signal()
+        return
+    }
+    #expect((0..<rows.count).map { rows[$0].name } == ["a", "b"])
+    #expect(listedAt == testDate)
+    let table = try #require(restored.window?.firstResponder as? ListingTableView)
+    #expect(table.numberOfRows == 2)
+
+    volumeGate.signal()
+    #expect(await lister.waitForCall(album))
+    lister.release(album)
+    await settle {
+        guard case .loaded(let rows) = pane.state else { return false }
+        return (0..<rows.count).map { rows[$0].name } == ["a", "c"]
+    }
+    #expect(!volumeReads.all.isEmpty)
+    #expect(!volumeReads.all.contains(true))
+    #expect(lister.calls.map(\.onMainThread) == [false])
+}
+
+@MainActor @Test func aRestoreShowsItsWindowsAnywayWhenCachedRowsDontComeInTime() async throws {
+    let music = share("music")
+    let album = "/music/Album"
+    // The cache's read of the share's file never ends.
+    let cache = ListingCache(
+        load: { _ in
+            await withCheckedContinuation {
+                (_: CheckedContinuation<[String: ListingCache.Folder], Never>) in
+            }
+        }, save: { _, _ in }, flush: {})
+    let volumeGate = DispatchSemaphore(value: 0)
+    let windows = windowsOnShare(
+        music, lister: GatedLister([album: .blockForever]), cache: cache,
+        volumeGate: volumeGate, volumeReads: EventLog<Bool>())
+    let clock = ManualClock()
+    windows.restoreClock = clock
+    var faults: [String] = []
+    windows.logFault = { faults.append($0) }
+    windows.holdSavesUntilRestore()
+
+    let restoring = Task { await windows.restore(oneWindowSession(at: album)) != nil }
+    await settle { clock.waitingSleeps == 1 }
+    #expect(windows.controllers.isEmpty)
+    #expect(windows.awaitsRestore)
+    clock.advance(by: WorkspaceWindows.cachedRowsLimit)
+    #expect(await restoring.value)
+
+    #expect(windows.controllers.count == 1)
+    let restored = try #require(windows.controllers.first)
+    let state = restored.workspace.selectedTab.focusedPane.state
+    if case .loading = state {} else { Issue.record("the pane was \(state), not loading") }
+    #expect(faults.count == 1)
+    #expect(faults.first?.contains(album) == true)
+    volumeGate.signal()
 }

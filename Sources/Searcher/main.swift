@@ -143,7 +143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         Task {
             // The store reads on its own actor, so the main thread waits on no file.
             let contents = await restoring.value
-            let window = windows.restore(contents)?.window ?? openHomeWindow()
+            let window = await windows.restore(contents)?.window ?? openHomeWindow()
             NSApp.activate()
             LaunchWarmup.shared.start(after: window)
         }

@@ -56,6 +56,12 @@ public final class WorkspaceWindows {
     private var saveWait: Task<Void, Never>?
     /// The clock saves wait on. Tests give a manual one.
     var saveClock = SaveClock(ContinuousClock())
+    /// The clock a restore's wait for cached rows runs on. Tests give a manual one.
+    var restoreClock: any Clock<Duration> = ContinuousClock()
+    /// Where a restore reports cached rows that didn't come in time. Tests read it.
+    var logFault: (String) -> Void = { message in
+        Logger(category: "workspaces").fault("\(message, privacy: .public)")
+    }
     /// When the first change not yet saved came, on `saveClock`.
     private var firstUnsaved: Duration?
     /// When the last change came, on `saveClock`.
@@ -259,22 +265,29 @@ public final class WorkspaceWindows {
     /// focused pane's load goes first, and its window is made key when windows are shown.
     /// Returns the key window's controller, or nil when there was nothing to restore. Every pane
     /// lists its folder off the main thread, so a slow or missing one doesn't hold the windows
-    /// back.
+    /// back. The windows are made once the panes of their selected tabs have the rows the
+    /// listing cache keeps for them, so those are in each window's first frame, or once
+    /// `cachedRowsLimit` passes on `restoreClock`; saves stay held meanwhile.
     @discardableResult
-    public func restore(_ contents: WorkspaceStore.Contents) -> BrowserWindowController? {
+    public func restore(_ contents: WorkspaceStore.Contents) async -> BrowserWindowController? {
+        let saved = contents.session?.workspaces.compactMap { contents.workspaces[$0] } ?? []
+        let snapshots = freelyNamed(contents.snapshots, frontFirst: saved.map(\.id))
+        let restoring = restoredWorkspaces(saved, contents: contents, snapshots: snapshots)
+        if let restoring {
+            await waitForCachedRows(
+                of: restoring.workspaces.values.flatMap { $0.selectedTab.panes.values })
+        }
         // Decided now, whatever is restored: saves from here on keep the windows as they are.
         awaitsRestore = false
         list.awaitsRestore = false
         // Runs last: saves the changes noted while saves were held, and the renames and deletes.
         defer { scheduleSave() }
-        let saved = contents.session?.workspaces.compactMap { contents.workspaces[$0] } ?? []
         let open = Set(saved.map(\.id))
         // Window files of windows a crash closed, or of a session that didn't load.
         for id in contents.workspaces.keys where !open.contains(id) {
             forgetWindow(id)
         }
-        let snapshots = freelyNamed(contents.snapshots, frontFirst: saved.map(\.id))
-        let key = openWindows(saved, contents: contents, snapshots: snapshots)
+        let key = restoring.map { openWindows($0, contents: contents, snapshots: snapshots) }
         // Once the windows are open, so their snapshots are listed open.
         for snapshot in snapshots {
             do {
@@ -317,11 +330,17 @@ public final class WorkspaceWindows {
         }
     }
 
-    /// Opens the windows of `saved`, front first, each named after its snapshot in `snapshots`
-    /// if it has one. Returns the key window's controller, or nil with no window.
-    private func openWindows(
+    /// How long a restore waits for its panes' cached rows before it shows the windows anyway.
+    /// The cache is asked off the main thread and never waits on a share, so only a cache
+    /// that stopped answering takes this long.
+    static let cachedRowsLimit: Duration = .milliseconds(300)
+
+    /// The workspaces of `saved`, made with their panes, which start listing, each named after
+    /// its snapshot in `snapshots` if it has one: their states, front first, and the key
+    /// window's workspace ID. Nil with no window to open.
+    private func restoredWorkspaces(
         _ saved: [WorkspaceState], contents: WorkspaceStore.Contents, snapshots: [WorkspaceState]
-    ) -> BrowserWindowController? {
+    ) -> (states: [WorkspaceState], keyID: UUID, workspaces: [UUID: Workspace])? {
         guard let session = contents.session, !saved.isEmpty else { return nil }
         let linked = Dictionary(uniqueKeysWithValues: snapshots.map { ($0.id, $0) })
         let states = saved.map { $0.renamed(linked[$0.id]?.name) }
@@ -331,6 +350,43 @@ public final class WorkspaceWindows {
         let ordered = states.filter { $0.id == keyID } + states.filter { $0.id != keyID }
         let workspaces = Dictionary(
             uniqueKeysWithValues: ordered.map { ($0.id, restoredWorkspace($0)) })
+        return (states, keyID, workspaces)
+    }
+
+    /// Returns once every pane of `panes` has the rows the listing cache keeps for it, or once
+    /// `cachedRowsLimit` passes on `restoreClock`, which logs a fault naming the folders of the
+    /// panes still waiting.
+    private func waitForCachedRows(of panes: [Pane]) async {
+        let waiting = WaitingPanes(panes)
+        let handed = await Self.firstToFinish(on: restoreClock, limit: Self.cachedRowsLimit) {
+            @MainActor in
+            for pane in panes {
+                await pane.cachedRowsHanded()
+                waiting.remove(pane)
+            }
+        }
+        guard !handed else { return }
+        let limit = String(describing: Self.cachedRowsLimit)
+        logFault(
+            "showing the restored windows without the cached rows of \(waiting.folders): the "
+                + "listing cache didn't hand them in \(limit)")
+    }
+
+    /// `FirstToFinish.run` with a deadline `limit` from now on `clock`.
+    private static func firstToFinish<C: Clock<Duration>>(
+        on clock: C, limit: Duration, _ work: @escaping @Sendable () async -> Void
+    ) async -> Bool {
+        await FirstToFinish.run(by: clock.now.advanced(by: limit), clock: clock, work)
+    }
+
+    /// Opens the windows of `restoring`, made by `restoredWorkspaces`, each linked to its
+    /// snapshot in `snapshots` if it has one. Returns the key window's controller.
+    private func openWindows(
+        _ restoring: (states: [WorkspaceState], keyID: UUID, workspaces: [UUID: Workspace]),
+        contents: WorkspaceStore.Contents, snapshots: [WorkspaceState]
+    ) -> BrowserWindowController {
+        let (states, keyID, workspaces) = restoring
+        let linked = Dictionary(uniqueKeysWithValues: snapshots.map { ($0.id, $0) })
         // Back to front, so the front window is opened last and comes first in the list.
         for state in states.reversed() {
             guard let workspace = workspaces[state.id] else {
@@ -865,5 +921,24 @@ public final class WorkspaceWindows {
             preconditionFailure("the workspace of tab \(workspace.selectedTab.id) has no window")
         }
         return controller
+    }
+}
+
+/// The panes a restore still waits on for cached rows, in the order given.
+@MainActor
+private final class WaitingPanes: Sendable {
+    private var panes: [Pane]
+
+    init(_ panes: [Pane]) {
+        self.panes = panes
+    }
+
+    func remove(_ pane: Pane) {
+        panes.removeAll { $0 === pane }
+    }
+
+    /// The waiting panes' folders, for a log line.
+    var folders: String {
+        panes.map(\.location.path).joined(separator: ", ")
     }
 }
