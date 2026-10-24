@@ -34,7 +34,9 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
     /// How many rows show without scrolling.
     static let visibleRows = 9
     static let width: CGFloat = 640
-    private static let fieldHeight: CGFloat = 52
+    /// The panel's corner radius, as Spotlight's search window rounds its corners.
+    static let cornerRadius: CGFloat = 20
+    private static let fieldHeight: CGFloat = 60
     static var height: CGFloat {
         fieldHeight + 1 + CGFloat(visibleRows) * PaletteCellView.rowHeight + 2 * listInset
     }
@@ -53,14 +55,20 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
     public override func loadView() {
         let background = NSVisualEffectView(
             frame: NSRect(x: 0, y: 0, width: Self.width, height: Self.height))
+        // The panel has the keys whenever it shows, so the blur never goes through the inactive
+        // state; Reduce Transparency still turns the blur opaque, which the view does itself.
         background.material = .popover
         background.blendingMode = .behindWindow
-        background.state = .followsWindowActiveState
+        background.state = .active
+        background.wantsLayer = true
+        background.layer?.cornerRadius = Self.cornerRadius
+        background.layer?.cornerCurve = .continuous
+        background.layer?.masksToBounds = true
 
         let glass = NSImageView(
             image: NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)
                 ?? NSImage())
-        glass.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 18, weight: .regular)
+        glass.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 22, weight: .regular)
         glass.contentTintColor = .secondaryLabelColor
         glass.setAccessibilityElement(false)
 
@@ -68,7 +76,7 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
         field.isBezeled = false
         field.drawsBackground = false
         field.focusRingType = .none
-        field.font = .systemFont(ofSize: 22, weight: .light)
+        field.font = .systemFont(ofSize: 26, weight: .light)
         field.placeholderString = "Commands, workspaces and folders"
         field.setAccessibilityLabel("Open Quickly")
         field.cell?.isScrollable = true
@@ -106,7 +114,7 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
             background.addSubview(view)
         }
         NSLayoutConstraint.activate([
-            glass.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 18),
+            glass.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 22),
             glass.centerYAnchor.constraint(
                 equalTo: background.topAnchor, constant: Self.fieldHeight / 2),
             field.leadingAnchor.constraint(equalTo: glass.trailingAnchor, constant: 10),
