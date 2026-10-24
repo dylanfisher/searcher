@@ -51,6 +51,10 @@ public final class Pane {
     /// selection provisionally and settles it off the main thread too. Leaving the folder moves
     /// it too, so a command can tell whether the user has changed the selection since it ran.
     private(set) var selectionVersion = 0
+    /// Whether a row key, Opt-↑ or Opt-↓, or type-to-select made the selection, rather than a
+    /// click or a command. A column's trail waits for such keys to pause before the columns
+    /// right of it follow the selection (0094-column-open-delay.md).
+    private(set) var selectionIsFromKeys = false
     /// Names to select once the rows list them all, the selection version they were asked for
     /// at, whether hidden entries showed then, and what runs once they are selected. Dropped
     /// once the user selects anything, the pane leaves the folder, the filter changes or hidden
@@ -128,6 +132,9 @@ public final class Pane {
     public let settings: Settings
     /// How the pane and its views reach the system outside the app's windows.
     public let systemActions: any SystemActions
+    /// Where the trail in column mode waits out `ColumnTrail.openDelay`. Tests pass a clock they
+    /// advance.
+    var columnOpenClock: any Clock<Duration> = ContinuousClock()
     private(set) var load: ListingLoad?
     private var loadIsRunning = false
     /// Whether loads go ahead of other panes'. A trail moves it between its columns without
@@ -572,6 +579,7 @@ public final class Pane {
         filter = NameFilter()
         selection = name.map { Selection([$0], cursor: $0) } ?? Selection()
         selectionVersion += 1
+        selectionIsFromKeys = false
     }
 
     /// Opens the selected folder in this pane, or hands the selected files to the system. With
@@ -1127,7 +1135,7 @@ public final class Pane {
     public func select(_ selection: Selection, as source: SelectionHistory.Source = .once) {
         set(
             onMain { selection.resolved(in: state.listing, after: .sameEntries) },
-            recordingAs: source)
+            recordingAs: source, byKey: source == .typing)
     }
 
     /// Selects `rows` of the listing shown, as a click in the table gives them. They are named off
@@ -1144,6 +1152,7 @@ public final class Pane {
             rows == selection.rows(in: listing)
         {
             namesToSelect = nil
+            chooseSelectionMadeByKeys()
             return
         }
         set(Selection(rows: rows, in: listing, cursor: cursor, anchor: anchor), recordingAs: source)
@@ -1197,19 +1206,33 @@ public final class Pane {
 
     /// Takes a selection already resolved against the listing shown, keeping the one it replaces
     /// in the selection history as made by `source`; nil for a step the history itself restores.
+    /// `byKey` says a key made it (`selectionIsFromKeys`).
     private func set(
-        _ selection: Selection, recordingAs source: SelectionHistory.Source? = .once
+        _ selection: Selection, recordingAs source: SelectionHistory.Source? = .once,
+        byKey: Bool = false
     ) {
         // Selecting the rows already selected doesn't move the version, but is still the user's
         // choice over names a command is waiting to select.
         namesToSelect = nil
-        guard selection != self.selection else { return }
+        guard selection != self.selection else {
+            if !byKey { chooseSelectionMadeByKeys() }
+            return
+        }
         if let source {
             selectionHistory.record(self.selection, in: location, by: source)
         }
         self.selection = selection
         selectionVersion += 1
+        selectionIsFromKeys = byKey
         startSettlingIfNeeded()
+        reportChange()
+    }
+
+    /// A click or a command chose the selection keys made: it no longer waits for them to pause,
+    /// so the change is reported for a trail to follow at once.
+    private func chooseSelectionMadeByKeys() {
+        guard selectionIsFromKeys else { return }
+        selectionIsFromKeys = false
         reportChange()
     }
 
@@ -1319,7 +1342,7 @@ public final class Pane {
         guard let listing = state.listing else { return }
         set(
             onMain { selection.moved(by: delta, in: listing, extending: extending) },
-            recordingAs: .move(by: delta, extending: extending, isRepeat: isKeyRepeat))
+            recordingAs: .move(by: delta, extending: extending, isRepeat: isKeyRepeat), byKey: true)
     }
 
     /// Moves the cursor `pages` screens of rows, `visibleRowCount` rows each.
@@ -1328,14 +1351,19 @@ public final class Pane {
         moveSelection(by: pages * max(visibleRowCount, 1), isKeyRepeat: isKeyRepeat)
     }
 
-    public func selectFirstRow() {
+    /// Selects the first row alone. `byKey` says a key asked for it, as Opt-↑ does; → into a
+    /// column asks without it, so the folder in that row opens its column at once.
+    public func selectFirstRow(byKey: Bool = false) {
         guard let listing = state.listing else { return }
-        set(onMain { selection.moved(toRow: 0, in: listing, extending: false) })
+        set(onMain { selection.moved(toRow: 0, in: listing, extending: false) }, byKey: byKey)
     }
 
-    public func selectLastRow() {
+    /// Selects the last row alone. `byKey` says a key asked for it, as Opt-↓ does.
+    public func selectLastRow(byKey: Bool = false) {
         guard let listing = state.listing else { return }
-        set(onMain { selection.moved(toRow: listing.count - 1, in: listing, extending: false) })
+        set(
+            onMain { selection.moved(toRow: listing.count - 1, in: listing, extending: false) },
+            byKey: byKey)
     }
 
     /// Selects every row shown, keeping the cursor and anchor where they were.

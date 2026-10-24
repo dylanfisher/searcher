@@ -63,8 +63,8 @@ public enum SelectionCommands: CommandSet {
             CommandBinding(extendUp) {
                 $0.pane.moveSelection(by: -1, extending: true, isKeyRepeat: $0.isKeyRepeat)
             },
-            CommandBinding(selectFirst) { $0.pane.selectFirstRow() },
-            CommandBinding(selectLast) { $0.pane.selectLastRow() },
+            CommandBinding(selectFirst) { $0.pane.selectFirstRow(byKey: true) },
+            CommandBinding(selectLast) { $0.pane.selectLastRow(byKey: true) },
             CommandBinding(tenRowsDown) {
                 $0.pane.moveSelection(by: 10, isKeyRepeat: $0.isKeyRepeat)
             },
