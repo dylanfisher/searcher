@@ -64,22 +64,47 @@ private func sheet(remaining: Int = 2) -> (ConflictSheetController, Answers) {
 @MainActor @Test func theSheetShowsBothItemsSizeAndDate() {
     let (sheet, _) = sheet()
     let formatter = EntryCellFormatter()
+    let lines = sheet.alert.informativeText.split(separator: "\n").map(String.init)
 
-    #expect(sheet.messageLabel.stringValue.contains("“report.pdf”"))
-    #expect(sheet.messageLabel.stringValue.contains("“dst”"))
-    #expect(sheet.existingLabel.stringValue.contains(formatter.bytes(1_000)))
-    #expect(
-        sheet.existingLabel.stringValue.contains(
-            formatter.date(modified.addingTimeInterval(-86_400))))
-    #expect(sheet.sourceLabel.stringValue.contains(formatter.bytes(2_000_000)))
-    #expect(sheet.sourceLabel.stringValue.contains(formatter.date(modified)))
+    #expect(sheet.alert.messageText.contains("“report.pdf”"))
+    #expect(sheet.alert.messageText.contains("“dst”"))
+    #expect(lines.count == 2)
+    #expect(lines[0].contains(formatter.bytes(1_000)))
+    #expect(lines[0].contains(formatter.date(modified.addingTimeInterval(-86_400))))
+    #expect(lines[1].contains(formatter.bytes(2_000_000)))
+    #expect(lines[1].contains(formatter.date(modified)))
 }
 
 @MainActor @Test func applyToAllShowsOnlyWhenMoreConflictsFollow() {
     let (last, _) = sheet(remaining: 0)
     let (more, _) = sheet(remaining: 3)
 
-    #expect(last.applyToAllBox.isHidden)
-    #expect(!more.applyToAllBox.isHidden)
+    #expect(!last.alert.showsSuppressionButton)
+    #expect(more.alert.showsSuppressionButton)
+    #expect(more.applyToAllBox === more.alert.suppressionButton)
     #expect(more.applyToAllBox.title.contains("3"))
+}
+
+@MainActor @Test func theConflictSheetIsAnAlertWithKeepBothAsTheDefault() {
+    let (sheet, _) = sheet()
+
+    #expect(sheet.panel === sheet.alert.window)
+    #expect(
+        sheet.alert.buttons == [
+            sheet.keepBothButton, sheet.replaceButton, sheet.skipButton, sheet.cancelButton,
+        ])
+    #expect(sheet.keepBothButton.keyEquivalent == "\r")
+    #expect(sheet.cancelButton.keyEquivalent == "\u{1B}")
+    #expect(sheet.replaceButton.hasDestructiveAction)
+}
+
+@MainActor @Test func returnKeepsBothAndEscCancels() throws {
+    let (kept, keptAnswers) = sheet()
+    let (cancelled, cancelledAnswers) = sheet()
+
+    #expect(kept.panel.performKeyEquivalent(with: try keyEvent("\r")))
+    #expect(cancelled.panel.performKeyEquivalent(with: try keyEvent("\u{1B}")))
+
+    #expect(keptAnswers.given == [ConflictResolution(choice: .keepBoth, appliesToAll: false)])
+    #expect(cancelledAnswers.given == [nil])
 }

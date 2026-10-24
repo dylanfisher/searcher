@@ -143,6 +143,49 @@ func aMissingFolderShowsWhyWithThePathAndStaysOpen(typed: String, path: String) 
             doCommandBy: #selector(NSResponder.moveLeft(_:))))
 }
 
+@MainActor @Test func theSheetIsAnAlertWithTheFieldAndGoAsTheDefault() async throws {
+    let fixture = await Fixture()
+    let alert = fixture.sheet.alert
+
+    #expect(fixture.sheet.panel === alert.window)
+    #expect(alert.buttons.map(\.title) == ["Go", "Cancel"])
+    #expect(alert.buttons.map(\.keyEquivalent) == ["\r", "\u{1B}"])
+    #expect(fixture.sheet.field.isDescendant(of: try #require(alert.accessoryView)))
+    #expect(alert.window.initialFirstResponder === fixture.sheet.field)
+}
+
+@MainActor @Test func theGoButtonGoesAndCancelCloses() async {
+    let going = await Fixture()
+    let cancelling = await Fixture()
+    going.sheet.field.stringValue = "src"
+
+    going.sheet.alert.buttons[0].performClick(nil)
+    cancelling.sheet.alert.buttons[1].performClick(nil)
+    await settle { going.closeCount == 1 }
+
+    #expect(going.pane.location == Location(path: "/home/me/work/src"))
+    #expect(cancelling.closeCount == 1)
+    #expect(cancelling.pane.location == Location(path: "/home/me/work"))
+}
+
+/// The line saying why takes room only while it shows, and the field keeps the keys.
+@MainActor @Test func theReasonLineGrowsTheSheetOnlyWhileItShows() async {
+    let fixture = await Fixture()
+    let closedHeight = fixture.sheet.panel.frame.height
+
+    fixture.go("../gone")
+    await settle { !fixture.sheet.messageLabel.isHidden }
+
+    #expect(fixture.sheet.panel.frame.height > closedHeight)
+    #expect(fixture.sheet.panel.initialFirstResponder === fixture.sheet.field)
+
+    fixture.go("src")
+    await settle { fixture.closeCount == 1 }
+
+    #expect(fixture.sheet.messageLabel.isHidden)
+    #expect(fixture.sheet.panel.frame.height == closedHeight)
+}
+
 /// Returns once the main queue has run every block queued on it before this call.
 @MainActor
 private func drainMainQueue() async {

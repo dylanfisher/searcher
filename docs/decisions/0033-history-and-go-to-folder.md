@@ -43,7 +43,8 @@ the pane, which can't show a sheet: Browser has no AppKit.
   `GoToFolderSheet` over the pane's window. The sheet stays up while the folder lists, shows "There’s
   no folder at “path”." (or "isn’t a folder") under the field, and closes when the pane moves.
   Esc cancels the pending load. Its field editor keeps the text-editing keys
-  ([0027](0027-key-dispatch.md)).
+  ([0027](0027-key-dispatch.md)). It is a `Dialog` alert with the field as its accessory view
+  (amended 2026-10-23, [0076](0076-dialogs.md)).
 
 ## Alternatives considered
 
