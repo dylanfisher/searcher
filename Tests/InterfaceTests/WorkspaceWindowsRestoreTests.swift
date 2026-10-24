@@ -678,6 +678,10 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
     let windows = makeWindows(store: nil)
     let controller = windows.open(at: Location(path: "/root"))
     let table = try #require(controller.window?.firstResponder as? ListingTableView)
+    // A sheet orders its unshown window in.
+    let window = try #require(controller.window)
+    SecondDisplay.move(window)
+    defer { window.orderOut(nil) }
 
     table.keyDown(with: try keyEvent("s", modifiers: .command))
 
