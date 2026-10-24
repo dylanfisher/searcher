@@ -1201,6 +1201,9 @@ public final class Pane {
             return
         }
         selection = settled
+        // Settling moves no version, but a step can now equal the selection, which changes
+        // whether Undo and Redo Selection have a step left.
+        selectionStepsFound = StepsFound(state: -1, selection: -1)
         onChange?()
     }
 
@@ -1287,7 +1290,8 @@ public final class Pane {
     var selectionHistory = SelectionHistory()
     /// `canUndoSelection` and `canRedoSelection` as last found, at the state and selection
     /// versions they were found at. Menus ask on every key equivalent, and each answer resolves
-    /// steps against the rows; the history changes only with the selection version.
+    /// steps against the rows; the history changes only with the selection version. Settling,
+    /// which moves neither version, drops them.
     private var selectionStepsFound = StepsFound(state: -1, selection: -1)
 
     private struct StepsFound {
