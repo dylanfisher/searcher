@@ -18,7 +18,8 @@ once the operation ends.
   of the table would put the table's `runMenuCommand` in the field's responder chain, so
   Cmd-Delete in the field would trash the file being renamed. Beside it, the file commands' menu
   items are off while the field has the keys, as 0066 expects of a text field. The clip view
-  scrolls it with the rows.
+  scrolls it with the rows. It has a thin plain border and no focus ring, so it shows at once as
+  Finder's does (amended 2026-10-23, [0076](0076-dialogs.md)).
 - **What is selected:** a file's name up to the extension `UniqueName.split` finds, so it splits
   as Finder's copy names do ("song.flac" selects "song", "archive.tar.gz" selects "archive.tar");
   a folder's whole name. `split` is now public for this.

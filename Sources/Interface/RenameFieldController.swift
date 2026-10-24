@@ -78,9 +78,15 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
         }
     }
 
-    /// The text field the name is edited in.
+    /// The text field the name is edited in. Finder's shows at once with a thin plain border;
+    /// a bezel's focus ring would animate in around it, so it has neither.
     private(set) lazy var field: NSTextField = {
         let field = NSTextField()
+        field.isBezeled = false
+        field.isBordered = true
+        field.drawsBackground = true
+        field.backgroundColor = .textBackgroundColor
+        field.focusRingType = .none
         field.font = .systemFont(ofSize: NSFont.systemFontSize)
         field.lineBreakMode = .byTruncatingMiddle
         field.cell?.isScrollable = true
