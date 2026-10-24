@@ -122,6 +122,7 @@ public actor ListingCache {
             if let found = restoredVolumes.volume(holding: path),
                 found.mountPoint.count > shorter
             {
+                read.insert(found)
                 continue
             }
             guard let (volume, stored) = await findVolume(path),
@@ -153,18 +154,15 @@ public actor ListingCache {
     }
 
     /// Replaces the folders the caps leave with `folders`, as the stored workspaces change during
-    /// the session, and keeps the files of the volumes in memory or restored that hold them.
-    /// Reads nothing: a folder's volume is in memory once a pane has listed it.
-    public func keep(folders: Set<String>) async {
-        keptFolders = folders
-        var held = Set(
-            volumes.compactMap { volume, stored in
-                stored.keys.contains(where: folders.contains) ? volume : nil
-            })
-        for path in folders {
-            if let restored = restoredVolumes.volume(holding: path) { held.insert(restored) }
-        }
-        await keepFiles(held)
+    /// the session, and keeps the volume files holding them through the byte cap. Places each
+    /// folder as `restore(folders:mountedVolumes:)` does, whether or not its volume is in
+    /// memory, so it reads the mount table off the main thread and a volume file not yet in
+    /// memory.
+    public func keep(
+        folders: Set<String>,
+        mountedVolumes: @escaping @Sendable () -> [VolumeIdentity] = VolumeIdentity.mounted
+    ) async {
+        await restore(folders: folders, mountedVolumes: mountedVolumes)
     }
 
     /// The volume `restore` found in the store for `path`, which the mount table didn't place:

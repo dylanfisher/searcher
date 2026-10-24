@@ -533,7 +533,7 @@ public final class WorkspaceWindows {
             if let changedSession {
                 await store.saveSession(changedSession)
             }
-            // The folders every stored workspace holds now, as the launch keeps them.
+            // The folders every stored workspace holds now, computed as the launch computes them.
             if !states.isEmpty || !deletes.isEmpty {
                 await cache?.keep(folders: kept)
             }
