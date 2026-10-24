@@ -33,11 +33,11 @@ public struct StoreProblem: Error, Equatable, Sendable, CustomStringConvertible 
         case .unreadable:
             "Couldn't read \(file.path), so it wasn't restored: \(reason)"
         case .discarded:
-            "Deleted \(file.path), which isn't a saved workspace or session Searcher can read:"
-                + " \(reason)"
-        case .undeletable:
-            "Couldn't read or delete \(file.path), which isn't a saved workspace or session"
+            "Deleted \(file.path), which isn't a saved workspace, session or folder history"
                 + " Searcher can read: \(reason)"
+        case .undeletable:
+            "Couldn't read or delete \(file.path), which isn't a saved workspace, session or"
+                + " folder history Searcher can read: \(reason)"
         case .unwritten:
             "Couldn't save \(file.path), so the last change to it isn't kept: \(reason)"
         case .unforgotten:

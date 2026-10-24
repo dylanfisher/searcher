@@ -2,8 +2,9 @@ import Base
 import Foundation
 
 /// Keeps workspaces and the session on disk: one JSON file per workspace in
-/// `<application support root>/workspaces/<id>.json`, and the open windows in
-/// `<application support root>/session.json`. Saves are written `writeDelay` after the first
+/// `<application support root>/workspaces/<id>.json`, the open windows in
+/// `<application support root>/session.json`, and the palette's `FolderHistory` in
+/// `<application support root>/folder-history.json`. Saves are written `writeDelay` after the first
 /// unwritten one, so a burst of edits costs one write per file, each through `AtomicWrite`. A
 /// file that isn't in the one stored shape is deleted and reported, and the rest still load. See
 /// docs/decisions/0078-workspace-store.md.
@@ -19,6 +20,7 @@ public actor WorkspaceStore {
 
     private let folder: URL
     private let sessionFile: URL
+    private let folderHistoryFile: URL
     private let report: @Sendable (StoreProblem) -> Void
     /// Starts a wait of the given length on the store's clock, taking the deadline at once.
     private let startWait: @Sendable (Duration) -> @Sendable () async throws -> Void
@@ -26,6 +28,7 @@ public actor WorkspaceStore {
     /// Workspaces not yet written, by ID.
     private var pending: [UUID: WorkspaceState] = [:]
     private var pendingSession: SessionState?
+    private var pendingFolderHistory: FolderHistory?
     /// The wait for the next write, cancelled by a `flush` that writes first, so a save after
     /// the flush waits the whole delay.
     private var scheduledWrite: Task<Void, Never>?
@@ -42,6 +45,7 @@ public actor WorkspaceStore {
     ) {
         folder = roots.applicationSupport.appending(path: "workspaces")
         sessionFile = roots.applicationSupport.appending(path: "session.json")
+        folderHistoryFile = roots.applicationSupport.appending(path: "folder-history.json")
         self.report = report
         startWait = { duration in
             let deadline = clock.now.advanced(by: duration)
@@ -59,6 +63,12 @@ public actor WorkspaceStore {
     /// Saves `session`, replacing the one saved before.
     public func saveSession(_ session: SessionState) {
         pendingSession = session
+        scheduleWrite()
+    }
+
+    /// Saves `history`, replacing the one saved before.
+    public func saveFolderHistory(_ history: FolderHistory) {
+        pendingFolderHistory = history
         scheduleWrite()
     }
 
@@ -101,15 +111,18 @@ public actor WorkspaceStore {
         scheduledWrite = nil
         let workspaces = pending
         let session = pendingSession
+        let folderHistory = pendingFolderHistory
         pending = [:]
         pendingSession = nil
-        guard !workspaces.isEmpty || session != nil else { return }
+        pendingFolderHistory = nil
+        guard !workspaces.isEmpty || session != nil || folderHistory != nil else { return }
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         } catch {
-            // The session file sits beside the folder, so it fails with it.
+            // The session and history files sit beside the folder, so they fail with it.
             var files = workspaces.keys.map(url(for:))
             if session != nil { files.append(sessionFile) }
+            if folderHistory != nil { files.append(folderHistoryFile) }
             for url in files {
                 report(StoreProblem(file: url, kind: .unwritten, reason: "\(error)"))
             }
@@ -120,6 +133,9 @@ public actor WorkspaceStore {
         }
         if let session {
             store(session, to: sessionFile)
+        }
+        if let folderHistory {
+            store(folderHistory, to: folderHistoryFile)
         }
     }
 
@@ -166,6 +182,14 @@ public actor WorkspaceStore {
         workspaces.merge(pending) { _, new in new }
         let session = pendingSession ?? read(SessionState.self, from: sessionFile)
         return Contents(session: session, workspaces: workspaces)
+    }
+
+    /// The latest saved folder history, written or not; an empty one when there is none, or when
+    /// its file isn't in the one stored shape, which deletes it and reports it.
+    public func loadFolderHistory() -> FolderHistory {
+        dispatchPrecondition(condition: .notOnQueue(.main))
+        return pendingFolderHistory ?? read(FolderHistory.self, from: folderHistoryFile)
+            ?? FolderHistory()
     }
 
     /// The file at `url`, decoded; nil when there is none or it can't be read, and when it isn't
