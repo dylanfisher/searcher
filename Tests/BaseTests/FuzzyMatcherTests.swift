@@ -50,14 +50,18 @@ func aMissingLetterIsNoMatch(query: String) {
 
 @Test func aCharacterOfSeveralBytesMatchesWhole() {
     #expect(matchedTexts("日本", "日x本") == ["日", "本"])
-    // 本 is E6 9C AC. 日 starts with E6, ʜ ends with 9C and ʬ with AC: the bytes of 本 in order,
-    // but no 本.
+    // 本 is E6 9C AC. 日 starts with E6, ʜ ends with 9C and ʬ with AC: the bytes of 本
+    // in order, but no 本.
     #expect(matchedTexts("本", "日ʜʬ") == nil)
 }
 
 @Test func aLetterInsideAFoldedLigatureHighlightsTheLigature() {
     #expect(matchedTexts("f", "ﬁle") == ["ﬁ"])
     #expect(matchedTexts("il", "ﬁle") == ["ﬁl"])
+}
+
+@Test func aPrefixOnAccentedTextHighlightsItsCharacters() {
+    #expect(matchedTexts("rés", "Résumé") == ["Rés"])
 }
 
 @Test func aRunIsOneRange() {
@@ -129,6 +133,7 @@ private func score(_ query: String, _ candidate: String) -> Int? {
             == ["my-video-downloads", "Movies/Downloads"])
     #expect(
         ranked("mvd", ["mvdir", "my-video-downloads"]) == ["mvdir", "my-video-downloads"])
+    #expect(ranked("mv", ["mvdir", "my-video-downloads"]) == ["my-video-downloads", "mvdir"])
 }
 
 @Test func initialsInDifferentPathComponentsAreNotAChain() {
