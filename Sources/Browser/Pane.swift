@@ -174,6 +174,9 @@ public final class Pane {
     var rowWorkQueue = DispatchQueue.global(qos: .userInitiated)
     /// Where sorts run. Tests suspend a queue of their own here to hold a sort.
     var sortQueue = DispatchQueue.global(qos: .userInitiated)
+    /// Where Open reads whether a link points to a package (`checkLink`). Tests suspend a queue
+    /// of their own here to hold a check.
+    var linkCheckQueue = DispatchQueue.global(qos: .userInitiated)
     /// The folders left, for Back and Forward.
     private(set) var history = History()
     /// The load of a `goToFolder` that hasn't moved the pane yet, and the request it answers.
@@ -185,6 +188,8 @@ public final class Pane {
     private var goSelectionVersion = 0
     /// The read of whether a link being opened points to a package (`checkLink`).
     private var packageCheck: Task<Void, Never>?
+    /// Whether an Open of a link is still finding out what the link points to, for tests.
+    var isCheckingLink: Bool { packageCheck != nil || linkCheck != nil }
     /// The cached rows of a `goToFolder` that hasn't moved the pane yet, shown when it moves.
     /// The listing of a link `openSelectedLink(asFolderIn:)` checks before it asks for a pane.
     private var linkCheck: ListingLoad?
@@ -714,17 +719,23 @@ public final class Pane {
     /// Finds out off the main thread whether `link` points to a package, as a listing of the
     /// target's folder would name it, then runs `ifPackage` or `otherwise`. A link whose target
     /// can't be read runs `otherwise`, whose listing reports why. A navigation or Go to folder
-    /// before the answer cancels both, as it cancels a pending go.
+    /// before the answer, a second Open and closing the pane cancel both, as they cancel a
+    /// pending go. The read runs on `linkCheckQueue`, not the cooperative pool, since a link onto
+    /// a stalled share blocks it.
     private func checkLink(
         _ link: Location, ifPackage: @escaping @MainActor () -> Void,
         otherwise: @escaping @MainActor () -> Void
     ) {
         cancelGoToFolder()
         let path = link.path
+        let queue = linkCheckQueue
         packageCheck = Task { [weak self] in
-            let isPackage = await Task.detached {
-                DirectoryLister.isPackage(followingLinksAt: path)
-            }.value
+            let isPackage = await withCheckedContinuation { continuation in
+                queue.async {
+                    continuation.resume(
+                        returning: DirectoryLister.isPackage(followingLinksAt: path))
+                }
+            }
             guard let self, !Task.isCancelled else { return }
             packageCheck = nil
             if isPackage { ifPackage() } else { otherwise() }
