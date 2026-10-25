@@ -224,6 +224,11 @@ private final class Fixture {
             return item
         }
         #expect(pasteboard.writeObjects(items))
+        // A drop reads the URLs back; if the pasteboard server gave none, the drop would be nil and
+        // a test would fail far from the cause.
+        #expect(
+            PasteboardFileClipboard(pasteboard: pasteboard).fileURLs().map(\.path)
+                == urls.map(\.path))
         return DraggingInfo(pasteboard: pasteboard, mask: mask)
     }
 

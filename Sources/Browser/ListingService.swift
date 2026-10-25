@@ -136,7 +136,8 @@ public final class ListingService: Sendable {
             foldersFirst: foldersFirst, showsHidden: showsHidden, hidesDSStore: hidesDSStore,
             filter: filter, priority: priority,
             onPriorityChange: { [weak self] in
-                self?.scheduler.async { self?.startWaitingLoads() }
+                guard let service = self else { return }
+                service.scheduler.async { service.startWaitingLoads() }
             },
             handOff: { update in
                 let prepared = prepare(update)
