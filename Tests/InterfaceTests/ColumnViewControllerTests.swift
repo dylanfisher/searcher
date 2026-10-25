@@ -901,6 +901,10 @@ private let chevronTree: [String: [DirectoryEntry]] = [
 @MainActor @Test func aListsNameCellsHaveNoChevron() async throws {
     let list = await controller(showing: [folder("c"), file("a.txt")])
     let table = list.tableView
+    // A list still scrolls sideways through its columns.
+    let scrollView = try #require(list.view as? NSScrollView)
+    #expect(!(scrollView is ColumnScrollView))
+    #expect(scrollView.hasHorizontalScroller)
 
     for row in 0..<2 {
         let cell = try #require(
@@ -925,6 +929,81 @@ private let chevronTree: [String: [DirectoryEntry]] = [
     fixture.controller.view.layoutSubtreeIfNeeded()
 
     #expect(try #require(cell.textField).frame.width == 0)
+}
+
+/// At every width down to the minimum, and with the table's column set wider than the column,
+/// a long folder name truncates in its middle, as Finder's does, and ends before the chevron,
+/// which sits at the column's visible right edge; a not-downloaded folder's badge sits between
+/// them. The table is as wide as the column shows, and the column can't scroll sideways.
+@MainActor @Test func aLongFoldersChevronStaysAtTheColumnsVisibleRightEdge() async throws {
+    let cloud = DirectoryEntry(
+        name: "cloud-" + longFolder, type: .directory, size: nil, modified: testDate,
+        isHidden: false, isDataless: true)
+    var folders = chevronTree
+    folders["/r", default: []].append(cloud)
+    let fixture = await Fixture(folders: folders)
+    let column = try #require(fixture.controller.columnControllers[0].view as? NSScrollView)
+    let table = fixture.tables[0]
+    let names = rowNames(table)
+    var chevronGaps: Set<Double> = []
+
+    for width in [Settings.columnWidths.lowerBound, 151.5, Settings.defaultColumnWidth, 600] {
+        fixture.pane.setColumnWidth(width, of: fixture.trail.columns[0].pane)
+        // Even a table column set wider than the column comes back to its visible width.
+        table.tableColumns[0].width = 2000
+        fixture.controller.view.layoutSubtreeIfNeeded()
+        let visible = column.contentView.frame
+        #expect(table.frame.width == column.contentView.bounds.width, "\(width)")
+        column.contentView.scroll(to: NSPoint(x: 50, y: 0))
+        #expect(column.contentView.bounds.minX == 0, "\(width)")
+
+        for name in [longFolder, cloud.name] {
+            let cell = try nameCell(table, row: try #require(names.firstIndex(of: name)))
+            let mark = try chevron(cell)
+            let text = try #require(cell.textField)
+            let markFrame = column.convert(mark.frame, from: cell)
+            #expect(!mark.isHidden)
+            #expect(markFrame.maxX <= visible.maxX, "\(name) at \(width)")
+            chevronGaps.insert(visible.maxX - markFrame.maxX)
+            #expect(text.lineBreakMode == .byTruncatingMiddle)
+            if width < 400 {
+                #expect(
+                    text.frame.width < text.intrinsicContentSize.width, "\(name) at \(width)")
+            }
+            if name == cloud.name {
+                let badge = try #require(
+                    cell.subviews.first {
+                        $0.identifier == ListingViewController.notDownloadedBadgeIdentifier
+                    })
+                #expect(!badge.isHidden)
+                #expect(text.frame.maxX <= badge.frame.minX, "\(width)")
+                #expect(badge.frame.maxX <= mark.frame.minX, "\(width)")
+            } else {
+                #expect(text.frame.maxX <= mark.frame.minX, "\(width)")
+            }
+        }
+    }
+    // The same few points from the edge at every width, for every name.
+    #expect(chevronGaps.count == 1)
+    #expect(try #require(chevronGaps.first) < 16)
+}
+
+/// A sideways scroll over a column goes up its responder chain, which reaches the columns' scroll
+/// view before any other scroll view, so the browser scrolls, as in Finder. AppKit scrolls a
+/// scroll view only in a window on screen, so the chain stands in for the scroll itself.
+@MainActor @Test func aColumnsSidewaysScrollGoesUpToTheBrowser() async throws {
+    let fixture = await Fixture()
+    await fixture.openThreeColumns()
+    let browser = try #require(fixture.controller.view as? NSScrollView)
+
+    for controller in fixture.controller.columnControllers {
+        #expect(controller.view is ColumnScrollView)
+        var responder = controller.view.nextResponder
+        while let next = responder, !(next is NSScrollView) {
+            responder = next.nextResponder
+        }
+        #expect(responder === browser)
+    }
 }
 
 /// Draws `view` into a bitmap, as AppKit does before it shows a row, which is when a row view
