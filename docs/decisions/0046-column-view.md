@@ -70,7 +70,18 @@ chevron (superseded 2026-10-24: a folder row shows Finder's right-aligned `chevr
 template that is white on a selected row in the focused column and secondary gray otherwise;
 files, packages and links show none, since the listing holds no link target and resolving one
 would be a read, and a name is fitted to end before the chevron). A column whose folder can't be
-listed shows an empty table with no message; only the spinner is per column ([0053](0053-column-accessibility.md)). A column's table carries the list's
+listed shows an empty table with no message; only the spinner is per column ([0053](0053-column-accessibility.md)).
+(Superseded 2026-10-24: a column with no rows to show says why in its middle, in the list's
+words from `PaneViewController.message(for:)`, `AccessDeniedView` and `PaneStatusText`. Denied
+shows the access explanation and its button, since the fix is Searcher's Full Disk Access, which
+Finder doesn't need. Failed and missing show the list's error line. Slow and offline with no rows
+kept show the status note, which the path bar shows only for the focused column; with rows kept
+they show the rows, as the list does. A filter that matches nothing shows the list's line. An
+empty folder's column is blank and a loading one shows only its spinner, as in Finder. →
+into a column whose rows haven't arrived selects its first row once they do, without the key
+flag, so a folder there opens its column at once; a selection in that column, ←, a focus change
+or navigating first gives that up. VoiceOver doesn't read a column's message yet: the browser's
+children are the columns only.) A column's table carries the list's
 `ListingViewController`, so changes to the list's rows reach columns too; a change meant for the
 list only has to check `showsNamesOnly`.
 

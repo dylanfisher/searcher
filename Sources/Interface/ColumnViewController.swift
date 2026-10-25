@@ -5,7 +5,8 @@ import Browser
 /// `ListingViewController` showing names only, so rows, icons, badges, labels, type-select and
 /// Quick Look work in a column as they do in the list. The focused column is scrolled into view
 /// whenever the focused column's index or the column count changes (0046-column-view.md). The
-/// trail's preview shows right of the last column (0090-preview-column.md).
+/// trail's preview shows right of the last column (0090-preview-column.md). A column with no rows
+/// to show says why in its middle, in the list's words (0046-column-view.md).
 ///
 /// It shows the trail; the trail decides which columns there are and which one has the keys
 /// (0041-column-model.md).
@@ -88,6 +89,10 @@ final class ColumnViewController: NSViewController {
     private weak var reportedFocus: ListingViewController?
     /// Each shown column's spinner and its wait for the spinner delay, by the column's pane.
     private var spinners: [ObjectIdentifier: ColumnSpinner] = [:]
+    /// The message and access explanation of each column that has shown one, by the column's
+    /// pane. Made the first time a column needs one, so a column that lists makes neither.
+    private var messages: [ObjectIdentifier: ColumnMessage] = [:]
+    private let statusText = PaneStatusText()
     /// The columns last set as the browser's accessibility children; nil before the first set.
     /// Until a list is set, AppKit gives the view's shown subviews, spinners among them.
     private var browserChildren: [NSView]?
@@ -155,6 +160,12 @@ final class ColumnViewController: NSViewController {
             spinner.indicator.removeFromSuperview()
             spinners[id] = nil
         }
+        for (id, message) in messages
+        where !columnControllers.contains(where: { ObjectIdentifier($0.pane) == id }) {
+            message.label?.removeFromSuperview()
+            message.denied?.removeFromSuperview()
+            messages[id] = nil
+        }
         showPreview()
         var columnViews = columnControllers.map(\.view)
         if let previewView, !previewView.isHidden { columnViews.append(previewView) }
@@ -165,6 +176,7 @@ final class ColumnViewController: NSViewController {
         for controller in columnControllers {
             controller.paneDidChange()
             showSpinner(for: controller.pane)
+            showMessage(for: controller)
             let generation = controller.pane.monitorGeneration
             if monitoredGenerations.updateValue(
                 generation, forKey: ObjectIdentifier(controller.pane))
@@ -325,6 +337,85 @@ final class ColumnViewController: NSViewController {
         }
     }
 
+    /// The column at `index`'s message line, left to right; nil before it first needed one.
+    func messageLabel(forColumnAt index: Int) -> NSTextField? {
+        guard columnControllers.indices.contains(index) else { return nil }
+        return messages[ObjectIdentifier(columnControllers[index].pane)]?.label
+    }
+
+    /// The column at `index`'s access explanation, left to right; nil before it first needed one.
+    func deniedView(forColumnAt index: Int) -> AccessDeniedView? {
+        guard columnControllers.indices.contains(index) else { return nil }
+        return messages[ObjectIdentifier(columnControllers[index].pane)]?.denied
+    }
+
+    /// Shows, centered in `controller`'s column, the access explanation for a denied folder or
+    /// the line for a column with no rows to show, and hides them for a column that lists. An
+    /// empty folder's column stays blank, as Finder's does, and a loading one shows only its
+    /// spinner.
+    private func showMessage(for controller: ListingViewController) {
+        let pane = controller.pane
+        let id = ObjectIdentifier(pane)
+        let isDenied = if case .denied = pane.state { true } else { false }
+        let line = message(for: pane)
+        guard isDenied || line != nil || messages[id] != nil else { return }
+        let message = messages[id] ?? ColumnMessage()
+        messages[id] = message
+        if isDenied, message.denied == nil {
+            let denied = AccessDeniedView(systemActions: pane.systemActions)
+            denied.folderName = pane.location.name
+            place(denied, over: controller.view)
+            message.denied = denied
+        }
+        message.denied?.isHidden = !isDenied
+        if let line {
+            let label =
+                message.label
+                ?? {
+                    let label = NSTextField(wrappingLabelWithString: "")
+                    label.alignment = .center
+                    label.textColor = .secondaryLabelColor
+                    place(label, over: controller.view)
+                    message.label = label
+                    return label
+                }()
+            if label.stringValue != line { label.stringValue = line }
+        }
+        message.label?.isHidden = line == nil
+    }
+
+    /// The line a column shows over no rows: the list's message, or, for a slow or offline
+    /// column with no rows kept, the status note, which a column not in front has nowhere else
+    /// to show. Nil for every other state.
+    private func message(for pane: Pane) -> String? {
+        if let line = PaneViewController.message(for: pane) { return line }
+        switch pane.state {
+        case .slow(nil), .offline(nil):
+            guard let volumeName = pane.volumeName else {
+                preconditionFailure("the column at \(pane.location.path) has no volume name")
+            }
+            // With no rows kept the note has no age, so the date isn't read.
+            return statusText.note(for: pane.state, volumeName: volumeName, now: Date())
+        case .loading, .partial, .loaded, .cachedRefreshing, .slow, .offline, .denied, .failed:
+            return nil
+        }
+    }
+
+    /// Adds `overlay` to the columns' view, centered on `column` and inset from its edges.
+    private func place(_ overlay: NSView, over column: NSView) {
+        overlay.translatesAutoresizingMaskIntoConstraints = false
+        columnsView.addSubview(overlay)
+        NSLayoutConstraint.activate([
+            overlay.centerXAnchor.constraint(equalTo: column.centerXAnchor),
+            overlay.centerYAnchor.constraint(equalTo: column.centerYAnchor),
+            overlay.widthAnchor.constraint(
+                equalToConstant: Self.columnWidth - 2 * Self.messageInset),
+        ])
+    }
+
+    /// The space between a column's message and its edges.
+    private static let messageInset = 10.0
+
     /// Tells VoiceOver the focused column changed, on the table it moved to, once per change.
     /// The first column shown isn't reported: its table taking the keys is.
     private func reportFocus() {
@@ -358,6 +449,13 @@ final class ColumnViewController: NSViewController {
         }
         columnsView.scrollToVisible(focused)
     }
+}
+
+/// A column's message line and access explanation, each made the first time the column shows it.
+@MainActor
+private final class ColumnMessage {
+    var label: NSTextField?
+    var denied: AccessDeniedView?
 }
 
 /// A column's spinner, and its wait for the spinner delay while the column's listing is in

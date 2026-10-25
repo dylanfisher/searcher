@@ -46,7 +46,8 @@ public final class ColumnTrail {
 
     /// → : moves into the column of the folder selected in the focused one, opening it at once
     /// if it waits for the keys to pause, and selects its first row if nothing there is
-    /// selected. Does nothing else when no folder is selected.
+    /// selected, or once its rows arrive if they haven't yet. Does nothing else when no folder
+    /// is selected.
     public func moveRight() {
         let wasHeld = focused.held != nil
         if wasHeld {
@@ -59,8 +60,12 @@ public final class ColumnTrail {
         }
         focus(focusedIndex + 1)
         let pane = focused.pane
-        if pane.selection.isEmpty, pane.state.listing.map({ $0.count > 0 }) == true {
-            pane.selectFirstRow()
+        if pane.selection.isEmpty {
+            if let listing = pane.state.listing {
+                if listing.count > 0 { pane.selectFirstRow() }
+            } else {
+                focused.selectsFirstRowAt = pane.selectionVersion
+            }
         }
         owner.trailDidChange()
     }
@@ -70,6 +75,7 @@ public final class ColumnTrail {
     /// Does nothing at `/`. A column waiting for the keys to pause gives up the wait, so the
     /// folder selected in it opens no column until → or another selection.
     public func moveLeft() {
+        focused.selectsFirstRowAt = nil
         focused.held?.wait?.cancel()
         focused.held?.wait = nil
         if focusedIndex > 0 {
@@ -128,6 +134,7 @@ public final class ColumnTrail {
 
     /// Moves the focus to the column at `index`, without listing anything again.
     private func focus(_ index: Int) {
+        focused.selectsFirstRowAt = nil
         focused.pane.isFocused = false
         focusedIndex = index
         focused.pane.isFocused = owner.isFocused
@@ -162,6 +169,7 @@ public final class ColumnTrail {
     private func columnDidChange(_ column: Column) {
         // A closed column can still report a change it was making.
         guard columns.contains(where: { $0 === column }) else { return }
+        if selectFirstRowIfWanted(in: column) { return }
         if column.pane.selectionIsFromKeys,
             column.followedSelectionVersion != column.pane.selectionVersion
         {
@@ -171,6 +179,31 @@ public final class ColumnTrail {
         }
         updatePreview()
         owner.trailDidChange()
+    }
+
+    /// Selects the first row of `column` once its rows arrive, when → moved into it before they
+    /// did and its selection hasn't changed since. Rows that arrive empty, or a folder that
+    /// can't be listed, give up the wait. Returns whether it selected: that selection reports
+    /// its own change, which the columns follow at once, since no key made it.
+    private func selectFirstRowIfWanted(in column: Column) -> Bool {
+        guard let version = column.selectsFirstRowAt else { return false }
+        let pane = column.pane
+        switch pane.state {
+        case .denied, .failed:
+            column.selectsFirstRowAt = nil
+            return false
+        case .loading, .partial, .loaded, .cachedRefreshing, .slow, .offline:
+            break
+        }
+        guard version == pane.selectionVersion else {
+            column.selectsFirstRowAt = nil
+            return false
+        }
+        guard let listing = pane.state.listing else { return false }
+        column.selectsFirstRowAt = nil
+        guard listing.count > 0, pane.selection.isEmpty else { return false }
+        pane.selectFirstRow()
+        return pane.selectionVersion != version
     }
 
     /// Drops the columns right of `column` that its key-made selection no longer asks for, and
