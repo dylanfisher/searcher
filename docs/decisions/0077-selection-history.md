@@ -129,3 +129,8 @@ rows in turn to check it. The test windows are not key
 (0091), so the selection's drawn colour, emphasized or not, is not tested; with the window not
 key, AppKit selects nothing at mouse down in either case, which is the behaviour that the
 reproduction shows. Whether it looks right in a key window: needs Dylan.
+
+The runtime's stop is recognised by `Thread.callStackSymbols[2]` containing
+"libswift_Concurrency". That depends on the frame layout and the image name. If a toolchain
+changes either, the runtime's exit stop is dropped too, and the Interface test process hangs at
+exit instead of passing. That is loud, but there is no timeout.
