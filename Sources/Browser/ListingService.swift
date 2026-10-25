@@ -49,6 +49,8 @@ public final class ListingService: Sendable {
     /// The network volumes loads have been on, to tell a folder that is gone from one whose
     /// volume is.
     private let networkVolumes = NetworkVolumes()
+    /// The `readInfo` calls in flight and waiting, per volume.
+    private let infoReads = InfoReads()
 
     /// A service that lists folders on the file system and finds each one's volume with `statfs`.
     /// `rootVolumeName` runs once per load, on the load's thread.
@@ -155,6 +157,46 @@ public final class ListingService: Sendable {
                 root: root, folder: self.volumeName(of: load.location.path, root: root))
         }
         return load
+    }
+
+    /// Reads the info of the item at `path` with `reader` on a `BlockingCallThread`, at most
+    /// `mostReads(on:)` at once on its volume, which the mount table places without asking it.
+    /// Reads wait in the order asked for their volume's slot, so on a share that stopped answering
+    /// one read stays blocked in the kernel and the rest wait without a thread. These slots are
+    /// apart from the loads'. Returns nil when the read fails. Throws when the calling task is
+    /// cancelled before the read starts; a started read can't be stopped and runs to its end
+    /// (docs/decisions/0095-preview-metadata.md).
+    public func readInfo(at path: String, with reader: any ItemInfoReading)
+        async throws(CancellationError) -> ItemInfo?
+    {
+        let reads = infoReads
+        let id = reads.makeID()
+        // Nil when cancelled before the read started; otherwise the read's info, nil if it failed.
+        let outcome: ItemInfo?? = await withTaskCancellationHandler {
+            await withCheckedContinuation {
+                (continuation: CheckedContinuation<ItemInfo??, Never>) in
+                BlockingCallThread.start {
+                    let volume = Self.longestMount(holding: path, in: self.mountedVolumes())
+                    reads.enter(
+                        id, on: volume, cancelled: { continuation.resume(returning: .none) }
+                    ) {
+                        let info: ItemInfo?
+                        do {
+                            info = try reader.info(at: path)
+                        } catch {
+                            // The caller shows the read failed; the error says no more.
+                            info = nil
+                        }
+                        continuation.resume(returning: .some(info))
+                        reads.finish(id, on: volume)
+                    }
+                }
+            }
+        } onCancel: {
+            reads.cancel(id)
+        }
+        guard let outcome else { throw CancellationError() }
+        return outcome
     }
 
     /// Runs on the load's `BlockingCallThread`. A folder under a mounted network volume, or under
@@ -584,6 +626,89 @@ public final class ListingService: Sendable {
             }
             return volume
         }
+    }
+}
+
+/// `ListingService.readInfo` calls by volume: those holding one of the volume's
+/// `ListingService.mostReads(on:)` slots, and those waiting for one in the order asked. A volume
+/// the mount table doesn't place counts as one local volume.
+private final class InfoReads: @unchecked Sendable {
+    private struct Waiter {
+        let id: Int
+        let cancelled: @Sendable () -> Void
+        let start: @Sendable () -> Void
+    }
+
+    // `lock` guards everything below.
+    private let lock = NSLock()
+    private var nextID = 0
+    private var running: [VolumeIdentity?: Int] = [:]
+    private var waiting: [VolumeIdentity?: [Waiter]] = [:]
+    /// Calls that have entered and not finished.
+    private var entered: Set<Int> = []
+    /// Calls cancelled before they entered, which end as they enter.
+    private var cancelledEarly: Set<Int> = []
+
+    func makeID() -> Int {
+        lock.withLock {
+            nextID += 1
+            return nextID
+        }
+    }
+
+    /// Runs `start` on a `BlockingCallThread` once `volume` has a slot for it, at once if it has
+    /// one now, or runs `cancelled` if the call was cancelled already.
+    func enter(
+        _ id: Int, on volume: VolumeIdentity?, cancelled: @escaping @Sendable () -> Void,
+        start: @escaping @Sendable () -> Void
+    ) {
+        let next: (@Sendable () -> Void)? = lock.withLock {
+            if cancelledEarly.remove(id) != nil { return cancelled }
+            entered.insert(id)
+            let limit = ListingService.mostReads(on: volume?.kind ?? .local)
+            guard running[volume, default: 0] < limit else {
+                waiting[volume, default: []].append(
+                    Waiter(id: id, cancelled: cancelled, start: start))
+                return nil
+            }
+            running[volume, default: 0] += 1
+            return start
+        }
+        next?()
+    }
+
+    /// The call `id` on `volume` ended: its slot goes to the first call waiting there, on a
+    /// thread of its own.
+    func finish(_ id: Int, on volume: VolumeIdentity?) {
+        let next: Waiter? = lock.withLock {
+            entered.remove(id)
+            guard var queue = waiting[volume], !queue.isEmpty else {
+                running[volume, default: 0] -= 1
+                return nil
+            }
+            let next = queue.removeFirst()
+            waiting[volume] = queue.isEmpty ? nil : queue
+            return next
+        }
+        if let next { BlockingCallThread.start(next.start) }
+    }
+
+    /// Drops the call `id` if it waits for a slot, running its `cancelled`; one that hasn't
+    /// entered yet ends as it enters. A started call runs on.
+    func cancel(_ id: Int) {
+        let dropped: Waiter? = lock.withLock {
+            for (volume, queue) in waiting {
+                guard let index = queue.firstIndex(where: { $0.id == id }) else { continue }
+                var rest = queue
+                let waiter = rest.remove(at: index)
+                waiting[volume] = rest.isEmpty ? nil : rest
+                entered.remove(id)
+                return waiter
+            }
+            if !entered.contains(id) { cancelledEarly.insert(id) }
+            return nil
+        }
+        dropped?.cancelled()
     }
 }
 
