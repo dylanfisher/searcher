@@ -38,9 +38,11 @@ on screen, with frames and tab strips set and the key window's focused pane show
   twice. A workspace file not named `<its id>.json`, and any other file in the folder, is
   deleted and reported too. The other files still load. (Amended 2026-10-25: a pane's column
   widths of another shape are dropped alone and the file loads, is written back without them
-  and is reported as `widthsDropped`; the comparison then leaves out only the dropped
-  panes' `columnWidths` keys, so the key anywhere else still discards the file, and a file
-  the load deletes for another reason isn't written back first. See
+  and is reported as `widthsDropped`; the decoder records the path in the file of each
+  pane whose widths it dropped, and the comparison leaves out exactly those panes'
+  `columnWidths` keys and nothing else, so any other difference, a `columnWidths` key or a
+  `null` anywhere else among them, still discards the file. A file the load deletes for another
+  reason isn't written back first. See
   [0098](0098-column-widths-per-window.md).)
 - **Leftovers and dot-files.** A crash between `AtomicWrite`'s write and rename leaves its
   temporary file in the workspaces folder; the load deletes it without a report, since the file

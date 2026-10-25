@@ -103,16 +103,32 @@ extension ColumnWidths: Equatable {
     }
 }
 
-/// The stored column widths a decode dropped, with why, for the store to report. A decoder
-/// that is given one in its `userInfo` under `key` adds to it; TabState drops a pane's bad widths
-/// either way (0098-column-widths-per-window.md).
+/// The stored column widths a decode dropped: where each was in the file and why, for the store
+/// to leave exactly those out of its check of the file and to report them. A decoder that is
+/// given one in its `userInfo` under `key` adds to it; TabState drops a pane's bad widths either
+/// way (0098-column-widths-per-window.md).
 final class DroppedColumnWidths: @unchecked Sendable {
     static let key = CodingUserInfoKey(rawValue: "DroppedColumnWidths")!
 
-    /// One line per pane whose widths were dropped.
-    private(set) var reasons: [String] = []
+    /// A step from a JSON value into one of its parts.
+    enum Step: Equatable {
+        case key(String)
+        case index(Int)
+    }
 
-    func add(_ reason: String) {
-        reasons.append(reason)
+    /// A pane's dropped widths: the steps from the file's top to the pane's object, whose
+    /// `columnWidths` key held them, and why they were dropped.
+    struct Drop {
+        let pane: [Step]
+        let reason: String
+    }
+
+    private(set) var drops: [Drop] = []
+
+    /// Notes that the widths of the pane at `index` in the array at `panes`, a decoder's coding
+    /// path, were dropped.
+    func add(panes: [any CodingKey], index: Int, reason: String) {
+        let steps = panes.map { key in key.intValue.map(Step.index) ?? .key(key.stringValue) }
+        drops.append(Drop(pane: steps + [.index(index)], reason: reason))
     }
 }
