@@ -303,10 +303,14 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(
         view.items.map(\.title) == [
             "as List", "as Columns", "", "Show Sidebar", "Focus Sidebar", "", "Show Hidden Files",
-            "Folders First", "", "Sort by Name",
+            "Always Hide .DS_Store", "Folders First", "", "Sort by Name",
             "Sort by Kind",
             "Sort by Date Modified", "Sort by Size", "", "Calculate All Sizes", "Calculate Sizes",
+            "", "Appearance",
         ])
+    let appearance = try #require(view.items.last?.submenu)
+    #expect(
+        appearance.items.map(\.title) == ["Auto Appearance", "Light Appearance", "Dark Appearance"])
     let table = ListingTableView()
     let log = CommandLog()
     table.runCommand = { log.ids.append($0) }
@@ -360,6 +364,28 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(hidden.state == .off)
     #expect(foldersFirst.state == .on)
     #expect(sortByName.state == .off)
+}
+
+@MainActor @Test func theDSStoreAndAppearanceItemsAreCheckedFromTheSettings() throws {
+    let folder = try TemporaryFolder("MainMenuBuilderTests")
+    let settings = storedSettings(in: folder)
+    let menu = try buildMenu(try AppCommands.registry())
+    MainMenuBuilder.showChecks(in: menu, settings: settings)
+    let dsStore = try #require(allItems(menu).first { $0.title == "Always Hide .DS_Store" })
+    let appearances = try ["Auto", "Light", "Dark"].map { name in
+        try #require(allItems(menu).first { $0.title == "\(name) Appearance" })
+    }
+    #expect(dsStore.state == .on)
+    #expect(appearances.map(\.state) == [.on, .off, .off])
+
+    settings.hideDSStore = false
+    #expect(dsStore.state == .off)
+
+    settings.appearance = .dark
+    #expect(appearances.map(\.state) == [.off, .off, .on])
+    settings.appearance = .light
+    #expect(appearances.map(\.state) == [.off, .on, .off])
+    #expect(dsStore.state == .off)
 }
 
 @MainActor @Test func goMenuHasBackForwardAndGoToFolderWithTheirChords() throws {

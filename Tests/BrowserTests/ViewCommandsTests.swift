@@ -104,6 +104,65 @@ func aSortKeySortsByItsColumnAndTheSameKeyAgainReverses(
     await settle { pane.state.names == ["b", "d", "a", "c"] }
 }
 
+@MainActor @Test func alwaysHideDSStoreTogglesTheSettingAndTheRowsFollow() async throws {
+    let temp = try TemporaryFolder("ViewCommandsTests")
+    let fixture = await viewPane([file("a"), file(".DS_Store"), file(".dot")], in: temp)
+    let pane = fixture.pane
+    let binding = try #require(
+        AppCommands.bindings.first { $0.command == ViewCommands.toggleHideDSStore })
+    let isChecked = try #require(binding.isChecked)
+    #expect(isChecked(pane.settings))
+    try run(toggleHidden, on: pane)
+    await settle { pane.state.names == [".dot", "a"] }
+
+    try run(ViewCommands.toggleHideDSStore, on: pane)
+    #expect(!pane.settings.hideDSStore)
+    #expect(!isChecked(pane.settings))
+    await settle { pane.state.names == [".dot", ".DS_Store", "a"] }
+
+    // With hidden files off, .DS_Store is hidden as any dot name is.
+    try run(toggleHidden, on: pane)
+    await settle { pane.state.names == ["a"] }
+}
+
+/// Select All, type-to-select and the status bar's counts read the rows, so a hidden .DS_Store
+/// is in none of them.
+@MainActor @Test func selectAllAndTypeToSelectSkipAHiddenDSStore() async throws {
+    let temp = try TemporaryFolder("ViewCommandsTests")
+    let fixture = await viewPane([file("a"), file(".DS_Store"), file(".dot")], in: temp)
+    let pane = fixture.pane
+    try run(toggleHidden, on: pane)
+    await settle { pane.state.names == [".dot", "a"] }
+
+    pane.selectAll()
+    #expect(Set(pane.selectedEntries.map(\.name)) == [".dot", "a"])
+    #expect(pane.state.listing?.count == 2)
+
+    #expect(SelectionCommands.selectFirstRow(startingWith: ".d", in: CommandContext(pane: pane)))
+    #expect(pane.selectedEntries.map(\.name) == [".dot"])
+}
+
+@MainActor @Test func theAppearanceCommandsSetTheSettingAndCheckOnlyTheirOwn() async throws {
+    let temp = try TemporaryFolder("ViewCommandsTests")
+    let fixture = await viewPane([file("a")], in: temp)
+    let pane = fixture.pane
+    let commands: [(Command, Settings.Appearance)] = [
+        (ViewCommands.lightAppearance, .light), (ViewCommands.darkAppearance, .dark),
+        (ViewCommands.autoAppearance, .auto),
+    ]
+    let checks = try commands.map { command, _ in
+        try #require(AppCommands.bindings.first { $0.command == command }?.isChecked)
+    }
+    #expect(checks.map { $0(pane.settings) } == [false, false, true])
+
+    for (index, (command, appearance)) in commands.enumerated() {
+        try run(command, on: pane)
+
+        #expect(pane.settings.appearance == appearance)
+        #expect(checks.map { $0(pane.settings) } == commands.indices.map { $0 == index })
+    }
+}
+
 @MainActor @Test func aToggleKeepsTheSelectedEntryWhileItStaysVisible() async throws {
     let temp = try TemporaryFolder("ViewCommandsTests")
     let fixture = await viewPane([file("a"), flagged("b"), file("c"), folder("d")], in: temp)

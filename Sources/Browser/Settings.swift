@@ -11,12 +11,21 @@ import Foundation
 public final class Settings {
     enum Key: String {
         case showHidden
+        case hideDSStore
         case foldersFirst
         case folderSizes
         case terminalBundleID
         case commanderFKeys
         case hideEmptyOperationsPanel
         case columnWidth
+        case appearance
+    }
+
+    /// Whether the app is light or dark. Auto follows the system's setting, as it changes.
+    public enum Appearance: String, CaseIterable, Sendable {
+        case auto
+        case light
+        case dark
     }
 
     /// The width a new column of column view gets until one is set, and the width an
@@ -40,6 +49,12 @@ public final class Settings {
     /// flag (`chflags hidden`). Off by default.
     public var showHidden: Bool {
         didSet { store(showHidden, for: .showHidden, changed: showHidden != oldValue) }
+    }
+    /// Whether panes leave out entries named exactly `.DS_Store` even while `showHidden` lists
+    /// the other hidden entries. On by default (0100-appearance-and-ds-store.md). It hides them
+    /// from the rows only: copying, moving or trashing a folder takes its `.DS_Store` along.
+    public var hideDSStore: Bool {
+        didSet { store(hideDSStore, for: .hideDSStore, changed: hideDSStore != oldValue) }
     }
     /// Whether folders come before every other entry in each sort. Off by default.
     public var foldersFirst: Bool {
@@ -92,6 +107,13 @@ public final class Settings {
         }
     }
 
+    /// Whether the app is light, dark or follows the system. Auto by default.
+    public var appearance: Appearance {
+        didSet {
+            store(appearance.rawValue, for: .appearance, changed: appearance != oldValue)
+        }
+    }
+
     /// How long a drag has to hover over a folder before it springs open, as the system's
     /// Spring-loading setting in Accessibility ▸ Pointer Control has it; nil while that setting is
     /// off. The system writes both keys to the global domain, which every suite reads through, and
@@ -126,6 +148,7 @@ public final class Settings {
     public init(defaults: UserDefaults) {
         self.defaults = defaults
         showHidden = Self.bool(.showHidden, in: defaults) ?? false
+        hideDSStore = Self.bool(.hideDSStore, in: defaults) ?? true
         foldersFirst = Self.bool(.foldersFirst, in: defaults) ?? false
         folderSizes = Self.bool(.folderSizes, in: defaults) ?? false
         terminalBundleID = Self.string(.terminalBundleID, in: defaults) ?? "com.apple.Terminal"
@@ -134,6 +157,7 @@ public final class Settings {
         columnWidth =
             Self.number(.columnWidth, in: defaults, within: Self.columnWidths)
             ?? Self.defaultColumnWidth
+        appearance = Self.appearance(in: defaults) ?? .auto
     }
 
     /// Runs `handler` after each change of a setting, for as long as `owner` exists.
@@ -174,6 +198,17 @@ public final class Settings {
             return number.doubleValue
         }
         defaults.removeObject(forKey: key.rawValue)
+        return nil
+    }
+
+    /// The appearance stored under its key; nil when there is none, or it isn't the name of one,
+    /// which is removed.
+    private static func appearance(in defaults: UserDefaults) -> Appearance? {
+        guard let name = string(.appearance, in: defaults) else { return nil }
+        if let appearance = Appearance(rawValue: name) {
+            return appearance
+        }
+        defaults.removeObject(forKey: Key.appearance.rawValue)
         return nil
     }
 

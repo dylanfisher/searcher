@@ -98,15 +98,15 @@ public final class PaneViewController: NSViewController {
     }
 
     /// Draws a ring around the pane, for the pane with the keys while another pane shows.
-    var showsFocus = false {
-        didSet {
-            guard showsFocus != oldValue else { return }
-            view.wantsLayer = true
-            view.layer?.borderWidth = showsFocus ? Self.focusRingWidth : 0
-            view.layer?.borderColor = NSColor.keyboardFocusIndicatorColor.cgColor
+    var showsFocus: Bool {
+        get { container.showsFocusRing }
+        set {
+            loadViewIfNeeded()
+            container.showsFocusRing = newValue
         }
     }
-    private static let focusRingWidth = 2.0
+    /// The root view, which `loadView` fills.
+    private let container = PaneContainerView()
 
     /// Shows the list scrolled as `other`'s is, for a pane a split or grid key copied from
     /// `other`'s. Column view keeps its own scrolling.
@@ -238,7 +238,6 @@ public final class PaneViewController: NSViewController {
     }
 
     public override func loadView() {
-        let container = NSView()
         let list = listingViewController.view
         let columns = columnViewController.view
         // Constraints rather than autoresizing: the container starts at zero size, where a list

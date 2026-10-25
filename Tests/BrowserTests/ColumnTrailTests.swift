@@ -548,6 +548,23 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
     #expect(pane.state.listing == nil)
 }
 
+@MainActor @Test func aColumnFollowsAlwaysHideDSStore() async throws {
+    let temp = try TemporaryFolder("ColumnTrailTests")
+    let settings = storedSettings(in: temp)
+    settings.showHidden = true
+    let fixture = PaneFixture(
+        at: "/r", folders: ["/r": [file("a"), file(".DS_Store"), file(".dot")]],
+        settings: settings)
+    await settle { fixture.pane.state.isLoaded }
+    let pane = fixture.pane
+    pane.setViewMode(.column)
+    await settle { trail(pane).focused.pane.state.names == [".dot", "a"] }
+
+    settings.hideDSStore = false
+
+    await settle { trail(pane).focused.pane.state.names == [".dot", ".DS_Store", "a"] }
+}
+
 @MainActor @Test func switchingToColumnsStopsThePanesOwnLoadAndMonitor() async {
     let fixture = PaneFixture(at: "/r", folders: tree, held: true)
     let pane = fixture.pane
