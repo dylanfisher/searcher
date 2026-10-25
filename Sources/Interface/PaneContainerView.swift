@@ -16,6 +16,15 @@ final class PaneContainerView: NSView {
         }
     }
 
+    /// Runs when a press reaches the container: a press on something in the pane that takes no
+    /// press itself, such as the preview's empty space, the gap between columns or the path bar.
+    /// The pane takes the keys, as a press on a row gives them.
+    var onPress: @MainActor () -> Void = {}
+
+    override func mouseDown(with event: NSEvent) {
+        onPress()
+    }
+
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         resolveRingColor()
