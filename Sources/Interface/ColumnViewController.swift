@@ -718,7 +718,11 @@ final class ColumnViewController: NSViewController {
         let target = clip.constrainBoundsRect(
             NSRect(origin: NSPoint(x: x, y: clip.bounds.origin.y), size: clip.bounds.size)
         )
-        let origin = clip.backingAlignedRect(target, options: .alignAllEdgesNearest).origin
+        // Not backingAlignedRect: it aligns in window coordinates, so it moves the result by
+        // the fraction the clip's current origin is off the grid, as it is in mid-animation.
+        let scale =
+            clip.window?.backingScaleFactor ?? NSScreen.screens.first?.backingScaleFactor ?? 2
+        let origin = NSPoint(x: (target.origin.x * scale).rounded() / scale, y: target.origin.y)
         guard animated else {
             clip.setBoundsOrigin(origin)
             return
