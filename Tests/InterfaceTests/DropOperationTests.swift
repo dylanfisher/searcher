@@ -242,6 +242,18 @@ private final class Fixture {
         list.tableView(table, acceptDrop: info, row: row, dropOperation: operation)
     }
 
+    /// Waits for `done` and for the queue to have reported the operation. The files change before
+    /// the queue's report reaches `snapshots`, so `done` alone can pass while `operations` is
+    /// still empty.
+    func settleOperation(
+        fileID: String = #fileID, filePath: String = #filePath, line: Int = #line,
+        column: Int = #column, until done: @MainActor () -> Bool
+    ) async {
+        await settle(fileID: fileID, filePath: filePath, line: line, column: column) {
+            done() && !operations.isEmpty
+        }
+    }
+
     func exists(_ url: URL) -> Bool {
         FileManager.default.fileExists(atPath: url.path)
     }
@@ -271,7 +283,7 @@ private final class Fixture {
     #expect(fixture.accept(info, row: row, .on))
 
     let target = fixture.folder.appending(path: "sub/x.txt")
-    await settle { fixture.exists(target) && !fixture.exists(source) }
+    await fixture.settleOperation { fixture.exists(target) && !fixture.exists(source) }
     #expect(
         fixture.operations == [
             .move([source.path], into: fixture.folder.appending(path: "sub").path)
@@ -289,7 +301,7 @@ private final class Fixture {
     #expect(fixture.validate(info, row: -1, .on) == .move)
     #expect(fixture.accept(info, row: try fixture.row("a.txt"), .on))
 
-    await settle { fixture.exists(fixture.folder.appending(path: "x.txt")) }
+    await fixture.settleOperation { fixture.exists(fixture.folder.appending(path: "x.txt")) }
     #expect(fixture.operations == [.move([source.path], into: fixture.folder.path)])
 }
 
@@ -302,7 +314,7 @@ private final class Fixture {
 
     #expect(fixture.accept(fixture.drag(sources), row: -1, .on))
 
-    await settle { fixture.selectedNames == ["x.txt", "y.txt"] }
+    await fixture.settleOperation { fixture.selectedNames == ["x.txt", "y.txt"] }
     #expect(fixture.operations == [.move(sources.map(\.path), into: fixture.folder.path)])
 }
 
@@ -318,7 +330,7 @@ private final class Fixture {
     #expect(fixture.validate(info, row: try fixture.row("a.txt"), .on) == .copy)
     #expect(fixture.accept(info, row: try fixture.row("a.txt"), .on))
 
-    await settle { fixture.exists(fixture.folder.appending(path: "a copy.txt")) }
+    await fixture.settleOperation { fixture.exists(fixture.folder.appending(path: "a copy.txt")) }
     await settle { fixture.selectedNames == ["a copy.txt"] }
     #expect(fixture.exists(a))
     #expect(fixture.operations == [.duplicate([a.path])])
@@ -334,7 +346,7 @@ private final class Fixture {
     #expect(fixture.validate(fixture.drag([x], mask: command), row: -1, .on) == .generic)
     #expect(fixture.accept(fixture.drag([x], mask: option), row: -1, .on))
 
-    await settle { fixture.exists(fixture.folder.appending(path: "x.txt")) }
+    await fixture.settleOperation { fixture.exists(fixture.folder.appending(path: "x.txt")) }
     #expect(fixture.exists(x))
     #expect(fixture.operations == [.copy([x.path], into: fixture.folder.path)])
 }
@@ -388,7 +400,7 @@ private final class Fixture {
     #expect(fixture.validate(info, row: row, .on) == .move)
     #expect(fixture.accept(info, row: row, .on))
 
-    await settle { fixture.exists(fixture.folder.appending(path: "x.txt")) }
+    await fixture.settleOperation { fixture.exists(fixture.folder.appending(path: "x.txt")) }
     #expect(fixture.operations == [.move([source.path], into: fixture.folder.path)])
     #expect(fixture.actions.openedWithApp.isEmpty)
 }
