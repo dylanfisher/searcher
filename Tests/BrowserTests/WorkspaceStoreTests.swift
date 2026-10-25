@@ -492,40 +492,125 @@ private func editColumnWidths(_ data: Data, _ edit: (inout [String: Any]) throws
     }
 }
 
-/// As `expectDiscarded`, for a first pane that stores widths.
-private func expectWidthsDiscarded(
+/// A workspace whose first tab's pane stores widths changed by `edit` loads with that pane's
+/// widths dropped and the rest as saved, the second tab's widths among them; the file is written
+/// again without the dropped widths, so the next load finds nothing wrong.
+private func expectWidthsDropped(
     _ edit: (inout [String: Any]) throws -> Void,
     sourceLocation: SourceLocation = #_sourceLocation
 ) async throws {
+    let folder = try TemporaryFolder("WorkspaceStoreTests")
+    let layout = Layout()
+    let kept = columnTab(someColumnWidths())
+    let saved = try workspace(tabs: [columnTab(someColumnWidths(), layout: layout), kept])
+    let writer = store(folder)
+    await writer.save(saved)
+    await writer.flush()
+    let url = file(of: saved.id, in: folder)
+    try editColumnWidths(try Data(contentsOf: url), edit).write(to: url)
+
+    let problems = EventLog<StoreProblem>()
+    let loaded = await store(folder, problems: problems).load()
+
+    let expected = try workspace(
+        saved.id, tabs: [columnTab(ColumnWidths(), layout: layout), kept])
+    #expect(loaded.workspaces == [saved.id: expected], sourceLocation: sourceLocation)
+    #expect(problems.all.map(\.kind) == [.widthsDropped], sourceLocation: sourceLocation)
+    let again = EventLog<StoreProblem>()
+    #expect(
+        await store(folder, problems: again).load().workspaces == [saved.id: expected],
+        sourceLocation: sourceLocation)
+    #expect(again.all.isEmpty, sourceLocation: sourceLocation)
+}
+
+/// Widths a grip can't have, or that can't be a pane's, drop the pane's widths alone: a saved
+/// workspace isn't lost over a width (0098-column-widths-per-window.md).
+@Test func storedColumnWidthsOfAnotherShapeAreDroppedAndTheRestLoads() async throws {
+    // A trackpad drag's width from before widths were whole points.
+    try await expectWidthsDropped { $0["preview"] = 286.5 }
+    try await expectWidthsDropped { widths in
+        widths["folders"] = [["path": "/a", "width": 312.25]]
+    }
+    try await expectWidthsDropped { $0["preview"] = 5000 }
+    try await expectWidthsDropped { widths in
+        widths["folders"] = [["path": "/a", "width": 200], ["path": "/a", "width": 300]]
+    }
+    try await expectWidthsDropped { widths in
+        widths["folders"] = (0...ColumnWidths.folderLimit).map {
+            ["path": "/f\($0)", "width": 200]
+        }
+    }
+    try await expectWidthsDropped { widths in
+        widths["folders"] = []
+        widths["preview"] = nil
+    }
+}
+
+/// A width of another type isn't a width at all: the file is discarded, as any file of another
+/// shape is.
+@Test func storedColumnWidthsOfAnotherTypeDiscardTheFile() async throws {
     let folder = try TemporaryFolder("WorkspaceStoreTests")
     let bad = try workspace(name: "Bad", tabs: [columnTab(someColumnWidths())])
     let writer = store(folder)
     await writer.save(bad)
     await writer.flush()
     let url = file(of: bad.id, in: folder)
-    try editColumnWidths(try Data(contentsOf: url), edit).write(to: url)
+    try editColumnWidths(try Data(contentsOf: url)) { $0["preview"] = "wide" }.write(to: url)
 
     let problems = EventLog<StoreProblem>()
     let loaded = await store(folder, problems: problems).load()
-    #expect(loaded.workspaces.isEmpty, sourceLocation: sourceLocation)
-    #expect(problems.all.map(\.kind) == [.discarded], sourceLocation: sourceLocation)
+    #expect(loaded.workspaces.isEmpty)
+    #expect(problems.all.map(\.kind) == [.discarded])
 }
 
-@Test func storedColumnWidthsOfAnotherShapeAreDiscarded() async throws {
-    try await expectWidthsDiscarded { $0["preview"] = 5000 }
-    try await expectWidthsDiscarded { $0["preview"] = "wide" }
-    try await expectWidthsDiscarded { widths in
-        widths["folders"] = [["path": "/a", "width": 200], ["path": "/a", "width": 300]]
+/// A key the widths don't keep is still caught when other widths in the file are dropped.
+@Test func anExtraKeyBesideDroppedWidthsDiscardsTheFile() async throws {
+    let folder = try TemporaryFolder("WorkspaceStoreTests")
+    let bad = try workspace(name: "Bad", tabs: [columnTab(someColumnWidths())])
+    let writer = store(folder)
+    await writer.save(bad)
+    await writer.flush()
+    let url = file(of: bad.id, in: folder)
+    try editJSON(try Data(contentsOf: url)) { object in
+        var tabs = try #require(object["tabs"] as? [[String: Any]])
+        var panes = try #require(tabs[0]["panes"] as? [[String: Any]])
+        var widths = try #require(panes[0]["columnWidths"] as? [String: Any])
+        widths["preview"] = 286.5
+        panes[0]["columnWidths"] = widths
+        panes[0]["extra"] = 2
+        tabs[0]["panes"] = panes
+        object["tabs"] = tabs
+    }.write(to: url)
+
+    let problems = EventLog<StoreProblem>()
+    let loaded = await store(folder, problems: problems).load()
+    #expect(loaded.workspaces.isEmpty)
+    #expect(problems.all.map(\.kind) == [.discarded])
+}
+
+/// A saved workspace and its window, saved alike with a fractional width, load alike without it,
+/// so the window doesn't show the edited dot for widths it never changed.
+@Test func aSnapshotAndItsWindowWithTheSameDroppedWidthsLoadAlike() async throws {
+    let folder = try TemporaryFolder("WorkspaceStoreTests")
+    let id = UUID()
+    let saved = try workspace(id, tabs: [columnTab(someColumnWidths())])
+    let writer = store(folder)
+    await writer.save(saved)
+    await writer.saveSnapshot(saved)
+    await writer.flush()
+    for url in [
+        file(of: id, in: folder), snapshotsFolder(folder).appending(path: "\(id.uuidString).json"),
+    ] {
+        try editColumnWidths(try Data(contentsOf: url)) { $0["preview"] = 286.5 }.write(to: url)
     }
-    try await expectWidthsDiscarded { widths in
-        widths["folders"] = (0...ColumnWidths.folderLimit).map {
-            ["path": "/f\($0)", "width": 200]
-        }
-    }
-    try await expectWidthsDiscarded { widths in
-        widths["folders"] = []
-        widths["preview"] = nil
-    }
+
+    let problems = EventLog<StoreProblem>()
+    let loaded = await store(folder, problems: problems).load()
+
+    let window = try #require(loaded.workspaces[id])
+    #expect(loaded.snapshots[id] == window)
+    #expect(window.tabs.count == 1)
+    #expect(problems.all.map(\.kind) == [.widthsDropped, .widthsDropped])
 }
 
 // MARK: Snapshots

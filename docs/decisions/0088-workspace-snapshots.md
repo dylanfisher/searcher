@@ -62,7 +62,9 @@ and for a Focus Sidebar chord ([0086](0086-workspace-sidebar.md) gave it none). 
 - **Launch.** Session restore is unchanged: each window comes back from its window file, as it
   was at quit. A window is linked when a snapshot with its ID loaded, and takes the snapshot's
   name; one whose snapshot is gone comes back unsaved. The edited dot shows when the restored
-  state differs from the snapshot. Free names are given to snapshots, the open windows' first,
+  state differs from the snapshot. (Amended 2026-10-25: column widths of another shape are
+  dropped from the window file and the snapshot alike as they load, so the same bad widths in
+  both leave them alike and show no dot; see [0098](0098-column-widths-per-window.md).) Free names are given to snapshots, the open windows' first,
   front to back, then the closed ones by name, so the front window keeps its name. Window files
   the session doesn't list are deleted, as crash leftovers.
 - **Focus Sidebar (Command-0)** shows the sidebar and moves the keys into it; pressed while the

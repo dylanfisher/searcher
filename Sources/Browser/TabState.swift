@@ -157,8 +157,11 @@ public struct TabState: Codable, Equatable, Sendable {
         try container.encode(stored, forKey: .panes)
     }
 
-    /// Stored data whose panes don't match the layout's leaves, or whose column widths
-    /// `ColumnWidths.problem` finds wrong or are stored empty, is rejected, not repaired.
+    /// Stored data whose panes don't match the layout's leaves is rejected, not repaired. A
+    /// pane's column widths that `ColumnWidths.problem` finds wrong, or that are stored empty, are
+    /// dropped, and the pane keeps the rest: the pane shows the default width, as it would with
+    /// none set. Each drop is added to the `DroppedColumnWidths` in the decoder's `userInfo`, if
+    /// any (0098-column-widths-per-window.md).
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         layout = try container.decode(Layout.self, forKey: .layout)
@@ -170,18 +173,19 @@ public struct TabState: Codable, Equatable, Sendable {
                     codingPath: decoder.codingPath,
                     debugDescription: "the panes don't match the layout's leaves"))
         }
-        let widths = try stored.map { pane -> ColumnWidths in
+        let widths = stored.map { pane -> ColumnWidths in
             guard let stored = pane.columnWidths else { return ColumnWidths() }
             let folders = stored.folders.map {
                 ColumnWidths.Folder(location: Location(path: $0.path), width: $0.width)
             }
             let problem =
                 folders.isEmpty && stored.preview == nil
-                ? "pane \(pane.id) stores column widths with none in them"
+                ? "column widths are stored with none in them"
                 : ColumnWidths.problem(folders: folders, preview: stored.preview)
             if let problem {
-                throw DecodingError.dataCorrupted(
-                    .init(codingPath: decoder.codingPath, debugDescription: problem))
+                (decoder.userInfo[DroppedColumnWidths.key] as? DroppedColumnWidths)?.add(
+                    "pane \(pane.id): \(problem)")
+                return ColumnWidths()
             }
             return ColumnWidths(folders: folders, preview: stored.preview)
         }

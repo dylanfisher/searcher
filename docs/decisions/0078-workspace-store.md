@@ -36,7 +36,10 @@ on screen, with frames and tab strips set and the key window's focused pane show
   each type. The decoders reject what breaks an invariant: a selected tab out of range, panes
   that don't match the layout's leaves, a key window not in the session, a workspace listed
   twice. A workspace file not named `<its id>.json`, and any other file in the folder, is
-  deleted and reported too. The other files still load.
+  deleted and reported too. The other files still load. (Amended 2026-10-25: a pane's column
+  widths of another shape are dropped alone and the file loads, is written back without them
+  and is reported as `widthsDropped`; the comparison then leaves out only the dropped
+  `columnWidths` keys. See [0098](0098-column-widths-per-window.md).)
 - **Leftovers and dot-files.** A crash between `AtomicWrite`'s write and rename leaves its
   temporary file in the workspaces folder; the load deletes it without a report, since the file
   it was to replace is still there. `AtomicWrite.isPartial` is the one test of that name. Any
@@ -51,7 +54,7 @@ on screen, with frames and tab strips set and the key window's focused pane show
   save after it waits the whole delay. A load sees saves not yet written.
   The store's file calls trap on the main thread (`dispatchPrecondition`). The clock is injected.
 - **Problems.** `StoreProblem` names the file, the kind (unreadable, discarded, undeletable,
-  unwritten) and the error, and its description is the sentence to show. The store reports each
+  unwritten; widthsDropped since 0098) and the error, and its description is the sentence to show. The store reports each
   one through the `report` closure it is given, from loads and from background writes alike.
 - **Where B1 ends.** The store's read is inside B1: M5a.2 reads the session and its workspaces
   off the main actor before the first window, and B1 ends when every restored window is on
