@@ -29,15 +29,20 @@ session and workspace files ([0080](0080-restore-at-launch.md), [0081](0081-rest
   every column and the preview to the dragged column's new width, and on release sets
   `Settings.columnWidth`, the width new columns get. A plain drag leaves that default alone.
   Whether Option is held is read at the press. An Option-click that doesn't move changes nothing.
+  An Option-drag whose own column closes under it keeps resizing the columns left, and its last
+  width still becomes the default.
 - **Double-click.** Plain, it fits the column to its widest name, beside a folder's chevron, and
   leaves the default alone. With Option it fits every column and the preview to one width, that
   of the widest name in any column, and sets the default, as an Option-drag does. The preview's
   grip has no names, so its plain double-click does nothing. A column with no rows does nothing.
   The names are measured off the main thread with `NSString.size(withAttributes:)` in the name
-  cell's font, from the column's `Listing`; nothing reads the disk. The result lands only on the
-  columns still shown.
+  cell's font, from the column's `Listing`, at user-initiated priority; nothing reads the disk.
+  A new fit cancels the one running, which stops measuring within 512 names. The result lands
+  only on the columns still shown; a fit whose column closed is dropped.
 - **Limits.** `Settings.columnWidths` is 100…1000 points: a grip drags no further, and a stored
-  default outside it is discarded. A fit stops at `ColumnViewController.fitWidthCap`, 600 points,
+  default outside it is discarded, and VoiceOver setting a width that isn't a finite number
+  stops the app, as a value of the wrong type does. The columns' view is wide enough for the
+  last grip's right half. A fit stops at `ColumnViewController.fitWidthCap`, 600 points,
   about two and a half default columns, so one very long name doesn't make a column wider than most
   windows; a drag can still go past it.
 - **Default and storage.** `Settings.defaultColumnWidth` is 245, Finder's, and the only copy of the

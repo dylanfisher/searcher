@@ -97,3 +97,14 @@ private final class GripLog {
     grip.setAccessibilityValue(NSNumber(value: 300))
     #expect(log.width == 300)
 }
+
+/// A width that isn't a finite number stops the app, as a value of the wrong type does, rather
+/// than lay the columns out at NaN.
+@Test func aWidthThatIsNotFiniteFailsLoudly() async {
+    await #expect(processExitsWith: .failure) {
+        await MainActor.run {
+            let grip = ColumnGripView(frame: NSRect(origin: .zero, size: ColumnGripView.size))
+            grip.setAccessibilityValue(NSNumber(value: Double.nan))
+        }
+    }
+}
