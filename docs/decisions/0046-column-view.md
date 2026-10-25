@@ -66,7 +66,10 @@ stacked single-column tables over `NSBrowser`.
 Columns are a fixed 240 points wide and can't be resized. There is no preview column
 (superseded 2026-10-24: one selected file in the last column shows a preview to its right, see
 [0090](0090-preview-column.md)). A folder row shows no disclosure
-chevron. A column whose folder can't be listed shows an empty table with no message; only the
+chevron (superseded 2026-10-24: a folder row shows Finder's right-aligned `chevron.right`, a
+template that is white on a selected row in the focused column and secondary gray otherwise;
+files, packages and links show none, since the listing holds no link target and resolving one
+would be a read, and a name is fitted to end before the chevron). A column whose folder can't be listed shows an empty table with no message; only the
 spinner is per column ([0053](0053-column-accessibility.md)). A column's table carries the list's
 `ListingViewController`, so changes to the list's rows reach columns too; a change meant for the
 list only has to check `showsNamesOnly`.

@@ -519,3 +519,122 @@ private let socket = DirectoryEntry(
     let shown = try #require(view.accessibilityChildren() as? [NSTextField])
     #expect(shown.contains { $0 === view.sizeField })
 }
+
+private func entry(_ name: String, _ type: DirectoryEntry.FileType) -> DirectoryEntry {
+    DirectoryEntry(
+        name: name, type: type, size: nil, modified: testDate, isHidden: false, isDataless: false)
+}
+
+/// The folder chevron in a name cell, shown or not.
+@MainActor
+private func chevron(_ cell: NSTableCellView) throws -> NSImageView {
+    try #require(
+        cell.subviews.first { $0.identifier == ListingViewController.folderChevronIdentifier }
+            as? NSImageView)
+}
+
+@MainActor
+private func nameCell(_ table: NSTableView, row: Int) throws -> NSTableCellView {
+    try #require(table.view(atColumn: 0, row: row, makeIfNecessary: true) as? NSTableCellView)
+}
+
+private let longFolder = "a-very-long-folder-name-that-cannot-fit-in-a-column-at-all"
+
+private let chevronTree: [String: [DirectoryEntry]] = [
+    "/": [folder("r")],
+    "/r": [
+        entry("App.app", .package), file("a.txt"), folder("docs"),
+        entry("link", .symbolicLink), entry(longFolder, .directory),
+    ],
+    "/r/docs": [],
+]
+
+@MainActor @Test func onlyFolderRowsShowTheChevron() async throws {
+    let fixture = await Fixture(folders: chevronTree)
+    let table = fixture.tables[0]
+
+    for (row, name) in rowNames(table).enumerated() {
+        let isFolder = name == "docs" || name == longFolder
+        #expect(try !chevron(nameCell(table, row: row)).isHidden == isFolder, "\(name)")
+    }
+}
+
+@MainActor @Test func theChevronIsOneSharedSymbolImage() async throws {
+    let iconCache = TypeIconCache { _ in NSImage() }
+    let fixture = await Fixture(iconCache: iconCache, folders: chevronTree)
+    let table = fixture.tables[0]
+
+    let images = try (0..<table.numberOfRows).map { try chevron(nameCell(table, row: $0)).image }
+    #expect(images.allSatisfy { $0 === iconCache.folderChevron })
+    #expect(iconCache.folderChevron.isTemplate)
+}
+
+@MainActor @Test func aNameEndsBeforeTheChevron() async throws {
+    let fixture = await Fixture(folders: chevronTree)
+    let table = fixture.tables[0]
+    let names = rowNames(table)
+    let cell = try nameCell(table, row: try #require(names.firstIndex(of: longFolder)))
+    let mark = try chevron(cell)
+    let text = try #require(cell.textField)
+
+    #expect(text.frame.maxX <= mark.frame.minX)
+    #expect(mark.frame.maxX <= cell.bounds.width)
+    // A file's name takes the room back.
+    let file = try nameCell(table, row: try #require(names.firstIndex(of: "a.txt")))
+    #expect(try #require(file.textField).frame.width > text.frame.width)
+}
+
+@MainActor @Test func theChevronFollowsTheRowsSelectionStyle() async throws {
+    let fixture = await Fixture(folders: chevronTree)
+    let cell = try nameCell(fixture.tables[0], row: 0)
+    let mark = try chevron(cell)
+
+    cell.backgroundStyle = .emphasized
+    #expect(mark.contentTintColor == .alternateSelectedControlTextColor)
+    cell.backgroundStyle = .normal
+    #expect(mark.contentTintColor == .secondaryLabelColor)
+}
+
+@MainActor @Test func aSelectedRowInAFocusedColumnTurnsItsChevronWhite() async throws {
+    let fixture = await Fixture(folders: chevronTree)
+    let table = fixture.tables[0]
+    let row = try #require(rowNames(table).firstIndex(of: "docs"))
+    let rowView = try #require(table.rowView(atRow: row, makeIfNecessary: true))
+    let cell = try #require(rowView.view(atColumn: 0) as? NSTableCellView)
+
+    rowView.isSelected = true
+    rowView.isEmphasized = true
+    draw(rowView)
+    #expect(cell.backgroundStyle == .emphasized)
+    #expect(try chevron(cell).contentTintColor == .alternateSelectedControlTextColor)
+
+    rowView.isEmphasized = false
+    draw(rowView)
+    #expect(try chevron(cell).contentTintColor == .secondaryLabelColor)
+}
+
+@MainActor @Test func aNotDownloadedFolderShowsItsBadgeLeftOfTheChevron() async throws {
+    let cloud = DirectoryEntry(
+        name: "cloud", type: .directory, size: nil, modified: testDate, isHidden: false,
+        isDataless: true)
+    let fixture = await Fixture(folders: ["/": [folder("r")], "/r": [cloud], "/r/cloud": []])
+    let cell = try nameCell(fixture.tables[0], row: 0)
+    let mark = try chevron(cell)
+    let badge = try #require(
+        cell.subviews.first { $0.identifier == ListingViewController.notDownloadedBadgeIdentifier })
+    let text = try #require(cell.textField)
+
+    #expect(!badge.isHidden && !mark.isHidden)
+    #expect(badge.frame.maxX <= mark.frame.minX)
+    #expect(text.frame.maxX <= badge.frame.minX)
+}
+
+/// Draws `view` into a bitmap, as AppKit does before it shows a row, which is when a row view
+/// gives its cells their background style.
+@MainActor
+private func draw(_ view: NSView) {
+    guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
+        preconditionFailure("no bitmap for \(view.bounds)")
+    }
+    view.cacheDisplay(in: view.bounds, to: bitmap)
+}

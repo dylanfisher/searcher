@@ -20,6 +20,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     static let notDownloadedLabel = "Not downloaded"
     /// The name cell's badge view, shown only for an entry that isn't downloaded.
     static let notDownloadedBadgeIdentifier = NSUserInterfaceItemIdentifier("notDownloadedBadge")
+    /// The name cell's chevron view in column view, shown only for a folder.
+    static let folderChevronIdentifier = NSUserInterfaceItemIdentifier("folderChevron")
     /// The opacity of a cut entry's cells.
     static let cutAlpha: CGFloat = 0.5
 
@@ -627,6 +629,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     ) {
         if column == .name {
             cell.imageView?.image = iconCache.icon(for: listing.kind(atRow: row).type)
+            showFolderChevron(listing[row].type == .directory, in: cell)
             showNotDownloadedBadge(listing[row].isDataless, in: cell)
         }
         cell.textField?.stringValue = text(column, row: row, in: listing)
@@ -699,6 +702,13 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// row refilled in place, may have shown another entry's badge.
     private func showNotDownloadedBadge(_ shown: Bool, in cell: NSTableCellView) {
         let badge = Self.badge(in: cell)
+        // Left of the chevron when the cell shows one.
+        let badgeX =
+            cell.bounds.width - 2 - badge.frame.width
+            - (Self.chevron(in: cell).map { $0.isHidden ? 0 : Self.chevronReserve } ?? 0)
+        if badge.frame.minX != badgeX {
+            badge.frame.origin.x = badgeX
+        }
         if shown, badge.image == nil {
             badge.image = iconCache.notDownloadedBadge
         }
@@ -706,15 +716,31 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         Self.fitName(in: cell)
     }
 
+    /// Shows or hides a column name cell's chevron: shown for a folder, not for a file, a package
+    /// or a link, whose target the listing doesn't hold. A list's cell has none. The name is
+    /// fitted after, by `showNotDownloadedBadge`.
+    private func showFolderChevron(_ shown: Bool, in cell: NSTableCellView) {
+        guard let chevron = Self.chevron(in: cell) else { return }
+        chevron.isHidden = !shown
+    }
+
+    private static func chevron(in cell: NSTableCellView) -> NSImageView? {
+        (cell as? ColumnNameCellView)?.chevron
+    }
+
     /// Sets the name's width from the cell's: up to the badge when it shows, else up to the
-    /// trailing padding. Set outright, since autoresizing clamps a width at zero in a column
+    /// chevron when it shows, else up to the trailing padding. Set outright, since autoresizing clamps a width at zero in a column
     /// narrower than the name and the badge, and widening the column doesn't give that back.
     private static func fitName(in cell: NSTableCellView) {
         let badge = badge(in: cell)
         guard let textField = cell.textField else {
             preconditionFailure("the name cell has no text field: \(cell.subviews)")
         }
-        let end = badge.isHidden ? cell.bounds.width - 2 : badge.frame.minX - badgeGap
+        let end =
+            badge.isHidden
+            ? (chevron(in: cell).flatMap { $0.isHidden ? nil : $0.frame.minX - badgeGap }
+                ?? cell.bounds.width - 2)
+            : badge.frame.minX - badgeGap
         let width = max(end - textField.frame.minX, 0)
         if textField.frame.width != width {
             textField.frame.size.width = width
@@ -759,13 +785,34 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     private static let iconSize = 16.0
     private static let nameX = 2 + iconSize + 4
 
-    /// The space between a name and its badge.
+    /// The space between a name and its badge or chevron.
     private static let badgeGap = 4.0
+    /// The chevron's width, and its distance from the cell's right edge.
+    private static let chevronWidth = 10.0
+    private static let chevronInset = 8.0
+    /// The room a shown chevron takes from the cell's trailing padding, which a badge keeps clear
+    /// of.
+    private static let chevronReserve = chevronWidth + chevronInset - 2 + badgeGap
 
     /// A cell laid out with frames and autoresizing, which costs less per row than constraints.
     private func makeCell(for column: SortColumn) -> NSTableCellView {
         let height = tableView.rowHeight
-        let cell = NSTableCellView(frame: NSRect(x: 0, y: 0, width: column.width, height: height))
+        let frame = NSRect(x: 0, y: 0, width: column.width, height: height)
+        let cell: NSTableCellView
+        if showsNamesOnly, column == .name {
+            let named = ColumnNameCellView(frame: frame, chevronImage: iconCache.folderChevron)
+            let chevron = named.chevron
+            chevron.identifier = Self.folderChevronIdentifier
+            let side = 16.0
+            chevron.frame = NSRect(
+                x: column.width - Self.chevronInset - Self.chevronWidth, y: (height - side) / 2,
+                width: Self.chevronWidth, height: side)
+            chevron.autoresizingMask = [.minXMargin, .minYMargin, .maxYMargin]
+            chevron.isHidden = true
+            cell = named
+        } else {
+            cell = NSTableCellView(frame: frame)
+        }
         cell.identifier = column.identifier
         var textX = 2.0
         if column == .name {
