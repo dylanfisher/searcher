@@ -196,22 +196,30 @@ public actor WorkspaceStore {
     /// saved, even when it names a workspace that didn't load.
     public func load() -> Contents {
         dispatchPrecondition(condition: .notOnQueue(.main))
-        let workspaces = readWorkspaces(in: folder, at: url(for:)).merging(pending) { _, new in
-            new
-        }
+        let workspaces = readWorkspaces(in: folder, at: url(for:))
+            .mapValues { kept($0, at: url(for: $0.value.id)) }
+            .merging(pending) { _, new in new }
         var snapshots = readWorkspaces(in: snapshotFolder, at: snapshotURL(for:))
-        for (id, snapshot) in snapshots where snapshot.name == nil {
+        for (id, snapshot) in snapshots where snapshot.value.name == nil {
             snapshots[id] = nil
             discard(snapshotURL(for: id), because: "it has no name, which a saved workspace has")
         }
-        snapshots.merge(pendingSnapshots) { _, new in new }
-        let session = pendingSession ?? read(SessionState.self, from: sessionFile)
-        return Contents(session: session, workspaces: workspaces, snapshots: snapshots)
+        let loadedSnapshots = snapshots.mapValues { kept($0, at: snapshotURL(for: $0.value.id)) }
+            .merging(pendingSnapshots) { _, new in new }
+        let session =
+            pendingSession
+            ?? read(SessionState.self, from: sessionFile).map {
+                kept($0, at: sessionFile)
+            }
+        return Contents(session: session, workspaces: workspaces, snapshots: loadedSnapshots)
     }
 
-    /// The workspaces in `folder`, each of whose files must be at `url(id)`.
-    private func readWorkspaces(in folder: URL, at url: (UUID) -> URL) -> [UUID: WorkspaceState] {
-        var workspaces: [UUID: WorkspaceState] = [:]
+    /// The workspaces in `folder`, each of whose files must be at `url(id)`, as read: not yet
+    /// written back without the column widths a read dropped.
+    private func readWorkspaces(in folder: URL, at url: (UUID) -> URL) -> [UUID: Read<
+        WorkspaceState
+    >] {
+        var workspaces: [UUID: Read<WorkspaceState>] = [:]
         let names: [String]
         do {
             names = try FileManager.default.contentsOfDirectory(atPath: folder.path)
@@ -230,11 +238,11 @@ public actor WorkspaceStore {
             // Such as Finder's .DS_Store, which isn't the store's to delete.
             if name.hasPrefix(".") { continue }
             guard let workspace = read(WorkspaceState.self, from: file) else { continue }
-            guard file == url(workspace.id) else {
-                discard(file, because: "it holds workspace \(workspace.id)")
+            guard file == url(workspace.value.id) else {
+                discard(file, because: "it holds workspace \(workspace.value.id)")
                 continue
             }
-            workspaces[workspace.id] = workspace
+            workspaces[workspace.value.id] = workspace
         }
         return workspaces
     }
@@ -243,16 +251,38 @@ public actor WorkspaceStore {
     /// its file isn't in the one stored shape, which deletes it and reports it.
     public func loadFolderHistory() -> FolderHistory {
         dispatchPrecondition(condition: .notOnQueue(.main))
-        return pendingFolderHistory ?? read(FolderHistory.self, from: folderHistoryFile)
-            ?? FolderHistory()
+        return pendingFolderHistory
+            ?? read(FolderHistory.self, from: folderHistoryFile).map {
+                kept($0, at: folderHistoryFile)
+            } ?? FolderHistory()
+    }
+
+    /// A file's decoded value, and why each pane's column widths the decode dropped were dropped.
+    private struct Read<Value> {
+        let value: Value
+        let droppedWidths: [String]
+    }
+
+    /// `read`'s value, once the file it came from is kept: written back without the column widths
+    /// the read dropped, if any, and reported, so they are dropped and reported once. A file the
+    /// load deletes for another reason isn't written back first.
+    private func kept<Value: Encodable>(_ read: Read<Value>, at url: URL) -> Value {
+        if !read.droppedWidths.isEmpty {
+            store(read.value, to: url)
+            report(
+                StoreProblem(
+                    file: url, kind: .widthsDropped,
+                    reason: read.droppedWidths.joined(separator: "; ")))
+        }
+        return read.value
     }
 
     /// The file at `url`, decoded; nil when there is none or it can't be read, and when it isn't
     /// exactly what its decoded value encodes to, which deletes it. That comparison catches a
     /// key a type doesn't declare, which decoding alone ignores, anywhere in the file. A pane's
-    /// column widths of another shape are dropped alone: the rest loads, and the file is written
-    /// again without them and reported (0098-column-widths-per-window.md).
-    private func read<Value: Codable>(_ type: Value.Type, from url: URL) -> Value? {
+    /// column widths of another shape are dropped alone: the rest loads, and the comparison
+    /// leaves out only those panes' `columnWidths` keys (0098-column-widths-per-window.md).
+    private func read<Value: Codable>(_ type: Value.Type, from url: URL) -> Read<Value>? {
         let data: Data
         do {
             data = try Data(contentsOf: url)
@@ -267,51 +297,48 @@ public actor WorkspaceStore {
             let decoder = JSONDecoder()
             decoder.userInfo[DroppedColumnWidths.key] = dropped
             let value = try decoder.decode(type, from: data)
-            let encoded = try Self.encoder.encode(value)
-            let expected = try JSONSerialization.jsonObject(with: encoded)
+            let expected = try JSONSerialization.jsonObject(with: Self.encoder.encode(value))
             var stored = try JSONSerialization.jsonObject(with: data)
             if !dropped.reasons.isEmpty {
-                stored = Self.removing("columnWidths", absentFrom: expected, in: stored)
+                stored = Self.withoutDroppedWidths(stored, absentFrom: expected)
             }
             guard let stored = stored as? NSObject, stored.isEqual(expected) else {
                 discard(url, because: "it has keys or values its \(type) doesn't keep")
                 return nil
             }
-            if !dropped.reasons.isEmpty {
-                // Written back without them, so they are dropped and reported once.
-                store(value, to: url)
-                report(
-                    StoreProblem(
-                        file: url, kind: .widthsDropped,
-                        reason: dropped.reasons.joined(separator: "; ")))
-            }
-            return value
+            return Read(value: value, droppedWidths: dropped.reasons)
         } catch {
             discard(url, because: "\(error)")
             return nil
         }
     }
 
-    /// `stored`, a decoded JSON value, without each `key` that the same place in `expected` lacks,
-    /// so a file whose column widths a decode dropped still has every other key checked.
-    private static func removing(_ key: String, absentFrom expected: Any, in stored: Any) -> Any {
-        if let stored = stored as? [String: Any], let expected = expected as? [String: Any] {
-            var kept: [String: Any] = [:]
-            for (name, value) in stored {
-                guard let match = expected[name] else {
-                    if name != key { kept[name] = value }
-                    continue
-                }
-                kept[name] = removing(key, absentFrom: match, in: value)
+    /// `stored`, a workspace file's JSON, without the `columnWidths` key of each pane, in each
+    /// tab's `panes`, whose pane in `expected` has none: the widths a decode dropped. A
+    /// `columnWidths` key anywhere else is left, for the comparison to catch.
+    private static func withoutDroppedWidths(_ stored: Any, absentFrom expected: Any) -> Any {
+        guard var workspace = stored as? [String: Any],
+            let storedTabs = workspace["tabs"] as? [Any],
+            let expectedTabs = (expected as? [String: Any])?["tabs"] as? [Any],
+            storedTabs.count == expectedTabs.count
+        else { return stored }
+        workspace["tabs"] = zip(storedTabs, expectedTabs).map { storedTab, expectedTab -> Any in
+            guard var tab = storedTab as? [String: Any],
+                let storedPanes = tab["panes"] as? [Any],
+                let expectedPanes = (expectedTab as? [String: Any])?["panes"] as? [Any],
+                storedPanes.count == expectedPanes.count
+            else { return storedTab }
+            tab["panes"] = zip(storedPanes, expectedPanes).map { storedPane, expectedPane -> Any in
+                guard var pane = storedPane as? [String: Any],
+                    let expectedPane = expectedPane as? [String: Any],
+                    expectedPane["columnWidths"] == nil
+                else { return storedPane }
+                pane["columnWidths"] = nil
+                return pane
             }
-            return kept
+            return tab
         }
-        if let stored = stored as? [Any], let expected = expected as? [Any],
-            stored.count == expected.count
-        {
-            return zip(stored, expected).map { removing(key, absentFrom: $1, in: $0) }
-        }
-        return stored
+        return workspace
     }
 
     /// The file `id`'s window's workspace is kept in.
