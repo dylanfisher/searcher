@@ -292,6 +292,10 @@ public final class PaneViewController: NSViewController {
                 lessThanOrEqualTo: container.widthAnchor, constant: -40),
             deniedWidth,
         ])
+        container.onPress = { [weak self] in
+            guard let self else { return }
+            view.window?.makeFirstResponder(keyView)
+        }
         view = container
     }
 

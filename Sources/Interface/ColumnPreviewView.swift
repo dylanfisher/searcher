@@ -140,6 +140,9 @@ final class ColumnPreviewView: NSView {
             header.font = Self.headerFont
         }
         tagsField.font = Self.detailFont
+        // A selectable field takes the keys on a press and tracks the mouse itself, so a press
+        // on the text wouldn't reach the pane (0090-preview-column.md).
+        for field in [nameField, tagsField] { field.isSelectable = false }
         tagsTitleField.isHidden = true
         tagsField.isHidden = true
 
@@ -225,6 +228,7 @@ final class ColumnPreviewView: NSView {
         let field = NSTextField(wrappingLabelWithString: "")
         field.font = detailFont
         field.alignment = .right
+        field.isSelectable = false
         return field
     }
 

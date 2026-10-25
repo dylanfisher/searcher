@@ -82,3 +82,27 @@ preview has its own grip and starts at the width new columns get, see
 [0096](0096-column-widths.md)). A held arrow key through
 files refills the preview's fields on every row (superseded 2026-10-24: a preview reached by
 keys shows once they pause, see [0094](0094-column-open-delay.md)).
+
+## Update 2026-10-25: a press anywhere in a pane focuses it
+
+Dylan found that a press on the empty space below or right of the preview's fields gave the pane
+no focus. The cause: `NSWindow.sendEvent` makes the hit view first responder only when it accepts
+the keys. The preview, its stack, the gaps past the columns, the path bar and the status area are
+plain views that don't, and their `mouseDown` went up the responder chain to nothing. A row, or
+the empty area of a table below its rows, hits the table, which does take the keys; so list view
+and a column's own empty area already focused the pane.
+
+`PaneContainerView`, the pane's root, now takes any press that reaches it and makes the pane's
+`keyView` first responder, as a press on a row does (`Pane.didGainFocus` follows from the table
+becoming first responder). In column view `keyView` is the focused column's table, so a press in
+the preview leaves the focused column as it was, and the selection is not touched. Controls keep
+their presses because they take them before the container sees them: the CV.10 grips, the path
+bar's buttons, the filter field, the rename field, Access Denied's button.
+
+The preview's name, tags and values were selectable wrapping labels. A selectable label takes the
+keys and tracks the mouse itself, so a press on its text would not have reached the pane; they are
+no longer selectable. Finder's preview text is not selectable either, as recalled; Dylan to
+confirm. A press on empty space below a table's rows is left to AppKit, which clears the selection in
+that table at mouse up, as Finder's columns do ([0077](0077-selection-history.md) relies on it);
+it is not tested, since the test windows are not key (0091) and AppKit selects nothing then. A
+press in the preview's empty space, the gaps or the bars changes no selection (tested).
