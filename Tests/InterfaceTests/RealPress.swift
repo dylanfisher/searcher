@@ -42,13 +42,14 @@ extension ListingTableView {
         nonisolated(unsafe) let down = try event(.leftMouseDown)
         nonisolated(unsafe) let up = try event(.leftMouseUp)
         nonisolated(unsafe) var snapshots: [PressSnapshot] = []
+        let table = UncheckedSendable(self)
         let observers = [
             NSTableView.selectionIsChangingNotification, NSTableView.selectionDidChangeNotification,
         ].map { name in
             NotificationCenter.default.addObserver(forName: name, object: self, queue: nil) { _ in
                 MainActor.assumeIsolated {
                     var drawn = IndexSet()
-                    self.enumerateAvailableRowViews { rowView, row in
+                    table.value.enumerateAvailableRowViews { rowView, row in
                         if rowView.isSelected { drawn.insert(row) }
                     }
                     let buttonIsDown =
@@ -57,8 +58,9 @@ extension ListingTableView {
                             dequeue: false) != nil
                     snapshots.append(
                         PressSnapshot(
-                            rows: self.selectedRowIndexes, drawnRows: drawn,
-                            hasKeys: window.firstResponder === self, buttonIsDown: buttonIsDown))
+                            rows: table.value.selectedRowIndexes, drawnRows: drawn,
+                            hasKeys: window.firstResponder === table.value,
+                            buttonIsDown: buttonIsDown))
                 }
             }
         }
@@ -72,8 +74,8 @@ extension ListingTableView {
         CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
             MainActor.assumeIsolated {
                 NSApp.postEvent(up, atStart: false)
-                _ = window.makeFirstResponder(self)
-                self.mouseDown(with: down)
+                _ = window.makeFirstResponder(table.value)
+                table.value.mouseDown(with: down)
                 pressed = true
             }
         }
