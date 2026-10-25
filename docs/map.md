@@ -43,7 +43,7 @@ the dependency direction.
 | **app** | `Sources/Searcher` | The executable: app delegate, menus, wiring. Kept thin. | everything |
 | **tools** | `Sources/Bench` | The release-mode benchmark runner, its cases, and `Budget`, the only copy of the budget numbers in code. Nothing imports it. | browser, base |
 | **test support** | `Sources/TestSupport` | Stubs and helpers that more than one test target uses, such as a lister that holds calls until a test releases them. Every test target depends on it; no shipping target does. | base |
-| **beep interpose** | `Sources/BeepInterpose` | A dylib that `scripts/test` inserts into test processes. It silences the alert sound and reports each one to `TestSupport`, which fails the test that made it. Nothing imports it. | system frameworks |
+| **beep interpose** | `Sources/BeepInterpose` | A dylib that `scripts/test` inserts into test processes. It silences the alert sound and reports each one to `TestSupport`, which fails the test that made it, and drops the stray stops of the main run loop that real presses leave. Nothing imports it. | system frameworks |
 | **browser test support** | `Sources/BrowserTestSupport` | Stubs of Browser protocols that more than one test target uses: the in-memory clipboard, the folder monitor, the system actions and the prompts that fail on a question. Only Browser and Interface tests depend on it; no shipping target does. | browser, test support |
 
 **Dependency direction is one-way: app → interface → browser → base → c.** Never upward. Tools

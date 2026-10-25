@@ -634,8 +634,9 @@ private func docsAndFiles(in table: ListingTableView) async -> ListingViewContro
 }
 
 /// A guard on how the table reports AppKit's own Cmd-click toggles, not a test of the click (a
-/// real one is `ListingTableView.realPress`, which BrowserWindowControllerTests uses). It sets the rows a Cmd-click on `docs` and then a second one would leave selected, and checks
-/// the pane takes them without running a command or opening a tab.
+/// real one is `ListingTableView.realPress`, which BrowserWindowControllerTests uses). It sets
+/// the rows a Cmd-click on `docs` and then a second one would leave selected, and checks the pane
+/// takes them without running a command or opening a tab.
 @MainActor @Test func aCmdClickOnARowStillTogglesItsSelection() async throws {
     let fixture = await DoubleClickFixture()
     let pane = fixture.controller.pane

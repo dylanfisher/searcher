@@ -47,6 +47,47 @@ func silentAlertSoundWithCompletion(_ id: UInt32, _ done: Completion?) {
     done?()
 }
 
+// Stray stops of the main run loop. Once a test has pulled events with `NSApp.nextEvent` (a real
+// press does), HIToolbox queues blocks on the main run loop, at any time after, that each stop
+// it, to wake a `nextEvent` that is no longer waiting. They run in the outermost main run loop,
+// the one that keeps the Swift Testing runner alive, and the process then exits normally with
+// exit status 0 and no summary. After a test calls `searcher_runloop_stops_drop`, the replacement
+// drops every stop of the main run loop except the Swift runtime's own, which ends the run.
+nonisolated(unsafe) private var dropsStops = false
+nonisolated(unsafe) private var droppedStops = 0
+
+typealias Stop = @convention(c) (UnsafeRawPointer?) -> Void
+
+@_extern(c, "CFRunLoopStop") private func realStop(_ loop: UnsafeRawPointer?)
+
+/// Starts dropping the main run loop's stray stops, for the rest of the process.
+@_cdecl("searcher_runloop_stops_drop")
+public func dropStops() {
+    dropsStops = true
+}
+
+/// How many stops have been dropped.
+@_cdecl("searcher_runloop_stops_dropped")
+public func countDroppedStops() -> Int {
+    droppedStops
+}
+
+@_cdecl("searcher_runloop_stop")
+func silentStop(_ loop: UnsafeRawPointer?) {
+    // Frame 0 is this function, frame 1 the call's entry here, frame 2 its caller.
+    if dropsStops,
+        loop == UnsafeRawPointer(Unmanaged.passUnretained(CFRunLoopGetMain()).toOpaque()),
+        !Thread.callStackSymbols[2].contains("libswift_Concurrency")
+    {
+        droppedStops += 1
+        return
+    }
+    realStop(loop)
+}
+
+@used @section("__DATA,__interpose")
+private let interposeStop: (Stop, Stop) = (silentStop, realStop)
+
 @used @section("__DATA,__interpose")
 private let interposeBeep: (Silent, Silent) = (silentBeep, realBeep)
 
