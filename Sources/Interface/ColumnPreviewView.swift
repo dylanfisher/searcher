@@ -5,9 +5,10 @@ import Browser
 /// type icon, the name, its kind and size, then an Information section with the size and the
 /// created, modified and last-opened dates, then the tags. The name, kind, size and modified date
 /// come from the column's listing and the icon is the type's shared one from `TypeIconCache`, so
-/// they show at once; the rest is read off the main thread and fills in when it lands, without
-/// moving a field. Built once and refilled for each file (0090-preview-column.md,
-/// 0095-preview-metadata.md).
+/// they show at once; the rest is read off the main thread, and column view shows a new file once
+/// it lands, or empty after `ColumnTrail.previewHold`, filling in later without moving the rows
+/// above. The rows are drawn as Finder's: title left, value right, a rule under each. Built once
+/// and refilled for each file (0090-preview-column.md, 0095-preview-metadata.md).
 ///
 /// The fields scroll vertically when the column is shorter than they are. VoiceOver reads the
 /// preview as a group named for the file, its text fields in reading order. It takes no keys.
@@ -28,6 +29,14 @@ final class ColumnPreviewView: NSView {
     static let noDate = "--"
     /// Between two tags' names.
     static let tagSeparator = ", "
+    /// The name's type, as Finder's preview sets it: bold, larger than the rest.
+    static let nameFont = NSFont.boldSystemFont(ofSize: 15)
+    /// The section headers', Information and Tags.
+    static let headerFont = NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)
+    /// The kind and size under the name, and each Information row's title and value.
+    static let detailFont = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+    /// The space above and below an Information row's text, inside the rules between rows.
+    static let rowPadding = 4.0
 
     /// Holds the fields, scrolling them vertically in a short window.
     let scrollView = NSScrollView()
@@ -35,38 +44,34 @@ final class ColumnPreviewView: NSView {
     let nameField = NSTextField(wrappingLabelWithString: "")
     /// The kind, and the size when the file has one.
     let summaryField = NSTextField(labelWithString: "")
-    let sizeField = NSTextField(labelWithString: "")
-    let createdField = NSTextField(labelWithString: "")
-    let modifiedField = NSTextField(labelWithString: "")
-    let lastOpenedField = NSTextField(labelWithString: "")
+    let sizeField = ColumnPreviewView.value()
+    let createdField = ColumnPreviewView.value()
+    let modifiedField = ColumnPreviewView.value()
+    let lastOpenedField = ColumnPreviewView.value()
     /// The tags' names; hidden, with its title, when the file has none or they aren't read.
     let tagsField = NSTextField(wrappingLabelWithString: "")
+    /// The Information rows, top to bottom: Size, Created, Modified and Last opened, each its
+    /// title left, its value right and a rule below it, as Finder draws them.
+    let rows: [InformationRow]
     /// The file last shown, so a change that leaves it as it was sets no field.
     private(set) var shown: ColumnPreview?
 
     private let formatter: EntryCellFormatter
     private let iconCache: TypeIconCache
     private let informationField: NSTextField
-    private let sizeTitleField: NSTextField
-    private let createdTitleField: NSTextField
-    private let modifiedTitleField: NSTextField
-    private let lastOpenedTitleField: NSTextField
     private let tagsTitleField: NSTextField
-    private let grid: NSGridView
 
     init(iconCache: TypeIconCache, formatter: EntryCellFormatter) {
         self.iconCache = iconCache
         self.formatter = formatter
         informationField = NSTextField(labelWithString: Self.informationTitle)
-        sizeTitleField = Self.title(Self.sizeTitle)
-        createdTitleField = Self.title(Self.createdTitle)
-        modifiedTitleField = Self.title(Self.modifiedTitle)
-        lastOpenedTitleField = Self.title(Self.lastOpenedTitle)
         tagsTitleField = NSTextField(labelWithString: Self.tagsTitle)
-        grid = NSGridView(views: [
-            [sizeTitleField, sizeField], [createdTitleField, createdField],
-            [modifiedTitleField, modifiedField], [lastOpenedTitleField, lastOpenedField],
-        ])
+        rows = [
+            InformationRow(title: Self.sizeTitle, value: sizeField),
+            InformationRow(title: Self.createdTitle, value: createdField),
+            InformationRow(title: Self.modifiedTitle, value: modifiedField),
+            InformationRow(title: Self.lastOpenedTitle, value: lastOpenedField),
+        ]
         super.init(frame: .zero)
         build()
     }
@@ -78,8 +83,8 @@ final class ColumnPreviewView: NSView {
 
     /// Fills the fields from `preview`. Does nothing when it is the file already shown. An entry
     /// without a size, such as a socket, shows its kind and no Size row, as in Finder. The
-    /// Created and Last opened rows are always there, empty until their dates are read, so a
-    /// read landing moves nothing; the tags sit below every other field.
+    /// Created and Last opened rows are always there, empty until their dates are read; the
+    /// tags sit below every other field.
     func show(_ preview: ColumnPreview) {
         guard preview != shown else { return }
         shown = preview
@@ -92,12 +97,8 @@ final class ColumnPreviewView: NSView {
         summaryField.stringValue =
             hasSize ? preview.kind.text + Self.summarySeparator + size : preview.kind.text
         sizeField.stringValue = size
-        if grid.row(at: 0).isHidden == hasSize {
-            grid.row(at: 0).isHidden = !hasSize
-            sizeTitleField.isHidden = !hasSize
-            sizeField.isHidden = !hasSize
-        }
-        modifiedField.stringValue = formatter.date(entry.modified)
+        rows[0].isShown = hasSize
+        modifiedField.stringValue = formatter.longDate(entry.modified)
         let tags: [String]
         switch preview.info {
         case .unread, .reading:
@@ -105,8 +106,8 @@ final class ColumnPreviewView: NSView {
             lastOpenedField.stringValue = ""
             tags = []
         case .read(let info):
-            createdField.stringValue = info.created.map(formatter.date) ?? Self.noDate
-            lastOpenedField.stringValue = info.lastOpened.map(formatter.date) ?? Self.noDate
+            createdField.stringValue = info.created.map(formatter.longDate) ?? Self.noDate
+            lastOpenedField.stringValue = info.lastOpened.map(formatter.longDate) ?? Self.noDate
             tags = info.tags
         case .failed:
             createdField.stringValue = Self.noDate
@@ -120,45 +121,47 @@ final class ColumnPreviewView: NSView {
         setAccessibilityLabel(entry.name)
     }
 
-    /// Wraps the name and the tags at the preview's width, which its grip changes.
+    /// Wraps the name, the rows' values and the tags at the preview's width, which its grip
+    /// changes.
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         let wrapWidth = max(newSize.width - 2 * Self.inset, 0)
         for field in [nameField, tagsField] where field.preferredMaxLayoutWidth != wrapWidth {
             field.preferredMaxLayoutWidth = wrapWidth
         }
+        for row in rows { row.wrapValue(at: wrapWidth) }
     }
 
     private func build() {
         iconView.imageScaling = .scaleProportionallyUpOrDown
         iconView.setAccessibilityElement(false)
-        nameField.alignment = .center
-        nameField.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
-        summaryField.alignment = .center
+        nameField.font = Self.nameFont
+        summaryField.font = Self.detailFont
         summaryField.textColor = .secondaryLabelColor
         summaryField.lineBreakMode = .byTruncatingMiddle
         for header in [informationField, tagsTitleField] {
-            header.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
+            header.font = Self.headerFont
         }
+        tagsField.font = Self.detailFont
         tagsTitleField.isHidden = true
         tagsField.isHidden = true
-        for value in [sizeField, createdField, modifiedField, lastOpenedField] {
-            value.lineBreakMode = .byTruncatingTail
-        }
-        grid.column(at: 0).xPlacement = .trailing
-        grid.column(at: 1).xPlacement = .leading
-        grid.columnSpacing = 6
-        grid.rowSpacing = 4
 
+        let rowStack = NSStackView(views: rows)
+        rowStack.orientation = .vertical
+        rowStack.alignment = .leading
+        rowStack.spacing = 0
         let stack = NSStackView(views: [
-            iconView, nameField, summaryField, informationField, grid, tagsTitleField, tagsField,
+            iconView, nameField, summaryField, informationField, rowStack, tagsTitleField,
+            tagsField,
         ])
         stack.orientation = .vertical
         stack.alignment = .centerX
         stack.spacing = 6
         stack.setCustomSpacing(12, after: iconView)
+        stack.setCustomSpacing(2, after: nameField)
         stack.setCustomSpacing(16, after: summaryField)
-        stack.setCustomSpacing(16, after: grid)
+        stack.setCustomSpacing(2, after: informationField)
+        stack.setCustomSpacing(16, after: rowStack)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         let document = FlippedView()
@@ -190,19 +193,21 @@ final class ColumnPreviewView: NSView {
                 equalTo: document.trailingAnchor, constant: -Self.inset),
             iconView.widthAnchor.constraint(equalToConstant: Self.iconSide),
             iconView.heightAnchor.constraint(equalToConstant: Self.iconSide),
+            nameField.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
+            summaryField.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
             informationField.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
-            grid.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
-            grid.trailingAnchor.constraint(lessThanOrEqualTo: stack.trailingAnchor),
+            rowStack.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
+            rowStack.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
             tagsTitleField.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
             tagsField.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
         ]
-        // A centered view in a stack can be wider than the stack; these keep each field inside
+        for row in rows {
+            constraints.append(row.widthAnchor.constraint(equalTo: rowStack.widthAnchor))
+        }
+        // A view in a centering stack can be wider than the stack; these keep each field inside
         // it, truncating or wrapping the text instead.
         for field in [nameField, summaryField, informationField, tagsTitleField, tagsField] {
             constraints.append(field.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor))
-            field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        }
-        for field in [sizeField, createdField, modifiedField, lastOpenedField] {
             field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         }
         NSLayoutConstraint.activate(constraints)
@@ -214,23 +219,96 @@ final class ColumnPreviewView: NSView {
 
     /// The text fields VoiceOver reads, in order: the ones shown.
     private func readingOrder() -> [NSTextField] {
-        [
-            nameField, summaryField, informationField, sizeTitleField, sizeField,
-            createdTitleField, createdField, modifiedTitleField, modifiedField,
-            lastOpenedTitleField, lastOpenedField, tagsTitleField, tagsField,
-        ].filter { !$0.isHidden }
+        ([nameField, summaryField, informationField] + rows.flatMap { [$0.titleField, $0.value] }
+            + [tagsTitleField, tagsField]).filter { !$0.isHidden }
     }
 
-    /// A row's title in the Information section, in secondary text.
-    private static func title(_ text: String) -> NSTextField {
-        let field = NSTextField(labelWithString: text)
-        field.textColor = .secondaryLabelColor
+    /// An Information row's value: wrapping, right-aligned, in the label color.
+    private static func value() -> NSTextField {
+        let field = NSTextField(wrappingLabelWithString: "")
+        field.font = detailFont
         field.alignment = .right
         return field
     }
 
     /// The space at each side of the fields.
     private static let inset = 12.0
+}
+
+/// One row of the preview's Information section, as Finder draws it: its title at the left in
+/// secondary text, its value at the right, wrapping when the two don't fit on a line, and a thin
+/// rule in the separator color under the row.
+@MainActor
+final class InformationRow: NSView {
+    /// Between the title and the value.
+    static let gap = 8.0
+
+    let titleField: NSTextField
+    let value: NSTextField
+    /// The rule under the row.
+    let rule = NSBox()
+
+    init(title: String, value: NSTextField) {
+        titleField = NSTextField(labelWithString: title)
+        self.value = value
+        super.init(frame: .zero)
+        titleField.font = ColumnPreviewView.detailFont
+        titleField.textColor = .secondaryLabelColor
+        rule.boxType = .separator
+        rule.setAccessibilityElement(false)
+        let padding = ColumnPreviewView.rowPadding
+        for view in [titleField, value, rule] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+        }
+        translatesAutoresizingMaskIntoConstraints = false
+        titleField.setContentCompressionResistancePriority(.required, for: .horizontal)
+        titleField.setContentHuggingPriority(.required, for: .horizontal)
+        value.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        NSLayoutConstraint.activate([
+            titleField.leadingAnchor.constraint(equalTo: leadingAnchor),
+            titleField.topAnchor.constraint(equalTo: topAnchor, constant: padding),
+            value.firstBaselineAnchor.constraint(equalTo: titleField.firstBaselineAnchor),
+            value.leadingAnchor.constraint(
+                greaterThanOrEqualTo: titleField.trailingAnchor, constant: Self.gap),
+            value.trailingAnchor.constraint(equalTo: trailingAnchor),
+            rule.topAnchor.constraint(
+                greaterThanOrEqualTo: titleField.bottomAnchor, constant: padding),
+            rule.topAnchor.constraint(greaterThanOrEqualTo: value.bottomAnchor, constant: padding),
+            rule.leadingAnchor.constraint(equalTo: leadingAnchor),
+            rule.trailingAnchor.constraint(equalTo: trailingAnchor),
+            rule.bottomAnchor.constraint(equalTo: bottomAnchor),
+            rule.heightAnchor.constraint(equalToConstant: 1),
+        ])
+        // The row is as short as its text lets it be.
+        let fit = rule.topAnchor.constraint(equalTo: titleField.bottomAnchor, constant: padding)
+        fit.priority = .defaultLow
+        fit.isActive = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("InformationRow is built in code")
+    }
+
+    /// Whether the row shows. A hidden row's fields are hidden too, so VoiceOver skips them.
+    var isShown: Bool {
+        get { !isHidden }
+        set {
+            guard newValue == isHidden else { return }
+            isHidden = !newValue
+            titleField.isHidden = !newValue
+            value.isHidden = !newValue
+        }
+    }
+
+    /// Wraps the value at what `width`, the row's, leaves beside the title.
+    func wrapValue(at width: Double) {
+        let valueWidth = max(width - titleField.intrinsicContentSize.width - Self.gap, 0)
+        if value.preferredMaxLayoutWidth != valueWidth {
+            value.preferredMaxLayoutWidth = valueWidth
+        }
+    }
 }
 
 /// The scrolled fields' document view, flipped so the fields start at the top.

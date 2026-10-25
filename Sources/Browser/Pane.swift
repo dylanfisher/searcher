@@ -135,6 +135,9 @@ public final class Pane {
     /// Where the trail in column mode waits out `ColumnTrail.openDelay`. Tests pass a clock they
     /// advance.
     var columnOpenClock: any Clock<Duration> = ContinuousClock()
+    /// Where the trail in column mode waits out `ColumnTrail.previewHold`. Tests pass a clock
+    /// they advance.
+    var previewHoldClock: any Clock<Duration> = ContinuousClock()
     private(set) var load: ListingLoad?
     private var loadIsRunning = false
     /// Whether loads go ahead of other panes'. A trail moves it between its columns without
