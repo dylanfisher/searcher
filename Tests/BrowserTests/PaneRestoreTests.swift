@@ -330,3 +330,65 @@ private func restoredOnShare(
     await settle { pane.state.missingFolder != nil }
     #expect(pane.state.missingFolder == album)
 }
+
+// MARK: Waiting for cached rows
+
+/// A cache whose read of a volume's file never ends, as one stuck on its store would.
+private func cacheThatNeverAnswers() -> ListingCache {
+    ListingCache(
+        load: { _ in
+            await withCheckedContinuation {
+                (_: CheckedContinuation<[String: ListingCache.Folder], Never>) in
+            }
+        }, save: { _, _ in }, flush: {})
+}
+
+@MainActor @Test func aRestoredColumnPaneHasEachColumnsCachedRowsOnceHanded() async throws {
+    let root = try TemporaryFolder("PaneRestoreTests")
+    let share = share(under: root)
+    let album = share.mountPoint + "/Album"
+    let cache = ListingCache(store: nil)
+    await cache.insert(
+        ListingCache.Folder(entries: [file("b"), file("a")], listedAt: testDate), at: album,
+        on: share)
+    await cache.restore(folders: [album], mountedVolumes: { [share] })
+    let lister = GatedLister([album: .blockForever])
+    let pane = Pane(
+        restoring: saved(album, viewMode: .column),
+        service: ListingService(
+            lister: lister,
+            volumeOf: { _ throws(ListingError) in
+                DispatchSemaphore(value: 0).wait()
+                preconditionFailure("a volume read that never returns returned")
+            }, mountedVolumes: { [share] }, cache: cache),
+        systemActions: StubSystemActions(), settings: untouchedSettings())
+    let trail = try #require(pane.columnTrail)
+
+    await pane.cachedRowsHanded()
+
+    #expect(trail.columns.count == 1)
+    #expect(trail.columns[0].pane.state.isCachedRefreshing)
+    #expect(trail.columns[0].pane.state.names == ["a", "b"])
+    pane.close()
+}
+
+@MainActor @Test func closingAPaneEndsAWaitForCachedRowsThatNeverCome() async throws {
+    let root = try TemporaryFolder("PaneRestoreTests")
+    let share = share(under: root)
+    let album = share.mountPoint + "/Album"
+    let pane = restoredOnShare(
+        album, lister: GatedLister([album: .blockForever]), cache: cacheThatNeverAnswers(),
+        mounted: [share], volumeOf: { _ in share })
+    let ended = EventLog<Bool>()
+    Task {
+        await pane.cachedRowsHanded()
+        ended.append(true)
+    }
+    await drainMainQueue()
+    #expect(ended.all.isEmpty)
+
+    pane.close()
+
+    await settle { !ended.all.isEmpty }
+    #expect(pane.state.isLoading)
+}

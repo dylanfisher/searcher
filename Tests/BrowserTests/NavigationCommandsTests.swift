@@ -53,6 +53,71 @@ private func threeFolders() async -> PaneFixture {
     return fixture
 }
 
+// MARK: Packages
+
+/// A pane at `/root` holding a package `App.app`, a folder `docs` and a file `a.txt`, loaded.
+@MainActor
+private func packagePane() async -> PaneFixture {
+    let fixture = PaneFixture(
+        at: "/root",
+        folders: [
+            "/root": [package("App.app"), folder("docs"), file("a.txt")],
+            "/root/App.app": [folder("Contents")], "/root/docs": [file("x")],
+        ])
+    await settle { fixture.pane.state.isLoaded }
+    return fixture
+}
+
+@MainActor
+private func showPackageContents() throws -> CommandBinding {
+    try #require(
+        AppCommands.bindings.first { $0.command == NavigationCommands.showPackageContents })
+}
+
+@MainActor @Test func showPackageContentsBrowsesIntoTheSelectedPackageAsAFolder() async throws {
+    let fixture = await packagePane()
+    fixture.select("App.app")
+    let binding = try showPackageContents()
+    #expect(binding.isEnabled?(CommandContext(pane: fixture.pane)) == true)
+
+    binding.run(CommandContext(pane: fixture.pane))
+
+    #expect(fixture.pane.location.path == "/root/App.app")
+    await settle { fixture.pane.state.isLoaded }
+    #expect(fixture.pane.state.names == ["Contents"])
+    #expect(fixture.pane.canGoBack)
+    #expect(fixture.actions.openedFiles.isEmpty)
+}
+
+@MainActor @Test func showPackageContentsIsOffAndDoesNothingWithoutOneSelectedPackage()
+    async throws
+{
+    let fixture = await packagePane()
+    let binding = try showPackageContents()
+
+    for names in [["a.txt"], ["docs"], ["App.app", "a.txt"], []] {
+        fixture.pane.select(
+            Selection(Set(names.map(ExactName.init)), cursor: names.last.map(ExactName.init)))
+        #expect(binding.isEnabled?(CommandContext(pane: fixture.pane)) == false, "\(names)")
+
+        binding.run(CommandContext(pane: fixture.pane))
+
+        #expect(fixture.pane.location.path == "/root", "\(names)")
+    }
+    #expect(fixture.actions.openedFiles.isEmpty)
+}
+
+/// Cmd-↓ is Open in Finder, so on a package it opens the package as a file.
+@MainActor @Test func cmdDownOnAPackageOpensItAsAFile() async throws {
+    let fixture = await packagePane()
+    fixture.select("App.app")
+
+    try run(KeyChord(.down, modifiers: .command), in: fixture)
+
+    #expect(fixture.actions.openedFiles == [URL(fileURLWithPath: "/root/App.app")])
+    #expect(fixture.pane.location.path == "/root")
+}
+
 @MainActor
 private func navigate(_ fixture: PaneFixture, to path: String) async {
     fixture.pane.navigate(to: Location(path: path))

@@ -43,7 +43,7 @@ private final class PaletteFixture {
             systemActions: StubSystemActions(), settings: untouchedSettings())
         workspace = Workspace(tab: Tab(pane: pane))
         list.add(workspace)
-        try list.name(workspace, as: "Project 1")
+        try list.save(workspace, as: "Project 1", frame: Rect(x: 0, y: 0, width: 900, height: 600))
         state.registry = try AppCommands.registry()
         var sources: [any PaletteSource] = []
         let list = list
@@ -155,10 +155,10 @@ private final class PaletteFixture {
 @MainActor @Test func aCommandItemRunsItsCommand() async throws {
     let fixture = try PaletteFixture()
 
-    await fixture.search("name workspace")
-    fixture.palette.run(try fixture.result(titled: WorkspaceCommands.name.title))
+    await fixture.search("rename workspace")
+    fixture.palette.run(try fixture.result(titled: WorkspaceCommands.rename.title))
 
-    #expect(fixture.ran.all == [WorkspaceCommands.name.id])
+    #expect(fixture.ran.all == [WorkspaceCommands.rename.id])
 }
 
 @MainActor @Test func aFolderItemNavigatesTheFocusedPane() async throws {

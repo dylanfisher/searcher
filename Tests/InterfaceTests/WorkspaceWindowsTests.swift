@@ -709,7 +709,9 @@ private func stopEverything(_ windows: WorkspaceWindows) async {
 
     try fixture.press(
         try keyEvent("s", modifiers: [.command, .control]), in: first)
-    try #require(first.window).makeKeyAndOrderFront(nil)
+    let shown = try #require(first.window)
+    SecondDisplay.orderFront(shown)
+    defer { shown.orderOut(nil) }
     fixture.windows.list.activate(first.workspace)
 
     #expect(!fixture.windows.open(at: Location(path: "/root")).showsSidebar)
@@ -756,7 +758,7 @@ private func type(_ query: String, in controller: BrowserWindowController) async
 @MainActor @Test func thePalettesSavedWorkspaceOpensThroughTheWindows() async throws {
     let fixture = try await Fixture()
     let named = try #require(fixture.windows.controllers.first)
-    try fixture.windows.list.name(named.workspace, as: "Project 1")
+    try named.saveWorkspace(as: "Project 1")
     let other = try await fixture.open()
     #expect(fixture.windows.list.workspaces.first === other.workspace)
     try fixture.press(try keyEvent("k", modifiers: .command), in: other)
@@ -765,4 +767,93 @@ private func type(_ query: String, in controller: BrowserWindowController) async
     try #require(other.palette).viewController.runSelected()
 
     #expect(fixture.windows.list.workspaces.first === named.workspace)
+}
+
+// MARK: Undo in a text field
+
+/// A window on a temporary folder whose rename of `a.txt` to `a2.txt` can be undone, with the
+/// Edit menu's Undo item.
+@MainActor
+private struct UndoableWindow {
+    let folder: TemporaryFolder
+    let windows: WorkspaceWindows
+    let controller: BrowserWindowController
+    let window: NSWindow
+    let table: ListingTableView
+    let undo: NSMenuItem
+
+    init() async throws {
+        folder = try TemporaryFolder("WorkspaceWindowsTests")
+        let root = folder.url.path
+        try Data("a".utf8).write(to: URL(fileURLWithPath: root + "/a.txt"))
+        windows = WorkspaceWindows(
+            service: ListingService(), systemActions: StubSystemActions(),
+            settings: untouchedSettings(), folderSizes: nil, clipboard: MemoryClipboard(),
+            store: nil)
+        windows.showsWindows = false
+        controller = windows.open(at: Location(path: root))
+        window = try #require(controller.window)
+        window.contentView?.layoutSubtreeIfNeeded()
+        let pane = controller.workspace.selectedTab.focusedPane
+        await settle { pane.state.isLoaded }
+        table = try #require(window.firstResponder as? ListingTableView)
+        let menu = try MainMenuBuilder.build(appName: "Searcher", registry: AppCommands.registry())
+        let edit = try #require(menu.items.first { $0.title == "Edit" }?.submenu)
+        undo = try #require(edit.items.first { $0.action == MainMenuBuilder.undo.action })
+        _ = await windows.fileOperations.perform(.rename(root + "/a.txt", to: "a2.txt"))
+        let table = table
+        let undo = undo
+        await settle { table.validateMenuItem(undo) }
+        await settle { pane.state.listing?.row(named: "a2.txt") != nil }
+    }
+
+    /// The field editor with the keys, after typing `text` into it.
+    func type(_ text: String) throws -> NSTextView {
+        let editor = try #require(window.firstResponder as? NSTextView)
+        editor.insertText(text, replacementRange: editor.selectedRange())
+        return editor
+    }
+
+    /// Sends Undo where AppKit would, from the window's first responder, once it validates.
+    func chooseUndo() throws {
+        var responder = window.firstResponder
+        while let current = responder, !current.responds(to: MainMenuBuilder.undo.action) {
+            responder = current.nextResponder
+        }
+        let taker = try #require(responder)
+        #expect(try #require(taker as? NSMenuItemValidation).validateMenuItem(undo))
+        #expect(NSApplication.shared.sendAction(MainMenuBuilder.undo.action, to: taker, from: undo))
+    }
+
+    func stop() {
+        controller.workspace.selectedTab.focusedPane.monitor?.stop()
+    }
+}
+
+@MainActor @Test func cmdZInTheFilterFieldUndoesTheTypingNotTheRename() async throws {
+    let fixture = try await UndoableWindow()
+    defer { fixture.stop() }
+    fixture.table.keyDown(with: try keyEvent("f", modifiers: .command))
+    let editor = try fixture.type("zz")
+    #expect(editor.string == "zz")
+
+    try fixture.chooseUndo()
+
+    #expect(editor.string.isEmpty)
+    #expect(fixture.windows.undoHistory.canUndo && !fixture.windows.undoHistory.canRedo)
+}
+
+@MainActor @Test func cmdZInTheRenameFieldUndoesTheTypingNotTheRename() async throws {
+    let fixture = try await UndoableWindow()
+    defer { fixture.stop() }
+    let pane = fixture.controller.workspace.selectedTab.focusedPane
+    pane.select(Selection([ExactName("a2.txt")], cursor: ExactName("a2.txt")))
+    fixture.table.keyDown(with: try keyEvent("\r"))
+    let editor = try fixture.type("zz")
+    #expect(editor.string == "zz.txt")
+
+    try fixture.chooseUndo()
+
+    #expect(editor.string == "a2.txt")
+    #expect(fixture.windows.undoHistory.canUndo && !fixture.windows.undoHistory.canRedo)
 }

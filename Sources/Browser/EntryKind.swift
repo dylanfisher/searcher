@@ -14,8 +14,9 @@ public struct EntryKind: Hashable, Sendable {
     /// up once per process and each type described once. Call it off the main thread: a lookup
     /// the cache misses asks Launch Services.
     ///
-    /// A file whose extension has no described type is `.data`, and a folder whose extension
-    /// isn't a package type is `.folder`, as in Finder.
+    /// A file whose extension has no described type is `.data`, a folder is `.folder`, and a
+    /// package whose extension isn't a described package type, as one with the bundle bit can
+    /// be, is `.package`.
     public init(_ fileType: DirectoryEntry.FileType, pathExtension: Substring) {
         dispatchPrecondition(condition: .notOnQueue(.main))
         self = Self.cache.kind(fileType, pathExtension: pathExtension)
@@ -24,15 +25,6 @@ public struct EntryKind: Hashable, Sendable {
     private init(type: UTType, text: String) {
         self.type = type
         self.text = text
-    }
-
-    /// What follows the last dot in `name`, or nothing when that dot is the first or last
-    /// character: ".bashrc" and "notes." have no extension.
-    public static func pathExtension(of name: String) -> Substring {
-        guard let dot = name.utf8.lastIndex(of: UInt8(ascii: ".")), dot != name.startIndex else {
-            return ""
-        }
-        return name[name.index(after: dot)...]
     }
 
     private static let cache = Cache()
@@ -108,12 +100,14 @@ public struct EntryKind: Hashable, Sendable {
                 }
                 return .data
             case .directory:
+                return .folder
+            case .package:
                 if let type = UTType(filenameExtension: pathExtension, conformingTo: .directory),
                     type.conforms(to: .package), type.localizedDescription != nil
                 {
                     return type
                 }
-                return .folder
+                return .package
             case .symbolicLink:
                 return .symbolicLink
             case .other:

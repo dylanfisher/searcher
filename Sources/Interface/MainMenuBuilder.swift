@@ -128,7 +128,8 @@ public enum MainMenuBuilder {
             .command(WindowCommands.movePaneToNewWindow.id),
             .command(WindowCommands.mergeWindowIntoTab.id),
             .separator,
-            .command(WorkspaceCommands.name.id), .command(WorkspaceCommands.delete.id),
+            .command(WorkspaceCommands.save.id), .command(WorkspaceCommands.rename.id),
+            .command(WorkspaceCommands.delete.id),
             .separator,
             .command(WindowCommands.toggleOperations.id),
             .separator,
@@ -162,6 +163,7 @@ public enum MainMenuBuilder {
                 .command(FileCommands.moveToOtherPane.id),
                 .separator,
                 .openWith,
+                .command(NavigationCommands.showPackageContents.id),
                 // Space is its key.
                 .commandWithoutKey(ViewCommands.toggleQuickLook.id),
                 .command(SystemCommands.revealInFinder.id),

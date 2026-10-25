@@ -262,7 +262,7 @@ private func folder(of count: Int, at seconds: Double) -> ListingCache.Folder {
         showsSidebar: false)
 
     await cache.restore(
-        WorkspaceStore.Contents(session: nil, workspaces: [saved.id: saved]),
+        WorkspaceStore.Contents(session: nil, workspaces: [saved.id: saved], snapshots: [:]),
         mountedVolumes: { [] })
     await cache.insert(folder(of: 2, at: 1), at: "/fake/a/kept", on: share("a"))
     await cache.insert(folder(of: 2, at: 2), at: "/fake/a/other", on: share("a"))

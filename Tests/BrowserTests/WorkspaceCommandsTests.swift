@@ -5,8 +5,10 @@ import Testing
 
 @testable import Browser
 
-/// A context on `workspace`'s focused pane whose name and delete questions, and its moves of
-/// the keys to the sidebar, are counted.
+private let frame = Rect(x: 0, y: 0, width: 900, height: 600)
+
+/// A context on `workspace`'s focused pane whose name and delete questions, its saves and its
+/// moves of the keys to the sidebar are counted.
 @MainActor
 private func context(
     _ workspace: Workspace, list: WorkspaceList, asked: EventLog<String>
@@ -14,6 +16,7 @@ private func context(
     CommandContext(
         pane: workspace.selectedTab.focusedPane.commandPane, workspace: workspace,
         workspaces: list, askForWorkspaceName: { asked.append("name") },
+        saveWorkspace: { asked.append("save") },
         askToDeleteWorkspace: { asked.append("delete") },
         focusSidebar: { asked.append("focusSidebar") })
 }
@@ -23,20 +26,40 @@ private func binding(_ command: Command) throws -> CommandBinding {
     try #require(WorkspaceCommands.bindings.first { $0.command == command })
 }
 
-@MainActor @Test func nameAsksForANameAndSaysRenameOnceNamed() async throws {
+@MainActor @Test func saveAsksForANameFirstThenSavesWithoutAsking() async throws {
     let fixture = await PaneFixture.loaded()
     let workspace = Workspace(tab: Tab(pane: fixture.pane))
     let list = WorkspaceList()
     list.add(workspace)
     let asked = EventLog<String>()
-    let name = try binding(WorkspaceCommands.name)
+    let save = try binding(WorkspaceCommands.save)
 
-    #expect(name.title?(context(workspace, list: list, asked: asked)) == "Name Workspace…")
-    name.run(context(workspace, list: list, asked: asked))
+    #expect(save.title?(context(workspace, list: list, asked: asked)) == "Save Workspace…")
+    save.run(context(workspace, list: list, asked: asked))
     #expect(asked.all == ["name"])
 
-    try list.name(workspace, as: "Project 1")
-    #expect(name.title?(context(workspace, list: list, asked: asked)) == "Rename Workspace…")
+    try list.save(workspace, as: "Project 1", frame: frame)
+    // It no longer asks anything, so its title loses the ellipsis.
+    #expect(save.title?(context(workspace, list: list, asked: asked)) == "Save Workspace")
+    save.run(context(workspace, list: list, asked: asked))
+    #expect(asked.all == ["name", "save"])
+}
+
+@MainActor @Test func renameIsOnlyForANamedWorkspaceAndAsksForTheName() async throws {
+    let fixture = await PaneFixture.loaded()
+    let workspace = Workspace(tab: Tab(pane: fixture.pane))
+    let list = WorkspaceList()
+    list.add(workspace)
+    let asked = EventLog<String>()
+    let rename = try binding(WorkspaceCommands.rename)
+
+    #expect(rename.isEnabled?(context(workspace, list: list, asked: asked)) == false)
+    try list.save(workspace, as: "Project 1", frame: frame)
+    #expect(rename.isEnabled?(context(workspace, list: list, asked: asked)) == true)
+
+    rename.run(context(workspace, list: list, asked: asked))
+
+    #expect(asked.all == ["name"])
 }
 
 @MainActor @Test func deleteIsOnlyForANamedWorkspaceAndAsksFirst() async throws {
@@ -48,7 +71,7 @@ private func binding(_ command: Command) throws -> CommandBinding {
     let delete = try binding(WorkspaceCommands.delete)
 
     #expect(delete.isEnabled?(context(workspace, list: list, asked: asked)) == false)
-    try list.name(workspace, as: "Project 1")
+    try list.save(workspace, as: "Project 1", frame: frame)
     #expect(delete.isEnabled?(context(workspace, list: list, asked: asked)) == true)
 
     delete.run(context(workspace, list: list, asked: asked))
@@ -58,12 +81,12 @@ private func binding(_ command: Command) throws -> CommandBinding {
     #expect(list.saved.count == 1 && !workspace.isClosed)
 }
 
-@MainActor @Test func workspaceCommandsHaveNoChordsAndAreRegistered() throws {
+@MainActor @Test func renameAndDeleteHaveNoChordsAndAreRegistered() throws {
     let registry = try AppCommands.registry()
-    for command in [WorkspaceCommands.name, WorkspaceCommands.delete] {
-        #expect(command.chords.isEmpty)
+    for command in [WorkspaceCommands.save, WorkspaceCommands.rename, WorkspaceCommands.delete] {
         #expect(registry.command(for: command.id) == command)
     }
+    #expect(WorkspaceCommands.rename.chords.isEmpty && WorkspaceCommands.delete.chords.isEmpty)
 }
 
 @MainActor @Test func toggleSidebarShowsAndHidesItInTheWorkspaceAndSaysWhich() async throws {
@@ -103,7 +126,9 @@ private func binding(_ command: Command) throws -> CommandBinding {
 }
 
 /// Show Sidebar has Finder's chord, Control-Command-S; Calculate Sizes has Option-Command-S.
-@MainActor @Test func toggleSidebarHasControlCommandSAndCalculateSizesHasOptionCommandS() throws {
+/// Save Workspace takes Command-S, which Finder leaves unused, and Focus Sidebar Command-0,
+/// which Finder leaves unused too.
+@MainActor @Test func theWorkspaceCommandsChords() throws {
     let registry = try AppCommands.registry()
     #expect(
         registry.command(for: KeyChord("s", modifiers: [.control, .command]))
@@ -111,5 +136,8 @@ private func binding(_ command: Command) throws -> CommandBinding {
     #expect(
         registry.command(for: KeyChord("s", modifiers: [.option, .command]))
             == SizeCommands.calculateSizes)
-    #expect(WorkspaceCommands.focusSidebar.chords.isEmpty)
+    #expect(registry.command(for: KeyChord("s", modifiers: .command)) == WorkspaceCommands.save)
+    #expect(
+        registry.command(for: KeyChord("0", modifiers: .command))
+            == WorkspaceCommands.focusSidebar)
 }

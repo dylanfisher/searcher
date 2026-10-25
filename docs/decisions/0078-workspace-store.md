@@ -79,3 +79,10 @@ reported at the next load. Only the workspaces folder is cleaned of leftovers: o
 folder. A file written by hand with a lowercase UUID or another number
 format doesn't re-encode to itself and is discarded. A closed unnamed workspace's file is
 deleted ([0082](0082-saved-workspaces.md)).
+
+## Amendment: snapshots (2026-10-24)
+
+Saved workspaces now keep a snapshot apart from their window, one JSON file each in
+`<application support root>/snapshots/<id>.json`, read and checked as the workspace files are; one
+without a name is deleted and reported. `workspaces/` holds the open windows only, and a window's
+file is deleted when it closes. See [0088](0088-workspace-snapshots.md).

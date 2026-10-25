@@ -5,13 +5,22 @@
 @MainActor
 public final class Column {
     public let pane: Pane
+    /// A key-made selection, by its selection version, that the columns right of this one don't
+    /// follow yet, and the wait for the keys to pause before they do; the wait is nil once ←
+    /// gave it up. Nil while they follow the selection (0094-column-open-delay.md).
+    var held: (selectionVersion: Int, wait: Task<Void, Never>?)?
+    /// The selection version the columns right of this one last followed. A change that keeps
+    /// it, such as a patch, is followed at once even when keys made the selection.
+    var followedSelectionVersion: Int?
 
     init(pane: Pane) {
         self.pane = pane
     }
 
-    /// Stops the column's load and its folder monitor, for good.
+    /// Stops the column's load, its folder monitor and its wait to follow a selection, for good.
     func close() {
+        held?.wait?.cancel()
+        held = nil
         pane.close()
     }
 }

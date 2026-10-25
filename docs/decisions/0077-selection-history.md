@@ -86,3 +86,20 @@ it already has, so mouse up after mouse down changes nothing and is no second st
   tests drive a table that holds a press's rows and posts the two notifications.
 - The history holds names: a 50k-name selection kept in many steps costs that many name sets.
   The bounds (100 steps, 20 folders) cap it.
+
+## Update 2026-10-24: selecting on mouse down, across panes
+
+Dylan found that a press in another pane still showed its row only on mouse up. The change above
+leaned on `NSTableView` posting `selectionIsChanging` at mouse down; the tests posted that
+notification themselves, so they never showed whether AppKit does. A press can't be sent to a real
+`NSTableView` in a test: `mouseDown` tracks in a nested loop and the test process exits under it.
+So the fix doesn't depend on that notification. `ListingTableView.mouseDown` now, for a press in a
+table without the keys, takes the keys (which focuses the pane) and selects the pressed row
+itself before calling `super`, so the pane has the row before the listing that taking focus starts
+can land. A press on an already selected row, with Shift, Command or Control, or below the rows is
+left to AppKit, so a drag still takes the whole selection, Shift- and Cmd-clicks extend and
+toggle, and a context menu opens. The tests call the pre-step with a real `NSEvent` against a
+two-pane window; the one line in `mouseDown` that calls it is not covered by a test. Column
+view's columns use the same table class. The selection is drawn emphasized when the table is the
+first responder of a key window, which the press now makes true at mouse down; no test shows the
+drawing, since the test windows are never key. Cause confirmed by hand: needs Dylan.

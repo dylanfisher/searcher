@@ -49,18 +49,45 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         var showsOpen: Bool { !openMark.isHidden }
     }
 
-    /// The list, which takes Return and Esc for the sidebar; other keys work as in any outline
-    /// view: the arrows move the selection and typing selects by name.
+    /// The list, which takes Return and Esc for the sidebar. The other plain and Shift-only keys
+    /// work as in any outline view: the arrows move the selection, Tab moves the keys on and
+    /// typing selects by name. Every key with Command, Control or Option, and the function keys,
+    /// are offered to `passKey` first, so the pane's chords work while the sidebar has the keys
+    /// (docs/decisions/0089-sidebar-key-routing.md).
     final class SidebarOutlineView: NSOutlineView {
         var onReturn: @MainActor () -> Void = {}
         var onEscape: @MainActor () -> Void = {}
+        /// Runs a key that isn't the list's on the window's focused pane, if a command there takes
+        /// it, and says whether one did; the list handles the others as before. The window sets
+        /// it; a list without it traps on such a key.
+        var passKey: @MainActor (NSEvent) -> Bool = { event in
+            preconditionFailure("the sidebar has nowhere to pass \(event)")
+        }
 
         override func keyDown(with event: NSEvent) {
             switch KeyChord(event: event) {
             case KeyChord(.return): onReturn()
             case KeyChord(.escape): onEscape()
+            case let chord? where !Self.isListKey(chord) && passKey(event): break
             default: super.keyDown(with: event)
             }
+        }
+
+        /// Whether the list keeps `chord`: a plain or Shift-only key other than the function
+        /// keys, which the pane runs file commands on. Space stays: Quick Look previews from the
+        /// list that has the keys, and the sidebar's list has nothing to preview.
+        static func isListKey(_ chord: KeyChord) -> Bool {
+            guard chord.modifiers.isDisjoint(with: [.command, .control, .option]) else {
+                return false
+            }
+            if case .function = chord.key { return false }
+            return true
+        }
+
+        /// The list selects one row at a time, so Select All goes up the responder chain to the
+        /// window, which runs it on the focused pane.
+        override func responds(to selector: Selector!) -> Bool {
+            selector != #selector(selectAll(_:)) && super.responds(to: selector)
         }
     }
 

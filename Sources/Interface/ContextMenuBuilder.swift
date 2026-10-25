@@ -35,6 +35,7 @@ enum ContextMenuBuilder {
     /// selection.
     static let rowItems: [Item] = [
         .command(NavigationCommands.open.id), .openWith,
+        .command(NavigationCommands.showPackageContents.id),
         .command(WindowCommands.openInNewTab.id), .command(DualPaneCommands.openInOtherPane.id),
         .separator,
         .command(ViewCommands.toggleQuickLook.id),

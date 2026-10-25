@@ -162,22 +162,38 @@ public final class ListingService: Sendable {
     /// before its own volume read, which blocks while the share doesn't answer. For the share
     /// that isn't mounted, the read then finds nothing there and the load ends `volumeGone`.
     private func place(_ load: ListingLoad) {
-        guard let cache else { return readVolume(of: load, cachedFrom: nil) }
+        guard let cache else {
+            endCachedLookup(of: load)
+            return readVolume(of: load, cachedFrom: nil)
+        }
         let path = load.location.path
         if let mounted = mountedNetworkVolume(holding: path) {
             return handCachedRows(of: load, on: mounted) {
+                self.endCachedLookup(of: load)
                 self.readVolume(of: load, cachedFrom: mounted)
             }
         }
         let placed = Self.longestMount(holding: path, in: mountedVolumes())
         guard let restored = cache.restoredVolume(holding: path),
             restored.mountPoint.count > placed?.mountPoint.count ?? 0
-        else { return readVolume(of: load, cachedFrom: nil) }
+        else {
+            endCachedLookup(of: load)
+            return readVolume(of: load, cachedFrom: nil)
+        }
         // Remembered as a volume loads were on, so the read that finds nothing there reports
         // the share gone rather than the folder.
         networkVolumes.add(restored)
         handCachedRows(of: load, on: restored) {
+            self.endCachedLookup(of: load)
             self.readVolume(of: load, cachedFrom: restored)
+        }
+    }
+
+    /// Ends `load.cachedRowsHanded()` on the main queue, behind the cached rows' hand-off if
+    /// there was one. Runs before the volume read, so it never waits on the share.
+    private func endCachedLookup(of load: ListingLoad) {
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated { load.endCachedLookup() }
         }
     }
 

@@ -1114,3 +1114,65 @@ private struct FailsAfterABatchLister: Lister {
     }
     #expect(names(listing) == ["e0", "e1"])
 }
+
+@MainActor @Test func cachedRowsHandedHasTheCachedRowsAndNeverWaitsOnAVolumeRead() async {
+    let cache = ListingCache(store: nil)
+    await cache.insert(
+        ListingCache.Folder(entries: files("e", 0..<2), listedAt: testDate), at: "/a/x",
+        on: shareA)
+    let lister = GatedLister(["/a/x": .blockForever, "/a/y": .blockForever, "/l": .blockForever])
+    let volumeOf: @Sendable (String) throws(ListingError) -> VolumeIdentity = { _ in
+        DispatchSemaphore(value: 0).wait()
+        preconditionFailure("a volume read that never returns returned")
+    }
+    let cached = ListingService(
+        lister: lister, volumeOf: volumeOf, mountedVolumes: { [disk, shareA] }, cache: cache)
+    let uncached = ListingService(
+        lister: lister, volumeOf: volumeOf, mountedVolumes: { [disk, shareA] })
+    let kept = UpdateLog()
+    let notKept = UpdateLog()
+    let local = UpdateLog()
+    let noCache = UpdateLog()
+
+    await load(cached, "/a/x", into: kept).cachedRowsHanded()
+    await load(cached, "/a/y", into: notKept).cachedRowsHanded()
+    await load(cached, "/l", into: local).cachedRowsHanded()
+    await load(uncached, "/a/x", into: noCache).cachedRowsHanded()
+
+    guard case .cached(let listing, _, _) = kept.updates.first, kept.updates.count == 1 else {
+        Issue.record("updates are \(kept.updates)")
+        return
+    }
+    #expect(names(listing) == ["e0", "e1"])
+    #expect(notKept.updates.isEmpty)
+    #expect(local.updates.isEmpty)
+    #expect(noCache.updates.isEmpty)
+    #expect(lister.calls.isEmpty)
+}
+
+@MainActor @Test func cancellingALoadEndsItsWaitForCachedRows() async {
+    // The cache's read of the volume's file never ends.
+    let cache = ListingCache(
+        load: { _ in
+            await withCheckedContinuation {
+                (_: CheckedContinuation<[String: ListingCache.Folder], Never>) in
+            }
+        }, save: { _, _ in }, flush: {})
+    let service = ListingService(
+        lister: GatedLister(["/a/x": .blockForever]), volumeOf: { _ in shareA },
+        mountedVolumes: { [disk, shareA] }, cache: cache)
+    let log = UpdateLog()
+    let load = load(service, "/a/x", into: log)
+    let ended = EventLog<Bool>()
+    Task {
+        await load.cachedRowsHanded()
+        ended.append(true)
+    }
+    await drainMainQueue()
+    #expect(ended.all.isEmpty)
+
+    load.cancel()
+
+    await settle { !ended.all.isEmpty }
+    #expect(log.updates.isEmpty)
+}

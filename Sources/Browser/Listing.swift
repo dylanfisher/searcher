@@ -243,7 +243,7 @@ public struct Listing: Sendable {
         var changed = false
         for (exact, update) in updates {
             guard let index = index(named: exact.name, key: NameSortKey(exact.name)).found,
-                entries[index].type == .directory, entries[index].modified == update.modified,
+                entries[index].type.isFolderOnDisk, entries[index].modified == update.modified,
                 folderSizes[index] != update.value
             else { continue }
             folderSizes[index] = update.value
@@ -274,7 +274,7 @@ public struct Listing: Sendable {
     /// Whether `new` is the folder `old` was, with the same modification date, so its walked
     /// size still holds.
     private static func isSameFolder(_ old: DirectoryEntry, _ new: DirectoryEntry) -> Bool {
-        old.type == .directory && new.type == .directory && old.modified == new.modified
+        old.type.isFolderOnDisk && new.type.isFolderOnDisk && old.modified == new.modified
     }
 
     /// Removes the entry named `name` and its row, and returns it; nil if there is none.
@@ -296,7 +296,7 @@ public struct Listing: Sendable {
         var kindIndexes = [Int32]()
         kindIndexes.reserveCapacity(entries.count)
         for entry in entries {
-            let pathExtension = EntryKind.pathExtension(of: entry.name)
+            let pathExtension = Base.pathExtension(of: entry.name)
             let key = Key(fileType: entry.type, pathExtension: pathExtension)
             if let index = seen[key] {
                 kindIndexes.append(index)
@@ -372,7 +372,7 @@ public struct Listing: Sendable {
     ) {
         let position = index(named: entry.name, key: key).position
         let index = Int32(entries.count)
-        let kind = EntryKind(entry.type, pathExtension: EntryKind.pathExtension(of: entry.name))
+        let kind = EntryKind(entry.type, pathExtension: pathExtension(of: entry.name))
         let kindIndex = kindIndex(of: kind)
         entries.append(entry)
         keys.append(key)

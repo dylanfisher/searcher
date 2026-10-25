@@ -22,8 +22,9 @@ case "$config" in debug|release) ;; *) printf -- '-c must be debug or release, g
 case "$app" in *.app) ;; *) printf -- '-o must end in .app, got %s\n' "$app" >&2; exit 1 ;; esac
 
 # Build output goes to stderr so stdout carries only the bundle path.
-swift build -c "$config" --product Searcher >&2
-bin="$(swift build -c "$config" --show-bin-path)"
+source scripts/gentle
+swift_cmd build -c "$config" --product Searcher >&2
+bin="$(swift_cmd build -c "$config" --show-bin-path)"
 
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS"

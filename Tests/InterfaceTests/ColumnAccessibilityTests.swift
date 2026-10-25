@@ -89,9 +89,17 @@ private final class Fixture {
 
     await fixture.select("a.txt", inColumn: 0)
 
+    // The file's preview follows the columns.
     let remaining = try #require(browser.accessibilityChildren() as? [NSView])
-    #expect(remaining.count == 1)
+    #expect(remaining.count == 2)
     #expect(remaining.first === fixture.controller.columnControllers[0].view)
+    #expect(remaining.last === fixture.controller.previewView)
+
+    await fixture.select("docs", inColumn: 0)
+
+    let folders = try #require(browser.accessibilityChildren() as? [NSView])
+    #expect(folders.count == 2)
+    #expect(!folders.contains { $0 is ColumnPreviewView })
 }
 
 @MainActor @Test func eachColumnIsLabeledWithItsFolderName() async throws {
@@ -168,4 +176,22 @@ private final class Fixture {
 
     #expect(fixture.trail.focusedIndex == 2)
     #expect(fixture.focusChanges.isEmpty)
+}
+
+@MainActor @Test func thePreviewIsAGroupNamedForItsFileThatReadsItsFields() async throws {
+    let fixture = await Fixture()
+
+    await fixture.select("x.txt", inColumn: 1)
+
+    let view = try #require(fixture.controller.previewView)
+    let kind = try #require(fixture.trail.preview?.kind.text)
+    #expect(view.isAccessibilityElement())
+    #expect(view.accessibilityRole() == .group)
+    #expect(view.accessibilityLabel() == "x.txt")
+    let fields = try #require(view.accessibilityChildren() as? [NSTextField])
+    #expect(
+        fields.map(\.stringValue) == [
+            "x.txt", "\(kind) – 2 MB", "Information", "Size", "2 MB", "Modified",
+            formatter.date(testDate),
+        ])
 }

@@ -93,7 +93,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// Runs as the window closes.
     var onClose: (@MainActor (BrowserWindowController) -> Void)?
     /// Hands over the view controller another window has for a pane that moved here, or nil.
-    private let takePaneController: @MainActor (PaneID) -> PaneViewController?
+    private let takePaneController: @MainActor (PaneID, Pane) -> PaneViewController?
 
     /// A window of one tab at `location`, in a list of its own, as the UI bench opens it. With
     /// `fileOperations`, its operations panel lists what `showOperations` is given.
@@ -123,7 +123,9 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         fileOperations: FileOperationQueue? = nil, clipboard: CutState? = nil,
         mountTable: MountTable? = nil, undoHistory: UndoHistory? = nil, openWith: OpenWith? = nil,
         folderVisits: FolderVisits? = nil,
-        takePaneController: @escaping @MainActor (PaneID) -> PaneViewController? = { _ in nil },
+        takePaneController: @escaping @MainActor (PaneID, Pane) -> PaneViewController? = {
+            _, _ in nil
+        },
         openSavedWorkspace: @escaping @MainActor (UUID) -> Void = { id in
             preconditionFailure("this window can't open saved workspace \(id)")
         }
@@ -190,6 +192,17 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         window.setContentSize(NSSize(width: 900, height: 600))
         window.center()
         sidebar.onEscape = { [weak self] in self?.giveKeysBack() }
+        sidebar.outlineView.passKey = { [weak self] event in
+            guard let self, !isClosed, !workspace.isClosed else { return false }
+            let table = focusedTable
+            guard
+                KeyChord.candidates(for: event).contains(where: {
+                    table.registry.command(for: $0) != nil
+                })
+            else { return false }
+            table.keyDown(with: event)
+            return true
+        }
         sidebarResizeObserver = NotificationCenter.default.addObserver(
             forName: NSSplitView.didResizeSubviewsNotification, object: split.splitView,
             queue: nil
@@ -261,16 +274,34 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     // MARK: Saved workspace
 
     /// The name sheet while it shows.
-    private var nameSheet: WorkspaceNameSheet?
+    private(set) var nameSheet: WorkspaceNameSheet?
 
-    /// Shows the sheet that names or renames the window's workspace, unless it already shows.
+    /// Shows the sheet that saves the window's workspace under a name, or renames the saved
+    /// one, unless it already shows.
     private func askForWorkspaceName() {
         guard nameSheet == nil else { return }
         guard let window else { preconditionFailure("a browser window controller has no window") }
-        let sheet = WorkspaceNameSheet(workspace: workspace, list: workspaces)
+        let sheet = WorkspaceNameSheet(
+            workspace: workspace, list: workspaces, frame: { Rect(window.frame) })
         sheet.onClose = { [weak self] in self?.nameSheet = nil }
         nameSheet = sheet
         sheet.present(over: window)
+    }
+
+    /// Saves the window's workspace as the window has it now: under `name` if it isn't saved
+    /// yet, else over its snapshot, keeping its name (docs/decisions/0088-workspace-snapshots.md).
+    func saveWorkspace(as name: String? = nil) throws(WorkspaceList.NameRefusal) {
+        guard let window else { preconditionFailure("a browser window controller has no window") }
+        try workspaces.save(workspace, as: name, frame: Rect(window.frame))
+    }
+
+    /// Save Workspace on a saved workspace, which asks nothing and can't be refused.
+    private func saveSavedWorkspace() {
+        do {
+            try saveWorkspace()
+        } catch {
+            preconditionFailure("saving workspace \(workspace.id) again was refused: \(error)")
+        }
     }
 
     /// The question before Delete Workspace deletes `name`, a saved workspace; Delete is first.
@@ -359,14 +390,22 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             })
     }
 
-    /// Shows the sidebar, which the command has the workspace show, and moves the keys into it.
+    /// Shows the sidebar, which the command has the workspace show, and moves the keys into it;
+    /// with the keys in it already, gives them back to the focused pane.
     private func focusSidebar() {
+        if let responder = window?.firstResponder as? NSView,
+            responder.isDescendant(of: sidebar.view)
+        {
+            giveKeysBack()
+            return
+        }
         showSidebar()
         window?.makeFirstResponder(sidebar.outlineView)
     }
 
-    /// Esc in the sidebar: the focused pane takes the keys back.
-    private func giveKeysBack() {
+    /// Gives the keys to the focused pane, as Esc in the sidebar does and as going to a saved
+    /// workspace does.
+    func giveKeysBack() {
         guard !isClosed, !workspace.isClosed else { return }
         window?.makeFirstResponder(paneViewController.keyView)
     }
@@ -504,33 +543,85 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
 
     // MARK: Menu items from outside the panes' tables
 
-    /// The commands whose menu items work while the keys are outside every pane's table, as in
-    /// the filter field, the path bar or the tab strip under Full Keyboard Access. Other
-    /// commands' items stay off there, so the text-editing keys stay with a text field.
+    // With the keys outside every pane's table, as in the sidebar, the path bar or the tab strip
+    // under Full Keyboard Access, a command's menu item reaches the window, which runs it on the
+    // focused pane's table. In a text field only the window commands do
+    // (docs/decisions/0089-sidebar-key-routing.md).
+
+    /// The commands whose menu items work while a text field, such as the filter field, has the
+    /// keys. Other commands' items stay off there, so the text-editing keys stay with the field.
     private static let windowCommands: Set<CommandID> = [
         TilingCommands.closePane.id, WindowCommands.closeTab.id, WindowCommands.newTab.id,
         WindowCommands.nextTab.id, WindowCommands.previousTab.id, WindowCommands.newWindow.id,
         WindowCommands.movePaneToNewWindow.id, WindowCommands.mergeWindowIntoTab.id,
-        WindowCommands.toggleOperations.id, WorkspaceCommands.name.id,
+        WindowCommands.toggleOperations.id, WorkspaceCommands.save.id,
+        WorkspaceCommands.rename.id,
         WorkspaceCommands.delete.id, WorkspaceCommands.toggleSidebar.id,
         WorkspaceCommands.focusSidebar.id, WindowCommands.showPalette.id,
     ]
 
-    /// Runs a window or tab command's menu item on the focused pane's table. A table with the
-    /// keys takes the item first, since it is earlier in the responder chain.
+    /// Whether a text field, such as the filter or rename field, has the keys, through its field
+    /// editor.
+    var keysAreInText: Bool { window?.firstResponder is NSText }
+
+    /// Whether command `id`'s menu item runs from where the keys are now, outside every pane's
+    /// table. In a text field only the window commands do. Elsewhere every command does but
+    /// Quick Look, whose panel previews from the list that has the keys.
+    private func runsFromOutsideTheTables(_ id: CommandID) -> Bool {
+        if keysAreInText {
+            return Self.windowCommands.contains(id)
+        }
+        return id != ViewCommands.toggleQuickLook.id
+    }
+
+    /// Runs a command's menu item on the focused pane's table. A table with the keys takes the
+    /// item first, since it is earlier in the responder chain.
     @objc func runMenuCommand(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? CommandID, Self.windowCommands.contains(id)
-        else {
-            preconditionFailure("menu item \"\(sender.title)\" isn't a window command")
+        guard let id = sender.representedObject as? CommandID, runsFromOutsideTheTables(id) else {
+            preconditionFailure("menu item \"\(sender.title)\" can't run from outside the panes")
         }
         focusedTable.runMenuCommand(sender)
     }
 
+    /// Select All, Undo, Redo, Cut, Copy and Paste from the Edit menu, on the focused pane's
+    /// table. A text field and a table with the keys answer these first.
+    public override func selectAll(_ sender: Any?) {
+        focusedTable.selectAll(sender)
+    }
+
+    @objc func undo(_ sender: Any?) {
+        focusedTable.undo(sender)
+    }
+
+    @objc func redo(_ sender: Any?) {
+        focusedTable.redo(sender)
+    }
+
+    @objc func cut(_ sender: Any?) {
+        focusedTable.cut(sender)
+    }
+
+    @objc func copy(_ sender: Any?) {
+        focusedTable.copy(sender)
+    }
+
+    @objc func paste(_ sender: Any?) {
+        focusedTable.paste(sender)
+    }
+
     public func validateMenuItem(_ item: NSMenuItem) -> Bool {
-        guard item.action == #selector(runMenuCommand(_:)) else { return true }
-        guard !isClosed, let id = item.representedObject as? CommandID,
-            Self.windowCommands.contains(id)
-        else { return false }
+        let isStandard = MainMenuBuilder.actionsRunningCommands.contains {
+            $0.action == item.action
+        }
+        guard item.action == #selector(runMenuCommand(_:)) || isStandard else { return true }
+        guard !isClosed, !workspace.isClosed else { return false }
+        // A text field answers the Edit menu's actions itself, through its field editor and the
+        // window's undo manager; none reaches the panes from there.
+        if isStandard, keysAreInText { return false }
+        if !isStandard {
+            guard let id = item.representedObject as? CommandID, runsFromOutsideTheTables(id)
+            else { return false }
+        }
         return focusedTable.validateMenuItem(item)
     }
 
@@ -637,7 +728,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// A view controller for pane `id`: the one another window had, if the pane moved here, so
     /// it keeps its table, scroll position and folder monitor; else a new one.
     private func makePaneController(for pane: Pane, id: PaneID) -> PaneViewController {
-        let controller = takePaneController(id) ?? PaneViewController(pane: pane)
+        let controller = takePaneController(id, pane) ?? PaneViewController(pane: pane)
         precondition(
             controller.pane === pane,
             "the view controller handed over for pane \(id) at \(pane.location.path) shows "
@@ -652,6 +743,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             didClosePane: { [weak self] result in self?.didClose(result) },
             toggleOperations: { [weak self] in self?.toggleOperations() },
             askForWorkspaceName: { [weak self] in self?.askForWorkspaceName() },
+            saveWorkspace: { [weak self] in self?.saveSavedWorkspace() },
             askToDeleteWorkspace: { [weak self] in self?.askToDeleteWorkspace() },
             focusSidebar: { [weak self] in self?.focusSidebar() },
             showPalette: { [weak self] in self?.showPalette() },
@@ -674,11 +766,13 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         return Rect(view.bounds)
     }
 
-    /// Gives up the view controller of pane `id`, which moved to another window, if this window
-    /// has one. Its view leaves this window's layout now, before the other window adds it, so a
-    /// later update here can't take it out of that window.
-    func handOver(_ id: PaneID) -> PaneViewController? {
-        guard let views = tabViews.values.first(where: { $0.paneControllers[id] != nil }),
+    /// Gives up the view controller of `pane`, under `id`, which moved to another window, if
+    /// this window has one. Its view leaves this window's layout now, before the other window
+    /// adds it, so a later update here can't take it out of that window. A pane of another
+    /// object under the same ID, as a reloaded snapshot rebuilds it, gets nothing.
+    func handOver(_ id: PaneID, of pane: Pane) -> PaneViewController? {
+        guard
+            let views = tabViews.values.first(where: { $0.paneControllers[id]?.pane === pane }),
             let controller = views.paneControllers.removeValue(forKey: id)
         else { return nil }
         showWorkspace()
@@ -801,5 +895,42 @@ private final class BrowserWindow: NSWindow {
             didChangeFirstResponder()
         }
         return made
+    }
+
+    /// NSWindow answers Undo and Redo, ahead of its controller. A text field's typing is undone
+    /// here with the field editor's undo manager, as NSWindow does: the field editor doesn't
+    /// answer these actions itself. With the keys anywhere else outside the tables, such as in the sidebar,
+    /// they undo the focused pane's file operations, which the controller runs, as a table with
+    /// the keys does.
+    @objc func undo(_ sender: Any?) {
+        if controller.keysAreInText {
+            firstResponder?.undoManager?.undo()
+        } else {
+            controller.undo(sender)
+        }
+    }
+
+    @objc func redo(_ sender: Any?) {
+        if controller.keysAreInText {
+            firstResponder?.undoManager?.redo()
+        } else {
+            controller.redo(sender)
+        }
+    }
+
+    override func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        guard item.action == #selector(undo(_:)) || item.action == #selector(redo(_:)),
+            !controller.keysAreInText
+        else {
+            return super.validateMenuItem(item)
+        }
+        return controller.validateMenuItem(item)
+    }
+
+    private var controller: BrowserWindowController {
+        guard let controller = windowController as? BrowserWindowController else {
+            preconditionFailure("a browser window has no controller")
+        }
+        return controller
     }
 }

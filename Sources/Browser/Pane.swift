@@ -51,6 +51,10 @@ public final class Pane {
     /// selection provisionally and settles it off the main thread too. Leaving the folder moves
     /// it too, so a command can tell whether the user has changed the selection since it ran.
     private(set) var selectionVersion = 0
+    /// Whether a row key, Opt-↑ or Opt-↓, or type-to-select made the selection, rather than a
+    /// click or a command. A column's trail waits for such keys to pause before the columns
+    /// right of it follow the selection (0094-column-open-delay.md).
+    private(set) var selectionIsFromKeys = false
     /// Names to select once the rows list them all, the selection version they were asked for
     /// at, whether hidden entries showed then, and what runs once they are selected. Dropped
     /// once the user selects anything, the pane leaves the folder, the filter changes or hidden
@@ -128,6 +132,9 @@ public final class Pane {
     public let settings: Settings
     /// How the pane and its views reach the system outside the app's windows.
     public let systemActions: any SystemActions
+    /// Where the trail in column mode waits out `ColumnTrail.openDelay`. Tests pass a clock they
+    /// advance.
+    var columnOpenClock: any Clock<Duration> = ContinuousClock()
     private(set) var load: ListingLoad?
     private var loadIsRunning = false
     /// Whether loads go ahead of other panes'. A trail moves it between its columns without
@@ -167,6 +174,9 @@ public final class Pane {
     var rowWorkQueue = DispatchQueue.global(qos: .userInitiated)
     /// Where sorts run. Tests suspend a queue of their own here to hold a sort.
     var sortQueue = DispatchQueue.global(qos: .userInitiated)
+    /// Where Open reads whether a link points to a package (`checkLink`). Tests suspend a queue
+    /// of their own here to hold a check.
+    var linkCheckQueue = DispatchQueue.global(qos: .userInitiated)
     /// The folders left, for Back and Forward.
     private(set) var history = History()
     /// The load of a `goToFolder` that hasn't moved the pane yet, and the request it answers.
@@ -176,6 +186,10 @@ public final class Pane {
     /// The selection version when the last `goToFolder` moved the pane. Its load's later updates
     /// were resolved from the selection it started with then.
     private var goSelectionVersion = 0
+    /// The read of whether a link being opened points to a package (`checkLink`).
+    private var packageCheck: Task<Void, Never>?
+    /// Whether an Open of a link is still finding out what the link points to, for tests.
+    var isCheckingLink: Bool { packageCheck != nil || linkCheck != nil }
     /// The cached rows of a `goToFolder` that hasn't moved the pane yet, shown when it moves.
     /// The listing of a link `openSelectedLink(asFolderIn:)` checks before it asks for a pane.
     private var linkCheck: ListingLoad?
@@ -214,6 +228,19 @@ public final class Pane {
             isFocused: false, selection: Selection(saved.selection, cursor: saved.cursor),
             viewMode: saved.viewMode, rows: nil)
         history = saved.history
+    }
+
+    /// Returns once the rows the listing cache keeps for the pane's folder, or for each column's
+    /// in column mode, have reached the pane, or the cache had none (`ListingLoad`'s
+    /// `cachedRowsHanded()`). It never waits on a folder's volume.
+    public func cachedRowsHanded() async {
+        guard let trail = columnTrail else {
+            await load?.cachedRowsHanded()
+            return
+        }
+        for column in trail.columns {
+            await column.pane.cachedRowsHanded()
+        }
     }
 
     /// A pane that shows `rows`, a complete listing of `location` in list mode, and lists nothing
@@ -455,6 +482,8 @@ public final class Pane {
     /// Stops a `goToFolder` that hasn't moved the pane yet, and an
     /// `openSelectedLink(asFolderIn:)` that hasn't asked for its pane; its `finish` never runs.
     public func cancelGoToFolder() {
+        packageCheck?.cancel()
+        packageCheck = nil
         linkCheck?.cancel()
         linkCheck = nil
         pendingGo?.load.cancel()
@@ -559,13 +588,31 @@ public final class Pane {
         filter = NameFilter()
         selection = name.map { Selection([$0], cursor: $0) } ?? Selection()
         selectionVersion += 1
+        selectionIsFromKeys = false
     }
 
     /// Opens the selected folder in this pane, or hands the selected files to the system. With
     /// several entries selected, folders are skipped and symbolic links count as files, which the
-    /// system resolves. A single selected link opens as what it points at does (`openLink`).
+    /// system resolves. A single selected link opens as what it points at does (`openLink`). A
+    /// package is a file here (docs/decisions/0093-packages-are-files.md).
     public func openSelection() {
         openSelection(foldersIn: nil)
+    }
+
+    /// The one selected entry when it is a package; nil for any other selection.
+    public var selectedPackage: DirectoryEntry? {
+        let entries = selectedEntries
+        guard entries.count == 1, entries[0].type == .package else { return nil }
+        return entries[0]
+    }
+
+    /// Shows the one selected package's contents as a folder, as Finder's Show Package Contents
+    /// does: in this pane, or in a column right of this one when it is a column. Does nothing for
+    /// any other selection.
+    public func showPackageContents() {
+        guard let package = selectedPackage else { return }
+        if let trail = containingTrail { return trail.openPackage(named: package.name, from: self) }
+        navigate(to: location.child(named: package.name))
     }
 
     /// Opens a single selected folder in `other`, which must not be a column. Any other
@@ -579,13 +626,21 @@ public final class Pane {
     /// to a folder. The link is listed first, off the main thread, and `other` is called only
     /// once it lists, so a link to a file or a broken link opens nothing and makes no pane.
     /// The pane then goes to the link with `goToFolder`, which shows any other failure there.
-    /// A later navigation or Go to folder in this pane cancels the open.
+    /// A link to a package opens nothing, as a link to a file doesn't. A later navigation or Go
+    /// to folder in this pane cancels the open.
     public func openSelectedLink(asFolderIn other: @escaping @MainActor () -> Pane?) {
         let entries = selectedEntries
         precondition(
             entries.count == 1 && entries[0].type == .symbolicLink,
             "openSelectedLink(asFolderIn:) ran without one selected link")
         let link = location.child(named: entries[0].name)
+        checkLink(
+            link, ifPackage: {},
+            otherwise: { [weak self] in self?.listLink(link, asFolderIn: other) })
+    }
+
+    /// The rest of `openSelectedLink(asFolderIn:)`, for a link that doesn't point to a package.
+    private func listLink(_ link: Location, asFolderIn other: @escaping @MainActor () -> Pane?) {
         cancelGoToFolder()
         linkCheck = service.load(link, priority: loadPriority) { [weak self] update in
             // Nil once cancelled or decided; a cancelled load sends nothing more.
@@ -640,8 +695,16 @@ public final class Pane {
     /// Opens `link` as Go to folder would, so listing it is the check: a link to a folder moves
     /// the pane to the link's own path on its first rows. A link to a file or a broken one leaves
     /// the pane where it is and goes to the system. Any other failure shows in the pane. A later
-    /// navigation or Go to folder cancels the open, as it cancels any pending go.
+    /// navigation or Go to folder cancels the open, as it cancels any pending go. A link to a
+    /// package goes to the system as the package would, as Finder launches a linked app.
     private func openLink(_ link: Location) {
+        checkLink(
+            link, ifPackage: { [weak self] in self?.openFile(link) },
+            otherwise: { [weak self] in self?.goToLink(link) })
+    }
+
+    /// The rest of `openLink`, for a link that doesn't point to a package.
+    private func goToLink(_ link: Location) {
         goToFolder(link) { [weak self] error in
             guard let self, let error else { return }
             switch error.reason {
@@ -650,6 +713,32 @@ public final class Pane {
             case .privacyProtected, .permissionDenied, .unreachable, .other:
                 preconditionFailure("goToFolder moved the pane for \(error) but reported it")
             }
+        }
+    }
+
+    /// Finds out off the main thread whether `link` points to a package, as a listing of the
+    /// target's folder would name it, then runs `ifPackage` or `otherwise`. A link whose target
+    /// can't be read runs `otherwise`, whose listing reports why. A navigation or Go to folder
+    /// before the answer, a second Open and closing the pane cancel both, as they cancel a
+    /// pending go. The read runs on `linkCheckQueue`, not the cooperative pool, since a link onto
+    /// a stalled share blocks it.
+    private func checkLink(
+        _ link: Location, ifPackage: @escaping @MainActor () -> Void,
+        otherwise: @escaping @MainActor () -> Void
+    ) {
+        cancelGoToFolder()
+        let path = link.path
+        let queue = linkCheckQueue
+        packageCheck = Task { [weak self] in
+            let isPackage = await withCheckedContinuation { continuation in
+                queue.async {
+                    continuation.resume(
+                        returning: DirectoryLister.isPackage(followingLinksAt: path))
+                }
+            }
+            guard let self, !Task.isCancelled else { return }
+            packageCheck = nil
+            if isPackage { ifPackage() } else { otherwise() }
         }
     }
 
@@ -1114,7 +1203,7 @@ public final class Pane {
     public func select(_ selection: Selection, as source: SelectionHistory.Source = .once) {
         set(
             onMain { selection.resolved(in: state.listing, after: .sameEntries) },
-            recordingAs: source)
+            recordingAs: source, byKey: source == .typing)
     }
 
     /// Selects `rows` of the listing shown, as a click in the table gives them. They are named off
@@ -1131,6 +1220,7 @@ public final class Pane {
             rows == selection.rows(in: listing)
         {
             namesToSelect = nil
+            chooseSelectionMadeByKeys()
             return
         }
         set(Selection(rows: rows, in: listing, cursor: cursor, anchor: anchor), recordingAs: source)
@@ -1184,19 +1274,33 @@ public final class Pane {
 
     /// Takes a selection already resolved against the listing shown, keeping the one it replaces
     /// in the selection history as made by `source`; nil for a step the history itself restores.
+    /// `byKey` says a key made it (`selectionIsFromKeys`).
     private func set(
-        _ selection: Selection, recordingAs source: SelectionHistory.Source? = .once
+        _ selection: Selection, recordingAs source: SelectionHistory.Source? = .once,
+        byKey: Bool = false
     ) {
         // Selecting the rows already selected doesn't move the version, but is still the user's
         // choice over names a command is waiting to select.
         namesToSelect = nil
-        guard selection != self.selection else { return }
+        guard selection != self.selection else {
+            if !byKey { chooseSelectionMadeByKeys() }
+            return
+        }
         if let source {
             selectionHistory.record(self.selection, in: location, by: source)
         }
         self.selection = selection
         selectionVersion += 1
+        selectionIsFromKeys = byKey
         startSettlingIfNeeded()
+        reportChange()
+    }
+
+    /// A click or a command chose the selection keys made: it no longer waits for them to pause,
+    /// so the change is reported for a trail to follow at once.
+    private func chooseSelectionMadeByKeys() {
+        guard selectionIsFromKeys else { return }
+        selectionIsFromKeys = false
         reportChange()
     }
 
@@ -1306,7 +1410,7 @@ public final class Pane {
         guard let listing = state.listing else { return }
         set(
             onMain { selection.moved(by: delta, in: listing, extending: extending) },
-            recordingAs: .move(by: delta, extending: extending, isRepeat: isKeyRepeat))
+            recordingAs: .move(by: delta, extending: extending, isRepeat: isKeyRepeat), byKey: true)
     }
 
     /// Moves the cursor `pages` screens of rows, `visibleRowCount` rows each.
@@ -1315,14 +1419,19 @@ public final class Pane {
         moveSelection(by: pages * max(visibleRowCount, 1), isKeyRepeat: isKeyRepeat)
     }
 
-    public func selectFirstRow() {
+    /// Selects the first row alone. `byKey` says a key asked for it, as Opt-↑ does; → into a
+    /// column asks without it, so the folder in that row opens its column at once.
+    public func selectFirstRow(byKey: Bool = false) {
         guard let listing = state.listing else { return }
-        set(onMain { selection.moved(toRow: 0, in: listing, extending: false) })
+        set(onMain { selection.moved(toRow: 0, in: listing, extending: false) }, byKey: byKey)
     }
 
-    public func selectLastRow() {
+    /// Selects the last row alone. `byKey` says a key asked for it, as Opt-↓ does.
+    public func selectLastRow(byKey: Bool = false) {
         guard let listing = state.listing else { return }
-        set(onMain { selection.moved(toRow: listing.count - 1, in: listing, extending: false) })
+        set(
+            onMain { selection.moved(toRow: listing.count - 1, in: listing, extending: false) },
+            byKey: byKey)
     }
 
     /// Selects every row shown, keeping the cursor and anchor where they were.
@@ -1648,7 +1757,7 @@ public final class Pane {
             var missing: [ExactName: Listing.FolderSizeUpdate] = [:]
             for row in 0..<listing.count {
                 let entry = listing[row]
-                guard entry.type == .directory else { continue }
+                guard entry.type.isFolderOnDisk else { continue }
                 let name = ExactName(entry.name)
                 if let update = known[name], update.modified == entry.modified {
                     if listing.folderSize(atRow: row) != update.value { missing[name] = update }
@@ -1853,7 +1962,7 @@ public final class Pane {
         in listing: Listing, from folderSizes: FolderSizeService?, under folder: Location
     ) -> [ExactName: Listing.FolderSizeUpdate] {
         guard let folderSizes else { return [:] }
-        let folders = (0..<listing.count).map { listing[$0] }.filter { $0.type == .directory }
+        let folders = (0..<listing.count).map { listing[$0] }.filter { $0.type.isFolderOnDisk }
         let asked = folders.map { (path: folder.child(named: $0.name).path, modified: $0.modified) }
         var found: [ExactName: Listing.FolderSizeUpdate] = [:]
         for (entry, size) in zip(folders, folderSizes.keptSizes(of: asked)) {

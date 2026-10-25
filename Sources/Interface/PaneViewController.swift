@@ -49,11 +49,13 @@ public final class PaneViewController: NSViewController {
         let didClosePane: @MainActor (CloseResult) -> Void
         /// Shows or hides the window's operations panel.
         let toggleOperations: @MainActor () -> Void
-        /// Asks for a name for the window's workspace.
+        /// Asks for a name for the window's workspace, to save or rename it under.
         let askForWorkspaceName: @MainActor () -> Void
+        /// Saves the window's saved workspace as the window has it now.
+        let saveWorkspace: @MainActor () -> Void
         /// Asks whether to delete the window's saved workspace.
         let askToDeleteWorkspace: @MainActor () -> Void
-        /// Moves the keys into the window's workspace sidebar.
+        /// Moves the keys into the window's workspace sidebar, or back out of it.
         let focusSidebar: @MainActor () -> Void
         /// Shows the command palette over the window.
         let showPalette: @MainActor () -> Void
@@ -364,7 +366,7 @@ public final class PaneViewController: NSViewController {
             askForFolder: { [weak self] in self?.askForFolder() },
             showFilter: { [weak self] in self?.showFilter() },
             toggleOperations: link.toggleOperations,
-            askForWorkspaceName: link.askForWorkspaceName,
+            askForWorkspaceName: link.askForWorkspaceName, saveWorkspace: link.saveWorkspace,
             askToDeleteWorkspace: link.askToDeleteWorkspace, focusSidebar: link.focusSidebar,
             showPalette: link.showPalette, folder: folder,
             fileOperations: link.fileOperations,

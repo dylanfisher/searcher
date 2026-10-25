@@ -429,7 +429,8 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(
         file.items.map(\.title) == [
             "New Window", "New Folder", "New Tab", "Close Tab", "", "Rename", "Duplicate",
-            "Copy to Other Pane", "Move to Other Pane", "", "Open With", "Quick Look",
+            "Copy to Other Pane", "Move to Other Pane", "", "Open With",
+            "Show Package Contents", "Quick Look",
             "Reveal in Finder",
             "Open Terminal Here", "", "Move to Trash", "", "Filter",
         ])
@@ -476,7 +477,8 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
             "Split Down", "Columns", "Rows", "", "Focus Other Pane", "Focus Pane", "Move Pane",
             "Resize Pane",
             "Zoom Pane", "Unzoom Pane", "Equalize Panes", "", "Move Pane to New Window",
-            "Merge Window into Tab", "", "Name Workspace…", "Delete Workspace…",
+            "Merge Window into Tab", "", "Save Workspace…", "Rename Workspace…",
+            "Delete Workspace…",
             "", "Operations", "", "Close Pane",
         ])
     #expect(!allItems(menu).contains { $0.action == #selector(NSWindow.performClose(_:)) })

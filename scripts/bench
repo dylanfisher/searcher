@@ -74,8 +74,9 @@ if $ui; then
 fi
 
 # Build output goes to stderr so `--print-budget` leaves only the number on stdout.
-swift build -c release --product Bench >&2
-bench="$(swift build -c release --show-bin-path)/Bench"
+source scripts/gentle
+swift_cmd build -c release --product Bench >&2
+bench="$(swift_cmd build -c release --show-bin-path)/Bench"
 
 # "<megabytes> <folder>" for a run that copies to a disk image, after the free
 # space check; "0" for any other. A short check fails here, naming the bytes.

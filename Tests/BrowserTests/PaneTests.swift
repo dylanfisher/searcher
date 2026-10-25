@@ -452,6 +452,23 @@ private func heldSortQueue() -> DispatchQueue {
     #expect(fixture.pane.location == Location(path: "/root"))
 }
 
+@MainActor @Test func openOnAPackageHandsItToTheSystemAsAFile() async throws {
+    let root = try TemporaryFolder("PaneTests")
+    try FileManager.default.createDirectory(
+        at: root.url.appending(path: "App.app/Contents"), withIntermediateDirectories: true)
+    let actions = StubSystemActions()
+    let pane = Pane(
+        location: Location(path: root.url.path), service: ListingService(),
+        systemActions: actions, settings: untouchedSettings())
+    await settle { pane.state.isLoaded }
+    pane.select(Selection([ExactName("App.app")], cursor: ExactName("App.app")))
+
+    pane.openSelection()
+
+    #expect(actions.openedFiles.map(\.path) == [root.url.path + "/App.app"])
+    #expect(pane.location.path == root.url.path)
+}
+
 /// A pane over a temporary folder holding `folder` (with `inside.txt`), `file.txt`, links to
 /// each, a link to the folder's link, a broken link and a link to itself, loaded.
 @MainActor
@@ -515,6 +532,147 @@ private func linkTree() async throws -> (Pane, StubSystemActions, TemporaryFolde
     #expect(other.state.names == ["inside.txt"])
     #expect(pane.location == Location(path: root.url.path))
     #expect(actions.openedFiles.count == 1)
+}
+
+/// A pane over a temporary folder holding the package `Real.app` and `app link`, a link to it
+/// whose own name has no package extension, as Homebrew links casks into /Applications; loaded.
+@MainActor
+private func packageLinkTree() async throws -> (Pane, StubSystemActions, TemporaryFolder) {
+    let root = try TemporaryFolder("PaneTests")
+    try FileManager.default.createDirectory(
+        at: root.url.appending(path: "Real.app/Contents"), withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(
+        atPath: root.url.path + "/app link", withDestinationPath: "Real.app")
+    try FileManager.default.createDirectory(
+        at: root.url.appending(path: "plain"), withIntermediateDirectories: false)
+    try Data().write(to: root.url.appending(path: "plain/inside.txt"))
+    try FileManager.default.createSymbolicLink(
+        atPath: root.url.path + "/plain link", withDestinationPath: "plain")
+    let actions = StubSystemActions()
+    let pane = Pane(
+        location: Location(path: root.url.path), service: ListingService(), systemActions: actions,
+        settings: untouchedSettings())
+    await settle { pane.state.isLoaded }
+    pane.select(Selection([ExactName("app link")], cursor: ExactName("app link")))
+    return (pane, actions, root)
+}
+
+/// Finder launches the app a link points to.
+@MainActor @Test func openOnALinkToAPackageOpensTheLinkAsAFile() async throws {
+    let (pane, actions, root) = try await packageLinkTree()
+
+    pane.openSelection()
+
+    await settle { actions.openedFiles.count == 1 }
+    #expect(actions.openedFiles.map(\.path) == [root.url.path + "/app link"])
+    #expect(pane.location.path == root.url.path)
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(pane.location.path == root.url.path)
+}
+
+@MainActor @Test func openOnALinkToAPackageInAColumnOpensItAsAFileAndAddsNoColumn()
+    async throws
+{
+    let (pane, actions, root) = try await packageLinkTree()
+    pane.setViewMode(.column)
+    let trail = try #require(pane.columnTrail)
+    await settle { trail.focused.pane.state.isLoaded }
+    let column = trail.focused.pane
+    column.select(Selection([ExactName("app link")], cursor: ExactName("app link")))
+    #expect(trail.columns.count == 1)
+    #expect(trail.preview == nil)
+
+    column.openSelection()
+
+    await settle { actions.openedFiles.count == 1 }
+    #expect(actions.openedFiles.map(\.path) == [root.url.path + "/app link"])
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(trail.columns.map(\.pane.location.path) == [root.url.path])
+}
+
+/// Open in Other Pane is for folders, so a link to a package opens nothing there, as a link to
+/// a file doesn't.
+@MainActor @Test func openALinkAsAFolderElsewhereOpensNothingForALinkToAPackage() async throws {
+    let (pane, actions, root) = try await packageLinkTree()
+    let held = holdLinkChecks(of: pane)
+    var asked: [String] = []
+    func open(_ name: String) {
+        pane.select(Selection([ExactName(name)], cursor: ExactName(name)))
+        pane.openSelectedLink(asFolderIn: {
+            asked.append(name)
+            return nil
+        })
+    }
+
+    // A link to a plain folder is listed, then asks for its pane, after which nothing is pending.
+    open("plain link")
+    #expect(pane.isCheckingLink)
+    held.resume()
+    await settle { asked == ["plain link"] && !pane.isCheckingLink }
+
+    open("app link")
+    await settle { !pane.isCheckingLink }
+
+    #expect(asked == ["plain link"])
+    #expect(actions.openedFiles.isEmpty)
+    #expect(pane.location.path == root.url.path)
+}
+
+/// Holds `pane`'s package checks on a suspended queue of their own; `resume` lets them run.
+@MainActor
+private func holdLinkChecks(of pane: Pane) -> DispatchQueue {
+    let held = DispatchQueue(label: "held link checks")
+    held.suspend()
+    pane.linkCheckQueue = held
+    return held
+}
+
+/// Waits until a released check has run on `held` and its answer has reached the main actor.
+@MainActor
+private func finishChecks(on held: DispatchQueue) async {
+    await withCheckedContinuation { continuation in held.async { continuation.resume() } }
+    await drainMainQueue()
+    await Task.yield()
+}
+
+/// A navigation, a second Open or closing the pane while a link's check is pending cancels the
+/// open, as it cancels a pending go.
+@MainActor @Test func aNavigationASecondOpenOrClosingThePaneCancelsAPendingLinkOpen()
+    async throws
+{
+    let (pane, actions, root) = try await packageLinkTree()
+    let held = holdLinkChecks(of: pane)
+
+    pane.openSelection()
+    #expect(pane.isCheckingLink)
+    pane.navigate(to: Location(path: root.url.path + "/plain"))
+    #expect(!pane.isCheckingLink)
+    await settle { pane.state.isLoaded }
+
+    pane.goBack()
+    await settle { pane.location.path == root.url.path && pane.state.isLoaded }
+    pane.select(Selection([ExactName("app link")], cursor: ExactName("app link")))
+    pane.openSelection()
+    pane.select(Selection([ExactName("plain link")], cursor: ExactName("plain link")))
+    pane.openSelection()
+
+    held.resume()
+    await settle { pane.location.name == "plain link" && pane.state.isLoaded }
+    await finishChecks(on: held)
+    #expect(actions.openedFiles.isEmpty)
+
+    held.suspend()
+    pane.goBack()
+    await settle { pane.location.path == root.url.path && pane.state.isLoaded }
+    pane.select(Selection([ExactName("app link")], cursor: ExactName("app link")))
+    pane.openSelection()
+    pane.close()
+    #expect(!pane.isCheckingLink)
+    held.resume()
+    await finishChecks(on: held)
+
+    #expect(actions.openedFiles.isEmpty)
+    #expect(pane.location.path == root.url.path)
 }
 
 @MainActor @Test func openOnALinkWhoseLoadGoesSlowLeavesThePaneWhereItWas() async {

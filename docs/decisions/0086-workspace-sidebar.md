@@ -2,6 +2,9 @@
 
 - **Date:** 2026-10-24
 - **Status:** accepted
+- **2026-10-24:** Focus Sidebar has Command-0 and gives the keys back when pressed in the
+  sidebar, and opening a saved workspace whose window is open loads its snapshot into it; see
+  [0088](0088-workspace-snapshots.md).
 
 ## Context
 
@@ -88,3 +91,10 @@ before column view, in the plain `--ui` run CI makes, with no scenario of its ow
 10% across three CI runs. The sidebar is no longer "still to be measured", but the run doesn't
 check that the sidebar draws nothing during the presses, as the splits cases check the unfocused
 panes.
+
+## Amendment: pane keys while the sidebar has the keys (2026-10-24)
+
+The sidebar keeps the arrows, Return, Esc, Tab, Shift-Tab, the page keys and typing to select.
+A chord with Command, Control or Option, or a function key, that a pane command takes now runs
+on the window's focused pane, and every command's menu item but Quick Look works, with the keys
+left in the sidebar ([0089](0089-sidebar-key-routing.md)).

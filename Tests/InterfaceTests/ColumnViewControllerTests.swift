@@ -26,10 +26,13 @@ private struct Fixture {
     let pane: Pane
     let controller: ColumnViewController
 
-    init(width: Double = 800, iconCache: TypeIconCache = TypeIconCache { _ in NSImage() }) async {
+    init(
+        width: Double = 800, iconCache: TypeIconCache = TypeIconCache { _ in NSImage() },
+        folders: [String: [DirectoryEntry]] = tree
+    ) async {
         pane = Pane(
             location: Location(path: "/r"),
-            service: ListingService(lister: StubLister(tree), rootVolumeName: { "Test Disk" }),
+            service: ListingService(lister: StubLister(folders), rootVolumeName: { "Test Disk" }),
             systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true,
             viewMode: .column)
         let controller = ColumnViewController(pane: pane, iconCache: iconCache, formatter: .init())
@@ -242,14 +245,15 @@ private struct Fixture {
     #expect(fixture.pane.location == Location(path: "/r/docs/sub"))
 }
 
-/// The views and children of the shown columns, and nothing else: a column, its separator and
-/// its spinner each.
+/// The views and children of the shown columns, and nothing else but the preview: a column, its
+/// separator and its spinner each.
 @MainActor
 private func expectOnlyShownColumns(in controller: ColumnViewController) {
     let shown = controller.columnControllers
     #expect(controller.children.count == shown.count)
     #expect(zip(controller.children, shown).allSatisfy { $0 === $1 })
-    let subviews = controller.columnsView.subviews
+    // The preview view stays once made, shown or hidden.
+    let subviews = controller.columnsView.subviews.filter { !($0 is ColumnPreviewView) }
     #expect(subviews.count == shown.count * 3)
     #expect(subviews.filter { $0 is NSProgressIndicator }.count == shown.count)
     #expect(shown.allSatisfy { column in subviews.contains { $0 === column.view } })
@@ -358,4 +362,160 @@ private struct LoadingThirdColumn {
 
     fixture.lister.release("/r/docs/sub")
     await settle { fixture.trail.columns[2].pane.state.isLoaded }
+}
+
+@MainActor @Test func oneSelectedFileShowsItsPreviewRightOfTheLastColumn() async throws {
+    let maker = IconMaker()
+    let iconCache = TypeIconCache(makeIcon: maker.icon(for:))
+    let fixture = await Fixture(iconCache: iconCache)
+    await fixture.select("docs", inColumn: 0)
+
+    await fixture.select("x.txt", inColumn: 1)
+    fixture.controller.view.layoutSubtreeIfNeeded()
+
+    let preview = try #require(fixture.trail.preview)
+    let view = try #require(fixture.controller.previewView)
+    #expect(!view.isHidden)
+    #expect(view.superview === fixture.controller.columnsView)
+    let last = try #require(fixture.controller.columnControllers.last).view.frame
+    #expect(view.frame.minX == last.maxX + 1)
+    #expect(view.frame.size == NSSize(width: ColumnViewController.columnWidth, height: last.height))
+    #expect(fixture.controller.columnsView.frame.width >= view.frame.maxX)
+    #expect(view.iconView.image === iconCache.icon(for: preview.kind.type))
+    #expect(view.iconView.frame.size == NSSize(width: 128, height: 128))
+    #expect(view.nameField.stringValue == "x.txt")
+    #expect(view.summaryField.stringValue == "\(preview.kind.text) – 1 byte")
+    #expect(view.sizeField.stringValue == "1 byte")
+    #expect(view.modifiedField.stringValue == EntryCellFormatter().date(testDate))
+    #expect(!view.acceptsFirstResponder)
+}
+
+@MainActor @Test func aFolderOrNoSelectionHidesThePreviewAndTheNextFileReusesIt() async throws {
+    let fixture = await Fixture()
+    await fixture.select("a.txt", inColumn: 0)
+    let view = try #require(fixture.controller.previewView)
+    #expect(!view.isHidden)
+    #expect(view.nameField.stringValue == "a.txt")
+
+    await fixture.select("docs", inColumn: 0)
+    #expect(view.isHidden)
+
+    await fixture.select("x.txt", inColumn: 1)
+    #expect(fixture.controller.previewView === view)
+    #expect(!view.isHidden)
+    #expect(view.nameField.stringValue == "x.txt")
+
+    fixture.trail.columns[1].pane.select(Selection())
+    #expect(view.isHidden)
+}
+
+@MainActor @Test func aPatchedFileUpdatesItsPreview() async throws {
+    let fixture = await Fixture()
+    await fixture.select("a.txt", inColumn: 0)
+    let view = try #require(fixture.controller.previewView)
+    let column = fixture.trail.columns[0].pane
+
+    column.apply(.patches([.update(file("a.txt", size: 2_000_000))]), at: column.location)
+
+    await settle { view.sizeField.stringValue == "2 MB" }
+    #expect(view.summaryField.stringValue.hasSuffix(" – 2 MB"))
+
+    column.apply(.patches([.remove(name: "a.txt")]), at: column.location)
+
+    await settle { view.isHidden }
+}
+
+/// → into a column whose first row is a file shows that file's preview past the right edge; it
+/// is scrolled into view with the focused column.
+@MainActor @Test func thePreviewIsScrolledIntoViewWithTheFocusedColumn() async throws {
+    // Room for two columns.
+    let fixture = await Fixture(width: ColumnViewController.columnWidth * 2 + 20)
+    await fixture.openThreeColumns()
+    let scrollView = try #require(fixture.controller.view as? NSScrollView)
+
+    fixture.trail.moveRight()
+    fixture.trail.moveRight()
+
+    #expect(fixture.trail.focusedIndex == 2)
+    #expect(fixture.trail.preview?.location == Location(path: "/r/docs/sub/one.flac"))
+    let view = try #require(fixture.controller.previewView)
+    let focused = fixture.controller.columnControllers[2].view.frame
+    #expect(scrollView.documentVisibleRect.contains(focused))
+    #expect(scrollView.documentVisibleRect.contains(view.frame))
+
+    // → on a file does nothing.
+    fixture.trail.moveRight()
+    #expect(fixture.trail.focusedIndex == 2)
+}
+
+/// `/r` holding a file with a long name that has no spaces to wrap at.
+private let longName = String(repeating: "a", count: 120) + ".txt"
+
+/// A file in `/r` that has no size, as a socket has none.
+private let socket = DirectoryEntry(
+    name: "socket", type: .other, size: nil, modified: testDate, isHidden: false,
+    isDataless: false)
+
+@MainActor @Test func everyFieldStaysInsideThePreviewWidth() async throws {
+    var folders = tree
+    folders["/r"] = [file(longName)]
+    let fixture = await Fixture(folders: folders)
+    await fixture.select(longName, inColumn: 0)
+    let view = try #require(fixture.controller.previewView)
+
+    view.summaryField.stringValue =
+        "Portable Document Format (PDF) – 12.3 MB" + String(repeating: " and more", count: 6)
+    fixture.controller.view.layoutSubtreeIfNeeded()
+
+    let fields = try #require(view.accessibilityChildren() as? [NSTextField])
+    #expect(fields.count == 7)
+    // Laid out, and the name wrapped onto more than one line.
+    #expect(view.summaryField.frame.width > 100)
+    #expect(view.nameField.frame.height > 2 * view.summaryField.frame.height)
+    for field in fields {
+        let frame = field.convert(field.bounds, to: view)
+        #expect(frame.minX >= 0, "\(field.stringValue)")
+        #expect(frame.maxX <= view.bounds.width, "\(field.stringValue)")
+    }
+}
+
+@MainActor @Test func aPreviewTallerThanTheColumnScrollsVertically() async throws {
+    var folders = tree
+    folders["/r"] = [file(longName)]
+    let fixture = await Fixture(folders: folders)
+    await fixture.select(longName, inColumn: 0)
+    let view = try #require(fixture.controller.previewView)
+
+    fixture.controller.view.frame.size.height = 150
+    fixture.controller.view.layoutSubtreeIfNeeded()
+
+    let scrollView = view.scrollView
+    let document = try #require(scrollView.documentView)
+    #expect(scrollView.hasVerticalScroller)
+    #expect(!scrollView.hasHorizontalScroller)
+    #expect(document.frame.height > scrollView.contentSize.height)
+    let bottom = view.modifiedField.convert(view.modifiedField.bounds, to: document)
+    #expect(document.bounds.contains(bottom))
+}
+
+/// As Finder shows a socket: its kind, and no Size row.
+@MainActor @Test func aFileWithoutASizeShowsItsKindAndNoSizeRow() async throws {
+    var folders = tree
+    folders["/r"] = [file("a.txt"), socket]
+    let fixture = await Fixture(folders: folders)
+
+    await fixture.select("socket", inColumn: 0)
+
+    let view = try #require(fixture.controller.previewView)
+    let kind = try #require(fixture.trail.preview?.kind.text)
+    #expect(view.summaryField.stringValue == kind)
+    #expect(view.sizeField.isHidden)
+    let fields = try #require(view.accessibilityChildren() as? [NSTextField])
+    #expect(!fields.contains { $0 === view.sizeField })
+
+    await fixture.select("a.txt", inColumn: 0)
+
+    #expect(!view.sizeField.isHidden)
+    let shown = try #require(view.accessibilityChildren() as? [NSTextField])
+    #expect(shown.contains { $0 === view.sizeField })
 }

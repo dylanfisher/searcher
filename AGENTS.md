@@ -19,10 +19,11 @@ Instructions for AI coding agents working in this repo. Humans: see [README.md](
 | Install / bootstrap | `./scripts/setup` |
 | Run locally | `./scripts/dev` |
 | Run tests | `./scripts/test` |
+| Run the tests for what you changed | `./scripts/test --changed` |
 | Fix formatting | `./scripts/format` |
 | **Full gate** | `./scripts/check` |
 
-`./scripts/check` is the gate — see Definition of done.
+`./scripts/check` is the gate — see Definition of done. Iterate with `./scripts/test --changed`; run `check` once, at the end.
 
 ## Principles
 

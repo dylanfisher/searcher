@@ -569,8 +569,9 @@ private final class PressedTableView: ListingTableView {
     #expect(controller.pane.selection == Selection([ExactName("e")], cursor: ExactName("e")))
 }
 
-/// A controller over a folder `docs` and files `a.txt` and `b.txt` in a table that reports a
-/// double-click on a row, recording the commands and new tabs the table is asked for.
+/// A controller over a folder `docs`, a package `App.app` and files `a.txt` and `b.txt` in a
+/// table that reports a double-click on a row, recording the commands and new tabs the table is
+/// asked for.
 @MainActor
 private final class DoubleClickFixture {
     let table = ClickedRowTableView()
@@ -593,7 +594,9 @@ private final class DoubleClickFixture {
 
 @MainActor
 private func docsAndFiles(in table: ListingTableView) async -> ListingViewController {
-    await controller(showing: [folder("docs"), file("a.txt"), file("b.txt")], tableView: table)
+    await controller(
+        showing: [folder("docs"), package("App.app"), file("a.txt"), file("b.txt")],
+        tableView: table)
 }
 
 @MainActor @Test func cmdDoubleClickOnAFolderRowOpensItInANewTab() async throws {
@@ -617,6 +620,17 @@ private func docsAndFiles(in table: ListingTableView) async -> ListingViewContro
     #expect(fixture.ran == [NavigationCommands.open.id])
     #expect(fixture.opened.isEmpty)
     #expect(fixture.controller.pane.selection.contains(ExactName("a.txt")))
+}
+
+/// A package is a file, so Cmd-double-click opens it rather than browsing it in a new tab.
+@MainActor @Test func cmdDoubleClickOnAPackageOpensItAsADoubleClickDoes() async throws {
+    let fixture = await DoubleClickFixture()
+    fixture.controller.currentModifierFlags = { .command }
+
+    try fixture.doubleClick("App.app")
+
+    #expect(fixture.ran == [NavigationCommands.open.id])
+    #expect(fixture.opened.isEmpty)
 }
 
 /// A guard on how the table reports AppKit's own Cmd-click toggles, not a test of the click: a
@@ -967,6 +981,17 @@ private func folderSize(_ name: String, in pane: Pane) -> Listing.FolderSizeValu
     await settle { clock.waitingSleeps == 1 }
     clock.advance(by: Pane.sizeBatchInterval)
     await settle { (try? sizeText(controller)) == ["4 MB", "≥ 2 MB", "500 bytes"] }
+}
+
+/// Finder shows a package's size as it shows a folder's.
+@MainActor @Test func aPackageShowsPendingTextThenItsWalkedSize() async throws {
+    let walks = HeldWalks()
+    let controller = await sizedController(showing: [package("Logic.logicx")], walks: walks)
+    #expect(try sizeText(controller) == [EntryCellFormatter.pendingSize])
+
+    walks.release("/folder/Logic.logicx", bytes: 4_000_000)
+
+    await settle { (try? sizeText(controller)) == ["4 MB"] }
 }
 
 @MainActor @Test func aFailedWalkShowsNoSizeAndAReloadAsksAgain() async throws {

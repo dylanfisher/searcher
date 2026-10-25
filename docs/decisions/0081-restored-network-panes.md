@@ -25,6 +25,20 @@ found. The entry cap and the store's 50 MB cap could drop the folders a saved wo
   the restored panes' volume files. No share is read before the windows show.
 - **Mounted shares.** A folder the mount table places on a network volume has that volume's file
   read into memory, so the pane's lookup finds it without a file read.
+- **Rows in the first frame** (amended 2026-10-24). The lookup found the rows 0.4 ms into the
+  restore, but handed them on the main queue, behind the restore, which made and showed the
+  window in the same main-queue block. The window's first frame showed the pane loading, and
+  the rows came in a second frame, 47 ms after the window was shown (p95, on `/Volumes/music`).
+  `WorkspaceWindows.restore` now makes the panes, waits for each one in a selected tab to have
+  its cached rows (`Pane.cachedRowsHanded()`), and only then makes and shows the windows. The
+  wait ends on the main queue right behind the rows' hand-off, once the cache has been asked
+  and before the volume read, so it never waits on a share; a folder the cache isn't asked for
+  first, as a local one, ends it as soon as the load is placed, and a cancelled load ends it at
+  once. The wait is capped at 300 ms (`WorkspaceWindows.cachedRowsLimit`): past it, the
+  restore logs a fault naming the folders of the panes still waiting and shows the windows
+  anyway, so a cache that stops answering can't stop the launch. Saves stay held during the
+  wait. Local panes wait too, a few main-queue hops each, so B1's restored session should be
+  timed again on an idle machine. The full listing still replaces the rows when it lands.
 - **Shares that aren't mounted.** A cache file is now named
   `<sha256(mount point)>-<sha256(device, mount point)>.plist`. For a folder the mount table
   doesn't place past a shorter mount point, the store lists its folder once and reads the file
@@ -44,7 +58,11 @@ found. The entry cap and the store's 50 MB cap could drop the folders a saved wo
 - **UI bench.** `restored-network-pane --path <dir>` lists the folder once through a cache over
   a store in the temporary root, flushes it, then restores a one-window session on the folder
   through `WorkspaceStore`, `ListingCache.restore` and `WorkspaceWindows.restore`, as a launch
-  does, and times the window shown to the frame with its cached rows (B4), 20 launches.
+  does, and times the window shown to the frame with its cached rows (B4), 20 launches. A pane
+  without rows as its window is shown fails the launch; rows of the folder's own listing that
+  beat the first frame count, since the cache was checked to keep the folder first. That frame
+  is the first of a fresh process, so it includes setting up the table, its cells and the
+  window's backing store.
 
 ## Alternatives considered
 

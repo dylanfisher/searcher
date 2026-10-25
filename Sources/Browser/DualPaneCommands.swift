@@ -12,9 +12,9 @@ public enum DualPaneCommands: CommandSet {
     public static let sameFolderInOtherPane = Command(
         id: CommandID("dualPane.sameFolderInOtherPane"), title: "Same Folder in Other Pane",
         chords: [KeyChord("=", modifiers: [.command, .option])])
-    /// Opens the one selected folder, package or link in the other pane. A link opens there
-    /// only once it lists as a folder; a link to a file opens nothing. Off for any other
-    /// selection, as Open in New Tab is for a file, so a file never goes to its app from here.
+    /// Opens the one selected folder or link in the other pane. A link opens there only once it
+    /// lists as a folder; a link to a file opens nothing. Off for any other selection, as Open
+    /// in New Tab is for a file, so a file or a package never goes to its app from here.
     public static let openInOtherPane = Command(
         id: CommandID("dualPane.openInOtherPane"), title: "Open in Other Pane",
         chords: [KeyChord("o", modifiers: [.command, .option])])
@@ -55,8 +55,8 @@ public enum DualPaneCommands: CommandSet {
         ]
     }
 
-    /// The type of `pane`'s one selected entry when it is a folder, which a package is as the
-    /// pane lists it, or a link; nil for any other selection.
+    /// The type of `pane`'s one selected entry when it is a folder or a link; nil for any other
+    /// selection, a package among them.
     @MainActor
     private static func selectedFolderOrLink(in pane: Pane) -> DirectoryEntry.FileType? {
         let rows = pane.selectedRows
