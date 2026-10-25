@@ -1395,8 +1395,10 @@ public final class Pane {
     /// Go to Item's choice: selects the entry named `name` alone with the cursor on it, as a click
     /// on its row does, so a column's trail follows it at once, and asks the view to scroll its
     /// row to the middle. A folder is selected, not opened. The change is one step of the
-    /// selection history (docs/decisions/0101-go-to-item.md).
+    /// selection history. A name the rows no longer list, as one deleted while the palette was
+    /// open, changes nothing (docs/decisions/0101-go-to-item.md).
     public func jump(to name: String) {
+        guard state.listing?.row(named: name) != nil else { return }
         let name = ExactName(name)
         let version = selectionVersion
         centeringRequest += 1
