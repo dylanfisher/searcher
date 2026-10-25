@@ -65,32 +65,45 @@ extension ListingTableView {
             }
         }
         defer { observers.forEach(NotificationCenter.default.removeObserver) }
-        // Once events are pulled with `NSApp.nextEvent`, HIToolbox queues blocks that stop the
-        // main run loop, at any time after. They run in the outermost main run loop, which keeps
-        // the test runner alive, and the process ends with exit status 0 and no summary. So they
-        // are dropped from here on. The press itself runs in a run loop of the test's own.
-        dropStrayMainRunLoopStops()
-        nonisolated(unsafe) var pressed = false
-        CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
-            MainActor.assumeIsolated {
-                NSApp.postEvent(up, atStart: false)
-                _ = window.makeFirstResponder(table.value)
-                table.value.mouseDown(with: down)
-                pressed = true
-            }
+        try performRealPress(releasedBy: up) {
+            _ = window.makeFirstResponder(table.value)
+            table.value.mouseDown(with: down)
         }
-        while !pressed {
-            CFRunLoopRunInMode(.defaultMode, 0, true)
-        }
-        // The tracking loop put back the mouse up it took, and the press is over, so it is in
-        // the queue now. Take it and anything else the press posted, so the next press starts
-        // with an empty queue.
-        let reposted = NSApp.nextEvent(
-            matching: .leftMouseUp, until: .distantPast, inMode: .default, dequeue: true)
-        try #require(reposted != nil, "the press left no mouse up in the queue")
-        while NSApp.nextEvent(matching: .any, until: .distantPast, inMode: .default, dequeue: true)
-            != nil
-        {}
         return snapshots
     }
+}
+
+/// Runs `press`, a `mouseDown` on a view, the way a real press runs, with `up` queued first so
+/// any tracking ends at once, and leaves the event queue empty. The one copy of this logic: both
+/// `ListingTableView.realPress` and the tests that press a view without tracking use it.
+@MainActor
+func performRealPress(
+    releasedBy up: NSEvent, _ press: @escaping @MainActor () -> Void
+) throws {
+    nonisolated(unsafe) let up = up
+    // Once events are pulled with `NSApp.nextEvent`, HIToolbox queues blocks that stop the
+    // main run loop, at any time after. They run in the outermost main run loop, which keeps
+    // the test runner alive, and the process ends with exit status 0 and no summary. So they
+    // are dropped from here on. The press itself runs in a run loop of the test's own.
+    dropStrayMainRunLoopStops()
+    nonisolated(unsafe) var pressed = false
+    CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
+        MainActor.assumeIsolated {
+            NSApp.postEvent(up, atStart: false)
+            press()
+            pressed = true
+        }
+    }
+    while !pressed {
+        CFRunLoopRunInMode(.defaultMode, 0, true)
+    }
+    // The tracking loop put back the mouse up it took, and the press is over, so it is in
+    // the queue now. Take it and anything else the press posted, so the next press starts
+    // with an empty queue.
+    let reposted = NSApp.nextEvent(
+        matching: .leftMouseUp, until: .distantPast, inMode: .default, dequeue: true)
+    try #require(reposted != nil, "the press left no mouse up in the queue")
+    while NSApp.nextEvent(matching: .any, until: .distantPast, inMode: .default, dequeue: true)
+        != nil
+    {}
 }
