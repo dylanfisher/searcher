@@ -802,7 +802,10 @@ final class ColumnViewController: NSViewController {
     /// `animated`. A jump sets the origin directly, which ends an animation still running, and
     /// an animated move starts from where one running has got to. The scroll view's scrollers
     /// follow the clip view's bounds notifications.
-    static func moveClip(_ clip: NSClipView, toX x: Double, animated: Bool) {
+    static func moveClip(
+        _ clip: NSClipView, toX x: Double, animated: Bool,
+        animate: @MainActor (NSClipView, NSPoint, TimeInterval) -> Void = animateClip(_:to:over:)
+    ) {
         let target = clip.constrainBoundsRect(
             NSRect(origin: NSPoint(x: x, y: clip.bounds.origin.y), size: clip.bounds.size)
         )
@@ -815,8 +818,14 @@ final class ColumnViewController: NSViewController {
             clip.setBoundsOrigin(origin)
             return
         }
+        animate(clip, origin, scrollDuration)
+    }
+
+    /// Animates `clip`'s origin to `origin` over `duration` through its animator, which AppKit
+    /// runs on display refresh. Tests pass `moveClip` a stand-in, so none waits on a display.
+    static func animateClip(_ clip: NSClipView, to origin: NSPoint, over duration: TimeInterval) {
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = scrollDuration
+            context.duration = duration
             clip.animator().setBoundsOrigin(origin)
         }
     }
