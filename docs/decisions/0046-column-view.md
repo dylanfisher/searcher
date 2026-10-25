@@ -42,7 +42,7 @@ stacked single-column tables over `NSBrowser`.
   through the clip view's animator, which a new target retargets from where it is, so a held →
   or ← never queues one. The rows and the selection are set before it starts, so B6 doesn't
   change. It jumps for the first show, a new trail with no column kept (a restore, a workspace,
-  a Go to folder), a resizing drag and Reduce Motion.) (Amended 2026-10-25, Dylan: "when i move
+  a Go to folder), a resizing drag and Reduce Motion.) (Amended 2026-10-25: AppKit runs the animator on display refresh, so with the display asleep it never ends. `moveClip` takes the animation as a parameter, `animateClip` by default; tests pass a stand-in that records each target and ends the latest on demand, and none waits on a real animation.) (Amended 2026-10-25, Dylan: "when i move
   up or down in selection the whole pane flashes and jumps scroll horizontally to left, then
   moves back over to right." A ↓ made by keys drops the column right of the selection, or
   clears the preview, at once and opens the next one once the keys pause

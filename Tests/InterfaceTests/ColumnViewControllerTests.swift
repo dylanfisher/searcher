@@ -178,26 +178,49 @@ extension Fixture {
     #expect(abs(last.x - scrollView.contentView.bounds.origin.x) < 0.5)
 }
 
-@MainActor @Test func aRealAnimatedScrollEndsAtTheLatestTarget() async throws {
+/// Stands in for the clip view's animator, which AppKit runs on display refresh and so never
+/// runs with the display asleep. Records what each animated move asks for and ends the latest
+/// one when the test says.
+@MainActor
+final class ClipAnimation {
+    private(set) var starts: [(origin: NSPoint, duration: TimeInterval)] = []
+
+    func start(_ clip: NSClipView, to origin: NSPoint, over duration: TimeInterval) {
+        starts.append((origin, duration))
+    }
+
+    /// Ends the animation at the target a later move retargeted it to.
+    func finish(_ clip: NSClipView) {
+        if let last = starts.last { clip.setBoundsOrigin(last.origin) }
+    }
+}
+
+@MainActor @Test func anAnimatedScrollEndsAtTheLatestTarget() async throws {
     let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)
     await fixture.openThreeColumns()
     fixture.controller.reduceMotion = { false }
+    let animation = ClipAnimation()
+    fixture.controller.animateScroll = { clip, x, animated in
+        ColumnViewController.moveClip(clip, toX: x, animated: animated, animate: animation.start)
+    }
     let clip = try #require((fixture.controller.view as? NSScrollView)?.contentView)
     let second = fixture.controller.columnControllers[1].view
     let third = fixture.controller.columnControllers[2].view
 
     // Two columns right, then one back before the first animation ends: the second and third
-    // columns are the ones in view. Had the first animation not been retargeted, the origin
-    // would end at its target instead and the wait would time out.
+    // columns are the ones in view. Had the last move not been the animation's target, the
+    // origin would end at an earlier one.
     fixture.trail.moveRight()
     fixture.trail.moveRight()
     fixture.trail.moveLeft()
+    #expect(animation.starts.count == 3)
+    #expect(animation.starts.allSatisfy { $0.duration == ColumnViewController.scrollDuration })
+    #expect(ColumnViewController.scrollDuration == 0.25)
+    animation.finish(clip)
 
-    let visible = { clip.documentVisibleRect }
-    await settle {
-        visible().contains(second.frame) && visible().contains(third.frame)
-            && clip.bounds.origin.x < third.frame.minX - second.frame.width / 2
-    }
+    let visible = clip.documentVisibleRect
+    #expect(visible.contains(second.frame) && visible.contains(third.frame))
+    #expect(clip.bounds.origin.x < third.frame.minX - second.frame.width / 2)
 }
 
 @MainActor @Test func aMoveFromAFractionalOriginEndsOnTheTarget() async throws {
@@ -215,22 +238,19 @@ extension Fixture {
     #expect(clip.bounds.origin.x == 100)
 }
 
-@MainActor @Test func aJumpEndsAnAnimationStillRunning() async throws {
+@MainActor @Test func aJumpSetsTheOriginAtOnceAndStartsNoAnimation() async throws {
     let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)
     await fixture.openThreeColumns()
     let clip = try #require((fixture.controller.view as? NSScrollView)?.contentView)
+    let animation = ClipAnimation()
 
-    ColumnViewController.moveClip(clip, toX: 200, animated: true)
-    // Until the animation is under way.
-    await settle { clip.bounds.origin.x > 0 }
-    ColumnViewController.moveClip(clip, toX: 0, animated: false)
+    ColumnViewController.moveClip(clip, toX: 200, animated: true, animate: animation.start)
+    #expect(animation.starts.count == 1)
+    ColumnViewController.moveClip(clip, toX: 0, animated: false, animate: animation.start)
+
+    // Setting the origin directly is what ends an animation running in AppKit (0046).
+    #expect(animation.starts.count == 1)
     #expect(clip.bounds.origin.x == 0)
-
-    // The animation's frames stop with the jump: the origin stays put over several frames.
-    for _ in 0..<10 {
-        try await Task.sleep(for: .milliseconds(30))
-        #expect(clip.bounds.origin.x == 0)
-    }
 }
 
 @MainActor @Test func aFocusMoveDuringAGripDragJumps() async throws {
