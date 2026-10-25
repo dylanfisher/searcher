@@ -48,11 +48,16 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
         image.resizingMode = .stretch
         return image
     }()
+    /// Whether the backdrop is Liquid Glass (macOS 26 on) rather than a masked blur.
+    static var backdropIsGlass: Bool {
+        if #available(macOS 26, *) { return true }
+        return false
+    }
     /// The window's backdrop with `content` inside it. From macOS 26 it is the system's Liquid
     /// Glass (`NSGlassEffectView`), which rounds, blurs and refracts what is behind the panel
     /// itself; before that, a `.popover` blur in the same rounded shape.
     private static func makeBackdrop(holding content: NSView) -> NSView {
-        if #available(macOS 26, *) {
+        if backdropIsGlass, #available(macOS 26, *) {
             let glass = NSGlassEffectView(
                 frame: NSRect(x: 0, y: 0, width: width, height: height))
             glass.style = .regular
