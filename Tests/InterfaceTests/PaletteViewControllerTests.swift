@@ -296,8 +296,23 @@ private func isBold(_ title: NSAttributedString, at offset: Int) -> Bool {
     #expect(panel.styleMask.contains(.titled) == false)
     #expect(panel.isOpaque == false)
     #expect(panel.backgroundColor == .clear)
-    #expect(panel.hasShadow)
     #expect(panel.canBecomeKey)
+}
+
+@MainActor @Test func onlyAMaskedBlurGetsAWindowShadowNotLiquidGlass() throws {
+    let controller = PaletteWindowController(palette: Palette(sources: []))
+    let panel = try #require(controller.window)
+    let backdrop = controller.viewController.view
+
+    // The window server shapes the shadow from the window's own pixels; the glass isn't among
+    // them, so a shadow would be a rectangle showing through it (docs/decisions/0087).
+    if backdrop is NSVisualEffectView {
+        #expect(panel.hasShadow)
+        #expect((backdrop as? NSVisualEffectView)?.maskImage != nil)
+    } else {
+        #expect(PaletteViewController.backdropIsGlass)
+        #expect(panel.hasShadow == false)
+    }
 }
 
 @MainActor @Test func theSearchFieldIsLargerThanTheRows() {

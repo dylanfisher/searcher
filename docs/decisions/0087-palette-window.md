@@ -103,3 +103,15 @@ Transparency or Increase Contrast. Nothing opaque sat between the blur and the d
 window, field, table and scroll view were already clear. The flat look came from the material:
 `.popover` is a heavy, nearly uniform blur with none of the glass's refraction or lensing. The scroll
 view's clip view is now set to draw no background explicitly, so the list can't paint over the glass.
+
+## Update 2026-10-25: no window shadow around the glass
+
+Dylan saw a square, light rectangle around the rounded glass, with the corners filled. The window
+server shapes a window's shadow from the alpha of the pixels the window drew. The masked blur
+carried a `maskImage`, so its shadow was rounded; `NSGlassEffectView` is composited outside the
+window's own pixels and has no such mask, so the shadow of the glass panel is the window's
+rectangle, and it shows through the translucent glass. From macOS 26 the panel has no window
+shadow (`hasShadow` false) and the glass draws its own edge; before 26 the masked blur keeps the
+rounded shadow. The cause was inferred, not seen: screen capture isn't available to the agent that
+built it, so the look needs a check on a real display. If the glass reads flat without a shadow,
+the next option is a larger window with a layer shadow shaped to the rounded rectangle.
