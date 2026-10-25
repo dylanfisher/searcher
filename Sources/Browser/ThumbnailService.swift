@@ -85,8 +85,8 @@ public final class ThumbnailService: Sendable {
             await withCheckedContinuation {
                 (continuation: CheckedContinuation<CGImage??, Never>) in
                 let making = Making()
-                // Runs once the volume has a slot: on the caller's thread when it has one now,
-                // on a `BlockingCallThread` when one frees.
+                // Runs once the volume has a slot, always on a `BlockingCallThread`: a slot that
+                // frees hands it one, and a slot free now starts one from the caller's thread.
                 let start: @Sendable () -> Void = {
                     let wait = startWait(Self.giveUp)
                     let stop = maker.makeThumbnail(at: path, side: side, scale: Self.scale) {
