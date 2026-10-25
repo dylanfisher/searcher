@@ -1535,3 +1535,39 @@ private func rowImage(_ controller: ListingViewController, row: Int) -> NSImage?
     #expect(maker.calls.isEmpty)
     #expect(rowImage(controller, row: 0) === typeIcon)
 }
+
+/// Rows the folder's volume hasn't answered with, as a slow listing keeps them, ask for no
+/// thumbnail: a read there can wait on a disk that stopped answering. Those asked for before the
+/// listing went slow are dropped.
+@MainActor @Test func rowsTheVolumeHasntAnsweredWithAskForNoThumbnail() async throws {
+    let lister = HoldableLister([
+        "/folder": (0..<2_000).map { file(String(format: "p%04d.jpg", $0)) }
+    ])
+    let clock = ManualClock()
+    let maker = GatedThumbnailMaker()
+    let pane = Pane(
+        location: Location(path: "/folder"),
+        service: ListingService(
+            lister: lister, clock: clock, thumbnails: ThumbnailService(maker: maker)),
+        systemActions: StubSystemActions(), settings: untouchedSettings())
+    let controller = ListingViewController(
+        pane: pane, iconCache: TypeIconCache { _ in typeIcon }, formatter: .init(),
+        tableView: ListingTableView())
+    pane.onChange = { [weak controller] in controller?.paneDidChange() }
+    controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 400)
+    await settle { pane.state.listing != nil }
+    controller.view.layoutSubtreeIfNeeded()
+    #expect(!controller.askedThumbnails.isEmpty)
+
+    lister.hold()
+    pane.reload()
+    clock.advance(by: LoadTimeouts.slow)
+    await settle {
+        if case .slow = pane.state { true } else { false }
+    }
+    controller.tableView.scrollRowToVisible(1_500)
+
+    #expect(controller.listing != nil)
+    #expect(controller.askedThumbnails.isEmpty)
+    lister.release()
+}

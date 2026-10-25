@@ -1907,3 +1907,35 @@ private func photoPane(
     #expect(maker.calls.isEmpty)
     #expect(trail(pane).shownPreview?.thumbnail == nil)
 }
+
+/// A file in rows its volume hasn't answered with, as a slow listing keeps them, gets no
+/// thumbnail: making one could wait on a disk that stopped answering.
+@MainActor @Test func aFileInRowsTheVolumeHasntAnsweredWithAsksForNoThumbnail() async throws {
+    let lister = HoldableLister(["/": [folder("t")], "/t": [file("a.jpg")]])
+    let clock = ManualClock()
+    let maker = GatedThumbnailMaker()
+    // Answered, so a request that reached the maker would land in the preview.
+    maker.answer("/t/a.jpg", with: testThumbnail(pixels: 256))
+    let pane = Pane(
+        location: Location(path: "/t"),
+        service: ListingService(
+            lister: lister, clock: clock, thumbnails: ThumbnailService(maker: maker)),
+        systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true)
+    pane.itemInfoReader = GatedItemInfoReader(["/t/a.jpg": info(1)])
+    await settle { pane.state.isLoaded }
+    pane.setViewMode(.column)
+    let column = trail(pane).columns[0].pane
+    await settle { column.state.isLoaded }
+    lister.hold()
+    column.reload()
+    clock.advance(by: LoadTimeouts.slow)
+    await settle { column.state.isSlow }
+
+    select("a.jpg", in: trail(pane).columns[0])
+
+    #expect(trail(pane).preview?.location == Location(path: "/t/a.jpg"))
+    for _ in 0..<3 { await drainMainQueue() }
+    #expect(maker.calls.isEmpty)
+    #expect(trail(pane).shownPreview?.thumbnail == nil)
+    lister.release()
+}

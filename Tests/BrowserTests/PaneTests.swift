@@ -1757,3 +1757,86 @@ private func shownWidths(_ pane: Pane) -> [Double] {
     #expect(trail.focused.pane.location == Location(path: "/root"))
     fixture.pane.close()
 }
+
+// MARK: - Folder volume
+
+/// Reads each folder's volume as `disk`, at once until the test calls `hold()`; from then on
+/// each read blocks until `release()`, as `statfs` on a volume that stopped answering does.
+private final class HeldVolumeReads: @unchecked Sendable {
+    let disk = VolumeIdentity(device: "/dev/disk9s1", mountPoint: "/", kind: .local)
+    private let condition = NSCondition()
+    private var held = false
+
+    func volume(of path: String) -> VolumeIdentity {
+        condition.withLock {
+            while held { condition.wait() }
+        }
+        return disk
+    }
+
+    func hold() {
+        condition.withLock { held = true }
+    }
+
+    func release() {
+        condition.withLock {
+            held = false
+            condition.broadcast()
+        }
+    }
+}
+
+/// A pane at `/root` over `tree`, whose volume reads go through `reads`, loaded.
+@MainActor
+private func volumePane(_ reads: HeldVolumeReads) async -> Pane {
+    let lister = GatedLister([
+        "/root": .batches([[file("a.jpg")]]), "/other": .batches([[file("b.jpg")]]),
+    ])
+    lister.releaseAll()
+    let pane = Pane(
+        location: Location(path: "/root"),
+        service: ListingService(lister: lister, volumeOf: { reads.volume(of: $0) }),
+        systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true)
+    await settle { pane.state.isLoaded }
+    return pane
+}
+
+/// Listing the folder again keeps the volume the last load read until the new load reads it, so
+/// rows on screen go on asking for thumbnails through a reload.
+@MainActor @Test func theFoldersVolumeIsKeptThroughAReloadOfTheSameFolder() async {
+    let reads = HeldVolumeReads()
+    let pane = await volumePane(reads)
+    #expect(pane.folderVolume == reads.disk)
+    reads.hold()
+
+    pane.reload()
+
+    #expect(pane.folderVolume == reads.disk)
+    reads.release()
+}
+
+/// A split's copy, made with its source's rows, has its source's volume before it lists anything.
+@MainActor @Test func aCopyWithItsSourcesRowsHasItsSourcesVolume() async {
+    let reads = HeldVolumeReads()
+    let pane = await volumePane(reads)
+    reads.hold()
+
+    let copy = pane.copy(takingFocus: false)
+
+    #expect(copy.folderVolume == reads.disk)
+    reads.release()
+}
+
+/// Another folder's volume isn't known until its load reads it: the last folder's isn't used.
+@MainActor @Test func anotherFoldersVolumeIsUnknownUntilItsLoadReadsIt() async {
+    let reads = HeldVolumeReads()
+    let pane = await volumePane(reads)
+    reads.hold()
+
+    pane.navigate(to: Location(path: "/other"))
+
+    #expect(pane.location == Location(path: "/other"))
+    #expect(pane.folderVolume == nil)
+    reads.release()
+    await settle { pane.state.isLoaded && pane.folderVolume == reads.disk }
+}

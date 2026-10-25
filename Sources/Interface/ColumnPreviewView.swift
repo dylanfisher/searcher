@@ -8,8 +8,9 @@ import Browser
 /// `TypeIconCache`, so they show at once; the rest is read, and the thumbnail made, off the main
 /// thread, and column view shows a new file once they land, or without them after
 /// `ColumnTrail.previewHold`, filling in later without moving the rows above. A thumbnail
-/// replaces the icon in the same square. The rows are drawn as Finder's: title left, value right, a rule under each. Built once
-/// and refilled for each file (0090-preview-column.md, 0095-preview-metadata.md).
+/// replaces the icon in the same square. The rows are drawn as Finder's: title left, value
+/// right, a rule under each. Built once and refilled for each file (0090-preview-column.md,
+/// 0095-preview-metadata.md, 0102-thumbnails.md).
 ///
 /// The fields scroll vertically when the column is shorter than they are. VoiceOver reads the
 /// preview as a group named for the file, its text fields in reading order. It takes no keys.
