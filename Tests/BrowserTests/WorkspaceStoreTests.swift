@@ -563,29 +563,124 @@ private func expectWidthsDropped(
     #expect(problems.all.map(\.kind) == [.discarded])
 }
 
-/// A key the widths don't keep is still caught when other widths in the file are dropped.
-@Test func anExtraKeyBesideDroppedWidthsDiscardsTheFile() async throws {
+/// Drops a fractional width from a one-tab workspace's pane and makes `stray` change the file
+/// beside it; the file must be discarded, as it would be without the drop.
+private func expectDiscardedBesideADrop(
+    _ stray: (inout [String: Any]) throws -> Void,
+    sourceLocation: SourceLocation = #_sourceLocation
+) async throws {
     let folder = try TemporaryFolder("WorkspaceStoreTests")
     let bad = try workspace(name: "Bad", tabs: [columnTab(someColumnWidths())])
     let writer = store(folder)
     await writer.save(bad)
     await writer.flush()
     let url = file(of: bad.id, in: folder)
-    try editJSON(try Data(contentsOf: url)) { object in
-        var tabs = try #require(object["tabs"] as? [[String: Any]])
-        var panes = try #require(tabs[0]["panes"] as? [[String: Any]])
-        var widths = try #require(panes[0]["columnWidths"] as? [String: Any])
-        widths["preview"] = 286.5
-        panes[0]["columnWidths"] = widths
-        panes[0]["extra"] = 2
-        tabs[0]["panes"] = panes
-        object["tabs"] = tabs
-    }.write(to: url)
+    let dropped = try editColumnWidths(try Data(contentsOf: url)) { $0["preview"] = 286.5 }
+    try editJSON(dropped, stray).write(to: url)
 
     let problems = EventLog<StoreProblem>()
     let loaded = await store(folder, problems: problems).load()
-    #expect(loaded.workspaces.isEmpty)
+    #expect(loaded.workspaces.isEmpty, sourceLocation: sourceLocation)
+    #expect(problems.all.map(\.kind) == [.discarded], sourceLocation: sourceLocation)
+}
+
+/// Only a pane's dropped `columnWidths` is left out of the comparison: another key on the pane,
+/// or a `columnWidths` key on the workspace, a tab or its layout, still discards the file.
+@Test func aStrayKeyBesideDroppedWidthsDiscardsTheFile() async throws {
+    let widths: [String: Any] = ["folders": [] as [Any], "preview": 300]
+    try await expectDiscardedBesideADrop { object in
+        var tabs = try #require(object["tabs"] as? [[String: Any]])
+        var panes = try #require(tabs[0]["panes"] as? [[String: Any]])
+        panes[0]["extra"] = 2
+        tabs[0]["panes"] = panes
+        object["tabs"] = tabs
+    }
+    try await expectDiscardedBesideADrop { $0["columnWidths"] = widths }
+    try await expectDiscardedBesideADrop { object in
+        var tabs = try #require(object["tabs"] as? [[String: Any]])
+        tabs[0]["columnWidths"] = widths
+        object["tabs"] = tabs
+    }
+    try await expectDiscardedBesideADrop { object in
+        var tabs = try #require(object["tabs"] as? [[String: Any]])
+        var layout = try #require(tabs[0]["layout"] as? [String: Any])
+        layout["columnWidths"] = widths
+        tabs[0]["layout"] = layout
+        object["tabs"] = tabs
+    }
+}
+
+/// A write-back that fails is reported; the workspace still loads without the dropped widths,
+/// and the next load drops them again.
+@Test func aFailedWriteBackIsReportedAndTheWorkspaceStillLoads() async throws {
+    let folder = try TemporaryFolder("WorkspaceStoreTests")
+    let layout = Layout()
+    let saved = try workspace(tabs: [columnTab(someColumnWidths(), layout: layout)])
+    let writer = store(folder)
+    await writer.save(saved)
+    await writer.flush()
+    let url = file(of: saved.id, in: folder)
+    try editColumnWidths(try Data(contentsOf: url)) { $0["preview"] = 286.5 }.write(to: url)
+
+    let problems = EventLog<StoreProblem>()
+    let failing = store(folder, problems: problems) { _, _ in
+        throw CocoaError(.fileWriteNoPermission)
+    }
+    let loaded = await failing.load()
+
+    let expected = try workspace(saved.id, tabs: [columnTab(ColumnWidths(), layout: layout)])
+    #expect(loaded.workspaces == [saved.id: expected])
+    #expect(problems.all.map(\.kind) == [.unwritten, .widthsDropped])
+    #expect(problems.all.allSatisfy { $0.file == url })
+    let again = EventLog<StoreProblem>()
+    #expect(await store(folder, problems: again).load().workspaces == [saved.id: expected])
+    #expect(again.all.map(\.kind) == [.widthsDropped])
+}
+
+/// A snapshot whose widths are good and a window whose widths were dropped differ, so the window
+/// shows the edited dot, and going back to the snapshot gives the saved widths.
+@Test func aWindowWhoseWidthsWereDroppedDiffersFromItsGoodSnapshot() async throws {
+    let folder = try TemporaryFolder("WorkspaceStoreTests")
+    let id = UUID()
+    let layout = Layout()
+    let saved = try workspace(id, tabs: [columnTab(someColumnWidths(), layout: layout)])
+    let writer = store(folder)
+    await writer.save(saved)
+    await writer.saveSnapshot(saved)
+    await writer.flush()
+    let url = file(of: id, in: folder)
+    try editColumnWidths(try Data(contentsOf: url)) { $0["preview"] = 286.5 }.write(to: url)
+
+    let loaded = await store(folder).load()
+
+    #expect(loaded.snapshots[id] == saved)
+    #expect(
+        loaded.workspaces[id]
+            == (try workspace(id, tabs: [columnTab(ColumnWidths(), layout: layout)])))
+    #expect(loaded.workspaces[id] != loaded.snapshots[id])
+}
+
+/// A nameless snapshot with dropped widths is deleted, not written back first.
+@Test func aNamelessSnapshotWithDroppedWidthsIsDeletedWithoutAWriteBack() async throws {
+    let folder = try TemporaryFolder("WorkspaceStoreTests")
+    let id = UUID()
+    let writer = store(folder)
+    await writer.saveSnapshot(try workspace(id, name: nil, tabs: [columnTab(someColumnWidths())]))
+    await writer.flush()
+    let url = snapshotsFolder(folder).appending(path: "\(id.uuidString).json")
+    try editColumnWidths(try Data(contentsOf: url)) { $0["preview"] = 286.5 }.write(to: url)
+
+    let problems = EventLog<StoreProblem>()
+    let writes = EventLog<URL>()
+    let loaded = await store(folder, problems: problems) { data, url in
+        writes.append(url)
+        try AtomicWrite.write(data, to: url)
+    }.load()
+
+    #expect(loaded.snapshots.isEmpty)
     #expect(problems.all.map(\.kind) == [.discarded])
+    #expect(writes.all.isEmpty)
+    #expect(!FileManager.default.fileExists(atPath: url.path))
 }
 
 /// A saved workspace and its window, saved alike with a fractional width, load alike without it,
