@@ -120,14 +120,14 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     }
 }
 
-/// A width of another type, a Boolean among them, or one outside the range a grip can drag to
-/// reads as the default and is removed.
+/// A width of another type, a Boolean among them, a fraction of a point, or one outside the range
+/// a grip can drag to reads as the default and is removed.
 @MainActor @Test func aColumnWidthOfAnotherShapeIsDiscarded() throws {
     let folder = try TemporaryFolder("SettingsTests")
     let key = Settings.Key.columnWidth.rawValue
     for stored: Any in [
         "300", true, Settings.columnWidths.lowerBound - 1, Settings.columnWidths.upperBound + 1,
-        Double.nan,
+        Double.nan, 300.5,
     ] {
         let defaults = temporarySuite(in: folder.url.path)
         defaults.set(stored, forKey: key)
