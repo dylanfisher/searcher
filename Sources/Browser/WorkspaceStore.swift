@@ -281,7 +281,8 @@ public actor WorkspaceStore {
     /// exactly what its decoded value encodes to, which deletes it. That comparison catches a
     /// key a type doesn't declare, which decoding alone ignores, anywhere in the file. A pane's
     /// column widths of another shape are dropped alone: the rest loads, and the comparison
-    /// leaves out only those panes' `columnWidths` keys (0098-column-widths-per-window.md).
+    /// leaves out exactly the `columnWidths` key of each pane whose widths were dropped, located by
+    /// its path in the file (0098-column-widths-per-window.md).
     private func read<Value: Codable>(_ type: Value.Type, from url: URL) -> Read<Value>? {
         let data: Data
         do {
@@ -299,47 +300,56 @@ public actor WorkspaceStore {
             let value = try decoder.decode(type, from: data)
             let expected = try JSONSerialization.jsonObject(with: Self.encoder.encode(value))
             var stored = try JSONSerialization.jsonObject(with: data)
-            if !dropped.reasons.isEmpty {
-                stored = Self.withoutDroppedWidths(stored, absentFrom: expected)
+            for drop in dropped.drops {
+                stored = try Self.removingColumnWidths(at: drop.pane, in: stored)
             }
             guard let stored = stored as? NSObject, stored.isEqual(expected) else {
                 discard(url, because: "it has keys or values its \(type) doesn't keep")
                 return nil
             }
-            return Read(value: value, droppedWidths: dropped.reasons)
+            return Read(value: value, droppedWidths: dropped.drops.map(\.reason))
         } catch {
             discard(url, because: "\(error)")
             return nil
         }
     }
 
-    /// `stored`, a workspace file's JSON, without the `columnWidths` key of each pane, in each
-    /// tab's `panes`, whose pane in `expected` has none: the widths a decode dropped. A
-    /// `columnWidths` key anywhere else is left, for the comparison to catch.
-    private static func withoutDroppedWidths(_ stored: Any, absentFrom expected: Any) -> Any {
-        guard var workspace = stored as? [String: Any],
-            let storedTabs = workspace["tabs"] as? [Any],
-            let expectedTabs = (expected as? [String: Any])?["tabs"] as? [Any],
-            storedTabs.count == expectedTabs.count
-        else { return stored }
-        workspace["tabs"] = zip(storedTabs, expectedTabs).map { storedTab, expectedTab -> Any in
-            guard var tab = storedTab as? [String: Any],
-                let storedPanes = tab["panes"] as? [Any],
-                let expectedPanes = (expectedTab as? [String: Any])?["panes"] as? [Any],
-                storedPanes.count == expectedPanes.count
-            else { return storedTab }
-            tab["panes"] = zip(storedPanes, expectedPanes).map { storedPane, expectedPane -> Any in
-                guard var pane = storedPane as? [String: Any],
-                    let expectedPane = expectedPane as? [String: Any],
-                    expectedPane["columnWidths"] == nil
-                else { return storedPane }
-                pane["columnWidths"] = nil
-                return pane
+    /// `json`, a file's decoded JSON, without the `columnWidths` key of the pane object at
+    /// `path`: the widths a decode dropped there. Nothing else is removed, so any other
+    /// difference from what the value encodes to still fails the comparison.
+    private static func removingColumnWidths(
+        at path: [DroppedColumnWidths.Step], in json: Any
+    ) throws -> Any {
+        guard let step = path.first else {
+            guard var pane = json as? [String: Any], pane["columnWidths"] != nil else {
+                throw droppedWidthsNotFound
             }
-            return tab
+            pane["columnWidths"] = nil
+            return pane
         }
-        return workspace
+        let rest = Array(path.dropFirst())
+        switch step {
+        case .key(let key):
+            guard var object = json as? [String: Any], let value = object[key] else {
+                throw droppedWidthsNotFound
+            }
+            object[key] = try removingColumnWidths(at: rest, in: value)
+            return object
+        case .index(let index):
+            guard var array = json as? [Any], array.indices.contains(index) else {
+                throw droppedWidthsNotFound
+            }
+            array[index] = try removingColumnWidths(at: rest, in: array[index])
+            return array
+        }
     }
+
+    /// A decode reported dropped widths where the file has none, which can't happen with
+    /// `JSONDecoder`; the file is discarded rather than kept unchecked.
+    private static let droppedWidthsNotFound = DecodingError.dataCorrupted(
+        .init(
+            codingPath: [],
+            debugDescription: "dropped column widths aren't where the decode saw them"))
 
     /// The file `id`'s window's workspace is kept in.
     nonisolated func url(for id: UUID) -> URL {

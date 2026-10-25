@@ -610,6 +610,31 @@ private func expectDiscardedBesideADrop(
     }
 }
 
+/// A pane with no widths that stores `"columnWidths": null` is discarded as it is without a drop,
+/// when another tab's pane has its widths dropped: only that pane's key is left out of the check.
+@Test func aNullColumnWidthsInAnotherTabBesideADropDiscardsTheFile() async throws {
+    let folder = try TemporaryFolder("WorkspaceStoreTests")
+    let bad = try workspace(name: "Bad", tabs: [columnTab(someColumnWidths()), onePaneTab()])
+    let writer = store(folder)
+    await writer.save(bad)
+    await writer.flush()
+    let url = file(of: bad.id, in: folder)
+    let dropped = try editColumnWidths(try Data(contentsOf: url)) { $0["preview"] = 286.5 }
+    try editJSON(dropped) { object in
+        var tabs = try #require(object["tabs"] as? [[String: Any]])
+        var panes = try #require(tabs[1]["panes"] as? [[String: Any]])
+        #expect(panes[0]["columnWidths"] == nil)
+        panes[0]["columnWidths"] = NSNull()
+        tabs[1]["panes"] = panes
+        object["tabs"] = tabs
+    }.write(to: url)
+
+    let problems = EventLog<StoreProblem>()
+    let loaded = await store(folder, problems: problems).load()
+    #expect(loaded.workspaces.isEmpty)
+    #expect(problems.all.map(\.kind) == [.discarded])
+}
+
 /// A write-back that fails is reported; the workspace still loads without the dropped widths,
 /// and the next load drops them again.
 @Test func aFailedWriteBackIsReportedAndTheWorkspaceStillLoads() async throws {

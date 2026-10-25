@@ -173,7 +173,7 @@ public struct TabState: Codable, Equatable, Sendable {
                     codingPath: decoder.codingPath,
                     debugDescription: "the panes don't match the layout's leaves"))
         }
-        let widths = stored.map { pane -> ColumnWidths in
+        let widths = stored.enumerated().map { index, pane -> ColumnWidths in
             guard let stored = pane.columnWidths else { return ColumnWidths() }
             let folders = stored.folders.map {
                 ColumnWidths.Folder(location: Location(path: $0.path), width: $0.width)
@@ -184,7 +184,8 @@ public struct TabState: Codable, Equatable, Sendable {
                 : ColumnWidths.problem(folders: folders, preview: stored.preview)
             if let problem {
                 (decoder.userInfo[DroppedColumnWidths.key] as? DroppedColumnWidths)?.add(
-                    "pane \(pane.id): \(problem)")
+                    panes: decoder.codingPath + [CodingKeys.panes], index: index,
+                    reason: "pane \(pane.id): \(problem)")
                 return ColumnWidths()
             }
             return ColumnWidths(folders: folders, preview: stored.preview)
