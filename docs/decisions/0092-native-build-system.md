@@ -48,10 +48,16 @@ exit status 0, no closing line (0077-selection-history.md). `swift test` then re
 and the gate said "all checks passed" over a suite that had silently stopped part-way, from the
 step that added real-press tests (52c4add) until this was found. `scripts/test` now reads each
 run's output (`verify_run`) and fails when a run that exited 0 lacks Swift Testing's closing
-"Test run with N tests ... after ..." line, or left a suite or test started and not finished,
-naming them and the last test started. The whole-suite pass stamp (`.build/tests-passed`) is
-written only when both runs pass that check, so a truncated run cannot stamp. The script is an
-input of the stamp's key, so stamps written before this change no longer match.
+"Test run with N tests ... after ..." line, naming the last test started. The whole-suite pass
+stamp (`.build/tests-passed`) is written only when both runs pass that check, so a truncated run
+cannot stamp. The script is an input of the stamp's key, so stamps written before this change no
+longer match.
+
+The first version also failed a run that left a test or suite "started" with no matching
+"passed" line. That check false-failed: under load a run drops lines from its output, and in
+one captured run 35 lines were missing (two tests' "passed" lines and 33 parameterized-case
+"started" lines) while the closing line still said 164 tests passed, and the exit status was 0.
+The output is not a complete record, so only the closing line decides.
 
 A `--filter` that matches no tests also fails now, with "no test run started". Swift Testing
 prints no closing line when nothing ran, so the check cannot tell that run from a truncated one,
