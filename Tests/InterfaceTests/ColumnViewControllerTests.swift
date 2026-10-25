@@ -1977,3 +1977,15 @@ private func hit(_ point: NSPoint, in fixture: Fixture) -> NSView? {
     #expect(columnWidths(fixture) == [standard + 40])
     #expect(fixture.controller.previewView.map { Double($0.frame.width) } == standard + 70)
 }
+
+@MainActor @Test func aJumpCentersTheRowInItsColumn() async throws {
+    let names = (0..<2_000).map { String(format: "e%04d", $0) }
+    let fixture = await Fixture(folders: ["/": [folder("r")], "/r": names.map { file($0) }])
+    let table = try #require(fixture.tables.first)
+    fixture.controller.view.layoutSubtreeIfNeeded()
+
+    fixture.trail.columns[0].pane.jump(to: "e1000")
+
+    #expect(table.selectedRowIndexes == [1_000])
+    #expect(abs(table.rect(ofRow: 1_000).midY - rowArea(of: table).midY) <= 1)
+}

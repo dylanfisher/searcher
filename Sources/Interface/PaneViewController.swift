@@ -59,6 +59,8 @@ public final class PaneViewController: NSViewController {
         let focusSidebar: @MainActor () -> Void
         /// Shows the command palette over the window.
         let showPalette: @MainActor () -> Void
+        /// Shows the palette over the window in Go to Item mode.
+        let showItemPalette: @MainActor () -> Void
         /// Runs the file commands; nil where nothing answers its questions.
         let fileOperations: FileOperationQueue?
         /// The app's clipboard, for Cut, Copy and Paste; nil where there is none.
@@ -381,7 +383,7 @@ public final class PaneViewController: NSViewController {
             toggleOperations: link.toggleOperations,
             askForWorkspaceName: link.askForWorkspaceName, saveWorkspace: link.saveWorkspace,
             askToDeleteWorkspace: link.askToDeleteWorkspace, focusSidebar: link.focusSidebar,
-            showPalette: link.showPalette, folder: folder,
+            showPalette: link.showPalette, showItemPalette: link.showItemPalette, folder: folder,
             fileOperations: link.fileOperations,
             editName: { [weak self] in self?.editName() }, clipboard: link.clipboard,
             undoHistory: link.undoHistory, isKeyRepeat: isKeyRepeat)

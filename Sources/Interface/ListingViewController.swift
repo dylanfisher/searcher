@@ -47,6 +47,9 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// The pane's cursor when `paneDidChange` last ran, so the row is scrolled to only when it
     /// moves: Cmd-A leaves the view where the user scrolled it.
     private var shownCursor: ExactName?
+    /// The pane's `centeringRequest` when `paneDidChange` last ran, so a new one centers the
+    /// cursor's row.
+    private var shownCenteringRequest: Int
     /// The folder and row order shown. A reload scrolls to the cursor only when it shows a new
     /// folder, sort or filter; a folder change patch leaves the view where the user scrolled it.
     private var shownLocation: Location?
@@ -98,6 +101,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         self.iconCache = iconCache
         self.formatter = formatter
         self.showsNamesOnly = showsNamesOnly
+        shownCenteringRequest = pane.centeringRequest
         quickLook = QuickLookController(pane: pane, table: tableView)
         super.init(nibName: nil, bundle: nil)
         configureTable()
@@ -165,6 +169,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         }
         let cursorMoved = pane.selection.cursor != shownCursor
         shownCursor = pane.selection.cursor
+        let centers = pane.centeringRequest != shownCenteringRequest
+        shownCenteringRequest = pane.centeringRequest
         if reloaded, listing != nil, let origin = pendingScrollOrigin {
             pendingScrollOrigin = nil
             scrollsToCursorAfterReload = false
@@ -178,9 +184,36 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
                 // The cursor isn't in the folder, so there is nothing to scroll to.
                 scrollsToCursorAfterReload = false
             }
+        } else if centers, let listing, let row = pane.selection.cursorRow(in: listing) {
+            center(row)
         } else if cursorMoved, let listing, let row = pane.selection.cursorRow(in: listing) {
             tableView.scrollRowToVisible(row)
         }
+    }
+
+    /// Scrolls `row` to the middle of the rows on screen, or as near as the ends of the list let
+    /// it, for Go to Item (docs/decisions/0101-go-to-item.md).
+    private func center(_ row: Int) {
+        guard let scrollView = view as? NSScrollView else {
+            preconditionFailure("the list's view is \(view)")
+        }
+        scrollView.layoutSubtreeIfNeeded()
+        let clip = scrollView.contentView
+        let header = headerOverlap(in: scrollView)
+        var bounds = clip.bounds
+        let shown = scrollView.documentVisibleRect.height - header
+        bounds.origin.y = tableView.rect(ofRow: row).midY - header - shown / 2
+        clip.scroll(to: clip.constrainBoundsRect(bounds).origin)
+        scrollView.reflectScrolledClipView(clip)
+    }
+
+    /// The height of the column header over the top of the rows; 0 in column view, which has
+    /// none.
+    private func headerOverlap(in scrollView: NSScrollView) -> CGFloat {
+        // The rows scroll under the column header, whose clip view overlaps the content view.
+        tableView.headerView?.superview.map {
+            scrollView.contentView.frame.intersection($0.frame).height
+        } ?? 0
     }
 
     /// Shows a new listing of the folder on screen, from a patch, a sort or a load, in the row
@@ -263,11 +296,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         guard let scrollView = view as? NSScrollView, pitch > 0 else {
             preconditionFailure("the list's view is \(view), with rows \(pitch) points apart")
         }
-        // The rows scroll under the column header, whose clip view overlaps the content view.
-        let header = tableView.headerView?.superview.map {
-            scrollView.contentView.frame.intersection($0.frame).height
-        }
-        let height = scrollView.documentVisibleRect.height - (header ?? 0)
+        let height = scrollView.documentVisibleRect.height - headerOverlap(in: scrollView)
         pane.visibleRowCount = max(Int(height / pitch), 0)
         renameField.layout()
     }

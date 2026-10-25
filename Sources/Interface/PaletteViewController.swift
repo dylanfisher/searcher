@@ -85,8 +85,23 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
     }
     private static let listInset: CGFloat = 6
 
-    init(palette: Palette) {
+    /// What VoiceOver calls the palette.
+    private let label: String
+    /// What the empty field says the palette searches.
+    private let placeholder: String
+    /// Open Quickly's `label` and `placeholder`.
+    static let openQuicklyLabel = "Open Quickly"
+    static let openQuicklyPlaceholder = "Commands, workspaces and folders"
+
+    /// A palette called `label`, whose empty field shows `placeholder`; Open Quickly's unless
+    /// given, as Go to Item gives its own.
+    init(
+        palette: Palette, label: String = openQuicklyLabel,
+        placeholder: String = openQuicklyPlaceholder
+    ) {
         self.palette = palette
+        self.label = label
+        self.placeholder = placeholder
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -112,8 +127,8 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
         field.drawsBackground = false
         field.focusRingType = .none
         field.font = .systemFont(ofSize: 26, weight: .light)
-        field.placeholderString = "Commands, workspaces and folders"
-        field.setAccessibilityLabel("Open Quickly")
+        field.placeholderString = placeholder
+        field.setAccessibilityLabel(label)
         field.cell?.isScrollable = true
         field.cell?.wraps = false
         field.delegate = self

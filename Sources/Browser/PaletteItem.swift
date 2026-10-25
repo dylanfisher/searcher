@@ -1,13 +1,16 @@
 import Base
 import Foundation
+import UniformTypeIdentifiers
 
-/// One thing the palette can list and run: a command, a saved workspace or a folder.
+/// One thing the palette can list and run: a command, a saved workspace, a folder, or, in Go to
+/// Item, an entry the focused pane shows.
 public struct PaletteItem: Sendable {
     /// What the item is, which no two items listed together share.
     public enum ID: Hashable, Sendable {
         case workspace(UUID)
         case folder(path: String)
         case command(CommandID)
+        case entry(name: String)
     }
 
     /// The kinds in the order an empty query lists them, and equal scores rank them.
@@ -15,6 +18,7 @@ public struct PaletteItem: Sendable {
         case workspace
         case folder
         case command
+        case entry
 
         public static func < (a: Kind, b: Kind) -> Bool { a.rawValue < b.rawValue }
     }
@@ -28,6 +32,9 @@ public struct PaletteItem: Sendable {
     public let chord: KeyChord?
     /// For a folder, `FolderHistory.frecency` when the item was made; 0 for other items.
     public let frecency: Double
+    /// For an entry, the type whose icon its row shows; nil for other items, whose rows show
+    /// their kind's.
+    public let iconType: UTType?
     /// What choosing the item does.
     public let action: @MainActor @Sendable () -> Void
     /// The UTF-8 offset in `title` where matching starts. The query is matched from the same
@@ -42,6 +49,7 @@ public struct PaletteItem: Sendable {
         case .workspace: .workspace
         case .folder: .folder
         case .command: .command
+        case .entry: .entry
         }
     }
 
@@ -50,7 +58,7 @@ public struct PaletteItem: Sendable {
     /// - Precondition: `matchOffset` is a character boundary in `title`'s UTF-8.
     public init(
         id: ID, title: String, detail: String? = nil, chord: KeyChord? = nil,
-        frecency: Double = 0, matchOffset: Int = 0,
+        frecency: Double = 0, iconType: UTType? = nil, matchOffset: Int = 0,
         action: @escaping @MainActor @Sendable () -> Void
     ) {
         let start = title.utf8.index(title.startIndex, offsetBy: matchOffset)
@@ -62,6 +70,7 @@ public struct PaletteItem: Sendable {
         self.detail = detail
         self.chord = chord
         self.frecency = frecency
+        self.iconType = iconType
         self.matchOffset = matchOffset
         self.action = action
         candidate = FuzzyMatcher.Candidate(String(title[start...]))

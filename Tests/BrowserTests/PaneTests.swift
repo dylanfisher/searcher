@@ -1686,3 +1686,50 @@ private func shownWidths(_ pane: Pane) -> [Double] {
     #expect(new.columnWidths.isEmpty)
     for pane in [pane, copy, new] { pane.close() }
 }
+
+@MainActor @Test func aJumpSelectsTheRowAloneAsOneStepOfTheSelectionHistory() async throws {
+    let fixture = await PaneFixture.loaded()
+    fixture.select("a.txt", "b.txt")
+
+    fixture.pane.jump(to: "docs")
+
+    #expect(fixture.pane.selection == Selection([ExactName("docs")], cursor: ExactName("docs")))
+    #expect(fixture.pane.location == Location(path: "/root"))
+    fixture.pane.undoSelection()
+    #expect(fixture.selectedNames == ["a.txt", "b.txt"])
+}
+
+@MainActor @Test func aJumpToTheRowAlreadySelectedStillAsksForItToBeCentered() async throws {
+    let fixture = await PaneFixture.loaded()
+    fixture.select("docs")
+    var changes = 0
+    fixture.pane.onChange = { changes += 1 }
+    let centering = fixture.pane.centeringRequest
+
+    fixture.pane.jump(to: "docs")
+
+    #expect(fixture.pane.centeringRequest == centering + 1)
+    #expect(changes == 1)
+}
+
+/// A jump in a column is the user's choice, as a click is: the next column follows at once,
+/// without the pause a key waits for.
+@MainActor @Test func aJumpInAColumnOpensTheFoldersColumnAtOnce() async throws {
+    let fixture = PaneFixture(
+        at: "/root",
+        folders: [
+            "/root": [folder("docs"), file("a.txt")], "/root/docs": [file("inside.txt")],
+            "/": [folder("root")],
+        ])
+    await settle { fixture.pane.state.isLoaded }
+    fixture.pane.columnOpenClock = ManualClock()
+    fixture.pane.setViewMode(.column)
+    let trail = try #require(fixture.pane.columnTrail)
+    await settle { trail.focused.pane.state.isLoaded }
+
+    trail.focused.pane.jump(to: "docs")
+
+    #expect(trail.columns.map(\.pane.location.path) == ["/root", "/root/docs"])
+    #expect(trail.focused.pane.location == Location(path: "/root"))
+    fixture.pane.close()
+}

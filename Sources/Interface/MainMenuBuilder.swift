@@ -211,6 +211,7 @@ public enum MainMenuBuilder {
                 .command(DualPaneCommands.sameFolderInOtherPane.id),
                 .command(NavigationCommands.goToFolder.id),
                 .command(WindowCommands.showPalette.id),
+                .command(WindowCommands.goToItem.id),
             ]
         ),
         Menu(

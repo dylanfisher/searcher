@@ -329,6 +329,49 @@ private func shownNames(_ controller: ListingViewController) -> [String] {
     #expect(table.visibleRect.contains(table.rect(ofRow: 40)))
 }
 
+/// The part of the table's visible rect the rows show in, below the column header.
+@MainActor
+func rowArea(of table: NSTableView) -> NSRect {
+    var area = table.visibleRect
+    let header = table.headerView?.frame.height ?? 0
+    area.origin.y += header
+    area.size.height -= header
+    return area
+}
+
+@MainActor @Test func aJumpCentersTheRowInTheListAndStopsAtTheEnds() async throws {
+    let entries = (0..<2_000).map { file(String(format: "e%04d", $0)) }
+    let controller = await controller(showing: entries)
+    let table = controller.tableView
+    controller.view.layoutSubtreeIfNeeded()
+    let top = table.visibleRect
+
+    controller.pane.jump(to: "e1000")
+    #expect(table.selectedRowIndexes == [1_000])
+    #expect(abs(table.rect(ofRow: 1_000).midY - rowArea(of: table).midY) <= 1)
+
+    controller.pane.jump(to: "e0002")
+    #expect(table.visibleRect == top)
+
+    controller.pane.jump(to: "e1999")
+    #expect(abs(table.visibleRect.maxY - table.bounds.maxY) <= 1)
+}
+
+/// A jump to the row the cursor is on, already in view, still centers it.
+@MainActor @Test func aJumpToTheCursorsRowCentersIt() async throws {
+    let entries = (0..<2_000).map { file(String(format: "e%04d", $0)) }
+    let controller = await controller(showing: entries)
+    let table = controller.tableView
+    controller.view.layoutSubtreeIfNeeded()
+    controller.pane.select(Selection([ExactName("e0500")], cursor: ExactName("e0500")))
+    #expect(table.visibleRect.contains(table.rect(ofRow: 500)))
+    #expect(abs(table.rect(ofRow: 500).midY - rowArea(of: table).midY) > 10)
+
+    controller.pane.jump(to: "e0500")
+
+    #expect(abs(table.rect(ofRow: 500).midY - rowArea(of: table).midY) <= 1)
+}
+
 @MainActor @Test func theViewReportsHowManyRowsFitAsThePage() async throws {
     let entries = (0..<2_000).map { file(String(format: "e%04d", $0)) }
     let controller = await controller(showing: entries)

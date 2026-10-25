@@ -453,9 +453,35 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
                 run: { [weak self] id in self?.runFromPalette(id) }),
         ]
         let controller = PaletteWindowController(palette: Palette(sources: sources + extra))
+        controller.viewController.isEnabled = { [weak self] item in
+            guard case .command(let id) = item.id else { return true }
+            return self?.canRunFromPalette(id) ?? false
+        }
+        present(controller, closedBy: WindowCommands.showPalette.id, over: window)
+    }
+
+    /// Shows the palette over the window in Go to Item mode, unless a palette already shows. It
+    /// lists the rows of the focused pane, or of its focused column, as the pane shows them, and
+    /// selects the chosen one there with its row in the middle of the view
+    /// (docs/decisions/0101-go-to-item.md).
+    func showItemPalette() {
+        guard palette == nil, !isClosed, !workspace.isClosed, let window else { return }
+        let pane = workspace.selectedTab.focusedPane.commandPane
+        let label = "Go to Item"
+        let controller = PaletteWindowController(
+            palette: Palette(sources: [EntrySource(pane: pane)]), label: label,
+            placeholder: "\(label) in \(pane.location.name)")
+        present(controller, closedBy: WindowCommands.goToItem.id, over: window)
+    }
+
+    /// Shows `controller`'s palette over `window` with the keys in its field. Command `id`'s
+    /// chords and Close Pane's close it; as it closes, the keys go back where they were.
+    private func present(
+        _ controller: PaletteWindowController, closedBy id: CommandID, over window: NSWindow
+    ) {
         let registry = focusedTable.registry
         controller.closingChords = Set(
-            [WindowCommands.showPalette.id, TilingCommands.closePane.id].flatMap {
+            [id, TilingCommands.closePane.id].flatMap {
                 registry.command(for: $0)?.chords ?? []
             })
         // Where the keys were, to give them back there: a field's editor stands in for the field.
@@ -464,10 +490,6 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             let field = editor.delegate as? NSResponder
         {
             keys = field
-        }
-        controller.viewController.isEnabled = { [weak self] item in
-            guard case .command(let id) = item.id else { return true }
-            return self?.canRunFromPalette(id) ?? false
         }
         controller.onClose = { [weak self, weak controller, weak keys] in
             guard let self, palette === controller else { return }
@@ -558,6 +580,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         WorkspaceCommands.rename.id,
         WorkspaceCommands.delete.id, WorkspaceCommands.toggleSidebar.id,
         WorkspaceCommands.focusSidebar.id, WindowCommands.showPalette.id,
+        WindowCommands.goToItem.id,
     ]
 
     /// Whether a text field, such as the filter or rename field, has the keys, through its field
@@ -747,6 +770,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             askToDeleteWorkspace: { [weak self] in self?.askToDeleteWorkspace() },
             focusSidebar: { [weak self] in self?.focusSidebar() },
             showPalette: { [weak self] in self?.showPalette() },
+            showItemPalette: { [weak self] in self?.showItemPalette() },
             fileOperations: fileOperations, clipboard: clipboard, mountTable: mountTable,
             undoHistory: undoHistory, openWith: openWith,
             didRunCommand: { [weak self] in

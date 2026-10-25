@@ -39,6 +39,9 @@ public struct CommandContext {
     /// Shows the command palette over the window. Only the window can; a context built without
     /// it traps when Show Palette runs.
     public let showPalette: @MainActor () -> Void
+    /// Shows the palette over the window in Go to Item mode, over the rows of `pane`. Only the
+    /// window can; a context built without it traps when Go to Item runs.
+    public let showItemPalette: @MainActor () -> Void
     /// The folder a click named, for Open in New Tab: a Cmd-double-clicked folder row or a
     /// Cmd-clicked path bar segment. Nil when a key or menu item runs a command.
     public let folder: Location?
@@ -98,6 +101,9 @@ public struct CommandContext {
         showPalette: @escaping @MainActor () -> Void = {
             preconditionFailure("this command context has no palette")
         },
+        showItemPalette: @escaping @MainActor () -> Void = {
+            preconditionFailure("this command context has no palette")
+        },
         folder: Location? = nil,
         fileOperations: FileOperationQueue? = nil,
         editName: (@MainActor () -> Void)? = nil,
@@ -124,6 +130,7 @@ public struct CommandContext {
         self.askToDeleteWorkspace = askToDeleteWorkspace
         self.focusSidebar = focusSidebar
         self.showPalette = showPalette
+        self.showItemPalette = showItemPalette
         self.folder = folder
         self.fileOperations = fileOperations
         self.editName = editName

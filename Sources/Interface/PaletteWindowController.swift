@@ -28,8 +28,14 @@ public final class PaletteWindowController: NSWindowController, NSWindowDelegate
     /// height.
     private static let topOffset: CGFloat = 0.12
 
-    init(palette: Palette) {
-        viewController = PaletteViewController(palette: palette)
+    /// A panel over `palette`, called `label` and with `placeholder` in its empty field: Open
+    /// Quickly's unless given.
+    init(
+        palette: Palette, label: String = PaletteViewController.openQuicklyLabel,
+        placeholder: String = PaletteViewController.openQuicklyPlaceholder
+    ) {
+        viewController = PaletteViewController(
+            palette: palette, label: label, placeholder: placeholder)
         let panel = PalettePanel(
             contentRect: NSRect(
                 x: 0, y: 0, width: PaletteViewController.width,
@@ -47,7 +53,7 @@ public final class PaletteWindowController: NSWindowController, NSWindowDelegate
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = true
         panel.becomesKeyOnlyIfNeeded = false
-        panel.setAccessibilityLabel("Open Quickly")
+        panel.setAccessibilityLabel(label)
         super.init(window: panel)
         panel.contentViewController = viewController
         panel.setContentSize(

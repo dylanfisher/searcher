@@ -10,8 +10,9 @@ import Foundation
 /// `mostFrecencyBonus` for a folder the user visits often and lately (`frecencyBonus(_:)`).
 /// Equal scores rank workspaces, then folders, then commands; then the folder with the larger
 /// frecency bonus; then as `FuzzyMatcher.best` ranks them, the shorter text first; then the more
-/// frecent folder. An empty query lists workspaces, then folders, then commands, each kind in
-/// its source's order.
+/// frecent folder. An empty query lists workspaces, then folders, then commands, then entries,
+/// each kind in its source's order. Go to Item's entries get no bonus, so they rank by their
+/// match alone (docs/decisions/0101-go-to-item.md).
 @MainActor
 public final class Palette {
     /// The rows the palette shows.
@@ -135,11 +136,17 @@ public final class Palette {
         _ gathered: [[PaletteItem]], for query: String, limit: Int,
         isCancelled: () -> Bool = { Task.isCancelled }
     ) -> [Result] {
-        var seen: Set<PaletteItem.ID> = []
         var items: [PaletteItem] = []
-        for batch in gathered {
-            for item in batch where seen.insert(item.id).inserted {
-                items.append(item)
+        if gathered.count == 1 {
+            // No earlier source to drop items of. Go to Item's one source can hand over 100k
+            // rows, whose set would cost a third of the key.
+            items = gathered[0]
+        } else {
+            var seen: Set<PaletteItem.ID> = []
+            for batch in gathered {
+                for item in batch where seen.insert(item.id).inserted {
+                    items.append(item)
+                }
             }
         }
         guard !query.allSatisfy(\.isWhitespace) else {
@@ -214,12 +221,13 @@ public final class Palette {
                 title.startIndex, offsetBy: item.matchOffset + upper)
     }
 
-    /// Up to `limit` of `items`: workspaces, then folders, then commands, each in source order.
+    /// Up to `limit` of `items`: workspaces, then folders, then commands, then entries, each in
+    /// source order.
     nonisolated private static func firstOfEachKind(_ items: [PaletteItem], limit: Int)
         -> [Result]
     {
         var results: [Result] = []
-        for kind in [PaletteItem.Kind.workspace, .folder, .command] {
+        for kind in [PaletteItem.Kind.workspace, .folder, .command, .entry] {
             for item in items where item.kind == kind {
                 guard results.count < limit else { return results }
                 results.append(
