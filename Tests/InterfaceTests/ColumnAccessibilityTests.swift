@@ -242,7 +242,7 @@ private final class Fixture {
     let date = formatter.longDate(testDate)
     #expect(
         fields.map(\.stringValue) == [
-            "x.txt", "\(kind) – 2 MB", "Information", "Size", "2 MB", "Created", date,
+            "x.txt", "\(kind) – 2 MB", "Information", "Created", date,
             "Modified", date, "Last opened", date, "Tags", "Red",
         ])
 }

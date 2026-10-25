@@ -581,7 +581,6 @@ private struct LoadingThirdColumn {
     #expect(view.iconView.frame.size == NSSize(width: 128, height: 128))
     #expect(view.nameField.stringValue == "x.txt")
     #expect(view.summaryField.stringValue == "\(preview.kind.text) – 1 byte")
-    #expect(view.sizeField.stringValue == "1 byte")
     #expect(view.modifiedField.stringValue == EntryCellFormatter().longDate(testDate))
     #expect(!view.acceptsFirstResponder)
 }
@@ -613,8 +612,7 @@ private struct LoadingThirdColumn {
 
     column.apply(.patches([.update(file("a.txt", size: 2_000_000))]), at: column.location)
 
-    await settle { view.sizeField.stringValue == "2 MB" }
-    #expect(view.summaryField.stringValue.hasSuffix(" – 2 MB"))
+    await settle { view.summaryField.stringValue.hasSuffix(" – 2 MB") }
 
     column.apply(.patches([.remove(name: "a.txt")]), at: column.location)
 
@@ -672,7 +670,7 @@ private let socket = DirectoryEntry(
     fixture.controller.view.layoutSubtreeIfNeeded()
 
     let fields = try #require(view.accessibilityChildren() as? [NSTextField])
-    #expect(fields.count == 13)
+    #expect(fields.count == 11)
     // The tags wrap onto more than one line.
     #expect(view.tagsField.frame.height > 2 * view.summaryField.frame.height)
     // Laid out, and the name wrapped onto more than one line.
@@ -704,8 +702,8 @@ private let socket = DirectoryEntry(
     #expect(document.bounds.contains(bottom))
 }
 
-/// As Finder shows a socket: its kind, and no Size row.
-@MainActor @Test func aFileWithoutASizeShowsItsKindAndNoSizeRow() async throws {
+/// As Finder shows a socket: its kind alone under its name.
+@MainActor @Test func aFileWithoutASizeShowsOnlyItsKind() async throws {
     var folders = tree
     folders["/r"] = [file("a.txt"), socket]
     let fixture = await Fixture(folders: folders)
@@ -715,15 +713,10 @@ private let socket = DirectoryEntry(
     let view = try #require(fixture.controller.previewView)
     let kind = try #require(fixture.trail.preview?.kind.text)
     #expect(view.summaryField.stringValue == kind)
-    #expect(view.sizeField.isHidden)
-    let fields = try #require(view.accessibilityChildren() as? [NSTextField])
-    #expect(!fields.contains { $0 === view.sizeField })
 
     await fixture.select("a.txt", inColumn: 0)
 
-    #expect(!view.sizeField.isHidden)
-    let shown = try #require(view.accessibilityChildren() as? [NSTextField])
-    #expect(shown.contains { $0 === view.sizeField })
+    #expect(view.summaryField.stringValue.hasSuffix(" – 1 byte"))
 }
 
 private func entry(_ name: String, _ type: DirectoryEntry.FileType) -> DirectoryEntry {
@@ -917,14 +910,14 @@ private func draw(_ view: NSView) {
 private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
     let fields = try #require(view.accessibilityChildren() as? [NSTextField])
     let titles = [
-        ColumnPreviewView.sizeTitle, ColumnPreviewView.createdTitle,
-        ColumnPreviewView.modifiedTitle, ColumnPreviewView.lastOpenedTitle,
-        ColumnPreviewView.tagsTitle,
+        ColumnPreviewView.createdTitle, ColumnPreviewView.modifiedTitle,
+        ColumnPreviewView.lastOpenedTitle, ColumnPreviewView.tagsTitle,
     ]
     return fields.map(\.stringValue).filter(titles.contains)
 }
 
-/// As Finder's preview orders them: Kind and Size, Created, Modified, Last opened, then Tags. A
+/// As Finder's preview orders them: Kind and size under the name, then Created, Modified and
+/// Last opened under Information, with no Size row there, then Tags. A
 /// read that lands after the hold, as one on a slow share does, moves no row whose dates fit
 /// on a line.
 @MainActor @Test func theReadFieldsShowInFindersOrderWithoutMovingTheFieldsAboveThem()
@@ -952,8 +945,8 @@ private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
     #expect(view.tagsField.isHidden)
     #expect(
         try informationTitles(view) == [
-            ColumnPreviewView.sizeTitle, ColumnPreviewView.createdTitle,
-            ColumnPreviewView.modifiedTitle, ColumnPreviewView.lastOpenedTitle,
+            ColumnPreviewView.createdTitle, ColumnPreviewView.modifiedTitle,
+            ColumnPreviewView.lastOpenedTitle,
         ])
     // Each row's frame; a longer value only widens its field, leftward.
     func places() -> [NSRect] {
@@ -1129,8 +1122,8 @@ private func aligned(_ view: NSView, in ancestor: NSView) -> NSRect {
     fixture.controller.view.layoutSubtreeIfNeeded()
 
     // Modified, two lines tall beside Created's "--" on one.
-    let row = view.rows[2]
-    #expect(row.frame.height > view.rows[1].frame.height + 8)
+    let row = view.rows[1]
+    #expect(row.frame.height > view.rows[0].frame.height + 8)
     #expect(aligned(row.value, in: row).maxX == row.bounds.maxX)
     #expect(
         aligned(row.value, in: row).minX

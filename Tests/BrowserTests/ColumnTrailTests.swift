@@ -1379,6 +1379,32 @@ private func previewedM(holdingOn clock: ManualClock, reader: GatedItemInfoReade
     reader.releaseAll()
 }
 
+/// List mode, a navigation and closing the pane during the hold end it with the trail: nothing
+/// waits on the hold's clock afterwards.
+@MainActor @Test func closingTheTrailDuringTheHoldEndsItsWait() async throws {
+    for closing in ["list mode", "navigation", "pane close"] {
+        let reader = GatedItemInfoReader(["/k/f0/m.txt": info(1), "/k/f0/n.txt": info(2)])
+        let clock = ManualClock()
+        let fixture = try await previewedM(holdingOn: clock, reader: reader)
+        let pane = fixture.pane
+        let trail = trail(pane)
+        try click("n.txt", in: trail.columns[1].pane)
+        #expect(trail.shownPreview?.location == Location(path: "/k/f0/m.txt"), "\(closing)")
+        await settle { clock.waitingSleeps == 1 }
+
+        switch closing {
+        case "list mode": pane.setViewMode(.list)
+        case "navigation": pane.navigate(to: Location(path: "/k/f1"))
+        default: pane.close()
+        }
+
+        #expect(trail.shownPreview == nil, "\(closing)")
+        await drainMainQueue()
+        #expect(clock.waitingSleeps == 0, "\(closing)")
+        reader.releaseAll()
+    }
+}
+
 @MainActor @Test func aReadLandingAfterTheTrailClosesIsDropped() async throws {
     for closing in ["list mode", "navigation", "pane close"] {
         let fixture = await columnPane()
