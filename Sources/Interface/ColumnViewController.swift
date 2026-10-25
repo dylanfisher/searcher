@@ -7,8 +7,9 @@ import Browser
 /// whenever the focused column's index or the column count changes (0046-column-view.md). The
 /// trail's preview shows right of the last column (0090-preview-column.md). A column with no rows
 /// to show says why in its middle, in the list's words (0046-column-view.md). Each column and the
-/// preview has a grip that resizes it; a new one gets `Settings.columnWidth`
-/// (0096-column-widths.md).
+/// preview has a grip that resizes it. The widths are the pane's (`Pane.columnWidths`), kept by
+/// folder; a column with none gets `Settings.columnWidth` (0096-column-widths.md,
+/// 0098-column-widths-per-window.md).
 ///
 /// It shows the trail; the trail decides which columns there are and which one has the keys
 /// (0041-column-model.md).
@@ -79,17 +80,13 @@ final class ColumnViewController: NSViewController {
     let columnsView = NSView()
     /// The line right of each column, one per column.
     private var separators: [NSBox] = []
-    /// Each shown column's width, by the column's pane. A column keeps its width while it stays
-    /// in the trail; a new one starts at `Settings.columnWidth`.
-    private(set) var widths: [ObjectIdentifier: Double] = [:]
     /// Each shown column's grip, by the column's pane, centered on the column's separator.
     private var grips: [ObjectIdentifier: ColumnGripView] = [:]
-    /// The preview's width, kept while its view is hidden; set when the view is made.
-    private var previewWidth = Settings.defaultColumnWidth
     /// The preview's grip, made with its view and shown with it.
     private(set) var previewGrip: ColumnGripView?
     /// The resize a grip's drag is making: what it resizes, its width when the drag started,
-    /// whether it resizes every column, and the width it last set; nil until it moves.
+    /// whether it resizes every column, and the width it last set, which the columns it resizes
+    /// show until the drag ends and the pane takes it; nil until it moves.
     private var resizing: (target: GripTarget, start: Double, allColumns: Bool, width: Double?)?
     /// The measuring of names for a double-click on a grip, while it runs.
     private(set) var fitting: Task<Void, Never>?
@@ -210,7 +207,6 @@ final class ColumnViewController: NSViewController {
         where !columnControllers.contains(where: { ObjectIdentifier($0.pane) == id }) {
             grip.removeFromSuperview()
             grips[id] = nil
-            widths[id] = nil
         }
         showPreview()
         // Each column's grip follows it, as a split view's splitter follows its pane.
@@ -276,7 +272,6 @@ final class ColumnViewController: NSViewController {
         columnsView.addSubview(indicator)
         let id = ObjectIdentifier(column.pane)
         spinners[id] = ColumnSpinner(indicator: indicator)
-        widths[id] = pane.settings.columnWidth
         let grip = makeGrip(for: .column(id))
         grip.setAccessibilityLabel(ColumnGripView.label(forColumnNamed: column.pane.location.name))
         grips[id] = grip
@@ -298,61 +293,74 @@ final class ColumnViewController: NSViewController {
             guard let self, let start = width(of: target) else { return }
             resizing = (target, start, allColumns, nil)
         }
+        // Each drag event lays the columns out at the drag's width; the pane takes it once, as
+        // the drag ends, so a drag starts one save, not one per event.
         grip.resize = { [weak self] offset in
             guard let self, let resizing, offset != 0 || resizing.width != nil else { return }
-            let width = Self.clamped(resizing.start + offset)
-            self.resizing?.width = width
-            if resizing.allColumns {
-                setEveryWidth(width)
-            } else {
-                setWidth(width, of: target)
-            }
+            self.resizing?.width = Self.clamped(resizing.start + offset)
+            layoutColumns()
         }
         grip.endResize = { [weak self] in
             guard let self, let resizing else { return }
             self.resizing = nil
             // As in Finder, an Option-drag sets the width new columns get; a plain one doesn't.
             // The drag's own width, so a drag whose column closed under it still sets it.
-            if resizing.allColumns, let width = resizing.width {
-                pane.settings.columnWidth = width
+            if let width = resizing.width {
+                if resizing.allColumns {
+                    pane.setEveryColumnWidth(width)
+                } else {
+                    setWidth(width, of: resizing.target)
+                }
             }
+            layoutColumns()
         }
         grip.fit = { [weak self] allColumns in self?.fit(target, allColumns: allColumns) }
         grip.width = { [weak self] in self?.width(of: target) ?? 0 }
         grip.setWidth = { [weak self, weak grip] width in
             guard let self, let grip, self.width(of: target) != nil else { return }
             setWidth(Self.clamped(width), of: target)
+            layoutColumns()
             postAccessibility(grip, .valueChanged, nil)
         }
         columnsView.addSubview(grip)
         return grip
     }
 
-    /// `target`'s width; nil for a column the trail has closed, whose grip VoiceOver can still
-    /// hold for a moment.
+    /// `target`'s width as shown: a running drag's, or the pane's; nil for a column the trail
+    /// has closed, whose grip VoiceOver can still hold for a moment.
     private func width(of target: GripTarget) -> Double? {
         switch target {
-        case .column(let id): widths[id]
-        case .preview: previewWidth
+        case .column(let id):
+            columnControllers.first { ObjectIdentifier($0.pane) == id }.map {
+                shownWidth(of: $0.pane)
+            }
+        case .preview: dragWidth(for: .preview) ?? pane.previewWidth
         }
     }
 
-    /// Resizes `target` alone. A column the trail has closed since takes nothing.
+    /// The width `column`, a shown column's pane, shows at: a running drag's, or the pane's.
+    private func shownWidth(of column: Pane) -> Double {
+        dragWidth(for: .column(ObjectIdentifier(column))) ?? pane.columnWidth(of: column)
+    }
+
+    /// The width a running drag gives `target`; nil when no drag resizes it.
+    private func dragWidth(for target: GripTarget) -> Double? {
+        guard let resizing, let width = resizing.width,
+            resizing.allColumns || resizing.target == target
+        else { return nil }
+        return width
+    }
+
+    /// Has the pane set `target` alone to `width`. A column the trail has closed since takes
+    /// nothing.
     private func setWidth(_ width: Double, of target: GripTarget) {
         switch target {
         case .column(let id):
-            guard widths[id] != nil else { return }
-            widths[id] = width
-        case .preview: previewWidth = width
+            guard let shown = columnControllers.first(where: { ObjectIdentifier($0.pane) == id })
+            else { return }
+            pane.setColumnWidth(width, of: shown.pane)
+        case .preview: pane.setPreviewWidth(width)
         }
-        layoutColumns()
-    }
-
-    /// Resizes every column and the preview to `width`.
-    private func setEveryWidth(_ width: Double) {
-        for id in widths.keys { widths[id] = width }
-        previewWidth = width
-        layoutColumns()
     }
 
     private static func clamped(_ width: Double) -> Double {
@@ -404,11 +412,11 @@ final class ColumnViewController: NSViewController {
             let width = Self.clamped(
                 min(measured.columnWidth(fittingNameWidth: widest), Self.fitWidthCap))
             if allColumns {
-                setEveryWidth(width)
-                pane.settings.columnWidth = width
+                pane.setEveryColumnWidth(width)
             } else {
                 setWidth(width, of: target)
             }
+            layoutColumns()
         }
     }
 
@@ -454,9 +462,7 @@ final class ColumnViewController: NSViewController {
         var x = 0.0
         for (index, controller) in columnControllers.enumerated() {
             let id = ObjectIdentifier(controller.pane)
-            guard let width = widths[id] else {
-                preconditionFailure("the column at \(controller.pane.location.path) has no width")
-            }
+            let width = shownWidth(of: controller.pane)
             setFrame(of: controller.view, to: NSRect(x: x, y: 0, width: width, height: height))
             setFrame(
                 of: separators[index], to: NSRect(x: x + width, y: 0, width: 1, height: height))
@@ -474,6 +480,7 @@ final class ColumnViewController: NSViewController {
             x += width + 1
         }
         if let shownPreview {
+            let previewWidth = dragWidth(for: .preview) ?? pane.previewWidth
             setFrame(of: shownPreview, to: NSRect(x: x, y: 0, width: previewWidth, height: height))
             if let previewGrip {
                 setFrame(of: previewGrip, to: Self.gripFrame(atSeparator: x + previewWidth))
@@ -528,7 +535,6 @@ final class ColumnViewController: NSViewController {
                 let view = ColumnPreviewView(iconCache: iconCache, formatter: formatter)
                 columnsView.addSubview(view)
                 previewView = view
-                previewWidth = pane.settings.columnWidth
                 let grip = makeGrip(for: .preview)
                 grip.setAccessibilityLabel(ColumnGripView.previewLabel)
                 previewGrip = grip
@@ -735,7 +741,7 @@ final class ColumnViewController: NSViewController {
 }
 
 /// What a grip resizes: a column, by its pane, or the preview.
-private enum GripTarget {
+private enum GripTarget: Equatable {
     case column(ObjectIdentifier)
     case preview
 }

@@ -459,7 +459,8 @@ final class UIBench {
                             TabState.PaneState(
                                 location: Location(path: path), viewMode: .list,
                                 history: History(), selection: [], cursor: nil,
-                                sortColumn: .name, sortAscending: true)
+                                sortColumn: .name, sortAscending: true,
+                                columnWidths: ColumnWidths())
                         )
                     })
                 return TabState(layout: layout, panes: panes)
@@ -525,7 +526,8 @@ final class UIBench {
                     panes: [
                         layout.focused: TabState.PaneState(
                             location: Location(path: path), viewMode: .list, history: History(),
-                            selection: [], cursor: nil, sortColumn: .name, sortAscending: true)
+                            selection: [], cursor: nil, sortColumn: .name, sortAscending: true,
+                            columnWidths: ColumnWidths())
                     ])
             ], selectedTab: 0, showsSidebar: false)
         // Not synced to the disk, as in `restoreSession`.

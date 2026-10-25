@@ -23,7 +23,7 @@ public final class Settings {
     /// of its standard column view options.
     public static let defaultColumnWidth = 245.0
     /// The widths a column's grip can drag it to (0096-column-widths.md).
-    public static let columnWidths: ClosedRange<Double> = 100...1000
+    public nonisolated static let columnWidths: ClosedRange<Double> = 100...1000
 
     /// What the Settings window says about `commanderFKeys`.
     public static let commanderFKeysHelp =

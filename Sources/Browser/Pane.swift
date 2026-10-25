@@ -233,6 +233,7 @@ public final class Pane {
             isFocused: false, selection: Selection(saved.selection, cursor: saved.cursor),
             viewMode: saved.viewMode, rows: nil)
         history = saved.history
+        columnWidths = saved.columnWidths
     }
 
     /// Returns once the rows the listing cache keeps for the pane's folder, or for each column's
@@ -261,6 +262,7 @@ public final class Pane {
         self.systemActions = systemActions
         self.settings = settings
         self.isFocused = isFocused
+        columnWidthDefault = settings.columnWidth
         sortColumn = column
         sortAscending = ascending
         self.selection = selection
@@ -300,7 +302,7 @@ public final class Pane {
     /// rows' patches and sorts from here on itself, and lists the folder when this pane still has
     /// a listing or a patch to land, which its rows lack. With `takingFocus` such a pane is
     /// focused already, so gaining the focus doesn't list it either. In column mode the new trail
-    /// selects the focused column's cursor in its first column.
+    /// selects the focused column's cursor in its first column. It has this pane's column widths.
     func copy(takingFocus: Bool) -> Pane {
         let sorted = commandPane
         let rows: Listing? =
@@ -316,6 +318,7 @@ public final class Pane {
         pane.folderSizes = folderSizes
         if let folderVisits { pane.countVisits(in: folderVisits) }
         pane.copiedFrom = self
+        pane.columnWidths = columnWidths
         guard rows != nil else { return pane }
         pane.loadedAt = loadedAt
         pane.rootVolumeName = rootVolumeName
@@ -515,6 +518,89 @@ public final class Pane {
         guard let trail = columnTrail else { return }
         location = trail.focused.pane.location
         reportChange()
+    }
+
+    // MARK: - Column widths
+
+    /// The widths this pane's column grips have set, by folder, and the preview's. They stay in
+    /// list mode, so the columns get them back on the switch to columns, and `TabState` keeps
+    /// them (0098-column-widths-per-window.md).
+    public private(set) var columnWidths = ColumnWidths()
+    /// `Settings.columnWidth` as the pane last saw it: the width of a column, or the preview,
+    /// with no width set.
+    private var columnWidthDefault: Double
+
+    /// The width `column`'s pane, one of this pane's columns, shows at: its folder's set width,
+    /// or the default.
+    public func columnWidth(of column: Pane) -> Double {
+        columnWidths.width(of: column.location) ?? columnWidthDefault
+    }
+
+    /// The width the trail's preview shows at.
+    public var previewWidth: Double {
+        columnWidths.preview ?? columnWidthDefault
+    }
+
+    /// Sets the width of `column`'s pane's folder, as a grip's drag ends or a fit lands. A
+    /// column the trail has closed since takes nothing.
+    ///
+    /// - Precondition: `width` is within `Settings.columnWidths`.
+    public func setColumnWidth(_ width: Double, of column: Pane) {
+        guard let trail = columnTrail, trail.columns.contains(where: { $0.pane === column })
+        else { return }
+        let old = columnWidths
+        columnWidths.set(width, of: column.location)
+        if columnWidths != old { reportChange() }
+    }
+
+    /// Sets the preview's width, shown or hidden.
+    ///
+    /// - Precondition: `width` is within `Settings.columnWidths`.
+    public func setPreviewWidth(_ width: Double) {
+        let old = columnWidths
+        columnWidths.setPreview(width)
+        if columnWidths != old { reportChange() }
+    }
+
+    /// Shows every column and the preview at `width`, as an Option-drag ends, and makes it the
+    /// width new columns get in every pane, `Settings.columnWidth`. The widths set for folders,
+    /// shown or not, go, so every column of the pane is at the new default.
+    ///
+    /// - Precondition: `width` is within `Settings.columnWidths`.
+    public func setEveryColumnWidth(_ width: Double) {
+        let old = columnWidths
+        columnWidths = ColumnWidths()
+        // Before the setting, so this pane keeps none of its columns at the old default.
+        let oldDefault = columnWidthDefault
+        columnWidthDefault = width
+        settings.columnWidth = width
+        if columnWidths != old || oldDefault != width { reportChange() }
+    }
+
+    /// Takes `widths` as its own, as showing a saved workspace's snapshot does when only the
+    /// widths differ from it.
+    public func showColumnWidths(_ widths: ColumnWidths) {
+        guard widths != columnWidths else { return }
+        columnWidths = widths
+        reportChange()
+    }
+
+    /// Once `Settings.columnWidth` changes, from an Option-drag in another pane or window, sets
+    /// each shown column and the shown preview that had no width set to the width it shows at,
+    /// the old default, so nothing this pane shows changes width and its stored state still
+    /// says what it shows. Columns opened later get the new default.
+    private func followColumnWidthSetting() {
+        let oldDefault = columnWidthDefault
+        columnWidthDefault = settings.columnWidth
+        guard oldDefault != columnWidthDefault, let trail = columnTrail, !isClosed else { return }
+        let old = columnWidths
+        for column in trail.columns where columnWidths.width(of: column.pane.location) == nil {
+            columnWidths.set(oldDefault, of: column.pane.location)
+        }
+        if trail.preview != nil, columnWidths.preview == nil {
+            columnWidths.setPreview(oldDefault)
+        }
+        if columnWidths != old { reportChange() }
     }
 
     /// Stops the pane's load, its folder monitor and anything pending for its rows, for good.
@@ -1016,6 +1102,7 @@ public final class Pane {
     private func settingsDidChange() {
         // Followed in column mode too, so the list the pane switches back to has it.
         followSizeSetting()
+        followColumnWidthSetting()
         if namesToSelect?.showsHidden != settings.showHidden {
             namesToSelect = nil
         }

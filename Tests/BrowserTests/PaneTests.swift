@@ -1519,3 +1519,145 @@ private func springPane() async -> PaneFixture {
     #expect(first.canUndoSelection == canUndo)
     #expect(pane.location.path == "/root/more")
 }
+
+// MARK: - Column widths
+
+/// `/r` holds folders `docs` and `other` and a file `a.txt`; `/r/docs` holds a folder `sub`
+/// and a file `x.txt`.
+private let widthTree: [String: [DirectoryEntry]] = [
+    "/": [folder("r")],
+    "/r": [folder("docs"), folder("other"), file("a.txt")],
+    "/r/docs": [folder("sub"), file("x.txt")],
+    "/r/docs/sub": [file("deep.txt")],
+    "/r/other": [file("o.txt")],
+]
+
+/// A focused pane at `/r` in column mode over `widthTree`, its first column loaded.
+@MainActor
+private func widthPane(settings: Settings = untouchedSettings()) async -> Pane {
+    let fixture = PaneFixture(at: "/r", folders: widthTree, settings: settings)
+    await settle { fixture.pane.state.isLoaded }
+    fixture.pane.setViewMode(.column)
+    await settle { fixture.pane.columnTrail?.focused.pane.state.isLoaded == true }
+    return fixture.pane
+}
+
+/// Selects `name` alone in the column at `index` and waits for every column to load.
+@MainActor
+private func choose(_ name: String, inColumn index: Int, of pane: Pane) async {
+    guard let trail = pane.columnTrail else { preconditionFailure("not in column mode") }
+    trail.columns[index].pane.select(Selection([ExactName(name)], cursor: ExactName(name)))
+    await settle { trail.columns.allSatisfy { $0.pane.state.isLoaded } }
+}
+
+/// The width each of `pane`'s columns shows at, left to right.
+@MainActor
+private func shownWidths(_ pane: Pane) -> [Double] {
+    pane.columnTrail?.columns.map { pane.columnWidth(of: $0.pane) } ?? []
+}
+
+@MainActor @Test func aColumnWidthIsKeptByFolderAndANewColumnGetsTheDefault() async throws {
+    let pane = await widthPane()
+    await choose("docs", inColumn: 0, of: pane)
+    let docs = try #require(pane.columnTrail?.columns[1].pane)
+    var reports = 0
+    pane.onTabChange = { reports += 1 }
+
+    pane.setColumnWidth(300, of: docs)
+
+    #expect(reports == 1)
+    let standard = Settings.defaultColumnWidth
+    #expect(shownWidths(pane) == [standard, 300])
+    // The width the column has already reports nothing.
+    pane.setColumnWidth(300, of: docs)
+    #expect(reports == 1)
+
+    // Another folder's column gets the default; the folder's own column, opened again, its
+    // width.
+    await choose("other", inColumn: 0, of: pane)
+    #expect(shownWidths(pane) == [standard, standard])
+    await choose("docs", inColumn: 0, of: pane)
+    #expect(shownWidths(pane) == [standard, 300])
+    pane.close()
+}
+
+@MainActor @Test func aWidthForAColumnTheTrailClosedIsDropped() async throws {
+    let pane = await widthPane()
+    await choose("docs", inColumn: 0, of: pane)
+    let docs = try #require(pane.columnTrail?.columns[1].pane)
+    await choose("a.txt", inColumn: 0, of: pane)
+
+    pane.setColumnWidth(300, of: docs)
+
+    #expect(pane.columnWidths.isEmpty)
+    pane.close()
+}
+
+@MainActor @Test func everyColumnWidthDropsTheFoldersWidthsAndSetsTheDefault() async throws {
+    let settings = untouchedSettings()
+    let pane = await widthPane(settings: settings)
+    await choose("docs", inColumn: 0, of: pane)
+    pane.setColumnWidth(300, of: try #require(pane.columnTrail?.columns[1].pane))
+    pane.setPreviewWidth(400)
+
+    pane.setEveryColumnWidth(200)
+
+    #expect(pane.columnWidths.isEmpty)
+    #expect(settings.columnWidth == 200)
+    #expect(shownWidths(pane) == [200, 200])
+    #expect(pane.previewWidth == 200)
+    pane.close()
+}
+
+/// An Option-drag in another pane sets the width new columns get, but this pane's shown columns
+/// and preview keep the width they show, and its stored widths say so.
+@MainActor @Test func anotherPanesNewDefaultKeepsTheWidthsThisPaneShows() async throws {
+    let settings = untouchedSettings()
+    let pane = await widthPane(settings: settings)
+    let other = await widthPane(settings: settings)
+    await choose("docs", inColumn: 0, of: pane)
+    await choose("x.txt", inColumn: 1, of: pane)
+    #expect(pane.columnTrail?.preview != nil)
+    pane.setColumnWidth(300, of: try #require(pane.columnTrail?.columns[1].pane))
+
+    other.setEveryColumnWidth(200)
+
+    let standard = Settings.defaultColumnWidth
+    #expect(shownWidths(pane) == [standard, 300])
+    #expect(pane.previewWidth == standard)
+    #expect(pane.columnWidths.width(of: Location(path: "/r")) == standard)
+    #expect(pane.columnWidths.preview == standard)
+    // A column opened after it gets the new default.
+    await choose("sub", inColumn: 1, of: pane)
+    #expect(shownWidths(pane) == [standard, 300, 200])
+    pane.close()
+    other.close()
+}
+
+@MainActor @Test func columnWidthsStayThroughTheListAndBack() async throws {
+    let pane = await widthPane()
+    pane.setColumnWidth(300, of: try #require(pane.columnTrail?.columns[0].pane))
+    pane.setPreviewWidth(400)
+    let widths = pane.columnWidths
+
+    pane.setViewMode(.list)
+    #expect(pane.columnWidths == widths)
+    pane.setViewMode(.column)
+
+    #expect(pane.columnWidths == widths)
+    #expect(shownWidths(pane) == [300])
+    #expect(pane.previewWidth == 400)
+    pane.close()
+}
+
+@MainActor @Test func aSplitKeepsTheColumnWidthsAndANewTabStartsWithNone() async throws {
+    let pane = await widthPane()
+    pane.setColumnWidth(300, of: try #require(pane.columnTrail?.columns[0].pane))
+
+    let copy = pane.copy(takingFocus: false)
+    let new = pane.newPane(at: Location(path: "/r"))
+
+    #expect(copy.columnWidths == pane.columnWidths)
+    #expect(new.columnWidths.isEmpty)
+    for pane in [pane, copy, new] { pane.close() }
+}
