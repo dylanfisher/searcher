@@ -78,9 +78,12 @@ Finder doesn't need. Failed and missing show the list's error line. Slow and off
 kept show the status note, which the path bar shows only for the focused column; with rows kept
 they show the rows, as the list does. A filter that matches nothing shows the list's line. An
 empty folder's column is blank and a loading one shows only its spinner, as in Finder. →
-into a column whose rows haven't arrived selects its first row once they do, without the key
-flag, so a folder there opens its column at once; a selection in that column, ←, a focus change
-or navigating first gives that up. VoiceOver doesn't read a column's message yet: the browser's
+into a column whose rows haven't arrived selects its first row once the whole folder's rows
+do: a full listing or cached rows, not a first batch, whose first row needn't be the folder's.
+It selects without the key flag, so a folder there opens its column at once. A selection in that
+column, ←, a focus change, the pane losing the keys or navigating first gives that up, as do
+rows that land empty and a folder that can't be listed. Show Package Contents selects nothing
+in the package's column, as in Finder. VoiceOver doesn't read a column's message yet: the browser's
 children are the columns only.) A column's table carries the list's
 `ListingViewController`, so changes to the list's rows reach columns too; a change meant for the
 list only has to check `showsNamesOnly`.

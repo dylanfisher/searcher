@@ -902,6 +902,11 @@ private struct StateColumns {
     #expect(denied.frame.minX >= column.minX && denied.frame.maxX <= column.maxX)
     #expect(abs(denied.frame.midX - column.midX) < 1)
     #expect(abs(denied.frame.midY - column.midY) < 1)
+    // The button, the widest line, fits the column too.
+    let settings = denied.openSettingsButton
+    let button = settings.convert(settings.bounds, to: fixture.controller.columnsView)
+    #expect(button.width >= settings.fittingSize.width)
+    #expect(button.minX >= column.minX && button.maxX <= column.maxX)
 }
 
 @MainActor @Test func aFailedOrMissingColumnShowsTheListsErrorLine() async throws {
@@ -962,4 +967,11 @@ private struct StateColumns {
 
     await settle { fixture.column.state.listing?.count == 0 }
     #expect(fixture.message == FilterBarView.noMatchMessage("zz"))
+
+    // The rows coming back in the same column hide the message.
+    fixture.column.setFilter("")
+
+    await settle { fixture.column.state.listing?.count == 1 }
+    #expect(fixture.message == nil)
+    #expect(fixture.controller.messageLabel(forColumnAt: 1)?.isHidden == true)
 }
