@@ -82,24 +82,41 @@ it already has, so mouse up after mouse down changes nothing and is no second st
 
 ## Consequences
 
-- A real press can't be sent in a test, since the table tracks it in a nested run loop; the
-  tests drive a table that holds a press's rows and posts the two notifications.
+- The first tests drove a table that holds a press's rows and posts the two notifications
+  themselves, which is how two fixes passed and the press stayed broken; see the update below
+  for the tests that press for real.
 - The history holds names: a 50k-name selection kept in many steps costs that many name sets.
   The bounds (100 steps, 20 folders) cap it.
 
 ## Update 2026-10-24: selecting on mouse down, across panes
 
-Dylan found that a press in another pane still showed its row only on mouse up. The change above
-leaned on `NSTableView` posting `selectionIsChanging` at mouse down; the tests posted that
-notification themselves, so they never showed whether AppKit does. A press can't be sent to a real
-`NSTableView` in a test: `mouseDown` tracks in a nested loop and the test process exits under it.
-So the fix doesn't depend on that notification. `ListingTableView.mouseDown` now, for a press in a
-table without the keys, takes the keys (which focuses the pane) and selects the pressed row
-itself before calling `super`, so the pane has the row before the listing that taking focus starts
-can land. A press on an already selected row, with Shift, Command or Control, or below the rows is
-left to AppKit, so a drag still takes the whole selection, Shift- and Cmd-clicks extend and
-toggle, and a context menu opens. The tests call the pre-step with a real `NSEvent` against a
-two-pane window; the one line in `mouseDown` that calls it is not covered by a test. Column
-view's columns use the same table class. The selection is drawn emphasized when the table is the
-first responder of a key window, which the press now makes true at mouse down; no test shows the
-drawing, since the test windows are never key. Cause confirmed by hand: needs Dylan.
+Dylan found twice that a press in another pane showed its row only on mouse up. The cause,
+reproduced with a real `NSTableView.mouseDown` and its tracking loop:
+
+- `NSTableView.mouseDown` doesn't select the pressed row until the mouse comes up (or a drag
+  starts), in a focused pane as much as in another. It posts `selectionIsChanging` only then,
+  so the first fix, which leaned on that notification, had nothing to react to.
+- `NSWindow.sendEvent` makes the hit table first responder before it calls `mouseDown`. The
+  second fix selected the row in `ListingTableView.mouseDown` but only `if window.firstResponder
+  !== self`, so by then it always returned early. Its tests called the pre-step directly, on a
+  table that wasn't first responder, and never ran the composition.
+
+`ListingTableView.mouseDown` now selects the pressed row itself before calling `super`, whether
+or not the table already has the keys (`selectOnPress`), taking the keys first (which focuses
+the pane) so the pane has the row before the listing that taking focus starts can land. A press
+on an already selected row, with Shift, Command or Control, or below the rows is left to AppKit,
+so a drag still takes the whole selection, Shift- and Cmd-clicks extend and toggle, and a
+context menu opens. A press in a focused pane selects at mouse down too; it did not before.
+Column view's columns use the same table class.
+
+The tests (`ListingTableView.realPress`, `Tests/InterfaceTests/RealPress.swift`) send a real
+`mouseDown` with its mouse up queued first, read the table at each selection change, and tell
+whether the button was still down by the mouse up still waiting in the queue. They fail without
+the fix, in list view and in column view. Two harness facts, found the hard way: AppKit's
+posting of the mouse up stops the main run loop, and each stop leaves one queued that ends the
+test process when the test next suspends, so the helper takes them off before it returns; and a
+second `window.sendEvent` of a press in one process is dropped, so the helper makes the table
+first responder itself, as `NSWindow` does, and calls `mouseDown`. The test windows are not key
+(0091), so the selection's drawn colour, emphasized or not, is not tested; with the window not
+key, AppKit selects nothing at mouse down in either case, which is the behaviour that the
+reproduction shows. Whether it looks right in a key window: needs Dylan.

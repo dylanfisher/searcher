@@ -163,21 +163,19 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
 
     override func mouseDown(with event: NSEvent) {
         pressCount += 1
-        selectOnFirstPress(event)
+        selectOnPress(event)
         super.mouseDown(with: event)
     }
 
-    /// A press in a table without the keys takes them and selects the pressed row now, before
-    /// `NSTableView.mouseDown` starts tracking, as Finder does. Left to AppKit, the pane would
-    /// learn of the row only when tracking posts a change, and the listing that taking the keys
-    /// starts (`Pane.didGainFocus`) could land first and show the pane's old selection until
-    /// mouse up. A press on a selected row, with Shift, Command or Control, or below the rows is
-    /// left to AppKit: a drag must take the whole selection, and those presses extend, toggle,
-    /// open a menu or clear.
-    func selectOnFirstPress(_ event: NSEvent) {
-        guard let window, window.firstResponder !== self, window.makeFirstResponder(self) else {
-            return
-        }
+    /// A press takes the keys if the table lacks them and selects the pressed row now, before
+    /// `NSTableView.mouseDown` starts tracking, as Finder does. Left to AppKit, the table selects
+    /// the row only at mouse up (or when a drag starts), whether or not it had the keys: a press
+    /// through `NSWindow.sendEvent` has already made the table first responder when `mouseDown`
+    /// runs, so no check of the first responder can tell a press in another pane. A press on a
+    /// selected row, with Shift, Command or Control, or below the rows is left to AppKit: a drag
+    /// must take the whole selection, and those presses extend, toggle, open a menu or clear.
+    func selectOnPress(_ event: NSEvent) {
+        guard let window, window.makeFirstResponder(self) else { return }
         guard event.modifierFlags.isDisjoint(with: [.shift, .command, .control]) else { return }
         let row = row(at: convert(event.locationInWindow, from: nil))
         guard row >= 0, !selectedRowIndexes.contains(row) else { return }

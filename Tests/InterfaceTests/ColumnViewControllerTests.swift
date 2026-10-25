@@ -439,6 +439,40 @@ extension Fixture {
     #expect(fixture.pane.location == Location(path: "/r/docs/sub"))
 }
 
+@MainActor @Test func aRealPressInAnotherColumnSelectsItsRowWhileTheButtonIsDown() async throws {
+    let fixture = await Fixture()
+    await fixture.select("docs", inColumn: 0)
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 800, height: 400), styleMask: [.titled],
+        backing: .buffered, defer: true)
+    window.isReleasedWhenClosed = false
+    window.contentView?.addSubview(fixture.controller.view)
+    window.contentView?.layoutSubtreeIfNeeded()
+    SecondDisplay.orderFront(window)
+    defer { window.orderOut(nil) }
+    #expect(fixture.trail.focusedIndex == 0)
+
+    // The second column lists `docs`: sub, x.txt.
+    let shots = try fixture.tables[1].realPress(onRow: 1)
+
+    let held = try #require(shots.filter(\.buttonIsDown).last)
+    #expect(held.hasKeys)
+    #expect(held.rows == [1])
+    #expect(held.drawnRows == [1])
+    #expect(fixture.trail.focusedIndex == 1)
+    let column = fixture.trail.columns[1].pane
+    let listing = try #require(column.state.listing)
+    #expect(column.selection.rows(in: listing) == [1])
+
+    // Back in the first column: a.txt, docs, other.
+    let back = try fixture.tables[0].realPress(onRow: 2)
+
+    let backHeld = try #require(back.filter(\.buttonIsDown).last)
+    #expect(backHeld.rows == [2])
+    #expect(backHeld.drawnRows == [2])
+    #expect(fixture.trail.focusedIndex == 0)
+}
+
 /// The views and children of the shown columns, and nothing else but the preview and its grip: a
 /// column, its separator, its spinner and its grip each.
 @MainActor
