@@ -84,7 +84,7 @@ public enum ListingState: Sendable {
     /// The rows shown came from the pane's own load, a first batch or all of it, so the folder's
     /// volume answered. Cached rows, and the rows a slow or offline state keeps, come from a
     /// volume that hasn't answered since, and a read there can wait on a share that is gone.
-    var isAnswered: Bool {
+    public var isAnswered: Bool {
         switch self {
         case .partial, .loaded: true
         case .loading, .cachedRefreshing, .slow, .offline, .denied, .failed: false

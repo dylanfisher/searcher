@@ -1404,16 +1404,19 @@ private func folderSize(_ name: String, in pane: Pane) -> Listing.FolderSizeValu
 @MainActor private let typeIcon = NSImage(size: NSSize(width: 1, height: 1))
 
 /// A list of `/folder`, holding `entries`, 400 points tall, whose service makes thumbnails with
-/// `maker` on `volumes`, or on one local volume; `/other` holds `o.jpg`. Loaded and laid out.
+/// `maker`, its folders on `volume`, as `statfs` reads it, or on one local volume; `/other`
+/// holds `o.jpg`. Loaded and laid out.
 @MainActor
 private func photoController(
-    _ entries: [DirectoryEntry], maker: GatedThumbnailMaker, volumes: [VolumeIdentity] = []
+    _ entries: [DirectoryEntry], maker: GatedThumbnailMaker,
+    volume: VolumeIdentity = ListingService.listerVolume
 ) async -> ListingViewController {
     let lister = StubLister(["/folder": entries, "/other": [file("o.jpg")]])
-    let thumbnails = ThumbnailService(maker: maker, mountedVolumes: { volumes })
     let pane = Pane(
         location: Location(path: "/folder"),
-        service: ListingService(lister: lister, thumbnails: thumbnails),
+        service: ListingService(
+            lister: lister, volumeOf: { _ in volume },
+            thumbnails: ThumbnailService(maker: maker)),
         systemActions: StubSystemActions(), settings: untouchedSettings())
     let controller = ListingViewController(
         pane: pane, iconCache: TypeIconCache { _ in typeIcon }, formatter: .init(),
@@ -1519,15 +1522,16 @@ private func rowImage(_ controller: ListingViewController, row: Int) -> NSImage?
 }
 
 /// A file on a network volume keeps its icon: making its thumbnail would read it over the
-/// network (0004-listing-view.md).
-@MainActor @Test func aFileOnANetworkVolumeAsksForNoThumbnail() async throws {
-    let share = VolumeIdentity(device: "//nas/share", mountPoint: "/folder", kind: .network)
+/// network (0004-listing-view.md). The folder's volume is the one its load read with `statfs`,
+/// so `/folder`, a path under `/` reached through a link onto a share, is on the share.
+@MainActor @Test func aFileOnANetworkVolumeAsksForNoThumbnailWhateverItsPathReads() async throws {
+    let share = VolumeIdentity(device: "//nas/share", mountPoint: "/Volumes/nas", kind: .network)
     let maker = GatedThumbnailMaker()
-    let controller = await photoController([file("e.jpg")], maker: maker, volumes: [share])
-    let service = try #require(controller.pane.service.thumbnails)
+    let controller = await photoController([file("e.jpg")], maker: maker, volume: share)
+    #expect(controller.pane.folderVolume == share)
 
-    await settle { service.cached(at: "/folder/e.jpg", entry: file("e.jpg"), side: 16) != nil }
-
+    // The rows on screen were checked when they loaded and when they were laid out.
+    #expect(controller.askedThumbnails.isEmpty)
     #expect(maker.calls.isEmpty)
     #expect(rowImage(controller, row: 0) === typeIcon)
 }

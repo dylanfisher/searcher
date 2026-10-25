@@ -377,13 +377,16 @@ public final class ColumnTrail {
     /// Gives `next`, a file in `pane`, the thumbnail kept of its entry, or starts making one,
     /// unless that is done or running for its entry already. A file of the entry shown keeps
     /// its thumbnail until the new one lands, as its info does. A file that may not show one
-    /// (`ThumbnailService.shows`), and one in rows its volume hasn't answered with, gets none
-    /// and keeps its type icon (0102-thumbnails.md).
+    /// (`ThumbnailService.shows`), one in rows its volume hasn't answered with, and one whose
+    /// folder's volume isn't known or is a share, gets none and keeps its type icon. Its request
+    /// waits ahead of rows' for its volume's slot, so the hold isn't spent behind them
+    /// (0102-thumbnails.md).
     private func updateThumbnail(of next: inout ColumnPreview, in pane: Pane) {
         guard thumbnailEntry != next.entry else { return }
         cancelThumbnail()
         guard let thumbnails = owner.service.thumbnails,
-            ThumbnailService.shows(next.entry, kind: next.kind), pane.state.isAnswered
+            ThumbnailService.shows(next.entry, kind: next.kind), pane.state.isAnswered,
+            let volume = pane.folderVolume, ThumbnailService.makes(on: volume)
         else {
             next.thumbnail = nil
             return
@@ -401,7 +404,8 @@ public final class ColumnTrail {
             let thumbnail: CGImage?
             do {
                 thumbnail = try await thumbnails.thumbnail(
-                    at: location.path, entry: entry, side: ColumnPreview.iconSide)
+                    at: location.path, entry: entry, side: ColumnPreview.iconSide, on: volume,
+                    first: true)
             } catch {
                 // Cancelled before it started: the preview moved on.
                 return

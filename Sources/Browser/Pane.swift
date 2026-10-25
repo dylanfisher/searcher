@@ -143,6 +143,18 @@ public final class Pane {
     var previewHoldClock: any Clock<Duration> = ContinuousClock()
     private(set) var load: ListingLoad?
     private var loadIsRunning = false
+    /// The volume holding the folder, as its load read it with `statfs`, so a folder reached
+    /// through a link onto a share is on the share; nil until a load has read it. A copy made
+    /// with its source's rows has its source's, and a pane listing its folder again keeps the
+    /// last load's, until the new load reads it.
+    public var folderVolume: VolumeIdentity? {
+        if let load, load.location == location, let volume = load.volume { return volume }
+        guard let keptVolume, keptVolume.location == location else { return nil }
+        return keptVolume.volume
+    }
+    /// A folder's volume from before the running load: the last load's, or the source's for a
+    /// copy.
+    private var keptVolume: (location: Location, volume: VolumeIdentity)?
     /// Whether loads go ahead of other panes'. A trail moves it between its columns without
     /// listing them again. A change moves a waiting load in the queue.
     var isFocused: Bool {
@@ -325,6 +337,7 @@ public final class Pane {
         pane.copiedFrom = self
         pane.columnWidths = columnWidths
         guard rows != nil else { return pane }
+        pane.keptVolume = folderVolume.map { (location, $0) }
         pane.loadedAt = loadedAt
         pane.rootVolumeName = rootVolumeName
         pane.volumeName = volumeName
@@ -1191,6 +1204,7 @@ public final class Pane {
     /// Starts a load whose worker also resolves the selection, as it is now, against each listing
     /// it hands over.
     private func startLoad() {
+        if let load, let volume = load.volume { keptVolume = (load.location, volume) }
         load?.cancel()
         loadIsRunning = true
         let selection = selection
