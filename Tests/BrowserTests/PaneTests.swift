@@ -8,7 +8,8 @@ import UniformTypeIdentifiers
 
 @testable import Browser
 
-/// A pane over a `GatedLister`. Every call is released unless the test passes `held`.
+/// A pane over a `GatedLister`. Every call is released unless the test passes `held`. Its
+/// service makes thumbnails with `thumbnails`, or none.
 @MainActor
 struct PaneFixture {
     let pane: Pane
@@ -18,13 +19,14 @@ struct PaneFixture {
     init(
         at path: String, folders: [String: [DirectoryEntry]], held: Bool = false,
         settings: Settings = untouchedSettings(), sortedBy column: SortColumn = .name,
-        ascending: Bool = true
+        ascending: Bool = true, thumbnails: ThumbnailService? = nil
     ) {
         lister = GatedLister(folders.mapValues { .batches([$0]) })
         if !held { lister.releaseAll() }
         actions = StubSystemActions()
         pane = Pane(
-            location: Location(path: path), service: ListingService(lister: lister),
+            location: Location(path: path),
+            service: ListingService(lister: lister, thumbnails: thumbnails),
             systemActions: actions, settings: settings, sortedBy: column, ascending: ascending)
     }
 

@@ -9,6 +9,10 @@ public struct EntryKind: Hashable, Sendable {
     public let type: UTType
     /// The type's description with its first letter capitalized, as Finder shows kinds.
     public let text: String
+    /// Whether the type is text, such as plain text, source code or JSON, which shows its type
+    /// icon rather than a thumbnail of a page of text, as Finder shows it. An image stored as
+    /// text, such as SVG, isn't.
+    public let isText: Bool
 
     /// The kind of an entry of `fileType` whose name ends in `pathExtension`. Each pair is looked
     /// up once per process and each type described once. Call it off the main thread: a lookup
@@ -25,6 +29,7 @@ public struct EntryKind: Hashable, Sendable {
     private init(type: UTType, text: String) {
         self.type = type
         self.text = text
+        isText = type.conforms(to: .text) && !type.conforms(to: .image)
     }
 
     private static let cache = Cache()

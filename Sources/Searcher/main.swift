@@ -59,7 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 roots: roots, log: { logger.error("\($0, privacy: .public)") })
             let cache = ListingCache(store: store)
             self.cache = cache
-            service = ListingService(cache: cache)
+            service = ListingService(cache: cache, thumbnails: ThumbnailService())
             let sizeLogger = Logger(category: "sizes")
             let dropLogger = Logger(category: "folderSizes")
             folderSizes = FolderSizeService(
