@@ -35,6 +35,15 @@ validates a drop on every pointer move, on the main thread, from the listing alo
   since the wait can be long (the prompt waits for the user; the reply waits up to
   `finderTimeout`, 30 s), and on a GCD queue or the cooperative pool it would hold a worker.
   Tests inject the sender, so no test sends an Apple Event.
+- **One request at a time.** While Finder hasn't answered a Get Info, another one does nothing
+  and is logged. Pressing ⌘I again at a hung Finder then doesn't pile up events that all open
+  windows once it wakes. Replacing the waiting request isn't possible: an event already sent
+  can't be taken back from Finder.
+- **The prompt doesn't use up the timeout.** The sender first asks for permission with
+  `AEDeterminePermissionToAutomateTarget`, asking the user if needed, with no timeout, and sends
+  the event only once that returns, so the 30 s start after the prompt is answered. A timeout
+  (`errAETimeout`, -1712) is logged and not presented, whenever it happens: Finder keeps the
+  event and opens the windows once it gets to it, so an alert would be wrong as often as not.
 - **Automation permission.** `NSAppleEventsUsageDescription` is in `Info.plist`; without it
   macOS refuses the event without asking. `scripts/bundle` copies the plist as it is and signs
   without the hardened runtime, so no `com.apple.security.automation.apple-events` entitlement is
@@ -77,7 +86,12 @@ validates a drop on every pointer move, on the main thread, from the listing alo
   to what it was, so the folders sprung through are no Back steps. In column view each column
   still in the trail takes back its selection, left to right, and the focus goes back to its
   column. If something other than the drag moved the pane after the last spring (another folder,
-  or another folder in a column the spring left), the pane stays.
+  or another folder in a column the spring left), the pane stays. In list view the filter comes
+  back too: moving into a folder clears it, so `SpringOrigin` keeps it.
+- **No palette visits.** A spring and the way back count no visit in `FolderVisits`, so a drag
+  that only hovers leaves the palette's frecency as it was. Since the pane always goes back,
+  the user never stays in a sprung folder, so no folder of a spring is counted, the drop's
+  target included.
 - **Knowing the drag ended.** A list hears `draggingEnded` when the drag ends over it, after its
   drop, if any. A drag that ends elsewhere sends the pane nothing, so once the drag has left the
   pane's lists after a spring, `SpringLoader` checks the mouse button every 100 ms and goes back
@@ -107,5 +121,5 @@ alert sends the user to System Settings. An ad hoc signature changes with every 
 Automation grant may need renewing after a rebuild, as Full Disk Access does. Whether AppKit
 reports Space during a drag from another app depends on the drag server, which tests can't
 reach; tests call the activation directly. If AppKit ever fails to send `draggingEnded` for a
-drag that ends over a list, the pane stays in the sprung folder. A spring in list view clears
-the filter, as any navigation does, and going back doesn't restore it.
+drag that ends over a list, the pane stays in the sprung folder. A Get Info pressed while Finder
+is busy is dropped, not queued; the user presses ⌘I again once Finder answers.

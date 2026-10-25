@@ -143,6 +143,53 @@ private let infoItems = [
     answer.signal()
 }
 
+/// While Finder hasn't answered, another Get Info sends nothing; once it answers, the next one
+/// is sent.
+@MainActor @Test func getInfoWhileFinderHasntAnsweredDoesNothing() async {
+    let requests = EventLog<InfoRequest>()
+    let answer = DispatchSemaphore(value: 0)
+    let actions = WorkspaceSystemActions(
+        applicationURL: { _ in nil }, presentError: { _ in },
+        sendToFinder: { urls in
+            requests.append(InfoRequest(urls: urls, onMainThread: Thread.isMainThread))
+            answer.wait()
+        })
+    let second = [URL(fileURLWithPath: "/r/b.txt", isDirectory: false)]
+
+    actions.showInfo(infoItems)
+    #expect(await requests.wait { $0.count == 1 })
+    actions.showInfo(second)
+    answer.signal()
+    await settle { !actions.isShowingInfo }
+    #expect(requests.all.map(\.urls) == [infoItems])
+
+    actions.showInfo(second)
+    #expect(await requests.wait { $0.count == 2 })
+    answer.signal()
+    #expect(requests.all.map(\.urls) == [infoItems, second])
+    await settle { !actions.isShowingInfo }
+}
+
+/// Finder keeps an event it didn't answer in time and opens the windows later, so a timeout
+/// shows no error, and the next Get Info is sent.
+@MainActor @Test func aTimeoutShowsNoErrorAndFreesTheNextGetInfo() async {
+    let log = ErrorLog()
+    let sends = EventLog<Bool>()
+    let actions = WorkspaceSystemActions(
+        applicationURL: { _ in nil }, presentError: { log.errors.append($0) },
+        sendToFinder: { _ in
+            sends.append(true)
+            throw NSError(domain: NSOSStatusErrorDomain, code: -1712)
+        })
+
+    actions.showInfo(infoItems)
+    await settle { sends.all.count == 1 && !actions.isShowingInfo }
+    actions.showInfo(infoItems)
+    await settle { sends.all.count == 2 && !actions.isShowingInfo }
+
+    #expect(log.errors.isEmpty)
+}
+
 @MainActor @Test func aRefusedEventExplainsAutomationAndOffersItsSettings() async throws {
     let log = ErrorLog()
     let opened = EventLog<URL>()
@@ -170,8 +217,8 @@ private let infoItems = [
         applicationURL: { _ in nil }, presentError: { log.errors.append($0) },
         sendToFinder: { _ in
             throw NSError(
-                domain: NSOSStatusErrorDomain, code: -1712,
-                userInfo: [NSLocalizedDescriptionKey: "AppleEvent timed out."])
+                domain: NSOSStatusErrorDomain, code: -1728,
+                userInfo: [NSLocalizedDescriptionKey: "Can’t get information window."])
         })
 
     actions.showInfo(infoItems)
@@ -179,7 +226,7 @@ private let infoItems = [
     await settle { log.errors.count == 1 }
     let error = try #require(log.errors.first as? WorkspaceSystemActions.InfoFailed)
     #expect(error.localizedDescription == "Finder didn’t show the Info window")
-    #expect(error.recoverySuggestion == "AppleEvent timed out.")
+    #expect(error.recoverySuggestion == "Can’t get information window.")
 }
 
 /// The event AppleScript sends for `open information window of item`, one specifier per item,

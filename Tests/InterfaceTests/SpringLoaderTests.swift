@@ -8,11 +8,12 @@ import Testing
 @testable import Browser
 @testable import Interface
 
-/// `/r` holds a folder `docs`, the app `Tool.app`, a link `link` and a file `a.txt`; `/r/docs`
-/// holds a folder `sub`.
+/// `/r` holds the folders `docs` and `more`, the app `Tool.app`, a link `link` and a file
+/// `a.txt`; `/r/docs` holds a folder `sub`.
 private let tree: [String: [DirectoryEntry]] = [
     "/": [folder("r")],
-    "/r": [folder("docs"), package("Tool.app"), link("link"), file("a.txt")],
+    "/r": [folder("docs"), folder("more"), package("Tool.app"), link("link"), file("a.txt")],
+    "/r/more": [],
     "/r/docs": [folder("sub"), file("x.txt")],
     "/r/docs/sub": [file("one.txt")],
 ]
@@ -108,10 +109,7 @@ private final class Fixture {
             listController = controller
             columnController = nil
         }
-        let pasteboard = pasteboard
-        let item = NSPasteboardItem()
-        item.setString(URL(fileURLWithPath: "/elsewhere/x.txt").absoluteString, forType: .fileURL)
-        #expect(pasteboard.writeObjects([item]))
+        drag("/elsewhere/x.txt")
         let mounts = mounts
         await settle {
             !self.lists.isEmpty && self.lists.allSatisfy { $0.pane.state.isLoaded }
@@ -126,6 +124,14 @@ private final class Fixture {
     /// The mouse button, down while the drag goes on.
     final class Mouse {
         var isDown = true
+    }
+
+    /// Puts the file at `path` on the drag's pasteboard, as Finder writes it.
+    func drag(_ path: String) {
+        pasteboard.clearContents()
+        let item = NSPasteboardItem()
+        item.setString(URL(fileURLWithPath: path).absoluteString, forType: .fileURL)
+        #expect(pasteboard.writeObjects([item]))
     }
 
     /// The list, or each column left to right.
@@ -182,6 +188,31 @@ private final class Fixture {
     for _ in 0..<20 { await Task.yield() }
     #expect(fixture.pane.location.path == "/r")
     #expect(fixture.info.resets == 2)
+}
+
+@MainActor @Test func movingToAnotherFolderRowStartsTheDelayAgain() async throws {
+    let fixture = await Fixture()
+
+    try fixture.hover(over: "docs")
+    await fixture.advance(by: delay - .milliseconds(100))
+    try fixture.hover(over: "more")
+    await fixture.advance(by: delay - .milliseconds(1))
+
+    #expect(fixture.pane.location.path == "/r")
+
+    fixture.clock.advance(by: .milliseconds(1))
+    await settle { fixture.pane.location.path == "/r/more" }
+}
+
+/// A folder dragged onto its own row can't drop into itself, so it doesn't spring either.
+@MainActor @Test func aFolderDraggedOntoItsOwnRowDoesntSpring() async throws {
+    let fixture = await Fixture()
+    fixture.drag("/r/docs")
+
+    #expect(try fixture.hover(over: "docs") == [])
+
+    #expect(fixture.loader.target == nil)
+    #expect(fixture.clock.waitingSleeps == 0)
 }
 
 @MainActor @Test func leavingTheListBeforeTheDelayOpensNothing() async throws {
@@ -292,4 +323,30 @@ private final class Fixture {
 
     await settle { fixture.columnFolders == ["/r"] }
     #expect(fixture.pane.columnTrail?.columns.first?.pane.selection.cursor == nil)
+    // The mouse check stops with the drag.
+    await settle { fixture.clock.waitingSleeps == 0 }
+}
+
+/// A drag that leaves the lists after a spring and comes back to end over one stops the mouse
+/// check when it ends.
+@MainActor @Test func aDragThatEndsOverAListStopsTheMouseCheck() async throws {
+    let fixture = await Fixture()
+    let table = try #require(fixture.lists.first?.tableView)
+
+    try fixture.hover(over: "docs")
+    await fixture.advance(by: delay)
+    await settle { fixture.pane.location.path == "/r/docs" }
+    table.draggingExited(fixture.info)
+    await settle { fixture.clock.waitingSleeps == 1 }
+    await settle { fixture.pane.state.isLoaded }
+    try fixture.hover(over: "sub")
+    await settle { fixture.clock.waitingSleeps == 2 }
+    table.draggingEnded(fixture.info)
+
+    #expect(fixture.pane.location.path == "/r")
+    await settle { fixture.clock.waitingSleeps == 0 }
+    fixture.mouse.isDown = false
+    fixture.clock.advance(by: SpringLoader.mouseCheckInterval)
+    for _ in 0..<20 { await Task.yield() }
+    #expect(fixture.pane.location.path == "/r")
 }
