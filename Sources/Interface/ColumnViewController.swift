@@ -91,6 +91,20 @@ final class ColumnViewController: NSViewController {
     /// The focused column, the column count and whether a preview showed when last scrolled, so
     /// a selection change within a column leaves the view where the user scrolled it.
     private var scrolledTo: (focus: Int, count: Int, hasPreview: Bool)?
+    /// How long the scroll to the focused column takes, about Finder's.
+    static let scrollDuration = 0.25
+    /// Moves the clip view's left edge to `x`, animated or not. Tests replace it to see what the
+    /// view asked for.
+    var animateScroll: @MainActor (NSClipView, Double, Bool) -> Void = { clip, x, animated in
+        ColumnViewController.moveClip(clip, toX: x, animated: animated)
+    }
+    /// Whether the user asked the system to reduce motion. Tests replace it.
+    var reduceMotion: @MainActor () -> Bool = {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+    /// True when the last `paneDidChange` kept a column, so the view the user is looking at is
+    /// the one that moves; false for a new trail, which shows its focus at once.
+    private var keptColumn = false
 
     /// Posts an accessibility notification. Tests replace it to record what would be posted.
     var postAccessibility:
@@ -165,6 +179,7 @@ final class ColumnViewController: NSViewController {
             controller.view.removeFromSuperview()
             controller.removeFromParent()
         }
+        keptColumn = !kept.isEmpty
         columnControllers = columns.map { column in
             kept.first { $0.pane === column.pane } ?? makeController(for: column)
         }
@@ -656,16 +671,48 @@ final class ColumnViewController: NSViewController {
             focus: trail.focusedIndex, count: columnControllers.count,
             hasPreview: shownPreview != nil
         )
-        guard scrolledTo.map({ $0 != target }) ?? true else { return }
+        let previous = scrolledTo
+        guard previous.map({ $0 != target }) ?? true else { return }
         scrolledTo = target
         let focused = columnControllers[trail.focusedIndex].view.frame
         let next =
             trail.focusedIndex + 1 < columnControllers.count
             ? columnControllers[trail.focusedIndex + 1].view : shownPreview
-        if let next {
-            columnsView.scrollToVisible(focused.union(next.frame))
+        guard let scrollView = view as? NSScrollView else {
+            preconditionFailure("the column view's view is \(view)")
         }
-        columnsView.scrollToVisible(focused)
+        let clip = scrollView.contentView
+        var x = Self.originX(
+            showing: next.map { focused.union($0.frame) } ?? focused, from: clip.bounds.origin.x,
+            width: clip.bounds.width)
+        x = Self.originX(showing: focused, from: x, width: clip.bounds.width)
+        // A first show, a view that has no column kept (a restore, a new trail) and a resizing
+        // drag jump; so does Reduce Motion (0046-column-view.md).
+        let animated = previous != nil && keptColumn && resizing == nil && !reduceMotion()
+        animateScroll(clip, x, animated)
+    }
+
+    /// The left edge of the visible area that shows `rect` with the least scrolling from `x`:
+    /// `rect`'s left edge when it is wider than the area.
+    static func originX(showing rect: NSRect, from x: Double, width: Double) -> Double {
+        if rect.width >= width { return rect.minX }
+        if rect.minX < x { return rect.minX }
+        if rect.maxX > x + width { return rect.maxX - width }
+        return x
+    }
+
+    /// Moves `clip` so its left edge is at `x`, over `scrollDuration` when `animated`. Setting
+    /// the origin through the animator also ends an animation still running, so a new target
+    /// retargets it from where it is and a jump never leaves it to finish.
+    static func moveClip(_ clip: NSClipView, toX x: Double, animated: Bool) {
+        let origin = clip.constrainBoundsRect(
+            NSRect(origin: NSPoint(x: x, y: clip.bounds.origin.y), size: clip.bounds.size)
+        ).origin
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = animated ? scrollDuration : 0
+            clip.animator().setBoundsOrigin(origin)
+        }
+        clip.enclosingScrollView?.reflectScrolledClipView(clip)
     }
 }
 

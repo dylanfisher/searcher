@@ -131,6 +131,144 @@ private struct Fixture {
     #expect(scrollView.documentVisibleRect.contains(first.frame))
 }
 
+/// What the view asked its scroll to do: the left edge it moved to and whether it animated.
+@MainActor
+private final class ScrollLog {
+    var requests: [(x: Double, animated: Bool)] = []
+}
+
+extension Fixture {
+    /// Records each scroll the view asks for and makes it at once, so a test reads the result
+    /// without waiting on an animation.
+    func logScrolls() -> ScrollLog {
+        let log = ScrollLog()
+        controller.animateScroll = { clip, x, animated in
+            log.requests.append((x, animated))
+            ColumnViewController.moveClip(clip, toX: x, animated: false)
+        }
+        return log
+    }
+}
+
+@MainActor @Test func theScrollToTheFocusedColumnIsAnimatedAndReachesItsTarget() async throws {
+    let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)
+    await fixture.openThreeColumns()
+    let log = fixture.logScrolls()
+    fixture.controller.reduceMotion = { false }
+    let scrollView = try #require(fixture.controller.view as? NSScrollView)
+    let third = fixture.controller.columnControllers[2].view
+
+    fixture.trail.moveRight()
+    fixture.trail.moveRight()
+
+    let last = try #require(log.requests.last)
+    #expect(last.animated)
+    #expect(scrollView.documentVisibleRect.contains(third.frame))
+    #expect(abs(last.x - scrollView.contentView.bounds.origin.x) < 0.5)
+}
+
+@MainActor @Test func aRealAnimatedScrollEndsAtTheLatestTarget() async throws {
+    let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)
+    await fixture.openThreeColumns()
+    fixture.controller.reduceMotion = { false }
+    let clip = try #require((fixture.controller.view as? NSScrollView)?.contentView)
+    let second = fixture.controller.columnControllers[1].view
+    let third = fixture.controller.columnControllers[2].view
+
+    // Two columns right, then one back before the first animation ends: the second and third
+    // columns are the ones in view.
+    fixture.trail.moveRight()
+    fixture.trail.moveRight()
+    fixture.trail.moveLeft()
+
+    let visible = { clip.documentVisibleRect }
+    await settle { visible().contains(second.frame) && visible().contains(third.frame) }
+    // Long enough for the first animation to have ended had it not been retargeted.
+    try await Task.sleep(for: .milliseconds(500))
+    #expect(visible().contains(second.frame))
+    #expect(visible().contains(third.frame))
+    #expect(clip.bounds.origin.x < third.frame.minX - second.frame.width / 2)
+}
+
+@MainActor @Test func aJumpEndsAnAnimationStillRunning() async throws {
+    let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)
+    await fixture.openThreeColumns()
+    let clip = try #require((fixture.controller.view as? NSScrollView)?.contentView)
+
+    ColumnViewController.moveClip(clip, toX: 200, animated: true)
+    ColumnViewController.moveClip(clip, toX: 0, animated: false)
+
+    #expect(clip.bounds.origin.x == 0)
+    try await Task.sleep(for: .milliseconds(400))
+    #expect(clip.bounds.origin.x == 0)
+}
+
+@MainActor @Test func reduceMotionJumpsToTheFocusedColumn() async throws {
+    let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)
+    await fixture.openThreeColumns()
+    let log = fixture.logScrolls()
+    fixture.controller.reduceMotion = { true }
+
+    fixture.trail.moveRight()
+    fixture.trail.moveRight()
+
+    #expect(!log.requests.isEmpty)
+    #expect(log.requests.allSatisfy { !$0.animated })
+}
+
+@MainActor @Test func theFirstShowOfAColumnViewDoesNotAnimate() async throws {
+    let log = ScrollLog()
+    let lister = StubLister(tree)
+    let pane = Pane(
+        location: Location(path: "/r/docs/sub"),
+        service: ListingService(lister: lister, rootVolumeName: { "Test Disk" }),
+        systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true,
+        viewMode: .column)
+    let controller = ColumnViewController(
+        pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init())
+    controller.startMonitor = { _ in }
+    controller.reduceMotion = { false }
+    controller.animateScroll = { clip, x, animated in
+        log.requests.append((x, animated))
+        ColumnViewController.moveClip(clip, toX: x, animated: false)
+    }
+    pane.onChange = { [weak controller] in controller?.paneDidChange() }
+    controller.view.frame = NSRect(x: 0, y: 0, width: 300, height: 400)
+    controller.paneDidChange()
+    await settle { pane.columnTrail?.focused.pane.state.isLoaded ?? false }
+
+    #expect(!log.requests.isEmpty)
+    #expect(log.requests.first?.animated == false)
+}
+
+@MainActor @Test func aNewTrailJumpsToItsFocus() async throws {
+    let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)
+    await fixture.openThreeColumns()
+    fixture.trail.moveRight()
+    fixture.trail.moveRight()
+    let log = fixture.logScrolls()
+    fixture.controller.reduceMotion = { false }
+
+    // A workspace or a Go to folder replaces every column.
+    fixture.pane.navigate(to: Location(path: "/r/other"))
+    await settle { fixture.trail.focused.pane.state.isLoaded }
+
+    #expect(!log.requests.isEmpty)
+    #expect(log.requests.allSatisfy { !$0.animated })
+}
+
+@MainActor @Test func theSelectionMovesAtOnceWhileTheScrollAnimates() async throws {
+    let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)
+    await fixture.openThreeColumns()
+    fixture.controller.reduceMotion = { false }
+
+    fixture.trail.moveRight()
+    fixture.trail.moveRight()
+
+    #expect(fixture.trail.focusedIndex == 2)
+    #expect(fixture.tables[2].selectedRowIndexes == [0])
+}
+
 @MainActor @Test func aCutEntryDrawsDimmedInAColumnOpenedAfterTheCut() async throws {
     let pasteboard = NSPasteboard(name: NSPasteboard.Name("searcher-test-\(UUID().uuidString)"))
     defer { pasteboard.releaseGlobally() }

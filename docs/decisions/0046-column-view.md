@@ -28,7 +28,11 @@ stacked single-column tables over `NSBrowser`.
   → and ←; it adds a controller for each new column and starts its folder monitor, and drops the
   controllers of closed columns. When the focus or the column count changes it scrolls the
   focused column into view, with the column right of it where that fits; a selection change
-  inside a column doesn't scroll.
+  inside a column doesn't scroll. (Superseded 2026-10-24: the scroll is animated, 0.25 seconds
+  through the clip view's animator, which a new target retargets from where it is, so a held →
+  or ← never queues one. The rows and the selection are set before it starts, so B6 doesn't
+  change. It jumps for the first show, a new trail with no column kept (a restore, a workspace,
+  a Go to folder), a resizing drag and Reduce Motion.)
 - **`PaneViewController`** holds the list and the columns in the same place and shows one by the
   pane's view mode. It builds `CommandContext` with `commandPane`, the filter field calls
   `setFilter` on it, and Quick Look toggles the focused column's controller. The path bar and Go
