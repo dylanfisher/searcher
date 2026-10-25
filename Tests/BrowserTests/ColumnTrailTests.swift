@@ -1133,8 +1133,47 @@ private func info(_ seconds: Double, tags: [String] = []) -> ItemInfo {
     #expect(trail(fixture.pane).preview?.info == .reading)
     #expect(await reader.waitForCall("/r/a.txt"))
     #expect(reader.calls.map(\.onMainThread) == [false])
+    #expect(reader.calls.map(\.onBlockingCallThread) == [true])
     reader.releaseAll()
     await settle { trail(fixture.pane).preview?.info == .read(info(1, tags: ["Red"])) }
+}
+
+/// A file replaced under its name, as a save by rename replaces it, is read again; it shows
+/// what was read of it until then.
+@MainActor @Test func aChangedFileIsReadAgain() async throws {
+    let fixture = await columnPane()
+    let reader = GatedItemInfoReader(["/r/a.txt": info(1)])
+    reader.releaseAll()
+    fixture.pane.itemInfoReader = reader
+    let first = trail(fixture.pane).columns[0].pane
+    select("a.txt", in: trail(fixture.pane).columns[0])
+    await settle { trail(fixture.pane).preview?.info == .read(info(1)) }
+
+    first.apply(.patches([.update(file("a.txt", size: 5))]), at: first.location)
+
+    await settle { reader.calls.count == 2 }
+    #expect(trail(fixture.pane).preview?.entry.size == 5)
+    #expect(trail(fixture.pane).preview?.info == .read(info(1)))
+    #expect(await reader.waitForFinished(2))
+    for _ in 0..<3 { await drainMainQueue() }
+    #expect(trail(fixture.pane).preview?.info == .read(info(1)))
+}
+
+@MainActor @Test func aPatchToAnotherEntryKeepsThePreviewsRead() async throws {
+    let fixture = await columnPane()
+    let reader = GatedItemInfoReader(["/r/a.txt": info(1)])
+    reader.releaseAll()
+    fixture.pane.itemInfoReader = reader
+    let first = trail(fixture.pane).columns[0].pane
+    select("a.txt", in: trail(fixture.pane).columns[0])
+    await settle { trail(fixture.pane).preview?.info == .read(info(1)) }
+
+    first.apply(.patches([.update(file("b.txt"))]), at: first.location)
+
+    await settle { first.state.names.contains("b.txt") }
+    for _ in 0..<3 { await drainMainQueue() }
+    #expect(trail(fixture.pane).preview?.info == .read(info(1)))
+    #expect(reader.calls.count == 1)
 }
 
 @MainActor @Test func aPackagesPreviewReadsItsInfoToo() async throws {

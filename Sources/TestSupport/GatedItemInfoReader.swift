@@ -9,6 +9,7 @@ public final class GatedItemInfoReader: ItemInfoReading, @unchecked Sendable {
     public struct Call: Sendable, Equatable {
         public let path: String
         public let onMainThread: Bool
+        public let onBlockingCallThread: Bool
     }
 
     /// The error a call for a path set to nil throws.
@@ -32,7 +33,10 @@ public final class GatedItemInfoReader: ItemInfoReading, @unchecked Sendable {
             preconditionFailure("GatedItemInfoReader has no info for \(path)")
         }
         condition.lock()
-        startedCalls.append(Call(path: path, onMainThread: Thread.isMainThread))
+        startedCalls.append(
+            Call(
+                path: path, onMainThread: Thread.isMainThread,
+                onBlockingCallThread: BlockingCallThread.isCurrent))
         condition.broadcast()
         while !allReleased && !released.contains(path) {
             condition.wait()

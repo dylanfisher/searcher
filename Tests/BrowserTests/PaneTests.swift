@@ -618,21 +618,57 @@ private func packageLinkTree() async throws -> (Pane, StubSystemActions, Tempora
     #expect(pane.location.path == root.url.path)
 }
 
-/// Holds `pane`'s package checks on a suspended queue of their own; `resume` lets them run.
-@MainActor
-private func holdLinkChecks(of pane: Pane) -> DispatchQueue {
-    let held = DispatchQueue(label: "held link checks")
-    held.suspend()
-    pane.linkCheckQueue = held
-    return held
+/// A pane's package checks, held until `resume` lets them read, as the real check reads.
+private final class HeldLinkChecks: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var isHeld = true
+    private var finished = 0
+
+    func check(_ path: String) -> Bool {
+        condition.withLock {
+            while isHeld { condition.wait() }
+        }
+        let isPackage = DirectoryLister.isPackage(followingLinksAt: path)
+        condition.withLock {
+            finished += 1
+            condition.broadcast()
+        }
+        return isPackage
+    }
+
+    func suspend() {
+        condition.withLock { isHeld = true }
+    }
+
+    func resume() {
+        condition.withLock {
+            isHeld = false
+            condition.broadcast()
+        }
+    }
+
+    /// Suspends until `count` checks have read, and their answers have reached the main actor.
+    @MainActor
+    func finish(_ count: Int) async {
+        let deadline = Date(timeIntervalSinceNow: 5)
+        while condition.withLock({ finished < count }) {
+            guard Date() < deadline else {
+                Issue.record("\(count) link checks didn't finish")
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(2))
+        }
+        await drainMainQueue()
+        await Task.yield()
+    }
 }
 
-/// Waits until a released check has run on `held` and its answer has reached the main actor.
+/// Holds `pane`'s package checks; `resume` lets them run.
 @MainActor
-private func finishChecks(on held: DispatchQueue) async {
-    await withCheckedContinuation { continuation in held.async { continuation.resume() } }
-    await drainMainQueue()
-    await Task.yield()
+private func holdLinkChecks(of pane: Pane) -> HeldLinkChecks {
+    let held = HeldLinkChecks()
+    pane.linkIsPackage = { held.check($0) }
+    return held
 }
 
 /// A navigation, a second Open or closing the pane while a link's check is pending cancels the
@@ -658,7 +694,8 @@ private func finishChecks(on held: DispatchQueue) async {
 
     held.resume()
     await settle { pane.location.name == "plain link" && pane.state.isLoaded }
-    await finishChecks(on: held)
+    // The first Open's, the app link's and the plain link's.
+    await held.finish(3)
     #expect(actions.openedFiles.isEmpty)
 
     held.suspend()
@@ -669,7 +706,7 @@ private func finishChecks(on held: DispatchQueue) async {
     pane.close()
     #expect(!pane.isCheckingLink)
     held.resume()
-    await finishChecks(on: held)
+    await held.finish(4)
 
     #expect(actions.openedFiles.isEmpty)
     #expect(pane.location.path == root.url.path)

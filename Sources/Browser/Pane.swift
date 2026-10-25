@@ -174,14 +174,14 @@ public final class Pane {
     var rowWorkQueue = DispatchQueue.global(qos: .userInitiated)
     /// Where sorts run. Tests suspend a queue of their own here to hold a sort.
     var sortQueue = DispatchQueue.global(qos: .userInitiated)
-    /// Where Open reads whether a link points to a package (`checkLink`). Tests suspend a queue
-    /// of their own here to hold a check.
-    var linkCheckQueue = DispatchQueue.global(qos: .userInitiated)
-    /// Reads the column view preview's created date, last-opened date and tags. Tests hold its
-    /// reads with a reader of their own.
+    /// Reads whether the link at a path points to a package (`checkLink`). It blocks on a stalled
+    /// share, so it runs on a `BlockingCallThread`. Tests hold a check with one of their own.
+    var linkIsPackage: @Sendable (String) -> Bool = {
+        DirectoryLister.isPackage(followingLinksAt: $0)
+    }
+    /// Reads the column view preview's created date, last-opened date and tags, through
+    /// `ListingService.readInfo`. Tests hold its reads with a reader of their own.
     var itemInfoReader: any ItemInfoReading = ItemInfoReader()
-    /// Where `itemInfoReader` runs.
-    var itemInfoQueue = DispatchQueue.global(qos: .userInitiated)
     /// The folders left, for Back and Forward.
     private(set) var history = History()
     /// The load of a `goToFolder` that hasn't moved the pane yet, and the request it answers.
@@ -725,22 +725,17 @@ public final class Pane {
     /// target's folder would name it, then runs `ifPackage` or `otherwise`. A link whose target
     /// can't be read runs `otherwise`, whose listing reports why. A navigation or Go to folder
     /// before the answer, a second Open and closing the pane cancel both, as they cancel a
-    /// pending go. The read runs on `linkCheckQueue`, not the cooperative pool, since a link onto
-    /// a stalled share blocks it.
+    /// pending go. The read runs on a `BlockingCallThread`, not the cooperative pool or a GCD
+    /// queue, since a link onto a stalled share blocks it (docs/decisions/0038-slow-volumes.md).
     private func checkLink(
         _ link: Location, ifPackage: @escaping @MainActor () -> Void,
         otherwise: @escaping @MainActor () -> Void
     ) {
         cancelGoToFolder()
         let path = link.path
-        let queue = linkCheckQueue
+        let check = linkIsPackage
         packageCheck = Task { [weak self] in
-            let isPackage = await withCheckedContinuation { continuation in
-                queue.async {
-                    continuation.resume(
-                        returning: DirectoryLister.isPackage(followingLinksAt: path))
-                }
-            }
+            let isPackage = await BlockingCallThread.run { check(path) }
             guard let self, !Task.isCancelled else { return }
             packageCheck = nil
             if isPackage { ifPackage() } else { otherwise() }
