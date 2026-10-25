@@ -782,6 +782,36 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             width: max(cell.width - Self.nameX - 2, 0), height: cell.height)
     }
 
+    /// The font of every name cell's text, which `makeCell` leaves at a label's default.
+    static let nameFont: NSFont = {
+        guard let font = NSTextField(labelWithString: "").font else {
+            preconditionFailure("a label has no font")
+        }
+        return font
+    }()
+
+    /// What a name's text field adds to the width of its text as `NSString.size(withAttributes:)`
+    /// measures it in `nameFont`: the field's own insets.
+    private static let nameFieldPadding: Double = {
+        let sample = "M"
+        let textWidth = (sample as NSString).size(withAttributes: [.font: nameFont]).width
+        return NSTextField(labelWithString: sample).intrinsicContentSize.width - textWidth
+    }()
+
+    /// The width this column of column view needs to show, whole beside a folder's chevron, a
+    /// name `nameWidth` points wide in `nameFont`, as `NSString.size(withAttributes:)` measures
+    /// it.
+    func columnWidth(fittingNameWidth nameWidth: Double) -> Double {
+        // The table fits its column to the view's width only when it next tiles, which may not
+        // have happened since the column was resized.
+        tableView.sizeLastColumnToFit()
+        let outside = view.frame.width - tableView.tableColumns[0].width
+        // A point over, for the rounding of the field's own width.
+        let field = (nameWidth + Self.nameFieldPadding).rounded(.up) + 1
+        let trailing = Self.badgeGap + Self.chevronWidth + Self.chevronInset
+        return (outside + Self.nameX + field + trailing).rounded(.up)
+    }
+
     /// The icon's side in the Name column, and where the name starts after it.
     private static let iconSize = 16.0
     private static let nameX = 2 + iconSize + 4
