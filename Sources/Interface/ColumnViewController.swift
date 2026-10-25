@@ -701,18 +701,23 @@ final class ColumnViewController: NSViewController {
         return x
     }
 
-    /// Moves `clip` so its left edge is at `x`, over `scrollDuration` when `animated`. Setting
-    /// the origin through the animator also ends an animation still running, so a new target
-    /// retargets it from where it is and a jump never leaves it to finish.
+    /// Moves `clip` so its left edge is at `x`, on the pixel grid, over `scrollDuration` when
+    /// `animated`. A jump sets the origin directly, which ends an animation still running, and
+    /// an animated move starts from where one running has got to. The scroll view's scrollers
+    /// follow the clip view's bounds notifications.
     static func moveClip(_ clip: NSClipView, toX x: Double, animated: Bool) {
-        let origin = clip.constrainBoundsRect(
+        let target = clip.constrainBoundsRect(
             NSRect(origin: NSPoint(x: x, y: clip.bounds.origin.y), size: clip.bounds.size)
-        ).origin
+        )
+        let origin = clip.backingAlignedRect(target, options: .alignAllEdgesNearest).origin
+        guard animated else {
+            clip.setBoundsOrigin(origin)
+            return
+        }
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = animated ? scrollDuration : 0
+            context.duration = scrollDuration
             clip.animator().setBoundsOrigin(origin)
         }
-        clip.enclosingScrollView?.reflectScrolledClipView(clip)
     }
 }
 
