@@ -110,7 +110,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     }
 
     public override func loadView() {
-        let scrollView = NSScrollView()
+        let scrollView = showsNamesOnly ? ColumnScrollView() : NSScrollView()
         scrollView.documentView = tableView
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = !showsNamesOnly
