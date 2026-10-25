@@ -39,7 +39,18 @@ listing doesn't make.
   is previewed, keeps it in the columns' document view, hides it when there is no preview and
   refills its fields only when the preview changes. It sits right of the last column's separator,
   one column wide (240 points). Its icon is the type's shared icon from `TypeIconCache` at 128
-  points, so showing it reads nothing.
+  points, so showing it reads nothing. (Amended 2026-10-25, from Dylan: "preview area needs a
+  right border to show where you can drag to resize it", and "metadata area should have a
+  minimum width". The preview has the columns' one-point separator line at its right edge,
+  under its grip ([0096](0096-column-widths.md)), shown and hidden with it. Its width is at
+  least `Settings.previewWidths`' lower bound, 200 points, where a column's is 100: at 100 the
+  icon, 128 points then, was wider than the preview and the centered fields ran off its left
+  edge, cutting off the Information titles. 200 leaves, inside the 12-point insets, the widest
+  title, "Last opened", whole and about 110 points beside it for the value, room for
+  "Wednesday," and a date's other words, so a long date wraps by words onto three lines. The
+  preview's grip stops there; an Option-drag or Option-double-click that takes the columns
+  narrower leaves the preview at 200, and the default width a preview with none set follows
+  is held to it. A stored preview width below it is discarded, like one out of range.)
 - **Layout follows Finder's preview.** The icon at the top, the name below it centered and
   wrapping, the kind and size in secondary text, then an Information section with Size and
   Modified rows, titles right-aligned in secondary text. Colors are system colors, so it follows

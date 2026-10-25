@@ -1925,6 +1925,79 @@ private let gripDrags: [[Double]] = [[-30.37, -60.81, -90.13], [-60.4, -20.77, 4
     #expect(Double(preview.nameField.preferredMaxLayoutWidth) == Double(preview.frame.width) - 24)
 }
 
+/// Dylan: the preview "needs a right border to show where you can drag to resize it". It has the
+/// columns' separator line at its right edge, under its grip, shown and hidden with it.
+@MainActor @Test func thePreviewHasTheColumnsSeparatorAtItsRightEdge() async throws {
+    let fixture = await Fixture()
+    await fixture.select("a.txt", inColumn: 0)
+    let preview = try #require(fixture.controller.previewView)
+    let grip = try #require(fixture.controller.previewGrip)
+    let line = try #require(fixture.controller.previewSeparator)
+
+    #expect(line.superview === fixture.controller.columnsView)
+    #expect(line.boxType == .separator)
+    #expect(!line.isHidden)
+    #expect(
+        line.frame == NSRect(x: preview.frame.maxX, y: 0, width: 1, height: preview.frame.height))
+    #expect(grip.frame.midX == line.frame.midX)
+    drag(grip, by: 40)
+    #expect(line.frame.minX == preview.frame.maxX)
+
+    await fixture.select("docs", inColumn: 0)
+    #expect(line.isHidden)
+}
+
+/// Dylan: "metadata area should have a minimum width". Narrower than `Settings.previewWidths`
+/// the Information titles were cut off; the preview's grip stops there, and an Option-drag that
+/// takes the columns narrower leaves the preview there.
+@MainActor @Test func thePreviewStopsAtItsMinimumWidth() async throws {
+    let fixture = await Fixture()
+    await fixture.select("a.txt", inColumn: 0)
+    let preview = try #require(fixture.controller.previewView)
+    let minimum = Settings.previewWidths.lowerBound
+    #expect(minimum > Settings.columnWidths.lowerBound)
+
+    drag(try #require(fixture.controller.previewGrip), by: -1000)
+    #expect(Double(preview.frame.width) == minimum)
+    #expect(fixture.pane.previewWidth == minimum)
+
+    drag(try #require(fixture.controller.grip(forColumnAt: 0)), by: -1000, option: true)
+    #expect(columnWidths(fixture) == [Settings.columnWidths.lowerBound])
+    #expect(Double(preview.frame.width) == minimum)
+    #expect(preview.frame.minX == fixture.controller.columnControllers[0].view.frame.maxX + 1)
+}
+
+/// At its minimum width, with a date that wraps, every field of the preview is inside it, each
+/// Information title is whole, and each value has room for a word of a date on a line.
+@MainActor @Test func atItsMinimumWidthThePreviewsFieldsAreWhole() async throws {
+    let fixture = await Fixture()
+    let reader = GatedItemInfoReader([
+        "/Volumes/r/a.txt": ItemInfo(created: testDate, lastOpened: testDate, tags: ["Red"])
+    ])
+    reader.releaseAll()
+    fixture.pane.itemInfoReader = reader
+    await fixture.select("a.txt", inColumn: 0)
+    let view = try #require(fixture.controller.previewView)
+    await settle { !view.tagsField.isHidden }
+    drag(try #require(fixture.controller.previewGrip), by: -1000)
+    view.modifiedField.stringValue = "Wednesday, September 30, 2026 at 12:50 PM"
+    fixture.controller.view.layoutSubtreeIfNeeded()
+
+    let fields = try #require(view.accessibilityChildren() as? [NSTextField])
+    for field in fields {
+        let frame = field.convert(field.bounds, to: view)
+        #expect(frame.minX >= 0, "\(field.stringValue)")
+        #expect(frame.maxX <= view.bounds.width, "\(field.stringValue)")
+    }
+    let word = ("Wednesday," as NSString).size(withAttributes: [
+        .font: ColumnPreviewView.detailFont
+    ]).width
+    for row in view.rows {
+        #expect(row.titleField.frame.width >= row.titleField.intrinsicContentSize.width)
+        #expect(row.value.frame.width >= word, "\(row.titleField.stringValue)")
+    }
+}
+
 @MainActor @Test func aNewColumnAndThePreviewGetTheStoredDefaultWidth() async throws {
     let folder = try TemporaryFolder("ColumnViewControllerTests")
     let settings = storedSettings(in: folder)
