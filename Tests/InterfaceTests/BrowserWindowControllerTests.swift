@@ -1275,6 +1275,27 @@ func aModifiedPressInTheOtherPaneFocusesItAndLeavesTheSelectionToAppKit(
     #expect(held.drawnRows == [1])
 }
 
+/// The press selects its row at mouse down, before AppKit sets the table's `clickedRow` for this
+/// press, so the pane must take the cursor from the row pressed and not from the row of the
+/// press before.
+@MainActor @Test func aRealPressAfterAnotherPutsTheCursorOnItsOwnRow() async throws {
+    let press = try await PressFixture()
+    press.show()
+    defer { press.fixture.window.orderOut(nil) }
+    let listing = try #require(press.leftPane.state.listing)
+    let names = (0..<listing.count).map { listing[$0].name }
+
+    for row in [0, 1, 0, 1, 1, 0, 1, 0] {
+        _ = try press.table.realPress(onRow: row)
+        await settle { press.leftPane.selection.isSettled }
+
+        #expect(
+            press.leftPane.selection.cursor == ExactName(names[row]), "after a press on row \(row)")
+        #expect(
+            press.leftPane.selection.anchor == ExactName(names[row]), "after a press on row \(row)")
+    }
+}
+
 @MainActor @Test func aRealPressInsideTheSelectionLeavesItsRowsForADrag() async throws {
     let press = try await PressFixture()
     press.show()

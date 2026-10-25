@@ -1,4 +1,5 @@
 import AppKit
+import TestSupport
 import Testing
 
 @testable import Interface
@@ -38,13 +39,8 @@ extension ListingTableView {
                     windowNumber: window.windowNumber, context: nil, eventNumber: 0,
                     clickCount: 1, pressure: 1))
         }
-        let down = try event(.leftMouseDown)
-        let up = try event(.leftMouseUp)
-        func buttonIsDown() -> Bool {
-            NSApp.nextEvent(
-                matching: .leftMouseUp, until: .distantPast, inMode: .default, dequeue: false)
-                != nil
-        }
+        nonisolated(unsafe) let down = try event(.leftMouseDown)
+        nonisolated(unsafe) let up = try event(.leftMouseUp)
         nonisolated(unsafe) var snapshots: [PressSnapshot] = []
         nonisolated(unsafe) let table = self
         let observers = [
@@ -56,42 +52,44 @@ extension ListingTableView {
                     table.enumerateAvailableRowViews { rowView, row in
                         if rowView.isSelected { drawn.insert(row) }
                     }
+                    let buttonIsDown =
+                        NSApp.nextEvent(
+                            matching: .leftMouseUp, until: .distantPast, inMode: .default,
+                            dequeue: false) != nil
                     snapshots.append(
                         PressSnapshot(
                             rows: table.selectedRowIndexes, drawnRows: drawn,
-                            hasKeys: window.firstResponder === table, buttonIsDown: buttonIsDown()))
+                            hasKeys: window.firstResponder === table, buttonIsDown: buttonIsDown))
                 }
             }
         }
         defer { observers.forEach(NotificationCenter.default.removeObserver) }
-        // The press runs inside a run loop of the test's own, which takes the stop that posting
-        // the mouse up requests of the main run loop. Left to the one the test runs in, it would
-        // end the test process.
-        var pressed = false
+        // Once events are pulled with `NSApp.nextEvent`, HIToolbox queues blocks that stop the
+        // main run loop, at any time after. They run in the outermost main run loop, which keeps
+        // the test runner alive, and the process ends with exit status 0 and no summary. So they
+        // are dropped from here on. The press itself runs in a run loop of the test's own.
+        dropStrayMainRunLoopStops()
+        nonisolated(unsafe) var pressed = false
         CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
             MainActor.assumeIsolated {
                 NSApp.postEvent(up, atStart: false)
-                _ = window.makeFirstResponder(self)
-                self.mouseDown(with: down)
+                _ = window.makeFirstResponder(table)
+                table.mouseDown(with: down)
                 pressed = true
             }
         }
         while !pressed {
             CFRunLoopRunInMode(.defaultMode, 0, true)
         }
-        // AppKit's posting of an event stops the main run loop, and each stop of a nested loop
-        // leaves another queued for the next run of the loop that handles blocks. Left there,
-        // they end the test process when the test next suspends, so take the mouse up that the
-        // press put back in the queue and run this loop until it has taken every stop. Both are
-        // conditions to wait for, not times.
+        // The tracking loop put back the mouse up it took, and the press is over, so it is in
+        // the queue now. Take it and anything else the press posted, so the next press starts
+        // with an empty queue.
         let reposted = NSApp.nextEvent(
-            matching: .leftMouseUp, until: Date(timeIntervalSinceNow: 5), inMode: .default,
-            dequeue: true)
+            matching: .leftMouseUp, until: .distantPast, inMode: .default, dequeue: true)
         try #require(reposted != nil, "the press left no mouse up in the queue")
         while NSApp.nextEvent(matching: .any, until: .distantPast, inMode: .default, dequeue: true)
             != nil
         {}
-        while CFRunLoopRunInMode(.defaultMode, 0, false) == .stopped {}
         return snapshots
     }
 }

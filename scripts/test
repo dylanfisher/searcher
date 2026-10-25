@@ -17,7 +17,48 @@ source scripts/gentle
 # Reason: docs/decisions/0083-silent-tests.md.
 swift_cmd build --product BeepInterpose
 beep_interpose="$(swift_cmd build --show-bin-path)/libBeepInterpose.dylib"
-swift_test() { DYLD_INSERT_LIBRARIES="$beep_interpose" swift_cmd test "$@"; }
+
+# verify_run <log> — fails, naming what was cut off, when a test run that exited 0 did not print
+# Swift Testing's closing "Test run with N tests ... after ..." line, or left a suite or a test
+# started and never finished. A test that lets a stop of the main run loop reach the outermost
+# loop ends the process normally: exit 0, no summary, so the exit status alone reads as a pass.
+# Reason: docs/decisions/0092-native-build-system.md.
+verify_run() {
+  perl -CSD -Mutf8 -e '
+    my (%suite, %test, @tests, $summary, $started);
+    while (<>) {
+      chomp;
+      $started = 1 if /^◇ Test run started/;
+      $summary = 1 if /^\S Test run with \d+ tests?\b.* (?:passed|failed) after /;
+      if (/^◇ (Suite|Test) (?!run started|case )(.*) started\.$/) {
+        if ($1 eq "Suite") { $suite{$2} = 1 } else { $test{$2}++; push @tests, $2 }
+      } elsif (/^[^◇\s] (Suite|Test) (.*?)(?: with \d+ test cases)? (?:passed|failed|skipped)\b/) {
+        if ($1 eq "Suite") { delete $suite{$2} } else { $test{$2}-- if $test{$2} }
+      }
+    }
+    my %seen;
+    my @open_suites = sort keys %suite;
+    my @open_tests = grep { $test{$_} && !$seen{$_}++ } @tests;
+    exit 0 if $summary && !@open_suites && !@open_tests;
+    print STDERR "tests: the run ended without finishing, though it exited 0.\n";
+    print STDERR "  no \"Test run with N tests ... after ...\" summary line was printed.\n" unless $summary;
+    print STDERR "  no test run started.\n" unless $started;
+    print STDERR "  suites started and not finished: @open_suites\n" if @open_suites;
+    print STDERR "  tests started and not finished: @open_tests\n" if @open_tests;
+    print STDERR "  last test started: $tests[-1]\n" if @tests;
+    exit 1;
+  ' "$1"
+}
+
+# swift_test <args> — runs the tests; fails when verify_run finds the run cut short.
+swift_test() {
+  local log status=0
+  log="$(mktemp)"
+  DYLD_INSERT_LIBRARIES="$beep_interpose" swift_cmd test "$@" | tee "$log" || status=$?
+  [ "$status" -ne 0 ] || verify_run "$log" || status=1
+  rm -f "$log"
+  return "$status"
+}
 
 # The interface tests run one at a time, everything else in parallel. Reason and
 # measurements: docs/decisions/0064-serial-interface-tests.md. A run with swift test's own
