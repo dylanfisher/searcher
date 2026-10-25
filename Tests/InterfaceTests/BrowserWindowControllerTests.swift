@@ -1724,12 +1724,10 @@ extension PressFixture {
         let content = try #require(window.contentView)
         let frameView = try #require(content.superview)
         let hit = try #require(content.hitTest(frameView.convert(location, from: nil)))
-        NSApp.postEvent(try event(.leftMouseUp), atStart: false)
-        dropStrayMainRunLoopStops()
-        hit.mouseDown(with: try event(.leftMouseDown))
-        while NSApp.nextEvent(matching: .any, until: .distantPast, inMode: .default, dequeue: true)
-            != nil
-        {}
+        nonisolated(unsafe) let down = try event(.leftMouseDown)
+        try performRealPress(releasedBy: try event(.leftMouseUp)) {
+            hit.mouseDown(with: down)
+        }
     }
 }
 
@@ -1812,6 +1810,7 @@ extension PressFixture {
     }
 }
 
+/// A regression guard: a list's table already took this press, and must keep taking it.
 @MainActor @Test func aPressBelowTheRowsOfAListFocusesItsPane() async throws {
     let press = try await PressFixture()
     press.show()
