@@ -542,14 +542,15 @@ final class ColumnViewController: NSViewController {
     /// edge of what it shows, so a column or preview that closes or narrows never makes the clip
     /// view clamp the scroll: a ↓ that clears the preview while the keys pause, or a grip's drag
     /// at the right end. The room kept past the columns goes as the view scrolls it out of sight
-    /// (0046-column-view.md).
+    /// (0046-column-view.md). The room kept is never more than the view already has, so a
+    /// rubber-band past the right end, whose bounds reach past the view, widens nothing.
     private func sizeColumnsView() {
         guard let scrollView = view as? NSScrollView else {
             preconditionFailure("the column view's view is \(view)")
         }
+        let shown = min(scrollView.contentView.bounds.maxX, columnsView.frame.width)
         let size = NSSize(
-            width: max(
-                columnsWidth, scrollView.contentSize.width, scrollView.contentView.bounds.maxX),
+            width: max(columnsWidth, scrollView.contentSize.width, shown),
             height: scrollView.contentSize.height)
         if columnsView.frame.size != size {
             columnsView.frame = NSRect(origin: .zero, size: size)

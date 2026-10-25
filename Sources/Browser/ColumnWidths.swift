@@ -46,7 +46,7 @@ public struct ColumnWidths: Sendable {
     /// Sets `location`'s column to `width`, as the folder set last. Setting the width it has
     /// already changes nothing, so the order moves only when a width does.
     ///
-    /// - Precondition: `width` is within `Settings.columnWidths`.
+    /// - Precondition: `Settings.isColumnWidth(width)`.
     public mutating func set(_ width: Double, of location: Location) {
         Self.checkWidth(width)
         guard self.width(of: location) != width else { return }
@@ -64,7 +64,7 @@ public struct ColumnWidths: Sendable {
 
     /// Sets the preview to `width`.
     ///
-    /// - Precondition: `width` is within `Settings.columnWidths`.
+    /// - Precondition: `Settings.isColumnWidth(width)`.
     public mutating func setPreview(_ width: Double) {
         Self.checkWidth(width)
         preview = width
@@ -72,12 +72,13 @@ public struct ColumnWidths: Sendable {
 
     private static func checkWidth(_ width: Double) {
         precondition(
-            Settings.columnWidths.contains(width),
-            "column width \(width) is outside \(Settings.columnWidths)")
+            Settings.isColumnWidth(width),
+            "column width \(width) is not a whole number within \(Settings.columnWidths)")
     }
 
     /// What is wrong with these widths as stored data, or nil: a folder twice, more than
-    /// `folderLimit` folders, or a width outside `Settings.columnWidths`, NaN among them.
+    /// `folderLimit` folders, or a width `Settings.isColumnWidth` rejects: a fraction of a point,
+    /// or outside `Settings.columnWidths`, NaN among them.
     static func problem(folders: [Folder], preview: Double?) -> String? {
         let paths = folders.map(\.location.path)
         if Set(paths).count != paths.count {
@@ -87,8 +88,8 @@ public struct ColumnWidths: Sendable {
             return "\(folders.count) column widths are more than the \(folderLimit) kept"
         }
         let widths = folders.map(\.width) + (preview.map { [$0] } ?? [])
-        if let width = widths.first(where: { !Settings.columnWidths.contains($0) }) {
-            return "column width \(width) is outside \(Settings.columnWidths)"
+        if let width = widths.first(where: { !Settings.isColumnWidth($0) }) {
+            return "column width \(width) is not a whole number within \(Settings.columnWidths)"
         }
         return nil
     }

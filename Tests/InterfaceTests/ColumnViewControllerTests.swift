@@ -450,6 +450,24 @@ extension Fixture {
     #expect(columnsView.frame.width == previewGrip.frame.maxX)
 }
 
+/// A trackpad's rubber-band past the right end moves the bounds past the columns' view; the view
+/// doesn't widen to them, so the bounce comes back to the columns.
+@MainActor @Test func aRubberBandPastTheRightEndDoesNotWidenTheColumns() async throws {
+    let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)
+    await fixture.openThreeColumns()
+    fixture.trail.moveRight()
+    fixture.trail.moveRight()
+    await settle { fixture.trail.shownPreview == fixture.trail.preview }
+    let clip = try fixture.scrolledToTheEnd(waitingOn: ManualClock())
+    let columnsView = fixture.controller.columnsView
+    let width = columnsView.frame.width
+
+    clip.setBoundsOrigin(NSPoint(x: width - clip.bounds.width + 40, y: 0))
+    fixture.controller.view.layoutSubtreeIfNeeded()
+
+    #expect(columnsView.frame.width == width)
+}
+
 @MainActor @Test func aCutEntryDrawsDimmedInAColumnOpenedAfterTheCut() async throws {
     let pasteboard = NSPasteboard(name: NSPasteboard.Name("searcher-test-\(UUID().uuidString)"))
     defer { pasteboard.releaseGlobally() }
@@ -1074,7 +1092,7 @@ private let chevronTree: [String: [DirectoryEntry]] = [
     let names = rowNames(table)
     var chevronGaps: Set<Double> = []
 
-    for width in [Settings.columnWidths.lowerBound, 151.5, Settings.defaultColumnWidth, 600] {
+    for width in [Settings.columnWidths.lowerBound, 151, Settings.defaultColumnWidth, 600] {
         fixture.pane.setColumnWidth(width, of: fixture.trail.columns[0].pane)
         // Even a table column set wider than the column comes back to its visible width.
         table.tableColumns[0].width = 2000
@@ -1623,8 +1641,13 @@ private let gripDrags: [[Double]] = [[-30.37, -60.81, -90.13], [-60.4, -20.77, 4
                 #expect(frame.minX == frame.minX.rounded(), "\(frame)")
                 #expect(frame.width == frame.width.rounded(), "\(frame)")
                 let clip = try #require((controller.view as? NSScrollView)?.contentView)
-                #expect(clip.bounds.minX == 0, "\(move)")
+                #expect(clip.bounds.origin.x == 0, "\(move)")
                 #expect(clip.frame.minX == 0, "\(move)")
+                let table = controller.tableView
+                table.enumerateAvailableRowViews { rowView, row in
+                    let rowX = controller.view.convert(rowView.bounds, from: rowView).minX
+                    #expect(rowX == 0, "row \(row) at \(move)")
+                }
             }
         }
         grip.mouseUp(with: gripEvent(.leftMouseUp, x: 100 + moves.last!))

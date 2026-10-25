@@ -52,7 +52,8 @@ stacked single-column tables over `NSBrowser`.
   edge of what it shows, so a column or preview that closes or narrows never scrolls the view,
   and one that opens in its place needs no scroll. The room left past the columns goes as the
   view scrolls it out of sight: the controller resizes the view on each move of the clip view's
-  bounds. The same keeps a grip under the pointer in a drag at the right end, where the clamp
+  bounds. That only ever narrows it: the room kept is never more than the view already has, so
+  a rubber-band past the right end, whose bounds reach past the view, widens nothing. The same keeps a grip under the pointer in a drag at the right end, where the clamp
   used to slide every column left of the grip and leave the view scrolled after a drag back.)
 - **`PaneViewController`** holds the list and the columns in the same place and shows one by the
   pane's view mode. It builds `CommandContext` with `commandPane`, the filter field calls

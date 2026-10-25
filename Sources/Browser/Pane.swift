@@ -546,7 +546,7 @@ public final class Pane {
     /// Sets the width of `column`'s pane's folder, as a grip's drag ends or a fit lands. A
     /// column the trail has closed since takes nothing.
     ///
-    /// - Precondition: `width` is within `Settings.columnWidths`.
+    /// - Precondition: `Settings.isColumnWidth(width)`.
     public func setColumnWidth(_ width: Double, of column: Pane) {
         guard let trail = columnTrail, trail.columns.contains(where: { $0.pane === column })
         else { return }
@@ -568,7 +568,7 @@ public final class Pane {
 
     /// Sets the preview's width, shown or hidden.
     ///
-    /// - Precondition: `width` is within `Settings.columnWidths`.
+    /// - Precondition: `Settings.isColumnWidth(width)`.
     public func setPreviewWidth(_ width: Double) {
         let old = columnWidths
         columnWidths.setPreview(width)
@@ -580,7 +580,7 @@ public final class Pane {
     /// The widths set for this pane's folders, shown or not, go, so every column of the pane is
     /// at the new default.
     ///
-    /// - Precondition: `width` is within `Settings.columnWidths`.
+    /// - Precondition: `Settings.isColumnWidth(width)`.
     public func setEveryColumnWidth(_ width: Double) {
         let old = columnWidths
         columnWidths = ColumnWidths()

@@ -49,8 +49,11 @@ grip, the double-click and the default below are the amended ones.
   right of the dragged one off the pixel grid; AppKit then moved each column's clip view and its
   bounds by a fraction of a point to align its rows, so the rows no longer started at the
   column's left edge, against the clip view that pins them there
-  ([0046](0046-column-view.md)). A drag at the right end keeps its grip under the pointer: see
-  0046.)
+  ([0046](0046-column-view.md)). Overriding the clip view's `constrainBoundsRect` and `bounds`
+  setter as well doesn't stop that alignment, so the widths, not the pin, keep the rows in
+  place. A column width is therefore whole points everywhere (`Settings.isColumnWidth`): a
+  stored default or a session's width with a fraction is discarded like one out of range. A drag
+  at the right end keeps its grip under the pointer: see 0046.)
 - **Double-click: a toggle between the fit and the default.** Plain, it fits the column to its
   widest name, beside a folder's chevron, and leaves the default alone. With Option it fits every
   column and the preview to one width, that of the widest name in any column, and sets the

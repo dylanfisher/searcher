@@ -411,7 +411,7 @@ private func editJSON(_ data: Data, _ edit: (inout [String: Any]) throws -> Void
 /// Widths set for two folders, the later one first in the trail, and for the preview.
 private func someColumnWidths() -> ColumnWidths {
     var widths = ColumnWidths()
-    widths.set(312.5, of: Location(path: "/Volumes/music/library/Album"))
+    widths.set(312, of: Location(path: "/Volumes/music/library/Album"))
     widths.set(180, of: Location(path: "/Volumes/music/library"))
     widths.setPreview(420)
     return widths

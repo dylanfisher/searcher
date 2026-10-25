@@ -34,6 +34,12 @@ public final class Settings {
     /// The widths a column's grip can drag it to (0096-column-widths.md).
     public nonisolated static let columnWidths: ClosedRange<Double> = 100...1000
 
+    /// Whether `width` is one a column can have: whole points, so the columns sit on the pixel
+    /// grid, within `columnWidths` (0096-column-widths.md).
+    public nonisolated static func isColumnWidth(_ width: Double) -> Bool {
+        columnWidths.contains(width) && width == width.rounded()
+    }
+
     /// What the Settings window says about `commanderFKeys`.
     public static let commanderFKeysHelp =
         "F5 copies and F6 moves the selection to the other pane, F7 makes a new folder and F8 "
@@ -97,12 +103,12 @@ public final class Settings {
     /// Finder; a plain one resizes its column alone (0096-column-widths.md). `defaultColumnWidth`
     /// by default.
     ///
-    /// - Precondition: it is within `columnWidths`.
+    /// - Precondition: `isColumnWidth(_:)` holds for it.
     public var columnWidth: Double {
         didSet {
             precondition(
-                Self.columnWidths.contains(columnWidth),
-                "column width \(columnWidth) is outside \(Self.columnWidths)")
+                Self.isColumnWidth(columnWidth),
+                "column width \(columnWidth) is not a whole number within \(Self.columnWidths)")
             store(columnWidth, for: .columnWidth, changed: columnWidth != oldValue)
         }
     }
@@ -155,7 +161,7 @@ public final class Settings {
         commanderFKeys = Self.bool(.commanderFKeys, in: defaults) ?? false
         hideEmptyOperationsPanel = Self.bool(.hideEmptyOperationsPanel, in: defaults) ?? true
         columnWidth =
-            Self.number(.columnWidth, in: defaults, within: Self.columnWidths)
+            Self.number(.columnWidth, in: defaults, where: Self.isColumnWidth)
             ?? Self.defaultColumnWidth
         appearance = Self.appearance(in: defaults) ?? .auto
     }
@@ -187,13 +193,13 @@ public final class Settings {
     }
 
     /// The number stored under `key`; nil when there is none, it has another type, a Boolean
-    /// among them, or it is outside `range`, which is removed.
+    /// among them, or one `isValid` rejects, which is removed.
     private static func number(
-        _ key: Key, in defaults: UserDefaults, within range: ClosedRange<Double>
+        _ key: Key, in defaults: UserDefaults, where isValid: (Double) -> Bool
     ) -> Double? {
         guard let value = defaults.object(forKey: key.rawValue) else { return nil }
         if let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
-            range.contains(number.doubleValue)
+            isValid(number.doubleValue)
         {
             return number.doubleValue
         }
