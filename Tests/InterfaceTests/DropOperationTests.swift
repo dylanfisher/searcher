@@ -147,7 +147,8 @@ private final class DraggingInfo: NSObject, @preconcurrency NSDraggingInfo {
 
 /// A pane over a real temporary folder holding `a.txt` and the folder `sub`, and the packages
 /// `Tool.app` and `Notes.rtfd` when `packages` is true, in a window that is never shown, with a
-/// queue of its own that traps on any question, and a second folder `elsewhere` to drag from. `/` is the only volume unless a test says otherwise.
+/// queue of its own that traps on any question, and a second folder `elsewhere` to drag from.
+/// `/` is the only volume unless a test says otherwise.
 @MainActor
 private final class Fixture {
     let root: TemporaryFolder

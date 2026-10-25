@@ -534,6 +534,86 @@ private func linkTree() async throws -> (Pane, StubSystemActions, TemporaryFolde
     #expect(actions.openedFiles.count == 1)
 }
 
+/// A pane over a temporary folder holding the package `Real.app` and `app link`, a link to it
+/// whose own name has no package extension, as Homebrew links casks into /Applications; loaded.
+@MainActor
+private func packageLinkTree() async throws -> (Pane, StubSystemActions, TemporaryFolder) {
+    let root = try TemporaryFolder("PaneTests")
+    try FileManager.default.createDirectory(
+        at: root.url.appending(path: "Real.app/Contents"), withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(
+        atPath: root.url.path + "/app link", withDestinationPath: "Real.app")
+    try FileManager.default.createDirectory(
+        at: root.url.appending(path: "plain"), withIntermediateDirectories: false)
+    try Data().write(to: root.url.appending(path: "plain/inside.txt"))
+    try FileManager.default.createSymbolicLink(
+        atPath: root.url.path + "/plain link", withDestinationPath: "plain")
+    let actions = StubSystemActions()
+    let pane = Pane(
+        location: Location(path: root.url.path), service: ListingService(), systemActions: actions,
+        settings: untouchedSettings())
+    await settle { pane.state.isLoaded }
+    pane.select(Selection([ExactName("app link")], cursor: ExactName("app link")))
+    return (pane, actions, root)
+}
+
+/// Finder launches the app a link points to.
+@MainActor @Test func openOnALinkToAPackageOpensTheLinkAsAFile() async throws {
+    let (pane, actions, root) = try await packageLinkTree()
+
+    pane.openSelection()
+
+    await settle { actions.openedFiles.count == 1 }
+    #expect(actions.openedFiles.map(\.path) == [root.url.path + "/app link"])
+    #expect(pane.location.path == root.url.path)
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(pane.location.path == root.url.path)
+}
+
+@MainActor @Test func openOnALinkToAPackageInAColumnOpensItAsAFileAndAddsNoColumn()
+    async throws
+{
+    let (pane, actions, root) = try await packageLinkTree()
+    pane.setViewMode(.column)
+    let trail = try #require(pane.columnTrail)
+    await settle { trail.focused.pane.state.isLoaded }
+    let column = trail.focused.pane
+    column.select(Selection([ExactName("app link")], cursor: ExactName("app link")))
+    #expect(trail.columns.count == 1)
+    #expect(trail.preview == nil)
+
+    column.openSelection()
+
+    await settle { actions.openedFiles.count == 1 }
+    #expect(actions.openedFiles.map(\.path) == [root.url.path + "/app link"])
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(trail.columns.map(\.pane.location.path) == [root.url.path])
+}
+
+/// Open in Other Pane is for folders, so a link to a package opens nothing there, as a link to
+/// a file doesn't.
+@MainActor @Test func openALinkAsAFolderElsewhereOpensNothingForALinkToAPackage() async throws {
+    let (pane, actions, root) = try await packageLinkTree()
+    var asked: [String] = []
+    func open(_ name: String) {
+        pane.select(Selection([ExactName(name)], cursor: ExactName(name)))
+        pane.openSelectedLink(asFolderIn: {
+            asked.append(name)
+            return nil
+        })
+    }
+
+    open("app link")
+    try await Task.sleep(for: .milliseconds(200))
+    // A link to a plain folder asks for its pane, so the wait above was long enough to.
+    open("plain link")
+    await settle { asked == ["plain link"] }
+
+    #expect(asked == ["plain link"])
+    #expect(actions.openedFiles.isEmpty)
+    #expect(pane.location.path == root.url.path)
+}
+
 @MainActor @Test func openOnALinkWhoseLoadGoesSlowLeavesThePaneWhereItWas() async {
     let link = DirectoryEntry(
         name: "link", type: .symbolicLink, size: nil, modified: testDate, isHidden: false,

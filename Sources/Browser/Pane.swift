@@ -183,6 +183,8 @@ public final class Pane {
     /// The selection version when the last `goToFolder` moved the pane. Its load's later updates
     /// were resolved from the selection it started with then.
     private var goSelectionVersion = 0
+    /// The read of whether a link being opened points to a package (`checkLink`).
+    private var packageCheck: Task<Void, Never>?
     /// The cached rows of a `goToFolder` that hasn't moved the pane yet, shown when it moves.
     /// The listing of a link `openSelectedLink(asFolderIn:)` checks before it asks for a pane.
     private var linkCheck: ListingLoad?
@@ -475,6 +477,8 @@ public final class Pane {
     /// Stops a `goToFolder` that hasn't moved the pane yet, and an
     /// `openSelectedLink(asFolderIn:)` that hasn't asked for its pane; its `finish` never runs.
     public func cancelGoToFolder() {
+        packageCheck?.cancel()
+        packageCheck = nil
         linkCheck?.cancel()
         linkCheck = nil
         pendingGo?.load.cancel()
@@ -617,13 +621,21 @@ public final class Pane {
     /// to a folder. The link is listed first, off the main thread, and `other` is called only
     /// once it lists, so a link to a file or a broken link opens nothing and makes no pane.
     /// The pane then goes to the link with `goToFolder`, which shows any other failure there.
-    /// A later navigation or Go to folder in this pane cancels the open.
+    /// A link to a package opens nothing, as a link to a file doesn't. A later navigation or Go
+    /// to folder in this pane cancels the open.
     public func openSelectedLink(asFolderIn other: @escaping @MainActor () -> Pane?) {
         let entries = selectedEntries
         precondition(
             entries.count == 1 && entries[0].type == .symbolicLink,
             "openSelectedLink(asFolderIn:) ran without one selected link")
         let link = location.child(named: entries[0].name)
+        checkLink(
+            link, ifPackage: {},
+            otherwise: { [weak self] in self?.listLink(link, asFolderIn: other) })
+    }
+
+    /// The rest of `openSelectedLink(asFolderIn:)`, for a link that doesn't point to a package.
+    private func listLink(_ link: Location, asFolderIn other: @escaping @MainActor () -> Pane?) {
         cancelGoToFolder()
         linkCheck = service.load(link, priority: loadPriority) { [weak self] update in
             // Nil once cancelled or decided; a cancelled load sends nothing more.
@@ -678,8 +690,16 @@ public final class Pane {
     /// Opens `link` as Go to folder would, so listing it is the check: a link to a folder moves
     /// the pane to the link's own path on its first rows. A link to a file or a broken one leaves
     /// the pane where it is and goes to the system. Any other failure shows in the pane. A later
-    /// navigation or Go to folder cancels the open, as it cancels any pending go.
+    /// navigation or Go to folder cancels the open, as it cancels any pending go. A link to a
+    /// package goes to the system as the package would, as Finder launches a linked app.
     private func openLink(_ link: Location) {
+        checkLink(
+            link, ifPackage: { [weak self] in self?.openFile(link) },
+            otherwise: { [weak self] in self?.goToLink(link) })
+    }
+
+    /// The rest of `openLink`, for a link that doesn't point to a package.
+    private func goToLink(_ link: Location) {
         goToFolder(link) { [weak self] error in
             guard let self, let error else { return }
             switch error.reason {
@@ -688,6 +708,26 @@ public final class Pane {
             case .privacyProtected, .permissionDenied, .unreachable, .other:
                 preconditionFailure("goToFolder moved the pane for \(error) but reported it")
             }
+        }
+    }
+
+    /// Finds out off the main thread whether `link` points to a package, as a listing of the
+    /// target's folder would name it, then runs `ifPackage` or `otherwise`. A link whose target
+    /// can't be read runs `otherwise`, whose listing reports why. A navigation or Go to folder
+    /// before the answer cancels both, as it cancels a pending go.
+    private func checkLink(
+        _ link: Location, ifPackage: @escaping @MainActor () -> Void,
+        otherwise: @escaping @MainActor () -> Void
+    ) {
+        cancelGoToFolder()
+        let path = link.path
+        packageCheck = Task { [weak self] in
+            let isPackage = await Task.detached {
+                DirectoryLister.isPackage(followingLinksAt: path)
+            }.value
+            guard let self, !Task.isCancelled else { return }
+            packageCheck = nil
+            if isPackage { ifPackage() } else { otherwise() }
         }
     }
 

@@ -100,6 +100,25 @@ public struct DirectoryLister: Lister {
         return try entry(named: name, at: path + "/" + name, info: info)
     }
 
+    /// Whether what `path` names, following links, is a package, by the target's own name and
+    /// Finder info, as a listing of its folder would report it. False when the target isn't a
+    /// folder or can't be read: the listing of `path` that a caller makes next reports why.
+    /// Blocks on the file system, so call it off the main thread.
+    public static func isPackage(followingLinksAt path: String) -> Bool {
+        guard let resolved = realpath(path, nil) else { return false }
+        let target = String(cString: resolved)
+        free(resolved)
+        var info = Darwin.stat()
+        guard lstat(target, &info) == 0, info.st_mode & S_IFMT == S_IFDIR,
+            let name = target.split(separator: "/").last
+        else { return false }
+        do {
+            return try PackageRule.isPackage(folderAt: target, named: String(name)) == true
+        } catch {
+            return false
+        }
+    }
+
     /// Reads one `getattrlistbulk` record. Attributes are packed in bitmap order and only those
     /// marked returned are present, so each field is read only if its bit is set. Returns nil for
     /// an entry deleted while the directory was being listed.
