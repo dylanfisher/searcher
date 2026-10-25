@@ -38,7 +38,18 @@ the load through `ListingService`, the off-main sort and filter ([0025](0025-sor
   nothing selected selects its first row once the column has rows. Past the first column, ←
   adds the parent's column with the folder selected. (Superseded 2026-10-25: the first column is
   the root of the folder's volume, and ← there does nothing, as in Finder; see
-  [0103](0103-column-trail-from-the-root.md).)
+  [0103](0103-column-trail-from-the-root.md).) (Amended 2026-10-25, Dylan: "if you click a left
+  folder that is currently open in column mode it should close the right columns and show only
+  the items of that folder you clicked on": a plain press on the row selected alone in a column,
+  at mouse down, where [0077](0077-selection-history.md)'s press selects a row, makes the column
+  that selection opens the last one, with nothing selected in it, as in Finder
+  (`ListingTableView.pressedSelectedRow`, `ColumnTrail.showNextColumnAlone`). The pressed column
+  keeps its selection and takes the keys. A press on a folder not selected already opened its
+  column fresh. A press that starts a drag of the folder closes the columns too; they showed the
+  folder's own contents, which can't take it, and spring-loading
+  ([0099](0099-get-info-and-spring-loading.md)) opens the folders the drag hovers over as before.
+  A selection waiting for the keys to pause ([0094](0094-column-open-delay.md)) opens its column
+  at the press. ← still keeps the columns to the right.)
 - **Loads.** Each column's pane lists its folder. The focused column's load asks
   `ListingService` for `.focused` priority, so a parent column added by ← starts ahead of a
   child column queued before it, once both volumes are read; a load whose volume isn't known
@@ -67,7 +78,27 @@ the load through `ListingService`, the off-main sort and filter ([0025](0025-sor
   selected, in the sort of the focused column it replaces. Every old column closes. (Amended
   2026-10-25: the new trail runs from the root of the destination's volume down to it; a path
   bar click on a folder that has a column moves the focus there instead, keeping every column,
-  and is no step; see [0103](0103-column-trail-from-the-root.md).)
+  and is no step; see [0103](0103-column-trail-from-the-root.md).) (Amended 2026-10-25, Dylan:
+  "forward/back should save the directory changing within columns. right now if i go back it
+  jumps back to a cimpletely different directory, not just the last directory i was in within
+  the columns.": the folder History keeps is the pane's, the focused column's, the one the path
+  bar and the title show. Each move of the keys to another column is a step, recording the folder
+  left and the entry under its cursor (`Pane.trailWillMoveFocus`), at the moments
+  `FolderVisits` counts a visit ([0087](0087-palette-window.md)): → and ←, Open on a folder,
+  a click in another column, a path bar click, and a column closing under the focus, as a
+  removed folder's does. ↑ and ↓ move the selection inside the focused column, so a held key
+  through folders makes no step, however many columns open after it pauses
+  ([0094](0094-column-open-delay.md)). Back and Forward, a drag's spring-loaded folders and the
+  way back from them make none. Finder's title follows the selected folder, so in Finder a
+  selected folder may be the step and ← none; here the title follows the focused column, so the
+  steps follow it too, and ← is one. That is a hand check against Finder. Back or Forward to a
+  folder the trail shows doesn't build the trail again (`ColumnTrail.show`): its column takes
+  the keys with the remembered entry selected, the column that entry opens is the last one, with
+  nothing selected in it, and nothing lists again but a folder whose column had closed. Any
+  other folder starts the trail again as above, and one gone since shows the failed state
+  ([0033](0033-history-and-go-to-folder.md)). `History` keeps the same two stacks of a folder
+  and a name, so `TabState` stores and restores it as before
+  ([0042](0042-workspace-model.md)).)
 - **Filter.** The filter belongs to the column it was typed in and narrows that column only. It
   stays with the column until the column closes; a navigation closes every column, so it clears
   the filter as it does in a list.
@@ -92,8 +123,11 @@ the load through `ListingService`, the off-main sort and filter ([0025](0025-sor
 - **Requeue a waiting load at focused priority when its column gains the focus** — rejected:
   `ListingService` can't tell a waiting load from a running one, and restarting a running load
   throws away what it read.
-- **Count column moves as history steps** — rejected: Back would step through every column the
-  arrows passed, and the list keeps no such steps for ↑ and ↓.
+- **Count column moves as history steps** — rejected at first: Back would step through every
+  column the arrows passed, and the list keeps no such steps for ↑ and ↓. Reversed by Dylan,
+  2026-10-25: "forward/back should save the directory changing within columns. right now if i go
+  back it jumps back to a cimpletely different directory, not just the last directory i was in
+  within the columns." Moves of the focus are steps now; ↑ and ↓ still make none (see History).
 - **Hand the owner's listing to the first column on the switch** — not now: the column lists the
   folder again. M2.3's cache makes that read cheap on a share.
 

@@ -396,6 +396,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         tableView.target = self
         tableView.doubleAction = #selector(openClickedRow(_:))
         tableView.contextMenu = { [weak self] row in self?.contextMenu(forRow: row) }
+        tableView.pressedSelectedRow = { [weak self] in self?.pane.pressSelectedFolder() }
         let promiseTypes = NSFilePromiseReceiver.readableDraggedTypes.map {
             NSPasteboard.PasteboardType($0)
         }
