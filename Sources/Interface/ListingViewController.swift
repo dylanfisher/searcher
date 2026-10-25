@@ -729,8 +729,9 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     }
 
     /// Sets the name's width from the cell's: up to the badge when it shows, else up to the
-    /// chevron when it shows, else up to the trailing padding. Set outright, since autoresizing clamps a width at zero in a column
-    /// narrower than the name and the badge, and widening the column doesn't give that back.
+    /// chevron when it shows, else up to the trailing padding. Set outright, since autoresizing
+    /// clamps a width at zero in a column narrower than the name and the badge, and widening the
+    /// column doesn't give that back.
     private static func fitName(in cell: NSTableCellView) {
         let badge = badge(in: cell)
         guard let textField = cell.textField else {
@@ -785,6 +786,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     private static let iconSize = 16.0
     private static let nameX = 2 + iconSize + 4
 
+    /// The side of the badge, which is also the height of the chevron's view.
+    private static let badgeSize = 16.0
     /// The space between a name and its badge or chevron.
     private static let badgeGap = 4.0
     /// The chevron's width, and its distance from the cell's right edge.
@@ -803,10 +806,10 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             let named = ColumnNameCellView(frame: frame, chevronImage: iconCache.folderChevron)
             let chevron = named.chevron
             chevron.identifier = Self.folderChevronIdentifier
-            let side = 16.0
             chevron.frame = NSRect(
-                x: column.width - Self.chevronInset - Self.chevronWidth, y: (height - side) / 2,
-                width: Self.chevronWidth, height: side)
+                x: column.width - Self.chevronInset - Self.chevronWidth,
+                y: (height - Self.badgeSize) / 2, width: Self.chevronWidth,
+                height: Self.badgeSize)
             chevron.autoresizingMask = [.minXMargin, .minYMargin, .maxYMargin]
             chevron.isHidden = true
             cell = named
@@ -840,7 +843,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         if column == .name {
             // At the cell's trailing edge, as Finder draws it. Hidden until an entry needs it.
             // The row's label says the entry isn't downloaded, so the badge isn't read again.
-            let badgeSize = 16.0
+            let badgeSize = Self.badgeSize
             let badge = NSImageView(
                 frame: NSRect(
                     x: column.width - 2 - badgeSize, y: (height - badgeSize) / 2,

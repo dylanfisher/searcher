@@ -25,14 +25,16 @@ private let tree: [String: [DirectoryEntry]] = [
 private struct Fixture {
     let pane: Pane
     let controller: ColumnViewController
+    let lister: StubLister
 
     init(
         width: Double = 800, iconCache: TypeIconCache = TypeIconCache { _ in NSImage() },
         folders: [String: [DirectoryEntry]] = tree
     ) async {
+        lister = StubLister(folders)
         pane = Pane(
             location: Location(path: "/r"),
-            service: ListingService(lister: StubLister(folders), rootVolumeName: { "Test Disk" }),
+            service: ListingService(lister: lister, rootVolumeName: { "Test Disk" }),
             systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true,
             viewMode: .column)
         let controller = ColumnViewController(pane: pane, iconCache: iconCache, formatter: .init())
@@ -627,6 +629,71 @@ private let chevronTree: [String: [DirectoryEntry]] = [
     #expect(!badge.isHidden && !mark.isHidden)
     #expect(badge.frame.maxX <= mark.frame.minX)
     #expect(text.frame.maxX <= badge.frame.minX)
+}
+
+@MainActor @Test func aCellRefilledBetweenAFolderAndAFileTakesTheNewRowsChevronAndBadge()
+    async throws
+{
+    func dataless(_ name: String, _ type: DirectoryEntry.FileType) -> DirectoryEntry {
+        DirectoryEntry(
+            name: name, type: type, size: nil, modified: testDate, isHidden: false,
+            isDataless: true)
+    }
+    let fixture = await Fixture(folders: [
+        "/": [folder("r")], "/r": [dataless("a", .directory), file("b")],
+    ])
+    let table = fixture.tables[0]
+    let before = try (0..<2).map { try nameCell(table, row: $0) }
+    #expect(try !chevron(before[0]).isHidden && chevron(before[1]).isHidden)
+
+    fixture.lister.set("/r", to: [dataless("a", .regular), dataless("b", .directory)])
+    fixture.pane.reload()
+    await settle { fixture.trail.columns[0].pane.state.listing?[0].type == .regular }
+    fixture.controller.view.layoutSubtreeIfNeeded()
+
+    let after = try (0..<2).map { try nameCell(table, row: $0) }
+    #expect(after[0] === before[0] && after[1] === before[1])
+    #expect(try chevron(after[0]).isHidden && !chevron(after[1]).isHidden)
+    let badges = after.map { cell in
+        cell.subviews.first { $0.identifier == ListingViewController.notDownloadedBadgeIdentifier }
+    }
+    let file = try #require(badges[0])
+    let folder = try #require(badges[1])
+    // The file's badge is back at the trailing edge, the folder's left of its chevron.
+    #expect(!file.isHidden && !folder.isHidden)
+    #expect(file.frame.maxX == after[0].bounds.width - 2)
+    #expect(try folder.frame.maxX <= chevron(after[1]).frame.minX)
+    #expect(try #require(after[0].textField).frame.maxX <= file.frame.minX)
+    #expect(try #require(after[1].textField).frame.maxX <= folder.frame.minX)
+}
+
+@MainActor @Test func aListsNameCellsHaveNoChevron() async throws {
+    let list = await controller(showing: [folder("c"), file("a.txt")])
+    let table = list.tableView
+
+    for row in 0..<2 {
+        let cell = try #require(
+            list.tableView(table, viewFor: table.tableColumns[0], row: row) as? NSTableCellView)
+        #expect(!(cell is ColumnNameCellView))
+        #expect(
+            !cell.subviews.contains {
+                $0.identifier == ListingViewController.folderChevronIdentifier
+            }
+        )
+    }
+}
+
+@MainActor @Test func aNameInAColumnTooNarrowForItsChevronGetsNoWidth() async throws {
+    let fixture = await Fixture(folders: chevronTree)
+    let table = fixture.tables[0]
+    let row = try #require(rowNames(table).firstIndex(of: "docs"))
+    let cell = try nameCell(table, row: row)
+    let nameColumn = table.tableColumns[0]
+    nameColumn.minWidth = 1
+    nameColumn.width = 1
+    fixture.controller.view.layoutSubtreeIfNeeded()
+
+    #expect(try #require(cell.textField).frame.width == 0)
 }
 
 /// Draws `view` into a bitmap, as AppKit does before it shows a row, which is when a row view
