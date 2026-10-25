@@ -36,7 +36,9 @@ the load through `ListingService`, the off-main sort and filter ([0025](0025-sor
   columns to its right. While the cursor's entry hasn't arrived in a partial listing, the
   columns stay. → and ← move the focus without listing anything again; → into a column with
   nothing selected selects its first row once the column has rows. Past the first column, ←
-  adds the parent's column with the folder selected.
+  adds the parent's column with the folder selected. (Superseded 2026-10-25: the first column is
+  the root of the folder's volume, and ← there does nothing, as in Finder; see
+  [0103](0103-column-trail-from-the-root.md).)
 - **Loads.** Each column's pane lists its folder. The focused column's load asks
   `ListingService` for `.focused` priority, so a parent column added by ← starts ahead of a
   child column queued before it, once both volumes are read; a load whose volume isn't known
@@ -49,7 +51,10 @@ the load through `ListingService`, the off-main sort and filter ([0025](0025-sor
   goes back to the list, closes its pane (`Pane.close`): the load is cancelled, the monitor
   stopped and dropped, and a monitor handed to it after that is stopped at once.
 - **The owner in column mode.** Switching to columns stops the pane's own load and monitor and
-  starts the trail with one column at its folder, with the entry under the cursor selected. The
+  starts the trail with one column at its folder, with the entry under the cursor selected
+  (superseded 2026-10-25: the trail has a column for every folder from the root of the folder's
+  volume down, each with the next one selected, and the focused column at the folder; the
+  focused column's load is asked first, see [0103](0103-column-trail-from-the-root.md)). The
   pane's `location` follows the focused column, for the path bar, the window title and History.
   Its own rows go: its state holds no listing, so a settings change sorts nothing in it and a
   view can't show or act on rows under a location that moved. Its filter and selection stop
@@ -59,7 +64,10 @@ the load through `ListingService`, the off-main sort and filter ([0025](0025-sor
 - **History.** Moving between columns isn't a step. Back, Forward, Go to folder, a path bar click
   and a link to a folder record the focused column's folder and cursor, as a list pane records
   its own, and start the trail again with one column at the destination, the remembered entry
-  selected, in the sort of the focused column it replaces. Every old column closes.
+  selected, in the sort of the focused column it replaces. Every old column closes. (Amended
+  2026-10-25: the new trail runs from the root of the destination's volume down to it; a path
+  bar click on a folder that has a column moves the focus there instead, keeping every column,
+  and is no step; see [0103](0103-column-trail-from-the-root.md).)
 - **Filter.** The filter belongs to the column it was typed in and narrows that column only. It
   stays with the column until the column closes; a navigation closes every column, so it clears
   the filter as it does in a list.

@@ -581,15 +581,17 @@ private func packageLinkTree() async throws -> (Pane, StubSystemActions, Tempora
     await settle { trail.focused.pane.state.isLoaded }
     let column = trail.focused.pane
     column.select(Selection([ExactName("app link")], cursor: ExactName("app link")))
-    #expect(trail.columns.count == 1)
+    #expect(trail.columns.last?.pane === column)
     #expect(trail.preview == nil)
+    let columns = trail.columns.map(\.pane.location.path)
 
     column.openSelection()
 
     await settle { actions.openedFiles.count == 1 }
     #expect(actions.openedFiles.map(\.path) == [root.url.path + "/app link"])
     try await Task.sleep(for: .milliseconds(50))
-    #expect(trail.columns.map(\.pane.location.path) == [root.url.path])
+    #expect(trail.columns.map(\.pane.location.path) == columns)
+    #expect(columns.last == root.url.path)
 }
 
 /// Open in Other Pane is for folders, so a link to a package opens nothing there, as a link to
@@ -1394,6 +1396,7 @@ private func springPane() async -> PaneFixture {
     let fixture = PaneFixture(
         at: "/root",
         folders: [
+            "/": [folder("root")],
             "/root": [folder("docs"), folder("more"), file("a.txt"), file("b.txt")],
             "/root/docs": [folder("sub"), file("x.txt")],
             "/root/docs/sub": [file("y.txt")],
@@ -1454,15 +1457,15 @@ private func springPane() async -> PaneFixture {
     pane.setViewMode(.column)
     let trail = try #require(pane.columnTrail)
     await settle { trail.focused.pane.state.isLoaded }
-    let first = trail.columns[0].pane
+    let first = trail.columns[1].pane
 
     first.springOpen("docs")
-    #expect(trail.columns.map(\.pane.location.path) == ["/root", "/root/docs"])
-    // A click in the first column during the drag.
+    #expect(trail.columns.map(\.pane.location.path) == ["/", "/root", "/root/docs"])
+    // A click in the column at `/root` during the drag.
     first.select(Selection([ExactName("more")], cursor: ExactName("more")))
     first.springBack()
 
-    #expect(trail.columns.map(\.pane.location.path) == ["/root", "/root/more"])
+    #expect(trail.columns.map(\.pane.location.path) == ["/", "/root", "/root/more"])
     #expect(first.selection.cursor == ExactName("more"))
 }
 
@@ -1498,26 +1501,27 @@ private func springPane() async -> PaneFixture {
     pane.setViewMode(.column)
     let trail = try #require(pane.columnTrail)
     await settle { trail.focused.pane.state.isLoaded }
-    let first = trail.columns[0].pane
+    let first = trail.columns[1].pane
     first.select(Selection([ExactName("more")], cursor: ExactName("more")))
-    await settle { trail.columns.count == 2 && trail.columns[1].pane.state.isLoaded }
-    trail.columns[1].pane.select(Selection([ExactName("m.txt")], cursor: ExactName("m.txt")))
+    await settle { trail.columns.count == 3 && trail.columns[2].pane.state.isLoaded }
+    trail.columns[2].pane.select(Selection([ExactName("m.txt")], cursor: ExactName("m.txt")))
     trail.moveRight()
-    #expect(trail.focusedIndex == 1)
+    #expect(trail.focusedIndex == 2)
     let canUndo = first.canUndoSelection
 
     first.springOpen("docs")
-    await settle { trail.columns.count == 2 && trail.columns[1].pane.state.isLoaded }
-    #expect(trail.columns.map(\.pane.location.path) == ["/root", "/root/docs"])
+    await settle { trail.columns.count == 3 && trail.columns[2].pane.state.isLoaded }
+    #expect(trail.columns.map(\.pane.location.path) == ["/", "/root", "/root/docs"])
     #expect(first.canUndoSelection == canUndo)
-    trail.columns[1].pane.springOpen("sub")
-    #expect(trail.columns.map(\.pane.location.path) == ["/root", "/root/docs", "/root/docs/sub"])
-    trail.columns[2].pane.springBack()
+    trail.columns[2].pane.springOpen("sub")
+    #expect(
+        trail.columns.map(\.pane.location.path) == ["/", "/root", "/root/docs", "/root/docs/sub"])
+    trail.columns[3].pane.springBack()
 
-    #expect(trail.columns.map(\.pane.location.path) == ["/root", "/root/more"])
+    #expect(trail.columns.map(\.pane.location.path) == ["/", "/root", "/root/more"])
     #expect(first.selection.cursor == ExactName("more"))
-    #expect(trail.columns[1].pane.selection.cursor == ExactName("m.txt"))
-    #expect(trail.focusedIndex == 1)
+    #expect(trail.columns[2].pane.selection.cursor == ExactName("m.txt"))
+    #expect(trail.focusedIndex == 2)
     #expect(first.canUndoSelection == canUndo)
     #expect(pane.location.path == "/root/more")
 }
@@ -1534,7 +1538,7 @@ private let widthTree: [String: [DirectoryEntry]] = [
     "/r/other": [file("o.txt")],
 ]
 
-/// A focused pane at `/r` in column mode over `widthTree`, its first column loaded.
+/// A focused pane at `/r` in column mode over `widthTree`, its column at `/r` loaded.
 @MainActor
 private func widthPane(settings: Settings = untouchedSettings()) async -> Pane {
     let fixture = PaneFixture(at: "/r", folders: widthTree, settings: settings)
@@ -1552,16 +1556,17 @@ private func choose(_ name: String, inColumn index: Int, of pane: Pane) async {
     await settle { trail.columns.allSatisfy { $0.pane.state.isLoaded } }
 }
 
-/// The width each of `pane`'s columns shows at, left to right.
+/// The width each of `pane`'s columns from `/r` right shows at, left to right; the column at `/`
+/// is left out.
 @MainActor
 private func shownWidths(_ pane: Pane) -> [Double] {
-    pane.columnTrail?.columns.map { pane.columnWidth(of: $0.pane) } ?? []
+    pane.columnTrail?.columns.dropFirst().map { pane.columnWidth(of: $0.pane) } ?? []
 }
 
 @MainActor @Test func aColumnWidthIsKeptByFolderAndANewColumnGetsTheDefault() async throws {
     let pane = await widthPane()
-    await choose("docs", inColumn: 0, of: pane)
-    let docs = try #require(pane.columnTrail?.columns[1].pane)
+    await choose("docs", inColumn: 1, of: pane)
+    let docs = try #require(pane.columnTrail?.columns[2].pane)
     var reports = 0
     pane.onTabChange = { reports += 1 }
 
@@ -1576,18 +1581,18 @@ private func shownWidths(_ pane: Pane) -> [Double] {
 
     // Another folder's column gets the default; the folder's own column, opened again, its
     // width.
-    await choose("other", inColumn: 0, of: pane)
+    await choose("other", inColumn: 1, of: pane)
     #expect(shownWidths(pane) == [standard, standard])
-    await choose("docs", inColumn: 0, of: pane)
+    await choose("docs", inColumn: 1, of: pane)
     #expect(shownWidths(pane) == [standard, 300])
     pane.close()
 }
 
 @MainActor @Test func aWidthForAColumnTheTrailClosedIsDropped() async throws {
     let pane = await widthPane()
-    await choose("docs", inColumn: 0, of: pane)
-    let docs = try #require(pane.columnTrail?.columns[1].pane)
-    await choose("a.txt", inColumn: 0, of: pane)
+    await choose("docs", inColumn: 1, of: pane)
+    let docs = try #require(pane.columnTrail?.columns[2].pane)
+    await choose("a.txt", inColumn: 1, of: pane)
 
     pane.setColumnWidth(300, of: docs)
 
@@ -1602,8 +1607,8 @@ private func shownWidths(_ pane: Pane) -> [Double] {
     let folder = try TemporaryFolder("PaneTests")
     let settings = storedSettings(in: folder)
     let pane = await widthPane(settings: settings)
-    await choose("docs", inColumn: 0, of: pane)
-    let docs = try #require(pane.columnTrail?.columns[1].pane)
+    await choose("docs", inColumn: 1, of: pane)
+    let docs = try #require(pane.columnTrail?.columns[2].pane)
     pane.setColumnWidth(300, of: docs)
     var reports = 0
     pane.onTabChange = { reports += 1 }
@@ -1623,8 +1628,8 @@ private func shownWidths(_ pane: Pane) -> [Double] {
     let folder = try TemporaryFolder("PaneTests")
     let settings = storedSettings(in: folder)
     let pane = await widthPane(settings: settings)
-    await choose("docs", inColumn: 0, of: pane)
-    pane.setColumnWidth(300, of: try #require(pane.columnTrail?.columns[1].pane))
+    await choose("docs", inColumn: 1, of: pane)
+    pane.setColumnWidth(300, of: try #require(pane.columnTrail?.columns[2].pane))
     pane.setPreviewWidth(400)
 
     pane.setEveryColumnWidth(200)
@@ -1644,10 +1649,10 @@ private func shownWidths(_ pane: Pane) -> [Double] {
     let settings = storedSettings(in: folder)
     let pane = await widthPane(settings: settings)
     let other = await widthPane(settings: settings)
-    await choose("docs", inColumn: 0, of: pane)
-    await choose("x.txt", inColumn: 1, of: pane)
+    await choose("docs", inColumn: 1, of: pane)
+    await choose("x.txt", inColumn: 2, of: pane)
     #expect(pane.columnTrail?.preview != nil)
-    pane.setColumnWidth(300, of: try #require(pane.columnTrail?.columns[1].pane))
+    pane.setColumnWidth(300, of: try #require(pane.columnTrail?.columns[2].pane))
     let widths = pane.columnWidths
 
     other.setEveryColumnWidth(200)
@@ -1655,7 +1660,7 @@ private func shownWidths(_ pane: Pane) -> [Double] {
     #expect(shownWidths(pane) == [200, 300])
     #expect(pane.previewWidth == 200)
     #expect(pane.columnWidths == widths)
-    await choose("sub", inColumn: 1, of: pane)
+    await choose("sub", inColumn: 2, of: pane)
     #expect(shownWidths(pane) == [200, 300, 200])
     pane.close()
     other.close()
@@ -1663,7 +1668,7 @@ private func shownWidths(_ pane: Pane) -> [Double] {
 
 @MainActor @Test func columnWidthsStayThroughTheListAndBack() async throws {
     let pane = await widthPane()
-    pane.setColumnWidth(300, of: try #require(pane.columnTrail?.columns[0].pane))
+    pane.setColumnWidth(300, of: try #require(pane.columnTrail?.columns[1].pane))
     pane.setPreviewWidth(400)
     let widths = pane.columnWidths
 
@@ -1679,7 +1684,7 @@ private func shownWidths(_ pane: Pane) -> [Double] {
 
 @MainActor @Test func aSplitKeepsTheColumnWidthsAndANewTabStartsWithNone() async throws {
     let pane = await widthPane()
-    pane.setColumnWidth(300, of: try #require(pane.columnTrail?.columns[0].pane))
+    pane.setColumnWidth(300, of: try #require(pane.columnTrail?.columns[1].pane))
 
     let copy = pane.copy(takingFocus: false)
     let new = pane.newPane(at: Location(path: "/r"))
@@ -1753,7 +1758,7 @@ private func shownWidths(_ pane: Pane) -> [Double] {
 
     trail.focused.pane.jump(to: "docs")
 
-    #expect(trail.columns.map(\.pane.location.path) == ["/root", "/root/docs"])
+    #expect(trail.columns.map(\.pane.location.path) == ["/", "/root", "/root/docs"])
     #expect(trail.focused.pane.location == Location(path: "/root"))
     fixture.pane.close()
 }

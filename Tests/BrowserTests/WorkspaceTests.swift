@@ -271,7 +271,7 @@ private struct QueuedTabs {
 
 /// A tree for column panes: `/r` holds a folder `docs`, which holds a folder `sub`.
 private let columnTree: [String: [DirectoryEntry]] = [
-    "/r": [folder("docs")],
+    "/": [folder("r")], "/r": [folder("docs")],
     "/r/docs": [folder("sub")],
     "/r/docs/sub": [],
 ]
@@ -291,16 +291,16 @@ private let columnTree: [String: [DirectoryEntry]] = [
     let hidden = Tab(pane: columns)
     workspace.add(hidden)
     let trail = try #require(columns.columnTrail)
-    await settle { trail.columns[0].pane.state.isLoaded }
+    await settle { trail.columns.allSatisfy { $0.pane.state.isLoaded } }
 
     workspace.select(shown.id)
-    #expect(trail.columns[0].pane.load?.priority == .hidden)
+    #expect(trail.columns.map { $0.pane.load?.priority } == [.hidden, .hidden])
 
     // A folder selected in a hidden tab's column adds a column, which loads hidden too.
     let docs = ExactName("docs")
-    trail.columns[0].pane.select(Selection([docs], cursor: docs))
-    await settle { trail.columns.count == 2 }
-    #expect(trail.columns[1].pane.load?.priority == .hidden)
+    trail.columns[1].pane.select(Selection([docs], cursor: docs))
+    await settle { trail.columns.count == 3 }
+    #expect(trail.columns[2].pane.load?.priority == .hidden)
 }
 
 @MainActor @Test func focusingAPaneMovesItsQueuedLoadFirst() async throws {

@@ -16,6 +16,11 @@ public final class Column {
     /// first row is selected once they do, unless the selection, the focus or the location
     /// changed first. Nil when nothing waits.
     var selectsFirstRowAt: Int?
+    /// For a column the trail built left of the folder it started at: its selection version
+    /// then, with the next folder on the way down selected. While the selection keeps it, the
+    /// column right of this one stays, whatever the rows show of that folder: hidden, a link's
+    /// target or not listed at all (0103-column-trail-from-the-root.md). Nil for other columns.
+    var keepsNextColumnAt: Int?
 
     init(pane: Pane) {
         self.pane = pane

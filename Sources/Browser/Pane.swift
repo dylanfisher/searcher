@@ -222,7 +222,7 @@ public final class Pane {
     private var loadedAt: Date?
 
     /// Starts listing `location` right away, ahead of other panes' loads if `isFocused`, with
-    /// `name` to be selected once it's listed. In column mode the first column lists it instead.
+    /// `name` to be selected once it's listed. In column mode the column at it lists it instead.
     public convenience init(
         location: Location, service: ListingService, systemActions: any SystemActions,
         settings: Settings, sortedBy column: SortColumn = .name, ascending: Bool = true,
@@ -235,10 +235,31 @@ public final class Pane {
             viewMode: viewMode, rows: nil)
     }
 
+    /// A column's pane at `location`, with `name` to be selected once it's listed, that lists
+    /// nothing until `listIfWaiting()`, a reload or a change its monitor reports. A trail makes
+    /// the columns left of the one it is built at with it, so that column's load is asked first
+    /// (0103-column-trail-from-the-root.md).
+    convenience init(
+        waitingAt location: Location, service: ListingService, systemActions: any SystemActions,
+        settings: Settings, sortedBy column: SortColumn, ascending: Bool, selecting name: ExactName
+    ) {
+        self.init(
+            location: location, service: service, systemActions: systemActions,
+            settings: settings, sortedBy: column, ascending: ascending, isFocused: false,
+            selection: Selection([name], cursor: name), viewMode: .list, rows: nil,
+            listsNow: false)
+    }
+
+    /// Starts the first load of a pane made `waitingAt` its folder, unless one started already.
+    func listIfWaiting() {
+        guard load == nil, !isClosed else { return }
+        startLoad()
+    }
+
     /// A pane as `Tab.state` saved it: at its folder, in its view mode and sort, with its Back
     /// and Forward history, listing the folder right away. The saved names are selected as the
     /// rows bring them, and the full listing drops the ones the folder no longer has, as for any
-    /// selection made before its rows arrive. In column mode the one column at the folder
+    /// selection made before its rows arrive. In column mode the column at the folder
     /// selects the saved cursor. A folder that isn't there shows the missing state
     /// (`ListingState.missingFolder`).
     public convenience init(
@@ -268,12 +289,12 @@ public final class Pane {
     }
 
     /// A pane that shows `rows`, a complete listing of `location` in list mode, and lists nothing
-    /// until something asks it to; with no rows, it starts listing as above. In column mode the
-    /// first column selects the selection's cursor.
+    /// until something asks it to; with no rows, it starts listing as above unless `listsNow` is
+    /// false. In column mode the column at `location` selects the selection's cursor.
     private init(
         location: Location, service: ListingService, systemActions: any SystemActions,
         settings: Settings, sortedBy column: SortColumn, ascending: Bool, isFocused: Bool,
-        selection: Selection, viewMode: ViewMode, rows: Listing?
+        selection: Selection, viewMode: ViewMode, rows: Listing?, listsNow: Bool = true
     ) {
         self.location = location
         self.service = service
@@ -287,7 +308,7 @@ public final class Pane {
         case .list:
             if let rows {
                 state = .loaded(rows)
-            } else {
+            } else if listsNow {
                 startLoad()
             }
         case .column:
@@ -319,7 +340,8 @@ public final class Pane {
     /// rows' patches and sorts from here on itself, and lists the folder when this pane still has
     /// a listing or a patch to land, which its rows lack. With `takingFocus` such a pane is
     /// focused already, so gaining the focus doesn't list it either. In column mode the new trail
-    /// selects the focused column's cursor in its first column. It has this pane's column widths.
+    /// selects the focused column's cursor in its column at the folder. It has this pane's column
+    /// widths.
     func copy(takingFocus: Bool) -> Pane {
         let sorted = commandPane
         let rows: Listing? =
@@ -368,7 +390,7 @@ public final class Pane {
     /// step: it lists the folder again and keeps its monitor, selecting `name` if given.
     ///
     /// In column mode the pane is in the focused column's folder, and a navigation starts the
-    /// trail again with one column at `location`.
+    /// trail again at `location`, from its volume's root (`ColumnTrail`).
     public func navigate(to location: Location, selecting name: String? = nil) {
         precondition(containingTrail == nil, "a column navigates through its trail's owner")
         guard location != self.location else {
@@ -496,9 +518,10 @@ public final class Pane {
 
     // MARK: - View mode
 
-    /// Switches between the list and columns. Columns start with one at the pane's folder, with
-    /// the entry under the cursor selected; the pane's own load and monitor stop and its rows
-    /// go, since that column has its own, so `state` holds no listing in column mode. The list
+    /// Switches between the list and columns. Columns start at the root of the pane's folder's
+    /// volume and run down to a focused column at the folder, with the entry under the cursor
+    /// selected (`ColumnTrail`); the pane's own load and monitor stop and its rows go, since that
+    /// column has its own, so `state` holds no listing in column mode. The list
     /// starts at the focused column's folder, in its sort, with
     /// the entry under its cursor selected, and the columns close. Neither is a step in the
     /// history. Switching to the mode the pane is in does nothing.
@@ -536,6 +559,20 @@ public final class Pane {
         guard let trail = columnTrail else { return }
         location = trail.focused.pane.location
         reportChange()
+    }
+
+    /// A path bar click on `location`, a folder above the pane's, with `child` the folder on the
+    /// way down to it. In column mode, when a column shows `location`, that column takes the
+    /// keys, as a click in it does: its selection and the columns right of it stay, and it is no
+    /// step in the history. Otherwise the pane navigates to `location`, selecting `child`
+    /// (0103-column-trail-from-the-root.md).
+    public func showFolderAbove(_ location: Location, comingFrom child: String) {
+        if let trail = columnTrail,
+            let column = trail.columns.first(where: { $0.pane.location == location })
+        {
+            return trail.focus(column)
+        }
+        navigate(to: location, selecting: child)
     }
 
     // MARK: - Column widths
@@ -755,9 +792,9 @@ public final class Pane {
         reportChange()
     }
 
-    /// Closes the columns and starts one at `location`, with the selection's cursor selected.
-    /// The new column takes the focused column's sort, since the pane's own isn't kept in step
-    /// in column mode.
+    /// Closes the columns and starts the trail again at `location`, with the selection's cursor
+    /// selected there. The new columns take the focused column's sort, since the pane's own
+    /// isn't kept in step in column mode.
     private func restartTrail() {
         guard let old = columnTrail else { preconditionFailure("restarting a trail in list mode") }
         let model = old.focused.pane

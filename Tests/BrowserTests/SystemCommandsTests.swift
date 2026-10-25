@@ -108,13 +108,14 @@ private func systemPane(settings: Settings = untouchedSettings()) async -> PaneF
 
 @MainActor @Test func getInfoInAColumnAsksForTheColumnsSelection() async throws {
     let fixture = PaneFixture(
-        at: "/sys", folders: ["/sys": [folder("d"), file("a")], "/sys/d": [file("x")]])
+        at: "/sys",
+        folders: ["/": [folder("sys")], "/sys": [folder("d"), file("a")], "/sys/d": [file("x")]])
     await settle { fixture.pane.state.isLoaded }
     fixture.pane.setViewMode(.column)
     let trail = try #require(fixture.pane.columnTrail)
     await settle { trail.focused.pane.state.isLoaded }
     trail.focused.pane.select(Selection([ExactName("d")], cursor: ExactName("d")))
-    await settle { trail.columns.count == 2 && trail.columns[1].pane.state.isLoaded }
+    await settle { trail.columns.count == 3 && trail.columns[2].pane.state.isLoaded }
     trail.moveRight()
 
     try run(getInfo, on: fixture.pane.commandPane)

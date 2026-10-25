@@ -110,6 +110,8 @@ final class ColumnViewController: NSViewController {
     /// True when the last `paneDidChange` kept a column, so the view the user is looking at is
     /// the one that moves; false for a new trail, which shows its focus at once.
     private var keptColumn = false
+    /// The clip view's width at the last scroll to the focused column; nil before the first.
+    private var scrolledAtWidth: Double?
 
     /// Posts an accessibility notification. Tests replace it to record what would be posted.
     var postAccessibility:
@@ -244,6 +246,14 @@ final class ColumnViewController: NSViewController {
     override func viewDidLayout() {
         super.viewDidLayout()
         layoutColumns()
+        // A trail shown before the view had a width scrolled to its focused column with none, so
+        // it showed that column at the left edge, the columns left of it out of sight.
+        if scrolledAtWidth == 0, let clip = (view as? NSScrollView)?.contentView,
+            clip.bounds.width > 0
+        {
+            scrolledTo = nil
+            scrollToFocusedColumn()
+        }
     }
 
     private func makeController(for column: Column) -> ListingViewController {
@@ -765,13 +775,17 @@ final class ColumnViewController: NSViewController {
             preconditionFailure("the column view's view is \(view)")
         }
         let clip = scrollView.contentView
+        scrolledAtWidth = clip.bounds.width
+        // A new trail scrolls from the left end, so its focused column, the last, ends at the
+        // right edge with the columns of the folders above it filling the view to its left.
+        let isNewTrail = previous == nil || !keptColumn
         var x = Self.originX(
-            showing: next.map { focused.union($0.frame) } ?? focused, from: clip.bounds.origin.x,
-            width: clip.bounds.width)
+            showing: next.map { focused.union($0.frame) } ?? focused,
+            from: isNewTrail ? 0 : clip.bounds.origin.x, width: clip.bounds.width)
         x = Self.originX(showing: focused, from: x, width: clip.bounds.width)
         // A first show, a view that has no column kept (a restore, a new trail) and a resizing
         // drag jump; so does Reduce Motion (0046-column-view.md).
-        let animated = previous != nil && keptColumn && resizing == nil && !reduceMotion()
+        let animated = !isNewTrail && resizing == nil && !reduceMotion()
         animateScroll(clip, x, animated)
     }
 
