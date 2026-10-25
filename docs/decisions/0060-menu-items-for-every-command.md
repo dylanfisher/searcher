@@ -39,9 +39,9 @@ Sublime Text.
   Option (Tab, Space, the arrows, Shift-arrows, the page keys) is listed with
   `commandWithoutKey`; `eachCommandItemsKeyEquivalentIsItsCommandsFirstChord` fails if one of
   them shows a key equivalent. The table still gets the key in `keyDown`. The whole Selection
-  submenu is keyless, Opt- and Ctrl-Shift-arrows included: text fields move by those keys too,
-  and every row key repeat would otherwise go through the menu bar's key equivalent search
-  first. Every other command shows its first chord.
+  submenu is keyless, Opt- and Ctrl-Shift-arrows, Home and End included: text fields move by
+  those keys too, and every row key repeat would otherwise go through the menu bar's key
+  equivalent search first. Every other command shows its first chord.
 - **Pane keys.** Focus Pane is Cmd-Opt-Shift-arrow, which Move Pane had. Move Pane is
   Ctrl-Opt-Shift-arrow, which no command or standard item used. Cmd-Opt-arrow is unbound, and
   a test keeps it so.
@@ -54,8 +54,8 @@ Sublime Text.
   and each family's arrows read together.
 - **A second Select All item for the selection command** — rejected: two items with one title,
   and the existing one already runs the command from the table.
-- **Key equivalents on Opt- and Ctrl-Shift-arrows** — rejected: see above. The menu shows no key
-  for them; the table still runs them.
+- **Key equivalents on Opt- and Ctrl-Shift-arrows, Home and End** — rejected: see above. The menu
+  shows no key for them; the table still runs them.
 
 ## Consequences
 

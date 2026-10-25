@@ -51,7 +51,7 @@ public final class Pane {
     /// selection provisionally and settles it off the main thread too. Leaving the folder moves
     /// it too, so a command can tell whether the user has changed the selection since it ran.
     private(set) var selectionVersion = 0
-    /// Whether a row key, Opt-↑ or Opt-↓, or type-to-select made the selection, rather than a
+    /// Whether a row key, Home or End, or type-to-select made the selection, rather than a
     /// click or a command. A column's trail waits for such keys to pause before the columns
     /// right of it follow the selection (0094-column-open-delay.md).
     private(set) var selectionIsFromKeys = false
@@ -1594,14 +1594,14 @@ public final class Pane {
         moveSelection(by: pages * max(visibleRowCount, 1), isKeyRepeat: isKeyRepeat)
     }
 
-    /// Selects the first row alone. `byKey` says a key asked for it, as Opt-↑ does; → into a
+    /// Selects the first row alone. `byKey` says a key asked for it, as Home does; → into a
     /// column asks without it, so the folder in that row opens its column at once.
     public func selectFirstRow(byKey: Bool = false) {
         guard let listing = state.listing else { return }
         set(onMain { selection.moved(toRow: 0, in: listing, extending: false) }, byKey: byKey)
     }
 
-    /// Selects the last row alone. `byKey` says a key asked for it, as Opt-↓ does.
+    /// Selects the last row alone. `byKey` says a key asked for it, as End does.
     public func selectLastRow(byKey: Bool = false) {
         guard let listing = state.listing else { return }
         set(

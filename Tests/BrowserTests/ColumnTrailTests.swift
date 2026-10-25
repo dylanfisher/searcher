@@ -139,6 +139,28 @@ private func packageColumns() async -> PaneFixture {
     #expect(fixture.actions.openedFiles.isEmpty)
 }
 
+/// Opt-↓ moves ten rows, clamped to the last, and the columns right of the selection wait for the
+/// pause like any held key (0094-column-open-delay.md).
+@MainActor @Test func optionDownInAColumnWaitsForThePauseBeforeOpeningTheNewSelection()
+    async throws
+{
+    let clock = ManualClock()
+    let fixture = await columnPane()
+    fixture.pane.columnOpenClock = clock
+    let pane = fixture.pane
+    select("docs", in: trail(pane).columns[0])
+    #expect(paths(pane) == ["/r", "/r/docs"])
+
+    try press(KeyChord(.down, modifiers: .option), on: pane)
+
+    #expect(trail(pane).columns[0].pane.selection.cursor == ExactName("other"))
+    #expect(paths(pane) == ["/r"])
+    #expect(trail(pane).preview == nil)
+    await settle { clock.waitingSleeps == 1 }
+    clock.advance(by: ColumnTrail.openDelay)
+    await settle { paths(pane) == ["/r", "/r/other"] }
+}
+
 /// A package selected by keys waits for the pause, as a file does, then previews and still adds
 /// no column; Show Package Contents opens its column at once, since it is a command.
 @MainActor @Test func aPackageSelectedByKeysPreviewsAfterThePauseAndShowContentsOpensAtOnce()
@@ -1006,7 +1028,7 @@ private func drainWaits() async {
     clock.advance(by: ColumnTrail.openDelay)
     await settle { paths(pane) == ["/k", "/k/f5"] }
 
-    try press(KeyChord(.down, modifiers: .option), on: pane)
+    try press(KeyChord(.end), on: pane)
     #expect(paths(pane) == ["/k"])
     clock.advance(by: ColumnTrail.openDelay)
     await settle { trail(pane).preview?.location == Location(path: "/k/z.txt") }
@@ -1107,7 +1129,7 @@ private func click(_ name: String, in pane: Pane) throws {
     let fixture = await keyedPane(clock: clock)
     let pane = fixture.pane
     let first = trail(pane).columns[0].pane
-    try press(KeyChord(.down, modifiers: .option), on: pane)
+    try press(KeyChord(.end), on: pane)
     clock.advance(by: ColumnTrail.openDelay)
     await settle { trail(pane).preview?.location == Location(path: "/k/z.txt") }
 

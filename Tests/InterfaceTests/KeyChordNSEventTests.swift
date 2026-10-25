@@ -66,6 +66,18 @@ let arrowFlags: NSEvent.ModifierFlags = [.numericPad, .function]
     #expect(pageDown?.description == "Page Down")
 }
 
+/// Fn-← and Fn-→ on a laptop, and the Home and End keys on a full keyboard.
+@MainActor @Test func homeAndEndMapToTheirChordsAndDrawAsMenusDo() throws {
+    let home = try KeyChord(event: keyEvent(functionKey(NSHomeFunctionKey), modifiers: .function))
+    let end = try KeyChord(event: keyEvent(functionKey(NSEndFunctionKey), modifiers: .function))
+
+    #expect(home == KeyChord(.home))
+    #expect(end == KeyChord(.end))
+    #expect(home?.description == "Home")
+    #expect(KeyChord(.end, modifiers: .option).symbols == "⌥⇲")
+    #expect(KeyChord(.home, modifiers: .option).symbols == "⌥⇱")
+}
+
 /// F5 arrives the same with Fn held, as a laptop sends it while the system's standard function
 /// keys setting is off, and without, as it sends it while the setting is on.
 @MainActor @Test func fKeysMapToFunctionKeysWithOrWithoutFn() throws {
@@ -150,6 +162,8 @@ let arrowFlags: NSEvent.ModifierFlags = [.numericPad, .function]
         KeyChord("1", modifiers: [.control, .option, .command]),
         KeyChord(.return, modifiers: .command), KeyChord(.tab), KeyChord(.space),
         KeyChord(.escape), KeyChord(.pageDown), KeyChord(.pageUp, modifiers: .shift),
+        KeyChord(.home),
+        KeyChord(.end, modifiers: .option),
         KeyChord(.function(5)), KeyChord(.function(12), modifiers: .command),
     ]
     for chord in chords {

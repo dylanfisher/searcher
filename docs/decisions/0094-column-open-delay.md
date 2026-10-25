@@ -16,7 +16,7 @@ opens the selected folder's column, or shows the file's preview, only once the k
 ## Decision
 
 - **Keys wait, clicks don't.** A selection made by a row key (↑, ↓, Shift-arrows, Opt-, Ctrl-Shift-
-  and Fn-arrows), by Opt-↑ or Opt-↓, or by type-to-select sets `Pane.selectionIsFromKeys`. The trail
+  and Fn-arrows), by Home or End, or by type-to-select sets `Pane.selectionIsFromKeys`. The trail
   then drops the columns right of it that the new selection doesn't ask for at once, clears the
   preview if it showed another file, and opens the new column or preview after
   `ColumnTrail.openDelay` with no further selection change in that column. Each new key starts the
