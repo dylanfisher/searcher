@@ -99,5 +99,6 @@ kept by folder and come back after a relaunch or a reload, see
 [0098](0098-column-widths-per-window.md)). Relaunching, reloading a workspace
 or navigating to a new trail shows every column at the default. An Option-drag in one window
 changes the width new columns get in every window, as in Finder, but doesn't resize the columns
-other windows show. A not-downloaded folder's badge isn't counted in a fit; its name may truncate
+other windows show (superseded 2026-10-24: other windows' unresized columns follow the new
+width, see [0098](0098-column-widths-per-window.md)). A not-downloaded folder's badge isn't counted in a fit; its name may truncate
 by a few points.

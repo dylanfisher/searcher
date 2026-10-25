@@ -305,10 +305,12 @@ final class ColumnViewController: NSViewController {
             self.resizing = nil
             // As in Finder, an Option-drag sets the width new columns get; a plain one doesn't.
             // The drag's own width, so a drag whose column closed under it still sets it.
+            // A plain drag that ends at the width it started from sets none, so the column
+            // keeps following the default and the window shows no edit.
             if let width = resizing.width {
                 if resizing.allColumns {
                     pane.setEveryColumnWidth(width)
-                } else {
+                } else if width != resizing.start {
                     setWidth(width, of: resizing.target)
                 }
             }

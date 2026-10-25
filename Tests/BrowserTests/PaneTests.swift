@@ -1594,7 +1594,8 @@ private func shownWidths(_ pane: Pane) -> [Double] {
 }
 
 @MainActor @Test func everyColumnWidthDropsTheFoldersWidthsAndSetsTheDefault() async throws {
-    let settings = untouchedSettings()
+    let folder = try TemporaryFolder("PaneTests")
+    let settings = storedSettings(in: folder)
     let pane = await widthPane(settings: settings)
     await choose("docs", inColumn: 0, of: pane)
     pane.setColumnWidth(300, of: try #require(pane.columnTrail?.columns[1].pane))
@@ -1609,27 +1610,27 @@ private func shownWidths(_ pane: Pane) -> [Double] {
     pane.close()
 }
 
-/// An Option-drag in another pane sets the width new columns get, but this pane's shown columns
-/// and preview keep the width they show, and its stored widths say so.
-@MainActor @Test func anotherPanesNewDefaultKeepsTheWidthsThisPaneShows() async throws {
-    let settings = untouchedSettings()
+/// An Option-drag in another pane sets the default: this pane's columns and preview with no
+/// width set follow it, a resized one keeps its width, and nothing is stored, so the pane's
+/// state is as it was.
+@MainActor @Test func anotherPanesNewDefaultMovesOnlyTheColumnsWithNoWidthSet() async throws {
+    let folder = try TemporaryFolder("PaneTests")
+    let settings = storedSettings(in: folder)
     let pane = await widthPane(settings: settings)
     let other = await widthPane(settings: settings)
     await choose("docs", inColumn: 0, of: pane)
     await choose("x.txt", inColumn: 1, of: pane)
     #expect(pane.columnTrail?.preview != nil)
     pane.setColumnWidth(300, of: try #require(pane.columnTrail?.columns[1].pane))
+    let widths = pane.columnWidths
 
     other.setEveryColumnWidth(200)
 
-    let standard = Settings.defaultColumnWidth
-    #expect(shownWidths(pane) == [standard, 300])
-    #expect(pane.previewWidth == standard)
-    #expect(pane.columnWidths.width(of: Location(path: "/r")) == standard)
-    #expect(pane.columnWidths.preview == standard)
-    // A column opened after it gets the new default.
+    #expect(shownWidths(pane) == [200, 300])
+    #expect(pane.previewWidth == 200)
+    #expect(pane.columnWidths == widths)
     await choose("sub", inColumn: 1, of: pane)
-    #expect(shownWidths(pane) == [standard, 300, 200])
+    #expect(shownWidths(pane) == [200, 300, 200])
     pane.close()
     other.close()
 }

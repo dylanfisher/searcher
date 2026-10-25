@@ -262,7 +262,6 @@ public final class Pane {
         self.systemActions = systemActions
         self.settings = settings
         self.isFocused = isFocused
-        columnWidthDefault = settings.columnWidth
         sortColumn = column
         sortAscending = ascending
         self.selection = selection
@@ -526,19 +525,16 @@ public final class Pane {
     /// list mode, so the columns get them back on the switch to columns, and `TabState` keeps
     /// them (0098-column-widths-per-window.md).
     public private(set) var columnWidths = ColumnWidths()
-    /// `Settings.columnWidth` as the pane last saw it: the width of a column, or the preview,
-    /// with no width set.
-    private var columnWidthDefault: Double
 
     /// The width `column`'s pane, one of this pane's columns, shows at: its folder's set width,
-    /// or the default.
+    /// or `Settings.columnWidth`, which a column with no width set follows when it changes.
     public func columnWidth(of column: Pane) -> Double {
-        columnWidths.width(of: column.location) ?? columnWidthDefault
+        columnWidths.width(of: column.location) ?? settings.columnWidth
     }
 
-    /// The width the trail's preview shows at.
+    /// The width the trail's preview shows at: its set width, or `Settings.columnWidth`.
     public var previewWidth: Double {
-        columnWidths.preview ?? columnWidthDefault
+        columnWidths.preview ?? settings.columnWidth
     }
 
     /// Sets the width of `column`'s pane's folder, as a grip's drag ends or a fit lands. A
@@ -563,18 +559,16 @@ public final class Pane {
     }
 
     /// Shows every column and the preview at `width`, as an Option-drag ends, and makes it the
-    /// width new columns get in every pane, `Settings.columnWidth`. The widths set for folders,
-    /// shown or not, go, so every column of the pane is at the new default.
+    /// width every column with no width set shows at, in every pane: `Settings.columnWidth`.
+    /// The widths set for this pane's folders, shown or not, go, so every column of the pane is
+    /// at the new default.
     ///
     /// - Precondition: `width` is within `Settings.columnWidths`.
     public func setEveryColumnWidth(_ width: Double) {
         let old = columnWidths
         columnWidths = ColumnWidths()
-        // Before the setting, so this pane keeps none of its columns at the old default.
-        let oldDefault = columnWidthDefault
-        columnWidthDefault = width
         settings.columnWidth = width
-        if columnWidths != old || oldDefault != width { reportChange() }
+        if columnWidths != old { reportChange() }
     }
 
     /// Takes `widths` as its own, as showing a saved workspace's snapshot does when only the
@@ -583,24 +577,6 @@ public final class Pane {
         guard widths != columnWidths else { return }
         columnWidths = widths
         reportChange()
-    }
-
-    /// Once `Settings.columnWidth` changes, from an Option-drag in another pane or window, sets
-    /// each shown column and the shown preview that had no width set to the width it shows at,
-    /// the old default, so nothing this pane shows changes width and its stored state still
-    /// says what it shows. Columns opened later get the new default.
-    private func followColumnWidthSetting() {
-        let oldDefault = columnWidthDefault
-        columnWidthDefault = settings.columnWidth
-        guard oldDefault != columnWidthDefault, let trail = columnTrail, !isClosed else { return }
-        let old = columnWidths
-        for column in trail.columns where columnWidths.width(of: column.pane.location) == nil {
-            columnWidths.set(oldDefault, of: column.pane.location)
-        }
-        if trail.preview != nil, columnWidths.preview == nil {
-            columnWidths.setPreview(oldDefault)
-        }
-        if columnWidths != old { reportChange() }
     }
 
     /// Stops the pane's load, its folder monitor and anything pending for its rows, for good.
@@ -1102,7 +1078,6 @@ public final class Pane {
     private func settingsDidChange() {
         // Followed in column mode too, so the list the pane switches back to has it.
         followSizeSetting()
-        followColumnWidthSetting()
         if namesToSelect?.showsHidden != settings.showHidden {
             namesToSelect = nil
         }

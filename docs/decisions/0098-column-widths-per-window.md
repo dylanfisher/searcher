@@ -44,18 +44,19 @@ the main display, which the build rules don't allow. It is one of the checks by 
   `setPreviewWidth`); a fit hands it when it lands; each VoiceOver step hands it its step. Each
   is one pane change, which reaches the save path as any change does: `WorkspaceWindows` saves
   `saveDelay` after the changes stop, and the store writes a second later
-  ([0080](0080-restore-at-launch.md)). A drag starts one save, not one per event.
-- **Option-drag and the app-wide default.** An Option-drag or Option-double-click sets every
-  column and the preview to one width and makes it `Settings.columnWidth`, as before. The pane's
-  folder widths go with it, shown or not, so every column of that pane is at the new width and
-  a folder reopened later is too. Other panes, in this window and others, keep what they show:
-  when the default changes, each pane in column view stores the old default for each shown
-  column and a shown preview that had no width, so nothing on screen changes width and the
-  stored state still says what the window shows. A column opened afterwards, in any pane, gets
-  the new default. A hidden preview with no width takes the new default when it next shows.
-- **New columns in a restored window** get `Settings.columnWidth` as it is at the launch, unless
-  their folder is stored. A snapshot or window file saved before the default changed shows its
-  unresized columns at the new default; any column it showed while open was pinned as above.
+  ([0080](0080-restore-at-launch.md)). A drag starts one save, not one per event. A plain drag
+  that ends at the width it started from, and a click on a grip, hand the pane nothing, so they
+  are no edit.
+- **Option-drag and the app-wide default** (decided 2026-10-24 in review). An Option-drag or
+  Option-double-click sets every column and the preview to one width and makes it
+  `Settings.columnWidth`, as before. The pane's folder widths go with it, shown or not, so every
+  column of that pane is at the new width and a folder reopened later is too. Every other
+  column with no width set, in every pane and window, follows the live default: it changes
+  width on screen at once, and nothing is stored for it. Only grip-set widths are ever in
+  `columnWidths`. This matches Finder's single `ColumnWidth`, and an Option-drag in one window
+  never sets the edited dot of another saved window, whose state is unchanged.
+- **New columns in a restored window**, and its columns whose folder has no stored width, get
+  `Settings.columnWidth` as it is then, as every unresized column does.
 - **Snapshots: widths are saved state, handled as the frame is.** Save Workspace keeps the
   widths; reopening a closed saved workspace shows them. A resize after a save is an edit: the
   edited dot shows once the save path reads the state, as for any other change. Going to an
@@ -84,6 +85,11 @@ the main display, which the build rules don't allow. It is one of the checks by 
 - **One width per pane, plus per-column overrides** — rejected: a per-pane base would be a third
   value beside `Settings.columnWidth` and the folder widths, and it would disagree with 0096's
   rule that an Option-drag sets the width new columns get in every window.
+- **Pin the old default into each other pane's state when the default changes**, so no column
+  on screen changes width — rejected in review: it would set the edited dot of every other saved
+  window in column view after one Option-drag, with nothing the user did there, and store
+  widths nobody set. Keeping such a pin in memory only, out of the state, was rejected too: a
+  relaunch or a reload would then show different widths from the ones on screen.
 - **Store every shown column's width, resized or not** — rejected: every column opened would
   change the stored state and set the edited dot with nothing visibly changed, and a folder
   revisited after an Option-drag elsewhere would keep the old default.
@@ -101,12 +107,12 @@ the main display, which the build rules don't allow. It is one of the checks by 
 ## Consequences
 
 A restored column-mode pane shows its one column, and any column ← or a selection opens, at its
-folder's stored width. An Option-drag in one window stores up to a trail's worth of widths in
-every other column-mode pane, which can set their windows' edited dots: their columns now differ
-from what reopening their snapshots would show. A pane keeps the widths of at most 64 folders.
+folder's stored width. An Option-drag in one window moves the unresized columns of every other
+window, as one app-wide width does, and changes no stored state but its own pane's. A pane keeps
+the widths of at most 64 folders.
 
 Checks by hand, with Finder: whether Finder keeps a resized column's width for its folder or for
 its position (resize the second column, click another folder in the first, and see which width
 the new second column gets); whether a relaunch shows a window's resized columns; and whether an
 Option-drag in one window resizes another window's columns. A difference from this record is a
-change to `ColumnWidths` or `Pane.followColumnWidthSetting`.
+change to `ColumnWidths` or to `Pane.columnWidth(of:)`.

@@ -19,7 +19,9 @@ private func roots(_ folder: TemporaryFolder) -> StoreRoots {
 
 /// Windows that are never shown, on a lister of `/root` and `/root/docs`, saving to `store`.
 @MainActor
-private func makeWindows(store: WorkspaceStore?, cache: ListingCache? = nil) -> WorkspaceWindows {
+private func makeWindows(
+    store: WorkspaceStore?, cache: ListingCache? = nil, settings: Settings = untouchedSettings()
+) -> WorkspaceWindows {
     let lister = StubLister([
         "/root": [folder("docs"), file("a.txt"), file("b.txt")],
         "/root/docs": [file("inside.txt")],
@@ -27,7 +29,7 @@ private func makeWindows(store: WorkspaceStore?, cache: ListingCache? = nil) -> 
     ])
     let windows = WorkspaceWindows(
         service: ListingService(lister: lister) { "Test Disk" },
-        systemActions: StubSystemActions(), settings: untouchedSettings(), folderSizes: nil,
+        systemActions: StubSystemActions(), settings: settings, folderSizes: nil,
         clipboard: MemoryClipboard(), store: store, cache: cache)
     windows.showsWindows = false
     windows.screens = { [screen] }
@@ -1478,4 +1480,92 @@ private func resizedColumnWindow(in windows: WorkspaceWindows) async throws
 
     #expect(shownColumnWidths(restored) == [standard, standard])
     #expect(restored.window?.isDocumentEdited == false)
+}
+
+/// Save B, then Option-drag in A: B's columns with no width set follow the new default on
+/// screen, and B stores nothing new, so it shows no edited dot.
+@MainActor @Test func anOptionDragInAnotherWindowMovesASavedWindowsColumnsWithoutTheDot()
+    async throws
+{
+    let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
+    let windows = makeWindows(store: diskStore(folder), settings: storedSettings(in: folder))
+    let saved = windows.open(at: Location(path: "/root"))
+    try #require(saved.window).setFrame(savedFrame, display: false)
+    _ = try await showColumns(in: saved)
+    try saved.saveWorkspace(as: "Project 1")
+    let other = windows.open(at: Location(path: "/root"))
+    _ = try await showColumns(in: other)
+
+    let columns = other.paneViewController.columnViewController
+    drag(try #require(columns.grip(forColumnAt: 0)), by: 40, option: true)
+    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+
+    #expect(shownColumnWidths(saved) == [standard + 40, standard + 40])
+    #expect(saved.workspace.selectedTab.focusedPane.columnWidths.isEmpty)
+    #expect(saved.window?.isDocumentEdited == false)
+}
+
+/// A drag that ends where it started, or a click on a grip, is no edit.
+@MainActor @Test func aResizeBackToItsStartSetsNoDot() async throws {
+    let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
+    let windows = makeWindows(store: diskStore(folder))
+    let controller = windows.open(at: Location(path: "/root"))
+    try #require(controller.window).setFrame(savedFrame, display: false)
+    _ = try await showColumns(in: controller)
+    try controller.saveWorkspace(as: "Project 1")
+    let columns = controller.paneViewController.columnViewController
+    let grip = try #require(columns.grip(forColumnAt: 0))
+
+    grip.mouseDown(with: gripEvent(.leftMouseDown, x: 100))
+    grip.mouseDragged(with: gripEvent(.leftMouseDragged, x: 150))
+    grip.mouseDragged(with: gripEvent(.leftMouseDragged, x: 100))
+    grip.mouseUp(with: gripEvent(.leftMouseUp, x: 100))
+    drag(grip, by: 0)
+    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+
+    #expect(controller.window?.isDocumentEdited == false)
+}
+
+/// A saved window in columns that was then resized and changed by `change`: going back to the
+/// workspace reloads it, closing the tab, and the new pane has the snapshot's widths, none.
+@MainActor
+private func expectFullReload(
+    after change: @MainActor (BrowserWindowController) async throws -> Void,
+    sourceLocation: SourceLocation = #_sourceLocation
+) async throws {
+    let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
+    let windows = makeWindows(store: diskStore(folder))
+    let controller = windows.open(at: Location(path: "/root"))
+    try #require(controller.window).setFrame(savedFrame, display: false)
+    _ = try await showColumns(in: controller)
+    try controller.saveWorkspace(as: "Project 1")
+    let tab = controller.workspace.selectedTab
+    try resizeColumn(0, of: controller, by: 50)
+    try await change(controller)
+
+    windows.open(savedWorkspace: controller.workspace.id)
+
+    #expect(tab.isClosed, sourceLocation: sourceLocation)
+    let pane = controller.workspace.selectedTab.focusedPane
+    #expect(controller.workspace.tabs.count == 1, sourceLocation: sourceLocation)
+    #expect(pane.location == Location(path: "/root"), sourceLocation: sourceLocation)
+    #expect(pane.columnWidths.isEmpty, sourceLocation: sourceLocation)
+    #expect(controller.window?.isDocumentEdited == false, sourceLocation: sourceLocation)
+}
+
+@MainActor @Test func widthsAndAnotherFolderReloadTheSnapshot() async throws {
+    try await expectFullReload { controller in
+        let pane = controller.workspace.selectedTab.focusedPane
+        pane.navigate(to: Location(path: "/root/docs"))
+        await settle { pane.location == Location(path: "/root/docs") }
+    }
+}
+
+@MainActor @Test func widthsAndAnotherTabReloadTheSnapshot() async throws {
+    try await expectFullReload { controller in
+        let first = controller.workspace.selectedTab
+        controller.workspace.add(
+            Tab(pane: first.focusedPane.newPane(at: Location(path: "/root/docs"))))
+        controller.workspace.select(first.id)
+    }
 }
