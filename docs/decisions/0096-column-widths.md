@@ -49,7 +49,9 @@ session and workspace files ([0080](0080-restore-at-launch.md), [0081](0081-rest
   number; the old 240 is gone. `Settings.columnWidth` is a number in the app's `UserDefaults` suite,
   read in `Settings` only, like every other preference. A value of another type, a Boolean, NaN or
   out of range is removed and reads as the default.
-- **Widths live with the column view, not the session.** Each column keeps its width while it
+- **Widths live with the column view, not the session** (superseded 2026-10-24: the pane keeps
+  them by folder and the session saves them, see
+  [0098](0098-column-widths-per-window.md)). Each column keeps its width while it
   stays in the trail; a new column, and the preview when its view is first made, take the
   default. `TabState` keeps a column-mode pane's focused folder only, not its trail
   ([0041](0041-column-model.md)), so per-column widths would have no column to come back to;
@@ -76,7 +78,9 @@ session and workspace files ([0080](0080-restore-at-launch.md), [0081](0081-rest
   itself without opening windows on the main display, so it is one of the checks by hand: if
   Finder's plain drag turns out to set the width of new columns, `endResize` drops its
   `allColumns` condition.
-- **Per-column widths in `TabState`** — rejected: the trail itself isn't stored, so a width per
+- **Per-column widths in `TabState`** — rejected (superseded 2026-10-24: widths are stored by
+  folder, which needs no trail, see [0098](0098-column-widths-per-window.md)): the trail itself
+  isn't stored, so a width per
   column would need the columns stored first, a second session format for one view setting.
   Storing one per-pane width would be a third value beside the app default and the live ones.
 - **Widths by depth, as `NSBrowser`'s autosave keeps them** — rejected: ← past the first column
@@ -90,7 +94,9 @@ session and workspace files ([0080](0080-restore-at-launch.md), [0081](0081-rest
 
 ## Consequences
 
-Each window's column widths last only as long as its columns. Relaunching, reloading a workspace
+Each window's column widths last only as long as its columns (superseded 2026-10-24: they are
+kept by folder and come back after a relaunch or a reload, see
+[0098](0098-column-widths-per-window.md)). Relaunching, reloading a workspace
 or navigating to a new trail shows every column at the default. An Option-drag in one window
 changes the width new columns get in every window, as in Finder, but doesn't resize the columns
 other windows show. A not-downloaded folder's badge isn't counted in a fit; its name may truncate

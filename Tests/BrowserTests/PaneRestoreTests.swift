@@ -13,7 +13,7 @@ private let bounds = Rect(x: 0, y: 0, width: 1200, height: 800)
 private func saved(
     _ path: String, selection: [String] = [], cursor: String? = nil,
     viewMode: ViewMode = .list, sortedBy column: SortColumn = .name, ascending: Bool = true,
-    back: [String] = []
+    back: [String] = [], columnWidths: ColumnWidths = ColumnWidths()
 ) -> TabState.PaneState {
     TabState.PaneState(
         location: Location(path: path), viewMode: viewMode,
@@ -21,7 +21,7 @@ private func saved(
             back: back.map { History.Entry(location: Location(path: $0), selected: nil) },
             forward: []),
         selection: Set(selection.map(ExactName.init)), cursor: cursor.map(ExactName.init),
-        sortColumn: column, sortAscending: ascending)
+        sortColumn: column, sortAscending: ascending, columnWidths: columnWidths)
 }
 
 @MainActor
@@ -391,4 +391,77 @@ private func cacheThatNeverAnswers() -> ListingCache {
 
     await settle { !ended.all.isEmpty }
     #expect(pane.state.isLoading)
+}
+
+// MARK: Column widths
+
+/// Widths for `/r/docs`, `/r` and the preview.
+private func savedWidths() -> ColumnWidths {
+    var widths = ColumnWidths()
+    widths.set(300, of: Location(path: "/r/docs"))
+    widths.set(180, of: Location(path: "/r"))
+    widths.setPreview(400)
+    return widths
+}
+
+@MainActor @Test func restoredColumnPaneShowsEachFoldersSavedWidthAndThePreviewsWidth()
+    async throws
+{
+    let lister = GatedLister([
+        "/r": .batches([[folder("docs"), file("a.txt")]]),
+        "/r/docs": .batches([[folder("sub"), file("x.txt")]]),
+        "/r/docs/sub": .batches([[]]),
+        "/": .batches([[folder("r")]]),
+    ])
+    lister.releaseAll()
+    let pane = restored(
+        saved("/r/docs", cursor: "x.txt", viewMode: .column, columnWidths: savedWidths()),
+        lister: lister)
+    let trail = try #require(pane.columnTrail)
+    await settle { trail.focused.pane.state.isLoaded && trail.preview != nil }
+
+    #expect(pane.columnWidths == savedWidths())
+    #expect(pane.columnWidth(of: trail.columns[0].pane) == 300)
+    #expect(pane.previewWidth == 400)
+    // ← adds the parent's column, at the parent's width.
+    trail.moveLeft()
+    #expect(trail.columns.map(\.pane.location.path) == ["/r", "/r/docs"])
+    #expect(trail.columns.map { pane.columnWidth(of: $0.pane) } == [180, 300])
+    // A folder with no saved width gets the default.
+    trail.columns[1].pane.select(Selection([ExactName("sub")], cursor: ExactName("sub")))
+    await settle { trail.columns.count == 3 }
+    #expect(pane.columnWidth(of: trail.columns[2].pane) == Settings.defaultColumnWidth)
+    #expect(Tab(pane: pane).state.panes.values.first?.columnWidths == savedWidths())
+    pane.close()
+}
+
+/// The widths are kept by path and never read the disk, so a folder gone since the save shows
+/// its missing state at its saved width, and its widths stay stored.
+@MainActor @Test func restoredColumnPaneWhoseFolderIsGoneKeepsItsWidths() async throws {
+    let lister = GatedLister([
+        "/r/docs": .failure(ListingError(path: "/r/docs", code: ENOENT))
+    ])
+    lister.releaseAll()
+    let pane = restored(
+        saved("/r/docs", viewMode: .column, columnWidths: savedWidths()), lister: lister)
+    let trail = try #require(pane.columnTrail)
+
+    await settle { trail.focused.pane.state.missingFolder != nil }
+
+    #expect(pane.columnWidth(of: trail.columns[0].pane) == 300)
+    #expect(pane.columnWidths == savedWidths())
+    pane.close()
+}
+
+@MainActor @Test func restoredColumnPaneAtAFolderWithNoSavedWidthGetsTheDefault() async throws {
+    let lister = GatedLister(["/r/other": .batches([[]])])
+    lister.releaseAll()
+    let pane = restored(
+        saved("/r/other", viewMode: .column, columnWidths: savedWidths()), lister: lister)
+    let trail = try #require(pane.columnTrail)
+
+    await settle { trail.focused.pane.state.isLoaded }
+
+    #expect(pane.columnWidth(of: trail.columns[0].pane) == Settings.defaultColumnWidth)
+    pane.close()
 }

@@ -44,6 +44,16 @@ public struct WorkspaceState: Codable, Equatable, Sendable {
             showsSidebar: showsSidebar)
     }
 
+    /// The same state with each pane's column widths taken from the pane of `other` with its ID
+    /// in the tab at the same index. With another number of tabs it is unchanged.
+    public func withColumnWidths(of other: WorkspaceState) -> WorkspaceState {
+        guard tabs.count == other.tabs.count else { return self }
+        return WorkspaceState(
+            id: id, name: name, frame: frame,
+            tabs: zip(tabs, other.tabs).map { $0.withColumnWidths(of: $1) },
+            selectedTab: selectedTab, showsSidebar: showsSidebar)
+    }
+
     // MARK: Coding
 
     private enum CodingKeys: String, CodingKey {

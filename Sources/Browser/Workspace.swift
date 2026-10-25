@@ -146,6 +146,19 @@ public final class Workspace {
         selectedTab = newTabs[index]
     }
 
+    /// Gives each pane the column widths of the pane with its ID in the tab of `state` at the
+    /// same index, as showing a snapshot that differs only in its widths does. A pane `state`
+    /// doesn't have keeps its own.
+    public func showColumnWidths(of state: WorkspaceState) {
+        for (tab, saved) in zip(tabs, state.tabs) {
+            for (id, pane) in tab.panes {
+                if let widths = saved.panes[id]?.columnWidths {
+                    pane.showColumnWidths(widths)
+                }
+            }
+        }
+    }
+
     /// Every pane in every tab.
     public var paneCount: Int {
         tabs.reduce(0) { $0 + $1.panes.count }

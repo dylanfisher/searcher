@@ -57,9 +57,10 @@ public final class Tab {
         return pane
     }
 
-    /// The panes' locations, view modes, histories, selections and sorts with the layout, as
-    /// plain values. A settled selection of names gives them as they are, so one whose folder is
-    /// still loading keeps them; any other, such as Select All's, gives the selected rows' names.
+    /// The panes' locations, view modes, histories, selections, sorts and column widths with the
+    /// layout, as plain values. A settled selection of names gives them as they are, so one whose
+    /// folder is still loading keeps them; any other, such as Select All's, gives the selected
+    /// rows' names.
     public var state: TabState {
         checkOpen()
         return TabState(
@@ -75,7 +76,8 @@ public final class Tab {
                 return TabState.PaneState(
                     location: pane.location, viewMode: pane.viewMode, history: pane.history,
                     selection: selection, cursor: shown.selection.cursor,
-                    sortColumn: pane.sortColumn, sortAscending: pane.sortAscending)
+                    sortColumn: pane.sortColumn, sortAscending: pane.sortAscending,
+                    columnWidths: pane.columnWidths)
             })
     }
 
