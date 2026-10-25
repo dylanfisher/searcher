@@ -88,6 +88,15 @@ public final class PaneViewController: NSViewController {
         }
     }
 
+    /// Opens the folder rows a drag hovers over, in the list and in every column. Tests give it
+    /// a clock of their own.
+    var springLoader: SpringLoader {
+        didSet {
+            listingViewController.springLoader = springLoader
+            columnViewController.springLoader = springLoader
+        }
+    }
+
     /// Draws a ring around the pane, for the pane with the keys while another pane shows.
     var showsFocus = false {
         didSet {
@@ -177,7 +186,12 @@ public final class PaneViewController: NSViewController {
             pane: pane, iconCache: iconCache, formatter: formatter, tableView: tableView)
         columnViewController = ColumnViewController(
             pane: pane, iconCache: iconCache, formatter: formatter)
+        springLoader = SpringLoader(delay: { [settings = pane.settings] in
+            settings.springLoadingDelay
+        })
         super.init(nibName: nil, bundle: nil)
+        listingViewController.springLoader = springLoader
+        columnViewController.springLoader = springLoader
         prepare(tableView)
         columnViewController.prepareTable = { [weak self] table in self?.prepare(table) }
         columnViewController.startMonitor = { [weak self] column in

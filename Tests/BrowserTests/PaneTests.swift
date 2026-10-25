@@ -1382,3 +1382,99 @@ private func goBackWithBatchesHeld(_ pane: Pane, to root: String) async -> Listi
     await settle { bigSize(pane) == .size(bytes: 84, isPartial: false) }
     #expect(walks.startedPaths == [root + "/big", root + "/big"])
 }
+
+// MARK: Spring-loaded folders
+
+/// `/root` holds the folders `docs` and `more` and the files `a.txt` and `b.txt`; `/root/docs`
+/// holds the folder `sub`.
+@MainActor
+private func springPane() async -> PaneFixture {
+    let fixture = PaneFixture(
+        at: "/root",
+        folders: [
+            "/root": [folder("docs"), folder("more"), file("a.txt"), file("b.txt")],
+            "/root/docs": [folder("sub"), file("x.txt")],
+            "/root/docs/sub": [file("y.txt")],
+            "/root/more": [file("m.txt")],
+            "/elsewhere": [],
+        ])
+    await settle { fixture.pane.state.isLoaded }
+    return fixture
+}
+
+@MainActor @Test func springingInTheListGoesIntoTheFolderAndBackWithTheSelectionAndHistory()
+    async throws
+{
+    let fixture = await springPane()
+    let pane = fixture.pane
+    fixture.select("a.txt", "b.txt")
+
+    pane.springOpen("docs")
+    #expect(pane.location.path == "/root/docs")
+    await settle { pane.state.isLoaded }
+    pane.springOpen("sub")
+    #expect(pane.location.path == "/root/docs/sub")
+    pane.springBack()
+
+    #expect(pane.location.path == "/root")
+    #expect(!pane.canGoBack)
+    await settle { pane.state.isLoaded }
+    #expect(fixture.selectedNames == ["a.txt", "b.txt"])
+    #expect(pane.selection.cursor == ExactName("b.txt"))
+}
+
+@MainActor @Test func aPaneMovedAfterTheSpringStaysWhereItWasMoved() async throws {
+    let fixture = await springPane()
+    let pane = fixture.pane
+
+    pane.springOpen("docs")
+    pane.navigate(to: Location(path: "/elsewhere"))
+    pane.springBack()
+
+    #expect(pane.location.path == "/elsewhere")
+    // The drag's origin is gone with it: a second end does nothing either.
+    pane.goBack()
+    pane.springBack()
+    #expect(pane.location.path == "/root/docs")
+}
+
+@MainActor @Test func goingBackWithNoSpringDoesNothing() async throws {
+    let fixture = await springPane()
+
+    fixture.pane.springBack()
+
+    #expect(fixture.pane.location.path == "/root")
+    #expect(!fixture.pane.canGoBack)
+}
+
+@MainActor @Test func springingInAColumnSelectsTheFolderAndGoesBackToTheTrailItHad()
+    async throws
+{
+    let fixture = await springPane()
+    let pane = fixture.pane
+    pane.setViewMode(.column)
+    let trail = try #require(pane.columnTrail)
+    await settle { trail.focused.pane.state.isLoaded }
+    let first = trail.columns[0].pane
+    first.select(Selection([ExactName("more")], cursor: ExactName("more")))
+    await settle { trail.columns.count == 2 && trail.columns[1].pane.state.isLoaded }
+    trail.columns[1].pane.select(Selection([ExactName("m.txt")], cursor: ExactName("m.txt")))
+    trail.moveRight()
+    #expect(trail.focusedIndex == 1)
+    let canUndo = first.canUndoSelection
+
+    first.springOpen("docs")
+    await settle { trail.columns.count == 2 && trail.columns[1].pane.state.isLoaded }
+    #expect(trail.columns.map(\.pane.location.path) == ["/root", "/root/docs"])
+    #expect(first.canUndoSelection == canUndo)
+    trail.columns[1].pane.springOpen("sub")
+    #expect(trail.columns.map(\.pane.location.path) == ["/root", "/root/docs", "/root/docs/sub"])
+    trail.columns[2].pane.springBack()
+
+    #expect(trail.columns.map(\.pane.location.path) == ["/root", "/root/more"])
+    #expect(first.selection.cursor == ExactName("more"))
+    #expect(trail.columns[1].pane.selection.cursor == ExactName("m.txt"))
+    #expect(trail.focusedIndex == 1)
+    #expect(first.canUndoSelection == canUndo)
+    #expect(pane.location.path == "/root/more")
+}

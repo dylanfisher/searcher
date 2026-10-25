@@ -156,6 +156,7 @@ public enum MainMenuBuilder {
                 .command(WindowCommands.newTab.id),
                 .command(WindowCommands.closeTab.id),
                 .separator,
+                .command(SystemCommands.getInfo.id),
                 // Return is its key.
                 .commandWithoutKey(FileCommands.rename.id),
                 .command(FileCommands.duplicate.id),

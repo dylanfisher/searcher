@@ -54,6 +54,14 @@ final class ColumnViewController: NSViewController {
             }
         }
     }
+    /// Opens the folder row a drag hovers over in any column.
+    var springLoader: SpringLoader? {
+        didSet {
+            for controller in columnControllers {
+                controller.springLoader = springLoader
+            }
+        }
+    }
     /// Starts a folder monitor for a new column's pane. Set before the first column shows.
     var startMonitor: @MainActor (Pane) -> Void = { pane in
         preconditionFailure("no monitor starter for the column at \(pane.location.path)")
@@ -246,6 +254,7 @@ final class ColumnViewController: NSViewController {
         controller.clipboard = clipboard
         controller.fileOperations = fileOperations
         controller.mountTable = mountTable
+        controller.springLoader = springLoader
         prepareTable(table)
         table.setAccessibilityLabel(column.pane.location.name)
         controller.view.setAccessibilityLabel(column.pane.location.name)

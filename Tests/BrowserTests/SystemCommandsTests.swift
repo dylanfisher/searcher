@@ -17,6 +17,7 @@ private func run(_ chord: KeyChord, on pane: Pane) throws {
 private let copyPath = KeyChord("c", modifiers: [.option, .command])
 private let reveal = KeyChord("r", modifiers: [.option, .command])
 private let openTerminal = KeyChord("t", modifiers: [.option, .command])
+private let getInfo = KeyChord("i", modifiers: [.command])
 
 /// A pane at `/sys` with files "b", "a" and "c", sorted by name, loaded.
 @MainActor
@@ -76,6 +77,49 @@ private func systemPane(settings: Settings = untouchedSettings()) async -> PaneF
     try run(reveal, on: fixture.pane)
 
     #expect(fixture.actions.revealed == [[URL(fileURLWithPath: "/sys", isDirectory: true)]])
+}
+
+@MainActor @Test func getInfoAsksForTheInfoOfEachSelectedItemInDisplayOrder() async throws {
+    let fixture = await systemPane()
+    fixture.select("c", "a")
+
+    try run(getInfo, on: fixture.pane)
+
+    #expect(
+        fixture.actions.shownInfo == [
+            [
+                URL(fileURLWithPath: "/sys/a", isDirectory: false),
+                URL(fileURLWithPath: "/sys/c", isDirectory: false),
+            ]
+        ])
+}
+
+/// Finder's Get Info is never off: with nothing selected it shows the folder's Info window.
+@MainActor @Test func getInfoWithNothingSelectedAsksForTheFoldersInfo() async throws {
+    let fixture = await systemPane()
+    let binding = try #require(
+        AppCommands.bindings.first { $0.command.id == SystemCommands.getInfo.id })
+
+    #expect(binding.isEnabled == nil)
+    try run(getInfo, on: fixture.pane)
+
+    #expect(fixture.actions.shownInfo == [[URL(fileURLWithPath: "/sys", isDirectory: true)]])
+}
+
+@MainActor @Test func getInfoInAColumnAsksForTheColumnsSelection() async throws {
+    let fixture = PaneFixture(
+        at: "/sys", folders: ["/sys": [folder("d"), file("a")], "/sys/d": [file("x")]])
+    await settle { fixture.pane.state.isLoaded }
+    fixture.pane.setViewMode(.column)
+    let trail = try #require(fixture.pane.columnTrail)
+    await settle { trail.focused.pane.state.isLoaded }
+    trail.focused.pane.select(Selection([ExactName("d")], cursor: ExactName("d")))
+    await settle { trail.columns.count == 2 && trail.columns[1].pane.state.isLoaded }
+    trail.moveRight()
+
+    try run(getInfo, on: fixture.pane.commandPane)
+
+    #expect(fixture.actions.shownInfo == [[URL(fileURLWithPath: "/sys/d/x", isDirectory: false)]])
 }
 
 @MainActor @Test func openTerminalPassesTheFolderAndTheConfiguredBundleID() async throws {

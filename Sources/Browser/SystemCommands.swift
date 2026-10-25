@@ -1,9 +1,10 @@
 import Foundation
 
 /// Handing the pane's entries to the rest of the system: Copy Path writes the selection's paths to
-/// the pasteboard, one per line, Reveal in Finder shows the selection in Finder, and Open Terminal
-/// Here opens the pane's folder in the app `Settings.terminalBundleID` names. With nothing
-/// selected, Copy Path and Reveal in Finder act on the pane's folder.
+/// the pasteboard, one per line, Reveal in Finder shows the selection in Finder, Get Info opens
+/// Finder's Info window for each selected entry, and Open Terminal Here opens the pane's folder in
+/// the app `Settings.terminalBundleID` names. With nothing selected, Copy Path, Reveal in Finder
+/// and Get Info act on the pane's folder.
 public enum SystemCommands: CommandSet {
     public static let copyPath = Command(
         id: CommandID("system.copyPath"), title: "Copy Path",
@@ -11,6 +12,9 @@ public enum SystemCommands: CommandSet {
     public static let revealInFinder = Command(
         id: CommandID("system.revealInFinder"), title: "Reveal in Finder",
         chords: [KeyChord("r", modifiers: [.option, .command])])
+    public static let getInfo = Command(
+        id: CommandID("system.getInfo"), title: "Get Info",
+        chords: [KeyChord("i", modifiers: [.command])])
     public static let openTerminal = Command(
         id: CommandID("system.openTerminal"), title: "Open Terminal Here",
         chords: [KeyChord("t", modifiers: [.option, .command])])
@@ -23,6 +27,9 @@ public enum SystemCommands: CommandSet {
             },
             CommandBinding(revealInFinder) { context in
                 context.pane.systemActions.revealInFinder(selectedURLs(in: context.pane))
+            },
+            CommandBinding(getInfo) { context in
+                context.pane.systemActions.showInfo(selectedURLs(in: context.pane))
             },
             CommandBinding(openTerminal) { context in
                 let pane = context.pane

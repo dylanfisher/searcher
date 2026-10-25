@@ -125,6 +125,22 @@ private func selectedNames(_ pane: Pane) -> Set<String> {
     #expect(id == NavigationCommands.showPackageContents.id)
 }
 
+/// As in Finder's row menu, Get Info heads the group Rename is in, with its symbol.
+@MainActor @Test func theRowMenuShowsGetInfoBeforeRename() throws {
+    let table = ListingTableView()
+    let menu = try ContextMenuBuilder.build(
+        ContextMenuBuilder.rowItems, registry: try AppCommands.registry(), target: table,
+        selection: [])
+    let titles = menu.items.map(\.title)
+    let getInfo = try #require(titles.firstIndex(of: "Get Info"))
+
+    #expect(titles[getInfo - 1] == "")
+    #expect(titles[getInfo + 1] == "Rename")
+    #expect(menu.items[getInfo].keyEquivalent == "i")
+    #expect(menu.items[getInfo].representedObject as? CommandID == SystemCommands.getInfo.id)
+    #expect(ContextMenuBuilder.symbols[SystemCommands.getInfo.id] == "info.circle")
+}
+
 @MainActor @Test func itemsDisableWithTheirCommands() throws {
     let table = ListingTableView()
     table.canRunCommand = { $0 == FileCommands.duplicate.id }

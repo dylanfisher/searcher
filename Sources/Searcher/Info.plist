@@ -12,5 +12,7 @@
 	<string>Searcher</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Get Info asks Finder to open the Info window of each selected item.</string>
 </dict>
 </plist>

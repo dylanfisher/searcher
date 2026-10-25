@@ -12,6 +12,7 @@ public final class StubSystemActions: SystemActions {
     public private(set) var openedURLs: [URL] = []
     public private(set) var copiedTexts: [String] = []
     public private(set) var revealed: [[URL]] = []
+    public private(set) var shownInfo: [[URL]] = []
     public private(set) var openedInApp: [OpenedInApp] = []
     public private(set) var openedWithApp: [OpenedWithApp] = []
     /// The apps listed for each type, each type's default app, and the apps read for their name
@@ -61,6 +62,7 @@ public final class StubSystemActions: SystemActions {
     public func openURL(_ url: URL) { openedURLs.append(url) }
     public func copyToPasteboard(_ text: String) { copiedTexts.append(text) }
     public func revealInFinder(_ urls: [URL]) { revealed.append(urls) }
+    public func showInfo(_ urls: [URL]) { shownInfo.append(urls) }
     public func open(_ folder: URL, inAppWithBundleID bundleID: String) {
         openedInApp.append(OpenedInApp(folder: folder, bundleID: bundleID))
     }
