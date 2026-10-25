@@ -26,6 +26,8 @@ private struct Fixture {
     let pane: Pane
     let controller: ColumnViewController
     let lister: StubLister
+    /// Where the trail waits out `ColumnTrail.previewHold`.
+    let holdClock = ManualClock()
 
     init(
         width: Double = 800, iconCache: TypeIconCache = TypeIconCache { _ in NSImage() },
@@ -37,6 +39,7 @@ private struct Fixture {
             service: ListingService(lister: lister, rootVolumeName: { "Test Disk" }),
             systemActions: StubSystemActions(), settings: settings, isFocused: true,
             viewMode: .column)
+        pane.previewHoldClock = holdClock
         let controller = ColumnViewController(pane: pane, iconCache: iconCache, formatter: .init())
         controller.startMonitor = { _ in }
         self.controller = controller
@@ -56,11 +59,15 @@ private struct Fixture {
     var tables: [ListingTableView] { controller.columnControllers.map(\.tableView) }
 
     /// Selects `name` alone in the column at `index`, as a click or a key does, and waits for the
-    /// column it opens to load.
-    func select(_ name: String, inColumn index: Int) async {
+    /// column it opens to load and, unless `waitingForTheRead` is false, for a file's preview
+    /// to show once its info is read.
+    func select(_ name: String, inColumn index: Int, waitingForTheRead: Bool = true) async {
         let pane = trail.columns[index].pane
         pane.select(Selection([ExactName(name)], cursor: ExactName(name)))
-        await settle { trail.columns.allSatisfy { $0.pane.state.isLoaded } }
+        await settle {
+            trail.columns.allSatisfy { $0.pane.state.isLoaded }
+                && (!waitingForTheRead || trail.shownPreview == trail.preview)
+        }
     }
 
     /// Opens `/r/docs/sub` in three columns, the first one focused.
@@ -575,7 +582,7 @@ private struct LoadingThirdColumn {
     #expect(view.nameField.stringValue == "x.txt")
     #expect(view.summaryField.stringValue == "\(preview.kind.text) – 1 byte")
     #expect(view.sizeField.stringValue == "1 byte")
-    #expect(view.modifiedField.stringValue == EntryCellFormatter().date(testDate))
+    #expect(view.modifiedField.stringValue == EntryCellFormatter().longDate(testDate))
     #expect(!view.acceptsFirstResponder)
 }
 
@@ -627,6 +634,7 @@ private struct LoadingThirdColumn {
 
     #expect(fixture.trail.focusedIndex == 2)
     #expect(fixture.trail.preview?.location == Location(path: "/r/docs/sub/one.flac"))
+    await settle { fixture.trail.shownPreview == fixture.trail.preview }
     let view = try #require(fixture.controller.previewView)
     let focused = fixture.controller.columnControllers[2].view.frame
     #expect(scrollView.documentVisibleRect.contains(focused))
@@ -916,7 +924,9 @@ private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
     return fields.map(\.stringValue).filter(titles.contains)
 }
 
-/// As Finder's preview orders them: Kind and Size, Created, Modified, Last opened, then Tags.
+/// As Finder's preview orders them: Kind and Size, Created, Modified, Last opened, then Tags. A
+/// read that lands after the hold, as one on a slow share does, moves no row whose dates fit
+/// on a line.
 @MainActor @Test func theReadFieldsShowInFindersOrderWithoutMovingTheFieldsAboveThem()
     async throws
 {
@@ -927,12 +937,16 @@ private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
         "/r/a.txt": ItemInfo(created: created, lastOpened: opened, tags: ["Red", "Work"])
     ])
     fixture.pane.itemInfoReader = reader
-    await fixture.select("a.txt", inColumn: 0)
+    fixture.pane.setPreviewWidth(Settings.columnWidths.upperBound)
+    await fixture.select("a.txt", inColumn: 0, waitingForTheRead: false)
+    #expect(await reader.waitForCall("/r/a.txt"))
+    #expect(fixture.controller.previewView?.isHidden ?? true)
+    fixture.holdClock.advance(by: ColumnTrail.previewHold)
+    await settle { fixture.controller.previewView?.isHidden == false }
     let view = try #require(fixture.controller.previewView)
     fixture.controller.view.layoutSubtreeIfNeeded()
 
-    // While the read runs, the rows are there with no value, and there are no tags.
-    #expect(await reader.waitForCall("/r/a.txt"))
+    // Once the hold ends, the rows are there with no value, and there are no tags.
     #expect(view.createdField.stringValue == "")
     #expect(view.lastOpenedField.stringValue == "")
     #expect(view.tagsField.isHidden)
@@ -941,21 +955,17 @@ private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
             ColumnPreviewView.sizeTitle, ColumnPreviewView.createdTitle,
             ColumnPreviewView.modifiedTitle, ColumnPreviewView.lastOpenedTitle,
         ])
-    // Each value's origin and height; a longer value only widens its field.
-    let fields = [view.sizeField, view.createdField, view.modifiedField, view.lastOpenedField]
-    func places() -> [[Double]] {
-        fields.map {
-            let frame = $0.convert($0.bounds, to: view)
-            return [frame.minX, frame.minY, frame.height]
-        }
+    // Each row's frame; a longer value only widens its field, leftward.
+    func places() -> [NSRect] {
+        view.rows.map { $0.convert($0.bounds, to: view) }
     }
     let before = places()
 
     reader.releaseAll()
-    await settle { view.createdField.stringValue == EntryCellFormatter().date(created) }
+    await settle { view.createdField.stringValue == EntryCellFormatter().longDate(created) }
     fixture.controller.view.layoutSubtreeIfNeeded()
 
-    #expect(view.lastOpenedField.stringValue == EntryCellFormatter().date(opened))
+    #expect(view.lastOpenedField.stringValue == EntryCellFormatter().longDate(opened))
     #expect(!view.tagsField.isHidden)
     #expect(view.tagsField.stringValue == "Red, Work")
     #expect(try informationTitles(view).last == ColumnPreviewView.tagsTitle)
@@ -1003,8 +1013,128 @@ private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
     await fixture.select("a.txt", inColumn: 0)
 
     let view = try #require(fixture.controller.previewView)
-    await settle { view.createdField.stringValue == EntryCellFormatter().date(testDate) }
+    await settle { view.createdField.stringValue == EntryCellFormatter().longDate(testDate) }
     #expect(view.lastOpenedField.stringValue == ColumnPreviewView.noDate)
+}
+
+/// Dylan saw the Information rows flash at each new file: they showed empty from the selection
+/// until the read landed a frame later. Now each refill of the view shows one file's name with
+/// that file's own dates, from the selection to the read.
+@MainActor @Test func selectingAnotherFileShowsNoEmptyRowsOnTheWay() async throws {
+    let fixture = await Fixture()
+    let one = ItemInfo(
+        created: testDate, lastOpened: testDate.addingTimeInterval(60), tags: ["Red"])
+    let two = ItemInfo(created: testDate.addingTimeInterval(120), lastOpened: nil, tags: [])
+    let reader = GatedItemInfoReader([
+        "/r/docs/sub/one.flac": one, "/r/docs/sub/two.flac": two,
+    ])
+    reader.release("/r/docs/sub/one.flac")
+    fixture.pane.itemInfoReader = reader
+    await fixture.openThreeColumns()
+    await fixture.select("one.flac", inColumn: 2)
+    let view = try #require(fixture.controller.previewView)
+    let formatter = EntryCellFormatter()
+    #expect(view.createdField.stringValue == formatter.longDate(testDate))
+    var shown: [[String]] = []
+    let controller = fixture.controller
+    fixture.pane.onChange = {
+        controller.paneDidChange()
+        shown.append([
+            view.nameField.stringValue, view.createdField.stringValue,
+            view.lastOpenedField.stringValue,
+            view.tagsField.isHidden ? "" : view.tagsField.stringValue,
+        ])
+    }
+
+    await fixture.select("two.flac", inColumn: 2, waitingForTheRead: false)
+    #expect(await reader.waitForCall("/r/docs/sub/two.flac"))
+    reader.release("/r/docs/sub/two.flac")
+    await settle { view.nameField.stringValue == "two.flac" }
+
+    let oneShown = [
+        "one.flac", formatter.longDate(testDate),
+        formatter.longDate(testDate.addingTimeInterval(60)), "Red",
+    ]
+    let twoShown = [
+        "two.flac", formatter.longDate(testDate.addingTimeInterval(120)),
+        ColumnPreviewView.noDate, "",
+    ]
+    #expect(!shown.isEmpty)
+    #expect(shown.allSatisfy { $0 == oneShown || $0 == twoShown }, "\(shown)")
+    #expect(shown.last == twoShown)
+}
+
+/// As Finder draws its preview's Information section: each row's title at the left in
+/// secondary text and its value at the right in the label color, both in the small system
+/// font, with a rule under each row and none above the first.
+@MainActor @Test func theInformationRowsAreLaidOutAsFindersAre() async throws {
+    let fixture = await Fixture()
+    await fixture.select("a.txt", inColumn: 0)
+    let view = try #require(fixture.controller.previewView)
+    fixture.controller.view.layoutSubtreeIfNeeded()
+
+    #expect(view.nameField.font == ColumnPreviewView.nameFont)
+    #expect(view.summaryField.font == ColumnPreviewView.detailFont)
+    #expect(view.summaryField.textColor == .secondaryLabelColor)
+    // The name and the kind and size start where the row titles do, as in Finder.
+    let titlesX = aligned(view.rows[0].titleField, in: view).minX
+    for field in [view.nameField, view.summaryField] {
+        #expect(field.alignment != .center && field.alignment != .right)
+        #expect(aligned(field, in: view).minX == titlesX)
+    }
+    let small = NSFont.smallSystemFontSize
+    var previousBottom: Double?
+    for row in view.rows {
+        let frame = aligned(row, in: view)
+        let title = aligned(row.titleField, in: view)
+        let value = aligned(row.value, in: view)
+        let rule = aligned(row.rule, in: view)
+        #expect(row.titleField.font?.pointSize == small)
+        #expect(row.value.font?.pointSize == small)
+        #expect(row.titleField.textColor == .secondaryLabelColor)
+        #expect(row.value.textColor == .labelColor)
+        #expect(row.value.alignment == .right)
+        #expect(row.rule.boxType == .separator)
+        // The row spans the fields' width: title at its left, value at its right.
+        #expect(frame.width == view.bounds.width - 24)
+        #expect(title.minX == frame.minX)
+        #expect(value.maxX == frame.maxX)
+        #expect(value.minX >= title.maxX + InformationRow.gap)
+        // A one-point rule is the row's bottom edge, under its text, and the next row starts
+        // there; there is none above the first.
+        #expect(rule.minY == frame.minY)
+        #expect(rule.height == 1)
+        #expect(rule.width == frame.width)
+        #expect(rule.maxY <= min(title.minY, value.minY) - ColumnPreviewView.rowPadding)
+        #expect(abs(title.maxY - (frame.maxY - ColumnPreviewView.rowPadding)) < 0.01)
+        if let previousBottom { #expect(abs(frame.maxY - previousBottom) < 0.01) }
+        previousBottom = frame.minY
+    }
+}
+
+/// `view`'s alignment rectangle, the one Auto Layout places, in `ancestor`'s coordinates.
+@MainActor
+private func aligned(_ view: NSView, in ancestor: NSView) -> NSRect {
+    guard let superview = view.superview else { preconditionFailure("\(view) isn't shown") }
+    return superview.convert(view.alignmentRect(forFrame: view.frame), to: ancestor)
+}
+
+/// A date too long for the row beside its title wraps, right-aligned, rather than losing its
+/// time.
+@MainActor @Test func aLongDateWrapsInsideItsRow() async throws {
+    let fixture = await Fixture()
+    await fixture.select("a.txt", inColumn: 0)
+    let view = try #require(fixture.controller.previewView)
+    view.modifiedField.stringValue = "Wednesday, September 30, 2026 at 12:50 PM"
+    fixture.controller.view.layoutSubtreeIfNeeded()
+
+    // Modified, two lines tall beside Created's "--" on one.
+    let row = view.rows[2]
+    #expect(row.frame.height > view.rows[1].frame.height + 8)
+    #expect(aligned(row.value, in: row).maxX == row.bounds.maxX)
+    #expect(
+        aligned(row.value, in: row).minX
+            >= aligned(row.titleField, in: row).maxX + InformationRow.gap)
 }
 
 /// A pane at `/s` in column view whose folders each end in a state with no rows to show:

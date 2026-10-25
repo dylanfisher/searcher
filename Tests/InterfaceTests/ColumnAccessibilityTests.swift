@@ -67,10 +67,15 @@ private final class Fixture {
 
     var tables: [ListingTableView] { controller.columnControllers.map(\.tableView) }
 
+    /// Selects `name` alone in the column at `index`, and waits for the column it opens to load
+    /// and for a file's preview to show once its info is read.
     func select(_ name: String, inColumn index: Int) async {
         trail.columns[index].pane.select(Selection([ExactName(name)], cursor: ExactName(name)))
         let trail = trail
-        await settle { trail.columns.allSatisfy { $0.pane.state.isLoaded } }
+        await settle {
+            trail.columns.allSatisfy { $0.pane.state.isLoaded }
+                && trail.shownPreview == trail.preview
+        }
     }
 
     var focusChanges: [Post] { posts.filter { $0.notification == .focusedUIElementChanged } }
@@ -234,7 +239,7 @@ private final class Fixture {
     #expect(view.accessibilityRole() == .group)
     #expect(view.accessibilityLabel() == "x.txt")
     let fields = try #require(view.accessibilityChildren() as? [NSTextField])
-    let date = formatter.date(testDate)
+    let date = formatter.longDate(testDate)
     #expect(
         fields.map(\.stringValue) == [
             "x.txt", "\(kind) – 2 MB", "Information", "Size", "2 MB", "Created", date,

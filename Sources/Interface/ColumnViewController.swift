@@ -554,10 +554,12 @@ final class ColumnViewController: NSViewController {
         return NSRect(x: x + 0.5 - width / 2, y: 0, width: width, height: height)
     }
 
-    /// Shows the trail's preview right of the last column, making its view the first time, or
-    /// hides it when there is none.
+    /// Shows the trail's shown preview right of the last column, making its view the first time,
+    /// or hides it when there is none. While a newly previewed file's info is first read, that
+    /// is what showed before it, so a local file's rows don't show empty first
+    /// (0095-preview-metadata.md).
     private func showPreview() {
-        guard let preview = pane.columnTrail?.preview else {
+        guard let preview = pane.columnTrail?.shownPreview else {
             previewView?.isHidden = true
             return
         }

@@ -17,6 +17,11 @@ public final class ColumnTrail {
     /// than the 90 ms between repeats of a held key at the second-fastest Key Repeat setting,
     /// so a held arrow opens only the column it stops on.
     public static let openDelay: Duration = .milliseconds(120)
+    /// How long column view keeps showing what it showed before a newly previewed file while
+    /// that file's info is read, before it shows the file without it. A local read lands well
+    /// inside it, so the file shows with its dates from its first frame; a read on a slow share
+    /// holds the old preview no longer than this (0095-preview-metadata.md).
+    public static let previewHold: Duration = .milliseconds(100)
 
     public private(set) var columns: [Column] = []
     /// The column keys act on.
@@ -28,6 +33,17 @@ public final class ColumnTrail {
     /// The one file or package selected in the last column, shown to its right; nil for a
     /// folder, a link, several rows or none. It isn't a column: it lists, watches and takes the keys for nothing.
     public private(set) var preview: ColumnPreview?
+    /// What column view shows as the preview: `preview`, except while a newly previewed file's
+    /// info is first read, when what showed before it, another file or nothing, stays until the
+    /// read lands or `previewHold` passes. So the Information rows never show empty, or the old
+    /// file's dates, beside the new file's name while a local read runs.
+    public var shownPreview: ColumnPreview? {
+        if let heldPreview { return heldPreview.shown }
+        return preview
+    }
+    /// What column view keeps showing while the preview's info is first read, and the wait for
+    /// `previewHold`; nil when it shows `preview`.
+    private var heldPreview: (shown: ColumnPreview?, wait: Task<Void, Never>)?
     /// The read of the preview's info, while it runs.
     private var infoRead: Task<Void, Never>?
     /// The entry, as the preview's column lists it, that the preview's info was read for or is
@@ -294,6 +310,8 @@ public final class ColumnTrail {
     /// shows rows its volume hasn't answered with: cached, slow or offline
     /// (0095-preview-metadata.md).
     private func setPreview(_ next: ColumnPreview?, in pane: Pane?) {
+        let shown = shownPreview
+        defer { holdPreview(showing: shown) }
         guard var next, let pane else {
             cancelInfoRead()
             preview = nil
@@ -339,8 +357,42 @@ public final class ColumnTrail {
             guard let self, !Task.isCancelled, preview?.location == location else { return }
             infoRead = nil
             preview?.info = info.map { .read($0) } ?? .failed
+            releaseHeldPreview()
             owner.trailDidChange()
         }
+    }
+
+    /// Keeps `shown`, what column view showed before the preview changed, on screen while the
+    /// preview's info is first read, for at most `previewHold` from when the hold started: a
+    /// preview of another file while the hold lasts keeps it and its deadline. A preview whose
+    /// rows wait on no read, no preview, and a preview of the file shown already, whose rows
+    /// showed empty or what was read of it, show at once.
+    private func holdPreview(showing shown: ColumnPreview?) {
+        guard let preview, preview.info == .reading else {
+            releaseHeldPreview()
+            return
+        }
+        guard heldPreview == nil, shown?.location != preview.location else { return }
+        let wait = Self.startWait(on: owner.previewHoldClock, for: Self.previewHold)
+        let task = Task { [weak self] in
+            do {
+                try await wait()
+            } catch is CancellationError {
+                return
+            } catch {
+                preconditionFailure("the clock failed a wait with \(error)")
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.heldPreview = nil
+            self.owner.trailDidChange()
+        }
+        heldPreview = (shown, task)
+    }
+
+    /// Shows `preview` from now on, ending a hold of what showed before it.
+    private func releaseHeldPreview() {
+        heldPreview?.wait.cancel()
+        heldPreview = nil
     }
 
     /// Stops the read of the preview's info; its result never lands.

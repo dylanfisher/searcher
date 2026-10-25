@@ -46,6 +46,10 @@ listing doesn't make.
   light and dark mode. Each field is held to the column's width: a long name wraps, breaking
   inside a word that has no space, and a long kind or date truncates. In a window shorter than
   the fields they scroll vertically, in a scroll view with no horizontal scrolling of its own.
+  (Superseded 2026-10-24: the name and the kind and size are left-aligned, and the Information
+  rows are drawn as Finder draws them, title left and value right with a rule under each row,
+  in the small system font, and a long date wraps; see
+  [0095](0095-preview-metadata.md).)
 - **Scrolling.** The column view scrolls when the focus, the column count or whether a preview
   shows changes. The focused column's right-hand neighbor, kept in view where it fits, is the
   next column or, from the last column, the preview.
