@@ -87,7 +87,16 @@ focused folder only ([0041](0041-column-model.md), [0096](0096-column-widths.md)
   lists again, and it is no step of the history. The pane's location, the path bar and the title
   follow the focus, so the bar then ends at the clicked folder, as Finder's does. A folder above
   the trail's root, such as `/` or `Volumes` for a trail at `/Volumes/X`, has no column: the
-  click navigates to it, selecting the folder it came from, as in the list.
+  click navigates to it, selecting the folder it came from, as in the list. (Amended 2026-10-25,
+  Dylan: "clicking the breadcrumbs in column mode should close the columns to the right, only
+  keep the columns to the left open. keep the current behavior where navigating left on panes
+  continue to keep the right panes open, though.": the clicked folder's column takes the keys and
+  becomes the last one (`ColumnTrail.showAlone`). The folder the path went on to stays its
+  cursor, unselected, so it opens no column, as Finder's path bar shows the clicked folder last;
+  ↓ goes on from it. Nothing lists again, but a column whose first load waits. The click is a
+  step of the history, as every move of the keys to another column now is
+  ([0041](0041-column-model.md)), so Back returns to the folder left, building its trail again
+  since its column closed. ← still keeps the columns to the right.)
 - **Scrolling.** A new trail (no column kept) is scrolled from the left end, so the focused
   column, with the one right of it where that fits, ends at the right edge and the columns above
   it fill the view to its left. It jumps, as a new trail did ([0046](0046-column-view.md)). A

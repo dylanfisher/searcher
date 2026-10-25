@@ -202,7 +202,7 @@ public final class PaneViewController: NSViewController {
         }
         pane.onChange = { [weak self] in self?.paneDidChange() }
         // The pane, not a column's: it navigates, and in column mode it's in the focused
-        // column's folder and moves the focus to a column the bar names.
+        // column's folder and makes a column the bar names the focused and last one.
         pathBar.onSelect = { [weak pane] location, child in
             pane?.showFolderAbove(location, comingFrom: child)
         }

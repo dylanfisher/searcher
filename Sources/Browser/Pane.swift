@@ -415,7 +415,7 @@ public final class Pane {
     public func goBack() {
         if let trail = containingTrail { return trail.owner.goBack() }
         guard let entry = history.back(from: here) else { return }
-        move(to: entry.location, selecting: entry.selected)
+        show(entry)
     }
 
     /// Shows the folder Back last left, with the entry selected there. Does nothing at the end of
@@ -423,7 +423,33 @@ public final class Pane {
     public func goForward() {
         if let trail = containingTrail { return trail.owner.goForward() }
         guard let entry = history.forward(from: here) else { return }
-        move(to: entry.location, selecting: entry.selected)
+        show(entry)
+    }
+
+    /// Shows `entry`'s folder, from Back or Forward, recording nothing. In column view a folder
+    /// the trail shows is shown as it was left: its column takes the keys with the entry
+    /// selected, and nothing is listed again (`ColumnTrail.show`). Any other folder starts the
+    /// trail again at it (0041-column-model.md).
+    private func show(_ entry: History.Entry) {
+        guard let trail = columnTrail,
+            let column = trail.columns.first(where: { $0.pane.location == entry.location })
+        else { return move(to: entry.location, selecting: entry.selected) }
+        cancelGoToFolder()
+        isSteppingHistory = true
+        defer { isSteppingHistory = false }
+        trail.show(column, selecting: entry.selected)
+    }
+
+    /// Set while Back or Forward moves the trail's focus, which is no step of the history.
+    private var isSteppingHistory = false
+
+    /// The trail is moving the keys from `column`, one of its columns, to another: the pane
+    /// leaves `column`'s folder, so the folder goes into the history with the entry under its
+    /// cursor, as a navigation records the folder it leaves. Back and Forward and a drag's
+    /// spring-loaded folders move the focus without a step.
+    func trailWillMoveFocus(from column: Pane) {
+        guard !isSteppingHistory, !isSpringing else { return }
+        history.leave(History.Entry(location: column.location, selected: column.selection.cursor))
     }
 
     // MARK: - Spring-loaded folders
@@ -563,16 +589,25 @@ public final class Pane {
 
     /// A path bar click on `location`, a folder above the pane's, with `child` the folder on the
     /// way down to it. In column mode, when a column shows `location`, that column takes the
-    /// keys, as a click in it does: its selection and the columns right of it stay, and it is no
-    /// step in the history. Otherwise the pane navigates to `location`, selecting `child`
+    /// keys and becomes the last column, with `child` left as its cursor, unselected; it is a
+    /// step in the history, as any move of the keys to another column is
+    /// (`ColumnTrail.showAlone`). Otherwise the pane navigates to `location`, selecting `child`
     /// (0103-column-trail-from-the-root.md).
     public func showFolderAbove(_ location: Location, comingFrom child: String) {
         if let trail = columnTrail,
             let column = trail.columns.first(where: { $0.pane.location == location })
         {
-            return trail.focus(column)
+            cancelGoToFolder()
+            return trail.showAlone(column, cursor: ExactName(child))
         }
         navigate(to: location, selecting: child)
+    }
+
+    /// A press on this column's one selected row: when it opens a column, a folder's, that
+    /// column becomes the last, with nothing selected in it, as in Finder
+    /// (`ColumnTrail.showNextColumnAlone`). Does nothing in a pane that isn't a column.
+    public func pressSelectedFolder() {
+        containingTrail?.showNextColumnAlone(after: self)
     }
 
     // MARK: - Column widths
@@ -1441,6 +1476,15 @@ public final class Pane {
         set(
             onMain { selection.resolved(in: state.listing, after: .sameEntries) },
             recordingAs: source, byKey: source == .typing)
+    }
+
+    /// Selects what `selection` names, as `select(_:as:)` does, keeping the selection it replaces
+    /// in the selection history as made by `source`, or not at all when it is nil: Back and
+    /// Forward restore a column's selection without a step there.
+    func select(_ selection: Selection, recordingAs source: SelectionHistory.Source?) {
+        set(
+            onMain { selection.resolved(in: state.listing, after: .sameEntries) },
+            recordingAs: source)
     }
 
     /// Go to Item's choice: selects the entry named `name` alone with the cursor on it, as a click

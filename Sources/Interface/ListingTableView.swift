@@ -32,6 +32,9 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
     /// Runs when the table takes the keys, by a click or from code. A column's table moves the
     /// trail's focus to its column here.
     var didBecomeFirstResponder: @MainActor () -> Void = {}
+    /// Runs at mouse down for a plain press on the row selected alone, after the table takes the
+    /// keys. A column's list closes the columns past the one its folder opens here.
+    var pressedSelectedRow: @MainActor () -> Void = {}
     /// The text typed into this list since the last pause. Tests give it a clock they advance.
     var typeSelect = TypeSelect()
     /// Selects the first row of this table's pane whose name starts with a query, returning
@@ -173,12 +176,17 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
     /// through `NSWindow.sendEvent` has already made the table first responder when `mouseDown`
     /// runs, so no check of the first responder can tell a press in another pane. A press on a
     /// selected row, with Shift, Command or Control, or below the rows is left to AppKit: a drag
-    /// must take the whole selection, and those presses extend, toggle, open a menu or clear.
+    /// must take the whole selection, and those presses extend, toggle, open a menu or clear. A
+    /// plain press on the row selected alone runs `pressedSelectedRow`.
     func selectOnPress(_ event: NSEvent) {
         guard let window, window.makeFirstResponder(self) else { return }
         guard event.modifierFlags.isDisjoint(with: [.shift, .command, .control]) else { return }
         let row = row(at: convert(event.locationInWindow, from: nil))
-        guard row >= 0, !selectedRowIndexes.contains(row) else { return }
+        guard row >= 0 else { return }
+        guard !selectedRowIndexes.contains(row) else {
+            if selectedRowIndexes == [row] { pressedSelectedRow() }
+            return
+        }
         selectRowIndexes([row], byExtendingSelection: false)
     }
 
