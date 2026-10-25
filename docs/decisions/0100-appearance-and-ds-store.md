@@ -42,10 +42,8 @@ is no Settings window yet (M5b.8), and every command has a menu item
   it with no code of their own. The palette's path results list folders only, so they never
   showed it. Copy, move, trash and folder sizes work on the file system, not on rows, and are
   unchanged.
-- **On by default because Dylan asked for the setting.** Whether Finder lists `.DS_Store` with
-  hidden files shown (Cmd-Shift-. or `AppleShowAllFiles`) is unverified. The builder believed it
-  doesn't; the reviewer believes it does. Either way the default doesn't rest on Finder parity,
-  and the answer needs Dylan's hand check.
+- **On by default, as Finder hides it.** Finder doesn't list `.DS_Store` with hidden files
+  shown (Cmd-Shift-. or `AppleShowAllFiles`); Dylan checked by hand on 2026-10-25.
 
 ## Alternatives considered
 
