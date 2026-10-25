@@ -169,6 +169,10 @@ final class ColumnViewController: NSViewController {
         columnsView.setAccessibilityElement(true)
         columnsView.setAccessibilityRole(.browser)
         view = scrollView
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(clipBoundsDidChange(_:)),
+            name: NSView.boundsDidChangeNotification, object: scrollView.contentView)
     }
 
     /// Shows the trail's columns: adds a column for each new one, drops the ones it truncated,
@@ -378,8 +382,13 @@ final class ColumnViewController: NSViewController {
         return views.first { $0.frame.minX <= x && x < $0.frame.maxX + 1 }?.scrollView
     }
 
+    /// `width` as a grip sets it: whole points, so the columns right of it stay on the pixel grid
+    /// and AppKit doesn't move a column's rows off its left edge to align them, within the
+    /// widths a column can have.
     private static func clamped(_ width: Double) -> Double {
-        min(max(width, Settings.columnWidths.lowerBound), Settings.columnWidths.upperBound)
+        min(
+            max(width.rounded(), Settings.columnWidths.lowerBound),
+            Settings.columnWidths.upperBound)
     }
 
     /// Fits `target`'s column to its widest name, or with `allColumns` every column and the
@@ -522,11 +531,35 @@ final class ColumnViewController: NSViewController {
         previewGrip?.isHidden = shownPreview == nil
         raiseGrips()
         // Room for the right half of the last grip, past the last separator.
-        let lastGripEnd = Self.gripFrame(atSeparator: x - 1, height: height).maxX
-        let width = max(x, lastGripEnd, scrollView.contentSize.width)
-        if columnsView.frame.size != NSSize(width: width, height: height) {
-            columnsView.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        columnsWidth = max(x, Self.gripFrame(atSeparator: x - 1, height: height).maxX)
+        sizeColumnsView()
+    }
+
+    /// How wide the columns, the preview and the last grip are, as last laid out.
+    private var columnsWidth = 0.0
+
+    /// Sizes the columns' view to its columns, and no narrower than the scroll view or the right
+    /// edge of what it shows, so a column or preview that closes or narrows never makes the clip
+    /// view clamp the scroll: a ↓ that clears the preview while the keys pause, or a grip's drag
+    /// at the right end. The room kept past the columns goes as the view scrolls it out of sight
+    /// (0046-column-view.md).
+    private func sizeColumnsView() {
+        guard let scrollView = view as? NSScrollView else {
+            preconditionFailure("the column view's view is \(view)")
         }
+        let size = NSSize(
+            width: max(
+                columnsWidth, scrollView.contentSize.width, scrollView.contentView.bounds.maxX),
+            height: scrollView.contentSize.height)
+        if columnsView.frame.size != size {
+            columnsView.frame = NSRect(origin: .zero, size: size)
+        }
+    }
+
+    /// The columns' clip view moved: a scroll to the left gives up the room it leaves past the
+    /// columns.
+    @objc private func clipBoundsDidChange(_ notification: Notification) {
+        sizeColumnsView()
     }
 
     /// Puts the grips above every other view, once a view added since covers one: each grip

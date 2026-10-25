@@ -323,6 +323,133 @@ extension Fixture {
     #expect(fixture.tables[2].selectedRowIndexes == [0])
 }
 
+/// Every left edge a clip view's bounds move to, as they move.
+@MainActor
+private final class OriginLog: NSObject {
+    private(set) var xs: [Double] = []
+
+    init(_ clip: NSClipView) {
+        super.init()
+        clip.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(boundsDidChange(_:)),
+            name: NSView.boundsDidChangeNotification,
+            object: clip)
+    }
+
+    @objc private func boundsDidChange(_ notification: Notification) {
+        guard let clip = notification.object as? NSClipView else { return }
+        xs.append(clip.bounds.origin.x)
+    }
+}
+
+extension Fixture {
+    /// The columns' clip view, scrolled right so the view's last column or preview is in view,
+    /// with the trail waiting on `clock` for the keys to pause from now on.
+    func scrolledToTheEnd(waitingOn clock: ManualClock) throws -> NSClipView {
+        pane.columnOpenClock = clock
+        let clip = try #require((controller.view as? NSScrollView)?.contentView)
+        let last = try #require(
+            controller.previewView.flatMap { $0.isHidden ? nil : $0 }
+                ?? controller.columnControllers.last?.view)
+        #expect(clip.bounds.origin.x > 0)
+        #expect(clip.documentVisibleRect.contains(last.frame))
+        return clip
+    }
+
+    /// Lets the keys pause, so the trail follows the selection they made, and waits for `shown`.
+    func pauseKeys(on clock: ManualClock, until shown: @MainActor () -> Bool) async {
+        await settle { clock.waitingSleeps == 1 }
+        clock.advance(by: ColumnTrail.openDelay)
+        await settle(until: shown)
+    }
+}
+
+/// ↓ and ↑ between files in the last column, scrolled to its right end, leave the columns where
+/// they are: the preview clears while the keys pause and comes back in the same place, and the
+/// view doesn't scroll left as it clears and back right as it comes back.
+@MainActor @Test func arrowsBetweenFilesInTheLastColumnDoNotScroll() async throws {
+    let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)
+    await fixture.openThreeColumns()
+    fixture.trail.moveRight()
+    fixture.trail.moveRight()
+    await settle { fixture.trail.shownPreview == fixture.trail.preview }
+    let log = fixture.logScrolls()
+    fixture.controller.reduceMotion = { false }
+    let clock = ManualClock()
+    let clip = try fixture.scrolledToTheEnd(waitingOn: clock)
+    let start = clip.bounds.origin.x
+    let origins = OriginLog(clip)
+
+    fixture.trail.focused.pane.moveSelection(by: 1)
+
+    #expect(fixture.trail.shownPreview == nil)
+    #expect(clip.bounds.origin.x == start)
+
+    await fixture.pauseKeys(on: clock) { fixture.trail.shownPreview?.location.name == "two.flac" }
+    fixture.trail.focused.pane.moveSelection(by: -1)
+    await fixture.pauseKeys(on: clock) { fixture.trail.shownPreview?.location.name == "one.flac" }
+
+    #expect(origins.xs.allSatisfy { $0 == start }, "\(origins.xs)")
+    #expect(log.requests.allSatisfy { $0.x == start }, "\(log.requests)")
+}
+
+/// ↓ from a folder to a file, with the folder's column at the right end, drops the column while
+/// the keys pause and shows the file's preview in its place, without scrolling; ↑ back opens the
+/// folder's column there again.
+@MainActor @Test func arrowsBetweenAFolderAndAFileDoNotScroll() async throws {
+    let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)
+    await fixture.openThreeColumns()
+    fixture.trail.moveRight()
+    let log = fixture.logScrolls()
+    fixture.controller.reduceMotion = { false }
+    let clock = ManualClock()
+    let clip = try fixture.scrolledToTheEnd(waitingOn: clock)
+    let start = clip.bounds.origin.x
+    let origins = OriginLog(clip)
+
+    // `/r/docs`: sub, x.txt.
+    fixture.trail.focused.pane.moveSelection(by: 1)
+
+    #expect(fixture.trail.columns.count == 2)
+    #expect(clip.bounds.origin.x == start)
+
+    await fixture.pauseKeys(on: clock) { fixture.trail.shownPreview?.location.name == "x.txt" }
+    fixture.trail.focused.pane.moveSelection(by: -1)
+    await fixture.pauseKeys(on: clock) {
+        fixture.trail.columns.count == 3 && fixture.trail.columns[2].pane.state.isLoaded
+    }
+
+    #expect(origins.xs.allSatisfy { $0 == start }, "\(origins.xs)")
+    #expect(log.requests.allSatisfy { $0.x == start }, "\(log.requests)")
+}
+
+/// A column narrowed at the right end leaves its room while the room shows, and a scroll to the
+/// left gives the room up as it goes out of sight, so the scroller never reaches past the columns.
+@MainActor @Test func theRoomANarrowedColumnLeavesGoesOnceScrolledOutOfSight() async throws {
+    let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)
+    await fixture.openThreeColumns()
+    fixture.trail.moveRight()
+    fixture.trail.moveRight()
+    await settle { fixture.trail.shownPreview == fixture.trail.preview }
+    let clip = try fixture.scrolledToTheEnd(waitingOn: ManualClock())
+    let columnsView = fixture.controller.columnsView
+    let end = clip.bounds.maxX
+
+    drag(try #require(fixture.controller.grip(forColumnAt: 2)), by: -100)
+
+    #expect(columnsView.frame.width == end)
+    #expect(clip.bounds.maxX == end)
+
+    // A scroll of the user's, which lays nothing out.
+    clip.scroll(to: NSPoint(x: clip.bounds.origin.x - 60, y: 0))
+
+    #expect(columnsView.frame.width == end - 60)
+    clip.scroll(to: .zero)
+    let previewGrip = try #require(fixture.controller.previewGrip)
+    #expect(columnsView.frame.width == previewGrip.frame.maxX)
+}
+
 @MainActor @Test func aCutEntryDrawsDimmedInAColumnOpenedAfterTheCut() async throws {
     let pasteboard = NSPasteboard(name: NSPasteboard.Name("searcher-test-\(UUID().uuidString)"))
     defer { pasteboard.releaseGlobally() }
@@ -1421,6 +1548,86 @@ private func expectPacked(_ fixture: Fixture) throws {
         #expect(Double(grip.frame.width) == ColumnGripView.thickness)
         #expect(grip.frame.height == column.view.frame.height)
         x = Double(column.view.frame.maxX) + 1
+    }
+}
+
+/// The pointer's moves of the drags `gripDrags` makes: back and forth, by fractions of a point, as
+/// a trackpad's are.
+private let gripDrags: [[Double]] = [[-30.37, -60.81, -90.13], [-60.4, -20.77, 40.29]]
+
+/// Drags the focused column's grip with the view scrolled to its right end, back and forth: the
+/// view doesn't scroll, so the grip stays under the pointer and nothing left of it moves, and a
+/// drag back to where it started leaves every column where it was.
+@MainActor @Test func aDragAtTheRightEndKeepsTheGripUnderThePointer() async throws {
+    let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)
+    await fixture.openThreeColumns()
+    fixture.trail.moveRight()
+    fixture.trail.moveRight()
+    await settle { fixture.trail.shownPreview == fixture.trail.preview }
+    let clip = try fixture.scrolledToTheEnd(waitingOn: ManualClock())
+    let start = clip.bounds.origin.x
+    let grip = try #require(fixture.controller.grip(forColumnAt: 2))
+    let column = fixture.controller.columnControllers[2].view
+    let left = column.frame.minX
+    let gripX = grip.frame.midX
+
+    for moves in gripDrags {
+        let pressX = grip.frame.midX
+        grip.mouseDown(with: gripEvent(.leftMouseDown, x: 100))
+        for move in moves {
+            grip.mouseDragged(with: gripEvent(.leftMouseDragged, x: 100 + move))
+            #expect(clip.bounds.origin.x == start, "\(move)")
+            #expect(column.frame.minX == left)
+            #expect(abs(grip.frame.midX - (pressX + move)) <= 0.5, "\(move)")
+        }
+        grip.mouseUp(with: gripEvent(.leftMouseUp, x: 100 + moves.last!))
+    }
+    // The drags left the column 50 points narrower.
+    drag(grip, by: 50)
+
+    #expect(clip.bounds.origin.x == start)
+    #expect(grip.frame.midX == gripX)
+}
+
+/// A drag by fractions of a point gives whole-point widths, so every column and its rows sit on
+/// the pixel grid and a column's clip view keeps its rows at its left edge, in a window on screen
+/// as AppKit lays it out.
+@MainActor @Test func aDragGivesWholePointWidthsAndKeepsEveryColumnsRowsAtItsLeftEdge()
+    async throws
+{
+    var folders = tree
+    folders["/r/docs/sub"] = (0..<60).map { file("com.apple.LinkMetadata-\($0).db-wal") }
+    let fixture = await Fixture(width: 1000, folders: folders)
+    await fixture.openThreeColumns()
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 700, height: 400), styleMask: [.titled],
+        backing: .buffered, defer: true)
+    window.isReleasedWhenClosed = false
+    window.contentView?.wantsLayer = true
+    fixture.controller.view.frame = try #require(window.contentView).bounds
+    window.contentView?.addSubview(fixture.controller.view)
+    SecondDisplay.orderFront(window)
+    defer { window.orderOut(nil) }
+    fixture.trail.moveRight()
+    fixture.trail.moveRight()
+
+    for (index, moves) in zip([1, 2, 1, 2], gripDrags + gripDrags) {
+        let grip = try #require(fixture.controller.grip(forColumnAt: index))
+        grip.mouseDown(with: gripEvent(.leftMouseDown, x: 100))
+        for move in moves {
+            grip.mouseDragged(with: gripEvent(.leftMouseDragged, x: 100 + move))
+            window.contentView?.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            for controller in fixture.controller.columnControllers {
+                let frame = controller.view.frame
+                #expect(frame.minX == frame.minX.rounded(), "\(frame)")
+                #expect(frame.width == frame.width.rounded(), "\(frame)")
+                let clip = try #require((controller.view as? NSScrollView)?.contentView)
+                #expect(clip.bounds.minX == 0, "\(move)")
+                #expect(clip.frame.minX == 0, "\(move)")
+            }
+        }
+        grip.mouseUp(with: gripEvent(.leftMouseUp, x: 100 + moves.last!))
     }
 }
 

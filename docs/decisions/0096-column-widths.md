@@ -44,7 +44,13 @@ grip, the double-click and the default below are the amended ones.
   `Settings.columnWidth`, the width new columns get. A plain drag leaves that default alone.
   Whether Option is held is read at the press. An Option-click that doesn't move changes nothing.
   An Option-drag whose own column closes under it keeps resizing the columns left, and its last
-  width still becomes the default.
+  width still becomes the default. (Amended 2026-10-25: a drag's width is rounded to whole
+  points, as a fit's is. A trackpad drag moves by fractions of a point, which put every column
+  right of the dragged one off the pixel grid; AppKit then moved each column's clip view and its
+  bounds by a fraction of a point to align its rows, so the rows no longer started at the
+  column's left edge, against the clip view that pins them there
+  ([0046](0046-column-view.md)). A drag at the right end keeps its grip under the pointer: see
+  0046.)
 - **Double-click: a toggle between the fit and the default.** Plain, it fits the column to its
   widest name, beside a folder's chevron, and leaves the default alone. With Option it fits every
   column and the preview to one width, that of the widest name in any column, and sets the
