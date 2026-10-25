@@ -170,8 +170,12 @@ private func packageColumns() async -> PaneFixture {
     #expect(paths(pane) == ["/p", "/p/App.app"])
     #expect(trail(pane).focusedIndex == 1)
     clock.advance(by: ColumnTrail.openDelay)
+    // Its first row is selected once its rows land, as → into any column selects it, and the
+    // folder there opens at once.
+    await settle { paths(pane) == ["/p", "/p/App.app", "/p/App.app/Contents"] }
+    #expect(trail(pane).focusedIndex == 1)
     for _ in 0..<3 { await drainMainQueue() }
-    #expect(paths(pane) == ["/p", "/p/App.app"])
+    #expect(clock.waitingSleeps == 0)
 }
 
 @MainActor @Test func showPackageContentsAddsThePackagesColumnAndMovesIntoItUntilAnotherSelection()
@@ -1363,4 +1367,75 @@ private func cachedSharePane(lister: GatedLister, clock: ManualClock) async -> P
     lister.release("/n")
 
     await settle { trail(pane).preview?.info == .read(info(4)) }
+}
+
+/// A focused pane at `/r` in column mode, waiting out its column-open pause on `clock`, with
+/// `docs` selected by a click and its column still loading: the lister holds `/r/docs` until the
+/// test releases it.
+@MainActor
+private func loadingDocsColumn(clock: ManualClock = ManualClock()) async -> PaneFixture {
+    let fixture = PaneFixture(at: "/r", folders: tree, held: true)
+    fixture.lister.release("/r")
+    await settle { fixture.pane.state.isLoaded }
+    fixture.pane.columnOpenClock = clock
+    fixture.pane.setViewMode(.column)
+    await settle { trail(fixture.pane).focused.pane.state.isLoaded }
+    select("docs", in: trail(fixture.pane).columns[0])
+    #expect(await fixture.lister.waitForCall("/r/docs"))
+    return fixture
+}
+
+@MainActor @Test func rightIntoALoadingColumnSelectsItsFirstRowWhenTheRowsLand() async throws {
+    let clock = ManualClock()
+    let fixture = await loadingDocsColumn(clock: clock)
+    let pane = fixture.pane
+    try press(KeyChord(.right), on: pane)
+    #expect(trail(pane).focusedIndex == 1)
+    #expect(trail(pane).focused.pane.selection.isEmpty)
+
+    fixture.lister.release("/r/docs")
+    fixture.lister.release("/r/docs/sub")
+
+    await settle { trail(pane).columns[1].pane.selection.cursor == ExactName("sub") }
+    // Not a key-made selection: the folder in row 0 opens its column at once, with no wait for
+    // the keys to pause, as → does when the rows are already there.
+    #expect(paths(pane) == ["/r", "/r/docs", "/r/docs/sub"])
+    #expect(trail(pane).focusedIndex == 1)
+    await drainWaits()
+    #expect(clock.waitingSleeps == 0)
+}
+
+/// A selection in the loading column, ← out of it, a click in another column, or navigating
+/// before its rows land each give up selecting its first row.
+@MainActor @Test func aSelectionLeftAFocusChangeOrNavigationBeforeTheRowsLandCancelsIt()
+    async throws
+{
+    let cancels: [(String, @MainActor (Pane) throws -> Void)] = [
+        ("select", { pane in select("x.txt", in: trail(pane).columns[1]) }),
+        ("left", { pane in try press(KeyChord(.left), on: pane) }),
+        ("focus", { pane in trail(pane).focus(trail(pane).columns[0]) }),
+        ("navigate", { pane in pane.navigate(to: Location(path: "/r/other")) }),
+    ]
+    for (name, cancel) in cancels {
+        let fixture = await loadingDocsColumn()
+        let pane = fixture.pane
+        try press(KeyChord(.right), on: pane)
+        let docs = trail(pane).focused.pane
+
+        try cancel(pane)
+        fixture.lister.release("/r/docs")
+        fixture.lister.release("/r/other")
+        await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+        await drainMainQueue()
+
+        if name == "navigate" {
+            #expect(paths(pane) == ["/r/other"])
+            #expect(trail(pane).focused.pane.selection.isEmpty)
+        } else {
+            #expect(paths(pane) == ["/r", "/r/docs"], "after \(name)")
+        }
+        #expect(
+            docs.selection.cursor == (name == "select" ? ExactName("x.txt") : nil),
+            "after \(name)")
+    }
 }

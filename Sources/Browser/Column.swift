@@ -12,6 +12,10 @@ public final class Column {
     /// The selection version the columns right of this one last followed. A change that keeps
     /// it, such as a patch, is followed at once even when keys made the selection.
     var followedSelectionVersion: Int?
+    /// The selection version at which → moved into this column before its rows arrived: its
+    /// first row is selected once they do, unless the selection, the focus or the location
+    /// changed first. Nil when nothing waits.
+    var selectsFirstRowAt: Int?
 
     init(pane: Pane) {
         self.pane = pane
@@ -21,6 +25,7 @@ public final class Column {
     func close() {
         held?.wait?.cancel()
         held = nil
+        selectsFirstRowAt = nil
         pane.close()
     }
 }

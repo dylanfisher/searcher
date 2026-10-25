@@ -819,3 +819,147 @@ private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
     await settle { view.createdField.stringValue == EntryCellFormatter().date(testDate) }
     #expect(view.lastOpenedField.stringValue == ColumnPreviewView.noDate)
 }
+
+/// A pane at `/s` in column view whose folders each end in a state with no rows to show:
+/// `Mail` refuses with EPERM, as privacy protection does, `locked` with EACCES, `gone` with
+/// ENOENT, `stalled` never answers, `empty` holds nothing, and `full` holds a file. Loads and
+/// spinners wait on `clock`.
+@MainActor
+private struct StateColumns {
+    let lister = GatedLister([
+        "/s": .batches([
+            [
+                folder("Mail"), folder("locked"), folder("gone"), folder("stalled"),
+                folder("empty"), folder("full"),
+            ]
+        ]),
+        "/s/Mail": .failure(ListingError(path: "/s/Mail", code: EPERM)),
+        "/s/locked": .failure(ListingError(path: "/s/locked", code: EACCES)),
+        "/s/gone": .failure(ListingError(path: "/s/gone", code: ENOENT)),
+        "/s/stalled": .blockForever,
+        "/s/empty": .batches([[]]),
+        "/s/full": .batches([[file("f.txt")]]),
+    ])
+    let clock = ManualClock()
+    let pane: Pane
+    let controller: ColumnViewController
+    let trail: ColumnTrail
+
+    init() async throws {
+        lister.releaseAll()
+        pane = Pane(
+            location: Location(path: "/s"),
+            service: ListingService(lister: lister, clock: clock, rootVolumeName: { "Test Disk" }),
+            systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true,
+            viewMode: .column)
+        let controller = ColumnViewController(
+            pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
+            clock: clock)
+        controller.startMonitor = { _ in }
+        pane.onChange = { [weak controller] in controller?.paneDidChange() }
+        controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 400)
+        self.controller = controller
+        let trail = try #require(pane.columnTrail)
+        self.trail = trail
+        await settle { trail.focused.pane.state.isLoaded }
+    }
+
+    /// Selects the folder `name` in the first column, as a click does, and waits until its
+    /// column's load ends.
+    func open(_ name: String) async {
+        trail.columns[0].pane.select(Selection([ExactName(name)], cursor: ExactName(name)))
+        await settle {
+            trail.columns.count == 2 && column.location.name == name
+                && !PaneStatusView.isInFlight(column.state)
+        }
+    }
+
+    /// The second column's pane.
+    var column: Pane { trail.columns[1].pane }
+
+    /// The second column's message, if it shows one.
+    var message: String? {
+        controller.messageLabel(forColumnAt: 1).flatMap { $0.isHidden ? nil : $0.stringValue }
+    }
+
+    /// Whether the second column shows the access explanation.
+    var showsDenied: Bool {
+        controller.deniedView(forColumnAt: 1).map { !$0.isHidden } ?? false
+    }
+}
+
+@MainActor @Test func aDeniedColumnShowsTheAccessExplanationInTheColumn() async throws {
+    let fixture = try await StateColumns()
+
+    await fixture.open("Mail")
+
+    let denied = try #require(fixture.controller.deniedView(forColumnAt: 1))
+    #expect(!denied.isHidden)
+    #expect(denied.titleLabel.stringValue == AccessDeniedView.title(folderName: "Mail"))
+    #expect(fixture.message == nil)
+    fixture.controller.view.layoutSubtreeIfNeeded()
+    let column = fixture.controller.columnControllers[1].view.frame
+    #expect(denied.frame.minX >= column.minX && denied.frame.maxX <= column.maxX)
+    #expect(abs(denied.frame.midX - column.midX) < 1)
+    #expect(abs(denied.frame.midY - column.midY) < 1)
+}
+
+@MainActor @Test func aFailedOrMissingColumnShowsTheListsErrorLine() async throws {
+    let fixture = try await StateColumns()
+
+    await fixture.open("locked")
+    #expect(fixture.message == ListingError(path: "/s/locked", code: EACCES).description)
+    #expect(!fixture.showsDenied)
+
+    await fixture.open("gone")
+    #expect(fixture.message == PaneViewController.missingMessage("/s/gone"))
+    fixture.controller.view.layoutSubtreeIfNeeded()
+    let label = try #require(fixture.controller.messageLabel(forColumnAt: 1))
+    let column = fixture.controller.columnControllers[1].view.frame
+    #expect(label.frame.minX >= column.minX && label.frame.maxX <= column.maxX)
+    #expect(abs(label.frame.midY - column.midY) < 1)
+
+    // A column that lists shows no message.
+    await fixture.open("full")
+    #expect(fixture.message == nil)
+}
+
+@MainActor @Test func aSlowThenOfflineColumnWithNoRowsShowsTheStatusNote() async throws {
+    let fixture = try await StateColumns()
+    fixture.trail.columns[0].pane.select(
+        Selection([ExactName("stalled")], cursor: ExactName("stalled")))
+    #expect(await fixture.lister.waitForCall("/s/stalled"))
+    #expect(fixture.message == nil)
+
+    fixture.clock.advance(by: LoadTimeouts.slow)
+    await settle { if case .slow = fixture.column.state { true } else { false } }
+    let volume = try #require(fixture.column.volumeName)
+    let note = PaneStatusText().note(
+        for: fixture.column.state, volumeName: volume, now: Date())
+    #expect(fixture.message == note)
+    #expect(fixture.message == "\(volume) is slow to answer.")
+
+    fixture.clock.advance(by: LoadTimeouts.giveUp - LoadTimeouts.slow)
+    await settle { fixture.column.state.isOffline }
+    #expect(fixture.message == "\(volume) is offline.")
+}
+
+/// Finder shows an empty folder's column blank.
+@MainActor @Test func anEmptyFoldersColumnIsBlank() async throws {
+    let fixture = try await StateColumns()
+
+    await fixture.open("empty")
+
+    #expect(fixture.message == nil)
+    #expect(!fixture.showsDenied)
+}
+
+@MainActor @Test func aColumnWhoseFilterMatchesNothingSaysSoAsTheListDoes() async throws {
+    let fixture = try await StateColumns()
+    await fixture.open("full")
+
+    fixture.column.setFilter("zz")
+
+    await settle { fixture.column.state.listing?.count == 0 }
+    #expect(fixture.message == FilterBarView.noMatchMessage("zz"))
+}
