@@ -54,9 +54,7 @@ run map bash -c '
 # return nothing and pass silently, which is the failure this whole file exists
 # to prevent. Prune dependency trees so the cost stays flat as the project grows.
 run links bash -c '
-  files=$(find . -name "*.md" -not -path "./.git/*" \
-    -not -path "*/node_modules/*" -not -path "*/vendor/*" -not -path "*/.venv/*" \
-    -not -path "*/dist/*" -not -path "*/build/*" -not -path "*/target/*")
+  files=$(git ls-files --cached --others --exclude-standard "*.md")
   if [ -z "$files" ]; then echo "no markdown found — this check is not looking where it should." >&2; exit 1; fi
   bad=""
   for f in $files; do
