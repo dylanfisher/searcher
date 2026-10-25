@@ -30,6 +30,19 @@ public final class TypeIconCache {
         return image
     }()
 
+    /// The chevron Finder draws at the right of a folder row in column view, made the first time a
+    /// column shows one and shared by every such row. A template, so it takes its view's tint.
+    public private(set) lazy var folderChevron: NSImage = {
+        let name = "chevron.right"
+        guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil),
+            let sized = image.withSymbolConfiguration(
+                NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold, scale: .medium))
+        else {
+            preconditionFailure("no system symbol named \(name)")
+        }
+        return sized
+    }()
+
     public func icon(for type: UTType) -> NSImage {
         if let icon = icons[type] {
             return icon
