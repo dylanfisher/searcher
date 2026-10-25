@@ -24,7 +24,8 @@ extension. Finder treats a package as one file everywhere except Show Package Co
   with one `getattrlist`, only when the extension doesn't decide.
 - **Open treats a package as a file.** Return, double-click and Cmd-↓ hand it to its app through
   `SystemActions.openFile`, as for any file. Open in Other Pane is off for it, as for a file
-  (0047). Column view adds no column for it and shows the preview (0090); → does nothing.
+  (0047). Column view adds no column for it and shows the preview (0090), after the keys pause
+  when keys selected it, as for a file (0094); → does nothing.
 - **A link to a package opens as a file.** Homebrew links casks into /Applications, and Finder
   launches the app such a link points to. Before Open lists a link as a folder (`openLink`), the
   pane asks `DirectoryLister.isPackage(followingLinksAt:)` off the main thread: it resolves the
@@ -38,7 +39,8 @@ extension. Finder treats a package as one file everywhere except Show Package Co
   waits in that read rather than in the listing that would show the slow state.
 - **Show Package Contents** (File menu and row context menu, after Open With, no key) browses
   into the one selected package as a folder: the pane moves into it, or in column view a column
-  for it opens to the right and takes the keys. That column stays while the package stays
+  for it opens to the right at once, without the keys' pause, and takes the keys. That column
+  stays while the package stays
   selected and goes when another row is selected. The item is there for every selection and
   turned off unless one package is selected, as every context-menu item is (0070); Finder hides
   it instead.
