@@ -204,11 +204,14 @@ private func list(_ workspaces: Workspace...) -> WorkspaceList {
     #expect(target.tabs.count == 2 && target.tabs[1] === moved)
 }
 
-@MainActor @Test func cmdKResolvesToShowPaletteWhichAsksTheWindowToShowIt() async throws {
+@MainActor @Test func cmdKAndCmdShiftPResolveToShowPaletteWhichAsksTheWindowToShowIt() async throws
+{
     let registry = try AppCommands.registry()
-    #expect(
-        registry.command(for: KeyChord("k", modifiers: .command))?.id
-            == WindowCommands.showPalette.id)
+    for chord in [
+        KeyChord("k", modifiers: .command), KeyChord("p", modifiers: [.command, .shift]),
+    ] {
+        #expect(registry.command(for: chord)?.id == WindowCommands.showPalette.id, "\(chord)")
+    }
     let fixture = await PaneFixture.loaded()
     let shown = EventLog<Bool>()
     let binding = try #require(

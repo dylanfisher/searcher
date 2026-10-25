@@ -34,7 +34,12 @@ Recursive search and Spotlight are a separate feature (M5b.3) and stay out.
   it, and so does Cmd-W, as in Open Quickly: the panel takes those chords as key equivalents
   before the menu bar, whose command items are off while the panel has the keys. Any other
   Command key the field doesn't use does nothing, without a beep. Cmd-A and the other editing
-  keys reach the field's editor through the Edit menu.
+  keys reach the field's editor through the Edit menu. (Amended 2026-10-25, Dylan: "add a cmd k
+  alternative shortcut (keep both) as cmd+shift+p". Open Quickly has ⇧⌘P beside ⌘K, the key VS
+  Code and Sublime Text open their command palette with, as Go to Item has ⇧⌘K beside ⌘P
+  ([0101](0101-go-to-item.md)). No command had it: the app has no Print item. The menu shows
+  ⌘K, the first chord, and ⇧⌘P closes the panel as ⌘K does, since the panel takes every chord
+  of the command that opened it.)
 - **Commands that can never run from the palette are left out**, in one set,
   `CommandSource.unlisted`: Open in New Tab (it needs a clicked folder), Open Quickly itself,
   and the row keys, which move a selection the palette covers.
