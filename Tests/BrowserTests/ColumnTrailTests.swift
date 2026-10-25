@@ -139,6 +139,41 @@ private func packageColumns() async -> PaneFixture {
     #expect(fixture.actions.openedFiles.isEmpty)
 }
 
+/// A package selected by keys waits for the pause, as a file does, then previews and still adds
+/// no column; Show Package Contents opens its column at once, since it is a command.
+@MainActor @Test func aPackageSelectedByKeysPreviewsAfterThePauseAndShowContentsOpensAtOnce()
+    async throws
+{
+    let clock = ManualClock()
+    let fixture = await packageColumns()
+    fixture.pane.columnOpenClock = clock
+    let pane = fixture.pane
+    select("docs", in: trail(pane).columns[0])
+    #expect(paths(pane) == ["/p", "/p/docs"])
+
+    try press(KeyChord(.up), on: pane)
+
+    #expect(trail(pane).columns[0].pane.selection.cursor == ExactName("App.app"))
+    #expect(paths(pane) == ["/p"])
+    #expect(trail(pane).preview == nil)
+    await settle { clock.waitingSleeps == 1 }
+    clock.advance(by: ColumnTrail.openDelay)
+    await settle { trail(pane).preview?.location == Location(path: "/p/App.app") }
+    #expect(paths(pane) == ["/p"])
+
+    try press(KeyChord(.down), on: pane)
+    try press(KeyChord(.up), on: pane)
+    let binding = try #require(
+        AppCommands.bindings.first { $0.command == NavigationCommands.showPackageContents })
+    binding.run(CommandContext(pane: pane.commandPane))
+
+    #expect(paths(pane) == ["/p", "/p/App.app"])
+    #expect(trail(pane).focusedIndex == 1)
+    clock.advance(by: ColumnTrail.openDelay)
+    for _ in 0..<3 { await drainMainQueue() }
+    #expect(paths(pane) == ["/p", "/p/App.app"])
+}
+
 @MainActor @Test func showPackageContentsAddsThePackagesColumnAndMovesIntoItUntilAnotherSelection()
     async throws
 {
