@@ -1324,40 +1324,42 @@ private func oneWindowSession(at path: String) -> WorkspaceStore.Contents {
 
 // MARK: Column widths
 
-/// `controller`'s focused pane switched to columns, with `docs` selected in its first column and
-/// both columns loaded.
+/// `controller`'s focused pane switched to columns, `/`, `/root` and `/root/docs`, with `docs`
+/// selected in the column at `/root` and every column loaded. The helpers below count columns
+/// from `/root`.
 @MainActor
 private func showColumns(in controller: BrowserWindowController) async throws -> Pane {
     let pane = await loadedPane(of: controller)
     pane.setViewMode(.column)
     let trail = try #require(pane.columnTrail)
     await settle { trail.focused.pane.state.isLoaded }
-    trail.columns[0].pane.select(Selection([ExactName("docs")], cursor: ExactName("docs")))
-    await settle { trail.columns.count == 2 && trail.columns.allSatisfy { $0.pane.state.isLoaded } }
+    trail.columns[1].pane.select(Selection([ExactName("docs")], cursor: ExactName("docs")))
+    await settle { trail.columns.count == 3 && trail.columns.allSatisfy { $0.pane.state.isLoaded } }
     return pane
 }
 
-/// The width each column of `controller`'s focused pane is laid out at, left to right.
+/// The width each column of `controller`'s focused pane from `/root` right is laid out at, left
+/// to right.
 @MainActor
 private func shownColumnWidths(_ controller: BrowserWindowController) -> [Double] {
-    controller.paneViewController.columnViewController.columnControllers.map {
+    controller.paneViewController.columnViewController.columnControllers.dropFirst().map {
         Double($0.view.frame.width)
     }
 }
 
-/// Drags the grip of `controller`'s column at `index` by `offset`.
+/// Drags the grip of `controller`'s column at `index`, counted from `/root`, by `offset`.
 @MainActor
 private func resizeColumn(_ index: Int, of controller: BrowserWindowController, by offset: Double)
     throws
 {
     let columns = controller.paneViewController.columnViewController
-    drag(try #require(columns.grip(forColumnAt: index)), by: offset)
+    drag(try #require(columns.grip(forColumnAt: index + 1)), by: offset)
 }
 
 @MainActor private var standard: Double { Settings.defaultColumnWidth }
 
-/// A window at `/root` in columns, at `savedFrame`, with its first column 50 points wider and
-/// its second 30 narrower, and the preview's width set.
+/// A window at `/root` in columns, at `savedFrame`, with its column at `/root` 50 points wider and
+/// the next 30 narrower, and the preview's width set.
 @MainActor
 private func resizedColumnWindow(in windows: WorkspaceWindows) async throws
     -> BrowserWindowController
@@ -1384,7 +1386,7 @@ private func resizedColumnWindow(in windows: WorkspaceWindows) async throws
     let restored = try #require(await restoring.restore(diskStore(folder).load()))
     let pane = restored.workspace.selectedTab.focusedPane
     let trail = try #require(pane.columnTrail)
-    await settle { trail.columns.count == 2 }
+    await settle { trail.columns.count == 3 }
 
     #expect(pane.columnWidths == widths)
     #expect(shownColumnWidths(restored) == [standard + 50, standard - 30])
@@ -1418,7 +1420,7 @@ private func resizedColumnWindow(in windows: WorkspaceWindows) async throws
 
     let reopened = windows.open(savedWorkspace: id)
     let trail = try #require(reopened.workspace.selectedTab.focusedPane.columnTrail)
-    await settle { trail.columns.count == 2 }
+    await settle { trail.columns.count == 3 }
 
     #expect(shownColumnWidths(reopened) == [standard + 50, standard - 30])
     #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
@@ -1471,7 +1473,7 @@ private func resizedColumnWindow(in windows: WorkspaceWindows) async throws
     restoring.holdSavesUntilRestore()
     let restored = try #require(await restoring.restore(diskStore(folder).load()))
     let trail = try #require(restored.workspace.selectedTab.focusedPane.columnTrail)
-    await settle { trail.columns.count == 2 }
+    await settle { trail.columns.count == 3 }
 
     #expect(shownColumnWidths(restored) == [standard + 50, standard])
     #expect(restored.window?.isDocumentEdited == true)
@@ -1497,7 +1499,7 @@ private func resizedColumnWindow(in windows: WorkspaceWindows) async throws
     _ = try await showColumns(in: other)
 
     let columns = other.paneViewController.columnViewController
-    drag(try #require(columns.grip(forColumnAt: 0)), by: 40, option: true)
+    drag(try #require(columns.grip(forColumnAt: 1)), by: 40, option: true)
     #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
 
     #expect(shownColumnWidths(saved) == [standard + 40, standard + 40])
@@ -1514,7 +1516,7 @@ private func resizedColumnWindow(in windows: WorkspaceWindows) async throws
     _ = try await showColumns(in: controller)
     try controller.saveWorkspace(as: "Project 1")
     let columns = controller.paneViewController.columnViewController
-    let grip = try #require(columns.grip(forColumnAt: 0))
+    let grip = try #require(columns.grip(forColumnAt: 1))
 
     grip.mouseDown(with: gripEvent(.leftMouseDown, x: 100))
     grip.mouseDragged(with: gripEvent(.leftMouseDragged, x: 150))

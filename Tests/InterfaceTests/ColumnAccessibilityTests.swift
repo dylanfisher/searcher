@@ -13,13 +13,13 @@ import Testing
 private let formatter = EntryCellFormatter(
     locale: Locale(identifier: "en_US"), timeZone: TimeZone(identifier: "UTC")!)
 
-/// `/r` holds a folder `docs` and a file `a.txt`; `/r/docs` holds a folder `sub` and two files;
-/// `/r/docs/sub` holds a FLAC file.
+/// `/Volumes/r`, a volume, so its trail starts there, holds a folder `docs` and a file `a.txt`;
+/// `/Volumes/r/docs` holds a folder `sub` and two files; `/Volumes/r/docs/sub` holds a FLAC file.
 private let tree: [String: [DirectoryEntry]] = [
     "/": [folder("r")],
-    "/r": [folder("docs"), file("a.txt")],
-    "/r/docs": [folder("sub"), file("x.txt", size: 2_000_000), file("y.pdf")],
-    "/r/docs/sub": [file("one.flac")],
+    "/Volumes/r": [folder("docs"), file("a.txt")],
+    "/Volumes/r/docs": [folder("sub"), file("x.txt", size: 2_000_000), file("y.pdf")],
+    "/Volumes/r/docs/sub": [file("one.flac")],
 ]
 
 /// One accessibility notification the column view would have posted.
@@ -28,9 +28,9 @@ private struct Post {
     let notification: NSAccessibility.Notification
 }
 
-/// A pane at `/r` in column mode with `/r/docs/sub` open in three columns, the first focused,
-/// shown by a column view that is never put in a window. Its notifications are recorded rather
-/// than posted.
+/// A pane at `/Volumes/r` in column mode with `/Volumes/r/docs/sub` open in three columns, the
+/// first focused, shown by a column view that is never put in a window. Its notifications are
+/// recorded rather than posted.
 @MainActor
 private final class Fixture {
     let pane: Pane
@@ -39,7 +39,7 @@ private final class Fixture {
 
     init() async {
         pane = Pane(
-            location: Location(path: "/r"),
+            location: Location(path: "/Volumes/r"),
             service: ListingService(lister: StubLister(tree), rootVolumeName: { "Test Disk" }),
             systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true,
             viewMode: .column)
@@ -161,7 +161,7 @@ private final class Fixture {
     let column = fixture.controller.columnControllers[1]
     column.view.layoutSubtreeIfNeeded()
     let listPane = Pane(
-        location: Location(path: "/r/docs"),
+        location: Location(path: "/Volumes/r/docs"),
         service: ListingService(lister: StubLister(tree), rootVolumeName: { "Test Disk" }),
         systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: false)
     let list = ListingViewController(
@@ -225,7 +225,7 @@ private final class Fixture {
 @MainActor @Test func thePreviewIsAGroupNamedForItsFileThatReadsItsFields() async throws {
     let fixture = await Fixture()
     let reader = GatedItemInfoReader([
-        "/r/docs/x.txt": ItemInfo(created: testDate, lastOpened: testDate, tags: ["Red"])
+        "/Volumes/r/docs/x.txt": ItemInfo(created: testDate, lastOpened: testDate, tags: ["Red"])
     ])
     reader.releaseAll()
     fixture.pane.itemInfoReader = reader

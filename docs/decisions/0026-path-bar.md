@@ -30,7 +30,9 @@ name can't ride in the listing itself.
   folder loads, the bar keeps the folder the pane left. The rows and the bar change in the same
   `paneDidChange`, so one frame shows both.
 - **Clicks.** Clicking a folder above the pane's runs `Pane.navigate(to:selecting:)` with the
-  child on the way down. Clicking the pane's own folder does nothing.
+  child on the way down. Clicking the pane's own folder does nothing. (Amended 2026-10-25: in
+  column view a click on a folder whose column shows moves the focus to that column instead,
+  keeping every column; see [0103](0103-column-trail-from-the-root.md).)
 - **Truncation.** The segments between the ends shrink first, the one nearest the root first,
   each down to 32 points; then the root, then the pane's folder. Titles truncate in the middle. A
   row too long even then is clipped at the bar's edge.

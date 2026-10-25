@@ -42,7 +42,7 @@ stacked single-column tables over `NSBrowser`.
   through the clip view's animator, which a new target retargets from where it is, so a held →
   or ← never queues one. The rows and the selection are set before it starts, so B6 doesn't
   change. It jumps for the first show, a new trail with no column kept (a restore, a workspace,
-  a Go to folder), a resizing drag and Reduce Motion.) (Amended 2026-10-25, Dylan: "when i move
+  a Go to folder), a resizing drag and Reduce Motion.) (Amended 2026-10-25: AppKit runs the animator on display refresh, so with the display asleep it never ends. `moveClip` takes the animation as a parameter, `animateClip` by default; tests pass a stand-in that records each target and ends the latest on demand, and none waits on a real animation.) (Amended 2026-10-25, Dylan: "when i move
   up or down in selection the whole pane flashes and jumps scroll horizontally to left, then
   moves back over to right." A ↓ made by keys drops the column right of the selection, or
   clears the preview, at once and opens the next one once the keys pause
@@ -55,11 +55,18 @@ stacked single-column tables over `NSBrowser`.
   bounds. That only ever narrows it: the room kept is never more than the view already has, so
   a rubber-band past the right end, whose bounds reach past the view, widens nothing. The same keeps a grip under the pointer in a drag at the right end, where the clamp
   used to slide every column left of the grip and leave the view scrolled after a drag back.)
+  (Amended 2026-10-25: a trail now starts at the root of its folder's volume, so a new trail
+  is scrolled from the left end: the focused column, with the one right of it where that fits,
+  ends at the right edge and the columns above it fill the view to its left. A trail shown
+  before the view had a width scrolled to nothing, so the view scrolls again, once, when it
+  first gets one. See [0103](0103-column-trail-from-the-root.md).)
 - **`PaneViewController`** holds the list and the columns in the same place and shows one by the
   pane's view mode. It builds `CommandContext` with `commandPane`, the filter field calls
   `setFilter` on it, and Quick Look toggles the focused column's controller. The path bar and Go
-  to folder keep the pane, which navigates. It starts no monitor for the pane in column mode, and
-  starts the list's again when the list comes back.
+  to folder keep the pane, which navigates. (Amended 2026-10-25: a path bar click on a folder
+  whose column shows moves the focus to that column instead, `Pane.showFolderAbove`; see
+  [0103](0103-column-trail-from-the-root.md).) It starts no monitor for the pane in column mode,
+  and starts the list's again when the list comes back.
 - **The keys follow the focus.** If one of the pane's tables had the keys, the focused column's
   table takes them after → and ←, after a switch of view mode, and after the column that had them
   closes. A table that takes the keys by a click focuses its column (`ColumnTrail.focus`), and

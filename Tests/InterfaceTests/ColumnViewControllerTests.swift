@@ -8,20 +8,21 @@ import Testing
 @testable import Browser
 @testable import Interface
 
-/// `/r` holds a folder `docs`, a folder `other` and a file `a.txt`; `/r/docs` holds a folder
-/// `sub` and a file `x.txt`; `/r/docs/sub` holds two FLAC files.
+/// `/Volumes/r`, a volume, so its trail starts there, holds a folder `docs`, a folder `other` and a
+/// file `a.txt`; `/Volumes/r/docs` holds a folder `sub` and a file `x.txt`; `/Volumes/r/docs/sub`
+/// holds two FLAC files.
 private let tree: [String: [DirectoryEntry]] = [
     "/": [folder("r")],
-    "/r": [folder("docs"), folder("other"), file("a.txt")],
-    "/r/docs": [folder("sub"), file("x.txt")],
-    "/r/docs/sub": [file("one.flac"), file("two.flac")],
-    "/r/other": [file("o.txt")],
+    "/Volumes/r": [folder("docs"), folder("other"), file("a.txt")],
+    "/Volumes/r/docs": [folder("sub"), file("x.txt")],
+    "/Volumes/r/docs/sub": [file("one.flac"), file("two.flac")],
+    "/Volumes/r/other": [file("o.txt")],
 ]
 
-/// A pane at `/r` in column mode, shown by a column view that is never put in a window, `width`
-/// points wide, with its first column loaded. Its service makes thumbnails with `thumbnails`, or
-/// none. The pane's changes reach the view as
-/// `PaneViewController` passes them on.
+/// A pane at `/Volumes/r` in column mode, shown by a column view that is never put in a window,
+/// `width` points wide, with its first column loaded. Its service makes thumbnails with
+/// `thumbnails`, or none. The pane's changes reach the view as `PaneViewController` passes them
+/// on.
 @MainActor
 private struct Fixture {
     let pane: Pane
@@ -37,7 +38,7 @@ private struct Fixture {
     ) async {
         lister = StubLister(folders)
         pane = Pane(
-            location: Location(path: "/r"),
+            location: Location(path: "/Volumes/r"),
             service: ListingService(
                 lister: lister, rootVolumeName: { "Test Disk" }, thumbnails: thumbnails),
             systemActions: StubSystemActions(), settings: settings, isFocused: true,
@@ -73,7 +74,7 @@ private struct Fixture {
         }
     }
 
-    /// Opens `/r/docs/sub` in three columns, the first one focused.
+    /// Opens `/Volumes/r/docs/sub` in three columns, the first one focused.
     func openThreeColumns() async {
         await select("docs", inColumn: 0)
         await select("sub", inColumn: 1)
@@ -177,26 +178,49 @@ extension Fixture {
     #expect(abs(last.x - scrollView.contentView.bounds.origin.x) < 0.5)
 }
 
-@MainActor @Test func aRealAnimatedScrollEndsAtTheLatestTarget() async throws {
+/// Stands in for the clip view's animator, which AppKit runs on display refresh and so never
+/// runs with the display asleep. Records what each animated move asks for and ends the latest
+/// one when the test says.
+@MainActor
+final class ClipAnimation {
+    private(set) var starts: [(origin: NSPoint, duration: TimeInterval)] = []
+
+    func start(_ clip: NSClipView, to origin: NSPoint, over duration: TimeInterval) {
+        starts.append((origin, duration))
+    }
+
+    /// Ends the animation at the target a later move retargeted it to.
+    func finish(_ clip: NSClipView) {
+        if let last = starts.last { clip.setBoundsOrigin(last.origin) }
+    }
+}
+
+@MainActor @Test func anAnimatedScrollEndsAtTheLatestTarget() async throws {
     let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)
     await fixture.openThreeColumns()
     fixture.controller.reduceMotion = { false }
+    let animation = ClipAnimation()
+    fixture.controller.animateScroll = { clip, x, animated in
+        ColumnViewController.moveClip(clip, toX: x, animated: animated, animate: animation.start)
+    }
     let clip = try #require((fixture.controller.view as? NSScrollView)?.contentView)
     let second = fixture.controller.columnControllers[1].view
     let third = fixture.controller.columnControllers[2].view
 
     // Two columns right, then one back before the first animation ends: the second and third
-    // columns are the ones in view. Had the first animation not been retargeted, the origin
-    // would end at its target instead and the wait would time out.
+    // columns are the ones in view. Had the last move not been the animation's target, the
+    // origin would end at an earlier one.
     fixture.trail.moveRight()
     fixture.trail.moveRight()
     fixture.trail.moveLeft()
+    #expect(animation.starts.count == 3)
+    #expect(animation.starts.allSatisfy { $0.duration == ColumnViewController.scrollDuration })
+    #expect(ColumnViewController.scrollDuration == 0.25)
+    animation.finish(clip)
 
-    let visible = { clip.documentVisibleRect }
-    await settle {
-        visible().contains(second.frame) && visible().contains(third.frame)
-            && clip.bounds.origin.x < third.frame.minX - second.frame.width / 2
-    }
+    let visible = clip.documentVisibleRect
+    #expect(visible.contains(second.frame) && visible.contains(third.frame))
+    #expect(clip.bounds.origin.x < third.frame.minX - second.frame.width / 2)
 }
 
 @MainActor @Test func aMoveFromAFractionalOriginEndsOnTheTarget() async throws {
@@ -214,22 +238,19 @@ extension Fixture {
     #expect(clip.bounds.origin.x == 100)
 }
 
-@MainActor @Test func aJumpEndsAnAnimationStillRunning() async throws {
+@MainActor @Test func aJumpSetsTheOriginAtOnceAndStartsNoAnimation() async throws {
     let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)
     await fixture.openThreeColumns()
     let clip = try #require((fixture.controller.view as? NSScrollView)?.contentView)
+    let animation = ClipAnimation()
 
-    ColumnViewController.moveClip(clip, toX: 200, animated: true)
-    // Until the animation is under way.
-    await settle { clip.bounds.origin.x > 0 }
-    ColumnViewController.moveClip(clip, toX: 0, animated: false)
+    ColumnViewController.moveClip(clip, toX: 200, animated: true, animate: animation.start)
+    #expect(animation.starts.count == 1)
+    ColumnViewController.moveClip(clip, toX: 0, animated: false, animate: animation.start)
+
+    // Setting the origin directly is what ends an animation running in AppKit (0046).
+    #expect(animation.starts.count == 1)
     #expect(clip.bounds.origin.x == 0)
-
-    // The animation's frames stop with the jump: the origin stays put over several frames.
-    for _ in 0..<10 {
-        try await Task.sleep(for: .milliseconds(30))
-        #expect(clip.bounds.origin.x == 0)
-    }
 }
 
 @MainActor @Test func aFocusMoveDuringAGripDragJumps() async throws {
@@ -277,7 +298,7 @@ extension Fixture {
     let log = ScrollLog()
     let lister = StubLister(tree)
     let pane = Pane(
-        location: Location(path: "/r/docs/sub"),
+        location: Location(path: "/Volumes/r/docs/sub"),
         service: ListingService(lister: lister, rootVolumeName: { "Test Disk" }),
         systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true,
         viewMode: .column)
@@ -298,6 +319,42 @@ extension Fixture {
     #expect(log.requests.first?.animated == false)
 }
 
+/// A trail built at a folder below its volume's root ends at the right edge with that folder's
+/// column, the columns above it to its left, with no animation; so does one shown before the
+/// view had its width (0103-column-trail-from-the-root.md).
+@MainActor @Test func aNewTrailShowsItsFolderAtTheRightEdgeWithTheFoldersAboveToItsLeft()
+    async throws
+{
+    let log = ScrollLog()
+    let pane = Pane(
+        location: Location(path: "/Volumes/r/docs/sub"),
+        service: ListingService(lister: StubLister(tree), rootVolumeName: { "Test Disk" }),
+        systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true,
+        viewMode: .column)
+    let controller = ColumnViewController(
+        pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init())
+    controller.startMonitor = { _ in }
+    controller.reduceMotion = { false }
+    controller.animateScroll = { clip, x, animated in
+        log.requests.append((x, animated))
+        ColumnViewController.moveClip(clip, toX: x, animated: false)
+    }
+    pane.onChange = { [weak controller] in controller?.paneDidChange() }
+    controller.paneDidChange()
+
+    controller.view.frame = NSRect(x: 0, y: 0, width: 400, height: 400)
+    controller.view.layoutSubtreeIfNeeded()
+    let trail = try #require(pane.columnTrail)
+    await settle { trail.columns.allSatisfy { $0.pane.state.isLoaded } }
+
+    try #require(controller.columnControllers.count == 3)
+    let scrollView = try #require(controller.view as? NSScrollView)
+    let focused = controller.columnControllers[2].view.frame
+    #expect(trail.focusedIndex == 2)
+    #expect(scrollView.documentVisibleRect.maxX == focused.maxX)
+    #expect(log.requests.allSatisfy { !$0.animated })
+}
+
 @MainActor @Test func aNewTrailJumpsToItsFocus() async throws {
     let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)
     await fixture.openThreeColumns()
@@ -307,7 +364,7 @@ extension Fixture {
     fixture.controller.reduceMotion = { false }
 
     // A workspace or a Go to folder replaces every column.
-    fixture.pane.navigate(to: Location(path: "/r/other"))
+    fixture.pane.navigate(to: Location(path: "/Volumes/r/other"))
     await settle { fixture.trail.focused.pane.state.isLoaded }
 
     #expect(!log.requests.isEmpty)
@@ -411,7 +468,7 @@ extension Fixture {
     let start = clip.bounds.origin.x
     let origins = OriginLog(clip)
 
-    // `/r/docs`: sub, x.txt.
+    // `/Volumes/r/docs`: sub, x.txt.
     fixture.trail.focused.pane.moveSelection(by: 1)
 
     #expect(fixture.trail.columns.count == 2)
@@ -477,7 +534,7 @@ extension Fixture {
     let clipboard = CutState(clipboard: PasteboardFileClipboard(pasteboard: pasteboard))
     let fixture = await Fixture()
     fixture.controller.clipboard = clipboard
-    clipboard.cut([URL(fileURLWithPath: "/r/docs/x.txt", isDirectory: false)])
+    clipboard.cut([URL(fileURLWithPath: "/Volumes/r/docs/x.txt", isDirectory: false)])
 
     await fixture.select("docs", inColumn: 0)
 
@@ -537,7 +594,7 @@ extension Fixture {
 
 @MainActor @Test func eachColumnStartsAMonitorForItsOwnPaneOnce() async throws {
     let pane = Pane(
-        location: Location(path: "/r"), service: ListingService(lister: StubLister(tree)),
+        location: Location(path: "/Volumes/r"), service: ListingService(lister: StubLister(tree)),
         systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true,
         viewMode: .column)
     var started: [Pane] = []
@@ -552,7 +609,7 @@ extension Fixture {
     await settle { trail.columns.allSatisfy { $0.pane.state.isLoaded } }
 
     #expect(started.count == 2)
-    #expect(started.map(\.location.path) == ["/r", "/r/docs"])
+    #expect(started.map(\.location.path) == ["/Volumes/r", "/Volumes/r/docs"])
     #expect(zip(started, trail.columns).allSatisfy { $0 === $1.pane })
 }
 
@@ -584,7 +641,7 @@ extension Fixture {
     #expect(window.makeFirstResponder(fixture.tables[2]))
 
     #expect(fixture.trail.focusedIndex == 2)
-    #expect(fixture.pane.location == Location(path: "/r/docs/sub"))
+    #expect(fixture.pane.location == Location(path: "/Volumes/r/docs/sub"))
 }
 
 @MainActor @Test func aRealPressInAnotherColumnSelectsItsRowWhileTheButtonIsDown() async throws {
@@ -651,7 +708,7 @@ private func expectOnlyShownColumns(in controller: ColumnViewController) {
     await fixture.select("other", inColumn: 0)
     weak let otherController = fixture.controller.columnControllers[1]
     weak let otherPane = fixture.trail.columns[1].pane
-    #expect(fixture.trail.columns.map(\.pane.location.path) == ["/r", "/r/other"])
+    #expect(fixture.trail.columns.map(\.pane.location.path) == ["/Volumes/r", "/Volumes/r/other"])
     expectOnlyShownColumns(in: fixture.controller)
 
     await fixture.select("a.txt", inColumn: 0)
@@ -666,9 +723,9 @@ private func expectOnlyShownColumns(in controller: ColumnViewController) {
     #expect(otherController == nil && otherPane == nil)
 }
 
-/// `/r/docs/sub` open in three columns, where `/r` and `/r/docs` listed at once and
-/// `/r/docs/sub` stays in flight until the test releases it, so only the third column is
-/// loading. The column view's spinners wait on `clock`.
+/// `/Volumes/r/docs/sub` open in three columns, where `/Volumes/r` and `/Volumes/r/docs` listed at
+/// once and `/Volumes/r/docs/sub` stays in flight until the test releases it, so only the third
+/// column is loading. The column view's spinners wait on `clock`.
 @MainActor
 private struct LoadingThirdColumn {
     let lister = GatedLister(tree.mapValues { .batches([$0]) })
@@ -678,10 +735,10 @@ private struct LoadingThirdColumn {
     let trail: ColumnTrail
 
     init() async throws {
-        lister.release("/r")
-        lister.release("/r/docs")
+        lister.release("/Volumes/r")
+        lister.release("/Volumes/r/docs")
         pane = Pane(
-            location: Location(path: "/r"),
+            location: Location(path: "/Volumes/r"),
             service: ListingService(lister: lister, clock: clock, rootVolumeName: { "Test Disk" }),
             systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true,
             viewMode: .column)
@@ -721,7 +778,7 @@ private struct LoadingThirdColumn {
     #expect(spinners[1].isHidden)
     #expect(fixture.controller.columnControllers[2].view.frame.contains(spinners[2].frame))
 
-    fixture.lister.release("/r/docs/sub")
+    fixture.lister.release("/Volumes/r/docs/sub")
     await settle { fixture.trail.columns[2].pane.state.isLoaded }
     #expect(spinners.allSatisfy { $0.isHidden })
 }
@@ -737,7 +794,7 @@ private struct LoadingThirdColumn {
         fixture.controller.columnsView.accessibilityChildren() as? [NSView])
     #expect(!children.contains { $0 is NSProgressIndicator })
 
-    fixture.lister.release("/r/docs/sub")
+    fixture.lister.release("/Volumes/r/docs/sub")
     await settle { fixture.trail.columns[2].pane.state.isLoaded }
 }
 
@@ -773,7 +830,7 @@ private struct LoadingThirdColumn {
     let maker = GatedThumbnailMaker()
     let typeIcon = NSImage(size: NSSize(width: 1, height: 1))
     var folders = tree
-    folders["/r"] = [file("photo.jpg")]
+    folders["/Volumes/r"] = [file("photo.jpg")]
     let fixture = await Fixture(
         iconCache: TypeIconCache { _ in typeIcon }, folders: folders,
         thumbnails: ThumbnailService(maker: maker))
@@ -787,7 +844,7 @@ private struct LoadingThirdColumn {
     fixture.controller.view.layoutSubtreeIfNeeded()
     let square = view.iconView.frame
 
-    maker.answer("/r/photo.jpg", with: testThumbnail(pixels: 256))
+    maker.answer("/Volumes/r/photo.jpg", with: testThumbnail(pixels: 256))
 
     await settle { view.iconView.image !== typeIcon }
     #expect(view.iconView.image?.size == NSSize(width: 128, height: 128))
@@ -841,7 +898,7 @@ private struct LoadingThirdColumn {
     fixture.trail.moveRight()
 
     #expect(fixture.trail.focusedIndex == 2)
-    #expect(fixture.trail.preview?.location == Location(path: "/r/docs/sub/one.flac"))
+    #expect(fixture.trail.preview?.location == Location(path: "/Volumes/r/docs/sub/one.flac"))
     await settle { fixture.trail.shownPreview == fixture.trail.preview }
     let view = try #require(fixture.controller.previewView)
     let focused = fixture.controller.columnControllers[2].view.frame
@@ -853,21 +910,21 @@ private struct LoadingThirdColumn {
     #expect(fixture.trail.focusedIndex == 2)
 }
 
-/// `/r` holding a file with a long name that has no spaces to wrap at.
+/// `/Volumes/r` holding a file with a long name that has no spaces to wrap at.
 private let longName = String(repeating: "a", count: 120) + ".txt"
 
-/// A file in `/r` that has no size, as a socket has none.
+/// A file in `/Volumes/r` that has no size, as a socket has none.
 private let socket = DirectoryEntry(
     name: "socket", type: .other, size: nil, modified: testDate, isHidden: false,
     isDataless: false)
 
 @MainActor @Test func everyFieldStaysInsideThePreviewWidth() async throws {
     var folders = tree
-    folders["/r"] = [file(longName)]
+    folders["/Volumes/r"] = [file(longName)]
     let fixture = await Fixture(folders: folders)
     let tags = (1...12).map { "Project tag \($0)" }
     let reader = GatedItemInfoReader([
-        "/r/\(longName)": ItemInfo(created: testDate, lastOpened: testDate, tags: tags)
+        "/Volumes/r/\(longName)": ItemInfo(created: testDate, lastOpened: testDate, tags: tags)
     ])
     reader.releaseAll()
     fixture.pane.itemInfoReader = reader
@@ -895,7 +952,7 @@ private let socket = DirectoryEntry(
 
 @MainActor @Test func aPreviewTallerThanTheColumnScrollsVertically() async throws {
     var folders = tree
-    folders["/r"] = [file(longName)]
+    folders["/Volumes/r"] = [file(longName)]
     let fixture = await Fixture(folders: folders)
     await fixture.select(longName, inColumn: 0)
     let view = try #require(fixture.controller.previewView)
@@ -915,7 +972,7 @@ private let socket = DirectoryEntry(
 /// As Finder shows a socket: its kind alone under its name.
 @MainActor @Test func aFileWithoutASizeShowsOnlyItsKind() async throws {
     var folders = tree
-    folders["/r"] = [file("a.txt"), socket]
+    folders["/Volumes/r"] = [file("a.txt"), socket]
     let fixture = await Fixture(folders: folders)
 
     await fixture.select("socket", inColumn: 0)
@@ -951,11 +1008,11 @@ private let longFolder = "a-very-long-folder-name-that-cannot-fit-in-a-column-at
 
 private let chevronTree: [String: [DirectoryEntry]] = [
     "/": [folder("r")],
-    "/r": [
+    "/Volumes/r": [
         entry("App.app", .package), file("a.txt"), folder("docs"),
         entry("link", .symbolicLink), entry(longFolder, .directory),
     ],
-    "/r/docs": [],
+    "/Volumes/r/docs": [],
 ]
 
 @MainActor @Test func onlyFolderRowsShowTheChevron() async throws {
@@ -1026,7 +1083,9 @@ private let chevronTree: [String: [DirectoryEntry]] = [
     let cloud = DirectoryEntry(
         name: "cloud", type: .directory, size: nil, modified: testDate, isHidden: false,
         isDataless: true)
-    let fixture = await Fixture(folders: ["/": [folder("r")], "/r": [cloud], "/r/cloud": []])
+    let fixture = await Fixture(folders: [
+        "/": [folder("r")], "/Volumes/r": [cloud], "/Volumes/r/cloud": [],
+    ])
     let cell = try nameCell(fixture.tables[0], row: 0)
     let mark = try chevron(cell)
     let badge = try #require(
@@ -1047,13 +1106,13 @@ private let chevronTree: [String: [DirectoryEntry]] = [
             isDataless: true)
     }
     let fixture = await Fixture(folders: [
-        "/": [folder("r")], "/r": [dataless("a", .directory), file("b")],
+        "/": [folder("r")], "/Volumes/r": [dataless("a", .directory), file("b")],
     ])
     let table = fixture.tables[0]
     let before = try (0..<2).map { try nameCell(table, row: $0) }
     #expect(try !chevron(before[0]).isHidden && chevron(before[1]).isHidden)
 
-    fixture.lister.set("/r", to: [dataless("a", .regular), dataless("b", .directory)])
+    fixture.lister.set("/Volumes/r", to: [dataless("a", .regular), dataless("b", .directory)])
     fixture.pane.reload()
     await settle { fixture.trail.columns[0].pane.state.listing?[0].type == .regular }
     fixture.controller.view.layoutSubtreeIfNeeded()
@@ -1116,7 +1175,7 @@ private let chevronTree: [String: [DirectoryEntry]] = [
         name: "cloud-" + longFolder, type: .directory, size: nil, modified: testDate,
         isHidden: false, isDataless: true)
     var folders = chevronTree
-    folders["/r", default: []].append(cloud)
+    folders["/Volumes/r", default: []].append(cloud)
     let fixture = await Fixture(folders: folders)
     let column = try #require(fixture.controller.columnControllers[0].view as? NSScrollView)
     let table = fixture.tables[0]
@@ -1216,12 +1275,12 @@ private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
     let created = testDate.addingTimeInterval(-86_400)
     let opened = testDate.addingTimeInterval(3_600)
     let reader = GatedItemInfoReader([
-        "/r/a.txt": ItemInfo(created: created, lastOpened: opened, tags: ["Red", "Work"])
+        "/Volumes/r/a.txt": ItemInfo(created: created, lastOpened: opened, tags: ["Red", "Work"])
     ])
     fixture.pane.itemInfoReader = reader
     fixture.pane.setPreviewWidth(Settings.columnWidths.upperBound)
     await fixture.select("a.txt", inColumn: 0, waitingForTheRead: false)
-    #expect(await reader.waitForCall("/r/a.txt"))
+    #expect(await reader.waitForCall("/Volumes/r/a.txt"))
     #expect(fixture.controller.previewView?.isHidden ?? true)
     fixture.holdClock.advance(by: ColumnTrail.previewHold)
     await settle { fixture.controller.previewView?.isHidden == false }
@@ -1262,10 +1321,11 @@ private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
     let cloud = DirectoryEntry(
         name: "cloud.txt", type: .regular, size: 9, modified: testDate, isHidden: false,
         isDataless: true)
-    folders["/r"] = [file("a.txt"), cloud]
+    folders["/Volumes/r"] = [file("a.txt"), cloud]
     let fixture = await Fixture(folders: folders)
     let reader = GatedItemInfoReader([
-        "/r/a.txt": nil, "/r/cloud.txt": ItemInfo(created: testDate, lastOpened: nil, tags: []),
+        "/Volumes/r/a.txt": nil,
+        "/Volumes/r/cloud.txt": ItemInfo(created: testDate, lastOpened: nil, tags: []),
     ])
     reader.releaseAll()
     fixture.pane.itemInfoReader = reader
@@ -1280,14 +1340,14 @@ private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
     await settle { view.createdField.stringValue == ColumnPreviewView.noDate }
     #expect(view.lastOpenedField.stringValue == ColumnPreviewView.noDate)
     #expect(view.tagsField.isHidden)
-    #expect(reader.calls.map(\.path) == ["/r/a.txt"])
+    #expect(reader.calls.map(\.path) == ["/Volumes/r/a.txt"])
 }
 
 /// Spotlight has no last-opened date for a file it hasn't seen opened; Finder shows "--".
 @MainActor @Test func aReadWithoutALastOpenedDateShowsDashes() async throws {
     let fixture = await Fixture()
     let reader = GatedItemInfoReader([
-        "/r/a.txt": ItemInfo(created: testDate, lastOpened: nil, tags: [])
+        "/Volumes/r/a.txt": ItemInfo(created: testDate, lastOpened: nil, tags: [])
     ])
     reader.releaseAll()
     fixture.pane.itemInfoReader = reader
@@ -1308,9 +1368,9 @@ private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
         created: testDate, lastOpened: testDate.addingTimeInterval(60), tags: ["Red"])
     let two = ItemInfo(created: testDate.addingTimeInterval(120), lastOpened: nil, tags: [])
     let reader = GatedItemInfoReader([
-        "/r/docs/sub/one.flac": one, "/r/docs/sub/two.flac": two,
+        "/Volumes/r/docs/sub/one.flac": one, "/Volumes/r/docs/sub/two.flac": two,
     ])
-    reader.release("/r/docs/sub/one.flac")
+    reader.release("/Volumes/r/docs/sub/one.flac")
     fixture.pane.itemInfoReader = reader
     await fixture.openThreeColumns()
     await fixture.select("one.flac", inColumn: 2)
@@ -1329,8 +1389,8 @@ private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
     }
 
     await fixture.select("two.flac", inColumn: 2, waitingForTheRead: false)
-    #expect(await reader.waitForCall("/r/docs/sub/two.flac"))
-    reader.release("/r/docs/sub/two.flac")
+    #expect(await reader.waitForCall("/Volumes/r/docs/sub/two.flac"))
+    reader.release("/Volumes/r/docs/sub/two.flac")
     await settle { view.nameField.stringValue == "two.flac" }
 
     let oneShown = [
@@ -1419,25 +1479,25 @@ private func aligned(_ view: NSView, in ancestor: NSView) -> NSRect {
             >= aligned(row.titleField, in: row).maxX + InformationRow.gap)
 }
 
-/// A pane at `/s` in column view whose folders each end in a state with no rows to show:
+/// A pane at `/Volumes/s` in column view whose folders each end in a state with no rows to show:
 /// `Mail` refuses with EPERM, as privacy protection does, `locked` with EACCES, `gone` with
 /// ENOENT, `stalled` never answers, `empty` holds nothing, and `full` holds a file. Loads and
 /// spinners wait on `clock`.
 @MainActor
 private struct StateColumns {
     let lister = GatedLister([
-        "/s": .batches([
+        "/Volumes/s": .batches([
             [
                 folder("Mail"), folder("locked"), folder("gone"), folder("stalled"),
                 folder("empty"), folder("full"),
             ]
         ]),
-        "/s/Mail": .failure(ListingError(path: "/s/Mail", code: EPERM)),
-        "/s/locked": .failure(ListingError(path: "/s/locked", code: EACCES)),
-        "/s/gone": .failure(ListingError(path: "/s/gone", code: ENOENT)),
-        "/s/stalled": .blockForever,
-        "/s/empty": .batches([[]]),
-        "/s/full": .batches([[file("f.txt")]]),
+        "/Volumes/s/Mail": .failure(ListingError(path: "/Volumes/s/Mail", code: EPERM)),
+        "/Volumes/s/locked": .failure(ListingError(path: "/Volumes/s/locked", code: EACCES)),
+        "/Volumes/s/gone": .failure(ListingError(path: "/Volumes/s/gone", code: ENOENT)),
+        "/Volumes/s/stalled": .blockForever,
+        "/Volumes/s/empty": .batches([[]]),
+        "/Volumes/s/full": .batches([[file("f.txt")]]),
     ])
     let clock = ManualClock()
     let pane: Pane
@@ -1447,7 +1507,7 @@ private struct StateColumns {
     init() async throws {
         lister.releaseAll()
         pane = Pane(
-            location: Location(path: "/s"),
+            location: Location(path: "/Volumes/s"),
             service: ListingService(lister: lister, clock: clock, rootVolumeName: { "Test Disk" }),
             systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true,
             viewMode: .column)
@@ -1512,11 +1572,11 @@ private struct StateColumns {
     let fixture = try await StateColumns()
 
     await fixture.open("locked")
-    #expect(fixture.message == ListingError(path: "/s/locked", code: EACCES).description)
+    #expect(fixture.message == ListingError(path: "/Volumes/s/locked", code: EACCES).description)
     #expect(!fixture.showsDenied)
 
     await fixture.open("gone")
-    #expect(fixture.message == PaneViewController.missingMessage("/s/gone"))
+    #expect(fixture.message == PaneViewController.missingMessage("/Volumes/s/gone"))
     fixture.controller.view.layoutSubtreeIfNeeded()
     let label = try #require(fixture.controller.messageLabel(forColumnAt: 1))
     let column = fixture.controller.columnControllers[1].view.frame
@@ -1532,7 +1592,7 @@ private struct StateColumns {
     let fixture = try await StateColumns()
     fixture.trail.columns[0].pane.select(
         Selection([ExactName("stalled")], cursor: ExactName("stalled")))
-    #expect(await fixture.lister.waitForCall("/s/stalled"))
+    #expect(await fixture.lister.waitForCall("/Volumes/s/stalled"))
     #expect(fixture.message == nil)
 
     fixture.clock.advance(by: LoadTimeouts.slow)
@@ -1645,7 +1705,7 @@ private let gripDrags: [[Double]] = [[-30.37, -60.81, -90.13], [-60.4, -20.77, 4
     async throws
 {
     var folders = tree
-    folders["/r/docs/sub"] = (0..<60).map { file("com.apple.LinkMetadata-\($0).db-wal") }
+    folders["/Volumes/r/docs/sub"] = (0..<60).map { file("com.apple.LinkMetadata-\($0).db-wal") }
     let fixture = await Fixture(width: 1000, folders: folders)
     await fixture.openThreeColumns()
     let window = NSWindow(
@@ -1800,10 +1860,10 @@ private let endlessName = String(repeating: "w", count: 300)
 
 private let fitTree: [String: [DirectoryEntry]] = [
     "/": [folder("r")],
-    "/r": [folder("docs"), file("a.txt")],
-    "/r/docs": [folder(wideName), folder("endless"), file("x.txt")],
-    "/r/docs/endless": [file(endlessName)],
-    "/r/docs/\(wideName)": [file("o.txt")],
+    "/Volumes/r": [folder("docs"), file("a.txt")],
+    "/Volumes/r/docs": [folder(wideName), folder("endless"), file("x.txt")],
+    "/Volumes/r/docs/endless": [file(endlessName)],
+    "/Volumes/r/docs/\(wideName)": [file("o.txt")],
 ]
 
 /// The width the name field of `name`'s row in `table` has, and the width its text needs.
@@ -1893,7 +1953,7 @@ private func fit(_ grip: ColumnGripView?, option: Bool = false, in fixture: Fixt
     await fixture.select("docs", inColumn: 0)
     await fixture.select(wideName, inColumn: 1)
     let grip = fixture.controller.grip(forColumnAt: 1)
-    let docs = Location(path: "/r/docs")
+    let docs = Location(path: "/Volumes/r/docs")
     try await fit(grip, in: fixture)
     let fitted = columnWidths(fixture)[1]
     #expect(fitted > 300)
@@ -2167,7 +2227,7 @@ private func hit(_ point: NSPoint, in fixture: Fixture) -> NSView? {
     grip.mouseUp(with: gripEvent(.leftMouseUp, x: 160))
 
     #expect(reports == 1)
-    #expect(fixture.pane.columnWidths.width(of: Location(path: "/r/docs")) == standard + 60)
+    #expect(fixture.pane.columnWidths.width(of: Location(path: "/Volumes/r/docs")) == standard + 60)
     #expect(columnWidths(fixture) == [standard, standard + 60, standard])
     try expectPacked(fixture)
 }
@@ -2177,8 +2237,8 @@ private func hit(_ point: NSPoint, in fixture: Fixture) -> NSView? {
     await fixture.openThreeColumns()
     await fixture.select("one.flac", inColumn: 2)
     var widths = ColumnWidths()
-    widths.set(300, of: Location(path: "/r"))
-    widths.set(150, of: Location(path: "/r/docs/sub"))
+    widths.set(300, of: Location(path: "/Volumes/r"))
+    widths.set(150, of: Location(path: "/Volumes/r/docs/sub"))
     widths.setPreview(420)
 
     fixture.pane.showColumnWidths(widths)
@@ -2241,7 +2301,7 @@ private func hit(_ point: NSPoint, in fixture: Fixture) -> NSView? {
 
 @MainActor @Test func aJumpCentersTheRowInItsColumn() async throws {
     let names = (0..<2_000).map { String(format: "e%04d", $0) }
-    let fixture = await Fixture(folders: ["/": [folder("r")], "/r": names.map { file($0) }])
+    let fixture = await Fixture(folders: ["/": [folder("r")], "/Volumes/r": names.map { file($0) }])
     let table = try #require(fixture.tables.first)
     fixture.controller.view.layoutSubtreeIfNeeded()
 

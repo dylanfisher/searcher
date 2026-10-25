@@ -57,14 +57,137 @@ public final class ColumnTrail {
     /// when it has none of those.
     private var thumbnailEntry: DirectoryEntry?
 
-    /// One column at `location` with `name` selected, sorted like `model`: the owner when the
-    /// trail starts from the list, the focused column of the trail it replaces otherwise.
+    /// The columns left of the one the trail was built at, whose loads wait for that column's
+    /// first update, so its load is asked first, and for the check of the trail's root, so a
+    /// column the check drops lists nothing; empty once they list.
+    private var waitingColumns: [Column] = []
+    /// The column the trail was built at, until its first update lands.
+    private weak var leadColumn: Column?
+    /// The read of the mount table that checks the trail starts at its volume's root, until it
+    /// lands.
+    private var rootCheck: Task<Void, Never>?
+
+    /// A focused column at `location` with `name` selected, and left of it a column for each
+    /// folder from the root of its volume down, each with the next folder selected
+    /// (`root(of:mountedVolumes:)`), all sorted like `model`: the owner when the trail starts
+    /// from the list, the focused column of the trail it replaces otherwise. The focused
+    /// column's load is asked first, and the others' once its first update lands and the root is
+    /// checked, or the focus moves to one of them. The root is taken from the path first and
+    /// checked against the mount table off the main thread; a volume mounted elsewhere moves it
+    /// (0103-column-trail-from-the-root.md).
     init(owner: Pane, at location: Location, selecting name: ExactName?, sortedLike model: Pane) {
         self.owner = owner
-        columns = [
-            makeColumn(
-                at: location, selecting: name, sortedLike: model, isFocused: owner.isFocused)
-        ]
+        let focused = makeColumn(
+            at: location, selecting: name, sortedLike: model, isFocused: owner.isFocused)
+        let root = Self.root(of: location, mountedVolumes: [])
+        let ancestors = makeAncestors(from: root, to: location, sortedLike: model)
+        columns = ancestors + [focused]
+        focusedIndex = ancestors.count
+        waitingColumns = ancestors
+        leadColumn = focused
+        let service = owner.service
+        rootCheck = Task { [weak self] in
+            let root = await service.trailRoot(of: location)
+            guard let self, !Task.isCancelled else { return }
+            self.rootCheck = nil
+            self.start(at: root)
+            self.listWaitingColumnsIfReady()
+        }
+    }
+
+    /// Returns once the trail has checked its root against the mount table.
+    func rootChecked() async {
+        await rootCheck?.value
+    }
+
+    /// The folder a trail for `location` starts at: the mount point of the volume holding it, by
+    /// the path's text, as Finder's column view starts at the volume. A folder on the startup
+    /// disk, firmlinked ones such as `/Users` too, starts at `/`. A volume Finder doesn't show,
+    /// mounted `MNT_DONTBROWSE`, isn't a root. A folder under `/Volumes/X` with no volume
+    /// mounted there, such as a share not mounted yet, starts at `/Volumes/X`, where it would be;
+    /// one under a `MNT_DONTBROWSE` volume there starts at `/`. Names compare without case, as
+    /// APFS compares them by default (`FileOperation.comparable`), and the root is spelled as
+    /// `location` spells it, so its columns are the path's own folders.
+    nonisolated static func root(of location: Location, mountedVolumes: [VolumeIdentity])
+        -> Location
+    {
+        let components = pathComponents(location.path)
+        let folded = components.map { FileOperation.comparable(String($0)) }
+        /// The number of components of `mountPoint` when `location` is it or inside it.
+        func depth(of mountPoint: String) -> Int? {
+            let mount = pathComponents(mountPoint).map { FileOperation.comparable(String($0)) }
+            return folded.starts(with: mount) ? mount.count : nil
+        }
+        /// `location`'s folder `count` components below `/`.
+        func prefix(_ count: Int) -> Location {
+            Location(path: "/" + components.prefix(count).joined(separator: "/"))
+        }
+        let holding = mountedVolumes.compactMap { volume in
+            depth(of: volume.mountPoint).map { (volume, $0) }
+        }
+        if let deepest = holding.filter({ $0.0.isBrowsable && $0.1 > 0 })
+            .max(by: { $0.1 < $1.1 })
+        {
+            return prefix(deepest.1)
+        }
+        let isInVolumes = components.count >= 2 && folded[0] == FileOperation.comparable("Volumes")
+        let hidden = holding.contains { !$0.0.isBrowsable && $0.1 >= 2 }
+        return isInVolumes && !hidden ? prefix(2) : prefix(0)
+    }
+
+    /// A column for each folder from `root` down to the parent of `location`, each with the next
+    /// folder selected and its load waiting; none when `root` isn't `location` or above it.
+    private func makeAncestors(from root: Location, to location: Location, sortedLike model: Pane)
+        -> [Column]
+    {
+        let chain = Array(location.ancestors.drop { $0 != root })
+        guard chain.count > 1 else { return [] }
+        return zip(chain, chain.dropFirst()).map { folder, next in
+            let pane = Pane(
+                waitingAt: folder, service: owner.service, systemActions: owner.systemActions,
+                settings: owner.settings, sortedBy: model.sortColumn,
+                ascending: model.sortAscending, selecting: ExactName(next.name))
+            let column = adopt(pane)
+            column.keepsNextColumnAt = pane.selectionVersion
+            return column
+        }
+    }
+
+    /// Starts the loads of `waitingColumns` once the lead column's first update has landed and the
+    /// root is checked.
+    private func listWaitingColumnsIfReady() {
+        guard leadColumn == nil, rootCheck == nil else { return }
+        listWaitingColumns()
+    }
+
+    /// Starts the loads of `waitingColumns`, in the order the trail shows them.
+    private func listWaitingColumns() {
+        let waiting = waitingColumns
+        waitingColumns = []
+        for column in waiting where columns.contains(where: { $0 === column }) {
+            column.pane.listIfWaiting()
+        }
+    }
+
+    /// Makes the trail start at `root`, as the mount table places its first column's folder: the
+    /// columns left of a root among them close, and a root above the first column adds a column
+    /// for each folder down to it. A trail no longer under `root`, its columns moved by a
+    /// selection, stays as it is.
+    private func start(at root: Location) {
+        guard let first = columns.first, first.pane.location != root else { return }
+        if let index = columns.firstIndex(where: { $0.pane.location == root }) {
+            if focusedIndex < index { focus(index) }
+            for column in columns[..<index] { column.close() }
+            columns.removeSubrange(..<index)
+            focusedIndex -= index
+        } else {
+            let added = makeAncestors(from: root, to: first.pane.location, sortedLike: first.pane)
+            guard !added.isEmpty else { return }
+            columns.insert(contentsOf: added, at: 0)
+            focusedIndex += added.count
+            waitingColumns += added
+        }
+        owner.trailDidChange()
     }
 
     /// → : moves into the column of the folder selected in the focused one, opening it at once
@@ -95,33 +218,27 @@ public final class ColumnTrail {
         owner.trailDidChange()
     }
 
-    /// ← and Cmd-↑: moves to the column on the left, keeping the columns to the right. Past the
-    /// first column it adds the parent folder's column on the left, with the folder selected.
-    /// Does nothing at `/`. A column waiting for the keys to pause gives up the wait, so the
-    /// folder selected in it opens no column until → or another selection.
+    /// ← and Cmd-↑: moves to the column on the left, keeping the columns to the right. A column
+    /// waiting for the keys to pause gives up the wait, so the folder selected in it opens no
+    /// column until → or another selection. Does nothing in the first column, the volume's root,
+    /// as in Finder (0103-column-trail-from-the-root.md). Columns whose first loads wait start
+    /// them, so the column it moves to lists its folder.
     public func moveLeft() {
+        guard focusedIndex > 0 else { return }
         focused.selectsFirstRowAt = nil
         focused.held?.wait?.cancel()
         focused.held?.wait = nil
-        if focusedIndex > 0 {
-            focus(focusedIndex - 1)
-        } else {
-            let first = columns[0].pane
-            guard let parent = first.location.parent else { return }
-            first.isFocused = false
-            let column = makeColumn(
-                at: parent, selecting: ExactName(first.location.name), sortedLike: first,
-                isFocused: owner.isFocused)
-            columns.insert(column, at: 0)
-            focusedIndex = 0
-        }
+        listWaitingColumns()
+        focus(focusedIndex - 1)
         owner.trailDidChange()
     }
 
-    /// Moves the keys to `column`, as a click in it does, without selecting or listing anything.
-    /// Does nothing when it already has them.
+    /// Moves the keys to `column`, as a click in it or on its folder in the path bar does,
+    /// without selecting anything. A column whose first load waits starts it; nothing else is
+    /// listed. Does nothing when it already has them.
     public func focus(_ column: Column) {
         guard let index = index(of: column.pane), index != focusedIndex else { return }
+        listWaitingColumns()
         focus(index)
         owner.trailDidChange()
     }
@@ -150,9 +267,13 @@ public final class ColumnTrail {
         moveRight(selectingFirstRow: false)
     }
 
-    /// Closes every column, and drops the preview, the read of its info and the making of its
-    /// thumbnail.
+    /// Closes every column, and drops the preview, the read of its info, the making of its
+    /// thumbnail and the check of the trail's root.
     func close() {
+        rootCheck?.cancel()
+        rootCheck = nil
+        waitingColumns = []
+        leadColumn = nil
         for column in columns { column.close() }
         columns = []
         setPreview(nil, in: nil)
@@ -178,6 +299,11 @@ public final class ColumnTrail {
             location: location, service: owner.service, systemActions: owner.systemActions,
             settings: owner.settings, sortedBy: model.sortColumn, ascending: model.sortAscending,
             isFocused: isFocused, selecting: name)
+        return adopt(pane)
+    }
+
+    /// `pane` as a column of this trail: in the owner's tab, reporting its changes here.
+    private func adopt(_ pane: Pane) -> Column {
         // A column added in a hidden tab waits behind visible panes' loads too.
         pane.isVisible = owner.isVisible
         let column = Column(pane: pane)
@@ -195,6 +321,14 @@ public final class ColumnTrail {
     private func columnDidChange(_ column: Column) {
         // A closed column can still report a change it was making.
         guard columns.contains(where: { $0 === column }) else { return }
+        if column === leadColumn {
+            switch column.pane.state {
+            case .loading: break
+            case .partial, .loaded, .cachedRefreshing, .slow, .offline, .denied, .failed:
+                leadColumn = nil
+                listWaitingColumnsIfReady()
+            }
+        }
         if selectFirstRowIfWanted(in: column) { return }
         if column.pane.selectionIsFromKeys,
             column.followedSelectionVersion != column.pane.selectionVersion
@@ -499,6 +633,15 @@ public final class ColumnTrail {
         }
         guard let index = columns.firstIndex(where: { $0 === column }) else { return false }
         let pane = column.pane
+        if column.keepsNextColumnAt == pane.selectionVersion, index + 1 < columns.count {
+            // Kept until rows that listed the next folder lose it, as a removal or a rename
+            // does; then the columns follow the selection as any column's do.
+            let isListed =
+                pane.state.listing?.row(named: columns[index + 1].pane.location.name) != nil
+            if isListed { column.listedNextFolder = true }
+            if isListed || !column.listedNextFolder { return false }
+        }
+        column.keepsNextColumnAt = nil
         guard let listing = pane.state.listing else { return false }
         let cursorRow = pane.selection.cursorRow(in: listing)
         if cursorRow == nil, !pane.state.showsCompleteListing { return false }
@@ -531,7 +674,14 @@ public final class ColumnTrail {
     private func truncate(after index: Int) {
         guard index + 1 < columns.count else { return }
         if focusedIndex > index { focus(index) }
-        for column in columns[(index + 1)...] { column.close() }
+        let closed = columns[(index + 1)...]
+        for column in closed { column.close() }
         columns.removeSubrange((index + 1)...)
+        // A selection in a column above, listed early by its monitor, can close the lead column
+        // before its first update: the columns waiting on it list without it.
+        if let lead = leadColumn, closed.contains(where: { $0 === lead }) {
+            leadColumn = nil
+            listWaitingColumnsIfReady()
+        }
     }
 }

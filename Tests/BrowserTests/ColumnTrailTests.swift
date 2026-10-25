@@ -16,7 +16,7 @@ private let tree: [String: [DirectoryEntry]] = [
     "/r/other": [file("o.txt")],
 ]
 
-/// A focused pane at `path` over `tree`, loaded, switched to column mode, with its first column
+/// A focused pane at `path` over `tree`, loaded, switched to column mode, with every column
 /// loaded.
 @MainActor
 private func columnPane(at path: String = "/r", selecting name: String? = nil) async
@@ -26,7 +26,7 @@ private func columnPane(at path: String = "/r", selecting name: String? = nil) a
     await settle { fixture.pane.state.isLoaded }
     if let name { fixture.select(name) }
     fixture.pane.setViewMode(.column)
-    await settle { trail(fixture.pane).focused.pane.state.isLoaded }
+    await settle { trail(fixture.pane).columns.allSatisfy { $0.pane.state.isLoaded } }
     return fixture
 }
 
@@ -63,31 +63,289 @@ private func press(_ chord: KeyChord, on pane: Pane) throws {
     let pane = fixture.pane
 
     #expect(pane.viewMode == .column)
-    #expect(paths(pane) == ["/r"])
-    #expect(trail(pane).focusedIndex == 0)
+    #expect(paths(pane) == ["/", "/r"])
+    #expect(trail(pane).focusedIndex == 1)
     #expect(trail(pane).focused.pane.selection.cursor == ExactName("a.txt"))
     #expect(pane.commandPane === trail(pane).focused.pane)
+}
+
+/// Every folder from the volume's root down to the pane's has a column, each with the next one
+/// selected, as Finder's column view has; the pane's own folder's column takes the keys.
+@MainActor @Test func switchingToColumnModeShowsAColumnForEveryFolderFromTheRoot() async {
+    let fixture = await columnPane(at: "/r/docs", selecting: "x.txt")
+    let pane = fixture.pane
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+
+    #expect(paths(pane) == ["/", "/r", "/r/docs"])
+    #expect(trail(pane).focusedIndex == 2)
+    #expect(pane.location == Location(path: "/r/docs"))
+    #expect(trail(pane).columns.map { $0.pane.selection.cursor?.name } == ["r", "docs", "x.txt"])
+    #expect(trail(pane).preview?.location == Location(path: "/r/docs/x.txt"))
+}
+
+/// The columns left of the pane's folder list only once its column's first rows land, so its
+/// load is the first one asked (0103-column-trail-from-the-root.md).
+@MainActor @Test func theFocusedFoldersLoadIsAskedBeforeTheFoldersAboveIt() async {
+    let fixture = PaneFixture(at: "/r/docs", folders: tree, held: true)
+    fixture.lister.release("/r/docs")
+    let pane = fixture.pane
+    await settle { pane.state.isLoaded }
+
+    pane.setViewMode(.column)
+
+    #expect(paths(pane) == ["/", "/r", "/r/docs"])
+    #expect(trail(pane).columns[2].pane.load != nil)
+    #expect(trail(pane).columns[0].pane.load == nil)
+    #expect(trail(pane).columns[1].pane.load == nil)
+    await settle { trail(pane).focused.pane.state.isLoaded }
+    #expect(await fixture.lister.waitForCall("/"))
+    #expect(await fixture.lister.waitForCall("/r"))
+    // The list's load, then the column's; the columns above ask theirs together.
+    let calls = fixture.lister.calls.map(\.path)
+    #expect(calls.prefix(2) == ["/r/docs", "/r/docs"])
+    #expect(Set(calls.dropFirst(2)) == ["/", "/r"])
+    fixture.lister.releaseAll()
+}
+
+/// ← to a column whose load waits for the focused one's rows lists it at once.
+@MainActor @Test func movingToAColumnWhoseLoadWaitsStartsIt() async throws {
+    let fixture = PaneFixture(at: "/r/docs", folders: tree, held: true)
+    fixture.lister.release("/r/docs")
+    let pane = fixture.pane
+    await settle { pane.state.isLoaded }
+    fixture.lister.release("/r")
+    fixture.lister.release("/")
+    pane.setViewMode(.column)
+
+    try press(KeyChord(.left), on: pane)
+
+    #expect(trail(pane).focusedIndex == 1)
+    #expect(trail(pane).columns[1].pane.load?.priority == .visible)
+    #expect(trail(pane).columns[0].pane.load != nil)
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+}
+
+/// A folder above the pane's that its parent's rows don't show, hidden or behind a link, keeps
+/// its column, and so does one whose parent can't be listed; another selection there drops it.
+@MainActor @Test func aFolderItsParentDoesntShowOrCantListKeepsItsColumn() async throws {
+    var outcomes = tree.mapValues { GatedLister.Outcome.batches([$0]) }
+    // `/r` lists no `secret`, as it leaves out a hidden folder, and `/` can't be read.
+    outcomes["/r/secret"] = .batches([[file("s.txt")]])
+    outcomes["/"] = .failure(ListingError(path: "/", code: EACCES))
+    let lister = GatedLister(outcomes)
+    lister.releaseAll()
+    let pane = Pane(
+        location: Location(path: "/r/secret"), service: ListingService(lister: lister),
+        systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true,
+        viewMode: .column)
+
+    await settle {
+        trail(pane).columns.count == 3 && trail(pane).columns[0].pane.state.error != nil
+            && trail(pane).columns[1].pane.state.isLoaded
+            && trail(pane).columns[2].pane.state.isLoaded
+    }
+    await drainMainQueue()
+
+    #expect(paths(pane) == ["/", "/r", "/r/secret"])
+    #expect(trail(pane).focusedIndex == 2)
+    let parent = trail(pane).columns[1].pane
+    #expect(parent.selection.rows(in: try #require(parent.state.listing)).isEmpty)
+
+    select("docs", in: trail(pane).columns[1])
+
+    #expect(paths(pane) == ["/", "/r", "/r/docs"])
+}
+
+/// A path bar click on a folder whose column the trail shows moves the keys there, keeping every
+/// column and selection, and is no step in the history; one above the trail's root navigates.
+@MainActor @Test func aPathBarClickOnAShownFolderFocusesItsColumn() async throws {
+    let fixture = await columnPane(at: "/r/docs", selecting: "sub")
+    let pane = fixture.pane
+    await settle { paths(pane) == ["/", "/r", "/r/docs", "/r/docs/sub"] }
+    try press(KeyChord(.right), on: pane)
+    #expect(trail(pane).focusedIndex == 3)
+    let columns = trail(pane).columns.map(\.pane)
+    let selections = columns.map(\.selection)
+    let listings = fixture.lister.calls.count
+
+    pane.showFolderAbove(Location(path: "/r"), comingFrom: "docs")
+
+    #expect(trail(pane).focusedIndex == 1)
+    #expect(pane.location == Location(path: "/r"))
+    #expect(trail(pane).columns.map(\.pane).elementsEqual(columns, by: ===))
+    #expect(trail(pane).columns.map(\.pane.selection) == selections)
+    #expect(!pane.canGoBack)
+    await drainMainQueue()
+    #expect(fixture.lister.calls.count == listings)
+}
+
+@MainActor @Test func aPathBarClickInTheListNavigatesSelectingTheFolderLeft() async throws {
+    let fixture = PaneFixture(at: "/r/docs", folders: tree)
+    let pane = fixture.pane
+    await settle { pane.state.isLoaded }
+
+    pane.showFolderAbove(Location(path: "/r"), comingFrom: "docs")
+
+    #expect(pane.location == Location(path: "/r"))
+    #expect(pane.selection.cursor == ExactName("docs"))
+    #expect(pane.canGoBack)
+}
+
+@MainActor @Test func theTrailStartsAtTheRootOfTheFoldersVolume() {
+    func root(_ path: String, _ volumes: [VolumeIdentity] = []) -> String {
+        ColumnTrail.root(of: Location(path: path), mountedVolumes: volumes).path
+    }
+    let startup = VolumeIdentity(device: "/dev/disk3s1", mountPoint: "/", kind: .local)
+    let data = VolumeIdentity(
+        device: "/dev/disk3s5", mountPoint: "/System/Volumes/Data", kind: .local,
+        isBrowsable: false)
+    let backup = VolumeIdentity(device: "/dev/disk5s1", mountPoint: "/Volumes/Backup", kind: .local)
+    let share = VolumeIdentity(
+        device: "//me@nas.invalid/s", mountPoint: "/Users/me/mnt/s", kind: .network)
+    let mounted = [startup, data, backup, share]
+
+    // Firmlinked folders, on the Data volume, show under `/`, as Finder shows them.
+    #expect(root("/Users/me/Documents", mounted) == "/")
+    #expect(root("/System/Volumes/Data/Users", mounted) == "/")
+    #expect(root("/Volumes/Backup/a/b", mounted) == "/Volumes/Backup")
+    #expect(root("/Volumes/Backup", mounted) == "/Volumes/Backup")
+    #expect(root("/Users/me/mnt/s/docs", mounted) == "/Users/me/mnt/s")
+    #expect(root("/Users/me/mnt", mounted) == "/")
+    #expect(root("/", mounted) == "/")
+    // Before the mount table is read, and for a volume not mounted now.
+    #expect(root("/Volumes/Gone/a") == "/Volumes/Gone")
+    #expect(root("/Volumes") == "/")
+    #expect(root("/Users/me/mnt/s/docs") == "/")
+    // Without case, as APFS compares names, spelled as the path spells it.
+    #expect(root("/volumes/backup/a", mounted) == "/volumes/backup")
+    #expect(root("/volumes/gone/a") == "/volumes/gone")
+    #expect(root("/users/ME/mnt/S/docs", mounted) == "/users/ME/mnt/S")
+    // A volume Finder doesn't show, mounted under `/Volumes`, roots its folders at `/`.
+    let hidden = VolumeIdentity(
+        device: "/dev/disk9s1", mountPoint: "/Volumes/h", kind: .local, isBrowsable: false)
+    #expect(root("/Volumes/h/a", [startup, hidden]) == "/")
+}
+
+/// The root the path gives is too deep when a volume Finder doesn't show is mounted there: the
+/// check adds the columns above it, each with the next folder selected, keeping the focus.
+@MainActor @Test func aRootCheckedHigherThanThePathsAddsTheColumnsAboveIt() async {
+    let hidden = VolumeIdentity(
+        device: "/dev/disk9s1", mountPoint: "/Volumes/h", kind: .local, isBrowsable: false)
+    let lister = GatedLister([
+        "/": .batches([[folder("Volumes")]]), "/Volumes": .batches([[folder("h")]]),
+        "/Volumes/h": .batches([[folder("docs")]]),
+        "/Volumes/h/docs": .batches([[file("x.txt")]]),
+    ])
+    lister.releaseAll()
+    let pane = Pane(
+        location: Location(path: "/Volumes/h/docs"),
+        service: ListingService(lister: lister, mountedVolumes: { [hidden] }),
+        systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true,
+        viewMode: .column)
+    #expect(paths(pane) == ["/Volumes/h", "/Volumes/h/docs"])
+
+    await trail(pane).rootChecked()
+
+    #expect(paths(pane) == ["/", "/Volumes", "/Volumes/h", "/Volumes/h/docs"])
+    #expect(trail(pane).focusedIndex == 3)
+    #expect(pane.location == Location(path: "/Volumes/h/docs"))
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+    #expect(
+        trail(pane).columns.map { $0.pane.selection.cursor?.name } == ["Volumes", "h", "docs", nil])
+}
+
+/// A column above, listed early by its monitor, can close the column the trail was built at
+/// with a selection before that column's first update: the columns still waiting list anyway.
+@MainActor @Test func theLeadColumnClosedBeforeItsFirstUpdateLetsTheColumnsAboveList() async {
+    let lister = GatedLister(tree.mapValues { .batches([$0]) })
+    for path in ["/", "/r", "/r/other"] { lister.release(path) }
+    let pane = Pane(
+        location: Location(path: "/r/docs"), service: ListingService(lister: lister),
+        systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true,
+        viewMode: .column)
+    await trail(pane).rootChecked()
+    #expect(await lister.waitForCall("/r/docs"))
+    let parent = trail(pane).columns[1].pane
+    #expect(trail(pane).columns[0].pane.load == nil)
+    parent.apply(.relist, at: parent.location)
+    await settle { parent.state.isLoaded }
+
+    select("other", in: trail(pane).columns[1])
+
+    #expect(paths(pane) == ["/", "/r", "/r/other"])
+    await settle { trail(pane).columns[0].pane.state.isLoaded }
+    lister.releaseAll()
+}
+
+/// The folder a column above keeps selected goes, removed or renamed: its column closes, as a
+/// removed folder's does in any column.
+@MainActor @Test func aRemovedOrRenamedFolderAColumnAboveKeepsClosesItsColumn() async {
+    for patches: [FolderChange.Patch] in [
+        [.remove(name: "docs")], [.remove(name: "docs"), .update(folder("papers"))],
+    ] {
+        // Any column: `docs` selected by a click.
+        let any = await columnPane()
+        select("docs", in: trail(any.pane).columns[1])
+        await settle { trail(any.pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+        let anyParent = trail(any.pane).columns[1].pane
+        anyParent.apply(.patches(patches), at: anyParent.location)
+        await settle { !anyParent.state.names.contains("docs") }
+        await drainMainQueue()
+        // The column the trail built above `/r/docs`.
+        let built = await columnPane(at: "/r/docs")
+        let parent = trail(built.pane).columns[1].pane
+
+        parent.apply(.patches(patches), at: parent.location)
+
+        await settle { !parent.state.names.contains("docs") }
+        await drainMainQueue()
+        #expect(paths(any.pane) == ["/", "/r"], "\(patches)")
+        #expect(paths(built.pane) == paths(any.pane), "\(patches)")
+        #expect(trail(built.pane).focusedIndex == 1, "\(patches)")
+    }
+}
+
+/// The root taken from the path is checked against the mount table off the main thread: a volume
+/// mounted below `/` outside `/Volumes` drops the columns above it.
+@MainActor @Test func aVolumeMountedOutsideVolumesStartsTheTrailAtItsMountPoint() async {
+    let share = VolumeIdentity(device: "//me@nas.invalid/r", mountPoint: "/r", kind: .network)
+    let lister = GatedLister(tree.mapValues { .batches([$0]) })
+    lister.releaseAll()
+    let pane = Pane(
+        location: Location(path: "/r/docs"),
+        service: ListingService(lister: lister, mountedVolumes: { [share] }),
+        systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true,
+        viewMode: .column)
+    var changes = 0
+    pane.onChange = { changes += 1 }
+
+    await settle { paths(pane) == ["/r", "/r/docs"] }
+
+    #expect(trail(pane).focusedIndex == 1)
+    #expect(pane.location == Location(path: "/r/docs"))
+    #expect(changes > 0)
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
 }
 
 @MainActor @Test func switchingToColumnModeWithAFolderSelectedShowsItInTheNextColumn() async {
     let fixture = await columnPane(selecting: "docs")
 
-    await settle { paths(fixture.pane) == ["/r", "/r/docs"] }
-    #expect(trail(fixture.pane).focusedIndex == 0)
+    await settle { paths(fixture.pane) == ["/", "/r", "/r/docs"] }
+    #expect(trail(fixture.pane).focusedIndex == 1)
 }
 
 @MainActor @Test func selectingAFolderAddsAColumnAndAFileAddsNone() async {
     let fixture = await columnPane()
-    let first = trail(fixture.pane).columns[0]
+    let first = trail(fixture.pane).columns[1]
 
     select("docs", in: first)
-    #expect(paths(fixture.pane) == ["/r", "/r/docs"])
-    await settle { trail(fixture.pane).columns[1].pane.state.isLoaded }
-    #expect(trail(fixture.pane).columns[1].pane.state.names == ["sub", "x.txt"])
+    #expect(paths(fixture.pane) == ["/", "/r", "/r/docs"])
+    await settle { trail(fixture.pane).columns[2].pane.state.isLoaded }
+    #expect(trail(fixture.pane).columns[2].pane.state.names == ["sub", "x.txt"])
 
     // A file opens no column: the folder's column goes, and the file's preview isn't one.
     select("a.txt", in: first)
-    #expect(paths(fixture.pane) == ["/r"])
+    #expect(paths(fixture.pane) == ["/", "/r"])
 }
 
 /// The lister answers for the file's path too, so a column wrongly made for it shows up in the
@@ -98,12 +356,12 @@ private func press(_ chord: KeyChord, on pane: Pane) throws {
     let fixture = PaneFixture(at: "/r", folders: folders)
     await settle { fixture.pane.state.isLoaded }
     fixture.pane.setViewMode(.column)
-    await settle { trail(fixture.pane).focused.pane.state.isLoaded }
+    await settle { trail(fixture.pane).columns.allSatisfy { $0.pane.state.isLoaded } }
 
-    select("a.txt", in: trail(fixture.pane).columns[0])
+    select("a.txt", in: trail(fixture.pane).columns[1])
     await drainMainQueue()
 
-    #expect(paths(fixture.pane) == ["/r"])
+    #expect(paths(fixture.pane) == ["/", "/r"])
 }
 
 /// A pane at `/p` in column mode over `/p`, holding a package `App.app` and a folder `docs`.
@@ -112,30 +370,31 @@ private func packageColumns() async -> PaneFixture {
     let fixture = PaneFixture(
         at: "/p",
         folders: [
-            "/p": [package("App.app"), folder("docs")], "/p/App.app": [folder("Contents")],
+            "/": [folder("p")], "/p": [package("App.app"), folder("docs")],
+            "/p/App.app": [folder("Contents")],
             "/p/App.app/Contents": [file("Info.plist")], "/p/docs": [file("x.txt")],
         ])
     await settle { fixture.pane.state.isLoaded }
     fixture.pane.setViewMode(.column)
-    await settle { trail(fixture.pane).focused.pane.state.isLoaded }
+    await settle { trail(fixture.pane).columns.allSatisfy { $0.pane.state.isLoaded } }
     return fixture
 }
 
 @MainActor @Test func selectingAPackageAddsNoColumnPreviewsItAndRightDoesNothing() async throws {
     let fixture = await packageColumns()
-    let first = trail(fixture.pane).columns[0]
+    let first = trail(fixture.pane).columns[1]
     select("docs", in: first)
-    #expect(paths(fixture.pane) == ["/p", "/p/docs"])
+    #expect(paths(fixture.pane) == ["/", "/p", "/p/docs"])
 
     select("App.app", in: first)
     await drainMainQueue()
-    #expect(paths(fixture.pane) == ["/p"])
+    #expect(paths(fixture.pane) == ["/", "/p"])
     #expect(trail(fixture.pane).preview?.location == Location(path: "/p/App.app"))
     #expect(trail(fixture.pane).preview?.entry == package("App.app"))
 
     try press(KeyChord(.right), on: fixture.pane)
-    #expect(paths(fixture.pane) == ["/p"])
-    #expect(trail(fixture.pane).focusedIndex == 0)
+    #expect(paths(fixture.pane) == ["/", "/p"])
+    #expect(trail(fixture.pane).focusedIndex == 1)
     #expect(fixture.actions.openedFiles.isEmpty)
 }
 
@@ -152,18 +411,18 @@ private func packageColumns() async -> PaneFixture {
     await settle { fixture.pane.state.isLoaded }
     fixture.pane.setViewMode(.column)
     let pane = fixture.pane
-    await settle { trail(pane).focused.pane.state.isLoaded }
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
     pane.columnOpenClock = clock
-    select("d00", in: trail(pane).columns[0])
-    #expect(paths(pane) == ["/m", "/m/d00"])
+    select("d00", in: trail(pane).columns[1])
+    #expect(paths(pane) == ["/", "/m", "/m/d00"])
 
     try press(KeyChord(.down, modifiers: .option), on: pane)
 
-    #expect(trail(pane).columns[0].pane.selection.cursor == ExactName("d10"))
-    #expect(paths(pane) == ["/m"])
+    #expect(trail(pane).columns[1].pane.selection.cursor == ExactName("d10"))
+    #expect(paths(pane) == ["/", "/m"])
     await settle { clock.waitingSleeps == 1 }
     clock.advance(by: ColumnTrail.openDelay)
-    await settle { paths(pane) == ["/m", "/m/d10"] }
+    await settle { paths(pane) == ["/", "/m", "/m/d10"] }
 }
 
 /// A package selected by keys waits for the pause, as a file does, then previews and still adds
@@ -175,18 +434,18 @@ private func packageColumns() async -> PaneFixture {
     let fixture = await packageColumns()
     fixture.pane.columnOpenClock = clock
     let pane = fixture.pane
-    select("docs", in: trail(pane).columns[0])
-    #expect(paths(pane) == ["/p", "/p/docs"])
+    select("docs", in: trail(pane).columns[1])
+    #expect(paths(pane) == ["/", "/p", "/p/docs"])
 
     try press(KeyChord(.up), on: pane)
 
-    #expect(trail(pane).columns[0].pane.selection.cursor == ExactName("App.app"))
-    #expect(paths(pane) == ["/p"])
+    #expect(trail(pane).columns[1].pane.selection.cursor == ExactName("App.app"))
+    #expect(paths(pane) == ["/", "/p"])
     #expect(trail(pane).preview == nil)
     await settle { clock.waitingSleeps == 1 }
     clock.advance(by: ColumnTrail.openDelay)
     await settle { trail(pane).preview?.location == Location(path: "/p/App.app") }
-    #expect(paths(pane) == ["/p"])
+    #expect(paths(pane) == ["/", "/p"])
 
     try press(KeyChord(.down), on: pane)
     try press(KeyChord(.up), on: pane)
@@ -194,73 +453,74 @@ private func packageColumns() async -> PaneFixture {
         AppCommands.bindings.first { $0.command == NavigationCommands.showPackageContents })
     binding.run(CommandContext(pane: pane.commandPane))
 
-    #expect(paths(pane) == ["/p", "/p/App.app"])
-    #expect(trail(pane).focusedIndex == 1)
+    #expect(paths(pane) == ["/", "/p", "/p/App.app"])
+    #expect(trail(pane).focusedIndex == 2)
     clock.advance(by: ColumnTrail.openDelay)
     // Finder selects nothing in the package, even once its rows land.
-    await settle { trail(pane).columns[1].pane.state.isLoaded }
+    await settle { trail(pane).columns[2].pane.state.isLoaded }
     for _ in 0..<3 { await drainMainQueue() }
-    #expect(paths(pane) == ["/p", "/p/App.app"])
-    #expect(trail(pane).columns[1].pane.selection.isEmpty)
+    #expect(paths(pane) == ["/", "/p", "/p/App.app"])
+    #expect(trail(pane).columns[2].pane.selection.isEmpty)
 }
 
 @MainActor @Test func showPackageContentsAddsThePackagesColumnAndMovesIntoItUntilAnotherSelection()
     async throws
 {
     let fixture = await packageColumns()
-    let first = trail(fixture.pane).columns[0]
+    let first = trail(fixture.pane).columns[1]
     select("App.app", in: first)
     let binding = try #require(
         AppCommands.bindings.first { $0.command == NavigationCommands.showPackageContents })
 
     binding.run(CommandContext(pane: fixture.pane.commandPane))
 
-    #expect(paths(fixture.pane) == ["/p", "/p/App.app"])
-    #expect(trail(fixture.pane).focusedIndex == 1)
+    #expect(paths(fixture.pane) == ["/", "/p", "/p/App.app"])
+    #expect(trail(fixture.pane).focusedIndex == 2)
     #expect(trail(fixture.pane).preview == nil)
-    await settle { trail(fixture.pane).columns[1].pane.state.isLoaded }
-    select("Contents", in: trail(fixture.pane).columns[1])
-    #expect(paths(fixture.pane) == ["/p", "/p/App.app", "/p/App.app/Contents"])
+    await settle { trail(fixture.pane).columns[2].pane.state.isLoaded }
+    select("Contents", in: trail(fixture.pane).columns[2])
+    #expect(paths(fixture.pane) == ["/", "/p", "/p/App.app", "/p/App.app/Contents"])
 
     // A change in the package's own column keeps the package's column while it stays selected.
     first.pane.reload()
     await settle { first.pane.state.isLoaded }
-    #expect(paths(fixture.pane).prefix(2) == ["/p", "/p/App.app"])
+    #expect(paths(fixture.pane).prefix(3) == ["/", "/p", "/p/App.app"])
 
     select("docs", in: first)
-    #expect(paths(fixture.pane) == ["/p", "/p/docs"])
+    #expect(paths(fixture.pane) == ["/", "/p", "/p/docs"])
     select("App.app", in: first)
-    #expect(paths(fixture.pane) == ["/p"])
+    #expect(paths(fixture.pane) == ["/", "/p"])
 }
 
 @MainActor @Test func selectingAFolderTruncatesTheColumnsToItsRight() async {
     let fixture = await columnPane()
-    let first = trail(fixture.pane).columns[0]
+    let first = trail(fixture.pane).columns[1]
     select("docs", in: first)
-    await settle { trail(fixture.pane).columns[1].pane.state.isLoaded }
-    select("sub", in: trail(fixture.pane).columns[1])
-    #expect(paths(fixture.pane) == ["/r", "/r/docs", "/r/docs/sub"])
+    await settle { trail(fixture.pane).columns[2].pane.state.isLoaded }
+    select("sub", in: trail(fixture.pane).columns[2])
+    #expect(paths(fixture.pane) == ["/", "/r", "/r/docs", "/r/docs/sub"])
 
     select("other", in: first)
 
-    #expect(paths(fixture.pane) == ["/r", "/r/other"])
-    await settle { trail(fixture.pane).columns[1].pane.state.isLoaded }
-    #expect(trail(fixture.pane).columns[1].pane.state.names == ["o.txt"])
+    #expect(paths(fixture.pane) == ["/", "/r", "/r/other"])
+    await settle { trail(fixture.pane).columns[2].pane.state.isLoaded }
+    #expect(trail(fixture.pane).columns[2].pane.state.names == ["o.txt"])
 }
 
 @MainActor @Test func truncatedColumnsCancelTheirLoadsAndReleaseTheirWatches() async {
     let fixture = PaneFixture(at: "/r", folders: tree, held: true)
+    fixture.lister.release("/")
     fixture.lister.release("/r")
     fixture.lister.release("/r/docs")
     await settle { fixture.pane.state.isLoaded }
     fixture.pane.setViewMode(.column)
-    await settle { trail(fixture.pane).focused.pane.state.isLoaded }
-    let first = trail(fixture.pane).columns[0]
+    await settle { trail(fixture.pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+    let first = trail(fixture.pane).columns[1]
     select("docs", in: first)
-    await settle { trail(fixture.pane).columns[1].pane.state.isLoaded }
-    select("sub", in: trail(fixture.pane).columns[1])
-    let docs = trail(fixture.pane).columns[1].pane
-    let sub = trail(fixture.pane).columns[2].pane
+    await settle { trail(fixture.pane).columns[2].pane.state.isLoaded }
+    select("sub", in: trail(fixture.pane).columns[2])
+    let docs = trail(fixture.pane).columns[2].pane
+    let sub = trail(fixture.pane).columns[3].pane
     let docsMonitor = StubMonitor()
     let subMonitor = StubMonitor()
     docs.monitor = docsMonitor
@@ -272,7 +532,7 @@ private func packageColumns() async -> PaneFixture {
     #expect(await fixture.lister.waitForFinished(4))
     await drainMainQueue()
 
-    #expect(paths(fixture.pane) == ["/r"])
+    #expect(paths(fixture.pane) == ["/", "/r"])
     #expect(docsMonitor.stopCount == 1)
     #expect(subMonitor.stopCount == 1)
     #expect(docs.monitor == nil && sub.monitor == nil)
@@ -289,22 +549,22 @@ private func packageColumns() async -> PaneFixture {
 @MainActor @Test func rightMovesIntoTheSelectedFolderAndLeftBackToItsColumn() async throws {
     let fixture = await columnPane()
     let pane = fixture.pane
-    select("docs", in: trail(pane).columns[0])
-    await settle { trail(pane).columns[1].pane.state.isLoaded }
+    select("docs", in: trail(pane).columns[1])
+    await settle { trail(pane).columns[2].pane.state.isLoaded }
 
     try press(KeyChord(.right), on: pane)
 
-    #expect(trail(pane).focusedIndex == 1)
+    #expect(trail(pane).focusedIndex == 2)
     #expect(pane.location == Location(path: "/r/docs"))
     // Moving into a column with nothing selected selects its first row.
     #expect(trail(pane).focused.pane.selection.cursor == ExactName("sub"))
-    #expect(paths(pane) == ["/r", "/r/docs", "/r/docs/sub"])
+    #expect(paths(pane) == ["/", "/r", "/r/docs", "/r/docs/sub"])
 
     try press(KeyChord(.left), on: pane)
 
-    #expect(trail(pane).focusedIndex == 0)
+    #expect(trail(pane).focusedIndex == 1)
     #expect(pane.location == Location(path: "/r"))
-    #expect(paths(pane) == ["/r", "/r/docs", "/r/docs/sub"])
+    #expect(paths(pane) == ["/", "/r", "/r/docs", "/r/docs/sub"])
 }
 
 @MainActor @Test func rightOnAFileDoesNothing() async throws {
@@ -312,33 +572,37 @@ private func packageColumns() async -> PaneFixture {
 
     try press(KeyChord(.right), on: fixture.pane)
 
-    #expect(trail(fixture.pane).focusedIndex == 0)
-    #expect(paths(fixture.pane) == ["/r"])
+    #expect(trail(fixture.pane).focusedIndex == 1)
+    #expect(paths(fixture.pane) == ["/", "/r"])
     #expect(trail(fixture.pane).preview?.location == Location(path: "/r/a.txt"))
 }
 
 @MainActor
 @Test(arguments: [KeyChord(.left), KeyChord(.up, modifiers: .command)])
-func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) async throws {
+func leftOrCommandUpMovesToTheParentsColumnAndDoesNothingAtTheRoot(chord: KeyChord) async throws {
     let fixture = await columnPane(at: "/r/docs")
     let pane = fixture.pane
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+    let columns = trail(pane).columns.map(\.pane)
+    var changes = 0
+    pane.onChange = { changes += 1 }
 
     try press(chord, on: pane)
 
-    #expect(paths(pane) == ["/r", "/r/docs"])
-    #expect(trail(pane).focusedIndex == 0)
+    #expect(trail(pane).focusedIndex == 1)
     #expect(pane.location == Location(path: "/r"))
     #expect(trail(pane).focused.pane.selection.cursor == ExactName("docs"))
-    // The column the parent selects is the one that was there, not a new one.
-    await settle { trail(pane).focused.pane.state.isLoaded }
-    #expect(paths(pane) == ["/r", "/r/docs"])
-
     try press(chord, on: pane)
-    try press(chord, on: pane)
-
-    // At `/` there is no parent to add.
-    #expect(paths(pane) == ["/", "/r", "/r/docs"])
     #expect(trail(pane).focusedIndex == 0)
+    #expect(changes == 2)
+
+    // The first column is the volume's root: there is nothing left of it, as in Finder.
+    try press(chord, on: pane)
+
+    #expect(trail(pane).focusedIndex == 0)
+    #expect(changes == 2)
+    #expect(trail(pane).columns.map(\.pane).elementsEqual(columns, by: ===))
+    #expect(paths(pane) == ["/", "/r", "/r/docs"])
 }
 
 /// `ListingService` starts a `.focused` load before every waiting normal one whose volume is
@@ -351,16 +615,17 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
         systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true)
     await settle { pane.state.isLoaded }
     pane.setViewMode(.column)
-    #expect(trail(pane).columns[0].pane.load?.priority == .focused)
-    await settle { trail(pane).focused.pane.state.isLoaded }
+    #expect(trail(pane).columns[2].pane.load?.priority == .focused)
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
 
-    // A column for a selected folder isn't focused; the parent column ← adds is.
-    select("sub", in: trail(pane).columns[0])
+    // A column for a selected folder isn't focused; a column ← moves to is, once it lists again.
+    select("sub", in: trail(pane).columns[2])
     try press(KeyChord(.left), on: pane)
+    trail(pane).focused.pane.reload()
 
-    #expect(paths(pane) == ["/r", "/r/docs", "/r/docs/sub"])
-    #expect(trail(pane).columns[2].pane.load?.priority == .visible)
-    #expect(trail(pane).columns[0].pane.load?.priority == .focused)
+    #expect(paths(pane) == ["/", "/r", "/r/docs", "/r/docs/sub"])
+    #expect(trail(pane).columns[3].pane.load?.priority == .visible)
+    #expect(trail(pane).columns[1].pane.load?.priority == .focused)
 }
 
 @MainActor @Test func anUnfocusedPanesColumnsLoadAtNormalPriority() async {
@@ -372,8 +637,8 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
 @MainActor @Test func switchingBackToListKeepsTheSelectedEntry() async throws {
     let fixture = await columnPane()
     let pane = fixture.pane
-    select("docs", in: trail(pane).columns[0])
-    await settle { trail(pane).columns[1].pane.state.isLoaded }
+    select("docs", in: trail(pane).columns[1])
+    await settle { trail(pane).columns[2].pane.state.isLoaded }
     try press(KeyChord(.right), on: pane)
     try press(KeyChord(.down), on: pane)
     #expect(trail(pane).focused.pane.selection.cursor == ExactName("x.txt"))
@@ -392,7 +657,7 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
 @MainActor @Test func switchingBackToListClosesEveryColumn() async throws {
     let fixture = await columnPane(selecting: "docs")
     let pane = fixture.pane
-    await settle { paths(pane).count == 2 }
+    await settle { paths(pane).count == 3 }
     let monitors = trail(pane).columns.map { column in
         let monitor = StubMonitor()
         column.pane.monitor = monitor
@@ -401,26 +666,26 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
 
     pane.setViewMode(.list)
 
-    #expect(monitors.map(\.stopCount) == [1, 1])
+    #expect(monitors.map(\.stopCount) == [1, 1, 1])
 }
 
 @MainActor @Test func rowKeysAndTypeToSelectActOnTheFocusedColumn() async throws {
     let fixture = await columnPane()
     let pane = fixture.pane
-    select("docs", in: trail(pane).columns[0])
-    await settle { trail(pane).columns[1].pane.state.isLoaded }
+    select("docs", in: trail(pane).columns[1])
+    await settle { trail(pane).columns[2].pane.state.isLoaded }
     try press(KeyChord(.right), on: pane)
 
     try press(KeyChord(.down), on: pane)
-    #expect(trail(pane).columns[1].pane.selection.cursor == ExactName("x.txt"))
-    #expect(trail(pane).columns[0].pane.selection.cursor == ExactName("docs"))
+    #expect(trail(pane).columns[2].pane.selection.cursor == ExactName("x.txt"))
+    #expect(trail(pane).columns[1].pane.selection.cursor == ExactName("docs"))
 
     let typed = SelectionCommands.selectFirstRow(
         startingWith: "su", in: CommandContext(pane: pane.commandPane))
     #expect(typed)
-    #expect(trail(pane).columns[1].pane.selection.cursor == ExactName("sub"))
+    #expect(trail(pane).columns[2].pane.selection.cursor == ExactName("sub"))
     // A key-made selection opens its column once the keys pause.
-    await settle { paths(pane) == ["/r", "/r/docs", "/r/docs/sub"] }
+    await settle { paths(pane) == ["/", "/r", "/r/docs", "/r/docs/sub"] }
 }
 
 @MainActor @Test func sortAndHiddenSettingsActOnTheFocusedColumn() async throws {
@@ -429,49 +694,49 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
     await settle { fixture.pane.state.isLoaded }
     let pane = fixture.pane
     pane.setViewMode(.column)
-    await settle { trail(pane).focused.pane.state.isLoaded }
-    select("docs", in: trail(pane).columns[0])
-    await settle { trail(pane).columns[1].pane.state.isLoaded }
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+    select("docs", in: trail(pane).columns[1])
+    await settle { trail(pane).columns[2].pane.state.isLoaded }
     try press(KeyChord(.right), on: pane)
 
     // Sort by Name again reverses the focused column only.
     try press(KeyChord("1", modifiers: [.control, .option, .command]), on: pane)
-    await settle { trail(pane).columns[1].pane.state.names == ["x.txt", "sub"] }
-    #expect(trail(pane).columns[0].pane.sortAscending)
+    await settle { trail(pane).columns[2].pane.state.names == ["x.txt", "sub"] }
+    #expect(trail(pane).columns[1].pane.sortAscending)
 
     try press(KeyChord(".", modifiers: [.command, .shift]), on: pane)
-    await settle { trail(pane).columns[1].pane.state.names == ["x.txt", "sub", ".hidden"] }
+    await settle { trail(pane).columns[2].pane.state.names == ["x.txt", "sub", ".hidden"] }
 }
 
 @MainActor @Test func aColumnFilterNarrowsThatColumnOnly() async {
     let fixture = await columnPane()
     let pane = fixture.pane
-    select("docs", in: trail(pane).columns[0])
-    await settle { trail(pane).columns[1].pane.state.isLoaded }
+    select("docs", in: trail(pane).columns[1])
+    await settle { trail(pane).columns[2].pane.state.isLoaded }
     pane.columnTrail?.moveRight()
 
     pane.commandPane.setFilter("x")
 
-    await settle { trail(pane).columns[1].pane.state.names == ["x.txt"] }
-    #expect(trail(pane).columns[0].pane.state.names == ["a.txt", "docs", "other"])
+    await settle { trail(pane).columns[2].pane.state.names == ["x.txt"] }
+    #expect(trail(pane).columns[1].pane.state.names == ["a.txt", "docs", "other"])
 }
 
 @MainActor @Test func backInColumnModeStartsTheTrailAtTheFolderLeft() async throws {
     let fixture = await columnPane()
     let pane = fixture.pane
-    select("docs", in: trail(pane).columns[0])
-    await settle { trail(pane).columns[1].pane.state.isLoaded }
+    select("docs", in: trail(pane).columns[1])
+    await settle { trail(pane).columns[2].pane.state.isLoaded }
     try press(KeyChord(.right), on: pane)
     // Moving between columns isn't a step in the history.
     #expect(!pane.commandPane.canGoBack)
 
     pane.navigate(to: Location(path: "/r/other"))
-    #expect(paths(pane) == ["/r/other"])
+    #expect(paths(pane) == ["/", "/r", "/r/other"])
     #expect(pane.commandPane.canGoBack)
 
     try press(KeyChord("[", modifiers: .command), on: pane)
 
-    #expect(paths(pane) == ["/r/docs"])
+    #expect(paths(pane) == ["/", "/r", "/r/docs"])
     #expect(pane.location == Location(path: "/r/docs"))
     #expect(trail(pane).focused.pane.selection.cursor == ExactName("sub"))
 }
@@ -479,12 +744,12 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
 @MainActor @Test func openOnAFolderInAColumnMovesIntoItsColumn() async throws {
     let fixture = await columnPane(selecting: "docs")
     let pane = fixture.pane
-    await settle { paths(pane).count == 2 && trail(pane).columns[1].pane.state.isLoaded }
+    await settle { paths(pane).count == 3 && trail(pane).columns[2].pane.state.isLoaded }
 
     try press(KeyChord(.down, modifiers: .command), on: pane)
 
-    #expect(trail(pane).focusedIndex == 1)
-    #expect(paths(pane) == ["/r", "/r/docs", "/r/docs/sub"])
+    #expect(trail(pane).focusedIndex == 2)
+    #expect(paths(pane) == ["/", "/r", "/r/docs", "/r/docs/sub"])
 }
 
 @MainActor @Test func aColumnWhoseLoadGoesSlowIsSlowAndKeepsTheTrail() async {
@@ -498,8 +763,8 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
         systemActions: StubSystemActions(), settings: untouchedSettings())
     await settle { pane.state.isLoaded }
     pane.setViewMode(.column)
-    await settle { trail(pane).focused.pane.state.isLoaded }
-    select("docs", in: trail(pane).columns[0])
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+    select("docs", in: trail(pane).columns[1])
     #expect(await lister.waitForCall("/r/docs"))
     var changes = 0
     pane.onChange = { changes += 1 }
@@ -509,10 +774,10 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
     try? await Task.sleep(for: .milliseconds(200))
     await drainMainQueue()
 
-    #expect(trail(pane).columns[1].pane.state.isSlow)
-    #expect(trail(pane).columns[1].pane.state.listing == nil)
-    #expect(paths(pane) == ["/r", "/r/docs"])
-    #expect(trail(pane).focusedIndex == 0)
+    #expect(trail(pane).columns[2].pane.state.isSlow)
+    #expect(trail(pane).columns[2].pane.state.listing == nil)
+    #expect(paths(pane) == ["/", "/r", "/r/docs"])
+    #expect(trail(pane).focusedIndex == 1)
     #expect(changes == 1)
 }
 
@@ -520,13 +785,13 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
     let fixture = await columnPane()
     let pane = fixture.pane
     pane.navigate(to: Location(path: "/r/other"))
-    await settle { trail(pane).focused.pane.state.isLoaded }
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
     try press(KeyChord("6", modifiers: [.control, .option, .command]), on: pane)
     #expect(trail(pane).focused.pane.sortColumn == .size)
 
     try press(KeyChord("[", modifiers: .command), on: pane)
 
-    #expect(paths(pane) == ["/r"])
+    #expect(paths(pane) == ["/", "/r"])
     #expect(trail(pane).focused.pane.sortColumn == .size)
     #expect(trail(pane).focused.pane.load?.column == .size)
 }
@@ -537,7 +802,7 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
     await settle { fixture.pane.state.isLoaded }
     let pane = fixture.pane
     pane.setViewMode(.column)
-    await settle { trail(pane).focused.pane.state.isLoaded }
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
     #expect(pane.state.listing == nil)
     let sorts = pane.sortCount
 
@@ -553,7 +818,8 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
     let settings = storedSettings(in: temp)
     settings.showHidden = true
     let fixture = PaneFixture(
-        at: "/r", folders: ["/r": [file("a"), file(".DS_Store"), file(".dot")]],
+        at: "/r",
+        folders: ["/": [folder("r")], "/r": [file("a"), file(".DS_Store"), file(".dot")]],
         settings: settings)
     await settle { fixture.pane.state.isLoaded }
     let pane = fixture.pane
@@ -574,7 +840,7 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
 
     pane.setViewMode(.column)
     fixture.lister.releaseAll()
-    await settle { trail(pane).focused.pane.state.isLoaded }
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
     #expect(await fixture.lister.waitForFinished(2))
     await drainMainQueue()
 
@@ -595,14 +861,14 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
 
 @MainActor @Test func aNavigationClosesEveryColumnItLeaves() async throws {
     let fixture = PaneFixture(at: "/r", folders: tree, held: true)
-    for path in ["/r", "/r/docs", "/r/other"] { fixture.lister.release(path) }
+    for path in ["/", "/r", "/r/docs", "/r/other"] { fixture.lister.release(path) }
     let pane = fixture.pane
     await settle { pane.state.isLoaded }
     pane.setViewMode(.column)
-    await settle { trail(pane).focused.pane.state.isLoaded }
-    select("docs", in: trail(pane).columns[0])
-    await settle { trail(pane).columns[1].pane.state.isLoaded }
-    select("sub", in: trail(pane).columns[1])
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+    select("docs", in: trail(pane).columns[1])
+    await settle { trail(pane).columns[2].pane.state.isLoaded }
+    select("sub", in: trail(pane).columns[2])
     #expect(await fixture.lister.waitForCall("/r/docs/sub"))
     let left = trail(pane).columns.map(\.pane)
     let monitors = left.map { column in
@@ -611,24 +877,24 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
         return monitor
     }
 
-    // A path bar click.
+    // A sidebar click.
     pane.navigate(to: Location(path: "/r/other"))
     fixture.lister.release("/r/docs/sub")
-    await settle { trail(pane).focused.pane.state.isLoaded }
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
     #expect(await fixture.lister.waitForFinished(5))
     await drainMainQueue()
 
-    #expect(paths(pane) == ["/r/other"])
-    #expect(monitors.map(\.stopCount) == [1, 1, 1])
+    #expect(paths(pane) == ["/", "/r", "/r/other"])
+    #expect(monitors.map(\.stopCount) == [1, 1, 1, 1])
     // The held load was cancelled, so its listing never reached the closed column.
-    #expect(left[2].state.isLoading)
+    #expect(left[3].state.isLoading)
 
     let other = StubMonitor()
     trail(pane).focused.pane.monitor = other
     try press(KeyChord("[", modifiers: .command), on: pane)
 
     #expect(other.stopCount == 1)
-    #expect(paths(pane) == ["/r"])
+    #expect(paths(pane) == ["/", "/r"])
 }
 
 @MainActor @Test func goToFolderInColumnModeStartsTheTrailAtTheFolder() async {
@@ -642,10 +908,10 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
     }
     await settle { finished }
 
-    #expect(paths(pane) == ["/r/docs"])
+    #expect(paths(pane) == ["/", "/r", "/r/docs"])
     #expect(pane.location == Location(path: "/r/docs"))
     #expect(pane.canGoBack)
-    await settle { trail(pane).focused.pane.state.isLoaded }
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
 }
 
 @MainActor @Test func openOnALinkToAFolderInAColumnStartsTheTrailAtTheLink() async throws {
@@ -659,12 +925,12 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
     let pane = fixture.pane
     await settle { pane.state.isLoaded }
     pane.setViewMode(.column)
-    await settle { trail(pane).focused.pane.state.isLoaded }
-    select("link", in: trail(pane).columns[0])
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+    select("link", in: trail(pane).columns[1])
 
     try press(KeyChord(.down, modifiers: .command), on: pane)
 
-    await settle { paths(pane) == ["/r/link"] }
+    await settle { paths(pane) == ["/", "/r", "/r/link"] }
     await settle { trail(pane).focused.pane.state.names == ["l.txt"] }
     #expect(fixture.actions.openedFiles.isEmpty)
 }
@@ -673,37 +939,41 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
     let fixture = await columnPane()
     let pane = fixture.pane
     pane.didGainFocus()
-    select("docs", in: trail(pane).columns[0])
-    await settle { trail(pane).columns[1].pane.state.isLoaded }
-    #expect(trail(pane).columns[1].pane.load?.priority == .visible)
+    select("docs", in: trail(pane).columns[1])
+    await settle { trail(pane).columns[2].pane.state.isLoaded }
+    #expect(trail(pane).columns[2].pane.load?.priority == .visible)
     try press(KeyChord(.right), on: pane)
     try press(KeyChord(.left), on: pane)
     try press(KeyChord(.right), on: pane)
     await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
 
+    trail(pane).columns[2].pane.reload()
     trail(pane).columns[1].pane.reload()
-    trail(pane).columns[0].pane.reload()
 
-    #expect(trail(pane).columns[1].pane.load?.priority == .focused)
-    #expect(trail(pane).columns[0].pane.load?.priority == .visible)
+    #expect(trail(pane).columns[2].pane.load?.priority == .focused)
+    #expect(trail(pane).columns[1].pane.load?.priority == .visible)
 }
 
 @MainActor @Test func aColumnGoesCachedRefreshingThenOfflineLikeAListPane() async {
-    let share = VolumeIdentity(device: "//me@nas.invalid/n", mountPoint: "/n", kind: .network)
+    let share = VolumeIdentity(
+        device: "//me@nas.invalid/n", mountPoint: "/Volumes/n", kind: .network)
     let listedAt = Date(timeIntervalSinceReferenceDate: 700_000_000)
     let cache = ListingCache(store: nil)
-    for (path, entries) in ["/n": [folder("docs"), file("a.txt")], "/n/docs": [file("x.txt")]] {
+    for (path, entries) in [
+        "/Volumes/n": [folder("docs"), file("a.txt")], "/Volumes/n/docs": [file("x.txt")],
+    ] {
         await cache.insert(
             ListingCache.Folder(entries: entries, listedAt: listedAt), at: path, on: share)
     }
     // The share stops answering: no read of it ever returns.
-    let lister = GatedLister(["/n": .blockForever, "/n/docs": .blockForever])
+    let lister = GatedLister(["/Volumes/n": .blockForever, "/Volumes/n/docs": .blockForever])
     lister.releaseAll()
     let clock = ManualClock()
     let service = ListingService(
         lister: lister, clock: clock, volumeOf: { _ in share }, cache: cache)
     let pane = Pane(
-        location: Location(path: "/n"), service: service, systemActions: StubSystemActions(),
+        location: Location(path: "/Volumes/n"), service: service,
+        systemActions: StubSystemActions(),
         settings: untouchedSettings(), isFocused: true)
     await settle { pane.state.isCachedRefreshing }
 
@@ -712,7 +982,7 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
     await settle { first.pane.state.isCachedRefreshing }
     #expect(first.pane.state.names == ["a.txt", "docs"])
     select("docs", in: first)
-    await settle { paths(pane) == ["/n", "/n/docs"] }
+    await settle { paths(pane) == ["/Volumes/n", "/Volumes/n/docs"] }
     let second = trail(pane).columns[1]
     await settle { second.pane.state.isCachedRefreshing }
     #expect(second.pane.state.names == ["x.txt"])
@@ -722,24 +992,26 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
     #expect(first.pane.state.names == ["a.txt", "docs"])
     #expect(first.pane.state.listedAt == listedAt)
     #expect(second.pane.state.names == ["x.txt"])
-    #expect(paths(pane) == ["/n", "/n/docs"])
+    #expect(paths(pane) == ["/Volumes/n", "/Volumes/n/docs"])
 }
 
 @MainActor @Test func cachedRowsThatLackTheSelectedFolderKeepTheColumnsToTheRight() async throws {
-    let share = VolumeIdentity(device: "//me@nas.invalid/n", mountPoint: "/n", kind: .network)
+    let share = VolumeIdentity(
+        device: "//me@nas.invalid/n", mountPoint: "/Volumes/n", kind: .network)
     let cache = ListingCache(store: nil)
     // Cached before docs was made, so the parent's cached rows don't have it.
     await cache.insert(
-        ListingCache.Folder(entries: [file("a.txt")], listedAt: testDate), at: "/n", on: share)
+        ListingCache.Folder(entries: [file("a.txt")], listedAt: testDate), at: "/Volumes/n",
+        on: share)
     let lister = GatedLister([
-        "/n": .blockForever, "/n/docs": .batches([[file("x.txt")]]),
+        "/Volumes/n": .blockForever, "/Volumes/n/docs": .batches([[file("x.txt")]]),
     ])
-    lister.release("/n/docs")
+    lister.release("/Volumes/n/docs")
     let clock = ManualClock()
     let service = ListingService(
         lister: lister, clock: clock, volumeOf: { _ in share }, cache: cache)
     let pane = Pane(
-        location: Location(path: "/n/docs"), service: service,
+        location: Location(path: "/Volumes/n/docs"), service: service,
         systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true)
     await settle { pane.state.isLoaded }
     pane.setViewMode(.column)
@@ -748,42 +1020,42 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
     try press(KeyChord(.left), on: pane)
     let parent = trail(pane).columns[0].pane
     await settle { parent.state.isCachedRefreshing }
-    #expect(paths(pane) == ["/n", "/n/docs"])
+    #expect(paths(pane) == ["/Volumes/n", "/Volumes/n/docs"])
 
     clock.advance(by: LoadTimeouts.slow)
     await settle { parent.state.isSlow }
-    #expect(paths(pane) == ["/n", "/n/docs"])
+    #expect(paths(pane) == ["/Volumes/n", "/Volumes/n/docs"])
 
     clock.advance(by: LoadTimeouts.giveUp - LoadTimeouts.slow)
     await settle { parent.state.isOffline }
-    #expect(paths(pane) == ["/n", "/n/docs"])
+    #expect(paths(pane) == ["/Volumes/n", "/Volumes/n/docs"])
 }
 
 @MainActor @Test func focusingAColumnMovesTheKeysThereWithoutChangingTheColumns() async throws {
     let fixture = await columnPane()
     let pane = fixture.pane
-    select("docs", in: trail(pane).columns[0])
-    await settle { trail(pane).columns[1].pane.state.isLoaded }
+    select("docs", in: trail(pane).columns[1])
+    await settle { trail(pane).columns[2].pane.state.isLoaded }
     var changes = 0
     pane.onChange = { changes += 1 }
 
-    trail(pane).focus(trail(pane).columns[1])
+    trail(pane).focus(trail(pane).columns[2])
 
-    #expect(trail(pane).focusedIndex == 1)
+    #expect(trail(pane).focusedIndex == 2)
     #expect(pane.location == Location(path: "/r/docs"))
-    #expect(pane.commandPane === trail(pane).columns[1].pane)
-    #expect(paths(pane) == ["/r", "/r/docs"])
-    #expect(trail(pane).columns[1].pane.selection.isEmpty)
+    #expect(pane.commandPane === trail(pane).columns[2].pane)
+    #expect(paths(pane) == ["/", "/r", "/r/docs"])
+    #expect(trail(pane).columns[2].pane.selection.isEmpty)
     #expect(changes == 1)
 
-    trail(pane).focus(trail(pane).columns[1])
+    trail(pane).focus(trail(pane).columns[2])
 
     #expect(changes == 1)
 }
 
 @MainActor @Test func oneSelectedFileInTheLastColumnIsPreviewedFromItsListing() async throws {
     let fixture = await columnPane()
-    let first = trail(fixture.pane).columns[0]
+    let first = trail(fixture.pane).columns[1]
     let calls = fixture.lister.calls.count
     #expect(trail(fixture.pane).preview == nil)
 
@@ -796,14 +1068,14 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
     #expect(preview.entry == file("a.txt"))
     #expect(preview.kind == listing.kind(atRow: row))
     // The preview is neither a column nor a pane, and reads nothing.
-    #expect(paths(fixture.pane) == ["/r"])
+    #expect(paths(fixture.pane) == ["/", "/r"])
     await drainMainQueue()
     #expect(fixture.lister.calls.count == calls)
 }
 
 @MainActor @Test func aFolderSeveralRowsOrNoneSelectedClearThePreview() async throws {
     let fixture = await columnPane()
-    let first = trail(fixture.pane).columns[0]
+    let first = trail(fixture.pane).columns[1]
     select("a.txt", in: first)
     #expect(trail(fixture.pane).preview != nil)
 
@@ -825,31 +1097,31 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
 @MainActor @Test func thePreviewFollowsTheLastColumnOnly() async throws {
     let fixture = await columnPane()
     let pane = fixture.pane
-    select("docs", in: trail(pane).columns[0])
-    await settle { trail(pane).columns[1].pane.state.isLoaded }
+    select("docs", in: trail(pane).columns[1])
+    await settle { trail(pane).columns[2].pane.state.isLoaded }
 
-    select("x.txt", in: trail(pane).columns[1])
+    select("x.txt", in: trail(pane).columns[2])
 
     #expect(trail(pane).preview?.location == Location(path: "/r/docs/x.txt"))
-    #expect(paths(pane) == ["/r", "/r/docs"])
+    #expect(paths(pane) == ["/", "/r", "/r/docs"])
 
     // Choosing another folder on the left drops the column the file was in, and its preview.
-    select("other", in: trail(pane).columns[0])
+    select("other", in: trail(pane).columns[1])
 
     #expect(trail(pane).preview == nil)
 }
 
 @MainActor @Test func aPatchedEntryUpdatesThePreviewAndARemovedOneClearsIt() async throws {
     let fixture = await columnPane()
-    let first = trail(fixture.pane).columns[0].pane
-    select("a.txt", in: trail(fixture.pane).columns[0])
+    let first = trail(fixture.pane).columns[1].pane
+    select("a.txt", in: trail(fixture.pane).columns[1])
 
     first.apply(.patches([.update(file("a.txt", size: 5))]), at: first.location)
     await settle { trail(fixture.pane).preview?.entry.size == 5 }
 
     first.apply(.patches([.remove(name: "a.txt")]), at: first.location)
     await settle { trail(fixture.pane).preview == nil }
-    #expect(paths(fixture.pane) == ["/r"])
+    #expect(paths(fixture.pane) == ["/", "/r"])
 }
 
 @MainActor @Test func closingTheTrailClearsThePreview() async throws {
@@ -876,15 +1148,15 @@ func leftOrCommandUpPastTheFirstColumnAddsItsParentOnTheLeft(chord: KeyChord) as
     let fixture = PaneFixture(at: "/r", folders: folders)
     await settle { fixture.pane.state.isLoaded }
     fixture.pane.setViewMode(.column)
-    await settle { trail(fixture.pane).focused.pane.state.isLoaded }
-    let first = trail(fixture.pane).columns[0]
+    await settle { trail(fixture.pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+    let first = trail(fixture.pane).columns[1]
 
     select("socket", in: first)
     #expect(trail(fixture.pane).preview?.location == Location(path: "/r/socket"))
 
     select("link", in: first)
     #expect(trail(fixture.pane).preview == nil)
-    #expect(paths(fixture.pane) == ["/r"])
+    #expect(paths(fixture.pane) == ["/", "/r"])
 }
 
 // MARK: - Opening a column once the keys pause
@@ -909,8 +1181,8 @@ private func keyedPane(clock: ManualClock) async -> PaneFixture {
     await settle { fixture.pane.state.isLoaded }
     fixture.pane.columnOpenClock = clock
     fixture.pane.setViewMode(.column)
-    await settle { trail(fixture.pane).focused.pane.state.isLoaded }
-    select("f0", in: trail(fixture.pane).columns[0])
+    await settle { trail(fixture.pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+    select("f0", in: trail(fixture.pane).columns[1])
     await settle { trail(fixture.pane).columns.last?.pane.state.isLoaded == true }
     return fixture
 }
@@ -925,7 +1197,7 @@ private func drainWaits() async {
     let clock = ManualClock()
     let fixture = await keyedPane(clock: clock)
     let pane = fixture.pane
-    #expect(paths(pane) == ["/k", "/k/f0"])
+    #expect(paths(pane) == ["/", "/k", "/k/f0"])
 
     for _ in 0..<10 {
         try press(KeyChord(.down), on: pane)
@@ -933,14 +1205,14 @@ private func drainWaits() async {
     }
 
     // The selection moves at once and the stale column goes; the new one waits.
-    #expect(trail(pane).columns[0].pane.selection.cursor == ExactName("f10"))
-    #expect(paths(pane) == ["/k"])
+    #expect(trail(pane).columns[1].pane.selection.cursor == ExactName("f10"))
+    #expect(paths(pane) == ["/", "/k"])
     await settle { clock.waitingSleeps == 1 }
 
     clock.advance(by: .milliseconds(1))
 
-    await settle { paths(pane) == ["/k", "/k/f10"] }
-    #expect(trail(pane).focusedIndex == 0)
+    await settle { paths(pane) == ["/", "/k", "/k/f10"] }
+    #expect(trail(pane).focusedIndex == 1)
     let skipped = (1...9).map { "/k/f\($0)" }
     #expect(!fixture.lister.calls.contains { skipped.contains($0.path) })
 }
@@ -952,8 +1224,8 @@ private func drainWaits() async {
 
     try press(KeyChord(.down, modifiers: [.command, .option]), on: pane)
 
-    #expect(trail(pane).columns[0].pane.selection.cursor == ExactName("z.txt"))
-    #expect(paths(pane) == ["/k"])
+    #expect(trail(pane).columns[1].pane.selection.cursor == ExactName("z.txt"))
+    #expect(paths(pane) == ["/", "/k"])
     await settle { clock.waitingSleeps == 1 }
     clock.advance(by: ColumnTrail.openDelay)
     await drainWaits()
@@ -964,7 +1236,7 @@ private func drainWaits() async {
 @MainActor @Test func aClickOpensTheFoldersColumnAtOnce() async throws {
     let clock = ManualClock()
     let fixture = await keyedPane(clock: clock)
-    let first = trail(fixture.pane).columns[0].pane
+    let first = trail(fixture.pane).columns[1].pane
     let listing = try #require(first.state.listing)
     let row = try #require(listing.row(named: "f3"))
 
@@ -972,7 +1244,7 @@ private func drainWaits() async {
         rows: IndexSet(integer: row), cursor: ExactName("f3"), anchor: ExactName("f3"),
         as: .press(1))
 
-    #expect(paths(fixture.pane) == ["/k", "/k/f3"])
+    #expect(paths(fixture.pane) == ["/", "/k", "/k/f3"])
     await drainWaits()
     #expect(clock.waitingSleeps == 0)
 }
@@ -982,12 +1254,12 @@ private func drainWaits() async {
     let fixture = await keyedPane(clock: clock)
     let pane = fixture.pane
     try press(KeyChord(.down), on: pane)
-    #expect(paths(pane) == ["/k"])
+    #expect(paths(pane) == ["/", "/k"])
 
     try press(KeyChord(.right), on: pane)
 
-    #expect(paths(pane) == ["/k", "/k/f1"])
-    #expect(trail(pane).focusedIndex == 1)
+    #expect(paths(pane) == ["/", "/k", "/k/f1"])
+    #expect(trail(pane).focusedIndex == 2)
     await drainWaits()
     #expect(clock.waitingSleeps == 0)
 }
@@ -1038,11 +1310,11 @@ private func drainWaits() async {
     let pane = fixture.pane
     try press(KeyChord(.right), on: pane)
     // → selects the first row, the folder `in`, and opens its column at once.
-    #expect(paths(pane) == ["/k", "/k/f0", "/k/f0/in"])
+    #expect(paths(pane) == ["/", "/k", "/k/f0", "/k/f0/in"])
 
     try press(KeyChord(.down), on: pane)
 
-    #expect(paths(pane) == ["/k", "/k/f0"])
+    #expect(paths(pane) == ["/", "/k", "/k/f0"])
     #expect(trail(pane).preview == nil)
     clock.advance(by: ColumnTrail.openDelay)
     await settle { trail(pane).preview?.location == Location(path: "/k/f0/m.txt") }
@@ -1062,12 +1334,12 @@ private func drainWaits() async {
     let typed = SelectionCommands.selectFirstRow(
         startingWith: "f5", in: CommandContext(pane: pane.commandPane))
     #expect(typed)
-    #expect(paths(pane) == ["/k"])
+    #expect(paths(pane) == ["/", "/k"])
     clock.advance(by: ColumnTrail.openDelay)
-    await settle { paths(pane) == ["/k", "/k/f5"] }
+    await settle { paths(pane) == ["/", "/k", "/k/f5"] }
 
     try press(KeyChord(.end), on: pane)
-    #expect(paths(pane) == ["/k"])
+    #expect(paths(pane) == ["/", "/k"])
     clock.advance(by: ColumnTrail.openDelay)
     await settle { trail(pane).preview?.location == Location(path: "/k/z.txt") }
 }
@@ -1105,12 +1377,12 @@ private func click(_ name: String, in pane: Pane) throws {
     try press(KeyChord(.down), on: pane)
     await settle { clock.waitingSleeps == 1 }
 
-    try click("f3", in: trail(pane).columns[0].pane)
-    #expect(paths(pane) == ["/k", "/k/f3"])
+    try click("f3", in: trail(pane).columns[1].pane)
+    #expect(paths(pane) == ["/", "/k", "/k/f3"])
     clock.advance(by: ColumnTrail.openDelay)
     await drainWaits()
 
-    #expect(paths(pane) == ["/k", "/k/f3"])
+    #expect(paths(pane) == ["/", "/k", "/k/f3"])
     #expect(clock.waitingSleeps == 0)
     #expect(!fixture.lister.calls.contains { $0.path == "/k/f1" })
 }
@@ -1121,14 +1393,14 @@ private func click(_ name: String, in pane: Pane) throws {
     let clock = ManualClock()
     let fixture = await keyedPane(clock: clock)
     let pane = fixture.pane
-    let first = trail(pane).columns[0].pane
+    let first = trail(pane).columns[1].pane
     try press(KeyChord(.down), on: pane)
     await settle { clock.waitingSleeps == 1 }
 
     // A rename arrives as the old name's removal and the new name's update.
     first.apply(.patches([.remove(name: "f1"), .update(folder("g1"))]), at: first.location)
     await settle { !first.state.names.contains("f1") }
-    #expect(paths(pane) == ["/k"])
+    #expect(paths(pane) == ["/", "/k"])
     clock.advance(by: ColumnTrail.openDelay)
     await drainWaits()
 
@@ -1137,9 +1409,9 @@ private func click(_ name: String, in pane: Pane) throws {
     if let row = first.selection.cursorRow(in: listing), listing[row].type == .directory,
         first.selection.rows(in: listing) == IndexSet(integer: row)
     {
-        await settle { paths(pane) == ["/k", "/k/\(listing[row].name)"] }
+        await settle { paths(pane) == ["/", "/k", "/k/\(listing[row].name)"] }
     } else {
-        #expect(paths(pane) == ["/k"])
+        #expect(paths(pane) == ["/", "/k"])
     }
     #expect(!fixture.lister.calls.contains { $0.path == "/k/f1" })
 }
@@ -1155,7 +1427,7 @@ private func click(_ name: String, in pane: Pane) throws {
     try press(KeyChord(.right), on: pane)
 
     #expect(trail(pane).preview?.location == Location(path: "/k/f0/m.txt"))
-    #expect(trail(pane).focusedIndex == 1)
+    #expect(trail(pane).focusedIndex == 2)
     await drainWaits()
     #expect(clock.waitingSleeps == 0)
 }
@@ -1166,14 +1438,14 @@ private func click(_ name: String, in pane: Pane) throws {
     let clock = ManualClock()
     let fixture = await keyedPane(clock: clock)
     let pane = fixture.pane
-    let first = trail(pane).columns[0].pane
+    let first = trail(pane).columns[1].pane
     try press(KeyChord(.end), on: pane)
     clock.advance(by: ColumnTrail.openDelay)
     await settle { trail(pane).preview?.location == Location(path: "/k/z.txt") }
 
     first.apply(.patches([.update(folder("z.txt"))]), at: first.location)
 
-    await settle { paths(pane) == ["/k", "/k/z.txt"] }
+    await settle { paths(pane) == ["/", "/k", "/k/z.txt"] }
     #expect(clock.waitingSleeps == 0)
 }
 
@@ -1191,7 +1463,7 @@ private func info(_ seconds: Double, tags: [String] = []) -> ItemInfo {
     let reader = GatedItemInfoReader(["/r/a.txt": info(1, tags: ["Red"])])
     fixture.pane.itemInfoReader = reader
 
-    select("a.txt", in: trail(fixture.pane).columns[0])
+    select("a.txt", in: trail(fixture.pane).columns[1])
 
     #expect(trail(fixture.pane).preview?.info == .reading)
     #expect(await reader.waitForCall("/r/a.txt"))
@@ -1208,8 +1480,8 @@ private func info(_ seconds: Double, tags: [String] = []) -> ItemInfo {
     let reader = GatedItemInfoReader(["/r/a.txt": info(1)])
     reader.releaseAll()
     fixture.pane.itemInfoReader = reader
-    let first = trail(fixture.pane).columns[0].pane
-    select("a.txt", in: trail(fixture.pane).columns[0])
+    let first = trail(fixture.pane).columns[1].pane
+    select("a.txt", in: trail(fixture.pane).columns[1])
     await settle { trail(fixture.pane).preview?.info == .read(info(1)) }
 
     first.apply(.patches([.update(file("a.txt", size: 5))]), at: first.location)
@@ -1228,8 +1500,8 @@ private func info(_ seconds: Double, tags: [String] = []) -> ItemInfo {
     let reader = GatedItemInfoReader(["/r/a.txt": nil])
     reader.releaseAll()
     fixture.pane.itemInfoReader = reader
-    let first = trail(fixture.pane).columns[0].pane
-    select("a.txt", in: trail(fixture.pane).columns[0])
+    let first = trail(fixture.pane).columns[1].pane
+    select("a.txt", in: trail(fixture.pane).columns[1])
     await settle { trail(fixture.pane).preview?.info == .failed }
 
     first.apply(.patches([.update(file("b.txt"))]), at: first.location)
@@ -1251,8 +1523,8 @@ private func info(_ seconds: Double, tags: [String] = []) -> ItemInfo {
     let reader = GatedItemInfoReader(["/r/a.txt": info(1)])
     reader.releaseAll()
     fixture.pane.itemInfoReader = reader
-    let first = trail(fixture.pane).columns[0].pane
-    select("a.txt", in: trail(fixture.pane).columns[0])
+    let first = trail(fixture.pane).columns[1].pane
+    select("a.txt", in: trail(fixture.pane).columns[1])
     await settle { trail(fixture.pane).preview?.info == .read(info(1)) }
 
     first.apply(.patches([.update(file("b.txt"))]), at: first.location)
@@ -1269,12 +1541,12 @@ private func info(_ seconds: Double, tags: [String] = []) -> ItemInfo {
     let fixture = PaneFixture(at: "/r", folders: folders)
     await settle { fixture.pane.state.isLoaded }
     fixture.pane.setViewMode(.column)
-    await settle { trail(fixture.pane).focused.pane.state.isLoaded }
+    await settle { trail(fixture.pane).columns.allSatisfy { $0.pane.state.isLoaded } }
     let reader = GatedItemInfoReader(["/r/App.app": info(3)])
     reader.releaseAll()
     fixture.pane.itemInfoReader = reader
 
-    select("App.app", in: trail(fixture.pane).columns[0])
+    select("App.app", in: trail(fixture.pane).columns[1])
 
     await settle { trail(fixture.pane).preview?.info == .read(info(3)) }
 }
@@ -1285,7 +1557,7 @@ private func info(_ seconds: Double, tags: [String] = []) -> ItemInfo {
     reader.releaseAll()
     fixture.pane.itemInfoReader = reader
 
-    select("a.txt", in: trail(fixture.pane).columns[0])
+    select("a.txt", in: trail(fixture.pane).columns[1])
 
     await settle { trail(fixture.pane).preview?.info == .failed }
 }
@@ -1314,7 +1586,7 @@ private func info(_ seconds: Double, tags: [String] = []) -> ItemInfo {
     let pane = fixture.pane
     let reader = GatedItemInfoReader(["/k/f0/m.txt": info(1), "/k/f0/n.txt": info(2)])
     pane.itemInfoReader = reader
-    let column = trail(pane).columns[1]
+    let column = trail(pane).columns[2]
     try click("m.txt", in: column.pane)
     #expect(await reader.waitForCall("/k/f0/m.txt"))
 
@@ -1340,7 +1612,7 @@ private func previewedM(holdingOn clock: ManualClock, reader: GatedItemInfoReade
     pane.previewHoldClock = clock
     pane.itemInfoReader = reader
     reader.release("/k/f0/m.txt")
-    try click("m.txt", in: trail(pane).columns[1].pane)
+    try click("m.txt", in: trail(pane).columns[2].pane)
     await settle { trail(pane).shownPreview?.info == .read(info(1)) }
     return fixture
 }
@@ -1354,7 +1626,7 @@ private func previewedM(holdingOn clock: ManualClock, reader: GatedItemInfoReade
     let m = try #require(trail(pane).shownPreview)
     #expect(m.location == Location(path: "/k/f0/m.txt"))
 
-    try click("n.txt", in: trail(pane).columns[1].pane)
+    try click("n.txt", in: trail(pane).columns[2].pane)
 
     #expect(trail(pane).preview?.location == Location(path: "/k/f0/n.txt"))
     #expect(trail(pane).preview?.info == .reading)
@@ -1372,7 +1644,7 @@ private func previewedM(holdingOn clock: ManualClock, reader: GatedItemInfoReade
     let reader = GatedItemInfoReader(["/k/f0/m.txt": info(1)])
     pane.itemInfoReader = reader
 
-    try click("m.txt", in: trail(pane).columns[1].pane)
+    try click("m.txt", in: trail(pane).columns[2].pane)
 
     #expect(trail(pane).preview?.info == .reading)
     #expect(trail(pane).shownPreview == nil)
@@ -1387,7 +1659,7 @@ private func previewedM(holdingOn clock: ManualClock, reader: GatedItemInfoReade
     let reader = GatedItemInfoReader(["/k/f0/m.txt": info(1), "/k/f0/n.txt": info(2)])
     let fixture = try await previewedM(holdingOn: clock, reader: reader)
     let pane = fixture.pane
-    let column = trail(pane).columns[1].pane
+    let column = trail(pane).columns[2].pane
     let m = trail(pane).shownPreview
 
     try click("n.txt", in: column)
@@ -1409,7 +1681,7 @@ private func previewedM(holdingOn clock: ManualClock, reader: GatedItemInfoReade
     let pane = fixture.pane
     pane.previewHoldClock = clock
     pane.itemInfoReader = reader
-    let column = trail(pane).columns[1].pane
+    let column = trail(pane).columns[2].pane
     try click("m.txt", in: column)
     clock.advance(by: ColumnTrail.previewHold / 2)
 
@@ -1426,7 +1698,7 @@ private func previewedM(holdingOn clock: ManualClock, reader: GatedItemInfoReade
     let clock = ManualClock()
     let fixture = try await previewedM(holdingOn: clock, reader: reader)
     let pane = fixture.pane
-    let column = trail(pane).columns[1].pane
+    let column = trail(pane).columns[2].pane
     try click("n.txt", in: column)
     #expect(trail(pane).shownPreview?.location == Location(path: "/k/f0/m.txt"))
 
@@ -1448,7 +1720,7 @@ private func previewedM(holdingOn clock: ManualClock, reader: GatedItemInfoReade
         let fixture = try await previewedM(holdingOn: clock, reader: reader)
         let pane = fixture.pane
         let trail = trail(pane)
-        try click("n.txt", in: trail.columns[1].pane)
+        try click("n.txt", in: trail.columns[2].pane)
         #expect(trail.shownPreview?.location == Location(path: "/k/f0/m.txt"), "\(closing)")
         await settle { clock.waitingSleeps == 1 }
 
@@ -1472,7 +1744,7 @@ private func previewedM(holdingOn clock: ManualClock, reader: GatedItemInfoReade
         let reader = GatedItemInfoReader(["/r/a.txt": info(1)])
         pane.itemInfoReader = reader
         let trail = trail(pane)
-        select("a.txt", in: trail.columns[0])
+        select("a.txt", in: trail.columns[1])
         #expect(await reader.waitForCall("/r/a.txt"), "\(closing)")
 
         switch closing {
@@ -1498,11 +1770,11 @@ private func previewedM(holdingOn clock: ManualClock, reader: GatedItemInfoReade
     let fixture = PaneFixture(at: "/r", folders: folders)
     await settle { fixture.pane.state.isLoaded }
     fixture.pane.setViewMode(.column)
-    await settle { trail(fixture.pane).focused.pane.state.isLoaded }
+    await settle { trail(fixture.pane).columns.allSatisfy { $0.pane.state.isLoaded } }
     let reader = GatedItemInfoReader([:])
     fixture.pane.itemInfoReader = reader
 
-    select("cloud.txt", in: trail(fixture.pane).columns[0])
+    select("cloud.txt", in: trail(fixture.pane).columns[1])
     for _ in 0..<3 { await drainMainQueue() }
 
     #expect(trail(fixture.pane).preview?.location == Location(path: "/r/cloud.txt"))
@@ -1510,18 +1782,21 @@ private func previewedM(holdingOn clock: ManualClock, reader: GatedItemInfoReade
     #expect(reader.calls.isEmpty)
 }
 
-/// A focused pane on a share at `/n` in column mode, showing cached rows that list `a.txt`
+/// A focused pane on a share at `/Volumes/n` in column mode, showing cached rows that list `a.txt`
 /// while `lister` lists it again on `clock`.
 @MainActor
 private func cachedSharePane(lister: GatedLister, clock: ManualClock) async -> Pane {
-    let share = VolumeIdentity(device: "//me@nas.invalid/n", mountPoint: "/n", kind: .network)
+    let share = VolumeIdentity(
+        device: "//me@nas.invalid/n", mountPoint: "/Volumes/n", kind: .network)
     let cache = ListingCache(store: nil)
     await cache.insert(
-        ListingCache.Folder(entries: [file("a.txt")], listedAt: testDate), at: "/n", on: share)
+        ListingCache.Folder(entries: [file("a.txt")], listedAt: testDate), at: "/Volumes/n",
+        on: share)
     let service = ListingService(
         lister: lister, clock: clock, volumeOf: { _ in share }, cache: cache)
     let pane = Pane(
-        location: Location(path: "/n"), service: service, systemActions: StubSystemActions(),
+        location: Location(path: "/Volumes/n"), service: service,
+        systemActions: StubSystemActions(),
         settings: untouchedSettings(), isFocused: true)
     await settle { pane.state.isCachedRefreshing }
     pane.setViewMode(.column)
@@ -1533,7 +1808,8 @@ private func cachedSharePane(lister: GatedLister, clock: ManualClock) async -> P
 /// or offline.
 @MainActor @Test func aFileOnAShareThatDoesntAnswerGetsNoRead() async throws {
     let clock = ManualClock()
-    let pane = await cachedSharePane(lister: GatedLister(["/n": .blockForever]), clock: clock)
+    let pane = await cachedSharePane(
+        lister: GatedLister(["/Volumes/n": .blockForever]), clock: clock)
     let reader = GatedItemInfoReader([:])
     pane.itemInfoReader = reader
     let first = trail(pane).columns[0]
@@ -1545,21 +1821,21 @@ private func cachedSharePane(lister: GatedLister, clock: ManualClock) async -> P
     await settle { first.pane.state.isOffline }
     for _ in 0..<3 { await drainMainQueue() }
 
-    #expect(trail(pane).preview?.location == Location(path: "/n/a.txt"))
+    #expect(trail(pane).preview?.location == Location(path: "/Volumes/n/a.txt"))
     #expect(trail(pane).preview?.info == .unread)
     #expect(reader.calls.isEmpty)
 }
 
 @MainActor @Test func aFileIsReadOnceItsShareAnswers() async throws {
-    let lister = GatedLister(["/n": .batches([[file("a.txt")]])])
+    let lister = GatedLister(["/Volumes/n": .batches([[file("a.txt")]])])
     let pane = await cachedSharePane(lister: lister, clock: ManualClock())
-    let reader = GatedItemInfoReader(["/n/a.txt": info(4)])
+    let reader = GatedItemInfoReader(["/Volumes/n/a.txt": info(4)])
     reader.releaseAll()
     pane.itemInfoReader = reader
     select("a.txt", in: trail(pane).columns[0])
     #expect(trail(pane).preview?.info == .unread)
 
-    lister.release("/n")
+    lister.release("/Volumes/n")
 
     await settle { trail(pane).preview?.info == .read(info(4)) }
 }
@@ -1570,12 +1846,13 @@ private func cachedSharePane(lister: GatedLister, clock: ManualClock) async -> P
 @MainActor
 private func loadingDocsColumn(clock: ManualClock = ManualClock()) async -> PaneFixture {
     let fixture = PaneFixture(at: "/r", folders: tree, held: true)
+    fixture.lister.release("/")
     fixture.lister.release("/r")
     await settle { fixture.pane.state.isLoaded }
     fixture.pane.columnOpenClock = clock
     fixture.pane.setViewMode(.column)
-    await settle { trail(fixture.pane).focused.pane.state.isLoaded }
-    select("docs", in: trail(fixture.pane).columns[0])
+    await settle { trail(fixture.pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+    select("docs", in: trail(fixture.pane).columns[1])
     #expect(await fixture.lister.waitForCall("/r/docs"))
     return fixture
 }
@@ -1585,17 +1862,17 @@ private func loadingDocsColumn(clock: ManualClock = ManualClock()) async -> Pane
     let fixture = await loadingDocsColumn(clock: clock)
     let pane = fixture.pane
     try press(KeyChord(.right), on: pane)
-    #expect(trail(pane).focusedIndex == 1)
+    #expect(trail(pane).focusedIndex == 2)
     #expect(trail(pane).focused.pane.selection.isEmpty)
 
     fixture.lister.release("/r/docs")
     fixture.lister.release("/r/docs/sub")
 
-    await settle { trail(pane).columns[1].pane.selection.cursor == ExactName("sub") }
+    await settle { trail(pane).columns[2].pane.selection.cursor == ExactName("sub") }
     // Not a key-made selection: the folder in row 0 opens its column at once, with no wait for
     // the keys to pause, as → does when the rows are already there.
-    #expect(paths(pane) == ["/r", "/r/docs", "/r/docs/sub"])
-    #expect(trail(pane).focusedIndex == 1)
+    #expect(paths(pane) == ["/", "/r", "/r/docs", "/r/docs/sub"])
+    #expect(trail(pane).focusedIndex == 2)
     await drainWaits()
     #expect(clock.waitingSleeps == 0)
 }
@@ -1607,17 +1884,17 @@ private func loadingDocsColumn(clock: ManualClock = ManualClock()) async -> Pane
     async throws
 {
     let cancels: [(String, @MainActor (Pane) throws -> Void)] = [
-        ("select", { pane in select("x.txt", in: trail(pane).columns[1]) }),
+        ("select", { pane in select("x.txt", in: trail(pane).columns[2]) }),
         (
             "deselect",
             { pane in
-                select("x.txt", in: trail(pane).columns[1])
-                trail(pane).columns[1].pane.select(Selection())
+                select("x.txt", in: trail(pane).columns[2])
+                trail(pane).columns[2].pane.select(Selection())
             }
         ),
         ("blur", { pane in pane.didLoseFocus() }),
         ("left", { pane in try press(KeyChord(.left), on: pane) }),
-        ("focus", { pane in trail(pane).focus(trail(pane).columns[0]) }),
+        ("focus", { pane in trail(pane).focus(trail(pane).columns[1]) }),
         ("navigate", { pane in pane.navigate(to: Location(path: "/r/other")) }),
     ]
     for (name, cancel) in cancels {
@@ -1633,10 +1910,10 @@ private func loadingDocsColumn(clock: ManualClock = ManualClock()) async -> Pane
         await drainMainQueue()
 
         if name == "navigate" {
-            #expect(paths(pane) == ["/r/other"])
+            #expect(paths(pane) == ["/", "/r", "/r/other"])
             #expect(trail(pane).focused.pane.selection.isEmpty)
         } else {
-            #expect(paths(pane) == ["/r", "/r/docs"], "after \(name)")
+            #expect(paths(pane) == ["/", "/r", "/r/docs"], "after \(name)")
         }
         #expect(
             docs.selection.cursor == (name == "select" ? ExactName("x.txt") : nil),
@@ -1650,16 +1927,18 @@ private func loadingDocsColumn(clock: ManualClock = ManualClock()) async -> Pane
     let late = (100..<400).map { file("m\($0)") }
     let early = (100..<200).map { file("a\($0)") }
     let lister = GatedLister([
-        "/r": .batches([[folder("big")]]), "/r/big": .batches([late, early]),
+        "/": .batches([[folder("r")]]), "/r": .batches([[folder("big")]]),
+        "/r/big": .batches([late, early]),
     ])
+    lister.release("/")
     lister.release("/r")
     let pane = Pane(
         location: Location(path: "/r"), service: ListingService(lister: lister),
         systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true)
     await settle { pane.state.isLoaded }
     pane.setViewMode(.column)
-    await settle { trail(pane).focused.pane.state.isLoaded }
-    select("big", in: trail(pane).columns[0])
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+    select("big", in: trail(pane).columns[1])
     #expect(await lister.waitForCall("/r/big"))
     try press(KeyChord(.right), on: pane)
     let big = trail(pane).focused.pane
@@ -1677,12 +1956,13 @@ private func loadingDocsColumn(clock: ManualClock = ManualClock()) async -> Pane
     folders["/r"] = [folder("empty")]
     folders["/r/empty"] = []
     let fixture = PaneFixture(at: "/r", folders: folders, held: true)
+    fixture.lister.release("/")
     fixture.lister.release("/r")
     let pane = fixture.pane
     await settle { pane.state.isLoaded }
     pane.setViewMode(.column)
-    await settle { trail(pane).focused.pane.state.isLoaded }
-    select("empty", in: trail(pane).columns[0])
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+    select("empty", in: trail(pane).columns[1])
     #expect(await fixture.lister.waitForCall("/r/empty"))
     try press(KeyChord(.right), on: pane)
     let empty = trail(pane).focused.pane
@@ -1700,17 +1980,18 @@ private func loadingDocsColumn(clock: ManualClock = ManualClock()) async -> Pane
 @MainActor @Test(arguments: [EPERM, EACCES])
 func rightIntoALoadingFolderThatFailsGivesUpTheWait(code: Int32) async throws {
     let lister = GatedLister([
-        "/r": .batches([[folder("no")]]),
+        "/": .batches([[folder("r")]]), "/r": .batches([[folder("no")]]),
         "/r/no": .failure(ListingError(path: "/r/no", code: code)),
     ])
+    lister.release("/")
     lister.release("/r")
     let pane = Pane(
         location: Location(path: "/r"), service: ListingService(lister: lister),
         systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true)
     await settle { pane.state.isLoaded }
     pane.setViewMode(.column)
-    await settle { trail(pane).focused.pane.state.isLoaded }
-    select("no", in: trail(pane).columns[0])
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+    select("no", in: trail(pane).columns[1])
     #expect(await lister.waitForCall("/r/no"))
     try press(KeyChord(.right), on: pane)
     let column = trail(pane).focused
@@ -1724,18 +2005,22 @@ func rightIntoALoadingFolderThatFailsGivesUpTheWait(code: Int32) async throws {
 
 /// Cached rows are a whole listing in the column's sort, so → selects their first row.
 @MainActor @Test func rightIntoAColumnWhoseCachedRowsLandSelectsTheirFirstRow() async throws {
-    let share = VolumeIdentity(device: "//me@nas.invalid/n", mountPoint: "/n", kind: .network)
+    let share = VolumeIdentity(
+        device: "//me@nas.invalid/n", mountPoint: "/Volumes/n", kind: .network)
     let cache = ListingCache(store: nil)
-    for (path, entries) in ["/n": [folder("docs")], "/n/docs": [file("y.txt"), file("x.txt")]] {
+    for (path, entries) in [
+        "/Volumes/n": [folder("docs")], "/Volumes/n/docs": [file("y.txt"), file("x.txt")],
+    ] {
         await cache.insert(
             ListingCache.Folder(entries: entries, listedAt: testDate), at: path, on: share)
     }
-    let lister = GatedLister(["/n": .blockForever, "/n/docs": .blockForever])
+    let lister = GatedLister(["/Volumes/n": .blockForever, "/Volumes/n/docs": .blockForever])
     lister.releaseAll()
     let service = ListingService(
         lister: lister, clock: ManualClock(), volumeOf: { _ in share }, cache: cache)
     let pane = Pane(
-        location: Location(path: "/n"), service: service, systemActions: StubSystemActions(),
+        location: Location(path: "/Volumes/n"), service: service,
+        systemActions: StubSystemActions(),
         settings: untouchedSettings(), isFocused: true)
     await settle { pane.state.isCachedRefreshing }
     pane.setViewMode(.column)
@@ -1774,7 +2059,7 @@ private func photoPane(
     fixture.pane.previewHoldClock = clock
     fixture.pane.itemInfoReader = reader
     fixture.pane.setViewMode(.column)
-    await settle { trail(fixture.pane).focused.pane.state.isLoaded }
+    await settle { trail(fixture.pane).columns.allSatisfy { $0.pane.state.isLoaded } }
     return fixture
 }
 
@@ -1787,7 +2072,7 @@ private func photoPane(
     reader.releaseAll()
     let fixture = await photoPane(maker: maker, reader: reader, clock: ManualClock())
     let pane = fixture.pane
-    let column = trail(pane).columns[0]
+    let column = trail(pane).columns[1]
     let a = testThumbnail(pixels: 256)
     let b = testThumbnail(pixels: 256)
 
@@ -1826,7 +2111,7 @@ private func photoPane(
     let pane = fixture.pane
     let image = testThumbnail(pixels: 256)
 
-    select("a.jpg", in: trail(pane).columns[0])
+    select("a.jpg", in: trail(pane).columns[1])
     #expect(await maker.waitForCalls(1))
     clock.advance(by: ColumnTrail.previewHold)
 
@@ -1846,7 +2131,7 @@ private func photoPane(
     reader.releaseAll()
     let fixture = await photoPane(maker: maker, reader: reader, clock: ManualClock())
     let pane = fixture.pane
-    let column = trail(pane).columns[0]
+    let column = trail(pane).columns[1]
     select("a.jpg", in: column)
     await settle { trail(pane).shownPreview?.thumbnail === a }
     select("b.jpg", in: column)
@@ -1866,7 +2151,7 @@ private func photoPane(
     reader.releaseAll()
     let fixture = await photoPane(maker: maker, reader: reader, clock: ManualClock())
     let pane = fixture.pane
-    let column = trail(pane).columns[0]
+    let column = trail(pane).columns[1]
 
     select("c.txt", in: column)
     await settle { trail(pane).shownPreview?.info == .read(info(3)) }
@@ -1885,7 +2170,7 @@ private func photoPane(
     let maker = GatedThumbnailMaker()
     // Answered, so a request that reached the maker would land in the preview.
     maker.answer("/t/a.jpg", with: testThumbnail(pixels: 256))
-    let lister = GatedLister(["/t": .batches([[file("a.jpg")]])])
+    let lister = GatedLister(["/": .batches([[folder("t")]]), "/t": .batches([[file("a.jpg")]])])
     lister.releaseAll()
     let pane = Pane(
         location: Location(path: "/t"),
@@ -1897,10 +2182,10 @@ private func photoPane(
     pane.itemInfoReader = reader
     await settle { pane.state.isLoaded }
     pane.setViewMode(.column)
-    await settle { trail(pane).focused.pane.state.isLoaded }
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
     #expect(trail(pane).focused.pane.folderVolume == share)
 
-    select("a.jpg", in: trail(pane).columns[0])
+    select("a.jpg", in: trail(pane).columns[1])
 
     await settle { trail(pane).shownPreview?.info == .read(info(1)) }
     for _ in 0..<3 { await drainMainQueue() }
@@ -1924,14 +2209,14 @@ private func photoPane(
     pane.itemInfoReader = GatedItemInfoReader(["/t/a.jpg": info(1)])
     await settle { pane.state.isLoaded }
     pane.setViewMode(.column)
-    let column = trail(pane).columns[0].pane
-    await settle { column.state.isLoaded }
+    let column = trail(pane).columns[1].pane
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
     lister.hold()
     column.reload()
     clock.advance(by: LoadTimeouts.slow)
     await settle { column.state.isSlow }
 
-    select("a.jpg", in: trail(pane).columns[0])
+    select("a.jpg", in: trail(pane).columns[1])
 
     #expect(trail(pane).preview?.location == Location(path: "/t/a.jpg"))
     for _ in 0..<3 { await drainMainQueue() }

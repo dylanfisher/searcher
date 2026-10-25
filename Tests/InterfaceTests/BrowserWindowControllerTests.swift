@@ -1253,10 +1253,10 @@ private func paletteTitles(in fixture: Fixture) throws -> [String] {
     let pane = fixture.tab.focusedPane
     pane.setViewMode(.column)
     let trail = try #require(pane.columnTrail)
-    await settle { trail.focused.pane.state.isLoaded }
+    await settle { trail.columns.allSatisfy { $0.pane.state.isLoaded } }
     trail.focused.pane.select(Selection([ExactName("docs")], cursor: ExactName("docs")))
-    await settle { trail.columns.count == 2 && trail.columns[1].pane.state.isLoaded }
-    trail.focus(trail.columns[1])
+    await settle { trail.columns.count == 3 && trail.columns[2].pane.state.isLoaded }
+    trail.focus(trail.columns[2])
     fixture.controller.showWorkspace()
     try fixture.press(try keyEvent("p", modifiers: .command))
     let palette = try #require(fixture.controller.palette)
@@ -1266,10 +1266,10 @@ private func paletteTitles(in fixture: Fixture) throws -> [String] {
     #expect(try paletteTitles(in: fixture) == ["inside.txt"])
     editor.keyDown(with: try keyEvent("\r"))
 
-    let column = trail.columns[1].pane
+    let column = trail.columns[2].pane
     #expect(
         column.selection == Selection([ExactName("inside.txt")], cursor: ExactName("inside.txt")))
-    #expect(trail.columns[0].pane.selection.cursor == ExactName("docs"))
+    #expect(trail.columns[1].pane.selection.cursor == ExactName("docs"))
 }
 
 /// Two panes side by side with the right one focused, and a press on the left pane's second row.

@@ -39,7 +39,8 @@ private func viewPane(_ entries: [DirectoryEntry], in folder: TemporaryFolder) a
     -> PaneFixture
 {
     let fixture = PaneFixture(
-        at: "/view", folders: ["/view": entries], settings: storedSettings(in: folder))
+        at: "/view", folders: ["/": [TestSupport.folder("view")], "/view": entries],
+        settings: storedSettings(in: folder))
     await settle { fixture.pane.state.isLoaded }
     return fixture
 }
@@ -317,7 +318,8 @@ private func holdSorts(of pane: Pane) -> DispatchQueue {
 
     try run(KeyChord("3", modifiers: .command), on: pane)
     #expect(pane.viewMode == .column)
-    #expect(pane.columnTrail?.columns.map(\.pane.location) == [Location(path: "/view")])
+    #expect(
+        pane.columnTrail?.columns.map(\.pane.location.path) == ["/", "/view"])
     // Again in column mode, it keeps the trail.
     let trail = pane.columnTrail
     try run(KeyChord("3", modifiers: .command), on: pane.commandPane)

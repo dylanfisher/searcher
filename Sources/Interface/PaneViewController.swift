@@ -202,9 +202,9 @@ public final class PaneViewController: NSViewController {
         }
         pane.onChange = { [weak self] in self?.paneDidChange() }
         // The pane, not a column's: it navigates, and in column mode it's in the focused
-        // column's folder.
+        // column's folder and moves the focus to a column the bar names.
         pathBar.onSelect = { [weak pane] location, child in
-            pane?.navigate(to: location, selecting: child)
+            pane?.showFolderAbove(location, comingFrom: child)
         }
         pathBar.onOpenInNewTab = { [weak self] folder in self?.openInNewTab(folder) }
         filterBar.isHidden = true
