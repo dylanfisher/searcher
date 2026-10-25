@@ -176,18 +176,32 @@ extension Fixture {
     let third = fixture.controller.columnControllers[2].view
 
     // Two columns right, then one back before the first animation ends: the second and third
-    // columns are the ones in view.
+    // columns are the ones in view. Had the first animation not been retargeted, the origin
+    // would end at its target instead and the wait would time out.
     fixture.trail.moveRight()
     fixture.trail.moveRight()
     fixture.trail.moveLeft()
 
     let visible = { clip.documentVisibleRect }
-    await settle { visible().contains(second.frame) && visible().contains(third.frame) }
-    // Long enough for the first animation to have ended had it not been retargeted.
-    try await Task.sleep(for: .milliseconds(500))
-    #expect(visible().contains(second.frame))
-    #expect(visible().contains(third.frame))
-    #expect(clip.bounds.origin.x < third.frame.minX - second.frame.width / 2)
+    await settle {
+        visible().contains(second.frame) && visible().contains(third.frame)
+            && clip.bounds.origin.x < third.frame.minX - second.frame.width / 2
+    }
+}
+
+@MainActor @Test func aMoveFromAFractionalOriginEndsOnTheTarget() async throws {
+    let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)
+    await fixture.openThreeColumns()
+    let clip = try #require((fixture.controller.view as? NSScrollView)?.contentView)
+
+    // Where an animation in flight leaves the origin: between device pixels.
+    clip.setBoundsOrigin(NSPoint(x: 13.3, y: clip.bounds.origin.y))
+    ColumnViewController.moveClip(clip, toX: 0, animated: false)
+    #expect(clip.bounds.origin.x == 0)
+
+    clip.setBoundsOrigin(NSPoint(x: 13.3, y: clip.bounds.origin.y))
+    ColumnViewController.moveClip(clip, toX: 100, animated: false)
+    #expect(clip.bounds.origin.x == 100)
 }
 
 @MainActor @Test func aJumpEndsAnAnimationStillRunning() async throws {
@@ -199,11 +213,13 @@ extension Fixture {
     // Until the animation is under way.
     await settle { clip.bounds.origin.x > 0 }
     ColumnViewController.moveClip(clip, toX: 0, animated: false)
+    #expect(clip.bounds.origin.x == 0)
 
-    #expect(clip.bounds.origin.x == 0)
-    // Long enough for the animation to have ended had the jump not stopped it.
-    try await Task.sleep(for: .milliseconds(500))
-    #expect(clip.bounds.origin.x == 0)
+    // The animation's frames stop with the jump: the origin stays put over several frames.
+    for _ in 0..<10 {
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(clip.bounds.origin.x == 0)
+    }
 }
 
 @MainActor @Test func aFocusMoveDuringAGripDragJumps() async throws {
