@@ -74,7 +74,18 @@ and saw `["two.flac", "", "", ""]` before this change.
   did, and its file shows with empty rows after 100 ms. A local read, about 1 ms and 10 ms for a
   process's first, lands well inside the hold, so a local file shows with its dates from its
   first frame. Keys still clear the preview while they move ([0094](0094-column-open-delay.md));
-  after the pause the new preview is held the same way.
+  after the pause the new preview is held the same way. (Amended 2026-10-25: Dylan still saw
+  the preview flash white between files, where Finder's doesn't. The flash was the keys': ↓
+  cleared `preview`, so `shownPreview` was nil and column view hid the preview for the
+  `openDelay` pause, and the next file was then held with nothing before it to show, for up to
+  100 ms more. Clicks didn't flash. The view test `arrowsBetweenFilesNeverShowABlankPreview`
+  records each refill and saw the view hidden three times between the two files. Now `preview`
+  is still cleared while the keys move, so nothing is read, but column view keeps showing the
+  file it showed from the last column, with no deadline, until the keys pause; the next file
+  is then held behind it as a click's is. Keys that come back to the file shown keep it,
+  with its rows, until it is read again. A file no longer in the last column, as when the keys
+  move in a column to its left and drop the preview's column, isn't kept, and keys onto a
+  folder keep the file until the folder's column opens in its place.)
 - **The layout doesn't move when the read lands.** The Created and Last opened rows are in the
   Information section from the first frame, empty until read, before and after Modified. Tags are a section below every other field, shown only when the file has tags,
   so they only add height below. A read with no date, and a failed read, show "--", as Finder

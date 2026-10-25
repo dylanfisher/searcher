@@ -2123,6 +2123,83 @@ private func previewedM(holdingOn clock: ManualClock, reader: GatedItemInfoReade
     }
 }
 
+/// Dylan saw the preview flash blank between files reached by ↓: the keys cleared it while they
+/// paused, and the next file was held with nothing to show before it. Now the file shown stays
+/// while the keys pause and while the next file's info is read.
+@MainActor @Test func arrowsBetweenFilesKeepTheShownPreviewUntilTheNextIsRead() async throws {
+    let reader = GatedItemInfoReader(["/k/f0/m.txt": info(1), "/k/f0/n.txt": info(2)])
+    let fixture = try await previewedM(holdingOn: ManualClock(), reader: reader)
+    let pane = fixture.pane
+    let clock = ManualClock()
+    pane.columnOpenClock = clock
+    let m = try #require(trail(pane).shownPreview)
+
+    trail(pane).columns[2].pane.moveSelection(by: 1)
+
+    #expect(trail(pane).preview == nil)
+    #expect(trail(pane).shownPreview == m)
+    await settle { clock.waitingSleeps == 1 }
+    clock.advance(by: ColumnTrail.openDelay)
+    await settle { trail(pane).preview?.location == Location(path: "/k/f0/n.txt") }
+    #expect(trail(pane).shownPreview == m)
+    reader.release("/k/f0/n.txt")
+    await settle { trail(pane).shownPreview?.info == .read(info(2)) }
+}
+
+/// ↓ then ↑ back to the file shown keeps it, with what was read of it, until it is read again.
+@MainActor @Test func arrowsBackToTheShownFileKeepItsRowsUntilItIsReadAgain() async throws {
+    let reader = GatedItemInfoReader(["/k/f0/m.txt": info(1), "/k/f0/n.txt": info(2)])
+    let fixture = try await previewedM(holdingOn: ManualClock(), reader: reader)
+    let pane = fixture.pane
+    let clock = ManualClock()
+    pane.columnOpenClock = clock
+    let m = try #require(trail(pane).shownPreview)
+    let column = trail(pane).columns[2].pane
+
+    column.moveSelection(by: 1)
+    column.moveSelection(by: -1)
+    #expect(trail(pane).shownPreview == m)
+    await settle { clock.waitingSleeps == 1 }
+    clock.advance(by: ColumnTrail.openDelay)
+    await settle { trail(pane).preview?.location == Location(path: "/k/f0/m.txt") }
+
+    #expect(trail(pane).shownPreview == m)
+    await settle { trail(pane).shownPreview?.info == .read(info(1)) }
+}
+
+/// ↑ from a file to a folder keeps the file shown until the keys pause and the folder's column
+/// opens in its place.
+@MainActor @Test func arrowsFromAFileToAFolderKeepThePreviewUntilTheColumnOpens() async throws {
+    let reader = GatedItemInfoReader(["/k/f0/m.txt": info(1)])
+    let fixture = try await previewedM(holdingOn: ManualClock(), reader: reader)
+    let pane = fixture.pane
+    let clock = ManualClock()
+    pane.columnOpenClock = clock
+    let m = try #require(trail(pane).shownPreview)
+
+    trail(pane).columns[2].pane.moveSelection(by: -1)
+
+    #expect(trail(pane).shownPreview == m)
+    await settle { clock.waitingSleeps == 1 }
+    clock.advance(by: ColumnTrail.openDelay)
+    await settle { paths(pane) == ["/", "/k", "/k/f0", "/k/f0/in"] }
+    #expect(trail(pane).shownPreview == nil)
+}
+
+/// Keys in a column left of the preview's drop the preview's column at once, and the preview
+/// with it: its file is no longer in the trail.
+@MainActor @Test func arrowsInAColumnLeftOfThePreviewDropItAtOnce() async throws {
+    let reader = GatedItemInfoReader(["/k/f0/m.txt": info(1)])
+    let fixture = try await previewedM(holdingOn: ManualClock(), reader: reader)
+    let pane = fixture.pane
+    pane.columnOpenClock = ManualClock()
+
+    trail(pane).columns[1].pane.moveSelection(by: 1)
+
+    #expect(paths(pane) == ["/", "/k"])
+    #expect(trail(pane).shownPreview == nil)
+}
+
 @MainActor @Test func aReadLandingAfterTheTrailClosesIsDropped() async throws {
     for closing in ["list mode", "navigation", "pane close"] {
         let fixture = await columnPane()

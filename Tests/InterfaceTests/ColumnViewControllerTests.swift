@@ -426,8 +426,8 @@ extension Fixture {
 }
 
 /// ↓ and ↑ between files in the last column, scrolled to its right end, leave the columns where
-/// they are: the preview clears while the keys pause and comes back in the same place, and the
-/// view doesn't scroll left as it clears and back right as it comes back.
+/// they are: the file shown stays while the keys pause and the next one shows in its place, and
+/// the view doesn't scroll.
 @MainActor @Test func arrowsBetweenFilesInTheLastColumnDoNotScroll() async throws {
     let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)
     await fixture.openThreeColumns()
@@ -443,7 +443,7 @@ extension Fixture {
 
     fixture.trail.focused.pane.moveSelection(by: 1)
 
-    #expect(fixture.trail.shownPreview == nil)
+    #expect(fixture.trail.shownPreview?.location.name == "one.flac")
     #expect(clip.bounds.origin.x == start)
 
     await fixture.pauseKeys(on: clock) { fixture.trail.shownPreview?.location.name == "two.flac" }
@@ -1437,6 +1437,55 @@ private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
         "two.flac", formatter.longDate(testDate.addingTimeInterval(120)),
         ColumnPreviewView.noDate, "",
     ]
+    #expect(!shown.isEmpty)
+    #expect(shown.allSatisfy { $0 == oneShown || $0 == twoShown }, "\(shown)")
+    #expect(shown.last == twoShown)
+}
+
+/// Dylan saw the preview flash blank between files reached by ↓: the view hid while the keys
+/// paused and stayed hidden until the next file's info and thumbnail landed. Now each refill of
+/// the view, from the key to the next file's thumbnail, shows one whole file: the view never
+/// hides, and the name, rows and image it shows are one file's.
+@MainActor @Test func arrowsBetweenFilesNeverShowABlankPreview() async throws {
+    let maker = GatedThumbnailMaker()
+    let sub = "/Volumes/r/docs/sub"
+    maker.answer("\(sub)/one.flac", with: testThumbnail(pixels: 256))
+    let typeIcon = NSImage(size: NSSize(width: 1, height: 1))
+    let fixture = await Fixture(
+        iconCache: TypeIconCache { _ in typeIcon }, thumbnails: ThumbnailService(maker: maker))
+    let one = ItemInfo(created: testDate, lastOpened: nil, tags: [])
+    let two = ItemInfo(created: testDate.addingTimeInterval(120), lastOpened: nil, tags: [])
+    let reader = GatedItemInfoReader(["\(sub)/one.flac": one, "\(sub)/two.flac": two])
+    reader.release("\(sub)/one.flac")
+    fixture.pane.itemInfoReader = reader
+    await fixture.openThreeColumns()
+    await fixture.select("one.flac", inColumn: 2)
+    let view = try #require(fixture.controller.previewView)
+    #expect(view.iconView.image !== typeIcon)
+    let clock = ManualClock()
+    fixture.pane.columnOpenClock = clock
+    var shown: [[String]] = []
+    let controller = fixture.controller
+    fixture.pane.onChange = {
+        controller.paneDidChange()
+        shown.append([
+            view.isHidden ? "hidden" : view.nameField.stringValue, view.createdField.stringValue,
+            view.iconView.image === typeIcon ? "icon" : "thumbnail",
+        ])
+    }
+
+    fixture.trail.columns[2].pane.moveSelection(by: 1)
+    await settle { clock.waitingSleeps == 1 }
+    clock.advance(by: ColumnTrail.openDelay)
+    #expect(await reader.waitForCall("\(sub)/two.flac"))
+    reader.release("\(sub)/two.flac")
+    #expect(await maker.waitForCalls(2))
+    maker.answer("\(sub)/two.flac", with: testThumbnail(pixels: 256))
+    await settle { view.nameField.stringValue == "two.flac" }
+
+    let formatter = EntryCellFormatter()
+    let oneShown = ["one.flac", formatter.longDate(testDate), "thumbnail"]
+    let twoShown = ["two.flac", formatter.longDate(testDate.addingTimeInterval(120)), "thumbnail"]
     #expect(!shown.isEmpty)
     #expect(shown.allSatisfy { $0 == oneShown || $0 == twoShown }, "\(shown)")
     #expect(shown.last == twoShown)
