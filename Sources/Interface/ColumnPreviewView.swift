@@ -2,20 +2,19 @@ import AppKit
 import Browser
 
 /// Column view's preview of the one file selected in the last column, as Finder shows it: a large
-/// type icon, the name, its kind and size, then an Information section with the created,
-/// modified and last-opened dates, then the tags. The name, kind, size and modified date
-/// come from the column's listing and the icon is the type's shared one from `TypeIconCache`, so
-/// they show at once; the rest is read off the main thread, and column view shows a new file once
-/// it lands, or empty after `ColumnTrail.previewHold`, filling in later without moving the rows
-/// above. The rows are drawn as Finder's: title left, value right, a rule under each. Built once
+/// type icon or the file's thumbnail, the name, its kind and size, then an Information section
+/// with the created, modified and last-opened dates, then the tags. The name, kind, size and
+/// modified date come from the column's listing and the icon is the type's shared one from
+/// `TypeIconCache`, so they show at once; the rest is read, and the thumbnail made, off the main
+/// thread, and column view shows a new file once they land, or without them after
+/// `ColumnTrail.previewHold`, filling in later without moving the rows above. A thumbnail
+/// replaces the icon in the same square. The rows are drawn as Finder's: title left, value right, a rule under each. Built once
 /// and refilled for each file (0090-preview-column.md, 0095-preview-metadata.md).
 ///
 /// The fields scroll vertically when the column is shorter than they are. VoiceOver reads the
 /// preview as a group named for the file, its text fields in reading order. It takes no keys.
 @MainActor
 final class ColumnPreviewView: NSView {
-    /// The side of the type icon.
-    static let iconSide = 128.0
     /// Between the kind and the size under the name, as Finder writes it.
     static let summarySeparator = " – "
     static let informationTitle = "Information"
@@ -86,7 +85,9 @@ final class ColumnPreviewView: NSView {
         guard preview != shown else { return }
         shown = preview
         let entry = preview.entry
-        iconView.image = iconCache.icon(for: preview.kind.type)
+        iconView.image =
+            preview.thumbnail.map(NSImage.init(thumbnail:))
+            ?? iconCache.icon(for: preview.kind.type)
         nameField.stringValue = entry.name
         let size = formatter.size(
             entry, folderSize: nil, showsFolderSizes: false, awaitsFolderSizes: false)
@@ -186,8 +187,8 @@ final class ColumnPreviewView: NSView {
             stack.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: Self.inset),
             stack.trailingAnchor.constraint(
                 equalTo: document.trailingAnchor, constant: -Self.inset),
-            iconView.widthAnchor.constraint(equalToConstant: Self.iconSide),
-            iconView.heightAnchor.constraint(equalToConstant: Self.iconSide),
+            iconView.widthAnchor.constraint(equalToConstant: ColumnPreview.iconSide),
+            iconView.heightAnchor.constraint(equalToConstant: ColumnPreview.iconSide),
             nameField.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
             summaryField.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
             informationField.leadingAnchor.constraint(equalTo: stack.leadingAnchor),

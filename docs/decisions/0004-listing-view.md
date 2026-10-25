@@ -16,7 +16,9 @@ List view is a view-based `NSTableView` with a plain data source. Each entry get
 length; see [0013](0013-name-sort-key.md)) built off the main thread when the listing arrives.
 List and column views show per-type icons, one `NSWorkspace.icon(for: UTType)` per type shared by
 every row of that type (`TypeIconCache`); thumbnails are loaded only for Quick Look and the
-gallery, off the main thread and cancelable.
+gallery, off the main thread and cancelable. (Narrowed 2026-10-25: rows on screen show the
+thumbnails of local, downloaded, non-text files once made, never on a network volume; see
+[0102](0102-thumbnails.md).)
 
 ## Alternatives considered
 

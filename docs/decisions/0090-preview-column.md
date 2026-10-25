@@ -65,7 +65,8 @@ listing doesn't make.
   reads them off the main thread once it shows, see
   [0095](0095-preview-metadata.md).)
 - **Thumbnails** — not until CV.4, which generates one file's thumbnail asynchronously after the
-  selection settles. Until then the preview shows the type icon.
+  selection settles. Until then the preview shows the type icon. (Superseded 2026-10-25: the
+  preview shows the file's thumbnail once made; see [0102](0102-thumbnails.md).)
 - **Build the preview view on each selection** — rejected: a held ↓ through files would make a
   view hierarchy per row, against B6.
 - **Show the preview for a package** — left out of this step, which didn't decide what Open and

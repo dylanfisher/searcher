@@ -1749,3 +1749,131 @@ func rightIntoALoadingFolderThatFailsGivesUpTheWait(code: Int32) async throws {
     await settle { docs.state.isCachedRefreshing }
     await settle { docs.selection.cursor == ExactName("x.txt") }
 }
+
+// MARK: - Thumbnails
+
+/// A focused pane at `/t` in column mode, whose service makes thumbnails with `maker` on one
+/// local volume, reading previews' info with `reader` and holding them on `clock`. `/t` holds
+/// the photos `a.jpg` and `b.jpg`, the text file `c.txt` and `d.jpg`, a photo that isn't
+/// downloaded.
+@MainActor
+private func photoPane(
+    maker: GatedThumbnailMaker, reader: GatedItemInfoReader, clock: ManualClock
+) async -> PaneFixture {
+    let notDownloaded = DirectoryEntry(
+        name: "d.jpg", type: .regular, size: 9, modified: testDate, isHidden: false,
+        isDataless: true)
+    let fixture = PaneFixture(
+        at: "/t",
+        folders: [
+            "/": [folder("t")],
+            "/t": [file("a.jpg"), file("b.jpg"), file("c.txt"), notDownloaded],
+        ],
+        thumbnails: ThumbnailService(maker: maker, mountedVolumes: { [] }))
+    await settle { fixture.pane.state.isLoaded }
+    fixture.pane.previewHoldClock = clock
+    fixture.pane.itemInfoReader = reader
+    fixture.pane.setViewMode(.column)
+    await settle { trail(fixture.pane).focused.pane.state.isLoaded }
+    return fixture
+}
+
+/// The preview shows a file's type icon (no thumbnail) until its thumbnail is made, off the main
+/// thread. A new file stays held, like its info, until its thumbnail lands, so its icon doesn't
+/// show for a frame before the thumbnail replaces it.
+@MainActor @Test func aPreviewShowsItsThumbnailOnceMadeAndIsHeldUntilThen() async throws {
+    let maker = GatedThumbnailMaker()
+    let reader = GatedItemInfoReader(["/t/a.jpg": info(1), "/t/b.jpg": info(2)])
+    reader.releaseAll()
+    let fixture = await photoPane(maker: maker, reader: reader, clock: ManualClock())
+    let pane = fixture.pane
+    let column = trail(pane).columns[0]
+    let a = testThumbnail(pixels: 256)
+    let b = testThumbnail(pixels: 256)
+
+    select("a.jpg", in: column)
+
+    #expect(trail(pane).preview?.thumbnail == nil)
+    #expect(await maker.waitForCalls(1))
+    #expect(
+        maker.calls == [
+            .init(
+                path: "/t/a.jpg", side: 128, scale: 2, onMainThread: false,
+                onBlockingCallThread: true)
+        ])
+    await settle { trail(pane).preview?.info == .read(info(1)) }
+    #expect(trail(pane).shownPreview == nil)
+    maker.answer("/t/a.jpg", with: a)
+    await settle { trail(pane).shownPreview?.thumbnail === a }
+
+    select("b.jpg", in: column)
+    await settle { trail(pane).preview?.info == .read(info(2)) }
+
+    #expect(trail(pane).preview?.thumbnail == nil)
+    #expect(trail(pane).shownPreview?.location == Location(path: "/t/a.jpg"))
+    maker.answer("/t/b.jpg", with: b)
+    await settle { trail(pane).shownPreview?.thumbnail === b }
+    #expect(trail(pane).shownPreview?.location == Location(path: "/t/b.jpg"))
+}
+
+/// A thumbnail that takes longer than the hold shows in place of the icon once it lands.
+@MainActor @Test func aThumbnailMadeAfterTheHoldReplacesTheIcon() async throws {
+    let maker = GatedThumbnailMaker()
+    let reader = GatedItemInfoReader(["/t/a.jpg": info(1)])
+    reader.releaseAll()
+    let clock = ManualClock()
+    let fixture = await photoPane(maker: maker, reader: reader, clock: clock)
+    let pane = fixture.pane
+    let image = testThumbnail(pixels: 256)
+
+    select("a.jpg", in: trail(pane).columns[0])
+    #expect(await maker.waitForCalls(1))
+    clock.advance(by: ColumnTrail.previewHold)
+
+    await settle { trail(pane).shownPreview?.location == Location(path: "/t/a.jpg") }
+    #expect(trail(pane).shownPreview?.thumbnail == nil)
+    maker.answer("/t/a.jpg", with: image)
+    await settle { trail(pane).shownPreview?.thumbnail === image }
+}
+
+/// A file previewed again shows the thumbnail kept of it at once, without asking again.
+@MainActor @Test func aKeptThumbnailShowsAtOnce() async throws {
+    let maker = GatedThumbnailMaker()
+    let a = testThumbnail(pixels: 256)
+    maker.answer("/t/a.jpg", with: a)
+    maker.answer("/t/b.jpg", with: nil)
+    let reader = GatedItemInfoReader(["/t/a.jpg": info(1), "/t/b.jpg": info(2)])
+    reader.releaseAll()
+    let fixture = await photoPane(maker: maker, reader: reader, clock: ManualClock())
+    let pane = fixture.pane
+    let column = trail(pane).columns[0]
+    select("a.jpg", in: column)
+    await settle { trail(pane).shownPreview?.thumbnail === a }
+    select("b.jpg", in: column)
+    await settle { trail(pane).shownPreview?.location == Location(path: "/t/b.jpg") }
+
+    select("a.jpg", in: column)
+
+    #expect(trail(pane).preview?.thumbnail === a)
+    #expect(maker.paths == ["/t/a.jpg", "/t/b.jpg"])
+}
+
+/// Text keeps its type icon, and a file that isn't downloaded makes none, since making one would
+/// download it: neither is asked for.
+@MainActor @Test func aTextOrNotDownloadedFileAsksForNoThumbnail() async throws {
+    let maker = GatedThumbnailMaker()
+    let reader = GatedItemInfoReader(["/t/c.txt": info(3)])
+    reader.releaseAll()
+    let fixture = await photoPane(maker: maker, reader: reader, clock: ManualClock())
+    let pane = fixture.pane
+    let column = trail(pane).columns[0]
+
+    select("c.txt", in: column)
+    await settle { trail(pane).shownPreview?.info == .read(info(3)) }
+    select("d.jpg", in: column)
+    #expect(trail(pane).shownPreview?.location == Location(path: "/t/d.jpg"))
+    for _ in 0..<3 { await drainMainQueue() }
+
+    #expect(maker.calls.isEmpty)
+    #expect(trail(pane).preview?.thumbnail == nil)
+}

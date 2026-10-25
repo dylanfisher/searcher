@@ -19,7 +19,8 @@ private let tree: [String: [DirectoryEntry]] = [
 ]
 
 /// A pane at `/r` in column mode, shown by a column view that is never put in a window, `width`
-/// points wide, with its first column loaded. The pane's changes reach the view as
+/// points wide, with its first column loaded. Its service makes thumbnails with `thumbnails`, or
+/// none. The pane's changes reach the view as
 /// `PaneViewController` passes them on.
 @MainActor
 private struct Fixture {
@@ -31,12 +32,14 @@ private struct Fixture {
 
     init(
         width: Double = 800, iconCache: TypeIconCache = TypeIconCache { _ in NSImage() },
-        folders: [String: [DirectoryEntry]] = tree, settings: Settings = untouchedSettings()
+        folders: [String: [DirectoryEntry]] = tree, settings: Settings = untouchedSettings(),
+        thumbnails: ThumbnailService? = nil
     ) async {
         lister = StubLister(folders)
         pane = Pane(
             location: Location(path: "/r"),
-            service: ListingService(lister: lister, rootVolumeName: { "Test Disk" }),
+            service: ListingService(
+                lister: lister, rootVolumeName: { "Test Disk" }, thumbnails: thumbnails),
             systemActions: StubSystemActions(), settings: settings, isFocused: true,
             viewMode: .column)
         pane.previewHoldClock = holdClock
@@ -762,6 +765,34 @@ private struct LoadingThirdColumn {
     #expect(view.summaryField.stringValue == "\(preview.kind.text) – 1 byte")
     #expect(view.modifiedField.stringValue == EntryCellFormatter().longDate(testDate))
     #expect(!view.acceptsFirstResponder)
+}
+
+/// The preview shows the file's type icon until its thumbnail is made, then the thumbnail in the
+/// same square (0102-thumbnails.md).
+@MainActor @Test func thePreviewShowsTheFilesThumbnailInPlaceOfItsIconOnceMade() async throws {
+    let maker = GatedThumbnailMaker()
+    let typeIcon = NSImage(size: NSSize(width: 1, height: 1))
+    var folders = tree
+    folders["/r"] = [file("photo.jpg")]
+    let fixture = await Fixture(
+        iconCache: TypeIconCache { _ in typeIcon }, folders: folders,
+        thumbnails: ThumbnailService(maker: maker, mountedVolumes: { [] }))
+    await fixture.select("photo.jpg", inColumn: 0, waitingForTheRead: false)
+    #expect(await maker.waitForCalls(1))
+    // Past the hold, the file shows with its type icon.
+    fixture.holdClock.advance(by: ColumnTrail.previewHold)
+    await settle { fixture.trail.shownPreview == fixture.trail.preview }
+    let view = try #require(fixture.controller.previewView)
+    #expect(view.iconView.image === typeIcon)
+    fixture.controller.view.layoutSubtreeIfNeeded()
+    let square = view.iconView.frame
+
+    maker.answer("/r/photo.jpg", with: testThumbnail(pixels: 256))
+
+    await settle { view.iconView.image !== typeIcon }
+    #expect(view.iconView.image?.size == NSSize(width: 128, height: 128))
+    fixture.controller.view.layoutSubtreeIfNeeded()
+    #expect(view.iconView.frame == square)
 }
 
 @MainActor @Test func aFolderOrNoSelectionHidesThePreviewAndTheNextFileReusesIt() async throws {

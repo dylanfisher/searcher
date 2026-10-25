@@ -51,18 +51,21 @@ public final class ListingService: Sendable {
     private let networkVolumes = NetworkVolumes()
     /// The `readInfo` calls in flight and waiting, per volume.
     let infoReads = InfoReads()
+    /// Makes the thumbnails rows and the column preview show in place of type icons, for every
+    /// pane and column on this service; nil shows type icons only.
+    public let thumbnails: ThumbnailService?
 
     /// A service that lists folders on the file system and finds each one's volume with `statfs`.
     /// `rootVolumeName` runs once per load, on the load's thread.
     public convenience init<C: Clock<Duration>>(
         clock: C = ContinuousClock(),
         rootVolumeName: @escaping @Sendable () -> String = { readRootVolumeName() },
-        cache: ListingCache? = nil
+        cache: ListingCache? = nil, thumbnails: ThumbnailService? = nil
     ) {
         self.init(
             lister: DirectoryLister(), clock: clock, rootVolumeName: rootVolumeName,
             volumeOf: VolumeIdentity.init(path:), mountedVolumes: VolumeIdentity.mounted,
-            cache: cache)
+            cache: cache, thumbnails: thumbnails)
     }
 
     /// A service that lists folders with `lister`. `volumeOf` says which volume a path is on, and
@@ -77,11 +80,12 @@ public final class ListingService: Sendable {
             listerVolume
         },
         mountedVolumes: @escaping @Sendable () -> [VolumeIdentity] = { [] },
-        cache: ListingCache? = nil
+        cache: ListingCache? = nil, thumbnails: ThumbnailService? = nil
     ) {
         self.mountedVolumes = mountedVolumes
         self.lister = lister
         self.cache = cache
+        self.thumbnails = thumbnails
         startWait = { duration in
             let deadline = clock.now.advanced(by: duration)
             return { try await clock.sleep(until: deadline, tolerance: nil) }
@@ -264,7 +268,7 @@ public final class ListingService: Sendable {
     }
 
     /// The volume in `volumes` whose mount point is the longest one holding `path`.
-    private static func longestMount(
+    static func longestMount(
         holding path: String, in volumes: [VolumeIdentity]
     ) -> VolumeIdentity? {
         volumes.filter { $0.holds(path) }.max { $0.mountPoint.count < $1.mountPoint.count }
@@ -638,9 +642,9 @@ public final class ListingService: Sendable {
     }
 }
 
-/// `ListingService.readInfo` calls by volume: those holding one of the volume's
-/// `ListingService.mostReads(on:)` slots, and those waiting for one in the order asked. A volume
-/// the mount table doesn't place counts as one local volume.
+/// `ListingService.readInfo` calls, or `ThumbnailService` requests, by volume: those holding one
+/// of the volume's `ListingService.mostReads(on:)` slots, and those waiting for one in the order
+/// asked. A volume the mount table doesn't place counts as one local volume.
 final class InfoReads: @unchecked Sendable {
     private struct Waiter {
         let id: Int

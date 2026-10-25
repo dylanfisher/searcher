@@ -1,4 +1,5 @@
 import AppKit
+import Base
 import Browser
 import Quartz
 import UniformTypeIdentifiers
@@ -10,8 +11,10 @@ import UniformTypeIdentifiers
 /// (0017-list-view-columns.md). In column view each column is one of these showing names only,
 /// with no header (`showsNamesOnly`).
 ///
-/// Everything it shows comes from the pane's `Listing` and the icon cache, so it makes no
-/// file-system call (0004-listing-view.md).
+/// Everything it shows comes from the pane's `Listing`, the icon cache and the thumbnails its
+/// service keeps, so it makes no file-system call (0004-listing-view.md). A file's thumbnail
+/// replaces its type icon once made, asked for only while its row is on screen
+/// (0102-thumbnails.md).
 @MainActor
 public final class ListingViewController: NSViewController, NSTableViewDataSource,
     NSTableViewDelegate
@@ -78,6 +81,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     var mountTable: MountTable?
     /// Opens the folder row a drag hovers over; nil opens none. The pane's lists share one.
     var springLoader: SpringLoader?
+    /// The thumbnails being made for rows on screen, by name.
+    private var thumbnailRequests: [String: ThumbnailRequest] = [:]
     /// The modifier keys held in the event being handled, read when a click changes the
     /// selection. Tests replace it.
     var currentModifierFlags: @MainActor () -> NSEvent.ModifierFlags = {
@@ -120,6 +125,18 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         scrollView.hasHorizontalScroller = !showsNamesOnly
         scrollView.autohidesScrollers = true
         view = scrollView
+        // A scroll, a resize of the view and a change in the rows' height each change the rows
+        // on screen.
+        let clip = scrollView.contentView
+        clip.postsBoundsChangedNotifications = true
+        let center = NotificationCenter.default
+        let changed = #selector(rowsOnScreenMayHaveChanged(_:))
+        center.addObserver(
+            self, selector: changed, name: NSView.boundsDidChangeNotification, object: clip)
+        center.addObserver(
+            self, selector: changed, name: NSView.frameDidChangeNotification, object: clip)
+        center.addObserver(
+            self, selector: changed, name: NSView.frameDidChangeNotification, object: tableView)
     }
 
     /// Shows the pane's sort, rows and selection. Reloads the rows, in one reload, only when the
@@ -151,6 +168,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
                 tableView.reloadData()
             }
             reloaded = true
+            updateThumbnails()
         }
         let rows = listing.map { pane.selection.rows(in: $0) } ?? []
         let rowsChanged = rows != tableView.selectedRowIndexes
@@ -677,12 +695,103 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         _ cell: NSTableCellView, column: SortColumn, row: Int, in listing: Listing
     ) {
         if column == .name {
-            cell.imageView?.image = iconCache.icon(for: listing.kind(atRow: row).type)
+            cell.imageView?.image =
+                keptThumbnail(row: row, in: listing).map(NSImage.init(thumbnail:))
+                ?? iconCache.icon(for: listing.kind(atRow: row).type)
             showFolderChevron(listing[row].type == .directory, in: cell)
             showNotDownloadedBadge(listing[row].isDataless, in: cell)
         }
         cell.textField?.stringValue = text(column, row: row, in: listing)
         cell.alphaValue = cutNames.contains(listing[row].name) ? Self.cutAlpha : 1
+    }
+
+    // MARK: Thumbnails
+
+    /// A thumbnail asked for a row on screen: the file's path and entry when asked, and the
+    /// request.
+    private struct ThumbnailRequest {
+        let path: String
+        let entry: DirectoryEntry
+        let task: Task<Void, Never>
+    }
+
+    /// The thumbnail the service keeps for `row`'s file, as it is in `listing`; nil when it keeps
+    /// none, the file has none, or may not show one.
+    private func keptThumbnail(row: Int, in listing: Listing) -> CGImage? {
+        let entry = listing[row]
+        guard let thumbnails = pane.service.thumbnails,
+            ThumbnailService.shows(entry, kind: listing.kind(atRow: row)),
+            case .some(.some(let image)) = thumbnails.cached(
+                at: pane.location.child(named: entry.name).path, entry: entry, side: Self.iconSize)
+        else { return nil }
+        return image
+    }
+
+    @objc private func rowsOnScreenMayHaveChanged(_ notification: Notification) {
+        updateThumbnails()
+    }
+
+    /// Asks for the thumbnail of each row on screen that may show one and has none kept or
+    /// asked for, and cancels the requests of rows that left the screen, or whose entry or
+    /// folder changed. A request cancelled while it waits for its volume's slot is never made;
+    /// one being made is kept by the service, and shows when its row is next filled.
+    private func updateThumbnails() {
+        guard let thumbnails = pane.service.thumbnails, isViewLoaded else { return }
+        var onScreen: Set<String> = []
+        if let listing {
+            let rows = tableView.rows(in: tableView.visibleRect)
+            for row in rows.lowerBound..<min(rows.upperBound, listing.count) {
+                let entry = listing[row]
+                guard ThumbnailService.shows(entry, kind: listing.kind(atRow: row)) else {
+                    continue
+                }
+                let path = pane.location.child(named: entry.name).path
+                if let request = thumbnailRequests[entry.name], request.path == path,
+                    request.entry == entry
+                {
+                    onScreen.insert(entry.name)
+                    continue
+                }
+                if thumbnails.cached(at: path, entry: entry, side: Self.iconSize) != nil {
+                    continue
+                }
+                onScreen.insert(entry.name)
+                thumbnailRequests[entry.name]?.task.cancel()
+                thumbnailRequests[entry.name] = ThumbnailRequest(
+                    path: path, entry: entry,
+                    task: requestThumbnail(at: path, entry: entry, from: thumbnails))
+            }
+        }
+        for (name, request) in thumbnailRequests where !onScreen.contains(name) {
+            request.task.cancel()
+            thumbnailRequests[name] = nil
+        }
+    }
+
+    /// Asks `thumbnails` for the thumbnail of `entry`, the file at `path`, and shows it in the
+    /// entry's row once made, unless the request was cancelled first.
+    private func requestThumbnail(
+        at path: String, entry: DirectoryEntry, from thumbnails: ThumbnailService
+    ) -> Task<Void, Never> {
+        Task { [weak self] in
+            let thumbnail: CGImage?
+            do {
+                thumbnail = try await thumbnails.thumbnail(
+                    at: path, entry: entry, side: Self.iconSize)
+            } catch {
+                // Cancelled while it waited: the row left the screen.
+                return
+            }
+            guard let self, !Task.isCancelled else { return }
+            thumbnailRequests[entry.name] = nil
+            guard let thumbnail, let listing, let row = listing.row(named: entry.name),
+                listing[row] == entry,
+                let cell = tableView.view(
+                    atColumn: tableView.column(withIdentifier: SortColumn.name.identifier),
+                    row: row, makeIfNecessary: false) as? NSTableCellView
+            else { return }
+            cell.imageView?.image = NSImage(thumbnail: thumbnail)
+        }
     }
 
     /// What `column`'s cell shows for `row` of `listing`.

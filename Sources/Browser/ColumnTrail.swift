@@ -1,4 +1,5 @@
 import Base
+import CoreGraphics
 import Foundation
 
 /// A pane's columns in column mode, from the leftmost folder down to the folder selected in the
@@ -34,9 +35,10 @@ public final class ColumnTrail {
     /// folder, a link, several rows or none. It isn't a column: it lists, watches and takes the keys for nothing.
     public private(set) var preview: ColumnPreview?
     /// What column view shows as the preview: `preview`, except while a newly previewed file's
-    /// info is first read, when what showed before it, another file or nothing, stays until the
-    /// read lands or `previewHold` passes. So the Information rows never show empty, or the old
-    /// file's dates, beside the new file's name while a local read runs.
+    /// info is first read or its thumbnail first made, when what showed before it, another file
+    /// or nothing, stays until both land or `previewHold` passes. So the Information rows never
+    /// show empty, or the old file's dates, beside the new file's name while a local read runs,
+    /// and its type icon doesn't flash before its thumbnail.
     public var shownPreview: ColumnPreview? {
         if let heldPreview { return heldPreview.shown }
         return preview
@@ -49,6 +51,11 @@ public final class ColumnTrail {
     /// The entry, as the preview's column lists it, that the preview's info was read for or is
     /// being read for; nil when there is no read.
     private var readEntry: DirectoryEntry?
+    /// The making of the preview's thumbnail, while it runs.
+    private var thumbnailMaking: Task<Void, Never>?
+    /// The entry the preview's thumbnail was made or is being made for, or found kept for; nil
+    /// when it has none of those.
+    private var thumbnailEntry: DirectoryEntry?
 
     /// One column at `location` with `name` selected, sorted like `model`: the owner when the
     /// trail starts from the list, the focused column of the trail it replaces otherwise.
@@ -143,7 +150,8 @@ public final class ColumnTrail {
         moveRight(selectingFirstRow: false)
     }
 
-    /// Closes every column, and drops the preview and the read of its info.
+    /// Closes every column, and drops the preview, the read of its info and the making of its
+    /// thumbnail.
     func close() {
         for column in columns { column.close() }
         columns = []
@@ -308,21 +316,25 @@ public final class ColumnTrail {
     /// file saved by replacing it does, is read; a changed file shows what was read of it until
     /// the new read lands. There is no read when the file's contents aren't on this Mac or `pane`
     /// shows rows its volume hasn't answered with: cached, slow or offline
-    /// (0095-preview-metadata.md).
+    /// (0095-preview-metadata.md). Its thumbnail follows the same rules (`updateThumbnail`).
     private func setPreview(_ next: ColumnPreview?, in pane: Pane?) {
         let shown = shownPreview
         defer { holdPreview(showing: shown) }
         guard var next, let pane else {
             cancelInfoRead()
+            cancelThumbnail()
             preview = nil
             return
         }
         if let preview, preview.location == next.location {
             next.info = preview.info
+            next.thumbnail = preview.thumbnail
         } else {
             cancelInfoRead()
+            cancelThumbnail()
             next.info = .unread
         }
+        updateThumbnail(of: &next, in: pane)
         guard readEntry != next.entry else {
             preview = next
             return
@@ -357,18 +369,58 @@ public final class ColumnTrail {
             guard let self, !Task.isCancelled, preview?.location == location else { return }
             infoRead = nil
             preview?.info = info.map { .read($0) } ?? .failed
-            releaseHeldPreview()
+            releaseHeldPreviewOnceLanded()
+            owner.trailDidChange()
+        }
+    }
+
+    /// Gives `next`, a file in `pane`, the thumbnail kept of its entry, or starts making one,
+    /// unless that is done or running for its entry already. A file of the entry shown keeps
+    /// its thumbnail until the new one lands, as its info does. A file that may not show one
+    /// (`ThumbnailService.shows`), and one in rows its volume hasn't answered with, gets none
+    /// and keeps its type icon (0102-thumbnails.md).
+    private func updateThumbnail(of next: inout ColumnPreview, in pane: Pane) {
+        guard thumbnailEntry != next.entry else { return }
+        cancelThumbnail()
+        guard let thumbnails = owner.service.thumbnails,
+            ThumbnailService.shows(next.entry, kind: next.kind), pane.state.isAnswered
+        else {
+            next.thumbnail = nil
+            return
+        }
+        let location = next.location
+        let entry = next.entry
+        thumbnailEntry = entry
+        if let kept = thumbnails.cached(
+            at: location.path, entry: entry, side: ColumnPreview.iconSide)
+        {
+            next.thumbnail = kept
+            return
+        }
+        thumbnailMaking = Task { [weak self] in
+            let thumbnail: CGImage?
+            do {
+                thumbnail = try await thumbnails.thumbnail(
+                    at: location.path, entry: entry, side: ColumnPreview.iconSide)
+            } catch {
+                // Cancelled before it started: the preview moved on.
+                return
+            }
+            guard let self, !Task.isCancelled, preview?.location == location else { return }
+            thumbnailMaking = nil
+            preview?.thumbnail = thumbnail
+            releaseHeldPreviewOnceLanded()
             owner.trailDidChange()
         }
     }
 
     /// Keeps `shown`, what column view showed before the preview changed, on screen while the
-    /// preview's info is first read, for at most `previewHold` from when the hold started: a
-    /// preview of another file while the hold lasts keeps it and its deadline. A preview whose
-    /// rows wait on no read, no preview, and a preview of the file shown already, whose rows
-    /// showed empty or what was read of it, show at once.
+    /// preview's info is first read or its thumbnail first made, for at most `previewHold` from
+    /// when the hold started: a preview of another file while the hold lasts keeps it and its
+    /// deadline. A preview that waits on neither, no preview, and a preview of the file shown
+    /// already, whose rows showed empty or what was read of it, show at once.
     private func holdPreview(showing shown: ColumnPreview?) {
-        guard let preview, preview.info == .reading else {
+        guard let preview, preview.info == .reading || thumbnailMaking != nil else {
             releaseHeldPreview()
             return
         }
@@ -389,6 +441,12 @@ public final class ColumnTrail {
         heldPreview = (shown, task)
     }
 
+    /// Ends a hold of what showed before `preview` once its info is read and its thumbnail made.
+    private func releaseHeldPreviewOnceLanded() {
+        guard preview?.info != .reading, thumbnailMaking == nil else { return }
+        releaseHeldPreview()
+    }
+
     /// Shows `preview` from now on, ending a hold of what showed before it.
     private func releaseHeldPreview() {
         heldPreview?.wait.cancel()
@@ -400,6 +458,14 @@ public final class ColumnTrail {
         infoRead?.cancel()
         infoRead = nil
         readEntry = nil
+    }
+
+    /// Stops the making of the preview's thumbnail; it never lands, though the service still
+    /// keeps one already being made.
+    private func cancelThumbnail() {
+        thumbnailMaking?.cancel()
+        thumbnailMaking = nil
+        thumbnailEntry = nil
     }
 
     /// The preview of the one file selected in `pane`; nil for a folder, a link, several rows
