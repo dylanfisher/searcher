@@ -180,18 +180,25 @@ private final class Fixture {
 
 @MainActor @Test func thePreviewIsAGroupNamedForItsFileThatReadsItsFields() async throws {
     let fixture = await Fixture()
+    let reader = GatedItemInfoReader([
+        "/r/docs/x.txt": ItemInfo(created: testDate, lastOpened: testDate, tags: ["Red"])
+    ])
+    reader.releaseAll()
+    fixture.pane.itemInfoReader = reader
 
     await fixture.select("x.txt", inColumn: 1)
 
     let view = try #require(fixture.controller.previewView)
+    await settle { !view.tagsField.isHidden }
     let kind = try #require(fixture.trail.preview?.kind.text)
     #expect(view.isAccessibilityElement())
     #expect(view.accessibilityRole() == .group)
     #expect(view.accessibilityLabel() == "x.txt")
     let fields = try #require(view.accessibilityChildren() as? [NSTextField])
+    let date = formatter.date(testDate)
     #expect(
         fields.map(\.stringValue) == [
-            "x.txt", "\(kind) – 2 MB", "Information", "Size", "2 MB", "Modified",
-            formatter.date(testDate),
+            "x.txt", "\(kind) – 2 MB", "Information", "Size", "2 MB", "Created", date,
+            "Modified", date, "Last opened", date, "Tags", "Red",
         ])
 }
