@@ -1593,6 +1593,30 @@ private func shownWidths(_ pane: Pane) -> [Double] {
     pane.close()
 }
 
+/// Clearing a column's width, as a double-click back from its fit does, takes its folder out of
+/// the stored widths, so the column follows the default again; clearing one with none reports
+/// nothing.
+@MainActor @Test func aClearedColumnWidthFollowsTheDefaultAgain() async throws {
+    let folder = try TemporaryFolder("PaneTests")
+    let settings = storedSettings(in: folder)
+    let pane = await widthPane(settings: settings)
+    await choose("docs", inColumn: 0, of: pane)
+    let docs = try #require(pane.columnTrail?.columns[1].pane)
+    pane.setColumnWidth(300, of: docs)
+    var reports = 0
+    pane.onTabChange = { reports += 1 }
+
+    pane.clearColumnWidth(of: docs)
+
+    #expect(reports == 1)
+    #expect(pane.columnWidths.isEmpty)
+    pane.clearColumnWidth(of: docs)
+    #expect(reports == 1)
+    settings.columnWidth = 200
+    #expect(shownWidths(pane) == [200, 200])
+    pane.close()
+}
+
 @MainActor @Test func everyColumnWidthDropsTheFoldersWidthsAndSetsTheDefault() async throws {
     let folder = try TemporaryFolder("PaneTests")
     let settings = storedSettings(in: folder)

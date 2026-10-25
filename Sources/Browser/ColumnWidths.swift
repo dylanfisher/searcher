@@ -57,6 +57,11 @@ public struct ColumnWidths: Sendable {
         }
     }
 
+    /// Drops the width set for `location`'s column, if any.
+    public mutating func remove(_ location: Location) {
+        folders.removeAll { $0.location == location }
+    }
+
     /// Sets the preview to `width`.
     ///
     /// - Precondition: `width` is within `Settings.columnWidths`.

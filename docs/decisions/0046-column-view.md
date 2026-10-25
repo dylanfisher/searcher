@@ -23,7 +23,7 @@ stacked single-column tables over `NSBrowser`.
   kind, size and date from the entry for the columns it doesn't.
 - **`ColumnViewController`** lays the columns out with frames in a horizontal scroll view, 240
   points each with a separator line after each (superseded 2026-10-24: each column has its own
-  width, 245 points for a new one, see [0096](0096-column-widths.md)). On every change of the pane it keeps one
+  width, 286 points for a new one, see [0096](0096-column-widths.md)). On every change of the pane it keeps one
   controller per column, matched by pane, so a column's table and its scroll position survive
   → and ←; it adds a controller for each new column and starts its folder monitor, and drops the
   controllers of closed columns. When the focus or the column count changes it scrolls the
@@ -74,9 +74,9 @@ stacked single-column tables over `NSBrowser`.
 
 ## Consequences
 
-Columns are a fixed 240 points wide and can't be resized (superseded 2026-10-24: a grip at the
-bottom of each column's right edge resizes it, Option-drag resizes every column and a double-click
-fits the widest name; a new column is 245 points, Finder's width, or the width the last
+Columns are a fixed 240 points wide and can't be resized (superseded 2026-10-24: a grip along
+each column's separator resizes it, Option-drag resizes every column and a double-click
+fits the widest name or goes back to the default; a new column is 286 points, or the width the last
 Option-drag or Option-double-click set, see [0096](0096-column-widths.md)). There is no preview column
 (superseded 2026-10-24: one selected file in the last column shows a preview to its right, see
 [0090](0090-preview-column.md)). A folder row shows no disclosure

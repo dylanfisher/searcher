@@ -40,7 +40,7 @@ func doubleClick(_ grip: ColumnGripView, option: Bool = false) {
 @MainActor
 private final class GripLog {
     var calls: [String] = []
-    var width = 245.0
+    var width = 286.0
 
     func attach(to grip: ColumnGripView) {
         grip.beginResize = { [unowned self] all in calls.append("begin \(all)") }
@@ -53,7 +53,8 @@ private final class GripLog {
 }
 
 @MainActor @Test func aDragReportsItsOffsetFromWhereItStarted() {
-    let grip = ColumnGripView(frame: NSRect(origin: .zero, size: ColumnGripView.size))
+    let grip = ColumnGripView(
+        frame: NSRect(x: 0, y: 0, width: ColumnGripView.thickness, height: 400))
     let log = GripLog()
     log.attach(to: grip)
 
@@ -66,7 +67,8 @@ private final class GripLog {
 
 /// The first click of a double-click starts and ends a drag that moves nothing; the second fits.
 @MainActor @Test func aDoubleClickFitsAndOptionFitsEveryColumn() {
-    let grip = ColumnGripView(frame: NSRect(origin: .zero, size: ColumnGripView.size))
+    let grip = ColumnGripView(
+        frame: NSRect(x: 0, y: 0, width: ColumnGripView.thickness, height: 400))
     let log = GripLog()
     log.attach(to: grip)
 
@@ -77,8 +79,25 @@ private final class GripLog {
         log.calls == ["begin false", "end", "fit false", "begin true", "end", "fit true"])
 }
 
+/// As in Finder, the grip draws no "||" handle and doesn't cover the separator: every pixel it
+/// draws is clear, so the separator line under it shows.
+@MainActor @Test func theGripDrawsNothing() throws {
+    let grip = ColumnGripView(
+        frame: NSRect(x: 0, y: 0, width: ColumnGripView.thickness, height: 40))
+    let bitmap = try #require(grip.bitmapImageRepForCachingDisplay(in: grip.bounds))
+
+    grip.cacheDisplay(in: grip.bounds, to: bitmap)
+
+    #expect(!grip.isOpaque)
+    let painted = (0..<bitmap.pixelsWide).flatMap { x in
+        (0..<bitmap.pixelsHigh).filter { y in bitmap.colorAt(x: x, y: y)?.alphaComponent != 0 }
+    }
+    #expect(painted.isEmpty)
+}
+
 @MainActor @Test func theGripIsASplitterWhoseValueIsTheWidth() {
-    let grip = ColumnGripView(frame: NSRect(origin: .zero, size: ColumnGripView.size))
+    let grip = ColumnGripView(
+        frame: NSRect(x: 0, y: 0, width: ColumnGripView.thickness, height: 400))
     let log = GripLog()
     log.attach(to: grip)
     grip.setAccessibilityLabel(ColumnGripView.label(forColumnNamed: "docs"))
@@ -87,13 +106,13 @@ private final class GripLog {
     #expect(grip.accessibilityRole() == .splitter)
     #expect(grip.accessibilityOrientation() == .vertical)
     #expect(grip.accessibilityLabel() == "docs column width")
-    #expect(grip.accessibilityValue() as? NSNumber == 245)
-    #expect(grip.accessibilityValueDescription() == "245 points")
+    #expect(grip.accessibilityValue() as? NSNumber == 286)
+    #expect(grip.accessibilityValueDescription() == "286 points")
 
     #expect(grip.accessibilityPerformIncrement())
-    #expect(log.width == 245 + ColumnGripView.accessibilityStep)
+    #expect(log.width == 286 + ColumnGripView.accessibilityStep)
     #expect(grip.accessibilityPerformDecrement())
-    #expect(log.width == 245)
+    #expect(log.width == 286)
     grip.setAccessibilityValue(NSNumber(value: 300))
     #expect(log.width == 300)
 }
@@ -103,7 +122,8 @@ private final class GripLog {
 @Test func aWidthThatIsNotFiniteFailsLoudly() async {
     await #expect(processExitsWith: .failure) {
         await MainActor.run {
-            let grip = ColumnGripView(frame: NSRect(origin: .zero, size: ColumnGripView.size))
+            let grip = ColumnGripView(
+                frame: NSRect(x: 0, y: 0, width: ColumnGripView.thickness, height: 400))
             grip.setAccessibilityValue(NSNumber(value: Double.nan))
         }
     }

@@ -549,6 +549,17 @@ public final class Pane {
         if columnWidths != old { reportChange() }
     }
 
+    /// Drops the width set for `column`'s pane's folder, as a double-click on a fitted column's
+    /// grip does, so the column shows at `Settings.columnWidth` and follows it, as a column never
+    /// resized does. A column the trail has closed since keeps its folder's width.
+    public func clearColumnWidth(of column: Pane) {
+        guard let trail = columnTrail, trail.columns.contains(where: { $0.pane === column })
+        else { return }
+        let old = columnWidths
+        columnWidths.remove(column.location)
+        if columnWidths != old { reportChange() }
+    }
+
     /// Sets the preview's width, shown or hidden.
     ///
     /// - Precondition: `width` is within `Settings.columnWidths`.
