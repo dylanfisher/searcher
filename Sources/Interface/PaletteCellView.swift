@@ -70,7 +70,8 @@ final class PaletteCellView: NSTableCellView {
         shown = result
         self.isEnabled = isEnabled
         let item = result.item
-        icon.image = Self.icon(for: item.kind)
+        icon.image =
+            item.iconType.map { TypeIconCache.shared.icon(for: $0) } ?? Self.icon(for: item.kind)
         detailField.stringValue = item.detail ?? ""
         detailField.isHidden = item.detail == nil
         chordField.stringValue = item.chord?.symbols ?? ""
@@ -126,10 +127,12 @@ final class PaletteCellView: NSTableCellView {
         case .workspace: "workspace"
         case .folder: "folder"
         case .command: "command"
+        case .entry: "item"
         }
     }
 
     /// A folder's icon as Finder draws it; for a workspace, the window symbol the sidebar shows.
+    /// An entry shows its type's icon instead, as the list does.
     private static func icon(for kind: PaletteItem.Kind) -> NSImage {
         let image: NSImage? =
             switch kind {
@@ -138,6 +141,7 @@ final class PaletteCellView: NSTableCellView {
                 NSImage(systemSymbolName: "macwindow", accessibilityDescription: "Workspace")
             case .command:
                 NSImage(systemSymbolName: "command", accessibilityDescription: "Command")
+            case .entry: preconditionFailure("an entry's item has no icon type")
             }
         guard let image else { preconditionFailure("the system has no image for a \(kind)") }
         return image

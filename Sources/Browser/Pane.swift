@@ -77,6 +77,9 @@ public final class Pane {
     /// How many whole rows the pane's view shows, set by the view when its size changes. Page Up
     /// and Page Down move this many.
     public var visibleRowCount = 0
+    /// Goes up each time `jump(to:)` asks the pane's view to scroll the cursor's row to the
+    /// middle, rather than only into view.
+    public private(set) var centeringRequest = 0
     /// The name of the volume mounted at `/`, from the last listing update; nil until the first.
     public private(set) var rootVolumeName: String?
     /// The name of the volume holding the folder, for the note a slow or offline pane shows:
@@ -1387,6 +1390,19 @@ public final class Pane {
         set(
             onMain { selection.resolved(in: state.listing, after: .sameEntries) },
             recordingAs: source, byKey: source == .typing)
+    }
+
+    /// Go to Item's choice: selects the entry named `name` alone with the cursor on it, as a click
+    /// on its row does, so a column's trail follows it at once, and asks the view to scroll its
+    /// row to the middle. A folder is selected, not opened. The change is one step of the
+    /// selection history (docs/decisions/0101-go-to-item.md).
+    public func jump(to name: String) {
+        let name = ExactName(name)
+        let version = selectionVersion
+        centeringRequest += 1
+        select(Selection([name], cursor: name))
+        // Selecting what is selected reports no change, but the row still has to be centered.
+        if selectionVersion == version { reportChange() }
     }
 
     /// Selects `rows` of the listing shown, as a click in the table gives them. They are named off

@@ -395,7 +395,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
         go.items.map(\.title) == [
             "Back", "Forward", "", "Open", "Open in New Tab", "Open in Other Pane",
             "Go to Parent", "", "Into Selected Folder", "To Parent Column", "",
-            "Same Folder in Other Pane", "Go to Folder…", "Open Quickly…",
+            "Same Folder in Other Pane", "Go to Folder…", "Open Quickly…", "Go to Item…",
         ])
     let table = ListingTableView()
     let log = CommandLog()
@@ -404,6 +404,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     let presses = [
         try keyEvent("[", modifiers: .command), try keyEvent("]", modifiers: .command),
         try keyEvent("g", characters: "G", modifiers: [.command, .shift]),
+        try keyEvent("p", modifiers: .command),
     ]
     for press in presses {
         let item = try item(for: press, in: menu)
@@ -413,7 +414,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(
         log.ids == [
             NavigationCommands.back.id, NavigationCommands.forward.id,
-            NavigationCommands.goToFolder.id,
+            NavigationCommands.goToFolder.id, WindowCommands.goToItem.id,
         ])
 }
 

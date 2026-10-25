@@ -1152,6 +1152,91 @@ private func escapePalette(in fixture: Fixture) throws {
     #expect(fixture.controller.palette == nil)
 }
 
+/// Replaces the text in the palette's field with `query`, as typing would, waits until its rows
+/// show, and returns the field's editor.
+@MainActor
+private func typeInPalette(_ query: String, in fixture: Fixture) async throws -> NSTextView {
+    let palette = try #require(fixture.controller.palette)
+    let editor = try #require(palette.window?.firstResponder as? NSTextView)
+    editor.insertText(
+        query, replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+    let content = palette.viewController
+    await settle { content.shownQuery == query }
+    return editor
+}
+
+@MainActor
+private func paletteTitles(in fixture: Fixture) throws -> [String] {
+    try #require(fixture.controller.palette).viewController.palette.results.map(\.item.title)
+}
+
+@MainActor @Test func cmdPAndCmdShiftKShowGoToItemOverTheFocusedPanesRowsAlone() async throws {
+    for chord in [("p", NSEvent.ModifierFlags.command), ("k", [.command, .shift])] {
+        let fixture = try await Fixture()
+        try fixture.press(try keyEvent(chord.0, modifiers: chord.1))
+        let palette = try #require(fixture.controller.palette, "\(chord)")
+
+        #expect(palette.viewController.field.placeholderString == "Go to Item in root")
+        _ = try await typeInPalette("", in: fixture)
+        #expect(try paletteTitles(in: fixture) == ["a.txt", "docs"])
+        _ = try await typeInPalette("inside", in: fixture)
+        #expect(try paletteTitles(in: fixture) == [])
+    }
+}
+
+@MainActor @Test func returnInGoToItemSelectsAFolderWithoutOpeningIt() async throws {
+    let fixture = try await Fixture()
+    let table = try fixture.keyTable
+    let pane = fixture.tab.focusedPane
+    try fixture.press(try keyEvent("p", modifiers: .command))
+
+    let editor = try await typeInPalette("docs", in: fixture)
+    editor.keyDown(with: try keyEvent("\r"))
+
+    #expect(fixture.controller.palette == nil)
+    #expect(pane.selection == Selection([ExactName("docs")], cursor: ExactName("docs")))
+    #expect(pane.location == Location(path: "/root"))
+    #expect(fixture.window.firstResponder === table)
+}
+
+@MainActor @Test func escInGoToItemLeavesTheSelectionAsItWas() async throws {
+    let fixture = try await Fixture()
+    let pane = fixture.tab.focusedPane
+    pane.select(Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+    let selection = pane.selection
+    try fixture.press(try keyEvent("p", modifiers: .command))
+
+    let editor = try await typeInPalette("docs", in: fixture)
+    editor.keyDown(with: try keyEvent("\u{1B}"))
+
+    #expect(fixture.controller.palette == nil)
+    #expect(pane.selection == selection)
+}
+
+@MainActor @Test func inColumnViewGoToItemListsAndSelectsInTheFocusedColumn() async throws {
+    let fixture = try await Fixture()
+    let pane = fixture.tab.focusedPane
+    pane.setViewMode(.column)
+    let trail = try #require(pane.columnTrail)
+    await settle { trail.focused.pane.state.isLoaded }
+    trail.focused.pane.select(Selection([ExactName("docs")], cursor: ExactName("docs")))
+    await settle { trail.columns.count == 2 && trail.columns[1].pane.state.isLoaded }
+    trail.focus(trail.columns[1])
+    fixture.controller.showWorkspace()
+    try fixture.press(try keyEvent("p", modifiers: .command))
+    let palette = try #require(fixture.controller.palette)
+    #expect(palette.viewController.field.placeholderString == "Go to Item in docs")
+
+    let editor = try await typeInPalette("", in: fixture)
+    #expect(try paletteTitles(in: fixture) == ["inside.txt"])
+    editor.keyDown(with: try keyEvent("\r"))
+
+    let column = trail.columns[1].pane
+    #expect(
+        column.selection == Selection([ExactName("inside.txt")], cursor: ExactName("inside.txt")))
+    #expect(trail.columns[0].pane.selection.cursor == ExactName("docs"))
+}
+
 /// Two panes side by side with the right one focused, and a press on the left pane's second row.
 @MainActor
 private struct PressFixture {
