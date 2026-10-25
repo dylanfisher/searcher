@@ -57,7 +57,9 @@ listing doesn't make.
 - **Make the preview a `Column` or give it a `Pane`** — rejected: a column lists, watches and
   takes the keys, and the preview needs none of that; → would have to skip it.
 - **Read the file's attributes for the preview** — not in this step: created, last opened and
-  tags need a cancelable read off the main thread (CV.3).
+  tags need a cancelable read off the main thread (CV.3). (Superseded 2026-10-24: the preview
+  reads them off the main thread once it shows, see
+  [0095](0095-preview-metadata.md).)
 - **Thumbnails** — not until CV.4, which generates one file's thumbnail asynchronously after the
   selection settles. Until then the preview shows the type icon.
 - **Build the preview view on each selection** — rejected: a held ↓ through files would make a

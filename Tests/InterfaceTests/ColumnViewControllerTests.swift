@@ -462,15 +462,24 @@ private let socket = DirectoryEntry(
     var folders = tree
     folders["/r"] = [file(longName)]
     let fixture = await Fixture(folders: folders)
+    let tags = (1...12).map { "Project tag \($0)" }
+    let reader = GatedItemInfoReader([
+        "/r/\(longName)": ItemInfo(created: testDate, lastOpened: testDate, tags: tags)
+    ])
+    reader.releaseAll()
+    fixture.pane.itemInfoReader = reader
     await fixture.select(longName, inColumn: 0)
     let view = try #require(fixture.controller.previewView)
+    await settle { !view.tagsField.isHidden }
 
     view.summaryField.stringValue =
         "Portable Document Format (PDF) – 12.3 MB" + String(repeating: " and more", count: 6)
     fixture.controller.view.layoutSubtreeIfNeeded()
 
     let fields = try #require(view.accessibilityChildren() as? [NSTextField])
-    #expect(fields.count == 7)
+    #expect(fields.count == 13)
+    // The tags wrap onto more than one line.
+    #expect(view.tagsField.frame.height > 2 * view.summaryField.frame.height)
     // Laid out, and the name wrapped onto more than one line.
     #expect(view.summaryField.frame.width > 100)
     #expect(view.nameField.frame.height > 2 * view.summaryField.frame.height)
@@ -704,4 +713,109 @@ private func draw(_ view: NSView) {
         preconditionFailure("no bitmap for \(view.bounds)")
     }
     view.cacheDisplay(in: view.bounds, to: bitmap)
+}
+
+// MARK: - The info read for the preview
+
+/// The Information rows' titles, top to bottom, as shown.
+@MainActor
+private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
+    let fields = try #require(view.accessibilityChildren() as? [NSTextField])
+    let titles = [
+        ColumnPreviewView.sizeTitle, ColumnPreviewView.createdTitle,
+        ColumnPreviewView.modifiedTitle, ColumnPreviewView.lastOpenedTitle,
+        ColumnPreviewView.tagsTitle,
+    ]
+    return fields.map(\.stringValue).filter(titles.contains)
+}
+
+/// As Finder's preview orders them: Kind and Size, Created, Modified, Last opened, then Tags.
+@MainActor @Test func theReadFieldsShowInFindersOrderWithoutMovingTheFieldsAboveThem()
+    async throws
+{
+    let fixture = await Fixture()
+    let created = testDate.addingTimeInterval(-86_400)
+    let opened = testDate.addingTimeInterval(3_600)
+    let reader = GatedItemInfoReader([
+        "/r/a.txt": ItemInfo(created: created, lastOpened: opened, tags: ["Red", "Work"])
+    ])
+    fixture.pane.itemInfoReader = reader
+    await fixture.select("a.txt", inColumn: 0)
+    let view = try #require(fixture.controller.previewView)
+    fixture.controller.view.layoutSubtreeIfNeeded()
+
+    // While the read runs, the rows are there with no value, and there are no tags.
+    #expect(await reader.waitForCall("/r/a.txt"))
+    #expect(view.createdField.stringValue == "")
+    #expect(view.lastOpenedField.stringValue == "")
+    #expect(view.tagsField.isHidden)
+    #expect(
+        try informationTitles(view) == [
+            ColumnPreviewView.sizeTitle, ColumnPreviewView.createdTitle,
+            ColumnPreviewView.modifiedTitle, ColumnPreviewView.lastOpenedTitle,
+        ])
+    // Each value's origin and height; a longer value only widens its field.
+    let fields = [view.sizeField, view.createdField, view.modifiedField, view.lastOpenedField]
+    func places() -> [[Double]] {
+        fields.map {
+            let frame = $0.convert($0.bounds, to: view)
+            return [frame.minX, frame.minY, frame.height]
+        }
+    }
+    let before = places()
+
+    reader.releaseAll()
+    await settle { view.createdField.stringValue == EntryCellFormatter().date(created) }
+    fixture.controller.view.layoutSubtreeIfNeeded()
+
+    #expect(view.lastOpenedField.stringValue == EntryCellFormatter().date(opened))
+    #expect(!view.tagsField.isHidden)
+    #expect(view.tagsField.stringValue == "Red, Work")
+    #expect(try informationTitles(view).last == ColumnPreviewView.tagsTitle)
+    #expect(places() == before)
+    // Below Last opened, in the view's unflipped coordinates.
+    let lastOpened = view.lastOpenedField.convert(view.lastOpenedField.bounds, to: view)
+    #expect(view.tagsField.convert(view.tagsField.bounds, to: view).maxY < lastOpened.minY)
+}
+
+@MainActor @Test func aFileWithNoReadShowsNoValuesAndAFailedReadShowsDashes() async throws {
+    var folders = tree
+    let cloud = DirectoryEntry(
+        name: "cloud.txt", type: .regular, size: 9, modified: testDate, isHidden: false,
+        isDataless: true)
+    folders["/r"] = [file("a.txt"), cloud]
+    let fixture = await Fixture(folders: folders)
+    let reader = GatedItemInfoReader([
+        "/r/a.txt": nil, "/r/cloud.txt": ItemInfo(created: testDate, lastOpened: nil, tags: []),
+    ])
+    reader.releaseAll()
+    fixture.pane.itemInfoReader = reader
+
+    await fixture.select("cloud.txt", inColumn: 0)
+    let view = try #require(fixture.controller.previewView)
+    #expect(view.createdField.stringValue == "")
+    #expect(view.lastOpenedField.stringValue == "")
+    #expect(view.tagsField.isHidden)
+
+    await fixture.select("a.txt", inColumn: 0)
+    await settle { view.createdField.stringValue == ColumnPreviewView.noDate }
+    #expect(view.lastOpenedField.stringValue == ColumnPreviewView.noDate)
+    #expect(view.tagsField.isHidden)
+    #expect(reader.calls.map(\.path) == ["/r/a.txt"])
+}
+
+/// Spotlight has no last-opened date for a file it hasn't seen opened; Finder shows "--".
+@MainActor @Test func aReadWithoutALastOpenedDateShowsDashes() async throws {
+    let fixture = await Fixture()
+    let reader = GatedItemInfoReader([
+        "/r/a.txt": ItemInfo(created: testDate, lastOpened: nil, tags: [])
+    ])
+    reader.releaseAll()
+    fixture.pane.itemInfoReader = reader
+
+    await fixture.select("a.txt", inColumn: 0)
+
+    let view = try #require(fixture.controller.previewView)
+    await settle { view.createdField.stringValue == EntryCellFormatter().date(testDate) }
+    #expect(view.lastOpenedField.stringValue == ColumnPreviewView.noDate)
 }

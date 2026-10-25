@@ -177,6 +177,11 @@ public final class Pane {
     /// Where Open reads whether a link points to a package (`checkLink`). Tests suspend a queue
     /// of their own here to hold a check.
     var linkCheckQueue = DispatchQueue.global(qos: .userInitiated)
+    /// Reads the column view preview's created date, last-opened date and tags. Tests hold its
+    /// reads with a reader of their own.
+    var itemInfoReader: any ItemInfoReading = ItemInfoReader()
+    /// Where `itemInfoReader` runs.
+    var itemInfoQueue = DispatchQueue.global(qos: .userInitiated)
     /// The folders left, for Back and Forward.
     private(set) var history = History()
     /// The load of a `goToFolder` that hasn't moved the pane yet, and the request it answers.

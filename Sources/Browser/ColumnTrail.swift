@@ -28,6 +28,8 @@ public final class ColumnTrail {
     /// The one file or package selected in the last column, shown to its right; nil for a
     /// folder, a link, several rows or none. It isn't a column: it lists, watches and takes the keys for nothing.
     public private(set) var preview: ColumnPreview?
+    /// The read of the preview's info, while it runs.
+    private var infoRead: Task<Void, Never>?
 
     /// One column at `location` with `name` selected, sorted like `model`: the owner when the
     /// trail starts from the list, the focused column of the trail it replaces otherwise.
@@ -114,11 +116,11 @@ public final class ColumnTrail {
         moveRight()
     }
 
-    /// Closes every column.
+    /// Closes every column, and drops the preview and the read of its info.
     func close() {
         for column in columns { column.close() }
         columns = []
-        preview = nil
+        setPreview(nil, in: nil)
     }
 
     /// Moves the focus to the column at `index`, without listing anything again.
@@ -222,11 +224,65 @@ public final class ColumnTrail {
     /// keys to pause, a preview of another file is cleared and the new one waits too.
     private func updatePreview() {
         guard let last = columns.last else {
-            preview = nil
+            setPreview(nil, in: nil)
             return
         }
         let next = previewed(in: last.pane)
-        preview = last.held != nil && next?.location != preview?.location ? nil : next
+        setPreview(
+            last.held != nil && next?.location != preview?.location ? nil : next, in: last.pane)
+    }
+
+    /// Shows `next`, a file in `pane`, as the preview. The file shown already keeps what was read
+    /// of it, or the read running for it; another file drops that read. A file not read yet is
+    /// read once it shows, unless its contents aren't on this Mac or `pane` shows rows its volume
+    /// hasn't answered with: cached, slow or offline (0095-preview-metadata.md).
+    private func setPreview(_ next: ColumnPreview?, in pane: Pane?) {
+        guard var next, let pane else {
+            cancelInfoRead()
+            preview = nil
+            return
+        }
+        if let preview, preview.location == next.location {
+            next.info = preview.info
+        } else {
+            cancelInfoRead()
+        }
+        if next.info == .unread, !next.entry.isDataless, pane.state.isAnswered {
+            next.info = .reading
+            startInfoRead(of: next.location)
+        }
+        preview = next
+    }
+
+    /// Reads the info of the file at `location` with the owner's reader, on its queue rather
+    /// than the cooperative pool, since a file on a stalled share blocks the read. The result
+    /// lands only if the read wasn't cancelled and the file is still the preview.
+    private func startInfoRead(of location: Location) {
+        let reader = owner.itemInfoReader
+        let queue = owner.itemInfoQueue
+        let path = location.path
+        infoRead = Task { [weak self] in
+            let info = await withCheckedContinuation { continuation in
+                queue.async {
+                    do {
+                        continuation.resume(returning: Optional(try reader.info(at: path)))
+                    } catch {
+                        // The preview shows the read failed.
+                        continuation.resume(returning: nil)
+                    }
+                }
+            }
+            guard let self, !Task.isCancelled, preview?.location == location else { return }
+            infoRead = nil
+            preview?.info = info.map { .read($0) } ?? .failed
+            owner.trailDidChange()
+        }
+    }
+
+    /// Stops the read of the preview's info; its result never lands.
+    private func cancelInfoRead() {
+        infoRead?.cancel()
+        infoRead = nil
     }
 
     /// The preview of the one file selected in `pane`; nil for a folder, a link, several rows
