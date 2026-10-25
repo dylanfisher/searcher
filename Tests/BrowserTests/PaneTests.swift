@@ -594,6 +594,7 @@ private func packageLinkTree() async throws -> (Pane, StubSystemActions, Tempora
 /// a file doesn't.
 @MainActor @Test func openALinkAsAFolderElsewhereOpensNothingForALinkToAPackage() async throws {
     let (pane, actions, root) = try await packageLinkTree()
+    let held = holdLinkChecks(of: pane)
     var asked: [String] = []
     func open(_ name: String) {
         pane.select(Selection([ExactName(name)], cursor: ExactName(name)))
@@ -603,13 +604,73 @@ private func packageLinkTree() async throws -> (Pane, StubSystemActions, Tempora
         })
     }
 
-    open("app link")
-    try await Task.sleep(for: .milliseconds(200))
-    // A link to a plain folder asks for its pane, so the wait above was long enough to.
+    // A link to a plain folder is listed, then asks for its pane, after which nothing is pending.
     open("plain link")
-    await settle { asked == ["plain link"] }
+    #expect(pane.isCheckingLink)
+    held.resume()
+    await settle { asked == ["plain link"] && !pane.isCheckingLink }
+
+    open("app link")
+    await settle { !pane.isCheckingLink }
 
     #expect(asked == ["plain link"])
+    #expect(actions.openedFiles.isEmpty)
+    #expect(pane.location.path == root.url.path)
+}
+
+/// Holds `pane`'s package checks on a suspended queue of their own; `resume` lets them run.
+@MainActor
+private func holdLinkChecks(of pane: Pane) -> DispatchQueue {
+    let held = DispatchQueue(label: "held link checks")
+    held.suspend()
+    pane.linkCheckQueue = held
+    return held
+}
+
+/// Waits until a released check has run on `held` and its answer has reached the main actor.
+@MainActor
+private func finishChecks(on held: DispatchQueue) async {
+    await withCheckedContinuation { continuation in held.async { continuation.resume() } }
+    await drainMainQueue()
+    await Task.yield()
+}
+
+/// A navigation, a second Open or closing the pane while a link's check is pending cancels the
+/// open, as it cancels a pending go.
+@MainActor @Test func aNavigationASecondOpenOrClosingThePaneCancelsAPendingLinkOpen()
+    async throws
+{
+    let (pane, actions, root) = try await packageLinkTree()
+    let held = holdLinkChecks(of: pane)
+
+    pane.openSelection()
+    #expect(pane.isCheckingLink)
+    pane.navigate(to: Location(path: root.url.path + "/plain"))
+    #expect(!pane.isCheckingLink)
+    await settle { pane.state.isLoaded }
+
+    pane.goBack()
+    await settle { pane.location.path == root.url.path && pane.state.isLoaded }
+    pane.select(Selection([ExactName("app link")], cursor: ExactName("app link")))
+    pane.openSelection()
+    pane.select(Selection([ExactName("plain link")], cursor: ExactName("plain link")))
+    pane.openSelection()
+
+    held.resume()
+    await settle { pane.location.name == "plain link" && pane.state.isLoaded }
+    await finishChecks(on: held)
+    #expect(actions.openedFiles.isEmpty)
+
+    held.suspend()
+    pane.goBack()
+    await settle { pane.location.path == root.url.path && pane.state.isLoaded }
+    pane.select(Selection([ExactName("app link")], cursor: ExactName("app link")))
+    pane.openSelection()
+    pane.close()
+    #expect(!pane.isCheckingLink)
+    held.resume()
+    await finishChecks(on: held)
+
     #expect(actions.openedFiles.isEmpty)
     #expect(pane.location.path == root.url.path)
 }

@@ -79,7 +79,7 @@ private func setBundleBit(_ path: String) throws {
     let path = folder.url.path
     let folders = [
         "App.app", "Notes.rtfd", "Plugin.bundle", "Helper.xpc", "Kit.framework", "plain",
-        "Bundled", "Dotted.name",
+        "Bundled", "Dotted.name", "en.lproj",
     ]
     for name in folders {
         try FileManager.default.createDirectory(
@@ -97,7 +97,8 @@ private func setBundleBit(_ path: String) throws {
         types == [
             "App.app": .package, "Notes.rtfd": .package, "Plugin.bundle": .package,
             "Helper.xpc": .package, "Kit.framework": .directory, "plain": .directory,
-            "Bundled": .package, "Dotted.name": .directory, "file.app": .regular,
+            "Bundled": .package, "Dotted.name": .directory, "en.lproj": .directory,
+            "file.app": .regular,
         ])
     for name in folders {
         let isPackage = try folder.url.appending(path: name)

@@ -217,10 +217,9 @@ public final class ColumnTrail {
     /// Previews the one file selected in the last column, as its listing has it now, so a patch
     /// to the file shows and a removal, which drops it from the selection, clears the preview.
     /// A package previews as a file does. A folder has its own column instead, and several rows
-    /// or none show nothing. A link shows
-    /// nothing: Open treats a link to a folder as the folder, and telling one from a link to a
-    /// file takes a read. While the last column waits for the keys to pause, a preview of
-    /// another file is cleared and the new one waits too.
+    /// or none show nothing. A link shows nothing: Open treats a link to a folder as the folder,
+    /// and telling one from a link to a file takes a read. While the last column waits for the
+    /// keys to pause, a preview of another file is cleared and the new one waits too.
     private func updatePreview() {
         guard let last = columns.last else {
             preview = nil
