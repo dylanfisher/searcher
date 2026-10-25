@@ -114,7 +114,7 @@ private func uiRun(
         openW1: Array(repeating: 10, count: launches),
         openW2: Array(repeating: 30, count: launches),
         keyDown: Array(repeating: keyDown, count: UIBenchReport.keyPresses),
-        optionArrows: Array(repeating: 5, count: 200),
+        homeEnd: Array(repeating: 5, count: 200),
         controlShiftDown: Array(repeating: 5, count: 200),
         pageDown: Array(repeating: 5, count: 200), shiftDown: Array(repeating: 5, count: 200),
         selectAll: Array(repeating: 5, count: 100),

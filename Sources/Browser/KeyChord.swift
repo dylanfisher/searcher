@@ -8,6 +8,8 @@ public struct KeyChord: Hashable, Sendable, CustomStringConvertible {
         case up, down, left, right
         /// The Page Up and Page Down keys, which Fn-↑ and Fn-↓ type on a laptop keyboard.
         case pageUp, pageDown
+        /// The Home and End keys, which Fn-← and Fn-→ type on a laptop keyboard.
+        case home, end
         case tab, `return`, delete, space, escape
         /// F1 to F35. A laptop keyboard sends them with Fn held, unless the system's standard
         /// function keys setting is on; Fn isn't part of the chord.
@@ -83,6 +85,8 @@ public struct KeyChord: Hashable, Sendable, CustomStringConvertible {
         // Fn-↑ and Fn-↓ type these on a laptop keyboard.
         case .pageUp: "Page Up"
         case .pageDown: "Page Down"
+        case .home: "Home"
+        case .end: "End"
         case .tab: "Tab"
         case .return: "Return"
         case .delete: "Delete"

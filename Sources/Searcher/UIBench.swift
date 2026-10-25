@@ -889,18 +889,18 @@ final class UIBench {
         return samples
     }
 
-    /// Times each row command but ↓ over `count` presses on W2, after `pressDown`: Opt-↓ and
-    /// Opt-↑ alternating, then Ctrl-Shift-↓, Fn-↓ and Shift-↓, each from where the one before
+    /// Times each row command but ↓ over `count` presses on W2, after `pressDown`: End and
+    /// Home alternating, then Ctrl-Shift-↓, Fn-↓ and Shift-↓, each from where the one before
     /// left the cursor. Checks where each leaves the cursor and selection.
     private func pressRowCommands(_ count: Int) async throws {
         let pane = try requirePane()
         let rows = pane.state.listing?.count ?? 0
 
-        let alternating = (0..<count).map { $0.isMultiple(of: 2) ? Key.optionDown : .optionUp }
-        record.optionArrows = try await press(alternating, "Opt-arrow key")
+        let alternating = (0..<count).map { $0.isMultiple(of: 2) ? Key.end : .home }
+        record.homeEnd = try await press(alternating, "Home and End key")
         try expectCursor(
             atRow: count.isMultiple(of: 2) ? 0 : rows - 1,
-            after: "\(count) Opt-↓ and Opt-↑ presses")
+            after: "\(count) End and Home presses")
 
         var start = try cursorRow()
         record.controlShiftDown = try await press(
@@ -1599,12 +1599,11 @@ final class UIBench {
         static let down = Key(
             characters: function(NSDownArrowFunctionKey), keyCode: 125,
             flags: [.numericPad, .function])
-        static let optionDown = Key(
-            characters: function(NSDownArrowFunctionKey), keyCode: 125,
-            flags: [.numericPad, .function, .option])
-        static let optionUp = Key(
-            characters: function(NSUpArrowFunctionKey), keyCode: 126,
-            flags: [.numericPad, .function, .option])
+        /// The Home and End keys of a full keyboard, which Fn-← and Fn-→ also type.
+        static let home = Key(
+            characters: function(NSHomeFunctionKey), keyCode: 115, flags: .function)
+        static let end = Key(
+            characters: function(NSEndFunctionKey), keyCode: 119, flags: .function)
         static let controlShiftDown = Key(
             characters: function(NSDownArrowFunctionKey), keyCode: 125,
             flags: [.numericPad, .function, .control, .shift])

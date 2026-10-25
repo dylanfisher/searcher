@@ -1,7 +1,8 @@
-/// Row movement and selection: the arrows, Opt-, Ctrl-Shift- and Fn-arrows move the cursor and
-/// select its row alone, Shift-arrows extend the selection from the anchor, and Cmd-A selects
-/// every row. Type-to-select, which no chord runs, selects by name. Cmd-U and Shift-Cmd-U step
-/// back and forward through the pane's selections in the folder.
+/// Row movement and selection: the arrows, Opt- and Ctrl-Shift-arrows (ten rows), Fn-arrows (a
+/// page), Home and End move the cursor and select its row alone, Shift-arrows extend the
+/// selection from the anchor, and Cmd-A selects every row. Type-to-select, which no chord runs,
+/// selects by name. Cmd-U and Shift-Cmd-U step back and forward through the pane's selections in
+/// the folder.
 public enum SelectionCommands: CommandSet {
     public static let selectNext = Command(
         id: CommandID("selection.next"), title: "Select Next Row", chords: [KeyChord(.down)])
@@ -16,16 +17,20 @@ public enum SelectionCommands: CommandSet {
         chords: [KeyChord(.up, modifiers: .shift)])
     public static let selectFirst = Command(
         id: CommandID("selection.first"), title: "Select First Row",
-        chords: [KeyChord(.up, modifiers: .option)])
+        chords: [KeyChord(.home)])
     public static let selectLast = Command(
         id: CommandID("selection.last"), title: "Select Last Row",
-        chords: [KeyChord(.down, modifiers: .option)])
+        chords: [KeyChord(.end)])
     public static let tenRowsDown = Command(
         id: CommandID("selection.tenRowsDown"), title: "Move Down 10 Rows",
-        chords: [KeyChord(.down, modifiers: [.control, .shift])])
+        chords: [
+            KeyChord(.down, modifiers: .option), KeyChord(.down, modifiers: [.control, .shift]),
+        ])
     public static let tenRowsUp = Command(
         id: CommandID("selection.tenRowsUp"), title: "Move Up 10 Rows",
-        chords: [KeyChord(.up, modifiers: [.control, .shift])])
+        chords: [
+            KeyChord(.up, modifiers: .option), KeyChord(.up, modifiers: [.control, .shift]),
+        ])
     public static let pageDown = Command(
         id: CommandID("selection.pageDown"), title: "Page Down", chords: [KeyChord(.pageDown)])
     public static let pageUp = Command(

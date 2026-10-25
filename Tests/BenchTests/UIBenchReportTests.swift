@@ -7,7 +7,7 @@ import Testing
 private func underBudget() -> UIBenchRecord {
     UIBenchRecord(
         launch: [200, 210], openW1: [10, 12], openW2: [30, 40],
-        keyDown: Array(repeating: 4, count: 500), optionArrows: Array(repeating: 5, count: 200),
+        keyDown: Array(repeating: 4, count: 500), homeEnd: Array(repeating: 5, count: 200),
         controlShiftDown: Array(repeating: 5, count: 200),
         pageDown: Array(repeating: 6, count: 200),
         shiftDown: Array(repeating: 5, count: 200), selectAll: Array(repeating: 6, count: 100),

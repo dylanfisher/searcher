@@ -12,10 +12,10 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
     public var openW2: [Double]
     /// ↓ key event timestamp → frame with the moved selection, on W2 (B6).
     public var keyDown: [Double]
-    /// Opt-↓ and Opt-↑ alternating, each key event timestamp → frame with the moved selection, on
+    /// End and Home alternating, each key event timestamp → frame with the moved selection, on
     /// W2 (B6). This and the next three are the row commands other than ↓, timed in the launch
     /// that times ↓.
-    public var optionArrows: [Double]
+    public var homeEnd: [Double]
     /// Ctrl-Shift-↓ key → frame, on W2 (B6).
     public var controlShiftDown: [Double]
     /// Fn-↓ (Page Down) key → frame, on W2 (B6).
@@ -161,7 +161,7 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
 
     public init(
         launch: [Double] = [], openW1: [Double] = [], openW2: [Double] = [],
-        keyDown: [Double] = [], optionArrows: [Double] = [], controlShiftDown: [Double] = [],
+        keyDown: [Double] = [], homeEnd: [Double] = [], controlShiftDown: [Double] = [],
         pageDown: [Double] = [], shiftDown: [Double] = [], selectAll: [Double] = [],
         patchAllSelected: [Double] = [], reloadAllSelected: [Double] = [],
         patchAddingAllSelected: [Double] = [], clickHalf: [Double] = [],
@@ -178,7 +178,7 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         self.openW1 = openW1
         self.openW2 = openW2
         self.keyDown = keyDown
-        self.optionArrows = optionArrows
+        self.homeEnd = homeEnd
         self.controlShiftDown = controlShiftDown
         self.pageDown = pageDown
         self.shiftDown = shiftDown
@@ -218,7 +218,7 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
         openW1 += other.openW1
         openW2 += other.openW2
         keyDown += other.keyDown
-        optionArrows += other.optionArrows
+        homeEnd += other.homeEnd
         controlShiftDown += other.controlShiftDown
         pageDown += other.pageDown
         shiftDown += other.shiftDown

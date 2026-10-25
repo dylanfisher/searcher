@@ -2,8 +2,7 @@ import AppKit
 import Browser
 
 extension KeyChord {
-    /// The chord a key event spells, or nil for a key `KeyChord.Key` has no case for (Home and End,
-    /// forward delete, keypad Enter, backspace) or a dead key that typed nothing. The
+    /// The chord a key event spells, or nil for a key `KeyChord.Key` has no case for (forward delete, keypad Enter, backspace) or a dead key that typed nothing. The
     /// first of `candidates(for:)`.
     init?(event: NSEvent) {
         guard let chord = Self.candidates(for: event).first else { return nil }
@@ -65,6 +64,8 @@ extension KeyChord {
         case .right: Self.functionKey(NSRightArrowFunctionKey)
         case .pageUp: Self.functionKey(NSPageUpFunctionKey)
         case .pageDown: Self.functionKey(NSPageDownFunctionKey)
+        case .home: Self.functionKey(NSHomeFunctionKey)
+        case .end: Self.functionKey(NSEndFunctionKey)
         case .tab: "\t"
         case .return: "\r"
         // Menus spell the Delete key as backspace, though the key event types 0x7F.
@@ -90,6 +91,8 @@ extension KeyChord {
             case .right: "→"
             case .pageUp: "⇞"
             case .pageDown: "⇟"
+            case .home: "⇱"
+            case .end: "⇲"
             case .tab: "⇥"
             case .return: "↩"
             case .delete: "⌫"
@@ -131,6 +134,8 @@ extension KeyChord {
             case NSRightArrowFunctionKey: return .right
             case NSPageUpFunctionKey: return .pageUp
             case NSPageDownFunctionKey: return .pageDown
+            case NSHomeFunctionKey: return .home
+            case NSEndFunctionKey: return .end
             case NSF1FunctionKey...NSF35FunctionKey:
                 return .function(Int(scalar.value) - NSF1FunctionKey + 1)
             // AppKit's other function keys, which `Key` has no case for yet.

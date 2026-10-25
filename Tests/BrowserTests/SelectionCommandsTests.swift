@@ -43,6 +43,8 @@ private let down = KeyChord(.down)
 private let up = KeyChord(.up)
 private let optionDown = KeyChord(.down, modifiers: .option)
 private let optionUp = KeyChord(.up, modifiers: .option)
+private let home = KeyChord(.home)
+private let end = KeyChord(.end)
 private let tenDown = KeyChord(.down, modifiers: [.control, .shift])
 private let tenUp = KeyChord(.up, modifiers: [.control, .shift])
 private let pageDown = KeyChord(.pageDown)
@@ -56,7 +58,8 @@ private let commandA = KeyChord("a", modifiers: .command)
     arguments: [
         // (chord, start row, row after one press, row after many presses)
         (down, 12, 13, 24), (up, 12, 11, 0),
-        (optionDown, 12, 24, 24), (optionUp, 12, 0, 0),
+        (optionDown, 12, 22, 24), (optionUp, 12, 2, 0),
+        (home, 12, 0, 0), (end, 12, 24, 24),
         (tenDown, 12, 22, 24), (tenUp, 12, 2, 0),
         (pageDown, 12, 19, 24), (pageUp, 12, 5, 0),
     ])
@@ -294,7 +297,7 @@ func aNameRemovedAndWrittenAgainInOneBatchStaysSelected(afterSelectAll: Bool) as
 @MainActor
 @Test(
     arguments: [
-        down, up, optionDown, optionUp, tenDown, tenUp, pageDown, pageUp, shiftDown,
+        down, up, optionDown, optionUp, home, end, tenDown, tenUp, pageDown, pageUp, shiftDown,
         shiftUp, commandA,
     ])
 func movingOnAnEmptyListingDoesNothing(chord: KeyChord) async throws {
@@ -523,4 +526,15 @@ private func isEnabled(_ chord: KeyChord, in fixture: PaneFixture) throws -> Boo
 
     #expect(try isEnabled(commandU, in: first))
     #expect(try !isEnabled(commandU, in: second))
+}
+
+@MainActor @Test func optionAndControlShiftArrowsMoveTenRowsAndHomeAndEndSelectTheEnds() throws {
+    let registry = try AppCommands.registry()
+
+    #expect(registry.command(for: optionDown) == SelectionCommands.tenRowsDown)
+    #expect(registry.command(for: optionUp) == SelectionCommands.tenRowsUp)
+    #expect(registry.command(for: tenDown) == SelectionCommands.tenRowsDown)
+    #expect(registry.command(for: tenUp) == SelectionCommands.tenRowsUp)
+    #expect(registry.command(for: home) == SelectionCommands.selectFirst)
+    #expect(registry.command(for: end) == SelectionCommands.selectLast)
 }
