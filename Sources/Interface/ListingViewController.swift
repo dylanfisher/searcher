@@ -83,6 +83,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     var springLoader: SpringLoader?
     /// The thumbnails being made for rows on screen, by name.
     private var thumbnailRequests: [String: ThumbnailRequest] = [:]
+    /// The names of the rows whose thumbnails are being asked for, for tests.
+    var askedThumbnails: Set<String> { Set(thumbnailRequests.keys) }
     /// The modifier keys held in the event being handled, read when a click changes the
     /// selection. Tests replace it.
     var currentModifierFlags: @MainActor () -> NSEvent.ModifierFlags = {
@@ -734,11 +736,15 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// Asks for the thumbnail of each row on screen that may show one and has none kept or
     /// asked for, and cancels the requests of rows that left the screen, or whose entry or
     /// folder changed. A request cancelled while it waits for its volume's slot is never made;
-    /// one being made is kept by the service, and shows when its row is next filled.
+    /// one being made is kept by the service, and shows when its row is next filled. Rows its
+    /// volume hasn't answered with, as cached rows, ask for none, and neither does a folder
+    /// whose volume isn't known yet or is a share.
     private func updateThumbnails() {
         guard let thumbnails = pane.service.thumbnails, isViewLoaded else { return }
         var onScreen: Set<String> = []
-        if let listing {
+        if let listing, pane.state.isAnswered, let volume = pane.folderVolume,
+            ThumbnailService.makes(on: volume)
+        {
             let rows = tableView.rows(in: tableView.visibleRect)
             for row in rows.lowerBound..<min(rows.upperBound, listing.count) {
                 let entry = listing[row]
@@ -759,7 +765,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
                 thumbnailRequests[entry.name]?.task.cancel()
                 thumbnailRequests[entry.name] = ThumbnailRequest(
                     path: path, entry: entry,
-                    task: requestThumbnail(at: path, entry: entry, from: thumbnails))
+                    task: requestThumbnail(
+                        at: path, entry: entry, on: volume, from: thumbnails))
             }
         }
         for (name, request) in thumbnailRequests where !onScreen.contains(name) {
@@ -771,13 +778,14 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// Asks `thumbnails` for the thumbnail of `entry`, the file at `path`, and shows it in the
     /// entry's row once made, unless the request was cancelled first.
     private func requestThumbnail(
-        at path: String, entry: DirectoryEntry, from thumbnails: ThumbnailService
+        at path: String, entry: DirectoryEntry, on volume: VolumeIdentity,
+        from thumbnails: ThumbnailService
     ) -> Task<Void, Never> {
         Task { [weak self] in
             let thumbnail: CGImage?
             do {
                 thumbnail = try await thumbnails.thumbnail(
-                    at: path, entry: entry, side: Self.iconSize)
+                    at: path, entry: entry, side: Self.iconSize, on: volume)
             } catch {
                 // Cancelled while it waited: the row left the screen.
                 return

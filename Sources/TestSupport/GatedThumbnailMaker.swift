@@ -4,6 +4,8 @@ import Foundation
 
 /// A `ThumbnailMaking` for tests. Each request is recorded and held until the test answers its
 /// path, with an image or with none; a path answered before it is asked for is answered at once.
+/// A request stopped while held is recorded as stopped; answering it later still calls back, as
+/// Quick Look may.
 /// Tests use it to hold a thumbnail in flight and to see which files were asked for, and that
 /// none was asked for on the main thread.
 public final class GatedThumbnailMaker: ThumbnailMaking, @unchecked Sendable {
@@ -32,13 +34,14 @@ public final class GatedThumbnailMaker: ThumbnailMaking, @unchecked Sendable {
     private var answers: [String: CGImage?] = [:]
     private var held: [String: [@Sendable (CGImage?) -> Void]] = [:]
     private var startedCalls: [Call] = []
+    private var stoppedPaths: [String] = []
 
     public init() {}
 
     public func makeThumbnail(
         at path: String, side: Double, scale: Double,
         done: @escaping @Sendable (CGImage?) -> Void
-    ) {
+    ) -> @Sendable () -> Void {
         let answer: CGImage?? = lock.withLock {
             startedCalls.append(
                 Call(
@@ -49,6 +52,12 @@ public final class GatedThumbnailMaker: ThumbnailMaking, @unchecked Sendable {
             return nil
         }
         if let answer { done(answer) }
+        return { [self] in lock.withLock { stoppedPaths.append(path) } }
+    }
+
+    /// The paths of the requests stopped so far, in the order stopped.
+    public var stopped: [String] {
+        lock.withLock { stoppedPaths }
     }
 
     /// Answers every request for `path`, held now or made later, with `image`, or with none.

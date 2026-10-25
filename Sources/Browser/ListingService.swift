@@ -268,7 +268,7 @@ public final class ListingService: Sendable {
     }
 
     /// The volume in `volumes` whose mount point is the longest one holding `path`.
-    static func longestMount(
+    private static func longestMount(
         holding path: String, in volumes: [VolumeIdentity]
     ) -> VolumeIdentity? {
         volumes.filter { $0.holds(path) }.max { $0.mountPoint.count < $1.mountPoint.count }
@@ -644,10 +644,12 @@ public final class ListingService: Sendable {
 
 /// `ListingService.readInfo` calls, or `ThumbnailService` requests, by volume: those holding one
 /// of the volume's `ListingService.mostReads(on:)` slots, and those waiting for one in the order
-/// asked. A volume the mount table doesn't place counts as one local volume.
+/// asked, those asked `first` ahead of the rest. A volume the mount table doesn't place counts as
+/// one local volume.
 final class InfoReads: @unchecked Sendable {
     private struct Waiter {
         let id: Int
+        let first: Bool
         let cancelled: @Sendable () -> Void
         let start: @Sendable () -> Void
     }
@@ -670,6 +672,11 @@ final class InfoReads: @unchecked Sendable {
         }
     }
 
+    /// The calls waiting for a slot on `volume`, for tests.
+    func waitingCount(on volume: VolumeIdentity?) -> Int {
+        lock.withLock { waiting[volume]?.count ?? 0 }
+    }
+
     /// Drops what is kept of the call `id` once it has returned.
     func forget(_ id: Int) {
         lock.withLock { _ = cancelledEarly.remove(id) }
@@ -682,19 +689,23 @@ final class InfoReads: @unchecked Sendable {
         }
     }
 
-    /// Runs `start` on a `BlockingCallThread` once `volume` has a slot for it, at once if it has
-    /// one now, or runs `cancelled` if the call was cancelled already.
+    /// Runs `start` once `volume` has a slot for it: at once on the calling thread if it has one
+    /// now, or later on a `BlockingCallThread`. Runs `cancelled` instead if the call was cancelled
+    /// already. A call `first` waits ahead of every call that isn't.
     func enter(
-        _ id: Int, on volume: VolumeIdentity?, cancelled: @escaping @Sendable () -> Void,
-        start: @escaping @Sendable () -> Void
+        _ id: Int, on volume: VolumeIdentity?, first: Bool = false,
+        cancelled: @escaping @Sendable () -> Void, start: @escaping @Sendable () -> Void
     ) {
         let next: (@Sendable () -> Void)? = lock.withLock {
             if cancelledEarly.remove(id) != nil { return cancelled }
             entered.insert(id)
             let limit = ListingService.mostReads(on: volume?.kind ?? .local)
             guard running[volume, default: 0] < limit else {
-                waiting[volume, default: []].append(
-                    Waiter(id: id, cancelled: cancelled, start: start))
+                var queue = waiting[volume] ?? []
+                let waiter = Waiter(id: id, first: first, cancelled: cancelled, start: start)
+                queue.insert(
+                    waiter, at: first ? queue.firstIndex { !$0.first } ?? queue.count : queue.count)
+                waiting[volume] = queue
                 return nil
             }
             running[volume, default: 0] += 1

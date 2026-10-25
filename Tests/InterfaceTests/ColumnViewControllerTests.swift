@@ -776,7 +776,7 @@ private struct LoadingThirdColumn {
     folders["/r"] = [file("photo.jpg")]
     let fixture = await Fixture(
         iconCache: TypeIconCache { _ in typeIcon }, folders: folders,
-        thumbnails: ThumbnailService(maker: maker, mountedVolumes: { [] }))
+        thumbnails: ThumbnailService(maker: maker))
     await fixture.select("photo.jpg", inColumn: 0, waitingForTheRead: false)
     #expect(await maker.waitForCalls(1))
     // Past the hold, the file shows with its type icon.

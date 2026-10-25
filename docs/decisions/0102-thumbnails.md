@@ -43,24 +43,44 @@ A probe on this Mac (local APFS, generated 2000×1500 JPEGs, `QLThumbnailGenerat
   as Dylan's screenshot shows JSON. Quick Look's page of text is unreadable at 16 points.
 - **Which files.** `ThumbnailService.shows`: a regular file whose contents are on this Mac and
   which isn't text. Folders, packages, links, special files and dataless files keep their icons;
-  custom folder icons stay out of scope.
-- **Never on a network volume.** Each request is placed by the mount table (`getmntinfo` with
-  `MNT_NOWAIT`) on a `BlockingCallThread`; a file on a network volume gets none and the maker is
-  never called, in rows and the preview alike. 0004's 85 ms per file stands, and Quick Look would
-  read each file over the share.
-- **Threads and slots follow 0038.** The request starts on a `BlockingCallThread`: the call
-  returns at once on local disk, but what it does in-process before handing on isn't documented,
-  and a thread per request costs tens of microseconds. A volume has at most
-  `ListingService.mostReads(on:)` requests making a thumbnail at once (four on a local volume),
-  in slots of their own (`ThumbnailService.calls`, an `InfoReads`), apart from loads' and info
-  reads'. A slot is held until Quick Look answers. Requests past that wait without a thread, in
-  the order asked; one cancelled while waiting is never made. One already being made can't be
-  stopped; its result is still kept.
+  custom folder icons stay out of scope. Rows and the preview ask only for files in rows the
+  volume answered with (`ListingState.isAnswered`), not cached, slow or offline rows.
+- **Not downloaded, checked again.** The listing's `SF_DATALESS` flag can be stale, so
+  `QuickLookThumbnailer` reads the flag with `lstat`, which doesn't download, on the request's
+  thread just before asking Quick Look, and gives a dataless file none. A file evicted in the
+  microseconds between that `lstat` and Quick Look's open can still be downloaded; nothing short
+  of the process-wide `IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES` policy, which 0030 declined,
+  closes that.
+- **Never on a network volume, placed by the folder's volume.** A request names the volume of
+  its folder as the folder's load read it with `statfs` (`Pane.folderVolume`, from
+  `ListingLoad.volume`, kept through a reload of the same folder and copied into a split's copy),
+  not the path's text. A folder reached through a link under `/` onto a share (`~/nas ->
+  /Volumes/nas`) is on the share. A file on a network volume gets none and no request is made,
+  in rows and the preview alike; a folder whose volume no load has read yet asks for none. 0004's
+  85 ms per file stands, and Quick Look would read each file over the share.
+- **Threads and slots follow 0038.** The cache, the volume and the task's cancellation are
+  checked on the caller's thread first, so a row already kept, on a share or scrolled away costs
+  no thread. A volume has at most `ListingService.mostReads(on:)` requests making a thumbnail at
+  once (four on a local volume), in slots of their own (`ThumbnailService.calls`, an
+  `InfoReads`), apart from loads' and info reads'. A request that gets a slot starts Quick Look
+  on a `BlockingCallThread`: the call returns at once on local disk, but what it does in-process
+  before handing on isn't documented, and a thread per request costs tens of microseconds.
+  Requests past that wait without a thread, in the order asked, the preview's ahead of rows'
+  (`first`), so the CV.12 hold isn't spent behind a screen of rows. One cancelled while waiting
+  is never made.
+- **Given up after 5 s.** A slot is held until Quick Look answers or `ThumbnailService.giveUp`
+  (5 s, on the service's injected clock) passes. Then the request is cancelled
+  (`QLThumbnailGenerator.cancel`), its slot freed for the next request, and it ends with no
+  thumbnail; Quick Look's answer, if it still comes, does nothing. The file is kept as having
+  none for that version, so a file that hangs Quick Look holds a slot once, not each time its
+  row scrolls into view; it is asked again once it changes or the cache drops it. A local
+  thumbnail takes 1–112 ms, so 5 s is a broken file, a stalled disk or a Quick Look that stopped
+  answering, and without it four such requests would stop every thumbnail on the volume and
+  leave the preview held until its 100 ms ran out on every file.
 - **One cache.** `ThumbnailService` keeps thumbnails in a `ThumbnailCache`: least recently used
   dropped first past 32 MB (about 7,000 row thumbnails or 120 preview ones), keyed by path,
   modification date, size and pixel side, so a file saved again is asked for again. A file with
-  no thumbnail, and one on a network volume, is kept as having none, so scrolling back asks
-  nothing. `ListingService.thumbnails` holds the service, so every pane, column and copy shares
+  no thumbnail, and one given up, is kept as having none, so scrolling back asks nothing. `ListingService.thumbnails` holds the service, so every pane, column and copy shares
   it; nil, as in tests and benches that don't pass one, shows type icons only.
 - **Rows: only on screen.** `ListingViewController`, which draws list view and each column of
   column view, asks for the rows in `visibleRect` after each reload or patch and on each scroll
@@ -89,6 +109,12 @@ A probe on this Mac (local APFS, generated 2000×1500 JPEGs, `QLThumbnailGenerat
 - **Thumbnails on network volumes** — rejected, per 0004's measure; the preview too, since a
   thumbnail reads the file over the share and Quick Look's own queue can't be bounded from here.
   Revisit with a measure on the NAS (W4) if Dylan wants them there.
+- **Place a file by its path's text in the mount table** — rejected: a folder reached through a
+  link onto a share places as `/`, and every photo there would be read over the share.
+- **`statfs` per request** — rejected: on a share that stopped answering each one blocks a
+  thread before any per-volume limit applies (0038's consequence); the load has read it already.
+- **Retry a given-up thumbnail each time its row shows** — rejected: a file that always hangs
+  Quick Look would hold a slot for 5 s on every scroll past it.
 - **Cached thumbnails only** — not available: Quick Look has no public cache-only request.
 - **Request from `tableView(_:viewFor:row:)` and cancel in `didRemove`** — rejected: the table
   prepares rows beyond the visible ones, and a prepared row scrolled into view is never asked
@@ -106,5 +132,6 @@ its info read does. B10: no request blocks the main thread, and a share gets non
 folder of photos starts a thread and a Quick Look request per newly visible row, four at a time;
 the UI benches and a by-hand scroll through a large photo folder should confirm scroll budgets.
 A file replaced by another with the same path, date and size keeps the old thumbnail until the
-cache drops it. Folders with custom icons still show the generic icon. A list whose controller is
+cache drops it. A thumbnail Quick Look is slow to make once, past 5 s, as a large video on a
+disk that is spinning up, stays an icon until the file changes or the cache drops it. Folders with custom icons still show the generic icon. A list whose controller is
 dropped leaves its waiting requests to run.

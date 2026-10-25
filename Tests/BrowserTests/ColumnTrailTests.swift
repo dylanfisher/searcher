@@ -1769,7 +1769,7 @@ private func photoPane(
             "/": [folder("t")],
             "/t": [file("a.jpg"), file("b.jpg"), file("c.txt"), notDownloaded],
         ],
-        thumbnails: ThumbnailService(maker: maker, mountedVolumes: { [] }))
+        thumbnails: ThumbnailService(maker: maker))
     await settle { fixture.pane.state.isLoaded }
     fixture.pane.previewHoldClock = clock
     fixture.pane.itemInfoReader = reader
@@ -1876,4 +1876,34 @@ private func photoPane(
 
     #expect(maker.calls.isEmpty)
     #expect(trail(pane).preview?.thumbnail == nil)
+}
+
+/// A file in a folder on a share gets no thumbnail, even when the folder's path reads as on `/`,
+/// as one reached through a link does: the folder's volume is the one its load read.
+@MainActor @Test func aFileOnAShareReachedThroughALinkAsksForNoThumbnail() async throws {
+    let share = VolumeIdentity(device: "//nas/share", mountPoint: "/Volumes/nas", kind: .network)
+    let maker = GatedThumbnailMaker()
+    // Answered, so a request that reached the maker would land in the preview.
+    maker.answer("/t/a.jpg", with: testThumbnail(pixels: 256))
+    let lister = GatedLister(["/t": .batches([[file("a.jpg")]])])
+    lister.releaseAll()
+    let pane = Pane(
+        location: Location(path: "/t"),
+        service: ListingService(
+            lister: lister, volumeOf: { _ in share }, thumbnails: ThumbnailService(maker: maker)),
+        systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true)
+    let reader = GatedItemInfoReader(["/t/a.jpg": info(1)])
+    reader.releaseAll()
+    pane.itemInfoReader = reader
+    await settle { pane.state.isLoaded }
+    pane.setViewMode(.column)
+    await settle { trail(pane).focused.pane.state.isLoaded }
+    #expect(trail(pane).focused.pane.folderVolume == share)
+
+    select("a.jpg", in: trail(pane).columns[0])
+
+    await settle { trail(pane).shownPreview?.info == .read(info(1)) }
+    for _ in 0..<3 { await drainMainQueue() }
+    #expect(maker.calls.isEmpty)
+    #expect(trail(pane).shownPreview?.thumbnail == nil)
 }
