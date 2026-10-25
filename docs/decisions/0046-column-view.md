@@ -18,6 +18,16 @@ stacked single-column tables over `NSBrowser`.
 
 - **Each column is a `ListingViewController`** over its column's pane, built with
   `showsNamesOnly`: the Name column alone, no header, no alternating rows, no horizontal scroller.
+  (Amended 2026-10-25: a column scrolls vertically only, as in Finder; only the browser scrolls
+  sideways. A plain `NSScrollView` kept a sideways gesture over a column and bounced its rows
+  sideways, chevrons and all, and nothing put back a table column wider than the clip, so a
+  chevron could end up past the column's edge. A column's `ColumnScrollView` has no horizontal
+  bounce, a clip view that keeps its bounds at x = 0, and sizes the table's column to the
+  visible width whenever the table's or the clip's frame changes, so the table is never wider
+  than what shows of it and the chevron sits at the column's visible right edge for any name, at
+  any width down to the minimum. A sideways trackpad gesture over a column, decided by its first
+  move as over a grip, and a wheel's sideways click go up to the columns' scroll view. A long
+  name truncates in its middle before the badge and the chevron, as Finder's does.)
   Everything else (rows, icons, badge, labels, selection, Quick Look, Page Up and Down through
   `visibleRowCount`) is the list's code. Row labels read the cells the table has and format the
   kind, size and date from the entry for the columns it doesn't.

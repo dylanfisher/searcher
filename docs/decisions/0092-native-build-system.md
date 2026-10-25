@@ -41,6 +41,18 @@ The suite itself takes about 90 s (19 s parallel, 70 s for the serial interface 
   from the file; over the whole suite the names it reads match `swift test list` exactly
   (1,805).
 
+## A run that stops part-way is a failure
+
+A test that lets a stop of the main run loop reach the outermost loop ends the process normally:
+exit status 0, no closing line (0077-selection-history.md). `swift test` then reports success,
+and the gate said "all checks passed" over a suite that had silently stopped part-way, from the
+step that added real-press tests (52c4add) until this was found. `scripts/test` now reads each
+run's output (`verify_run`) and fails when a run that exited 0 lacks Swift Testing's closing
+"Test run with N tests ... after ..." line, or left a suite or test started and not finished,
+naming them and the last test started. The whole-suite pass stamp (`.build/tests-passed`) is
+written only when both runs pass that check, so a truncated run cannot stamp. The script is an
+input of the stamp's key, so stamps written before this change no longer match.
+
 ## Alternatives considered
 
 - **Keep swiftbuild and unify only the flags** — rejected: the random toolchain ID still

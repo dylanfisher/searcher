@@ -112,11 +112,20 @@ Column view's columns use the same table class.
 The tests (`ListingTableView.realPress`, `Tests/InterfaceTests/RealPress.swift`) send a real
 `mouseDown` with its mouse up queued first, read the table at each selection change, and tell
 whether the button was still down by the mouse up still waiting in the queue. They fail without
-the fix, in list view and in column view. Two harness facts, found the hard way: AppKit's
-posting of the mouse up stops the main run loop, and each stop leaves one queued that ends the
-test process when the test next suspends, so the helper takes them off before it returns; and a
-second `window.sendEvent` of a press in one process is dropped, so the helper makes the table
-first responder itself, as `NSWindow` does, and calls `mouseDown`. The test windows are not key
+the fix, in list view and in column view. Two harness facts, found the hard way: once `NSApp.nextEvent` has pulled events, HIToolbox
+queues blocks on the main run loop, at any time after, that each stop it, to wake a `nextEvent`
+that is no longer waiting. One that runs in the outermost main run loop, the loop that keeps the
+Swift Testing runner alive, ends the process with exit status 0 and no summary. Draining the
+queue and running the loop more did not help: the blocks arrive after the press, and a stop
+from a block is not told apart from the Swift runtime's own except by its caller. So the
+`BeepInterpose` dylib also replaces `CFRunLoopStop`; once a test calls
+`dropStrayMainRunLoopStops()` (`realPress` does), it drops every stop of the main run loop that
+the Swift runtime did not make, and counts them (`RealPressTests`). And a second `window.sendEvent`
+of a press in one process is dropped, so the helper makes the table first responder itself, as
+`NSWindow` does, and calls `mouseDown`. The helper waits on conditions only: the reposted mouse up
+is in the queue when the press returns. `clickedRow` is -1 while the press selects, so the pane's
+cursor comes from the selected row; `aRealPressAfterAnotherPutsTheCursorOnItsOwnRow` presses
+rows in turn to check it. The test windows are not key
 (0091), so the selection's drawn colour, emphasized or not, is not tested; with the window not
 key, AppKit selects nothing at mouse down in either case, which is the behaviour that the
 reproduction shows. Whether it looks right in a key window: needs Dylan.
