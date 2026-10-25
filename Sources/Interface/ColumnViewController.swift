@@ -73,7 +73,7 @@ final class ColumnViewController: NSViewController {
     private var separators: [NSBox] = []
     /// Each shown column's width, by the column's pane. A column keeps its width while it stays
     /// in the trail; a new one starts at `Settings.columnWidth`.
-    private var widths: [ObjectIdentifier: Double] = [:]
+    private(set) var widths: [ObjectIdentifier: Double] = [:]
     /// Each shown column's grip, by the column's pane, centered on the column's separator.
     private var grips: [ObjectIdentifier: ColumnGripView] = [:]
     /// The preview's width, kept while its view is hidden; set when the view is made.
@@ -81,8 +81,8 @@ final class ColumnViewController: NSViewController {
     /// The preview's grip, made with its view and shown with it.
     private(set) var previewGrip: ColumnGripView?
     /// The resize a grip's drag is making: what it resizes, its width when the drag started,
-    /// whether it resizes every column, and whether it has moved yet.
-    private var resizing: (target: GripTarget, start: Double, allColumns: Bool, moved: Bool)?
+    /// whether it resizes every column, and the width it last set; nil until it moves.
+    private var resizing: (target: GripTarget, start: Double, allColumns: Bool, width: Double?)?
     /// The measuring of names for a double-click on a grip, while it runs.
     private(set) var fitting: Task<Void, Never>?
     /// The trail's preview, right of the last column: made the first time a file is selected,
@@ -272,12 +272,12 @@ final class ColumnViewController: NSViewController {
         let grip = ColumnGripView(frame: NSRect(origin: .zero, size: ColumnGripView.size))
         grip.beginResize = { [weak self] allColumns in
             guard let self, let start = width(of: target) else { return }
-            resizing = (target, start, allColumns, false)
+            resizing = (target, start, allColumns, nil)
         }
         grip.resize = { [weak self] offset in
-            guard let self, let resizing, offset != 0 || resizing.moved else { return }
-            self.resizing?.moved = true
+            guard let self, let resizing, offset != 0 || resizing.width != nil else { return }
             let width = Self.clamped(resizing.start + offset)
+            self.resizing?.width = width
             if resizing.allColumns {
                 setEveryWidth(width)
             } else {
@@ -288,7 +288,8 @@ final class ColumnViewController: NSViewController {
             guard let self, let resizing else { return }
             self.resizing = nil
             // As in Finder, an Option-drag sets the width new columns get; a plain one doesn't.
-            if resizing.allColumns, resizing.moved, let width = width(of: target) {
+            // The drag's own width, so a drag whose column closed under it still sets it.
+            if resizing.allColumns, let width = resizing.width {
                 pane.settings.columnWidth = width
             }
         }
@@ -350,19 +351,32 @@ final class ColumnViewController: NSViewController {
             return
         }
         let listings = fitted.compactMap(\.pane.state.listing)
-        guard let measured = fitted.first, listings.contains(where: { $0.count > 0 }) else {
-            return
-        }
+        guard listings.contains(where: { $0.count > 0 }) else { return }
         // Fonts are immutable and string measuring is safe on any thread; the SDK doesn't mark
         // NSFont Sendable.
         nonisolated(unsafe) let font = ListingViewController.nameFont
         fitting?.cancel()
-        fitting = Task { [weak self, weak measured] in
-            let widest = await Task.detached {
-                Self.widestName(in: listings, font: font)
-            }.value
-            guard let self, let measured, !Task.isCancelled else { return }
+        let measuring = Task.detached(priority: .userInitiated) {
+            Self.widestName(in: listings, font: font)
+        }
+        fitting = Task { [weak self] in
+            let widest = await withTaskCancellationHandler {
+                await measuring.value
+            } onCancel: {
+                measuring.cancel()
+            }
+            // A newer fit cancelled this one and holds `fitting` now.
+            guard let self, !Task.isCancelled, let widest else { return }
             fitting = nil
+            // The column whose cell geometry the width is worked out from: the target's, or any
+            // shown column for every column. A target closed since drops the result.
+            let measured =
+                switch target {
+                case .column(let id):
+                    columnControllers.first { ObjectIdentifier($0.pane) == id }
+                case .preview: allColumns ? columnControllers.first : nil
+                }
+            guard let measured else { return }
             let width = Self.clamped(
                 min(measured.columnWidth(fittingNameWidth: widest), Self.fitWidthCap))
             if allColumns {
@@ -374,12 +388,19 @@ final class ColumnViewController: NSViewController {
         }
     }
 
-    /// The width of the widest name in `listings`, set in `font`.
-    private nonisolated static func widestName(in listings: [Listing], font: NSFont) -> Double {
+    /// How many names `widestName` measures between checks for cancellation.
+    private nonisolated static let namesPerCancelCheck = 512
+
+    /// The width of the widest name in `listings`, set in `font`; nil once the task is
+    /// cancelled.
+    private nonisolated static func widestName(in listings: [Listing], font: NSFont) -> Double? {
         let attributes: [NSAttributedString.Key: Any] = [.font: font]
         var widest = 0.0
+        var measured = 0
         for listing in listings {
             for row in 0..<listing.count {
+                measured += 1
+                if measured % namesPerCancelCheck == 0, Task.isCancelled { return nil }
                 let name = listing[row].name as NSString
                 widest = max(widest, name.size(withAttributes: attributes).width)
             }
@@ -437,7 +458,9 @@ final class ColumnViewController: NSViewController {
         }
         previewGrip?.isHidden = shownPreview == nil
         raiseGrips()
-        let width = max(x, scrollView.contentSize.width)
+        // Room for the right half of the last grip, past the last separator.
+        let lastGripEnd = Self.gripFrame(atSeparator: x - 1).maxX
+        let width = max(x, lastGripEnd, scrollView.contentSize.width)
         if columnsView.frame.size != NSSize(width: width, height: height) {
             columnsView.frame = NSRect(x: 0, y: 0, width: width, height: height)
         }

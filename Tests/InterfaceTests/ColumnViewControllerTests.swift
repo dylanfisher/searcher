@@ -1214,3 +1214,133 @@ private func nameRoom(_ name: String, in table: NSTableView) throws -> (
     #expect(scrollView.documentVisibleRect.contains(first.frame))
     #expect(fixture.controller.columnsView.frame.width >= preview.frame.maxX)
 }
+
+/// The view a click at `point`, in the columns' view, lands on.
+@MainActor
+private func hit(_ point: NSPoint, in fixture: Fixture) -> NSView? {
+    let columns = fixture.controller.columnsView
+    guard let superview = columns.superview else { preconditionFailure("no clip view") }
+    return columns.hitTest(columns.convert(point, to: superview))
+}
+
+/// A grip overlaps the bottom corner of the column left of its separator and of the one right
+/// of it; a click there goes to the grip, not to either table.
+@MainActor @Test func aGripTakesClicksOverTheTablesInItsCorner() async throws {
+    let fixture = await Fixture()
+    await fixture.openThreeColumns()
+    let grip = try #require(fixture.controller.grip(forColumnAt: 0))
+    let left = fixture.controller.columnControllers[0].view.frame
+    let right = fixture.controller.columnControllers[1].view.frame
+
+    let inLeft = NSPoint(x: grip.frame.minX + 1, y: grip.frame.midY)
+    let inRight = NSPoint(x: grip.frame.maxX - 1, y: grip.frame.midY)
+
+    #expect(left.contains(inLeft))
+    #expect(right.contains(inRight))
+    #expect(hit(inLeft, in: fixture) === grip)
+    #expect(hit(inRight, in: fixture) === grip)
+}
+
+/// At the far right the last grip, and the preview's, fit inside the columns' view, so their
+/// right halves take clicks too.
+@MainActor @Test func theLastGripFitsInsideTheColumnsViewAndTakesClicks() async throws {
+    let fixture = await Fixture(width: 300)
+    await fixture.openThreeColumns()
+    let last = try #require(fixture.controller.grip(forColumnAt: 2))
+
+    #expect(fixture.controller.columnsView.bounds.contains(last.frame))
+    #expect(hit(NSPoint(x: last.frame.maxX - 1, y: last.frame.midY), in: fixture) === last)
+
+    await fixture.select("one.flac", inColumn: 2)
+    let preview = try #require(fixture.controller.previewGrip)
+    #expect(fixture.controller.columnsView.bounds.contains(preview.frame))
+    #expect(
+        hit(NSPoint(x: preview.frame.maxX - 1, y: preview.frame.midY), in: fixture) === preview)
+}
+
+/// An Option-drag whose own column closes before the release still resizes the columns left and
+/// sets the default from the width the drag gave them.
+@MainActor @Test func anOptionDragWhoseColumnClosesStillSetsTheDefault() async throws {
+    let folder = try TemporaryFolder("ColumnViewControllerTests")
+    let settings = storedSettings(in: folder)
+    let fixture = await Fixture(settings: settings)
+    await fixture.openThreeColumns()
+    let grip = try #require(fixture.controller.grip(forColumnAt: 2))
+    grip.mouseDown(with: gripEvent(.leftMouseDown, x: 100, option: true))
+    grip.mouseDragged(with: gripEvent(.leftMouseDragged, x: 140, option: true))
+
+    await fixture.select("x.txt", inColumn: 1)
+    grip.mouseDragged(with: gripEvent(.leftMouseDragged, x: 160, option: true))
+    grip.mouseUp(with: gripEvent(.leftMouseUp, x: 160, option: true))
+
+    // The columns left keep following the drag after its own column closes.
+    let wide = Settings.defaultColumnWidth + 60
+    #expect(columnWidths(fixture) == [wide, wide])
+    #expect(settings.columnWidth == wide)
+}
+
+/// A plain drag whose column closes before the release resizes nothing else.
+@MainActor @Test func aPlainDragWhoseColumnClosesResizesNothingElse() async throws {
+    let fixture = await Fixture()
+    await fixture.openThreeColumns()
+    let grip = try #require(fixture.controller.grip(forColumnAt: 2))
+    grip.mouseDown(with: gripEvent(.leftMouseDown, x: 100))
+
+    await fixture.select("x.txt", inColumn: 1)
+    grip.mouseDragged(with: gripEvent(.leftMouseDragged, x: 160))
+    grip.mouseUp(with: gripEvent(.leftMouseUp, x: 160))
+
+    let standard = Settings.defaultColumnWidth
+    #expect(columnWidths(fixture) == [standard, standard])
+    try expectPacked(fixture)
+}
+
+/// A fit whose column closes before the names are measured lands on no column, and the fit is
+/// over: the folder's column opened again gets the default width.
+@MainActor @Test func aFitForAClosedColumnIsDropped() async throws {
+    let fixture = await Fixture(folders: fitTree)
+    await fixture.select("docs", inColumn: 0)
+    doubleClick(try #require(fixture.controller.grip(forColumnAt: 1)))
+    let fit = try #require(fixture.controller.fitting)
+
+    await fixture.select("a.txt", inColumn: 0)
+    await fit.value
+
+    #expect(fixture.controller.fitting == nil)
+    #expect(columnWidths(fixture) == [Settings.defaultColumnWidth])
+    await fixture.select("docs", inColumn: 0)
+    #expect(columnWidths(fixture) == [Settings.defaultColumnWidth, Settings.defaultColumnWidth])
+}
+
+/// A new fit cancels the one before it, whose result never lands.
+@MainActor @Test func aNewFitCancelsTheOneBefore() async throws {
+    let fixture = await Fixture(folders: fitTree)
+    await fixture.select("docs", inColumn: 0)
+    await fixture.select("endless", inColumn: 1)
+    doubleClick(try #require(fixture.controller.grip(forColumnAt: 2)))
+    let first = try #require(fixture.controller.fitting)
+
+    doubleClick(try #require(fixture.controller.grip(forColumnAt: 1)))
+    await first.value
+    await fixture.controller.fitting?.value
+
+    #expect(first.isCancelled)
+    #expect(columnWidths(fixture)[2] == Settings.defaultColumnWidth)
+    #expect(columnWidths(fixture)[1] > Settings.defaultColumnWidth)
+}
+
+@MainActor @Test func closedColumnsLeaveNoWidthOrGripBehind() async throws {
+    let fixture = await Fixture()
+    await fixture.openThreeColumns()
+    #expect(fixture.controller.widths.count == 3)
+
+    await fixture.select("a.txt", inColumn: 0)
+
+    let shown = fixture.controller.columnControllers.map { ObjectIdentifier($0.pane) }
+    #expect(Set(fixture.controller.widths.keys) == Set(shown))
+    #expect(fixture.controller.grip(forColumnAt: 1) == nil)
+    // The shown column's grip and the preview's.
+    #expect(
+        fixture.controller.columnsView.subviews.filter { $0 is ColumnGripView }.count
+            == shown.count + 1)
+}

@@ -94,7 +94,7 @@ final class ColumnGripView: NSView {
     }
 
     override func setAccessibilityValue(_ value: Any?) {
-        guard let number = value as? NSNumber else {
+        guard let number = value as? NSNumber, number.doubleValue.isFinite else {
             preconditionFailure("a grip's value is a width, got \(String(describing: value))")
         }
         setWidth(number.doubleValue)
