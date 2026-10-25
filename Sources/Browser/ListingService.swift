@@ -50,7 +50,7 @@ public final class ListingService: Sendable {
     /// volume is.
     private let networkVolumes = NetworkVolumes()
     /// The `readInfo` calls in flight and waiting, per volume.
-    private let infoReads = InfoReads()
+    let infoReads = InfoReads()
 
     /// A service that lists folders on the file system and finds each one's volume with `statfs`.
     /// `rootVolumeName` runs once per load, on the load's thread.
@@ -195,6 +195,9 @@ public final class ListingService: Sendable {
         } onCancel: {
             reads.cancel(id)
         }
+        // A cancel that landed after the read finished, before this task resumed, left the id
+        // behind as cancelled early; no cancel can land after this.
+        reads.forget(id)
         guard let outcome else { throw CancellationError() }
         return outcome
     }
@@ -632,7 +635,7 @@ public final class ListingService: Sendable {
 /// `ListingService.readInfo` calls by volume: those holding one of the volume's
 /// `ListingService.mostReads(on:)` slots, and those waiting for one in the order asked. A volume
 /// the mount table doesn't place counts as one local volume.
-private final class InfoReads: @unchecked Sendable {
+final class InfoReads: @unchecked Sendable {
     private struct Waiter {
         let id: Int
         let cancelled: @Sendable () -> Void
@@ -648,6 +651,19 @@ private final class InfoReads: @unchecked Sendable {
     private var entered: Set<Int> = []
     /// Calls cancelled before they entered, which end as they enter.
     private var cancelledEarly: Set<Int> = []
+
+    /// No call holds a slot, waits or is remembered, for tests.
+    var isIdle: Bool {
+        lock.withLock {
+            running.values.allSatisfy { $0 == 0 } && waiting.isEmpty && entered.isEmpty
+                && cancelledEarly.isEmpty
+        }
+    }
+
+    /// Drops what is kept of the call `id` once it has returned.
+    func forget(_ id: Int) {
+        lock.withLock { _ = cancelledEarly.remove(id) }
+    }
 
     func makeID() -> Int {
         lock.withLock {

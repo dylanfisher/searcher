@@ -1159,6 +1159,30 @@ private func info(_ seconds: Double, tags: [String] = []) -> ItemInfo {
     #expect(trail(fixture.pane).preview?.info == .read(info(1)))
 }
 
+/// A failed read is tried again only once the file's entry changes, not on a patch to another.
+@MainActor @Test func aFailedReadIsReadAgainOnlyOnceItsEntryChanges() async throws {
+    let fixture = await columnPane()
+    let reader = GatedItemInfoReader(["/r/a.txt": nil])
+    reader.releaseAll()
+    fixture.pane.itemInfoReader = reader
+    let first = trail(fixture.pane).columns[0].pane
+    select("a.txt", in: trail(fixture.pane).columns[0])
+    await settle { trail(fixture.pane).preview?.info == .failed }
+
+    first.apply(.patches([.update(file("b.txt"))]), at: first.location)
+    await settle { first.state.names.contains("b.txt") }
+    for _ in 0..<3 { await drainMainQueue() }
+    #expect(reader.calls.count == 1)
+
+    first.apply(.patches([.update(file("a.txt", size: 5))]), at: first.location)
+
+    await settle { reader.calls.count == 2 }
+    #expect(await reader.waitForFinished(2))
+    await settle { trail(fixture.pane).preview?.entry.size == 5 }
+    for _ in 0..<3 { await drainMainQueue() }
+    #expect(trail(fixture.pane).preview?.info == .failed)
+}
+
 @MainActor @Test func aPatchToAnotherEntryKeepsThePreviewsRead() async throws {
     let fixture = await columnPane()
     let reader = GatedItemInfoReader(["/r/a.txt": info(1)])

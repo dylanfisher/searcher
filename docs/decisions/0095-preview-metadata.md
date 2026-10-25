@@ -51,8 +51,8 @@ downloaded ([0030](0030-not-downloaded-badge.md)) has no contents on this Mac. P
 - **One read per file version.** The same file staying previewed keeps what was read through
   patches to other entries. A patch that changes its own entry, such as its size or modified
   date, as a file deleted and made again or saved by replacing it, starts a new read; the fields
-  keep what was read before until it lands, so they don't blank, and a failed read is tried again.
-  A tag change made elsewhere changes no entry, so it shows when the file is previewed again.
+  keep what was read before until it lands, so they don't blank. A failed read is likewise tried
+  again only once the file's entry changes, or when the file is previewed again. A tag change made elsewhere changes no entry, so it shows when the file is previewed again.
 - **The layout doesn't move when the read lands.** The Created and Last opened rows are in the
   Information grid from the first frame, empty until read, between Size and Modified and after
   Modified. Tags are a section below every other field, shown only when the file has tags, so
