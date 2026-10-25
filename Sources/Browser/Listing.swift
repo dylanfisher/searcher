@@ -9,8 +9,9 @@ import Foundation
 ///
 /// With `foldersFirst`, folders come before every other entry, each group in the column's order.
 /// Without `showsHidden`, hidden entries (`isHidden(_:)`) are kept but have no row, so showing
-/// them again is a sort, not a new listing. Entries a non-empty `filter` doesn't match are kept
-/// the same way.
+/// them again is a sort, not a new listing. With `hidesDSStore`, an entry named exactly
+/// `.DS_Store` has no row even while hidden entries show. Entries a non-empty `filter` doesn't
+/// match are kept the same way.
 ///
 /// A folder's size is its walk's total (`applyFolderSizes`), kept beside the entry: a folder
 /// without one sorts by size as it did before its walk, below a zero-byte file.
@@ -42,6 +43,7 @@ public struct Listing: Sendable {
     public private(set) var ascending = true
     public private(set) var foldersFirst = false
     public private(set) var showsHidden = true
+    public private(set) var hidesDSStore = false
     /// Names that don't match it have no row.
     public private(set) var filter = NameFilter()
 
@@ -74,7 +76,8 @@ public struct Listing: Sendable {
     /// - Precondition: no two entries have the same name.
     public init(
         _ entries: [DirectoryEntry], column: SortColumn = .name, ascending: Bool = true,
-        foldersFirst: Bool = false, showsHidden: Bool = true, filter: NameFilter = NameFilter()
+        foldersFirst: Bool = false, showsHidden: Bool = true, hidesDSStore: Bool = false,
+        filter: NameFilter = NameFilter()
     ) {
         dispatchPrecondition(condition: .notOnQueue(.main))
         precondition(entries.count < Int32.max, "\(entries.count) entries don't fit Int32 indexes")
@@ -89,7 +92,7 @@ public struct Listing: Sendable {
         orderNames()
         sort(
             by: column, ascending: ascending, foldersFirst: foldersFirst, showsHidden: showsHidden,
-            filter: filter)
+            hidesDSStore: hidesDSStore, filter: filter)
     }
 
     public var count: Int { rows.count }
@@ -177,21 +180,23 @@ public struct Listing: Sendable {
     }
 
     /// Puts the shown entries in rows in `column` order, with folders first if `foldersFirst`: the
-    /// hidden ones only if `showsHidden`, and only those whose names `filter` matches. Sorting by
-    /// name reuses the name order the listing keeps. Call it off the main thread.
+    /// hidden ones only if `showsHidden`, never `.DS_Store` if `hidesDSStore`, and only those
+    /// whose names `filter` matches. Sorting by name reuses the name order the listing keeps. Call
+    /// it off the main thread.
     public mutating func sort(
         by column: SortColumn, ascending: Bool, foldersFirst: Bool, showsHidden: Bool,
-        filter: NameFilter = NameFilter()
+        hidesDSStore: Bool = false, filter: NameFilter = NameFilter()
     ) {
         dispatchPrecondition(condition: .notOnQueue(.main))
         self.column = column
         self.ascending = ascending
         self.foldersFirst = foldersFirst
         self.showsHidden = showsHidden
+        self.hidesDSStore = hidesDSStore
         self.filter = filter
         if column == .name {
             let ordered = ascending ? nameOrder : nameOrder.reversed()
-            guard foldersFirst || !showsHidden || !filter.isEmpty else {
+            guard foldersFirst || !showsHidden || hidesDSStore || !filter.isEmpty else {
                 rows = ordered
                 return
             }
@@ -268,7 +273,7 @@ public struct Listing: Sendable {
     private mutating func sortAgain() {
         sort(
             by: column, ascending: ascending, foldersFirst: foldersFirst, showsHidden: showsHidden,
-            filter: filter)
+            hidesDSStore: hidesDSStore, filter: filter)
     }
 
     /// Whether `new` is the folder `old` was, with the same modification date, so its walked
@@ -441,8 +446,16 @@ public struct Listing: Sendable {
 
     /// Whether the entry at `index` has a row.
     private func isShown(_ index: Int) -> Bool {
-        (showsHidden || !Self.isHidden(entries[index]))
-            && filter.matches(foldedName: foldedNames[index])
+        let entry = entries[index]
+        guard showsHidden ? !(hidesDSStore && Self.isDSStore(entry)) : !Self.isHidden(entry) else {
+            return false
+        }
+        return filter.matches(foldedName: foldedNames[index])
+    }
+
+    /// Whether `entry` is Finder's `.DS_Store`: the name exactly, by its bytes.
+    private static func isDSStore(_ entry: DirectoryEntry) -> Bool {
+        entry.name.utf8.elementsEqual(".DS_Store".utf8)
     }
 
     /// The entry at `index`'s group in row order: 0 for a folder when folders come first, else 1.

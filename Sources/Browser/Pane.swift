@@ -56,13 +56,13 @@ public final class Pane {
     /// right of it follow the selection (0094-column-open-delay.md).
     private(set) var selectionIsFromKeys = false
     /// Names to select once the rows list them all, the selection version they were asked for
-    /// at, whether hidden entries showed then, and what runs once they are selected. Dropped
-    /// once the user selects anything, the pane leaves the folder, the filter changes or hidden
-    /// entries show or hide, since a name the filter or the setting hid would otherwise be
-    /// selected whenever it showed later.
+    /// at, whether hidden entries and `.DS_Store` showed then, and what runs once they are
+    /// selected. Dropped once the user selects anything, the pane leaves the folder, the filter
+    /// changes or hidden entries or `.DS_Store` show or hide, since a name the filter or the
+    /// setting hid would otherwise be selected whenever it showed later.
     private var namesToSelect:
         (
-            names: [ExactName], selectionVersion: Int, showsHidden: Bool,
+            names: [ExactName], selectionVersion: Int, showsHidden: Bool, hidesDSStore: Bool,
             selected: (@MainActor () -> Void)?
         )?
     /// A copy of the selection is being settled off the main thread.
@@ -127,8 +127,8 @@ public final class Pane {
 
     /// Lists the pane's folders; the palette lists a typed path through it too.
     public let service: ListingService
-    /// The app-wide settings. The rows follow `showHidden` and `foldersFirst`: a change re-sorts
-    /// them off the main actor, as a sort change does.
+    /// The app-wide settings. The rows follow `showHidden`, `hideDSStore` and `foldersFirst`: a
+    /// change re-sorts them off the main actor, as a sort change does.
     public let settings: Settings
     /// How the pane and its views reach the system outside the app's windows.
     public let systemActions: any SystemActions
@@ -642,6 +642,7 @@ public final class Pane {
         let load = service.load(
             target, sortedBy: sortColumn, ascending: sortAscending,
             foldersFirst: settings.foldersFirst, showsHidden: settings.showHidden,
+            hidesDSStore: settings.hideDSStore,
             priority: loadPriority,
             prepare: { update in (update, Self.resolve(start, against: update)) },
             onUpdate: { [weak self] prepared in
@@ -1092,7 +1093,9 @@ public final class Pane {
     private func settingsDidChange() {
         // Followed in column mode too, so the list the pane switches back to has it.
         followSizeSetting()
-        if namesToSelect?.showsHidden != settings.showHidden {
+        if namesToSelect?.showsHidden != settings.showHidden
+            || namesToSelect?.hidesDSStore != settings.hideDSStore
+        {
             namesToSelect = nil
         }
         guard columnTrail == nil, !isClosed else { return }
@@ -1104,16 +1107,18 @@ public final class Pane {
     public func isArranged(_ listing: Listing) -> Bool {
         listing.column == sortColumn && listing.ascending == sortAscending
             && listing.foldersFirst == settings.foldersFirst
-            && listing.showsHidden == settings.showHidden && listing.filter == filter
+            && listing.showsHidden == settings.showHidden
+            && listing.hidesDSStore == settings.hideDSStore && listing.filter == filter
     }
 
     /// Sorts a copy of the rows off the main actor when they aren't in the pane's sort, don't
     /// show hidden entries or put folders first as the settings ask, or aren't filtered by the
     /// pane's filter.
     ///
-    /// Showing hidden entries or changing the filter changes which entries the rows hold, so the
-    /// selection is resolved as against a new load: entries that appear aren't taken into a Select
-    /// All, and selected ones that leave the rows are dropped once the folder is fully listed.
+    /// Showing hidden entries or `.DS_Store`, or changing the filter, changes which entries the
+    /// rows hold, so the selection is resolved as against a new load: entries that appear aren't
+    /// taken into a Select All, and selected ones that leave the rows are dropped once the folder
+    /// is fully listed.
     /// When the cursor's entry is hidden, the cursor moves to the row that followed it
     /// (`keepingCursor`); when the filter drops it, to the first row (`keepingFirstRow`).
     private func startSortIfNeeded() {
@@ -1125,10 +1130,12 @@ public final class Pane {
         let ascending = sortAscending
         let foldersFirst = settings.foldersFirst
         let showsHidden = settings.showHidden
+        let hidesDSStore = settings.hideDSStore
         let filter = filter
         let filterChanged = listing.filter != filter
         let change: Selection.Change
-        if listing.showsHidden == showsHidden, !filterChanged {
+        if listing.showsHidden == showsHidden, listing.hidesDSStore == hidesDSStore, !filterChanged
+        {
             change = .sameEntries
         } else if case .loaded = state {
             change = .loaded(complete: true)
@@ -1141,7 +1148,7 @@ public final class Pane {
             var listing = listing
             listing.sort(
                 by: column, ascending: ascending, foldersFirst: foldersFirst,
-                showsHidden: showsHidden, filter: filter)
+                showsHidden: showsHidden, hidesDSStore: hidesDSStore, filter: filter)
             let resolved =
                 filterChanged
                 ? Self.keepingFirstRow(selection.resolved(in: listing, after: change), listing)
@@ -1191,7 +1198,8 @@ public final class Pane {
         let folder = location
         load = service.load(
             location, sortedBy: sortColumn, ascending: sortAscending,
-            foldersFirst: settings.foldersFirst, showsHidden: settings.showHidden, filter: filter,
+            foldersFirst: settings.foldersFirst, showsHidden: settings.showHidden,
+            hidesDSStore: settings.hideDSStore, filter: filter,
             priority: loadPriority,
             prepare: { update in
                 let update = Self.applying(sizes, keptIn: keptSizes, under: folder, to: update)
@@ -1427,7 +1435,9 @@ public final class Pane {
         then selected: (@MainActor () -> Void)? = nil
     ) {
         guard version == selectionVersion, !names.isEmpty else { return }
-        namesToSelect = (names.map(ExactName.init), version, settings.showHidden, selected)
+        namesToSelect = (
+            names.map(ExactName.init), version, settings.showHidden, settings.hideDSStore, selected
+        )
         selectNamesIfListed()
     }
 

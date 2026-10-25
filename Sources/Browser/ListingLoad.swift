@@ -19,6 +19,7 @@ public final class ListingLoad: @unchecked Sendable {
     public let ascending: Bool
     public let foldersFirst: Bool
     public let showsHidden: Bool
+    public let hidesDSStore: Bool
     public let filter: NameFilter
     /// Runs on the load's worker thread for each update, and returns what to run on the main actor
     /// for it.
@@ -40,7 +41,7 @@ public final class ListingLoad: @unchecked Sendable {
 
     init(
         location: Location, column: SortColumn, ascending: Bool, foldersFirst: Bool,
-        showsHidden: Bool, filter: NameFilter, priority: Priority,
+        showsHidden: Bool, hidesDSStore: Bool, filter: NameFilter, priority: Priority,
         onPriorityChange: @escaping @Sendable () -> Void,
         handOff: @escaping @Sendable (ListingUpdate) -> @MainActor @Sendable () -> Void
     ) {
@@ -49,6 +50,7 @@ public final class ListingLoad: @unchecked Sendable {
         self.ascending = ascending
         self.foldersFirst = foldersFirst
         self.showsHidden = showsHidden
+        self.hidesDSStore = hidesDSStore
         self.filter = filter
         storedPriority = priority
         self.onPriorityChange = onPriorityChange

@@ -131,6 +131,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             bench.start(systemActions: systemActions)
             return
         }
+        // Before any window opens, so none shows in the system's appearance first.
+        settings.applyAppearance(to: NSApp)
         installMainMenu()
         VolumeNotifications.start()
         guard let restoring, let folderHistory, let storeProblems else {

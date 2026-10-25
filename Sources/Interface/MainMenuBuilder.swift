@@ -223,6 +223,7 @@ public enum MainMenuBuilder {
                 .command(WorkspaceCommands.focusSidebar.id),
                 .separator,
                 .command(ViewCommands.toggleHidden.id),
+                .command(ViewCommands.toggleHideDSStore.id),
                 .command(ViewCommands.toggleFoldersFirst.id),
                 .separator,
                 .command(ViewCommands.sortByName.id), .command(ViewCommands.sortByKind.id),
@@ -230,6 +231,15 @@ public enum MainMenuBuilder {
                 .separator,
                 .command(SizeCommands.calculateAllSizes.id),
                 .command(SizeCommands.calculateSizes.id),
+                .separator,
+                .submenu(
+                    Menu(
+                        title: ViewCommands.appearanceTitle,
+                        items: [
+                            .command(ViewCommands.autoAppearance.id),
+                            .command(ViewCommands.lightAppearance.id),
+                            .command(ViewCommands.darkAppearance.id),
+                        ])),
             ]),
         windowMenu,
         helpMenu,

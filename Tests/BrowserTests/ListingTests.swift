@@ -355,6 +355,42 @@ private let shownNames: Set = ["b", "a.txt", "docs"]
     #expect(hidden.names(notIn: shown).isEmpty)
 }
 
+/// `.DS_Store` by its exact name: other dot names, and names that only fold to it, keep their
+/// rows when hidden entries show.
+@Test func hidingDSStoreTakesItsRowEvenWhileHiddenEntriesShow() {
+    let entries = [file("a"), file(".DS_Store"), file(".profile"), file(".DS_Store.txt")]
+    for (column, ascending) in everyOrder {
+        var listing = Listing(entries)
+        listing.sort(
+            by: column, ascending: ascending, foldersFirst: false, showsHidden: true,
+            hidesDSStore: true)
+
+        #expect(Set(names(listing)) == ["a", ".profile", ".DS_Store.txt"], "\(column)")
+        #expect(listing.row(named: ".DS_Store") == nil)
+        #expect(listing.hidesDSStore)
+
+        var shown = listing
+        shown.sort(
+            by: column, ascending: ascending, foldersFirst: false, showsHidden: true,
+            hidesDSStore: false)
+        #expect(names(shown) == names(arranged(entries, column, ascending: ascending)))
+        #expect(shown.names(notIn: listing) == [".DS_Store"])
+    }
+    let hidden = Listing(entries, showsHidden: false, hidesDSStore: true)
+    #expect(names(hidden) == ["a"])
+}
+
+@Test func aDSStoreThatArrivesInAPatchGetsNoRowWhileItIsHidden() {
+    var listing = Listing([file("a")], showsHidden: true, hidesDSStore: true)
+
+    listing.update(file(".DS_Store"))
+
+    #expect(names(listing) == ["a"])
+    #expect(listing.entries.count == 2)
+    #expect(listing.remove(named: ".DS_Store") != nil)
+    #expect(names(listing) == ["a"])
+}
+
 @Test func foldersFirstPutsEveryFolderFirstForEachColumnAndDirection() {
     // "Mail.app" is a package, which Finder sorts with the files.
     let entries = [
