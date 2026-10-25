@@ -196,11 +196,42 @@ extension Fixture {
     let clip = try #require((fixture.controller.view as? NSScrollView)?.contentView)
 
     ColumnViewController.moveClip(clip, toX: 200, animated: true)
+    // Until the animation is under way.
+    await settle { clip.bounds.origin.x > 0 }
     ColumnViewController.moveClip(clip, toX: 0, animated: false)
 
     #expect(clip.bounds.origin.x == 0)
-    try await Task.sleep(for: .milliseconds(400))
+    // Long enough for the animation to have ended had the jump not stopped it.
+    try await Task.sleep(for: .milliseconds(500))
     #expect(clip.bounds.origin.x == 0)
+}
+
+@MainActor @Test func aFocusMoveDuringAGripDragJumps() async throws {
+    let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)
+    await fixture.openThreeColumns()
+    let log = fixture.logScrolls()
+    fixture.controller.reduceMotion = { false }
+    let grip = try #require(fixture.controller.grip(forColumnAt: 0))
+
+    grip.beginResize(false)
+    fixture.trail.moveRight()
+    fixture.trail.moveRight()
+    grip.endResize()
+
+    #expect(!log.requests.isEmpty)
+    #expect(log.requests.allSatisfy { !$0.animated })
+}
+
+@MainActor @Test func theScrollEndsOnTheDeviceGrid() async throws {
+    let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)
+    await fixture.openThreeColumns()
+    let clip = try #require((fixture.controller.view as? NSScrollView)?.contentView)
+    let scale = clip.window?.backingScaleFactor ?? NSScreen.screens.first?.backingScaleFactor ?? 2
+
+    ColumnViewController.moveClip(clip, toX: 100.3, animated: false)
+
+    let device = clip.bounds.origin.x * scale
+    #expect(abs(device - device.rounded()) < 0.001)
 }
 
 @MainActor @Test func reduceMotionJumpsToTheFocusedColumn() async throws {
