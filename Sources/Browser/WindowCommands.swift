@@ -55,10 +55,13 @@ public enum WindowCommands: CommandSet {
         chords: [KeyChord("l", modifiers: [.command, .option])])
 
     /// Shows the command palette over the window: commands, saved workspaces, visited folders,
-    /// the folders open panes show and a typed path, to jump to or run.
+    /// the folders open panes show and a typed path, to jump to or run. Cmd-K, and Cmd-Shift-P,
+    /// the key VS Code and Sublime Text open their command palette with.
     public static let showPalette = Command(
         id: CommandID("window.showPalette"), title: "Open Quickly…",
-        chords: [KeyChord("k", modifiers: .command)])
+        chords: [
+            KeyChord("k", modifiers: .command), KeyChord("p", modifiers: [.command, .shift]),
+        ])
     /// Shows the palette over the window in Go to Item mode: the rows the focused pane shows,
     /// nothing nested, to select one with its row in the middle of the view
     /// (docs/decisions/0101-go-to-item.md). Cmd-P, the key Sublime Text and VS Code go to a file
