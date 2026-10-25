@@ -1,7 +1,7 @@
 /// The widths a column-mode pane's grips have set: one per folder whose column was resized, and
-/// the preview's. A column or preview with none shows at `Settings.columnWidth`. Widths are kept
-/// by folder, not by column position, because ← past the first column inserts a column on the
-/// left (0098-column-widths-per-window.md).
+/// the preview's. A column or preview with none shows at `Settings.columnWidth`, and follows it
+/// when it changes. Widths are kept by folder, not by column position, because ← past the first
+/// column inserts a column on the left (0098-column-widths-per-window.md).
 ///
 /// It holds at most `folderLimit` folders: setting one more drops the folder set longest ago.
 /// The order only decides which folder goes first, so two values with the same widths are equal
@@ -12,18 +12,13 @@ public struct ColumnWidths: Sendable {
     public static let folderLimit = 64
 
     /// A folder and the width its column was set to.
-    public struct Folder: Equatable, Sendable {
-        public let location: Location
-        public let width: Double
-
-        public init(location: Location, width: Double) {
-            self.location = location
-            self.width = width
-        }
+    struct Folder: Equatable, Sendable {
+        let location: Location
+        let width: Double
     }
 
     /// Set longest ago first.
-    public private(set) var folders: [Folder] = []
+    private(set) var folders: [Folder] = []
     /// The preview's width, once its grip has set one.
     public private(set) var preview: Double?
 
@@ -32,7 +27,7 @@ public struct ColumnWidths: Sendable {
     /// Widths as `TabState` stores them, set longest ago first.
     ///
     /// - Precondition: `problem(folders:preview:)` finds nothing wrong.
-    public init(folders: [Folder], preview: Double?) {
+    init(folders: [Folder], preview: Double?) {
         if let problem = Self.problem(folders: folders, preview: preview) {
             preconditionFailure(problem)
         }
@@ -78,7 +73,7 @@ public struct ColumnWidths: Sendable {
 
     /// What is wrong with these widths as stored data, or nil: a folder twice, more than
     /// `folderLimit` folders, or a width outside `Settings.columnWidths`, NaN among them.
-    public static func problem(folders: [Folder], preview: Double?) -> String? {
+    static func problem(folders: [Folder], preview: Double?) -> String? {
         let paths = folders.map(\.location.path)
         if Set(paths).count != paths.count {
             return "a folder has two column widths: \(paths)"
