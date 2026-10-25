@@ -372,7 +372,7 @@ private func linkWorkspace() async -> (Workspace, Pane, GatedLister, StubSystemA
     let trail = try #require(focused.columnTrail)
     await settle { trail.focused.pane.state.isLoaded }
     trail.focused.pane.select(Selection([ExactName("docs")], cursor: ExactName("docs")))
-    await settle { trail.columns.count == 2 && trail.columns[1].pane.state.isLoaded }
+    await settle { trail.columns.count == 3 && trail.columns[2].pane.state.isLoaded }
     trail.moveRight()
     #expect(focused.commandPane.location.path == "/root/docs")
 

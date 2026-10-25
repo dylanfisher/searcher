@@ -1237,21 +1237,23 @@ final class UIBench {
         return samples
     }
 
-    /// Times W2 in column view: `count` ↓ presses in its first column, sorted with Folders First
+    /// Times W2 in column view: `count` ↓ presses in its column, sorted with Folders First
     /// so each ↓ moves onto a folder, faster than the column-open pause, as a held key does, so
     /// each times the selection's frame and only the last folder opens its column; then, once it
-    /// has, → and ← alternating `rowCommandPresses` times between the first column and the last
+    /// has, → and ← alternating `rowCommandPresses` times between W2's column and the last
     /// folder's. W2's folders are empty, so → moves the keys into an empty column. Checks the
     /// cursor, the columns and the focus.
     private func pressColumnKeys(_ count: Int) async throws {
         guard count > 0 else { return }
         let pane = try requirePane()
         let window = try requireWindow()
-        // Read by the first column's own load, which lists W2 again.
+        // Read by W2's column's own load, which lists W2 again.
         pane.settings.foldersFirst = true
         pane.setViewMode(.column)
         guard let trail = pane.columnTrail else { throw Failure("column view has no columns") }
-        let first = trail.columns[0].pane
+        // The trail starts at the volume's root; W2's column is the focused one.
+        let start = trail.focusedIndex
+        let first = trail.focused.pane
         try await waitUntilLoaded(first)
         guard let listing = first.state.listing, listing.count > count,
             (0...count).allSatisfy({ listing[$0].type == .directory })
@@ -1261,7 +1263,7 @@ final class UIBench {
                     + "↓ presses through folders; pass a folder with at least \(count + 1)")
         }
         guard window.firstResponder === controller?.paneViewController.keyView else {
-            throw Failure("the first column's table doesn't have the keys")
+            throw Failure("W2's column's table doesn't have the keys")
         }
         // The list's cursor carries into the column; start from the first folder instead.
         first.selectFirstRow()
@@ -1271,9 +1273,10 @@ final class UIBench {
         try expectCursor(atRow: count, in: first, after: "\(count) ↓ presses in column view")
         // The presses come faster than the column-open pause, as a held key's do, so each timed
         // the selection's frame; only the folder they stop on opens its column, after the pause.
-        try await waitForColumns(2, in: trail)
-        guard trail.columns.count == 2,
-            trail.columns[1].pane.location == first.location.child(named: listing[count].name)
+        try await waitForColumns(start + 2, in: trail)
+        guard trail.columns.count == start + 2,
+            trail.columns[start + 1].pane.location
+                == first.location.child(named: listing[count].name)
         else {
             throw Failure(
                 "↓ onto \(listing[count].name) should open its column alone, but the columns are "
@@ -1281,12 +1284,13 @@ final class UIBench {
         }
         for _ in 0..<(Self.rowCommandPresses / 2) {
             record.columnRight += try await press([.right], "column key right")
-            guard trail.focusedIndex == 1 else {
-                throw Failure("→ left the focus on column \(trail.focusedIndex), not 1")
+            guard trail.focusedIndex == start + 1 else {
+                throw Failure(
+                    "→ left the focus on column \(trail.focusedIndex), not \(start + 1)")
             }
             record.columnLeft += try await press([.left], "column key left")
-            guard trail.focusedIndex == 0 else {
-                throw Failure("← left the focus on column \(trail.focusedIndex), not 0")
+            guard trail.focusedIndex == start else {
+                throw Failure("← left the focus on column \(trail.focusedIndex), not \(start)")
             }
         }
     }
@@ -1542,12 +1546,14 @@ final class UIBench {
         try await waitUntilLoaded()
         let pane = try requirePane()
         let window = try requireWindow()
-        // Read by the first column's own load, so folders come before files such as a cover
+        // Read by the walked column's own load, so folders come before files such as a cover
         // image.
         pane.settings.foldersFirst = true
         pane.setViewMode(.column)
         guard let trail = pane.columnTrail else { throw Failure("column view has no columns") }
-        let first = trail.columns[0].pane
+        // The trail starts at the share's root; the walked folder's column is the focused one.
+        let start = trail.focusedIndex
+        let first = trail.focused.pane
         try await waitUntilLoaded(first)
         guard let listing = first.state.listing,
             let lastFolder = (0..<min(Self.columnWalkPresses, listing.count)).last(where: {
@@ -1566,15 +1572,15 @@ final class UIBench {
         record.columnWalkKey += try await press(
             Array(repeating: Key.down, count: lastFolder), "column walk key")
         try expectCursor(atRow: lastFolder, in: first, after: "\(lastFolder) ↓ presses in the walk")
-        try await waitForColumns(2, in: trail)
-        guard trail.columns.count == 2 else {
+        try await waitForColumns(start + 2, in: trail)
+        guard trail.columns.count == start + 2 else {
             throw Failure(
                 "↓ onto \(listing[lastFolder].name) should open its column alone, but the columns "
                     + "are \(trail.columns.map(\.pane.location.path))")
         }
         record.columnWalkKey += try await press([.right], "column walk key")
-        guard trail.focusedIndex == 1 else {
-            throw Failure("→ left the focus on column \(trail.focusedIndex), not 1")
+        guard trail.focusedIndex == start + 1 else {
+            throw Failure("→ left the focus on column \(trail.focusedIndex), not \(start + 1)")
         }
         let inner = trail.focused.pane
         try await waitUntilLoaded(inner)
@@ -1583,8 +1589,8 @@ final class UIBench {
             Array(repeating: Key.down, count: min(Self.columnWalkPresses, innerRows)),
             "column walk key")
         record.columnWalkKey += try await press([.left], "column walk key")
-        guard trail.focusedIndex == 0 else {
-            throw Failure("← left the focus on column \(trail.focusedIndex), not 0")
+        guard trail.focusedIndex == start else {
+            throw Failure("← left the focus on column \(trail.focusedIndex), not \(start)")
         }
     }
 

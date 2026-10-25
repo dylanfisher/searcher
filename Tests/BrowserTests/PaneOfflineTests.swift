@@ -682,10 +682,10 @@ func aShareThatStopsAnsweringGoesOfflineWithTheCachedRows(code: Int32) async {
 
     @Test func aColumnModePaneGoesOfflineThroughItsColumn() async throws {
         let mountPoint = uniqueMountPoint()
-        let lister = StubLister([mountPoint: [file("a")]])
+        let lister = StubLister([mountPoint: [file("a")], "/": []])
         let pane = stubPane(at: mountPoint, lister: lister, viewMode: .column)
         let trail = try #require(pane.columnTrail)
-        let column = trail.columns[0].pane
+        let column = trail.focused.pane
         await settle { column.state.isLoaded }
 
         VolumeEvents.didUnmount(at: mountPoint)

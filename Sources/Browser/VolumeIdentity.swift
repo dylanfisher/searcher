@@ -10,11 +10,26 @@ public struct VolumeIdentity: Hashable, Sendable {
     /// Where it is mounted (`f_mntonname`).
     public let mountPoint: String
     public let kind: VolumeKind
+    /// Whether Finder shows the volume as one: false for a volume mounted `MNT_DONTBROWSE`, such
+    /// as the system's Data, VM and Preboot volumes. It isn't part of the identity, which is the
+    /// same whichever read made it.
+    public let isBrowsable: Bool
 
-    public init(device: String, mountPoint: String, kind: VolumeKind) {
+    public init(device: String, mountPoint: String, kind: VolumeKind, isBrowsable: Bool = true) {
         self.device = device
         self.mountPoint = mountPoint
         self.kind = kind
+        self.isBrowsable = isBrowsable
+    }
+
+    public static func == (lhs: VolumeIdentity, rhs: VolumeIdentity) -> Bool {
+        lhs.device == rhs.device && lhs.mountPoint == rhs.mountPoint && lhs.kind == rhs.kind
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(device)
+        hasher.combine(mountPoint)
+        hasher.combine(kind)
     }
 
     /// The volume's name as a pane's slow or offline note gives it: its mount point's last
@@ -35,7 +50,8 @@ public struct VolumeIdentity: Hashable, Sendable {
         if statfs(path, &info) != 0 { throw ListingError(path: path, code: errno) }
         self.init(
             device: Self.string(&info.f_mntfromname), mountPoint: Self.string(&info.f_mntonname),
-            kind: VolumeKind(mountFlags: info.f_flags))
+            kind: VolumeKind(mountFlags: info.f_flags),
+            isBrowsable: info.f_flags & UInt32(MNT_DONTBROWSE) == 0)
     }
 
     /// Every mounted volume, from the kernel's mount table (`getmntinfo` with `MNT_NOWAIT`),
@@ -53,7 +69,8 @@ public struct VolumeIdentity: Hashable, Sendable {
             var info = buffer[index]
             return VolumeIdentity(
                 device: string(&info.f_mntfromname), mountPoint: string(&info.f_mntonname),
-                kind: VolumeKind(mountFlags: info.f_flags))
+                kind: VolumeKind(mountFlags: info.f_flags),
+                isBrowsable: info.f_flags & UInt32(MNT_DONTBROWSE) == 0)
         }
     }
 

@@ -277,17 +277,17 @@ private final class Fixture {
 @MainActor @Test func aFolderRowInAColumnOpensItsColumnAfterTheDelay() async throws {
     let fixture = await Fixture(viewMode: .column)
 
-    try fixture.hover(over: "docs")
+    try fixture.hover(over: "docs", inList: 1)
     await fixture.advance(by: delay)
 
-    await settle { fixture.columnFolders == ["/r", "/r/docs"] }
-    await settle { fixture.lists.count == 2 && fixture.lists[1].pane.state.isLoaded }
+    await settle { fixture.columnFolders == ["/", "/r", "/r/docs"] }
+    await settle { fixture.lists.count == 3 && fixture.lists[2].pane.state.isLoaded }
 
     // The drag goes on into the new column, whose folder rows spring too.
-    try fixture.hover(over: "sub", inList: 1)
+    try fixture.hover(over: "sub", inList: 2)
     await fixture.advance(by: delay)
 
-    await settle { fixture.columnFolders == ["/r", "/r/docs", "/r/docs/sub"] }
+    await settle { fixture.columnFolders == ["/", "/r", "/r/docs", "/r/docs/sub"] }
 }
 
 @MainActor @Test func theListGoesBackOnceTheDragEndsOverIt() async throws {
@@ -307,22 +307,22 @@ private final class Fixture {
 
 @MainActor @Test func theColumnsGoBackOnceTheDragEndsAwayFromThePane() async throws {
     let fixture = await Fixture(viewMode: .column)
-    let table = try #require(fixture.lists.first?.tableView)
+    let table = fixture.lists[1].tableView
 
-    try fixture.hover(over: "docs")
+    try fixture.hover(over: "docs", inList: 1)
     await fixture.advance(by: delay)
-    await settle { fixture.columnFolders == ["/r", "/r/docs"] }
+    await settle { fixture.columnFolders == ["/", "/r", "/r/docs"] }
     table.draggingExited(fixture.info)
     await fixture.advance(by: SpringLoader.mouseCheckInterval)
 
     // The button is still down: the drag goes on elsewhere.
-    #expect(fixture.columnFolders == ["/r", "/r/docs"])
+    #expect(fixture.columnFolders == ["/", "/r", "/r/docs"])
 
     fixture.mouse.isDown = false
     await fixture.advance(by: SpringLoader.mouseCheckInterval)
 
-    await settle { fixture.columnFolders == ["/r"] }
-    #expect(fixture.pane.columnTrail?.columns.first?.pane.selection.cursor == nil)
+    await settle { fixture.columnFolders == ["/", "/r"] }
+    #expect(fixture.pane.columnTrail?.columns[1].pane.selection.cursor == nil)
     // The mouse check stops with the drag.
     await settle { fixture.clock.waitingSleeps == 0 }
 }

@@ -166,6 +166,15 @@ public final class ListingService: Sendable {
         return load
     }
 
+    /// The folder column view's trail for `location` starts at, from the mount table, which it
+    /// reads on a `BlockingCallThread` without asking any volume (`ColumnTrail.root`).
+    public func trailRoot(of location: Location) async -> Location {
+        let mountedVolumes = mountedVolumes
+        return await BlockingCallThread.run {
+            ColumnTrail.root(of: location, mountedVolumes: mountedVolumes())
+        }
+    }
+
     /// Reads the info of the item at `path` with `reader` on a `BlockingCallThread`, at most
     /// `mostReads(on:)` at once on its volume, which the mount table places without asking it.
     /// Reads wait in the order asked for their volume's slot, so on a share that stopped answering

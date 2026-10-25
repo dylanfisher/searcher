@@ -226,6 +226,7 @@ private func downKey(isARepeat: Bool) throws -> NSEvent {
 
 @MainActor @Test func inColumnViewThePathBarShowsTheFocusedColumnsState() async throws {
     let lister = GatedLister([
+        "/": .batches([Fixture.folders["/"] ?? []]),
         "/root": .batches([Fixture.folders["/root"] ?? []]),
         "/root/docs": .blockForever,
     ])
@@ -237,12 +238,12 @@ private func downKey(isARepeat: Bool) throws -> NSEvent {
     let trail = try #require(fixture.pane.columnTrail)
     await settle { trail.focused.pane.state.isLoaded }
 
-    trail.columns[0].pane.select(Selection([ExactName("docs")], cursor: ExactName("docs")))
-    await settle { trail.columns.count == 2 }
+    trail.columns[1].pane.select(Selection([ExactName("docs")], cursor: ExactName("docs")))
+    await settle { trail.columns.count == 3 }
     #expect(await lister.waitForCall("/root/docs"))
     clock.advance(by: LoadTimeouts.slow)
     await settle {
-        if case .slow = trail.columns[1].pane.state { true } else { false }
+        if case .slow = trail.columns[2].pane.state { true } else { false }
     }
     #expect(status.note.isHidden)
 
@@ -425,6 +426,31 @@ private final class VolumeName: @unchecked Sendable {
     #expect(fixture.table.selectedRowIndexes == [2])
 }
 
+/// In column view a click on a folder whose column shows moves the keys to that column: every
+/// column and its selection stay and Back has no step (0103-column-trail-from-the-root.md).
+@MainActor @Test func clickingAPathBarSegmentInColumnViewFocusesThatFoldersColumn() async throws {
+    let fixture = Fixture(at: "/root/docs")
+    await settle { fixture.pane.state.isLoaded }
+    fixture.pane.setViewMode(.column)
+    let trail = try #require(fixture.pane.columnTrail)
+    await settle {
+        trail.columns.allSatisfy { $0.pane.state.isLoaded }
+            && fixture.controller.pathBar.location == Location(path: "/root/docs")
+    }
+    let columns = trail.columns.map(\.pane)
+    let selections = columns.map(\.selection)
+    #expect(fixture.controller.pathBar.segments.map(\.title) == ["Test Disk", "root", "docs"])
+
+    fixture.controller.pathBar.segments[1].performClick(nil)
+
+    #expect(trail.focusedIndex == 1)
+    #expect(fixture.pane.location == Location(path: "/root"))
+    #expect(trail.columns.map(\.pane).elementsEqual(columns, by: ===))
+    #expect(trail.columns.map(\.pane.selection) == selections)
+    #expect(!fixture.pane.canGoBack)
+    #expect(fixture.controller.pathBar.location == Location(path: "/root"))
+}
+
 @MainActor @Test func pathBarChangesInTheSameUpdateAsTheNewFoldersFirstRows() async throws {
     let lister = GatedLister(Fixture.folders.mapValues { .batches([$0]) })
     let fixture = Fixture(lister: lister)
@@ -568,7 +594,7 @@ private final class WindowFixture {
     // a.txt, b.txt, docs: the third row opens a second column, and → moves the keys into it.
     // The column opens once the keys pause.
     for _ in 0..<3 { try setup.press(NSDownArrowFunctionKey) }
-    await settle { setup.pane.columnTrail?.columns.count == 2 }
+    await settle { setup.pane.columnTrail?.columns.count == 3 }
     await setup.waitForColumns()
     try setup.press(NSRightArrowFunctionKey)
 
@@ -621,7 +647,7 @@ private final class WindowFixture {
             doCommandBy: #selector(NSResponder.moveDown(_:))))
     await setup.waitForColumns()
     let second = try #require(columns.columnControllers.last)
-    #expect(columns.columnControllers.count == 2)
+    #expect(columns.columnControllers.count == 3)
 
     // A click in the second column.
     #expect(setup.window.makeFirstResponder(second.tableView))
@@ -679,15 +705,16 @@ private final class WindowFixture {
     pane.setViewMode(.column)
     let trail = try #require(pane.columnTrail)
     await settle {
-        trail.columns.count == 2 && trail.columns.allSatisfy { $0.pane.monitor != nil }
+        trail.columns.last?.pane.location.path == url.path + "/sub"
+            && trail.columns.allSatisfy { $0.pane.monitor != nil }
     }
     #expect(pane.monitor == nil)
 
     try await Task.detached { try Data().write(to: url.appending(path: "sub/new.txt")) }.value
 
     let tables = controller.columnViewController.columnControllers.map(\.tableView)
-    await settle { tables.count == 2 && rowNames(tables[1]) == ["new.txt"] }
-    #expect(rowNames(tables[1]) == ["new.txt"])
+    await settle { tables.last.map(rowNames) == ["new.txt"] }
+    #expect(tables.last.map(rowNames) == ["new.txt"])
     #expect(pane.monitor == nil)
 }
 
@@ -756,7 +783,7 @@ private final class WindowFixture {
         pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
         tableView: ListingTableView(), monitorsFolders: true)
     _ = controller.view
-    let column = try #require(pane.columnTrail?.columns.first?.pane)
+    let column = try #require(pane.columnTrail?.columns.last?.pane)
     await settle { column.state.isLoaded && column.monitor != nil }
 
     VolumeEvents.didUnmount(at: url.path)
@@ -766,7 +793,7 @@ private final class WindowFixture {
 
     try await Task.detached { try Data().write(to: url.appending(path: "new.txt")) }.value
 
-    let table = try #require(controller.columnViewController.columnControllers.first?.tableView)
+    let table = try #require(controller.columnViewController.columnControllers.last?.tableView)
     await settle { rowNames(table) == ["new.txt"] }
     #expect(rowNames(table) == ["new.txt"])
 }
@@ -803,7 +830,7 @@ private final class WindowFixture {
     try setup.press("d")
     #expect(first.tableView.typeSelect.query == "d")
     // The folder typed to opens its column once the keys pause.
-    await settle { setup.pane.columnTrail?.columns.count == 2 }
+    await settle { setup.pane.columnTrail?.columns.count == 3 }
     await setup.waitForColumns()
     let second = try #require(columns.columnControllers.last)
     #expect(second !== first)

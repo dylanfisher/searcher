@@ -60,7 +60,7 @@ private func count(_ path: String, in visits: FolderVisits) -> Int {
 
     // Selecting a folder shows its column; only moving the keys into it opens it.
     trail.focused.pane.select(Selection([ExactName("docs")], cursor: ExactName("docs")))
-    await settle { trail.columns.count == 2 }
+    await settle { trail.columns.count == 3 }
     #expect(count("/root/docs", in: visits) == 0)
     trail.moveRight()
 
