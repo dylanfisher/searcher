@@ -1408,6 +1408,7 @@ private func springPane() async -> PaneFixture {
     let fixture = await springPane()
     let pane = fixture.pane
     fixture.select("a.txt", "b.txt")
+    let canUndo = pane.canUndoSelection
 
     pane.springOpen("docs")
     #expect(pane.location.path == "/root/docs")
@@ -1421,6 +1422,46 @@ private func springPane() async -> PaneFixture {
     await settle { pane.state.isLoaded }
     #expect(fixture.selectedNames == ["a.txt", "b.txt"])
     #expect(pane.selection.cursor == ExactName("b.txt"))
+    #expect(pane.canUndoSelection == canUndo)
+}
+
+/// Leaving a folder clears its filter; going back puts it back. Neither the sprung folders nor
+/// the way back count as visits for the palette.
+@MainActor @Test func goingBackFromASpringKeepsTheFilterAndCountsNoVisit() async throws {
+    let fixture = await springPane()
+    let pane = fixture.pane
+    let visits = FolderVisits(store: nil)
+    pane.countVisits(in: visits)
+    pane.setFilter("o")
+    await settle { pane.state.names == ["docs", "more"] }
+
+    pane.springOpen("docs")
+    #expect(pane.filter.text == "")
+    await settle { pane.state.isLoaded }
+    pane.springOpen("sub")
+    pane.springBack()
+
+    #expect(pane.filter.text == "o")
+    await settle { pane.state.isLoaded && pane.state.names == ["docs", "more"] }
+    #expect(visits.history.folders.mapValues(\.count) == ["/root": 1])
+}
+
+@MainActor @Test func aColumnMovedAfterTheSpringKeepsWhatItWasMovedTo() async throws {
+    let fixture = await springPane()
+    let pane = fixture.pane
+    pane.setViewMode(.column)
+    let trail = try #require(pane.columnTrail)
+    await settle { trail.focused.pane.state.isLoaded }
+    let first = trail.columns[0].pane
+
+    first.springOpen("docs")
+    #expect(trail.columns.map(\.pane.location.path) == ["/root", "/root/docs"])
+    // A click in the first column during the drag.
+    first.select(Selection([ExactName("more")], cursor: ExactName("more")))
+    first.springBack()
+
+    #expect(trail.columns.map(\.pane.location.path) == ["/root", "/root/more"])
+    #expect(first.selection.cursor == ExactName("more"))
 }
 
 @MainActor @Test func aPaneMovedAfterTheSpringStaysWhereItWasMoved() async throws {

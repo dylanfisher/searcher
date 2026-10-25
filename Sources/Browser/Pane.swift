@@ -9,7 +9,7 @@ import Foundation
 public final class Pane {
     public private(set) var location: Location {
         didSet {
-            if location != oldValue { folderVisits?.visit(location) }
+            if location != oldValue, !isSpringing { folderVisits?.visit(location) }
         }
     }
     /// Counts a visit each time the pane moves to a folder, for the palette, once
@@ -389,9 +389,12 @@ public final class Pane {
     /// Finder's spring-loaded folders do: in list mode the pane moves into it, and in a column it
     /// is selected, so its column opens to the right at once. The first spring of a drag keeps
     /// where the pane was, for `springBack`. A column's selection here is no step of the
-    /// selection history, since the user didn't choose it.
+    /// selection history, since the user didn't choose it, and the folder is no visit for the
+    /// palette: the pane goes back once the drag ends.
     public func springOpen(_ name: String) {
         let owner = containingTrail?.owner ?? self
+        owner.isSpringing = true
+        defer { owner.isSpringing = false }
         if owner.springOrigin == nil {
             owner.springOrigin = owner.springStart()
         }
@@ -405,20 +408,26 @@ public final class Pane {
     }
 
     /// The drag that sprang folders open has ended, dropped or not: the pane goes back to where
-    /// it was before the first spring, as Finder's window does, unless something other than the
-    /// drag has moved it since the last spring: another folder in list mode, or a column the
-    /// last spring left, or one left of it, at another folder in column mode. In list mode the history goes back to what it
-    /// was, so the folders sprung through are no steps of it; in column mode each column the
-    /// trail still has takes back its selection, left to right, and the focus goes back to its
-    /// column. Does nothing when no folder sprang open.
+    /// it was before the first spring, as Finder's window does. It stays when something other
+    /// than the drag has moved it since the last spring: to another folder in list mode, or, in
+    /// column mode, a column the last spring left, or one left of it, to another folder.
+    ///
+    /// In list mode the pane takes back its folder, selection and filter, and the history goes
+    /// back to what it was, so the folders sprung through are no steps of it. In column mode each
+    /// column the trail still has takes back its selection, left to right, and the focus goes
+    /// back to its column. Going back is no visit for the palette either. Does nothing when no
+    /// folder sprang open.
     public func springBack() {
         let owner = containingTrail?.owner ?? self
         guard let origin = owner.springOrigin else { return }
         owner.springOrigin = nil
         guard owner.springFolders.starts(with: origin.sprungTo) else { return }
+        owner.isSpringing = true
+        defer { owner.isSpringing = false }
         guard let trail = owner.columnTrail else {
             owner.history = origin.history
             owner.move(to: origin.location, selection: origin.selection)
+            owner.setFilter(origin.filter.text)
             return
         }
         for (index, column) in origin.columns.enumerated() {
@@ -435,11 +444,14 @@ public final class Pane {
     /// Where the pane was when a drag first sprang a folder open, and where the last spring left
     /// it; nil while no drag has.
     private var springOrigin: SpringOrigin?
+    /// Set while a spring or the way back moves the pane, which counts no visit.
+    private var isSpringing = false
 
     private struct SpringOrigin {
         let history: History
         let location: Location
         let selection: Selection
+        let filter: NameFilter
         /// In column mode, each column's folder and selection, left to right.
         let columns: [(location: Location, selection: Selection)]
         let focusedIndex: Int
@@ -451,7 +463,8 @@ public final class Pane {
     private func springStart() -> SpringOrigin {
         let columns = columnTrail?.columns.map { ($0.pane.location, $0.pane.selection) } ?? []
         return SpringOrigin(
-            history: history, location: location, selection: selection, columns: columns,
+            history: history, location: location, selection: selection, filter: filter,
+            columns: columns,
             focusedIndex: columnTrail?.focusedIndex ?? 0)
     }
 

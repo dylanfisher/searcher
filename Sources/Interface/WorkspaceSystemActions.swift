@@ -69,6 +69,8 @@ public final class WorkspaceSystemActions: SystemActions {
     /// The Apple Event errors that mean macOS refused the event: `errAEEventNotPermitted` and
     /// `errAEEventWouldRequireUserConsent`.
     nonisolated static let automationDeniedCodes: Set<Int> = [-1743, -1744]
+    /// `errAETimeout`: Finder didn't reply within `finderTimeout`.
+    nonisolated static let timeoutCode = -1712
 
     private let logger = Logger(category: "workspace")
     /// The app with a bundle ID, or nil when there is none.
@@ -81,6 +83,8 @@ public final class WorkspaceSystemActions: SystemActions {
     private let sendToFinder: @Sendable ([URL]) throws -> Void
     /// Opens a URL, for the Automation list.
     private let openURL: @Sendable (URL) -> Void
+    /// A Get Info request is waiting for Finder.
+    private(set) var isShowingInfo = false
 
     public convenience init() {
         self.init(
@@ -138,18 +142,37 @@ public final class WorkspaceSystemActions: SystemActions {
     /// time to answer and macOS holds the first event while it asks the user for Automation
     /// permission. A refusal is presented as `AutomationDenied`, any other failure as
     /// `InfoFailed`.
+    ///
+    /// One request is in flight at a time: while Finder hasn't answered, another Get Info does
+    /// nothing, so pressing ⌘I again at a hung Finder doesn't pile up windows for when it wakes.
+    /// A timeout (`errAETimeout`) is logged and not presented: Finder keeps the event and opens
+    /// the windows once it gets to it.
     public func showInfo(_ urls: [URL]) {
+        guard !isShowingInfo else {
+            logger.info("Get Info ignored: Finder hasn't answered the last one")
+            return
+        }
+        isShowingInfo = true
         let send = sendToFinder
         let openURL = openURL
         BlockingCallThread.start {
+            var failure: (any Error)?
             do {
                 try send(urls)
             } catch {
-                let failure: any Error =
-                    Self.automationDeniedCodes.contains((error as NSError).code)
-                    ? AutomationDenied(openURL: openURL)
-                    : InfoFailed(reason: error.localizedDescription)
-                Task { @MainActor in self.fail(failure) }
+                let code = (error as NSError).code
+                if Self.automationDeniedCodes.contains(code) {
+                    failure = AutomationDenied(openURL: openURL)
+                } else if code != Self.timeoutCode {
+                    failure = InfoFailed(reason: error.localizedDescription)
+                } else {
+                    Logger(category: "workspace").error(
+                        "Finder didn't answer Get Info in \(Self.finderTimeout) s")
+                }
+            }
+            Task { @MainActor [failure] in
+                self.isShowingInfo = false
+                if let failure { self.fail(failure) }
             }
         }
     }
@@ -204,8 +227,18 @@ public final class WorkspaceSystemActions: SystemActions {
 
     /// Sends `infoEvent` and then `activateEvent` and waits for each reply, throwing the error
     /// Apple Events or Finder's reply gives.
+    /// Asks for Automation permission first, with no timeout, so a prompt the user takes a while
+    /// to answer doesn't use up the event's `finderTimeout`.
     private nonisolated static func openInfoWindows(_ urls: [URL]) throws {
         dispatchPrecondition(condition: .notOnQueue(.main))
+        guard let target = finder().aeDesc else {
+            preconditionFailure("Finder's bundle ID made no Apple Event address")
+        }
+        let permission = AEDeterminePermissionToAutomateTarget(
+            target, AEEventClass(typeWildCard), AEEventID(typeWildCard), true)
+        if permission != noErr {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(permission))
+        }
         for event in [infoEvent(for: urls), activateEvent()] {
             let reply = try event.sendEvent(
                 options: [.waitForReply, .canInteract], timeout: finderTimeout)
