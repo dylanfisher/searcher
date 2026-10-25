@@ -73,6 +73,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     var fileOperations: FileOperationQueue?
     /// Tells a drop whether its items are on the target folder's volume.
     var mountTable: MountTable?
+    /// Opens the folder row a drag hovers over; nil opens none. The pane's lists share one.
+    var springLoader: SpringLoader?
     /// The modifier keys held in the event being handled, read when a click changes the
     /// selection. Tests replace it.
     var currentModifierFlags: @MainActor () -> NSEvent.ModifierFlags = {
@@ -354,6 +356,13 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         for isLocal in [true, false] {
             tableView.setDraggingSourceOperationMask(Self.dragOperations, forLocal: isLocal)
         }
+        tableView.springLoadingOptions = { [weak self] in self?.springLoader?.options ?? [] }
+        tableView.springLoadingActivated = { [weak self] in self?.springLoader?.activate() }
+        tableView.dragExited = { [weak self] in
+            guard let self else { return }
+            springLoader?.dragExited(pane)
+        }
+        tableView.dragEnded = { [weak self] in self?.springLoader?.dragEnded() }
     }
 
     /// What a drag of rows lets its destination do with them.
@@ -477,7 +486,12 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         _ tableView: NSTableView, validateDrop info: any NSDraggingInfo, proposedRow row: Int,
         proposedDropOperation dropOperation: NSTableView.DropOperation
     ) -> NSDragOperation {
-        guard let drop = drop(info, row: row, dropOperation) else { return [] }
+        let drop = drop(info, row: row, dropOperation)
+        springLoader?.hover(
+            over: drop?.folderRow.map {
+                SpringLoader.Target(pane: pane, location: pane.location, name: $0)
+            }, info: info)
+        guard let drop else { return [] }
         if drop.pane != nil, row != -1 || dropOperation != .on {
             tableView.setDropRow(-1, dropOperation: .on)
         }
@@ -528,6 +542,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     }
 
     /// A drop the list takes: the folder it goes into, the pane when that is the pane's folder,
+    /// the folder row's name when it goes into one, which springs open while the drag hovers,
     /// and what it carries.
     private struct Drop {
         enum Content {
@@ -541,6 +556,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
 
         let folder: String
         let pane: Pane?
+        var folderRow: String?
         let content: Content
     }
 
@@ -553,11 +569,13 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         var folder = pane.location
         var target: Pane? = pane
         var app: Location?
+        var folderRow: String?
         if dropOperation == .on, let listing, row >= 0, row < listing.count {
             let kind = listing.kind(atRow: row).type
             if kind == .folder {
                 folder = pane.location.child(named: listing[row].name)
                 target = nil
+                folderRow = listing[row].name
             } else if listing[row].type == .package, kind.conforms(to: .application) {
                 app = pane.location.child(named: listing[row].name)
             }
@@ -579,12 +597,14 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
                     dropping: paths, into: folder.path,
                     allowed: info.draggingSourceOperationMask, mounts: mountTable)
             else { return nil }
-            return Drop(folder: folder.path, pane: target, content: .files(paths, operation))
+            return Drop(
+                folder: folder.path, pane: target, folderRow: folderRow,
+                content: .files(paths, operation))
         }
         guard pasteboard.canReadObject(forClasses: [NSFilePromiseReceiver.self]),
             info.draggingSourceOperationMask.contains(.copy)
         else { return nil }
-        return Drop(folder: folder.path, pane: target, content: .promises)
+        return Drop(folder: folder.path, pane: target, folderRow: folderRow, content: .promises)
     }
 
     /// The context menu for a right-click on `row`, or below the rows at -1. A row outside the

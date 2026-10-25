@@ -383,6 +383,83 @@ public final class Pane {
         move(to: entry.location, selecting: entry.selected)
     }
 
+    // MARK: - Spring-loaded folders
+
+    /// Opens the folder `name` in this pane's folder for a drag hovering over its row, as
+    /// Finder's spring-loaded folders do: in list mode the pane moves into it, and in a column it
+    /// is selected, so its column opens to the right at once. The first spring of a drag keeps
+    /// where the pane was, for `springBack`. A column's selection here is no step of the
+    /// selection history, since the user didn't choose it.
+    public func springOpen(_ name: String) {
+        let owner = containingTrail?.owner ?? self
+        if owner.springOrigin == nil {
+            owner.springOrigin = owner.springStart()
+        }
+        let folder = ExactName(name)
+        if containingTrail != nil {
+            set(Selection([folder], cursor: folder), recordingAs: nil)
+        } else {
+            navigate(to: location.child(named: name))
+        }
+        owner.springOrigin?.sprungTo = owner.springFolders
+    }
+
+    /// The drag that sprang folders open has ended, dropped or not: the pane goes back to where
+    /// it was before the first spring, as Finder's window does, unless something other than the
+    /// drag has moved it since the last spring: another folder in list mode, or a column the
+    /// last spring left, or one left of it, at another folder in column mode. In list mode the history goes back to what it
+    /// was, so the folders sprung through are no steps of it; in column mode each column the
+    /// trail still has takes back its selection, left to right, and the focus goes back to its
+    /// column. Does nothing when no folder sprang open.
+    public func springBack() {
+        let owner = containingTrail?.owner ?? self
+        guard let origin = owner.springOrigin else { return }
+        owner.springOrigin = nil
+        guard owner.springFolders.starts(with: origin.sprungTo) else { return }
+        guard let trail = owner.columnTrail else {
+            owner.history = origin.history
+            owner.move(to: origin.location, selection: origin.selection)
+            return
+        }
+        for (index, column) in origin.columns.enumerated() {
+            guard index < trail.columns.count,
+                trail.columns[index].pane.location == column.location
+            else { break }
+            trail.columns[index].pane.set(column.selection, recordingAs: nil)
+        }
+        if origin.focusedIndex < trail.columns.count {
+            trail.focus(trail.columns[origin.focusedIndex])
+        }
+    }
+
+    /// Where the pane was when a drag first sprang a folder open, and where the last spring left
+    /// it; nil while no drag has.
+    private var springOrigin: SpringOrigin?
+
+    private struct SpringOrigin {
+        let history: History
+        let location: Location
+        let selection: Selection
+        /// In column mode, each column's folder and selection, left to right.
+        let columns: [(location: Location, selection: Selection)]
+        let focusedIndex: Int
+        /// `springFolders` after the last spring. A column the trail opens after it, once the
+        /// sprung folder's column lists, moves nothing.
+        var sprungTo: [Location] = []
+    }
+
+    private func springStart() -> SpringOrigin {
+        let columns = columnTrail?.columns.map { ($0.pane.location, $0.pane.selection) } ?? []
+        return SpringOrigin(
+            history: history, location: location, selection: selection, columns: columns,
+            focusedIndex: columnTrail?.focusedIndex ?? 0)
+    }
+
+    /// The folder shown in list mode, or each column's left to right in column mode.
+    private var springFolders: [Location] {
+        columnTrail?.columns.map(\.pane.location) ?? [location]
+    }
+
     // MARK: - View mode
 
     /// Switches between the list and columns. Columns start with one at the pane's folder, with
@@ -527,7 +604,7 @@ public final class Pane {
             return
         }
         history.leave(here)
-        leave(for: pending.load.location, selecting: nil)
+        leave(for: pending.load.location, selection: Selection())
         if columnTrail != nil {
             // The new column lists the folder itself.
             pending.load.cancel()
@@ -556,7 +633,13 @@ public final class Pane {
     /// Moves to `location` without touching the history, and lists it: in column mode, in a
     /// trail started again at it.
     private func move(to location: Location, selecting name: ExactName?) {
-        leave(for: location, selecting: name)
+        move(to: location, selection: name.map { Selection([$0], cursor: $0) } ?? Selection())
+    }
+
+    /// Moves to `location` without touching the history, with `selection` to be selected once
+    /// it is listed.
+    private func move(to location: Location, selection: Selection) {
+        leave(for: location, selection: selection)
         if columnTrail != nil {
             restartTrail()
         } else {
@@ -578,8 +661,8 @@ public final class Pane {
     }
 
     /// Stops everything the pane does for the folder it leaves: its load, a pending
-    /// `goToFolder`, its monitor and patches. Takes `location` with `name` to be selected.
-    private func leave(for location: Location, selecting name: ExactName?) {
+    /// `goToFolder`, its monitor and patches. Takes `location` with `selection` to be selected.
+    private func leave(for location: Location, selection: Selection) {
         cancelGoToFolder()
         loadedAt = nil
         load?.cancel()
@@ -591,7 +674,7 @@ public final class Pane {
         forgetFolderSizes(lettingLocalWalksFinish: true)
         self.location = location
         filter = NameFilter()
-        selection = name.map { Selection([$0], cursor: $0) } ?? Selection()
+        self.selection = selection
         selectionVersion += 1
         selectionIsFromKeys = false
     }

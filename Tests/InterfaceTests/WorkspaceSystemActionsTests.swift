@@ -92,3 +92,121 @@ func openWithListsTheAppsLaunchServicesListsForAFileDefaultFirst(pathExtension: 
     #expect(app.version == nil)
     #expect(logged.bundleID == url.path)
 }
+
+// MARK: Get Info
+
+/// What a stand-in for Finder was asked: the items, and whether that ran on the main thread.
+private struct InfoRequest: Sendable {
+    let urls: [URL]
+    let onMainThread: Bool
+}
+
+private let infoItems = [
+    URL(fileURLWithPath: "/r/a.txt", isDirectory: false),
+    URL(fileURLWithPath: "/r/docs", isDirectory: true),
+]
+
+@MainActor @Test func getInfoAsksFinderOffTheMainThreadAndShowsNoError() async {
+    let log = ErrorLog()
+    let requests = EventLog<InfoRequest>()
+    let actions = WorkspaceSystemActions(
+        applicationURL: { _ in nil }, presentError: { log.errors.append($0) },
+        sendToFinder: { urls in
+            requests.append(InfoRequest(urls: urls, onMainThread: Thread.isMainThread))
+        })
+
+    actions.showInfo(infoItems)
+
+    #expect(await requests.wait { $0.count == 1 })
+    #expect(requests.all.first?.urls == infoItems)
+    #expect(requests.all.first?.onMainThread == false)
+    for _ in 0..<20 { await Task.yield() }
+    #expect(log.errors.isEmpty)
+}
+
+/// A Finder that doesn't answer, or the Automation prompt waiting for the user, holds a thread of
+/// its own, not the main one.
+@MainActor @Test func aFinderThatDoesntAnswerLeavesTheMainThreadFree() async {
+    let started = EventLog<Bool>()
+    let answer = DispatchSemaphore(value: 0)
+    let actions = WorkspaceSystemActions(
+        applicationURL: { _ in nil }, presentError: { _ in },
+        sendToFinder: { _ in
+            started.append(true)
+            answer.wait()
+        })
+
+    actions.showInfo(infoItems)
+
+    // The main actor gets here, and waits here, while Finder still hasn't answered.
+    #expect(await started.wait { $0.count == 1 })
+    answer.signal()
+}
+
+@MainActor @Test func aRefusedEventExplainsAutomationAndOffersItsSettings() async throws {
+    let log = ErrorLog()
+    let opened = EventLog<URL>()
+    let actions = WorkspaceSystemActions(
+        applicationURL: { _ in nil }, presentError: { log.errors.append($0) },
+        sendToFinder: { _ in throw NSError(domain: NSOSStatusErrorDomain, code: -1743) },
+        openURL: { opened.append($0) })
+
+    actions.showInfo(infoItems)
+
+    await settle { log.errors.count == 1 }
+    let error = try #require(log.errors.first as? WorkspaceSystemActions.AutomationDenied)
+    #expect(error.localizedDescription == "Searcher can’t show Finder’s Info window")
+    #expect(error.recoverySuggestion?.contains("Automation list") == true)
+    #expect(error.recoveryOptions.first == "Open Automation Settings")
+    #expect(!error.attemptRecovery(optionIndex: 1))
+    #expect(opened.all.isEmpty)
+    #expect(error.attemptRecovery(optionIndex: 0))
+    #expect(opened.all == [WorkspaceSystemActions.AutomationDenied.automationSettings])
+}
+
+@MainActor @Test func anotherFailureSaysFinderDidntShowTheWindowAndWhy() async throws {
+    let log = ErrorLog()
+    let actions = WorkspaceSystemActions(
+        applicationURL: { _ in nil }, presentError: { log.errors.append($0) },
+        sendToFinder: { _ in
+            throw NSError(
+                domain: NSOSStatusErrorDomain, code: -1712,
+                userInfo: [NSLocalizedDescriptionKey: "AppleEvent timed out."])
+        })
+
+    actions.showInfo(infoItems)
+
+    await settle { log.errors.count == 1 }
+    let error = try #require(log.errors.first as? WorkspaceSystemActions.InfoFailed)
+    #expect(error.localizedDescription == "Finder didn’t show the Info window")
+    #expect(error.recoverySuggestion == "AppleEvent timed out.")
+}
+
+/// The event AppleScript sends for `open information window of item`, one specifier per item,
+/// built without sending it, and the `activate` after it.
+@Test func theInfoEventOpensTheInformationWindowOfEachItem() throws {
+    let event = WorkspaceSystemActions.infoEvent(for: infoItems)
+
+    #expect(event.eventClass == AEEventClass(kCoreEventClass))
+    #expect(event.eventID == AEEventID(kAEOpenDocuments))
+    let target = try #require(event.attributeDescriptor(forKeyword: AEKeyword(keyAddressAttr)))
+    #expect(target.descriptorType == DescType(typeApplicationBundleID))
+    #expect(String(data: target.data, encoding: .utf8) == "com.apple.finder")
+    let windows = try #require(event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject)))
+    #expect(windows.numberOfItems == infoItems.count)
+    for (index, url) in infoItems.enumerated() {
+        let window = try #require(windows.atIndex(index + 1))
+        #expect(window.descriptorType == DescType(typeObjectSpecifier))
+        #expect(
+            window.forKeyword(AEKeyword(keyAEDesiredClass))?.typeCodeValue == DescType(cProperty))
+        #expect(
+            window.forKeyword(AEKeyword(keyAEKeyForm))?.enumCodeValue == DescType(formPropertyID))
+        #expect(
+            window.forKeyword(AEKeyword(keyAEKeyData))?.typeCodeValue
+                == WorkspaceSystemActions.informationWindow)
+        #expect(window.forKeyword(AEKeyword(keyAEContainer))?.fileURLValue == url)
+    }
+    let activate = WorkspaceSystemActions.activateEvent()
+    #expect(activate.eventClass == AEEventClass(kAEMiscStandards))
+    #expect(activate.eventID == AEEventID(kAEActivate))
+}

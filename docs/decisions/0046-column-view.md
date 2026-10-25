@@ -52,6 +52,12 @@ stacked single-column tables over `NSBrowser`.
 - **View menu.** as List (Cmd-1) and as Columns (Cmd-3) head the View menu, with a check mark on
   the pane's mode. The check comes from `CommandBinding.isCurrent`, which reads the pane through
   the command context, since view mode is per pane while `isChecked` reads app-wide `Settings`.
+- **Spring-loaded folders** (amended 2026-10-24). A drag that hovers over a folder row in a
+  column selects the folder once the system's spring-loading delay passes, so its column opens
+  to the right at once, without the keys' pause, and the drag can go on into it. The selection
+  is no step of the selection history. Once the drag ends, each column still in the trail takes
+  back the selection it had and the focus goes back to its column. See
+  [0099](0099-get-info-and-spring-loading.md).
 
 ## Alternatives considered
 

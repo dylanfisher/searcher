@@ -92,6 +92,29 @@ public final class Settings {
         }
     }
 
+    /// How long a drag has to hover over a folder before it springs open, as the system's
+    /// Spring-loading setting in Accessibility ▸ Pointer Control has it; nil while that setting is
+    /// off. The system writes both keys to the global domain, which every suite reads through, and
+    /// the app never writes them. A missing key or one of another type reads as the system's
+    /// default, on and 0.5 s; it isn't removed, since the key isn't the app's.
+    public var springLoadingDelay: Duration? {
+        let enabled = defaults.object(forKey: Self.springLoadingEnabledKey)
+        if let enabled = enabled as? NSNumber, CFGetTypeID(enabled) == CFBooleanGetTypeID(),
+            !enabled.boolValue
+        {
+            return nil
+        }
+        let delay = defaults.object(forKey: Self.springLoadingDelayKey)
+        guard let delay = delay as? NSNumber, CFGetTypeID(delay) != CFBooleanGetTypeID(),
+            delay.doubleValue >= 0, delay.doubleValue.isFinite
+        else { return Self.defaultSpringLoadingDelay }
+        return .seconds(delay.doubleValue)
+    }
+    /// The system's keys for its Spring-loading setting, and its default delay.
+    static let springLoadingEnabledKey = "com.apple.springing.enabled"
+    static let springLoadingDelayKey = "com.apple.springing.delay"
+    static let defaultSpringLoadingDelay: Duration = .milliseconds(500)
+
     private let defaults: UserDefaults
     private var observers: [Observer] = []
 

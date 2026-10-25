@@ -40,6 +40,7 @@ enum ContextMenuBuilder {
         .separator,
         .command(ViewCommands.toggleQuickLook.id),
         .separator,
+        .command(SystemCommands.getInfo.id),
         .command(FileCommands.rename.id), .command(FileCommands.duplicate.id),
         .command(FileCommands.copyToOtherPane.id), .command(FileCommands.moveToOtherPane.id),
         .separator,
@@ -74,6 +75,7 @@ enum ContextMenuBuilder {
         FileCommands.moveToTrash.id: "trash",
         FileCommands.newFolder.id: "folder.badge.plus",
         SystemCommands.openTerminal.id: "apple.terminal",
+        SystemCommands.getInfo.id: "info.circle",
     ]
 
     /// A menu of `items` whose commands run on `target`, which also turns each item off while its

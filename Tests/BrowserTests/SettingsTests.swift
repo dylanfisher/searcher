@@ -131,6 +131,27 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     }
 }
 
+/// The suite reads through to the global domain, where the system keeps its Spring-loading
+/// setting; a value in the suite stands in for the system's.
+@MainActor @Test func theSpringLoadingDelayFollowsTheSystemSetting() throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    func delay(enabled: Any?, delay: Any?) -> Duration? {
+        let defaults = temporarySuite(in: folder.url.path)
+        defaults.set(enabled, forKey: Settings.springLoadingEnabledKey)
+        defaults.set(delay, forKey: Settings.springLoadingDelayKey)
+        return Settings(defaults: defaults).springLoadingDelay
+    }
+
+    #expect(delay(enabled: true, delay: 1.25) == .milliseconds(1250))
+    #expect(delay(enabled: true, delay: 0) == .zero)
+    #expect(delay(enabled: false, delay: 1.25) == nil)
+    // Values of another shape read as the system's default, and are left where they are.
+    #expect(delay(enabled: true, delay: "1") == .milliseconds(500))
+    #expect(delay(enabled: true, delay: true) == .milliseconds(500))
+    #expect(delay(enabled: true, delay: -1) == .milliseconds(500))
+    #expect(delay(enabled: "NO", delay: 1.25) == .milliseconds(1250))
+}
+
 @MainActor @Test func theCommanderPresetsHelpSaysTheFKeysNeedFn() {
     #expect(Settings.commanderFKeysHelp.contains("Fn"))
 }
