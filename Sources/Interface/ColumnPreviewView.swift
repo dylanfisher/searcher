@@ -120,19 +120,26 @@ final class ColumnPreviewView: NSView {
         setAccessibilityLabel(entry.name)
     }
 
+    /// Wraps the name and the tags at the preview's width, which its grip changes.
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        let wrapWidth = max(newSize.width - 2 * Self.inset, 0)
+        for field in [nameField, tagsField] where field.preferredMaxLayoutWidth != wrapWidth {
+            field.preferredMaxLayoutWidth = wrapWidth
+        }
+    }
+
     private func build() {
         iconView.imageScaling = .scaleProportionallyUpOrDown
         iconView.setAccessibilityElement(false)
         nameField.alignment = .center
         nameField.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
-        nameField.preferredMaxLayoutWidth = ColumnViewController.columnWidth - 2 * Self.inset
         summaryField.alignment = .center
         summaryField.textColor = .secondaryLabelColor
         summaryField.lineBreakMode = .byTruncatingMiddle
         for header in [informationField, tagsTitleField] {
             header.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
         }
-        tagsField.preferredMaxLayoutWidth = nameField.preferredMaxLayoutWidth
         tagsTitleField.isHidden = true
         tagsField.isHidden = true
         for value in [sizeField, createdField, modifiedField, lastOpenedField] {

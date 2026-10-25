@@ -16,7 +16,14 @@ public final class Settings {
         case terminalBundleID
         case commanderFKeys
         case hideEmptyOperationsPanel
+        case columnWidth
     }
+
+    /// The width a new column of column view gets until one is set: Finder's, the `ColumnWidth`
+    /// of its standard column view options.
+    public static let defaultColumnWidth = 245.0
+    /// The widths a column's grip can drag it to (0096-column-widths.md).
+    public static let columnWidths: ClosedRange<Double> = 100...1000
 
     /// What the Settings window says about `commanderFKeys`.
     public static let commanderFKeysHelp =
@@ -70,6 +77,21 @@ public final class Settings {
         }
     }
 
+    /// The width, in points, every new column of column view gets, and the preview with them,
+    /// in every window. An Option-drag or Option-double-click of a column's grip sets it, as in
+    /// Finder; a plain one resizes its column alone (0096-column-widths.md). `defaultColumnWidth`
+    /// by default.
+    ///
+    /// - Precondition: it is within `columnWidths`.
+    public var columnWidth: Double {
+        didSet {
+            precondition(
+                Self.columnWidths.contains(columnWidth),
+                "column width \(columnWidth) is outside \(Self.columnWidths)")
+            store(columnWidth, for: .columnWidth, changed: columnWidth != oldValue)
+        }
+    }
+
     private let defaults: UserDefaults
     private var observers: [Observer] = []
 
@@ -86,6 +108,9 @@ public final class Settings {
         terminalBundleID = Self.string(.terminalBundleID, in: defaults) ?? "com.apple.Terminal"
         commanderFKeys = Self.bool(.commanderFKeys, in: defaults) ?? false
         hideEmptyOperationsPanel = Self.bool(.hideEmptyOperationsPanel, in: defaults) ?? true
+        columnWidth =
+            Self.number(.columnWidth, in: defaults, within: Self.columnWidths)
+            ?? Self.defaultColumnWidth
     }
 
     /// Runs `handler` after each change of a setting, for as long as `owner` exists.
@@ -109,6 +134,21 @@ public final class Settings {
         // A Boolean reads back as an NSNumber, as integers do; only CFBoolean is one.
         if let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() {
             return number.boolValue
+        }
+        defaults.removeObject(forKey: key.rawValue)
+        return nil
+    }
+
+    /// The number stored under `key`; nil when there is none, it has another type, a Boolean
+    /// among them, or it is outside `range`, which is removed.
+    private static func number(
+        _ key: Key, in defaults: UserDefaults, within range: ClosedRange<Double>
+    ) -> Double? {
+        guard let value = defaults.object(forKey: key.rawValue) else { return nil }
+        if let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+            range.contains(number.doubleValue)
+        {
+            return number.doubleValue
         }
         defaults.removeObject(forKey: key.rawValue)
         return nil

@@ -72,6 +72,8 @@ listing doesn't make.
 
 Selecting a file can now scroll the column view, to bring the preview in beside the focused
 column. Column view always shows the preview; there is no setting to hide it yet. The preview's
-width is the columns' fixed width until columns can be resized (CV.5). A held arrow key through
+width is the columns' fixed width until columns can be resized (CV.5) (superseded 2026-10-24: the
+preview has its own grip and starts at the width new columns get, see
+[0096](0096-column-widths.md)). A held arrow key through
 files refills the preview's fields on every row (superseded 2026-10-24: a preview reached by
 keys shows once they pause, see [0094](0094-column-open-delay.md)).

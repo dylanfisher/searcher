@@ -29,13 +29,13 @@ private struct Fixture {
 
     init(
         width: Double = 800, iconCache: TypeIconCache = TypeIconCache { _ in NSImage() },
-        folders: [String: [DirectoryEntry]] = tree
+        folders: [String: [DirectoryEntry]] = tree, settings: Settings = untouchedSettings()
     ) async {
         lister = StubLister(folders)
         pane = Pane(
             location: Location(path: "/r"),
             service: ListingService(lister: lister, rootVolumeName: { "Test Disk" }),
-            systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true,
+            systemActions: StubSystemActions(), settings: settings, isFocused: true,
             viewMode: .column)
         let controller = ColumnViewController(pane: pane, iconCache: iconCache, formatter: .init())
         controller.startMonitor = { _ in }
@@ -112,7 +112,7 @@ private struct Fixture {
 
 @MainActor @Test func theFocusedColumnIsScrolledIntoViewWhenArrowsMovePastTheEdge() async throws {
     // Room for two columns.
-    let fixture = await Fixture(width: ColumnViewController.columnWidth * 2 + 20)
+    let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)
     await fixture.openThreeColumns()
     let scrollView = try #require(fixture.controller.view as? NSScrollView)
     let third = fixture.controller.columnControllers[2].view
@@ -247,16 +247,19 @@ private struct Fixture {
     #expect(fixture.pane.location == Location(path: "/r/docs/sub"))
 }
 
-/// The views and children of the shown columns, and nothing else but the preview: a column, its
-/// separator and its spinner each.
+/// The views and children of the shown columns, and nothing else but the preview and its grip: a
+/// column, its separator, its spinner and its grip each.
 @MainActor
 private func expectOnlyShownColumns(in controller: ColumnViewController) {
     let shown = controller.columnControllers
     #expect(controller.children.count == shown.count)
     #expect(zip(controller.children, shown).allSatisfy { $0 === $1 })
-    // The preview view stays once made, shown or hidden.
-    let subviews = controller.columnsView.subviews.filter { !($0 is ColumnPreviewView) }
-    #expect(subviews.count == shown.count * 3)
+    // The preview view and its grip stay once made, shown or hidden.
+    let subviews = controller.columnsView.subviews.filter {
+        !($0 is ColumnPreviewView) && $0 !== controller.previewGrip
+    }
+    #expect(subviews.count == shown.count * 4)
+    #expect(subviews.filter { $0 is ColumnGripView }.count == shown.count)
     #expect(subviews.filter { $0 is NSProgressIndicator }.count == shown.count)
     #expect(shown.allSatisfy { column in subviews.contains { $0 === column.view } })
     #expect(subviews.filter { $0 is NSBox }.count == shown.count)
@@ -358,9 +361,7 @@ private struct LoadingThirdColumn {
 
     let children = try #require(
         fixture.controller.columnsView.accessibilityChildren() as? [NSView])
-    let columns = fixture.controller.columnControllers.map(\.view)
-    #expect(children.count == columns.count)
-    #expect(zip(children, columns).allSatisfy { $0 === $1 })
+    #expect(!children.contains { $0 is NSProgressIndicator })
 
     fixture.lister.release("/r/docs/sub")
     await settle { fixture.trail.columns[2].pane.state.isLoaded }
@@ -381,7 +382,8 @@ private struct LoadingThirdColumn {
     #expect(view.superview === fixture.controller.columnsView)
     let last = try #require(fixture.controller.columnControllers.last).view.frame
     #expect(view.frame.minX == last.maxX + 1)
-    #expect(view.frame.size == NSSize(width: ColumnViewController.columnWidth, height: last.height))
+    #expect(
+        view.frame.size == NSSize(width: Settings.defaultColumnWidth, height: last.height))
     #expect(fixture.controller.columnsView.frame.width >= view.frame.maxX)
     #expect(view.iconView.image === iconCache.icon(for: preview.kind.type))
     #expect(view.iconView.frame.size == NSSize(width: 128, height: 128))
@@ -431,7 +433,7 @@ private struct LoadingThirdColumn {
 /// is scrolled into view with the focused column.
 @MainActor @Test func thePreviewIsScrolledIntoViewWithTheFocusedColumn() async throws {
     // Room for two columns.
-    let fixture = await Fixture(width: ColumnViewController.columnWidth * 2 + 20)
+    let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)
     await fixture.openThreeColumns()
     let scrollView = try #require(fixture.controller.view as? NSScrollView)
 
@@ -974,4 +976,241 @@ private struct StateColumns {
     await settle { fixture.column.state.listing?.count == 1 }
     #expect(fixture.message == nil)
     #expect(fixture.controller.messageLabel(forColumnAt: 1)?.isHidden == true)
+}
+
+// MARK: - Column widths
+
+/// The width of each column, left to right, as laid out.
+@MainActor
+private func columnWidths(_ fixture: Fixture) -> [Double] {
+    fixture.controller.columnControllers.map { Double($0.view.frame.width) }
+}
+
+/// Each column starts one point, its separator, after the one left of it, and its grip is
+/// centered on that separator at the bottom.
+@MainActor
+private func expectPacked(_ fixture: Fixture) throws {
+    let controller = fixture.controller
+    var x = 0.0
+    for (index, column) in controller.columnControllers.enumerated() {
+        #expect(Double(column.view.frame.minX) == x)
+        let grip = try #require(controller.grip(forColumnAt: index))
+        #expect(Double(grip.frame.midX) == Double(column.view.frame.maxX) + 0.5)
+        #expect(grip.frame.minY == 0)
+        #expect(grip.frame.size == ColumnGripView.size)
+        x = Double(column.view.frame.maxX) + 1
+    }
+}
+
+@MainActor @Test func aDragResizesThatColumnOnlyAndLeavesTheDefault() async throws {
+    let folder = try TemporaryFolder("ColumnViewControllerTests")
+    let settings = storedSettings(in: folder)
+    let fixture = await Fixture(settings: settings)
+    await fixture.openThreeColumns()
+    let grip = try #require(fixture.controller.grip(forColumnAt: 1))
+
+    drag(grip, by: 60)
+
+    let standard = Settings.defaultColumnWidth
+    let wide = standard + 60
+    #expect(columnWidths(fixture) == [standard, wide, standard])
+    try expectPacked(fixture)
+    // As in Finder, only an Option-drag sets the width new columns get.
+    #expect(settings.columnWidth == standard)
+
+    // A column opened after the drag gets the default, and the dragged one keeps its width.
+    await fixture.select("x.txt", inColumn: 1)
+    await fixture.select("sub", inColumn: 1)
+    #expect(columnWidths(fixture) == [standard, wide, standard])
+    try expectPacked(fixture)
+}
+
+@MainActor @Test func anOptionDragResizesEveryColumnAndThePreviewAndSetsTheDefault()
+    async throws
+{
+    let folder = try TemporaryFolder("ColumnViewControllerTests")
+    let suite = folder.url.appending(path: "preferences").path
+    let settings = Settings(defaults: try #require(UserDefaults(suiteName: suite)))
+    let fixture = await Fixture(settings: settings)
+    await fixture.openThreeColumns()
+    await fixture.select("one.flac", inColumn: 2)
+    let preview = try #require(fixture.controller.previewView)
+
+    drag(try #require(fixture.controller.grip(forColumnAt: 0)), by: -45, option: true)
+
+    let narrow = Settings.defaultColumnWidth - 45
+    #expect(columnWidths(fixture) == [narrow, narrow, narrow])
+    #expect(Double(preview.frame.width) == narrow)
+    #expect(preview.frame.minX == fixture.controller.columnControllers[2].view.frame.maxX + 1)
+    try expectPacked(fixture)
+    #expect(settings.columnWidth == narrow)
+    // The default outlives the app.
+    let relaunched = Settings(defaults: try #require(UserDefaults(suiteName: suite)))
+    #expect(relaunched.columnWidth == narrow)
+
+    // A column opened after it gets the new default too.
+    await fixture.select("other", inColumn: 0)
+    #expect(columnWidths(fixture) == [narrow, narrow])
+}
+
+@MainActor @Test func anOptionClickThatDoesNotMoveChangesNothing() async throws {
+    let folder = try TemporaryFolder("ColumnViewControllerTests")
+    let settings = storedSettings(in: folder)
+    let fixture = await Fixture(settings: settings)
+    await fixture.openThreeColumns()
+    let grip = try #require(fixture.controller.grip(forColumnAt: 1))
+    drag(grip, by: 30)
+
+    drag(grip, by: 0, option: true)
+
+    let standard = Settings.defaultColumnWidth
+    #expect(columnWidths(fixture) == [standard, standard + 30, standard])
+    #expect(settings.columnWidth == standard)
+}
+
+@MainActor @Test func dragsStopAtTheMinimumAndMaximumWidth() async throws {
+    let fixture = await Fixture()
+    await fixture.openThreeColumns()
+    let grip = try #require(fixture.controller.grip(forColumnAt: 0))
+
+    drag(grip, by: -1000)
+    #expect(columnWidths(fixture)[0] == Settings.columnWidths.lowerBound)
+
+    drag(grip, by: 5000)
+    #expect(columnWidths(fixture)[0] == Settings.columnWidths.upperBound)
+    try expectPacked(fixture)
+}
+
+@MainActor @Test func draggingThePreviewsGripResizesThePreviewOnly() async throws {
+    let fixture = await Fixture()
+    await fixture.select("a.txt", inColumn: 0)
+    let preview = try #require(fixture.controller.previewView)
+    let grip = try #require(fixture.controller.previewGrip)
+
+    drag(grip, by: 80)
+
+    #expect(Double(preview.frame.width) == Settings.defaultColumnWidth + 80)
+    #expect(columnWidths(fixture) == [Settings.defaultColumnWidth])
+    #expect(Double(grip.frame.midX) == Double(preview.frame.maxX) + 0.5)
+    #expect(fixture.controller.columnsView.frame.width >= grip.frame.maxX)
+    // The wrapped name follows the preview's width.
+    #expect(Double(preview.nameField.preferredMaxLayoutWidth) == Double(preview.frame.width) - 24)
+}
+
+@MainActor @Test func aNewColumnAndThePreviewGetTheStoredDefaultWidth() async throws {
+    let folder = try TemporaryFolder("ColumnViewControllerTests")
+    let settings = storedSettings(in: folder)
+    settings.columnWidth = 300
+    let fixture = await Fixture(settings: settings)
+
+    await fixture.openThreeColumns()
+    await fixture.select("one.flac", inColumn: 2)
+
+    #expect(columnWidths(fixture) == [300, 300, 300])
+    #expect(fixture.controller.previewView.map { Double($0.frame.width) } == 300)
+    try expectPacked(fixture)
+}
+
+/// A name long enough to need a column wider than the default, and one too long for any.
+private let wideName = "a-folder-name-long-enough-to-need-a-wider-column"
+private let endlessName = String(repeating: "w", count: 300)
+
+private let fitTree: [String: [DirectoryEntry]] = [
+    "/": [folder("r")],
+    "/r": [folder("docs"), file("a.txt")],
+    "/r/docs": [folder(wideName), folder("endless"), file("x.txt")],
+    "/r/docs/endless": [file(endlessName)],
+    "/r/docs/\(wideName)": [file("o.txt")],
+]
+
+/// The width the name field of `name`'s row in `table` has, and the width its text needs.
+@MainActor
+private func nameRoom(_ name: String, in table: NSTableView) throws -> (
+    has: Double, needs: Double
+) {
+    let row = try #require(rowNames(table).firstIndex(of: name))
+    let field = try #require(try nameCell(table, row: row).textField)
+    return (field.frame.width, NSTextField(labelWithString: name).intrinsicContentSize.width)
+}
+
+@MainActor @Test func aDoubleClickFitsTheColumnToItsWidestName() async throws {
+    let folder = try TemporaryFolder("ColumnViewControllerTests")
+    let settings = storedSettings(in: folder)
+    let fixture = await Fixture(folders: fitTree, settings: settings)
+    await fixture.select("docs", inColumn: 0)
+    await fixture.select(wideName, inColumn: 1)
+
+    doubleClick(try #require(fixture.controller.grip(forColumnAt: 1)))
+    await fixture.controller.fitting?.value
+    fixture.controller.view.layoutSubtreeIfNeeded()
+
+    let widths = columnWidths(fixture)
+    #expect(widths[0] == Settings.defaultColumnWidth)
+    #expect(widths[1] > Settings.defaultColumnWidth)
+    #expect(widths[2] == Settings.defaultColumnWidth)
+    let room = try nameRoom(wideName, in: fixture.tables[1])
+    #expect(room.has >= room.needs)
+    #expect(room.has < room.needs + 4)
+    try expectPacked(fixture)
+    #expect(settings.columnWidth == Settings.defaultColumnWidth)
+
+    // A column of short names shrinks to the minimum.
+    doubleClick(try #require(fixture.controller.grip(forColumnAt: 2)))
+    await fixture.controller.fitting?.value
+    #expect(columnWidths(fixture)[2] == Settings.columnWidths.lowerBound)
+}
+
+@MainActor @Test func aDoubleClickStopsAtTheFitCap() async throws {
+    let fixture = await Fixture(folders: fitTree)
+    await fixture.select("docs", inColumn: 0)
+    await fixture.select("endless", inColumn: 1)
+
+    doubleClick(try #require(fixture.controller.grip(forColumnAt: 2)))
+    await fixture.controller.fitting?.value
+
+    #expect(columnWidths(fixture)[2] == ColumnViewController.fitWidthCap)
+}
+
+@MainActor @Test func anOptionDoubleClickFitsEveryColumnToTheWidestNameOfAll() async throws {
+    let folder = try TemporaryFolder("ColumnViewControllerTests")
+    let settings = storedSettings(in: folder)
+    let fixture = await Fixture(folders: fitTree, settings: settings)
+    await fixture.select("docs", inColumn: 0)
+    await fixture.select(wideName, inColumn: 1)
+    await fixture.select("o.txt", inColumn: 2)
+    doubleClick(try #require(fixture.controller.grip(forColumnAt: 1)))
+    await fixture.controller.fitting?.value
+    let fitted = columnWidths(fixture)[1]
+    #expect(fitted > Settings.defaultColumnWidth)
+
+    doubleClick(try #require(fixture.controller.grip(forColumnAt: 0)), option: true)
+    await fixture.controller.fitting?.value
+
+    #expect(columnWidths(fixture) == [fitted, fitted, fitted])
+    #expect(fixture.controller.previewView.map { Double($0.frame.width) } == fitted)
+    #expect(settings.columnWidth == fitted)
+    try expectPacked(fixture)
+}
+
+@MainActor @Test func theFocusedColumnIsScrolledIntoViewAtAWiderWidth() async throws {
+    let folder = try TemporaryFolder("ColumnViewControllerTests")
+    let fixture = await Fixture(width: 500, settings: storedSettings(in: folder))
+    drag(try #require(fixture.controller.grip(forColumnAt: 0)), by: 155, option: true)
+    await fixture.openThreeColumns()
+    let scrollView = try #require(fixture.controller.view as? NSScrollView)
+    #expect(columnWidths(fixture) == [400, 400, 400])
+
+    fixture.trail.moveRight()
+    fixture.trail.moveRight()
+
+    let third = fixture.controller.columnControllers[2].view
+    #expect(scrollView.documentVisibleRect.contains(third.frame))
+
+    await fixture.select("one.flac", inColumn: 2)
+    let preview = try #require(fixture.controller.previewView)
+    fixture.trail.moveLeft()
+    fixture.trail.moveLeft()
+    let first = fixture.controller.columnControllers[0].view
+    #expect(scrollView.documentVisibleRect.contains(first.frame))
+    #expect(fixture.controller.columnsView.frame.width >= preview.frame.maxX)
 }
