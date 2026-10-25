@@ -1199,6 +1199,41 @@ private func paletteTitles(in fixture: Fixture) throws -> [String] {
     #expect(fixture.window.firstResponder === table)
 }
 
+/// With the keys in the filter field, the menu bar runs ⌘P's item, which opens Go to Item over
+/// the filtered rows and gives the keys back to the field on Esc.
+@MainActor @Test func cmdPFromTheFilterFieldShowsGoToItem() async throws {
+    let fixture = try await Fixture()
+    try fixture.press(try keyEvent("f", modifiers: .command))
+    let filter = fixture.controller.paneViewController.filterBar.field
+    #expect(fixture.controller.keysAreInText)
+    let menu = try MainMenuBuilder.build(appName: "Searcher", registry: AppCommands.registry())
+    let item = try #require(menuItem(WindowCommands.goToItem.id, in: menu))
+    #expect(item.keyEquivalent == "p" && item.keyEquivalentModifierMask == .command)
+
+    #expect(fixture.controller.validateMenuItem(item))
+    fixture.controller.runMenuCommand(item)
+
+    let palette = try #require(fixture.controller.palette)
+    #expect(palette.viewController.field.placeholderString == "Go to Item in root")
+    try escapePalette(in: fixture)
+    let editor = try #require(fixture.window.firstResponder as? NSTextView)
+    #expect(editor.delegate === filter)
+}
+
+@MainActor @Test func goToItemChosenInOpenQuicklyShowsGoToItem() async throws {
+    let fixture = try await Fixture()
+    try fixture.press(try keyEvent("k", modifiers: .command))
+
+    let editor = try await typeInPalette("Go to Item", in: fixture)
+    #expect(try paletteTitles(in: fixture).first == WindowCommands.goToItem.title)
+    editor.keyDown(with: try keyEvent("\r"))
+
+    let palette = try #require(fixture.controller.palette)
+    #expect(palette.viewController.field.placeholderString == "Go to Item in root")
+    _ = try await typeInPalette("", in: fixture)
+    #expect(try paletteTitles(in: fixture) == ["a.txt", "docs"])
+}
+
 @MainActor @Test func escInGoToItemLeavesTheSelectionAsItWas() async throws {
     let fixture = try await Fixture()
     let pane = fixture.tab.focusedPane
