@@ -14,9 +14,12 @@ import Foundation
 public final class EntrySource: PaletteSource {
     /// The items made so far: the first rows, then every row.
     private var items: [PaletteItem]
-    /// Makes every row's item; nil once it is done or cancelled, or when the first rows were all.
-    private var preparing: Task<[PaletteItem], Never>?
-    /// Hands over the items for the latest query.
+    /// Makes every row's item, off the main actor; nil when the first rows were all.
+    private(set) var preparing: Task<[PaletteItem], Never>?
+    /// Takes `preparing`'s items and hands them over, unless the palette closed first. Tests
+    /// wait on it.
+    private(set) var handOver: Task<Void, Never>?
+    /// Hands over the items for the latest query; nil once the palette closed.
     private var deliver: (@MainActor ([PaletteItem]) -> Void)?
 
     /// `pane`'s rows as they are now; a chosen one is selected in `pane`.
@@ -34,10 +37,9 @@ public final class EntrySource: PaletteSource {
             Self.items(in: listing, rows: 0..<listing.count, jump: jump)
         }
         self.preparing = preparing
-        Task { [weak self] in
+        handOver = Task { [weak self] in
             let items = await preparing.value
-            guard let self, self.preparing == preparing else { return }
-            self.preparing = nil
+            guard let self else { return }
             self.items = items
             deliver?(items)
         }
@@ -50,7 +52,6 @@ public final class EntrySource: PaletteSource {
 
     public func cancel() {
         preparing?.cancel()
-        preparing = nil
         deliver = nil
     }
 
