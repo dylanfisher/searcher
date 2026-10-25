@@ -195,6 +195,14 @@ private struct RecordingTable {
             SelectionCommands.selectFirst.id
         ),
         (
+            try keyEvent(down, modifiers: arrowFlags.union([.command, .option])),
+            SelectionCommands.selectLast.id
+        ),
+        (
+            try keyEvent(up, modifiers: arrowFlags.union([.command, .option])),
+            SelectionCommands.selectFirst.id
+        ),
+        (
             try keyEvent(down, modifiers: arrowFlags.union([.control, .shift])),
             SelectionCommands.tenRowsDown.id
         ),

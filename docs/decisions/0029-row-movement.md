@@ -86,6 +86,12 @@ name about 32 ms, and a click selecting half the rows 32–51 ms.
   chords. Opt-↑/↓ and Ctrl-Shift-↑/↓ are both chords of Move Up/Down 10 Rows (Dylan,
   2026-10-24: "add the keyboard shortcut for jumping up/down 10 files (option+up or
   option+down)"), which took Opt-↑/↓ from Select First/Last Row; those moved to Home and End.
+  Cmd-Opt-↑ and Cmd-Opt-↓ are second chords of Select First/Last Row (Dylan, 2026-10-25: "add a
+  shortcut for cmd+opt+up/down to go to very top or very bottom"). Cmd-↑ is Enclosing Folder and
+  Cmd-↓ is Open; the chords differ in the Option flag, so the registry never confuses them, and
+  nothing else used Cmd-Opt-↑/↓ (the tiling keys use Cmd-Opt-Shift-arrows). A pane's table and
+  the sidebar ([0089](0089-sidebar-key-routing.md)) both pass a chord a command takes to the
+  pane. Like Home and End they select by key, so a column opens after the pause ([0094](0094-column-open-delay.md)).
   Unbound Shift-only keys still reach `super`. Shift with Page Up, Page Down, Home, End, ← and →
   was checked against the table and moves nothing. `allowsMultipleSelection` stays on, for clicks and for showing the pane's ranges.
 - **Page.** A page is `Pane.visibleRowCount` rows, the whole rows that fit below the column

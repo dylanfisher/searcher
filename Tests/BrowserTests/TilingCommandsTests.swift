@@ -144,11 +144,15 @@ private func expectClose(_ a: Rect?, _ b: Rect?, sourceLocation: SourceLocation 
     #expect(TilingCommands.bindings.count == expected.count)
 }
 
-@Test func cmdOptArrowsAreUnbound() throws {
+@Test func cmdOptLeftAndRightAreUnboundAndCmdOptUpAndDownSelectTheEnds() throws {
     let registry = try AppCommands.registry()
     for direction in Direction.allCases {
         let chord = KeyChord(arrow(direction), modifiers: [.command, .option])
-        #expect(registry.command(for: chord) == nil, "\(chord)")
+        switch direction {
+        case .up: #expect(registry.command(for: chord) == SelectionCommands.selectFirst)
+        case .down: #expect(registry.command(for: chord) == SelectionCommands.selectLast)
+        case .left, .right: #expect(registry.command(for: chord) == nil, "\(chord)")
+        }
     }
 }
 

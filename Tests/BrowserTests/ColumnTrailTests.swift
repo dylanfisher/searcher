@@ -928,6 +928,22 @@ private func drainWaits() async {
     #expect(!fixture.lister.calls.contains { skipped.contains($0.path) })
 }
 
+@MainActor @Test func cmdOptDownSelectsTheLastRowAndItsColumnOpensOnlyAfterThePause() async throws {
+    let clock = ManualClock()
+    let fixture = await keyedPane(clock: clock)
+    let pane = fixture.pane
+
+    try press(KeyChord(.down, modifiers: [.command, .option]), on: pane)
+
+    #expect(trail(pane).columns[0].pane.selection.cursor == ExactName("z.txt"))
+    #expect(paths(pane) == ["/k"])
+    await settle { clock.waitingSleeps == 1 }
+    clock.advance(by: ColumnTrail.openDelay)
+    await drainWaits()
+    #expect(clock.waitingSleeps == 0)
+    #expect(!fixture.lister.calls.contains { $0.path == "/k/f10" })
+}
+
 @MainActor @Test func aClickOpensTheFoldersColumnAtOnce() async throws {
     let clock = ManualClock()
     let fixture = await keyedPane(clock: clock)
