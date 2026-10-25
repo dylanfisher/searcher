@@ -36,7 +36,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(settings.terminalBundleID == "com.apple.Terminal")
     #expect(!settings.commanderFKeys)
     #expect(settings.hideEmptyOperationsPanel)
-    #expect(settings.columnWidth == 245)
+    #expect(settings.columnWidth == 286)
 }
 
 @MainActor @Test func aWrongTypedValueIsDiscardedNotCoerced() throws {

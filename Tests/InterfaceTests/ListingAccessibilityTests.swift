@@ -92,6 +92,11 @@ private final class Fixture {
     func press(_ key: Int, _ modifiers: NSEvent.ModifierFlags) throws {
         table.keyDown(with: try keyEvent(functionKey(key), modifiers: arrowFlags.union(modifiers)))
     }
+
+    /// Presses Home or End, which carry the function flag and no arrow flags.
+    func pressHomeOrEnd(_ key: Int) throws {
+        table.keyDown(with: try keyEvent(functionKey(key), modifiers: .function))
+    }
 }
 
 private func kindText(_ type: DirectoryEntry.FileType, _ pathExtension: Substring) async -> String {
@@ -165,18 +170,18 @@ private var modified: String {
 
 /// Each move changes the table's selection once, and `NSTableView` posts one
 /// `selectedRowsChanged` for each change, so VoiceOver hears each move once.
-@MainActor @Test func optDownCtrlShiftDownAndATypeSelectEachChangeTheTableSelectionOnce()
+@MainActor @Test func endCtrlShiftDownAndATypeSelectEachChangeTheTableSelectionOnce()
     async throws
 {
     let names = (0..<30).map { String(format: "n%02d", $0) }
     let fixture = await Fixture(names.map { file($0) })
     let start = fixture.selectionChanges
 
-    try fixture.press(NSDownArrowFunctionKey, .option)
+    try fixture.pressHomeOrEnd(NSEndFunctionKey)
     #expect(fixture.pane.selection.cursor == ExactName("n29"))
     #expect(fixture.selectionChanges == start + 1)
 
-    try fixture.press(NSUpArrowFunctionKey, .option)
+    try fixture.pressHomeOrEnd(NSHomeFunctionKey)
     try fixture.press(NSDownArrowFunctionKey, [.control, .shift])
     #expect(fixture.pane.selection.cursor == ExactName("n10"))
     #expect(fixture.selectionChanges == start + 3)
@@ -189,10 +194,10 @@ private var modified: String {
 
 @MainActor @Test func aKeyThatLeavesTheSelectionWhereItIsChangesNothing() async throws {
     let fixture = await Fixture([file("a"), file("b")])
-    try fixture.press(NSDownArrowFunctionKey, .option)
+    try fixture.pressHomeOrEnd(NSEndFunctionKey)
     let changes = fixture.selectionChanges
 
-    try fixture.press(NSDownArrowFunctionKey, .option)
+    try fixture.pressHomeOrEnd(NSEndFunctionKey)
 
     #expect(fixture.selectionChanges == changes)
 }

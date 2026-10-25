@@ -76,7 +76,7 @@ struct UIBenchReport {
                     ("open W1 → first rows frame", "B2.W1", record.openW1),
                     ("open W2 → first rows frame", "B2.W2", record.openW2),
                     ("W2 ↓ key → frame", "B6", record.keyDown),
-                    ("W2 Opt-↓/↑ key → frame", "B6", record.optionArrows),
+                    ("W2 Home/End key → frame", "B6", record.homeEnd),
                     ("W2 Ctrl-Shift-↓ key → frame", "B6", record.controlShiftDown),
                     ("W2 Fn-↓ key → frame", "B6", record.pageDown),
                     ("W2 Shift-↓ key → frame", "B6", record.shiftDown),

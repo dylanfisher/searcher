@@ -7,34 +7,66 @@
 
 Column view's columns were a fixed 240 points ([0046](0046-column-view.md)), and the preview had
 the same width ([0090](0090-preview-column.md)). Finder lets each column be resized by the "||"
-grip at the bottom of its right edge. Finder's own preferences (`defaults read com.apple.finder`,
-`StandardViewOptions` ▸ `ColumnViewOptions`) hold one `ColumnWidth`, 245, for the columns new
-windows get. `NSBrowser`, whose behavior Finder's column view follows, documents the gestures: a
-drag resizes one column, Option switches to resizing every column together, and a double-click
-right-sizes, one column plain and every column at one width with Option
-(`prefersAllColumnUserResizing`, `browser:sizeToFitWidthOfColumn:` in `NSBrowser.h`). B6 (16 ms
-key to frame) and B10 (no main-thread stall over 50 ms) hold while the user resizes, and the
-session and workspace files ([0080](0080-restore-at-launch.md), [0081](0081-restored-network-panes.md),
-[0088](0088-workspace-snapshots.md)) must not drift from what the window shows.
+grip at the bottom of its right edge (corrected 2026-10-24 by Dylan, below: Finder's whole
+separator takes the drag and it shows no handle). Finder's own preferences
+(`defaults read com.apple.finder`, `StandardViewOptions` ▸ `ColumnViewOptions`) hold one
+`ColumnWidth`, 245, for the columns new windows get. `NSBrowser`, whose behavior Finder's column
+view follows, documents the gestures: a drag resizes one column, Option switches to resizing
+every column together, and a double-click right-sizes, one column plain and every column at one
+width with Option (`prefersAllColumnUserResizing`, `browser:sizeToFitWidthOfColumn:` in
+`NSBrowser.h`). B6 (16 ms key to frame) and B10 (no main-thread stall over 50 ms) hold while the
+user resizes, and the session and workspace files ([0080](0080-restore-at-launch.md),
+[0081](0081-restored-network-panes.md), [0088](0088-workspace-snapshots.md)) must not drift from
+what the window shows.
+
+Amended 2026-10-24 from Dylan's use of the first version: "you should be able to drag the whole
+bar in column mode, not just the little thing in the bottom, and don't show the divider icon in
+the bottom, just like in finder"; "default column width should be ~286px"; and a double-click
+"should go back to the default size like a toggle between fitting the content and default". The
+grip, the double-click and the default below are the amended ones.
 
 ## Decision
 
-- **A grip per column and one for the preview.** `ColumnGripView` is an 11 × 16 point view
-  centered on the column's separator line at the bottom of the column, over the horizontal
-  scroller's area. It covers the separator there with the column background and draws two 1-point
-  lines, 9 points tall and 3 points apart, in `tertiaryLabelColor`, so it follows light and dark
-  mode. The pointer over it is `resizeLeftRight`. The preview has its own grip at its right edge;
-  it is hidden with the preview. The grips stay above the columns, which each overlaps by 5 points.
+- **A grip per column and one for the preview.** `ColumnGripView` is a strip
+  `ColumnGripView.thickness`, 7 points, wide and as tall as the columns, centered on the
+  column's 1-point separator line: the line and 3 points either side, as a thin split-view
+  divider takes a drag a little past its line. It draws nothing, so the separator shows through
+  and there is no "||" handle, as in Finder. The pointer anywhere over it is `resizeLeftRight`.
+  The preview has its own grip at its right edge; it is hidden with the preview. The grips stay
+  above the columns, which each overlaps by 3 points, so a click 4 points or more from the line
+  reaches the column's rows. A vertical scroll over a grip goes to the column or preview under
+  the pointer (the one left of the line over the line itself), a horizontal one to the columns'
+  scroll view, as over the columns; a trackpad gesture is sent to one of them from its first move
+  through its momentum. The grip resets its cursor rect when its size changes, since it is laid
+  out after it is made.
 - **Drag.** A drag resizes its column alone; the columns right of it move. An Option-drag resizes
   every column and the preview to the dragged column's new width, and on release sets
   `Settings.columnWidth`, the width new columns get. A plain drag leaves that default alone.
   Whether Option is held is read at the press. An Option-click that doesn't move changes nothing.
   An Option-drag whose own column closes under it keeps resizing the columns left, and its last
   width still becomes the default.
-- **Double-click.** Plain, it fits the column to its widest name, beside a folder's chevron, and
-  leaves the default alone. With Option it fits every column and the preview to one width, that
-  of the widest name in any column, and sets the default, as an Option-drag does. The preview's
-  grip has no names, so its plain double-click does nothing. A column with no rows does nothing.
+- **Double-click: a toggle between the fit and the default.** Plain, it fits the column to its
+  widest name, beside a folder's chevron, and leaves the default alone. With Option it fits every
+  column and the preview to one width, that of the widest name in any column, and sets the
+  default, as an Option-drag does. A double-click on what is already fitted goes back instead:
+  - Plain, on a column whose width is its fit, it clears the folder's width
+    (`Pane.clearColumnWidth`), so the column shows `Settings.columnWidth` and follows it, as a
+    column never resized does ([0098](0098-column-widths-per-window.md)). The default stays as
+    it is.
+  - With Option, when every shown column and the shown preview are at the fit of them all, it
+    sets them all to `Settings.defaultColumnWidth`, and that becomes `Settings.columnWidth`
+    again. An Option-double-click sets the width new columns get both ways, as an Option-drag
+    does; going back restores the app's default, not whatever the default was before the fit.
+  - "Fitted" is decided when the names have been measured, by comparing the shown width with
+    the fit just worked out. The fit is rounded up to a whole point and worked out from the
+    names and the column's cell geometry alone, so a width a fit set equals the next fit of the
+    same names exactly, and needs no stored flag. A column dragged off its fit, or whose names
+    changed so its fit did, fits again.
+  - A plain double-click on a column with no width set whose fit equals `Settings.columnWidth`
+    has nothing to go back to and changes nothing.
+
+  The preview's grip has no names, so its plain double-click does nothing. A column with no rows
+  does nothing.
   The names are measured off the main thread with `NSString.size(withAttributes:)` in the name
   cell's font, from the column's `Listing`, at user-initiated priority; nothing reads the disk.
   A new fit cancels the one running, which stops measuring within 512 names. The result lands
@@ -43,11 +75,12 @@ session and workspace files ([0080](0080-restore-at-launch.md), [0081](0081-rest
   default outside it is discarded, and VoiceOver setting a width that isn't a finite number
   stops the app, as a value of the wrong type does. The columns' view is wide enough for the
   last grip's right half. A fit stops at `ColumnViewController.fitWidthCap`, 600 points,
-  about two and a half default columns, so one very long name doesn't make a column wider than most
+  about two default columns, so one very long name doesn't make a column wider than most
   windows; a drag can still go past it.
-- **Default and storage.** `Settings.defaultColumnWidth` is 245, Finder's, and the only copy of the
-  number; the old 240 is gone. `Settings.columnWidth` is a number in the app's `UserDefaults` suite,
-  read in `Settings` only, like every other preference. A value of another type, a Boolean, NaN or
+- **Default and storage.** `Settings.defaultColumnWidth` is 286, the width Dylan asked for, and
+  the only copy of the number; the old 240 and Finder's 245 are gone. `Settings.columnWidth` is
+  a number in the app's `UserDefaults` suite, read in `Settings` only, like every other
+  preference. A value of another type, a Boolean, NaN or
   out of range is removed and reads as the default.
 - **Widths live with the column view, not the session** (superseded 2026-10-24: the pane keeps
   them by folder and the session saves them, see
@@ -91,6 +124,21 @@ session and workspace files ([0080](0080-restore-at-launch.md), [0081](0081-rest
 - **Measure with Core Text** — not used: `NSString.size(withAttributes:)` is the measure the
   name's text field takes, and the test compares against the field's own width.
 - **`NSBrowser`** — still rejected for the reasons in [0046](0046-column-view.md).
+- **The "||" grip at the bottom only** — the first version, replaced on Dylan's feedback: an
+  11 × 16 target was hard to find and Finder's whole separator takes the drag.
+- **A wider strip** — not done: each point past the line is a point of the column's rows, and of
+  its vertical scroller's right edge, that stops taking clicks. 3 points either side is what a
+  thin split-view divider gives.
+- **Remember each fit's result to know a column is fitted** — not done: the stored width already
+  equals the next fit exactly (see Double-click), a remembered flag would be one more piece of
+  state for the session files and would be wrong once the folder's names changed.
+- **Option going back restores the default from before the fit** — rejected: it needs the old
+  value kept somewhere that survives a relaunch and another window's Option-drag in between, an
+  edge case each. Going back to `Settings.defaultColumnWidth` is what "default" means everywhere
+  else in the app.
+- **Plain going back stores `Settings.defaultColumnWidth` for the folder** — rejected: the column
+  would stop following the live default, unlike a column never resized, and 0098 keeps only
+  widths that differ from following it.
 
 ## Consequences
 
@@ -102,3 +150,8 @@ changes the width new columns get in every window, as in Finder, but doesn't res
 other windows show (superseded 2026-10-24: other windows' unresized columns follow the new
 width, see [0098](0098-column-widths-per-window.md)). A not-downloaded folder's badge isn't counted in a fit; its name may truncate
 by a few points.
+
+The grips cover the outer 3 points of each column the full height: a click, a scroller drag or a
+file dropped there goes to the grip, which takes no drops. An Option-double-click back from the
+fit changes the width new columns get in every window, as the Option-double-click that fitted
+them did.

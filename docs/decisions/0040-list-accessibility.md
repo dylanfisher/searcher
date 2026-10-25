@@ -31,7 +31,7 @@ latest query ([0037](0037-type-to-filter.md)). The main thread does no work per 
   itself, synchronously, through `-[NSTableView _sendSelectionChangedNotificationForRows:columns:]`
   (seen with a breakpoint on `NSAccessibilityPostNotificationWithUserInfo` in a plain table). The
   pane's moves reach the table as one `selectRowIndexes` per change of the selected rows, so each
-  keyed move (Opt-↓, Ctrl-Shift-↓, a type-select key) is announced once, and a key that leaves
+  keyed move (End, Opt-↓, Ctrl-Shift-↓, a type-select key) is announced once, and a key that leaves
   the rows as they are posts nothing. The list posts nothing of its own. Tests count the table's
   `selectionDidChangeNotification`, which comes with the same change.
 - **A settle is announced too.** When a provisional selection settles and that changes the

@@ -47,9 +47,15 @@ the main display, which the build rules don't allow. It is one of the checks by 
   ([0080](0080-restore-at-launch.md)). A drag starts one save, not one per event. A plain drag
   that ends at the width it started from, and a click on a grip, hand the pane nothing, so they
   are no edit.
+- **A double-click back from a fit** (amended 2026-10-24, [0096](0096-column-widths.md)) takes
+  the folder's width out (`Pane.clearColumnWidth`): one pane change, an edit like any other,
+  after which the column is unresized again and follows the live default, with nothing stored
+  for it. Clearing a folder with no width hands the pane nothing. A relaunch shows the column
+  at `Settings.columnWidth`, as it shows any unresized one.
 - **Option-drag and the app-wide default** (decided 2026-10-24 in review). An Option-drag or
   Option-double-click sets every column and the preview to one width and makes it
-  `Settings.columnWidth`, as before. The pane's folder widths go with it, shown or not, so every
+  `Settings.columnWidth`, as before; an Option-double-click back from the fit does the same
+  with `Settings.defaultColumnWidth`. The pane's folder widths go with it, shown or not, so every
   column of that pane is at the new width and a folder reopened later is too. Every other
   column with no width set, in every pane and window, follows the live default: it changes
   width on screen at once, and nothing is stored for it. Only grip-set widths are ever in

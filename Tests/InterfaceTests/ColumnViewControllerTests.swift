@@ -26,6 +26,8 @@ private struct Fixture {
     let pane: Pane
     let controller: ColumnViewController
     let lister: StubLister
+    /// Where the trail waits out `ColumnTrail.previewHold`.
+    let holdClock = ManualClock()
 
     init(
         width: Double = 800, iconCache: TypeIconCache = TypeIconCache { _ in NSImage() },
@@ -37,6 +39,7 @@ private struct Fixture {
             service: ListingService(lister: lister, rootVolumeName: { "Test Disk" }),
             systemActions: StubSystemActions(), settings: settings, isFocused: true,
             viewMode: .column)
+        pane.previewHoldClock = holdClock
         let controller = ColumnViewController(pane: pane, iconCache: iconCache, formatter: .init())
         controller.startMonitor = { _ in }
         self.controller = controller
@@ -56,11 +59,15 @@ private struct Fixture {
     var tables: [ListingTableView] { controller.columnControllers.map(\.tableView) }
 
     /// Selects `name` alone in the column at `index`, as a click or a key does, and waits for the
-    /// column it opens to load.
-    func select(_ name: String, inColumn index: Int) async {
+    /// column it opens to load and, unless `waitingForTheRead` is false, for a file's preview
+    /// to show once its info is read.
+    func select(_ name: String, inColumn index: Int, waitingForTheRead: Bool = true) async {
         let pane = trail.columns[index].pane
         pane.select(Selection([ExactName(name)], cursor: ExactName(name)))
-        await settle { trail.columns.allSatisfy { $0.pane.state.isLoaded } }
+        await settle {
+            trail.columns.allSatisfy { $0.pane.state.isLoaded }
+                && (!waitingForTheRead || trail.shownPreview == trail.preview)
+        }
     }
 
     /// Opens `/r/docs/sub` in three columns, the first one focused.
@@ -432,6 +439,40 @@ extension Fixture {
     #expect(fixture.pane.location == Location(path: "/r/docs/sub"))
 }
 
+@MainActor @Test func aRealPressInAnotherColumnSelectsItsRowWhileTheButtonIsDown() async throws {
+    let fixture = await Fixture()
+    await fixture.select("docs", inColumn: 0)
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 800, height: 400), styleMask: [.titled],
+        backing: .buffered, defer: true)
+    window.isReleasedWhenClosed = false
+    window.contentView?.addSubview(fixture.controller.view)
+    window.contentView?.layoutSubtreeIfNeeded()
+    SecondDisplay.orderFront(window)
+    defer { window.orderOut(nil) }
+    #expect(fixture.trail.focusedIndex == 0)
+
+    // The second column lists `docs`: sub, x.txt.
+    let shots = try fixture.tables[1].realPress(onRow: 1)
+
+    let held = try #require(shots.filter(\.buttonIsDown).last)
+    #expect(held.hasKeys)
+    #expect(held.rows == [1])
+    #expect(held.drawnRows == [1])
+    #expect(fixture.trail.focusedIndex == 1)
+    let column = fixture.trail.columns[1].pane
+    let listing = try #require(column.state.listing)
+    #expect(column.selection.rows(in: listing) == [1])
+
+    // Back in the first column: a.txt, docs, other.
+    let back = try fixture.tables[0].realPress(onRow: 2)
+
+    let backHeld = try #require(back.filter(\.buttonIsDown).last)
+    #expect(backHeld.rows == [2])
+    #expect(backHeld.drawnRows == [2])
+    #expect(fixture.trail.focusedIndex == 0)
+}
+
 /// The views and children of the shown columns, and nothing else but the preview and its grip: a
 /// column, its separator, its spinner and its grip each.
 @MainActor
@@ -574,8 +615,7 @@ private struct LoadingThirdColumn {
     #expect(view.iconView.frame.size == NSSize(width: 128, height: 128))
     #expect(view.nameField.stringValue == "x.txt")
     #expect(view.summaryField.stringValue == "\(preview.kind.text) – 1 byte")
-    #expect(view.sizeField.stringValue == "1 byte")
-    #expect(view.modifiedField.stringValue == EntryCellFormatter().date(testDate))
+    #expect(view.modifiedField.stringValue == EntryCellFormatter().longDate(testDate))
     #expect(!view.acceptsFirstResponder)
 }
 
@@ -606,8 +646,7 @@ private struct LoadingThirdColumn {
 
     column.apply(.patches([.update(file("a.txt", size: 2_000_000))]), at: column.location)
 
-    await settle { view.sizeField.stringValue == "2 MB" }
-    #expect(view.summaryField.stringValue.hasSuffix(" – 2 MB"))
+    await settle { view.summaryField.stringValue.hasSuffix(" – 2 MB") }
 
     column.apply(.patches([.remove(name: "a.txt")]), at: column.location)
 
@@ -627,6 +666,7 @@ private struct LoadingThirdColumn {
 
     #expect(fixture.trail.focusedIndex == 2)
     #expect(fixture.trail.preview?.location == Location(path: "/r/docs/sub/one.flac"))
+    await settle { fixture.trail.shownPreview == fixture.trail.preview }
     let view = try #require(fixture.controller.previewView)
     let focused = fixture.controller.columnControllers[2].view.frame
     #expect(scrollView.documentVisibleRect.contains(focused))
@@ -664,7 +704,7 @@ private let socket = DirectoryEntry(
     fixture.controller.view.layoutSubtreeIfNeeded()
 
     let fields = try #require(view.accessibilityChildren() as? [NSTextField])
-    #expect(fields.count == 13)
+    #expect(fields.count == 11)
     // The tags wrap onto more than one line.
     #expect(view.tagsField.frame.height > 2 * view.summaryField.frame.height)
     // Laid out, and the name wrapped onto more than one line.
@@ -696,8 +736,8 @@ private let socket = DirectoryEntry(
     #expect(document.bounds.contains(bottom))
 }
 
-/// As Finder shows a socket: its kind, and no Size row.
-@MainActor @Test func aFileWithoutASizeShowsItsKindAndNoSizeRow() async throws {
+/// As Finder shows a socket: its kind alone under its name.
+@MainActor @Test func aFileWithoutASizeShowsOnlyItsKind() async throws {
     var folders = tree
     folders["/r"] = [file("a.txt"), socket]
     let fixture = await Fixture(folders: folders)
@@ -707,15 +747,10 @@ private let socket = DirectoryEntry(
     let view = try #require(fixture.controller.previewView)
     let kind = try #require(fixture.trail.preview?.kind.text)
     #expect(view.summaryField.stringValue == kind)
-    #expect(view.sizeField.isHidden)
-    let fields = try #require(view.accessibilityChildren() as? [NSTextField])
-    #expect(!fields.contains { $0 === view.sizeField })
 
     await fixture.select("a.txt", inColumn: 0)
 
-    #expect(!view.sizeField.isHidden)
-    let shown = try #require(view.accessibilityChildren() as? [NSTextField])
-    #expect(shown.contains { $0 === view.sizeField })
+    #expect(view.summaryField.stringValue.hasSuffix(" – 1 byte"))
 }
 
 private func entry(_ name: String, _ type: DirectoryEntry.FileType) -> DirectoryEntry {
@@ -909,14 +944,16 @@ private func draw(_ view: NSView) {
 private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
     let fields = try #require(view.accessibilityChildren() as? [NSTextField])
     let titles = [
-        ColumnPreviewView.sizeTitle, ColumnPreviewView.createdTitle,
-        ColumnPreviewView.modifiedTitle, ColumnPreviewView.lastOpenedTitle,
-        ColumnPreviewView.tagsTitle,
+        ColumnPreviewView.createdTitle, ColumnPreviewView.modifiedTitle,
+        ColumnPreviewView.lastOpenedTitle, ColumnPreviewView.tagsTitle,
     ]
     return fields.map(\.stringValue).filter(titles.contains)
 }
 
-/// As Finder's preview orders them: Kind and Size, Created, Modified, Last opened, then Tags.
+/// As Finder's preview orders them: Kind and size under the name, then Created, Modified and
+/// Last opened under Information, with no Size row there, then Tags. A
+/// read that lands after the hold, as one on a slow share does, moves no row whose dates fit
+/// on a line.
 @MainActor @Test func theReadFieldsShowInFindersOrderWithoutMovingTheFieldsAboveThem()
     async throws
 {
@@ -927,35 +964,35 @@ private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
         "/r/a.txt": ItemInfo(created: created, lastOpened: opened, tags: ["Red", "Work"])
     ])
     fixture.pane.itemInfoReader = reader
-    await fixture.select("a.txt", inColumn: 0)
+    fixture.pane.setPreviewWidth(Settings.columnWidths.upperBound)
+    await fixture.select("a.txt", inColumn: 0, waitingForTheRead: false)
+    #expect(await reader.waitForCall("/r/a.txt"))
+    #expect(fixture.controller.previewView?.isHidden ?? true)
+    fixture.holdClock.advance(by: ColumnTrail.previewHold)
+    await settle { fixture.controller.previewView?.isHidden == false }
     let view = try #require(fixture.controller.previewView)
     fixture.controller.view.layoutSubtreeIfNeeded()
 
-    // While the read runs, the rows are there with no value, and there are no tags.
-    #expect(await reader.waitForCall("/r/a.txt"))
+    // Once the hold ends, the rows are there with no value, and there are no tags.
     #expect(view.createdField.stringValue == "")
     #expect(view.lastOpenedField.stringValue == "")
     #expect(view.tagsField.isHidden)
     #expect(
         try informationTitles(view) == [
-            ColumnPreviewView.sizeTitle, ColumnPreviewView.createdTitle,
-            ColumnPreviewView.modifiedTitle, ColumnPreviewView.lastOpenedTitle,
+            ColumnPreviewView.createdTitle, ColumnPreviewView.modifiedTitle,
+            ColumnPreviewView.lastOpenedTitle,
         ])
-    // Each value's origin and height; a longer value only widens its field.
-    let fields = [view.sizeField, view.createdField, view.modifiedField, view.lastOpenedField]
-    func places() -> [[Double]] {
-        fields.map {
-            let frame = $0.convert($0.bounds, to: view)
-            return [frame.minX, frame.minY, frame.height]
-        }
+    // Each row's frame; a longer value only widens its field, leftward.
+    func places() -> [NSRect] {
+        view.rows.map { $0.convert($0.bounds, to: view) }
     }
     let before = places()
 
     reader.releaseAll()
-    await settle { view.createdField.stringValue == EntryCellFormatter().date(created) }
+    await settle { view.createdField.stringValue == EntryCellFormatter().longDate(created) }
     fixture.controller.view.layoutSubtreeIfNeeded()
 
-    #expect(view.lastOpenedField.stringValue == EntryCellFormatter().date(opened))
+    #expect(view.lastOpenedField.stringValue == EntryCellFormatter().longDate(opened))
     #expect(!view.tagsField.isHidden)
     #expect(view.tagsField.stringValue == "Red, Work")
     #expect(try informationTitles(view).last == ColumnPreviewView.tagsTitle)
@@ -1003,8 +1040,128 @@ private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
     await fixture.select("a.txt", inColumn: 0)
 
     let view = try #require(fixture.controller.previewView)
-    await settle { view.createdField.stringValue == EntryCellFormatter().date(testDate) }
+    await settle { view.createdField.stringValue == EntryCellFormatter().longDate(testDate) }
     #expect(view.lastOpenedField.stringValue == ColumnPreviewView.noDate)
+}
+
+/// Dylan saw the Information rows flash at each new file: they showed empty from the selection
+/// until the read landed a frame later. Now each refill of the view shows one file's name with
+/// that file's own dates, from the selection to the read.
+@MainActor @Test func selectingAnotherFileShowsNoEmptyRowsOnTheWay() async throws {
+    let fixture = await Fixture()
+    let one = ItemInfo(
+        created: testDate, lastOpened: testDate.addingTimeInterval(60), tags: ["Red"])
+    let two = ItemInfo(created: testDate.addingTimeInterval(120), lastOpened: nil, tags: [])
+    let reader = GatedItemInfoReader([
+        "/r/docs/sub/one.flac": one, "/r/docs/sub/two.flac": two,
+    ])
+    reader.release("/r/docs/sub/one.flac")
+    fixture.pane.itemInfoReader = reader
+    await fixture.openThreeColumns()
+    await fixture.select("one.flac", inColumn: 2)
+    let view = try #require(fixture.controller.previewView)
+    let formatter = EntryCellFormatter()
+    #expect(view.createdField.stringValue == formatter.longDate(testDate))
+    var shown: [[String]] = []
+    let controller = fixture.controller
+    fixture.pane.onChange = {
+        controller.paneDidChange()
+        shown.append([
+            view.nameField.stringValue, view.createdField.stringValue,
+            view.lastOpenedField.stringValue,
+            view.tagsField.isHidden ? "" : view.tagsField.stringValue,
+        ])
+    }
+
+    await fixture.select("two.flac", inColumn: 2, waitingForTheRead: false)
+    #expect(await reader.waitForCall("/r/docs/sub/two.flac"))
+    reader.release("/r/docs/sub/two.flac")
+    await settle { view.nameField.stringValue == "two.flac" }
+
+    let oneShown = [
+        "one.flac", formatter.longDate(testDate),
+        formatter.longDate(testDate.addingTimeInterval(60)), "Red",
+    ]
+    let twoShown = [
+        "two.flac", formatter.longDate(testDate.addingTimeInterval(120)),
+        ColumnPreviewView.noDate, "",
+    ]
+    #expect(!shown.isEmpty)
+    #expect(shown.allSatisfy { $0 == oneShown || $0 == twoShown }, "\(shown)")
+    #expect(shown.last == twoShown)
+}
+
+/// As Finder draws its preview's Information section: each row's title at the left in
+/// secondary text and its value at the right in the label color, both in the small system
+/// font, with a rule under each row and none above the first.
+@MainActor @Test func theInformationRowsAreLaidOutAsFindersAre() async throws {
+    let fixture = await Fixture()
+    await fixture.select("a.txt", inColumn: 0)
+    let view = try #require(fixture.controller.previewView)
+    fixture.controller.view.layoutSubtreeIfNeeded()
+
+    #expect(view.nameField.font == ColumnPreviewView.nameFont)
+    #expect(view.summaryField.font == ColumnPreviewView.detailFont)
+    #expect(view.summaryField.textColor == .secondaryLabelColor)
+    // The name and the kind and size start where the row titles do, as in Finder.
+    let titlesX = aligned(view.rows[0].titleField, in: view).minX
+    for field in [view.nameField, view.summaryField] {
+        #expect(field.alignment != .center && field.alignment != .right)
+        #expect(aligned(field, in: view).minX == titlesX)
+    }
+    let small = NSFont.smallSystemFontSize
+    var previousBottom: Double?
+    for row in view.rows {
+        let frame = aligned(row, in: view)
+        let title = aligned(row.titleField, in: view)
+        let value = aligned(row.value, in: view)
+        let rule = aligned(row.rule, in: view)
+        #expect(row.titleField.font?.pointSize == small)
+        #expect(row.value.font?.pointSize == small)
+        #expect(row.titleField.textColor == .secondaryLabelColor)
+        #expect(row.value.textColor == .labelColor)
+        #expect(row.value.alignment == .right)
+        #expect(row.rule.boxType == .separator)
+        // The row spans the fields' width: title at its left, value at its right.
+        #expect(frame.width == view.bounds.width - 24)
+        #expect(title.minX == frame.minX)
+        #expect(value.maxX == frame.maxX)
+        #expect(value.minX >= title.maxX + InformationRow.gap)
+        // A one-point rule is the row's bottom edge, under its text, and the next row starts
+        // there; there is none above the first.
+        #expect(rule.minY == frame.minY)
+        #expect(rule.height == 1)
+        #expect(rule.width == frame.width)
+        #expect(rule.maxY <= min(title.minY, value.minY) - ColumnPreviewView.rowPadding)
+        #expect(abs(title.maxY - (frame.maxY - ColumnPreviewView.rowPadding)) < 0.01)
+        if let previousBottom { #expect(abs(frame.maxY - previousBottom) < 0.01) }
+        previousBottom = frame.minY
+    }
+}
+
+/// `view`'s alignment rectangle, the one Auto Layout places, in `ancestor`'s coordinates.
+@MainActor
+private func aligned(_ view: NSView, in ancestor: NSView) -> NSRect {
+    guard let superview = view.superview else { preconditionFailure("\(view) isn't shown") }
+    return superview.convert(view.alignmentRect(forFrame: view.frame), to: ancestor)
+}
+
+/// A date too long for the row beside its title wraps, right-aligned, rather than losing its
+/// time.
+@MainActor @Test func aLongDateWrapsInsideItsRow() async throws {
+    let fixture = await Fixture()
+    await fixture.select("a.txt", inColumn: 0)
+    let view = try #require(fixture.controller.previewView)
+    view.modifiedField.stringValue = "Wednesday, September 30, 2026 at 12:50 PM"
+    fixture.controller.view.layoutSubtreeIfNeeded()
+
+    // Modified, two lines tall beside Created's "--" on one.
+    let row = view.rows[1]
+    #expect(row.frame.height > view.rows[0].frame.height + 8)
+    #expect(aligned(row.value, in: row).maxX == row.bounds.maxX)
+    #expect(
+        aligned(row.value, in: row).minX
+            >= aligned(row.titleField, in: row).maxX + InformationRow.gap)
 }
 
 /// A pane at `/s` in column view whose folders each end in a state with no rows to show:
@@ -1172,7 +1329,7 @@ private func columnWidths(_ fixture: Fixture) -> [Double] {
 }
 
 /// Each column starts one point, its separator, after the one left of it, and its grip is
-/// centered on that separator at the bottom.
+/// centered on that separator, as tall as the column.
 @MainActor
 private func expectPacked(_ fixture: Fixture) throws {
     let controller = fixture.controller
@@ -1182,7 +1339,8 @@ private func expectPacked(_ fixture: Fixture) throws {
         let grip = try #require(controller.grip(forColumnAt: index))
         #expect(Double(grip.frame.midX) == Double(column.view.frame.maxX) + 0.5)
         #expect(grip.frame.minY == 0)
-        #expect(grip.frame.size == ColumnGripView.size)
+        #expect(Double(grip.frame.width) == ColumnGripView.thickness)
+        #expect(grip.frame.height == column.view.frame.height)
         x = Double(column.view.frame.maxX) + 1
     }
 }
@@ -1377,10 +1535,95 @@ private func nameRoom(_ name: String, in table: NSTableView) throws -> (
     try expectPacked(fixture)
 }
 
+/// Double-clicks `grip`, Option held or not, and waits for the fit to land.
+@MainActor
+private func fit(_ grip: ColumnGripView?, option: Bool = false, in fixture: Fixture) async throws {
+    doubleClick(try #require(grip), option: option)
+    await fixture.controller.fitting?.value
+}
+
+/// A double-click on a column already at its fit width puts it back at the default, with no
+/// width stored, so it follows the default as an unresized column does; the next one fits it
+/// again. A column at any other width, even after a fit, fits.
+@MainActor @Test func aDoubleClickTogglesBetweenTheFitAndTheDefault() async throws {
+    let folder = try TemporaryFolder("ColumnViewControllerTests")
+    let settings = storedSettings(in: folder)
+    settings.columnWidth = 300
+    let fixture = await Fixture(folders: fitTree, settings: settings)
+    await fixture.select("docs", inColumn: 0)
+    await fixture.select(wideName, inColumn: 1)
+    let grip = fixture.controller.grip(forColumnAt: 1)
+    let docs = Location(path: "/r/docs")
+    try await fit(grip, in: fixture)
+    let fitted = columnWidths(fixture)[1]
+    #expect(fitted > 300)
+
+    try await fit(grip, in: fixture)
+
+    #expect(columnWidths(fixture) == [300, 300, 300])
+    #expect(fixture.pane.columnWidths.isEmpty)
+    #expect(settings.columnWidth == 300)
+    try expectPacked(fixture)
+    settings.columnWidth = 320
+    #expect(columnWidths(fixture)[1] == 320)
+
+    try await fit(grip, in: fixture)
+    #expect(columnWidths(fixture)[1] == fitted)
+    #expect(fixture.pane.columnWidths.width(of: docs) == fitted)
+
+    // Dragged off its fit, the column fits again rather than going back.
+    drag(try #require(grip), by: 10)
+    try await fit(grip, in: fixture)
+    #expect(columnWidths(fixture)[1] == fitted)
+    #expect(settings.columnWidth == 320)
+}
+
+/// An Option-double-click with every column and the preview at the fit of them all puts them
+/// all back at `Settings.defaultColumnWidth`, which becomes the width new columns get again,
+/// as the Option-double-click that fitted them set the fit; the next one fits them all again.
+@MainActor @Test func anOptionDoubleClickTogglesEveryColumnBetweenTheFitAndTheDefault()
+    async throws
+{
+    let folder = try TemporaryFolder("ColumnViewControllerTests")
+    let settings = storedSettings(in: folder)
+    let fixture = await Fixture(folders: fitTree, settings: settings)
+    await fixture.select("docs", inColumn: 0)
+    await fixture.select(wideName, inColumn: 1)
+    await fixture.select("o.txt", inColumn: 2)
+    let grip = fixture.controller.grip(forColumnAt: 0)
+    try await fit(grip, option: true, in: fixture)
+    let fitted = columnWidths(fixture)[0]
+    #expect(settings.columnWidth == fitted)
+    #expect(fitted != Settings.defaultColumnWidth)
+
+    try await fit(fixture.controller.previewGrip, option: true, in: fixture)
+
+    let standard = Settings.defaultColumnWidth
+    #expect(columnWidths(fixture) == [standard, standard, standard])
+    #expect(fixture.controller.previewView.map { Double($0.frame.width) } == standard)
+    #expect(settings.columnWidth == standard)
+    #expect(fixture.pane.columnWidths.isEmpty)
+    try expectPacked(fixture)
+
+    try await fit(grip, option: true, in: fixture)
+    #expect(columnWidths(fixture) == [fitted, fitted, fitted])
+    #expect(settings.columnWidth == fitted)
+
+    // One column off the fit makes the next Option-double-click fit them all again.
+    drag(try #require(fixture.controller.grip(forColumnAt: 2)), by: 10)
+    try await fit(grip, option: true, in: fixture)
+    #expect(columnWidths(fixture) == [fitted, fitted, fitted])
+    #expect(fixture.controller.previewView.map { Double($0.frame.width) } == fitted)
+    #expect(fixture.pane.columnWidths.isEmpty)
+}
+
 @MainActor @Test func theFocusedColumnIsScrolledIntoViewAtAWiderWidth() async throws {
     let folder = try TemporaryFolder("ColumnViewControllerTests")
     let fixture = await Fixture(width: 500, settings: storedSettings(in: folder))
-    drag(try #require(fixture.controller.grip(forColumnAt: 0)), by: 155, option: true)
+    drag(
+        try #require(fixture.controller.grip(forColumnAt: 0)),
+        by: 400 - Settings.defaultColumnWidth,
+        option: true)
     await fixture.openThreeColumns()
     let scrollView = try #require(fixture.controller.view as? NSScrollView)
     #expect(columnWidths(fixture) == [400, 400, 400])
@@ -1408,22 +1651,54 @@ private func hit(_ point: NSPoint, in fixture: Fixture) -> NSView? {
     return columns.hitTest(columns.convert(point, to: superview))
 }
 
-/// A grip overlaps the bottom corner of the column left of its separator and of the one right
-/// of it; a click there goes to the grip, not to either table.
-@MainActor @Test func aGripTakesClicksOverTheTablesInItsCorner() async throws {
+/// A grip runs the whole height of its separator and a few points either side of it, over the
+/// edges of the columns left and right of it, as a split view's divider does; a click anywhere
+/// along it goes to the grip, and one a few points further out reaches the column's rows.
+@MainActor @Test func aGripTakesClicksAlongTheWholeSeparator() async throws {
     let fixture = await Fixture()
     await fixture.openThreeColumns()
     let grip = try #require(fixture.controller.grip(forColumnAt: 0))
-    let left = fixture.controller.columnControllers[0].view.frame
-    let right = fixture.controller.columnControllers[1].view.frame
+    let left = fixture.controller.columnControllers[0].view
+    let right = fixture.controller.columnControllers[1].view
 
-    let inLeft = NSPoint(x: grip.frame.minX + 1, y: grip.frame.midY)
-    let inRight = NSPoint(x: grip.frame.maxX - 1, y: grip.frame.midY)
+    for y in [left.frame.minY + 1, left.frame.midY, left.frame.maxY - 1] {
+        let inLeft = NSPoint(x: grip.frame.minX + 0.5, y: y)
+        let inRight = NSPoint(x: grip.frame.maxX - 0.5, y: y)
+        #expect(left.frame.contains(inLeft))
+        #expect(right.frame.contains(inRight))
+        #expect(hit(inLeft, in: fixture) === grip)
+        #expect(hit(inRight, in: fixture) === grip)
+        let pastLeft = NSPoint(x: grip.frame.minX - 2, y: y)
+        let pastRight = NSPoint(x: grip.frame.maxX + 2, y: y)
+        #expect(hit(pastLeft, in: fixture)?.isDescendant(of: left) == true)
+        #expect(hit(pastRight, in: fixture)?.isDescendant(of: right) == true)
+    }
+}
 
-    #expect(left.contains(inLeft))
-    #expect(right.contains(inRight))
-    #expect(hit(inLeft, in: fixture) === grip)
-    #expect(hit(inRight, in: fixture) === grip)
+/// A vertical scroll over a grip goes to the scroll view of the column under the pointer: the
+/// column left of the separator over the line and its left side, the column or the preview right
+/// of it over its right side.
+@MainActor @Test func aGripScrollsTheColumnUnderThePointer() async throws {
+    let fixture = await Fixture()
+    await fixture.openThreeColumns()
+    await fixture.select("one.flac", inColumn: 2)
+    let controller = fixture.controller
+    let columns = controller.columnsView
+    let preview = try #require(controller.previewView)
+    func target(_ grip: ColumnGripView?, atX x: (NSRect) -> Double) throws -> NSView? {
+        let grip = try #require(grip)
+        let point = NSPoint(x: x(grip.frame), y: grip.frame.midY)
+        return grip.scrollTarget(columns.convert(point, to: nil))
+    }
+
+    let first = controller.grip(forColumnAt: 0)
+    #expect(try target(first) { $0.minX + 0.5 } === controller.columnControllers[0].view)
+    #expect(try target(first) { $0.midX } === controller.columnControllers[0].view)
+    #expect(try target(first) { $0.maxX - 0.5 } === controller.columnControllers[1].view)
+    let last = controller.grip(forColumnAt: 2)
+    #expect(try target(last) { $0.maxX - 0.5 } === preview.scrollView)
+    #expect(try target(controller.previewGrip) { $0.minX + 0.5 } === preview.scrollView)
+    #expect(try target(controller.previewGrip) { $0.maxX - 0.5 } == nil)
 }
 
 /// At the far right the last grip, and the preview's, fit inside the columns' view, so their

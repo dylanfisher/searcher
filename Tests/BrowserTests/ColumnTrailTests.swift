@@ -139,6 +139,33 @@ private func packageColumns() async -> PaneFixture {
     #expect(fixture.actions.openedFiles.isEmpty)
 }
 
+/// Opt-↓ moves ten rows, not to the last row, and the columns right of the selection wait for the
+/// pause like any held key (0094-column-open-delay.md).
+@MainActor @Test func optionDownInAColumnWaitsForThePauseBeforeOpeningTheNewSelection()
+    async throws
+{
+    let clock = ManualClock()
+    let names = (0..<14).map { String(format: "d%02d", $0) }
+    var folders: [String: [DirectoryEntry]] = ["/": [folder("m")], "/m": names.map { folder($0) }]
+    for name in names { folders["/m/\(name)"] = [file("x.txt")] }
+    let fixture = PaneFixture(at: "/m", folders: folders)
+    await settle { fixture.pane.state.isLoaded }
+    fixture.pane.setViewMode(.column)
+    let pane = fixture.pane
+    await settle { trail(pane).focused.pane.state.isLoaded }
+    pane.columnOpenClock = clock
+    select("d00", in: trail(pane).columns[0])
+    #expect(paths(pane) == ["/m", "/m/d00"])
+
+    try press(KeyChord(.down, modifiers: .option), on: pane)
+
+    #expect(trail(pane).columns[0].pane.selection.cursor == ExactName("d10"))
+    #expect(paths(pane) == ["/m"])
+    await settle { clock.waitingSleeps == 1 }
+    clock.advance(by: ColumnTrail.openDelay)
+    await settle { paths(pane) == ["/m", "/m/d10"] }
+}
+
 /// A package selected by keys waits for the pause, as a file does, then previews and still adds
 /// no column; Show Package Contents opens its column at once, since it is a command.
 @MainActor @Test func aPackageSelectedByKeysPreviewsAfterThePauseAndShowContentsOpensAtOnce()
@@ -1006,7 +1033,7 @@ private func drainWaits() async {
     clock.advance(by: ColumnTrail.openDelay)
     await settle { paths(pane) == ["/k", "/k/f5"] }
 
-    try press(KeyChord(.down, modifiers: .option), on: pane)
+    try press(KeyChord(.end), on: pane)
     #expect(paths(pane) == ["/k"])
     clock.advance(by: ColumnTrail.openDelay)
     await settle { trail(pane).preview?.location == Location(path: "/k/z.txt") }
@@ -1107,7 +1134,7 @@ private func click(_ name: String, in pane: Pane) throws {
     let fixture = await keyedPane(clock: clock)
     let pane = fixture.pane
     let first = trail(pane).columns[0].pane
-    try press(KeyChord(.down, modifiers: .option), on: pane)
+    try press(KeyChord(.end), on: pane)
     clock.advance(by: ColumnTrail.openDelay)
     await settle { trail(pane).preview?.location == Location(path: "/k/z.txt") }
 
@@ -1267,6 +1294,142 @@ private func info(_ seconds: Double, tags: [String] = []) -> ItemInfo {
     #expect(trail(pane).preview?.info == .reading)
     reader.release("/k/f0/n.txt")
     await settle { trail(pane).preview?.info == .read(info(2)) }
+}
+
+/// `/k/f0` in column view, with `/k/f0/m.txt` previewed and read, its preview waiting out its
+/// hold on `clock` and reading with `reader`, which holds `/k/f0/n.txt`'s read until released.
+@MainActor
+private func previewedM(holdingOn clock: ManualClock, reader: GatedItemInfoReader) async throws
+    -> PaneFixture
+{
+    let fixture = await keyedPane(clock: ManualClock())
+    let pane = fixture.pane
+    pane.previewHoldClock = clock
+    pane.itemInfoReader = reader
+    reader.release("/k/f0/m.txt")
+    try click("m.txt", in: trail(pane).columns[1].pane)
+    await settle { trail(pane).shownPreview?.info == .read(info(1)) }
+    return fixture
+}
+
+/// Selecting another file keeps the file shown before on screen until the new one's info is
+/// read, so its rows show neither empty nor the old file's dates (0095-preview-metadata.md).
+@MainActor @Test func anotherFileShowsOnlyOnceItsInfoIsRead() async throws {
+    let reader = GatedItemInfoReader(["/k/f0/m.txt": info(1), "/k/f0/n.txt": info(2)])
+    let fixture = try await previewedM(holdingOn: ManualClock(), reader: reader)
+    let pane = fixture.pane
+    let m = try #require(trail(pane).shownPreview)
+    #expect(m.location == Location(path: "/k/f0/m.txt"))
+
+    try click("n.txt", in: trail(pane).columns[1].pane)
+
+    #expect(trail(pane).preview?.location == Location(path: "/k/f0/n.txt"))
+    #expect(trail(pane).preview?.info == .reading)
+    #expect(trail(pane).shownPreview == m)
+    reader.release("/k/f0/n.txt")
+    await settle { trail(pane).shownPreview?.info == .read(info(2)) }
+    #expect(trail(pane).shownPreview == trail(pane).preview)
+}
+
+/// The first file previewed has nothing to keep on screen: it shows once its info is read.
+@MainActor @Test func theFirstFileShowsOnlyOnceItsInfoIsRead() async throws {
+    let fixture = await keyedPane(clock: ManualClock())
+    let pane = fixture.pane
+    pane.previewHoldClock = ManualClock()
+    let reader = GatedItemInfoReader(["/k/f0/m.txt": info(1)])
+    pane.itemInfoReader = reader
+
+    try click("m.txt", in: trail(pane).columns[1].pane)
+
+    #expect(trail(pane).preview?.info == .reading)
+    #expect(trail(pane).shownPreview == nil)
+    reader.release("/k/f0/m.txt")
+    await settle { trail(pane).shownPreview?.info == .read(info(1)) }
+}
+
+/// A read that takes longer than the hold, as one on a slow share does, shows the new file with
+/// empty rows once the hold ends, counted from the first selection it held through.
+@MainActor @Test func aSlowReadShowsTheFileWithoutItsInfoOnceTheHoldEnds() async throws {
+    let clock = ManualClock()
+    let reader = GatedItemInfoReader(["/k/f0/m.txt": info(1), "/k/f0/n.txt": info(2)])
+    let fixture = try await previewedM(holdingOn: clock, reader: reader)
+    let pane = fixture.pane
+    let column = trail(pane).columns[1].pane
+    let m = trail(pane).shownPreview
+
+    try click("n.txt", in: column)
+    clock.advance(by: ColumnTrail.previewHold - .milliseconds(1))
+    await drainMainQueue()
+    #expect(trail(pane).shownPreview == m)
+
+    clock.advance(by: .milliseconds(1))
+
+    await settle { trail(pane).shownPreview?.location == Location(path: "/k/f0/n.txt") }
+    #expect(trail(pane).shownPreview?.info == .reading)
+    reader.releaseAll()
+}
+
+@MainActor @Test func anotherSelectionDuringTheHoldKeepsItsDeadline() async throws {
+    let clock = ManualClock()
+    let reader = GatedItemInfoReader(["/k/f0/m.txt": info(1), "/k/f0/n.txt": info(2)])
+    let fixture = await keyedPane(clock: ManualClock())
+    let pane = fixture.pane
+    pane.previewHoldClock = clock
+    pane.itemInfoReader = reader
+    let column = trail(pane).columns[1].pane
+    try click("m.txt", in: column)
+    clock.advance(by: ColumnTrail.previewHold / 2)
+
+    try click("n.txt", in: column)
+    clock.advance(by: ColumnTrail.previewHold / 2)
+
+    await settle { trail(pane).shownPreview?.location == Location(path: "/k/f0/n.txt") }
+    reader.releaseAll()
+}
+
+/// A folder, or no file, ends the hold at once: the preview goes, as before.
+@MainActor @Test func aFolderSelectedDuringTheHoldDropsThePreviewAtOnce() async throws {
+    let reader = GatedItemInfoReader(["/k/f0/m.txt": info(1), "/k/f0/n.txt": info(2)])
+    let clock = ManualClock()
+    let fixture = try await previewedM(holdingOn: clock, reader: reader)
+    let pane = fixture.pane
+    let column = trail(pane).columns[1].pane
+    try click("n.txt", in: column)
+    #expect(trail(pane).shownPreview?.location == Location(path: "/k/f0/m.txt"))
+
+    try click("in", in: column)
+
+    #expect(trail(pane).preview == nil)
+    #expect(trail(pane).shownPreview == nil)
+    await drainMainQueue()
+    #expect(clock.waitingSleeps == 0)
+    reader.releaseAll()
+}
+
+/// List mode, a navigation and closing the pane during the hold end it with the trail: nothing
+/// waits on the hold's clock afterwards.
+@MainActor @Test func closingTheTrailDuringTheHoldEndsItsWait() async throws {
+    for closing in ["list mode", "navigation", "pane close"] {
+        let reader = GatedItemInfoReader(["/k/f0/m.txt": info(1), "/k/f0/n.txt": info(2)])
+        let clock = ManualClock()
+        let fixture = try await previewedM(holdingOn: clock, reader: reader)
+        let pane = fixture.pane
+        let trail = trail(pane)
+        try click("n.txt", in: trail.columns[1].pane)
+        #expect(trail.shownPreview?.location == Location(path: "/k/f0/m.txt"), "\(closing)")
+        await settle { clock.waitingSleeps == 1 }
+
+        switch closing {
+        case "list mode": pane.setViewMode(.list)
+        case "navigation": pane.navigate(to: Location(path: "/k/f1"))
+        default: pane.close()
+        }
+
+        #expect(trail.shownPreview == nil, "\(closing)")
+        await drainMainQueue()
+        #expect(clock.waitingSleeps == 0, "\(closing)")
+        reader.releaseAll()
+    }
 }
 
 @MainActor @Test func aReadLandingAfterTheTrailClosesIsDropped() async throws {

@@ -181,8 +181,19 @@ private struct RecordingTable {
     let presses: [(NSEvent, CommandID)] = [
         (try keyEvent(down, modifiers: arrowFlags.union(.shift)), SelectionCommands.extendDown.id),
         (try keyEvent(up, modifiers: arrowFlags.union(.shift)), SelectionCommands.extendUp.id),
-        (try keyEvent(down, modifiers: arrowFlags.union(.option)), SelectionCommands.selectLast.id),
-        (try keyEvent(up, modifiers: arrowFlags.union(.option)), SelectionCommands.selectFirst.id),
+        (
+            try keyEvent(down, modifiers: arrowFlags.union(.option)),
+            SelectionCommands.tenRowsDown.id
+        ),
+        (try keyEvent(up, modifiers: arrowFlags.union(.option)), SelectionCommands.tenRowsUp.id),
+        (
+            try keyEvent(functionKey(NSEndFunctionKey), modifiers: .function),
+            SelectionCommands.selectLast.id
+        ),
+        (
+            try keyEvent(functionKey(NSHomeFunctionKey), modifiers: .function),
+            SelectionCommands.selectFirst.id
+        ),
         (
             try keyEvent(down, modifiers: arrowFlags.union([.control, .shift])),
             SelectionCommands.tenRowsDown.id

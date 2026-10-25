@@ -51,7 +51,7 @@ public final class Pane {
     /// selection provisionally and settles it off the main thread too. Leaving the folder moves
     /// it too, so a command can tell whether the user has changed the selection since it ran.
     private(set) var selectionVersion = 0
-    /// Whether a row key, Opt-↑ or Opt-↓, or type-to-select made the selection, rather than a
+    /// Whether a row key, Home or End, or type-to-select made the selection, rather than a
     /// click or a command. A column's trail waits for such keys to pause before the columns
     /// right of it follow the selection (0094-column-open-delay.md).
     private(set) var selectionIsFromKeys = false
@@ -135,6 +135,9 @@ public final class Pane {
     /// Where the trail in column mode waits out `ColumnTrail.openDelay`. Tests pass a clock they
     /// advance.
     var columnOpenClock: any Clock<Duration> = ContinuousClock()
+    /// Where the trail in column mode waits out `ColumnTrail.previewHold`. Tests pass a clock
+    /// they advance.
+    var previewHoldClock: any Clock<Duration> = ContinuousClock()
     private(set) var load: ListingLoad?
     private var loadIsRunning = false
     /// Whether loads go ahead of other panes'. A trail moves it between its columns without
@@ -546,6 +549,17 @@ public final class Pane {
         else { return }
         let old = columnWidths
         columnWidths.set(width, of: column.location)
+        if columnWidths != old { reportChange() }
+    }
+
+    /// Drops the width set for `column`'s pane's folder, as a double-click on a fitted column's
+    /// grip does, so the column shows at `Settings.columnWidth` and follows it, as a column never
+    /// resized does. A column the trail has closed since keeps its folder's width.
+    public func clearColumnWidth(of column: Pane) {
+        guard let trail = columnTrail, trail.columns.contains(where: { $0.pane === column })
+        else { return }
+        let old = columnWidths
+        columnWidths.remove(column.location)
         if columnWidths != old { reportChange() }
     }
 
@@ -1580,14 +1594,14 @@ public final class Pane {
         moveSelection(by: pages * max(visibleRowCount, 1), isKeyRepeat: isKeyRepeat)
     }
 
-    /// Selects the first row alone. `byKey` says a key asked for it, as Opt-↑ does; → into a
+    /// Selects the first row alone. `byKey` says a key asked for it, as Home does; → into a
     /// column asks without it, so the folder in that row opens its column at once.
     public func selectFirstRow(byKey: Bool = false) {
         guard let listing = state.listing else { return }
         set(onMain { selection.moved(toRow: 0, in: listing, extending: false) }, byKey: byKey)
     }
 
-    /// Selects the last row alone. `byKey` says a key asked for it, as Opt-↓ does.
+    /// Selects the last row alone. `byKey` says a key asked for it, as End does.
     public func selectLastRow(byKey: Bool = false) {
         guard let listing = state.listing else { return }
         set(

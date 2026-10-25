@@ -5,12 +5,12 @@
 
 ## Context
 
-M1.2 adds the row movement keys (Opt-↑/↓ first and last row, Ctrl-Shift-↑/↓ ten rows, Fn-↑/↓ a
-page), Shift-↑/↓ to extend the selection, and Cmd-A. Until now the pane's selection was a set of
-names, and ↑ and ↓ moved it only when one row was selected. Extending needs to know where a range
-started and which end moves. `NSTableView` has its own selection extension on Shift-↑/↓, and those
-keys reached it, since only keys with Command, Control or Option were kept from it
-([0027](0027-key-dispatch.md)). Clicks, Shift-clicks and Cmd-clicks also change the table's
+M1.2 adds the row movement keys (Home and End first and last row, Opt-↑/↓ and Ctrl-Shift-↑/↓ ten
+rows, Fn-↑/↓ a page), Shift-↑/↓ to extend the selection, and Cmd-A. Until now the pane's
+selection was a set of names, and ↑ and ↓ moved it only when one row was selected. Extending
+needs to know where a range started and which end moves. `NSTableView` has its own selection
+extension on Shift-↑/↓, and those keys reached it, since only keys with Command, Control or
+Option were kept from it ([0027](0027-key-dispatch.md)). Clicks, Shift-clicks and Cmd-clicks also change the table's
 selection directly. B6 (16 ms on W2) applies to each of these commands, and B10 (no stall over
 50 ms) to everything on the main thread.
 
@@ -81,10 +81,13 @@ name about 32 ms, and a click selecting half the rows 32–51 ms.
 - **Keys.** Every row movement key, Shift-↑/↓ included, is a registered command in
   `SelectionCommands`, so `ListingTableView.keyDown` runs it and `NSTableView` never sees it.
   Cmd-A is registered as Select All, which the Edit menu's item runs. `KeyChord.Key` gains
-  `pageUp` and `pageDown`, named Page Up and Page Down: Fn-↓ types the Page Down character, and
-  the keys of a full keyboard give the same chord. Unbound Shift-only keys still reach `super`.
-  Shift with Page Up, Page Down, Home, End, ← and → was checked against the table and moves
-  nothing. `allowsMultipleSelection` stays on, for clicks and for showing the pane's ranges.
+  `pageUp`, `pageDown`, `home` and `end`, named Page Up, Page Down, Home and End: Fn-↓ types the
+  Page Down character and Fn-→ the End one, and the keys of a full keyboard give the same
+  chords. Opt-↑/↓ and Ctrl-Shift-↑/↓ are both chords of Move Up/Down 10 Rows (Dylan,
+  2026-10-24: "add the keyboard shortcut for jumping up/down 10 files (option+up or
+  option+down)"), which took Opt-↑/↓ from Select First/Last Row; those moved to Home and End.
+  Unbound Shift-only keys still reach `super`. Shift with Page Up, Page Down, Home, End, ← and →
+  was checked against the table and moves nothing. `allowsMultipleSelection` stays on, for clicks and for showing the pane's ranges.
 - **Page.** A page is `Pane.visibleRowCount` rows, the whole rows that fit below the column
   header. `ListingViewController.viewDidLayout` sets it, subtracting the header's overlap with
   the clip view, since the rows scroll under the header. A pane too short for one row moves one.
@@ -103,8 +106,8 @@ name about 32 ms, and a click selecting half the rows 32–51 ms.
 - **Patched names.** A patch counts an entry as added only if the listing before the whole batch
   lacked it, so a name removed and written again in one batch stays selected under Select All,
   as it does in a selection by name.
-- **Bench.** The UI bench's launch that presses ↓ then times, on W2, 200 presses each of Opt-↓
-  and Opt-↑ alternating, Ctrl-Shift-↓, Fn-↓ and Shift-↓, then 100 Cmd-A presses, each after an
+- **Bench.** The UI bench's launch that presses ↓ then times, on W2, 200 presses each of End
+  and Home alternating, Ctrl-Shift-↓, Fn-↓ and Shift-↓, then 100 Cmd-A presses, each after an
   untimed ↓, then 100 folder change patches and 20 reloads landing with every row selected. The
   keys go through `window.sendEvent` like ↓. Each patch changes an entry's size in memory and goes
   through `Pane.apply`, the path the folder monitor's patches take, so it makes no file-system
@@ -188,7 +191,7 @@ are new, so the baseline has none:
 | B6 case | 1fad9b3, 3 runs | This change, 3 runs |
 |---|---|---|
 | ↓ | 10.15, 9.27, 9.26 | 9.43, 9.02, 10.42 |
-| Opt-↓/↑ | 10.25, 10.00, 9.01 | 13.52, 14.14, 10.44 |
+| Opt-↓/↑ (then first and last row; now Home/End) | 10.25, 10.00, 9.01 | 13.52, 14.14, 10.44 |
 | Ctrl-Shift-↓ | 8.85, 9.12, 10.51 | 9.70, 12.08, 8.66 |
 | Fn-↓ | 9.47, 10.09, 9.42 | 11.13, 10.47, 10.11 |
 | Shift-↓ | 9.04, 9.12, 9.08 | 10.23, 10.84, 9.01 |

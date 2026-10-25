@@ -29,12 +29,12 @@ listing doesn't make.
   (`Pane.openLink`), so such a link shows no preview, as a folder doesn't. Telling a link to a
   folder from a link to a file takes a read, which the preview never makes, so no link shows
   one; a link to a file loses Finder's preview until a read off the main thread (CV.3) can tell
-  them apart. A socket, device or FIFO shows a preview with its kind and no Size row, as Finder
+  them apart. A socket, device or FIFO shows a preview with its kind and no size, as Finder
   shows one.
 - **Packages follow the trail.** The preview shows for what the trail doesn't open as a column.
   A package such as an app is a file to Open and the trail
   ([0093](0093-packages-are-files.md)), so it opens no column and shows the preview, with no
-  Size row: its size is a walked folder size, which the preview doesn't show yet.
+  size: its size is a walked folder size, which the preview doesn't show yet.
 - **One view, refilled.** `ColumnViewController` makes `ColumnPreviewView` the first time a file
   is previewed, keeps it in the columns' document view, hides it when there is no preview and
   refills its fields only when the preview changes. It sits right of the last column's separator,
@@ -46,6 +46,10 @@ listing doesn't make.
   light and dark mode. Each field is held to the column's width: a long name wraps, breaking
   inside a word that has no space, and a long kind or date truncates. In a window shorter than
   the fields they scroll vertically, in a scroll view with no horizontal scrolling of its own.
+  (Superseded 2026-10-24: the name and the kind and size are left-aligned, the Information
+  section has no Size row, since the size is in the line under the name, and its rows are drawn as Finder draws them, title left and value right with a rule under each row,
+  in the small system font, and a long date wraps; see
+  [0095](0095-preview-metadata.md).)
 - **Scrolling.** The column view scrolls when the focus, the column count or whether a preview
   shows changes. The focused column's right-hand neighbor, kept in view where it fits, is the
   next column or, from the last column, the preview.

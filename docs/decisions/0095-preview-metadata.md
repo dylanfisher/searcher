@@ -15,6 +15,15 @@ or gone ([0038](0038-slow-volumes.md)) holds the calling thread, and an iCloud f
 downloaded ([0030](0030-not-downloaded-badge.md)) has no contents on this Mac. Packages are files
 ([0093](0093-packages-are-files.md)), and Finder shows the same fields for an app.
 
+Amended 2026-10-24 after Dylan's feedback: the Information rows flashed at each newly selected
+file, and their type and rules didn't match Finder's. The flash was the Created and Last opened
+values going empty: a click set the new preview with its info `.reading`, and the view refilled
+in the same main run loop turn, with those rows empty, so that frame was committed; the read's
+result lands on a later turn, after about 1 ms locally, and filled them a frame or two later.
+A preview with tags also dropped its Tags section in that frame. Nothing else rebuilt or moved.
+The view test `selectingAnotherFileShowsNoEmptyRowsOnTheWay` records the fields at each refill
+and saw `["two.flac", "", "", ""]` before this change.
+
 ## Decision
 
 - **`ItemInfoReader` in Base reads one item.** It returns `ItemInfo`: the creation date and the
@@ -53,11 +62,37 @@ downloaded ([0030](0030-not-downloaded-badge.md)) has no contents on this Mac. P
   date, as a file deleted and made again or saved by replacing it, starts a new read; the fields
   keep what was read before until it lands, so they don't blank. A failed read is likewise tried
   again only once the file's entry changes, or when the file is previewed again. A tag change made elsewhere changes no entry, so it shows when the file is previewed again.
+- **A new file shows once its read lands, or after 100 ms.** While a newly previewed file's info
+  is first read, column view keeps showing what it showed before: the previous file's whole
+  preview, or nothing. `ColumnTrail.shownPreview` is what the view shows; `preview` stays the
+  selected file, at once, for everything else. The hold ends when the read lands or fails, or
+  when `ColumnTrail.previewHold` (100 ms) has passed on `Pane.previewHoldClock` since it started;
+  a selection of another file during the hold keeps it and its deadline, so clicking through
+  files can't keep an old preview up longer. No preview (a folder, several rows, none), a file
+  that gets no read, and a re-read of the file shown already show at once. The wait is a task on
+  the clock; the read stays on its `BlockingCallThread`, so a hung share holds no more than it
+  did, and its file shows with empty rows after 100 ms. A local read, about 1 ms and 10 ms for a
+  process's first, lands well inside the hold, so a local file shows with its dates from its
+  first frame. Keys still clear the preview while they move ([0094](0094-column-open-delay.md));
+  after the pause the new preview is held the same way.
 - **The layout doesn't move when the read lands.** The Created and Last opened rows are in the
-  Information grid from the first frame, empty until read, between Size and Modified and after
-  Modified. Tags are a section below every other field, shown only when the file has tags, so
-  they only add height below. A read with no date, and a failed read, show "--", as Finder shows
-  an unknown value. A file that gets no read keeps its rows empty.
+  Information section from the first frame, empty until read, before and after Modified. Tags are a section below every other field, shown only when the file has tags,
+  so they only add height below. A read with no date, and a failed read, show "--", as Finder
+  shows an unknown value. A file that gets no read keeps its rows empty. The one exception: a
+  read that lands after the hold, on a slow share, with a date too long for one line beside its
+  title, makes that row two lines tall and moves the rows below it down.
+- **The rows are drawn as Finder's.** Taken from Dylan's screenshot of Finder's preview, not from
+  a Finder window on this Mac, which would have shown on the main display: below the icon, the
+  name in bold 15 pt and the kind and size under it, both left-aligned with the header and the
+  row titles; the kind and size in secondary text at the small system size (11 pt); an
+  Information header in bold 13 pt; then the Created, Modified and Last opened rows, with no
+  Size row, since the size is in the line under the name, as in Finder's screenshot. Each row
+  has its title at the left in secondary text and its value at the right in the label color,
+  both 11 pt, 4 pt of space above and below the text and a one-point separator rule under the
+  row, none above the first. Dates are written in
+  full, "Friday, October 16, 2026 at 12:50 PM", or "Today at 12:50 PM". A value that doesn't
+  fit beside its title wraps, right-aligned, instead of losing its time: at the default
+  column width a full date doesn't fit beside Last opened.
 - **Tags are plain text**, joined with ", " in Finder's order, wrapping to the column's width.
   Finder draws each tag's color; `tagNames` has no colors, and reading them takes the label
   colors from Finder's preferences, which this step leaves out.
@@ -69,6 +104,20 @@ downloaded ([0030](0030-not-downloaded-badge.md)) has no contents on this Mac. P
 - **Hide the Created and Last opened rows until read** — rejected: the Modified row would move
   down when the read landed.
 - **"--" while the read runs** — rejected: it reads as "no date" for the length of the read.
+- **Show the new file with the old file's dates until the read lands** — rejected: the rows
+  would show another file's dates beside the new name.
+- **A cache of recent reads, keyed by the file's entry** — rejected as the fix: it helps only a
+  file read before, so the first visit to each file still flashed, and a tag change made
+  elsewhere changes no entry, so a cached read would keep old tags. The hold covers every file.
+- **Hold until the read lands, however long** — rejected: a file on a hung share would keep the
+  previous file's preview up beside the new selection until the kernel gave up.
+- **Read a local file on the main thread** — rejected: AGENTS.md allows no file-system I/O on
+  the main thread, local or not.
+- **A longer hold** — rejected: past about 100 ms the preview visibly lags the selection, on a
+  share where reads take that long. 100 ms is under `openDelay` and is ten times a process's
+  first local read.
+- **Truncate a long date, as the rows did** — rejected: at the default width every full date
+  lost its time.
 - **The `com.apple.lastuseddate#PS` extended attribute** — rejected: one `getxattr` would be
   cheaper, but files Spotlight has a last-used date for don't all carry it (the probe's files had
   none), so it misses dates Finder shows.
@@ -92,4 +141,6 @@ the main thread, and on W6 a column that is slow or offline starts none. A read 
 before a share went bad holds one `BlockingCallThread` until the share answers or the kernel
 gives up, and the share's later reads wait behind it. A file that keeps changing, such as a
 download, is read again at each patch, one read at a time on a share. Tag colors are left for a
-later step.
+later step. The selection's highlight still moves at once; the preview follows when the read
+lands, up to 100 ms later on a slow share, and during that time it shows the file selected
+before.

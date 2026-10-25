@@ -82,7 +82,7 @@ public enum MainMenuBuilder {
     static let actionsRunningCommands = [undo, redo, cut, copy, paste, selectAll]
 
     /// The row keys, which all reach the table from `keyDown`: a key equivalent would take
-    /// ↑, ↓, Shift-, Opt- and Ctrl-Shift-arrows and the page keys from text fields.
+    /// ↑, ↓, Shift-, Opt- and Ctrl-Shift-arrows, the page keys, Home and End from text fields.
     static let selectionMenu = Menu(
         title: "Selection",
         items: [

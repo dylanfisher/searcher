@@ -1,17 +1,19 @@
 import AppKit
 
-/// The resize grip at the bottom of a column's right edge in column view, Finder's "||" handle:
-/// two short vertical lines over the column's separator. A drag resizes the column, an Option-drag
-/// every column, a double-click fits the column to its widest name and an Option-double-click
-/// fits every column (0096-column-widths.md). The grip reports the gesture; `ColumnViewController`
-/// owns the widths.
+/// The resize grip on a column's right edge in column view: a strip the column's full height,
+/// centered on its separator line, that draws nothing, so the line shows through, as in Finder.
+/// A drag resizes the column, an Option-drag every column, a double-click fits the column to its
+/// widest name or, once it is fitted, puts it back at the default, and an Option-double-click
+/// does that for every column (0096-column-widths.md). The grip reports the gesture;
+/// `ColumnViewController` owns the widths.
 ///
 /// VoiceOver reads it as a splitter whose value is the column's width in points, and whose
 /// increment and decrement actions resize the column by `accessibilityStep`.
 @MainActor
 final class ColumnGripView: NSView {
-    /// The grip's size. It is centered on the separator line, at the bottom of the column.
-    static let size = NSSize(width: 11, height: 16)
+    /// How wide the grip is: the 1-point separator line and 3 points either side of it, as a
+    /// split view's thin divider takes a drag a little past its line. It is as tall as the column.
+    static let thickness = 7.0
     /// How far an accessibility increment or decrement resizes the column.
     static let accessibilityStep = 20.0
     static let previewLabel = "Preview width"
@@ -23,16 +25,22 @@ final class ColumnGripView: NSView {
     /// The drag is `offset` points right of where it started; negative to its left.
     var resize: @MainActor (_ offset: Double) -> Void = { _ in }
     var endResize: @MainActor () -> Void = {}
-    /// A double-click: true when Option is held, which fits every column.
+    /// A double-click: true when Option is held, which fits every column or puts them back.
     var fit: @MainActor (_ allColumns: Bool) -> Void = { _ in }
     /// The column's width, for VoiceOver.
     var width: @MainActor () -> Double = { 0 }
     /// Resizes the column alone, as a plain drag does, for VoiceOver.
     var setWidth: @MainActor (Double) -> Void = { _ in }
+    /// The view a vertical scroll at a point in the window's coordinates goes to: the column or
+    /// preview under it; nil past them. A horizontal scroll goes up to the columns' scroll view.
+    var scrollTarget: @MainActor (_ locationInWindow: NSPoint) -> NSView? = { _ in nil }
 
     /// Where the drag in progress started, in the window's coordinates; nil when there is none,
     /// as after a double-click.
     private var dragStartX: Double?
+    /// The column or preview the scroll gesture in progress goes to; nil when it goes up to the
+    /// columns' scroll view, or the column closed during it.
+    private weak var scrolling: NSView?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -45,20 +53,32 @@ final class ColumnGripView: NSView {
         fatalError("ColumnGripView is built in code")
     }
 
-    override func draw(_ dirtyRect: NSRect) {
-        // Covers the separator line, which the grip's lines take the place of.
-        NSColor.controlBackgroundColor.setFill()
-        bounds.fill()
-        NSColor.tertiaryLabelColor.setFill()
-        let lineHeight = 9.0
-        let y = ((bounds.height - lineHeight) / 2).rounded()
-        for x in [bounds.midX - 2, bounds.midX + 1] {
-            NSRect(x: x.rounded(.down), y: y, width: 1, height: lineHeight).fill()
-        }
-    }
-
     override func resetCursorRects() {
         addCursorRect(bounds, cursor: .resizeLeftRight)
+    }
+
+    /// The grip is laid out after it is made, and AppKit doesn't reset a view's cursor rects
+    /// when its size changes.
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        window?.invalidateCursorRects(for: self)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        // A trackpad gesture goes to one view from its first move through its momentum, as
+        // AppKit sends a gesture to the view it began over; a wheel's click has no phase and
+        // goes on its own. A gesture's touch before it moves goes up, as a horizontal one does.
+        if event.phase == .mayBegin {
+            scrolling = nil
+        } else if event.phase == .began || (event.phase.isEmpty && event.momentumPhase.isEmpty) {
+            let isVertical = abs(event.scrollingDeltaY) > abs(event.scrollingDeltaX)
+            scrolling = isVertical ? scrollTarget(event.locationInWindow) : nil
+        }
+        if let scrolling {
+            scrolling.scrollWheel(with: event)
+        } else {
+            super.scrollWheel(with: event)
+        }
     }
 
     override func mouseDown(with event: NSEvent) {

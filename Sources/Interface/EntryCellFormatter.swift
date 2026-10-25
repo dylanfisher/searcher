@@ -5,7 +5,8 @@ import Foundation
 /// The Size and Date Modified text of a list row, in Finder's formats: "4.2 MB", "Zero bytes",
 /// "--" for anything without a size, and "Today at 9:41 AM" or "Sep 13, 2020 at 12:26 PM". A
 /// folder waiting for its walk shows `pendingSize` until the walk ends, then its size, after
-/// `partialPrefix` when part of its tree couldn't be read.
+/// `partialPrefix` when part of its tree couldn't be read. Column view's preview writes its dates
+/// in full, as Finder's does: "Friday, October 16, 2026 at 12:50 PM".
 @MainActor
 public struct EntryCellFormatter {
     /// A folder whose walk hasn't ended.
@@ -18,6 +19,7 @@ public struct EntryCellFormatter {
 
     private let sizes: ByteCountFormatter
     private let dates: DateFormatter
+    private let longDates: DateFormatter
 
     /// Sizes always use the system locale, since `ByteCountFormatter` takes no other.
     public init(locale: Locale = .autoupdatingCurrent, timeZone: TimeZone = .autoupdatingCurrent) {
@@ -31,6 +33,12 @@ public struct EntryCellFormatter {
         dates.dateStyle = .medium
         dates.timeStyle = .short
         dates.doesRelativeDateFormatting = true
+        longDates = DateFormatter()
+        longDates.locale = locale
+        longDates.timeZone = timeZone
+        longDates.dateStyle = .full
+        longDates.timeStyle = .short
+        longDates.doesRelativeDateFormatting = true
     }
 
     /// The Size text of `entry`. `folderSize` is its walked size, for a folder,
@@ -59,5 +67,11 @@ public struct EntryCellFormatter {
 
     public func date(_ date: Date) -> String {
         dates.string(from: date)
+    }
+
+    /// A date written in full, as Finder's preview writes it: "Friday, October 16, 2026 at
+    /// 12:50 PM", or "Today at 9:41 AM".
+    public func longDate(_ date: Date) -> String {
+        longDates.string(from: date)
     }
 }

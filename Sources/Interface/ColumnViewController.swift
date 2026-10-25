@@ -288,7 +288,8 @@ final class ColumnViewController: NSViewController {
 
     /// A grip for `target`, in the columns' view, wired to resize it.
     private func makeGrip(for target: GripTarget) -> ColumnGripView {
-        let grip = ColumnGripView(frame: NSRect(origin: .zero, size: ColumnGripView.size))
+        let grip = ColumnGripView(
+            frame: NSRect(x: 0, y: 0, width: ColumnGripView.thickness, height: 0))
         grip.beginResize = { [weak self] allColumns in
             guard let self, let start = width(of: target) else { return }
             resizing = (target, start, allColumns, nil)
@@ -317,6 +318,7 @@ final class ColumnViewController: NSViewController {
             layoutColumns()
         }
         grip.fit = { [weak self] allColumns in self?.fit(target, allColumns: allColumns) }
+        grip.scrollTarget = { [weak self] location in self?.scrollView(under: location) }
         grip.width = { [weak self] in self?.width(of: target) ?? 0 }
         grip.setWidth = { [weak self, weak grip] width in
             guard let self, let grip, self.width(of: target) != nil else { return }
@@ -365,16 +367,31 @@ final class ColumnViewController: NSViewController {
         }
     }
 
+    /// The scroll view of the column or the shown preview at `location`, in the window's
+    /// coordinates, a separator line counting as the view left of it; nil past them all.
+    private func scrollView(under location: NSPoint) -> NSView? {
+        let x = columnsView.convert(location, from: nil).x
+        var views = columnControllers.map { (frame: $0.view.frame, scrollView: $0.view) }
+        if let previewView, !previewView.isHidden {
+            views.append((previewView.frame, previewView.scrollView))
+        }
+        return views.first { $0.frame.minX <= x && x < $0.frame.maxX + 1 }?.scrollView
+    }
+
     private static func clamped(_ width: Double) -> Double {
         min(max(width, Settings.columnWidths.lowerBound), Settings.columnWidths.upperBound)
     }
 
     /// Fits `target`'s column to its widest name, or with `allColumns` every column and the
     /// preview to the widest name of them all, which then sets the width new columns get, as
-    /// an Option-drag does. The names are measured off the main thread, since a folder can hold
-    /// tens of thousands; the result lands only on the columns still shown. A fit is no wider
-    /// than `fitWidthCap` and no narrower than the minimum. The preview's own grip has no names
-    /// to fit and does nothing without Option; a column with no rows does nothing either.
+    /// an Option-drag does. A column already at its fit goes back to the default instead: its
+    /// folder's width is cleared, so it follows `Settings.columnWidth` again. With `allColumns`,
+    /// when every column and the shown preview are at the fit, they all go back to
+    /// `Settings.defaultColumnWidth`, which becomes the width new columns get. The names are
+    /// measured off the main thread, since a folder can hold tens of thousands; the result lands
+    /// only on the columns still shown. A fit is no wider than `fitWidthCap` and no narrower
+    /// than the minimum. The preview's own grip has no names to fit and does nothing without
+    /// Option; a column with no rows does nothing either.
     private func fit(_ target: GripTarget, allColumns: Bool) {
         let fitted: [ListingViewController]
         if allColumns {
@@ -411,12 +428,23 @@ final class ColumnViewController: NSViewController {
                 case .preview: allColumns ? columnControllers.first : nil
                 }
             guard let measured else { return }
-            let width = Self.clamped(
+            let fitWidth = Self.clamped(
                 min(measured.columnWidth(fittingNameWidth: widest), Self.fitWidthCap))
+            // Already at the fit, the columns go back to the default instead. The fit is a
+            // whole number of points worked out the same way each time, so a column a fit set
+            // equals the next fit of the same names exactly.
             if allColumns {
-                pane.setEveryColumnWidth(width)
+                let previewShows = previewView.map { !$0.isHidden } ?? false
+                let shown =
+                    columnControllers.map { shownWidth(of: $0.pane) }
+                    + (previewShows ? [dragWidth(for: .preview) ?? pane.previewWidth] : [])
+                let isFitted = shown.allSatisfy { $0 == fitWidth }
+                pane.setEveryColumnWidth(isFitted ? Settings.defaultColumnWidth : fitWidth)
+            } else if shownWidth(of: measured.pane) == fitWidth {
+                // Without Option the target is a column, the one measured.
+                pane.clearColumnWidth(of: measured.pane)
             } else {
-                setWidth(width, of: target)
+                setWidth(fitWidth, of: target)
             }
             layoutColumns()
         }
@@ -469,7 +497,7 @@ final class ColumnViewController: NSViewController {
             setFrame(
                 of: separators[index], to: NSRect(x: x + width, y: 0, width: 1, height: height))
             if let grip = grips[id] {
-                setFrame(of: grip, to: Self.gripFrame(atSeparator: x + width))
+                setFrame(of: grip, to: Self.gripFrame(atSeparator: x + width, height: height))
             }
             if let indicator = spinners[id]?.indicator {
                 let side = Self.spinnerSide
@@ -485,14 +513,16 @@ final class ColumnViewController: NSViewController {
             let previewWidth = dragWidth(for: .preview) ?? pane.previewWidth
             setFrame(of: shownPreview, to: NSRect(x: x, y: 0, width: previewWidth, height: height))
             if let previewGrip {
-                setFrame(of: previewGrip, to: Self.gripFrame(atSeparator: x + previewWidth))
+                setFrame(
+                    of: previewGrip,
+                    to: Self.gripFrame(atSeparator: x + previewWidth, height: height))
             }
             x += previewWidth + 1
         }
         previewGrip?.isHidden = shownPreview == nil
         raiseGrips()
         // Room for the right half of the last grip, past the last separator.
-        let lastGripEnd = Self.gripFrame(atSeparator: x - 1).maxX
+        let lastGripEnd = Self.gripFrame(atSeparator: x - 1, height: height).maxX
         let width = max(x, lastGripEnd, scrollView.contentSize.width)
         if columnsView.frame.size != NSSize(width: width, height: height) {
             columnsView.frame = NSRect(x: 0, y: 0, width: width, height: height)
@@ -518,16 +548,18 @@ final class ColumnViewController: NSViewController {
         }
     }
 
-    /// A grip's frame for the separator line at `x`: centered on it, at the bottom.
-    private static func gripFrame(atSeparator x: Double) -> NSRect {
-        let size = ColumnGripView.size
-        return NSRect(x: x + 0.5 - size.width / 2, y: 0, width: size.width, height: size.height)
+    /// A grip's frame for the separator line at `x`: centered on it, `height` tall.
+    private static func gripFrame(atSeparator x: Double, height: Double) -> NSRect {
+        let width = ColumnGripView.thickness
+        return NSRect(x: x + 0.5 - width / 2, y: 0, width: width, height: height)
     }
 
-    /// Shows the trail's preview right of the last column, making its view the first time, or
-    /// hides it when there is none.
+    /// Shows the trail's shown preview right of the last column, making its view the first time,
+    /// or hides it when there is none. While a newly previewed file's info is first read, that
+    /// is what showed before it, so a local file's rows don't show empty first
+    /// (0095-preview-metadata.md).
     private func showPreview() {
-        guard let preview = pane.columnTrail?.preview else {
+        guard let preview = pane.columnTrail?.shownPreview else {
             previewView?.isHidden = true
             return
         }
