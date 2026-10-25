@@ -47,7 +47,7 @@ private func at(_ path: String) -> Location { Location(path: path) }
     #expect(one != other)
 }
 
-@Test func storedWidthsWithAFolderTwiceTooManyOrOutOfRangeHaveAProblem() {
+@Test func storedWidthsWithAFolderTwiceTooManyOutOfRangeOrFractionalHaveAProblem() {
     let folder = { (path: String, width: Double) in
         ColumnWidths.Folder(location: at(path), width: width)
     }
@@ -61,4 +61,6 @@ private func at(_ path: String) -> Location { Location(path: path) }
     #expect(ColumnWidths.problem(folders: [folder("/a", 99)], preview: nil) != nil)
     #expect(ColumnWidths.problem(folders: [], preview: 1001) != nil)
     #expect(ColumnWidths.problem(folders: [folder("/a", .nan)], preview: nil) != nil)
+    #expect(ColumnWidths.problem(folders: [folder("/a", 200.5)], preview: nil) != nil)
+    #expect(ColumnWidths.problem(folders: [], preview: 286.25) != nil)
 }

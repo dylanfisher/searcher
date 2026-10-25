@@ -857,3 +857,27 @@ private final class WindowFixture {
     #expect(table.registry.command(for: f5) == nil)
     withExtendedLifetime(controller) {}
 }
+
+/// `keyboardFocusIndicatorColor` is a lighter blue in Dark Mode. The ring is a layer's border,
+/// whose `CGColor` is fixed when it is set, so it is resolved again when the appearance changes.
+@MainActor @Test func theFocusRingTakesTheColorOfThePanesAppearance() throws {
+    let fixture = Fixture()
+    let view = fixture.controller.view
+    func ring(in name: NSAppearance.Name) throws -> CGColor {
+        var color: CGColor?
+        try #require(NSAppearance(named: name)).performAsCurrentDrawingAppearance {
+            color = NSColor.keyboardFocusIndicatorColor.cgColor
+        }
+        return try #require(color)
+    }
+    #expect(try ring(in: .aqua) != ring(in: .darkAqua))
+    view.appearance = NSAppearance(named: .aqua)
+    fixture.controller.showsFocus = true
+    #expect(view.layer?.borderColor == (try ring(in: .aqua)))
+
+    view.appearance = NSAppearance(named: .darkAqua)
+    #expect(view.layer?.borderColor == (try ring(in: .darkAqua)))
+
+    view.appearance = NSAppearance(named: .aqua)
+    #expect(view.layer?.borderColor == (try ring(in: .aqua)))
+}

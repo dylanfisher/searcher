@@ -1152,6 +1152,126 @@ private func escapePalette(in fixture: Fixture) throws {
     #expect(fixture.controller.palette == nil)
 }
 
+/// Replaces the text in the palette's field with `query`, as typing would, waits until its rows
+/// show, and returns the field's editor.
+@MainActor
+private func typeInPalette(_ query: String, in fixture: Fixture) async throws -> NSTextView {
+    let palette = try #require(fixture.controller.palette)
+    let editor = try #require(palette.window?.firstResponder as? NSTextView)
+    editor.insertText(
+        query, replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+    let content = palette.viewController
+    await settle { content.shownQuery == query }
+    return editor
+}
+
+@MainActor
+private func paletteTitles(in fixture: Fixture) throws -> [String] {
+    try #require(fixture.controller.palette).viewController.palette.results.map(\.item.title)
+}
+
+@MainActor @Test func cmdPAndCmdShiftKShowGoToItemOverTheFocusedPanesRowsAlone() async throws {
+    for chord in [("p", NSEvent.ModifierFlags.command), ("k", [.command, .shift])] {
+        let fixture = try await Fixture()
+        try fixture.press(try keyEvent(chord.0, modifiers: chord.1))
+        let palette = try #require(fixture.controller.palette, "\(chord)")
+
+        #expect(palette.viewController.field.placeholderString == "Go to Item in root")
+        _ = try await typeInPalette("", in: fixture)
+        #expect(try paletteTitles(in: fixture) == ["a.txt", "docs"])
+        _ = try await typeInPalette("inside", in: fixture)
+        #expect(try paletteTitles(in: fixture) == [])
+    }
+}
+
+@MainActor @Test func returnInGoToItemSelectsAFolderWithoutOpeningIt() async throws {
+    let fixture = try await Fixture()
+    let table = try fixture.keyTable
+    let pane = fixture.tab.focusedPane
+    try fixture.press(try keyEvent("p", modifiers: .command))
+
+    let editor = try await typeInPalette("docs", in: fixture)
+    editor.keyDown(with: try keyEvent("\r"))
+
+    #expect(fixture.controller.palette == nil)
+    #expect(pane.selection == Selection([ExactName("docs")], cursor: ExactName("docs")))
+    #expect(pane.location == Location(path: "/root"))
+    #expect(fixture.window.firstResponder === table)
+}
+
+/// With the keys in the filter field, the menu bar runs ⌘P's item, which opens Go to Item over
+/// the filtered rows and gives the keys back to the field on Esc.
+@MainActor @Test func cmdPFromTheFilterFieldShowsGoToItem() async throws {
+    let fixture = try await Fixture()
+    try fixture.press(try keyEvent("f", modifiers: .command))
+    let filter = fixture.controller.paneViewController.filterBar.field
+    #expect(fixture.controller.keysAreInText)
+    let menu = try MainMenuBuilder.build(appName: "Searcher", registry: AppCommands.registry())
+    let item = try #require(menuItem(WindowCommands.goToItem.id, in: menu))
+    #expect(item.keyEquivalent == "p" && item.keyEquivalentModifierMask == .command)
+
+    #expect(fixture.controller.validateMenuItem(item))
+    fixture.controller.runMenuCommand(item)
+
+    let palette = try #require(fixture.controller.palette)
+    #expect(palette.viewController.field.placeholderString == "Go to Item in root")
+    try escapePalette(in: fixture)
+    let editor = try #require(fixture.window.firstResponder as? NSTextView)
+    #expect(editor.delegate === filter)
+}
+
+@MainActor @Test func goToItemChosenInOpenQuicklyShowsGoToItem() async throws {
+    let fixture = try await Fixture()
+    try fixture.press(try keyEvent("k", modifiers: .command))
+
+    let editor = try await typeInPalette("Go to Item", in: fixture)
+    #expect(try paletteTitles(in: fixture).first == WindowCommands.goToItem.title)
+    editor.keyDown(with: try keyEvent("\r"))
+
+    let palette = try #require(fixture.controller.palette)
+    #expect(palette.viewController.field.placeholderString == "Go to Item in root")
+    _ = try await typeInPalette("", in: fixture)
+    #expect(try paletteTitles(in: fixture) == ["a.txt", "docs"])
+}
+
+@MainActor @Test func escInGoToItemLeavesTheSelectionAsItWas() async throws {
+    let fixture = try await Fixture()
+    let pane = fixture.tab.focusedPane
+    pane.select(Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+    let selection = pane.selection
+    try fixture.press(try keyEvent("p", modifiers: .command))
+
+    let editor = try await typeInPalette("docs", in: fixture)
+    editor.keyDown(with: try keyEvent("\u{1B}"))
+
+    #expect(fixture.controller.palette == nil)
+    #expect(pane.selection == selection)
+}
+
+@MainActor @Test func inColumnViewGoToItemListsAndSelectsInTheFocusedColumn() async throws {
+    let fixture = try await Fixture()
+    let pane = fixture.tab.focusedPane
+    pane.setViewMode(.column)
+    let trail = try #require(pane.columnTrail)
+    await settle { trail.focused.pane.state.isLoaded }
+    trail.focused.pane.select(Selection([ExactName("docs")], cursor: ExactName("docs")))
+    await settle { trail.columns.count == 2 && trail.columns[1].pane.state.isLoaded }
+    trail.focus(trail.columns[1])
+    fixture.controller.showWorkspace()
+    try fixture.press(try keyEvent("p", modifiers: .command))
+    let palette = try #require(fixture.controller.palette)
+    #expect(palette.viewController.field.placeholderString == "Go to Item in docs")
+
+    let editor = try await typeInPalette("", in: fixture)
+    #expect(try paletteTitles(in: fixture) == ["inside.txt"])
+    editor.keyDown(with: try keyEvent("\r"))
+
+    let column = trail.columns[1].pane
+    #expect(
+        column.selection == Selection([ExactName("inside.txt")], cursor: ExactName("inside.txt")))
+    #expect(trail.columns[0].pane.selection.cursor == ExactName("docs"))
+}
+
 /// Two panes side by side with the right one focused, and a press on the left pane's second row.
 @MainActor
 private struct PressFixture {
@@ -1546,4 +1666,157 @@ private typealias SidebarOutline = WorkspaceSidebarViewController.SidebarOutline
 
     #expect(fixture.window.firstResponder === paneTable)
     #expect(fixture.controller.showsSidebar)
+}
+
+// MARK: A press anywhere in a pane focuses it
+
+extension PressFixture {
+    /// Puts the left pane in column mode with `a.txt` selected, so its preview shows, in a window
+    /// that is shown. Returns the left pane's controller.
+    func showPreviewInLeftPane() async throws -> PaneViewController {
+        let controller = try fixture.paneController(fixture.tab.layout.panes[0])
+        leftPane.setViewMode(.column)
+        let trail = try #require(leftPane.columnTrail)
+        await settle { trail.focused.pane.state.isLoaded }
+        trail.focused.pane.select(Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+        await settle {
+            trail.shownPreview != nil && trail.shownPreview == trail.preview
+                && controller.columnViewController.previewView?.isHidden == false
+        }
+        show()
+        fixture.window.contentView?.layoutSubtreeIfNeeded()
+        // The pane is narrower than its columns: scroll the preview into view.
+        let scroll = try #require(controller.columnViewController.view as? NSScrollView)
+        let preview = try #require(controller.columnViewController.previewView)
+        ColumnViewController.moveClip(
+            scroll.contentView, toX: max(preview.frame.maxX - scroll.contentView.bounds.width, 0),
+            animated: false)
+        return controller
+    }
+
+    /// Gives the right pane the focus again, after a press focused the left.
+    func focusRightPane() throws {
+        fixture.tab.focus(fixture.tab.layout.panes[1])
+        let right = try fixture.paneController(fixture.tab.layout.panes[1])
+        #expect(fixture.window.makeFirstResponder(right.keyView))
+        #expect(rightPane.isFocused && !leftPane.isFocused)
+    }
+
+    /// The middle of the part of `view` that `container` shows, in `container`'s coordinates:
+    /// a pane is narrower than its columns, so the middle of a view may lie outside it.
+    func shownCenter(of view: NSView, in container: NSView) -> NSPoint {
+        let shown = container.convert(view.bounds, from: view).intersection(container.bounds)
+        return NSPoint(x: shown.midX, y: shown.midY)
+    }
+
+    /// A press at `point`, in `view`'s coordinates, sent to the view hit there, as
+    /// `NSWindow.sendEvent` does, with its mouse up queued first so any tracking ends at once.
+    func press(at point: NSPoint, in view: NSView) throws {
+        let window = fixture.window
+        let location = view.convert(point, to: nil)
+        func event(_ type: NSEvent.EventType) throws -> NSEvent {
+            try #require(
+                NSEvent.mouseEvent(
+                    with: type, location: location, modifierFlags: [], timestamp: 0,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                    clickCount: 1, pressure: 1))
+        }
+        let content = try #require(window.contentView)
+        let frameView = try #require(content.superview)
+        let hit = try #require(content.hitTest(frameView.convert(location, from: nil)))
+        nonisolated(unsafe) let down = try event(.leftMouseDown)
+        try performRealPress(releasedBy: try event(.leftMouseUp)) {
+            hit.mouseDown(with: down)
+        }
+    }
+}
+
+@MainActor @Test func aPressOnThePreviewsEmptySpaceFocusesItsPaneAndKeepsTheFocusedColumn()
+    async throws
+{
+    let press = try await PressFixture()
+    defer { press.fixture.window.orderOut(nil) }
+    let controller = try await press.showPreviewInLeftPane()
+    try press.focusRightPane()
+    let preview = try #require(controller.columnViewController.previewView)
+    let focusedColumn = try #require(controller.columnViewController.focusedController).tableView
+    let before = press.leftPane.columnTrail?.focusedIndex
+    let rowsBefore = focusedColumn.selectedRowIndexes
+    #expect(!rowsBefore.isEmpty)
+
+    // Below the fields, at the right of the part of the preview the pane shows.
+    let container = controller.view
+    let shown = container.convert(preview.bounds, from: preview).intersection(container.bounds)
+    try press.press(
+        at: NSPoint(x: shown.maxX - 4, y: shown.minY + PathBarView.height + 10), in: container)
+
+    #expect(press.leftPane.isFocused && !press.rightPane.isFocused)
+    #expect(press.fixture.window.firstResponder === focusedColumn)
+    #expect(press.leftPane.columnTrail?.focusedIndex == before)
+    #expect(focusedColumn.selectedRowIndexes == rowsBefore)
+}
+
+@MainActor @Test func aPressOnEveryFieldOfThePreviewFocusesItsPane() async throws {
+    let press = try await PressFixture()
+    defer { press.fixture.window.orderOut(nil) }
+    let controller = try await press.showPreviewInLeftPane()
+    let preview = try #require(controller.columnViewController.previewView)
+    let container = controller.view
+    let fields: [NSView] =
+        [preview.iconView, preview.nameField, preview.summaryField]
+        + preview.rows.flatMap { [$0.titleField, $0.value] }
+    // A selectable field would take the keys and track the press itself.
+    for case let field as NSTextField in fields + [preview.tagsField] {
+        try #require(!field.isSelectable, "\(field.frame) is selectable")
+    }
+
+    for field in fields {
+        try press.focusRightPane()
+
+        try press.press(at: press.shownCenter(of: field, in: container), in: container)
+
+        #expect(press.leftPane.isFocused, "a press on \(type(of: field)) at \(field.frame)")
+        #expect(press.fixture.window.firstResponder === controller.keyView)
+    }
+}
+
+@MainActor @Test func aPressInAColumnViewsGapsAndBarsFocusesItsPane() async throws {
+    let press = try await PressFixture()
+    defer { press.fixture.window.orderOut(nil) }
+    let controller = try await press.showPreviewInLeftPane()
+    let container = controller.view
+    let table = try #require(controller.columnViewController.focusedController).tableView
+    let belowRows = press.shownCenter(of: table, in: container)
+    #expect(table.row(at: table.convert(belowRows, from: container)) == -1)
+    let spots: [(String, NSPoint)] = [
+        ("the empty area below a column's rows", belowRows),
+        (
+            "the path bar's empty end",
+            container.convert(
+                NSPoint(x: controller.pathBar.bounds.maxX - 2, y: 4), from: controller.pathBar)
+        ),
+        (
+            "the status area",
+            container.convert(
+                NSPoint(x: controller.status.bounds.midX, y: 4), from: controller.status)
+        ),
+    ]
+
+    for (name, point) in spots {
+        try press.focusRightPane()
+        try press.press(at: point, in: container)
+        #expect(press.leftPane.isFocused, "a press on \(name)")
+        #expect(press.fixture.window.firstResponder === controller.keyView, "\(name)")
+    }
+}
+
+/// A regression guard: a list's table already took this press, and must keep taking it.
+@MainActor @Test func aPressBelowTheRowsOfAListFocusesItsPane() async throws {
+    let press = try await PressFixture()
+    press.show()
+    defer { press.fixture.window.orderOut(nil) }
+
+    try press.press(at: NSPoint(x: 20, y: press.table.bounds.maxY - 1), in: press.table)
+
+    #expect(press.isFocusedWithKeys)
 }

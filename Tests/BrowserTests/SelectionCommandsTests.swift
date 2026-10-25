@@ -45,6 +45,8 @@ private let optionDown = KeyChord(.down, modifiers: .option)
 private let optionUp = KeyChord(.up, modifiers: .option)
 private let home = KeyChord(.home)
 private let end = KeyChord(.end)
+private let commandOptionUp = KeyChord(.up, modifiers: [.command, .option])
+private let commandOptionDown = KeyChord(.down, modifiers: [.command, .option])
 private let tenDown = KeyChord(.down, modifiers: [.control, .shift])
 private let tenUp = KeyChord(.up, modifiers: [.control, .shift])
 private let pageDown = KeyChord(.pageDown)
@@ -60,6 +62,7 @@ private let commandA = KeyChord("a", modifiers: .command)
         (down, 12, 13, 24), (up, 12, 11, 0),
         (optionDown, 12, 22, 24), (optionUp, 12, 2, 0),
         (home, 12, 0, 0), (end, 12, 24, 24),
+        (commandOptionUp, 12, 0, 0), (commandOptionDown, 12, 24, 24),
         (tenDown, 12, 22, 24), (tenUp, 12, 2, 0),
         (pageDown, 12, 19, 24), (pageUp, 12, 5, 0),
     ])
@@ -297,7 +300,8 @@ func aNameRemovedAndWrittenAgainInOneBatchStaysSelected(afterSelectAll: Bool) as
 @MainActor
 @Test(
     arguments: [
-        down, up, optionDown, optionUp, home, end, tenDown, tenUp, pageDown, pageUp, shiftDown,
+        down, up, optionDown, optionUp, home, end, commandOptionUp, commandOptionDown, tenDown,
+        tenUp, pageDown, pageUp, shiftDown,
         shiftUp, commandA,
     ])
 func movingOnAnEmptyListingDoesNothing(chord: KeyChord) async throws {
@@ -537,4 +541,13 @@ private func isEnabled(_ chord: KeyChord, in fixture: PaneFixture) throws -> Boo
     #expect(registry.command(for: tenUp) == SelectionCommands.tenRowsUp)
     #expect(registry.command(for: home) == SelectionCommands.selectFirst)
     #expect(registry.command(for: end) == SelectionCommands.selectLast)
+}
+
+@MainActor @Test func commandOptionArrowsSelectTheEndsAndHomeAndEndStayBound() throws {
+    let registry = try AppCommands.registry()
+
+    #expect(registry.command(for: commandOptionUp) == SelectionCommands.selectFirst)
+    #expect(registry.command(for: commandOptionDown) == SelectionCommands.selectLast)
+    #expect(SelectionCommands.selectFirst.chords == [home, commandOptionUp])
+    #expect(SelectionCommands.selectLast.chords == [end, commandOptionDown])
 }

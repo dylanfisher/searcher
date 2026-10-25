@@ -1,8 +1,9 @@
 import AppKit
 import UniformTypeIdentifiers
 
-/// One icon per file type, shared by every row of that type. Lists show type icons only, never
-/// per-file icons or thumbnails, which cost 85 ms per file over SMB (0004-listing-view.md).
+/// One icon per file type, shared by every row of that type. Rows show no per-file icons; a
+/// file's thumbnail replaces its type icon only once made, for local files
+/// (0004-listing-view.md, 0102-thumbnails.md).
 @MainActor
 public final class TypeIconCache {
     /// The cache the app's listings share.

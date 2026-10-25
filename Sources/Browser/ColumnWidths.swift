@@ -46,7 +46,7 @@ public struct ColumnWidths: Sendable {
     /// Sets `location`'s column to `width`, as the folder set last. Setting the width it has
     /// already changes nothing, so the order moves only when a width does.
     ///
-    /// - Precondition: `width` is within `Settings.columnWidths`.
+    /// - Precondition: `Settings.isColumnWidth(width)`.
     public mutating func set(_ width: Double, of location: Location) {
         Self.checkWidth(width)
         guard self.width(of: location) != width else { return }
@@ -64,7 +64,7 @@ public struct ColumnWidths: Sendable {
 
     /// Sets the preview to `width`.
     ///
-    /// - Precondition: `width` is within `Settings.columnWidths`.
+    /// - Precondition: `Settings.isColumnWidth(width)`.
     public mutating func setPreview(_ width: Double) {
         Self.checkWidth(width)
         preview = width
@@ -72,12 +72,13 @@ public struct ColumnWidths: Sendable {
 
     private static func checkWidth(_ width: Double) {
         precondition(
-            Settings.columnWidths.contains(width),
-            "column width \(width) is outside \(Settings.columnWidths)")
+            Settings.isColumnWidth(width),
+            "column width \(width) is not a whole number within \(Settings.columnWidths)")
     }
 
     /// What is wrong with these widths as stored data, or nil: a folder twice, more than
-    /// `folderLimit` folders, or a width outside `Settings.columnWidths`, NaN among them.
+    /// `folderLimit` folders, or a width `Settings.isColumnWidth` rejects: a fraction of a point,
+    /// or outside `Settings.columnWidths`, NaN among them.
     static func problem(folders: [Folder], preview: Double?) -> String? {
         let paths = folders.map(\.location.path)
         if Set(paths).count != paths.count {
@@ -87,8 +88,8 @@ public struct ColumnWidths: Sendable {
             return "\(folders.count) column widths are more than the \(folderLimit) kept"
         }
         let widths = folders.map(\.width) + (preview.map { [$0] } ?? [])
-        if let width = widths.first(where: { !Settings.columnWidths.contains($0) }) {
-            return "column width \(width) is outside \(Settings.columnWidths)"
+        if let width = widths.first(where: { !Settings.isColumnWidth($0) }) {
+            return "column width \(width) is not a whole number within \(Settings.columnWidths)"
         }
         return nil
     }
@@ -99,5 +100,35 @@ extension ColumnWidths: Equatable {
     public static func == (a: ColumnWidths, b: ColumnWidths) -> Bool {
         a.preview == b.preview && a.folders.count == b.folders.count
             && a.folders.allSatisfy { b.width(of: $0.location) == $0.width }
+    }
+}
+
+/// The stored column widths a decode dropped: where each was in the file and why, for the store
+/// to leave exactly those out of its check of the file and to report them. A decoder that is
+/// given one in its `userInfo` under `key` adds to it; TabState drops a pane's bad widths either
+/// way (0098-column-widths-per-window.md).
+final class DroppedColumnWidths: @unchecked Sendable {
+    static let key = CodingUserInfoKey(rawValue: "DroppedColumnWidths")!
+
+    /// A step from a JSON value into one of its parts.
+    enum Step: Equatable {
+        case key(String)
+        case index(Int)
+    }
+
+    /// A pane's dropped widths: the steps from the file's top to the pane's object, whose
+    /// `columnWidths` key held them, and why they were dropped.
+    struct Drop {
+        let pane: [Step]
+        let reason: String
+    }
+
+    private(set) var drops: [Drop] = []
+
+    /// Notes that the widths of the pane at `index` in the array at `panes`, a decoder's coding
+    /// path, were dropped.
+    func add(panes: [any CodingKey], index: Int, reason: String) {
+        let steps = panes.map { key in key.intValue.map(Step.index) ?? .key(key.stringValue) }
+        drops.append(Drop(pane: steps + [.index(index)], reason: reason))
     }
 }

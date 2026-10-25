@@ -82,6 +82,18 @@ the main display, which the build rules don't allow. It is one of the checks by 
   Widths of another shape — present but empty, a folder twice, more than 64 folders, a width
   outside `Settings.columnWidths` or not a number — make the workspace file undecodable, which
   the store deletes and reports, as for any other mismatch ([0078](0078-workspace-store.md)).
+  (Superseded 2026-10-25, CV.14: widths are whole points too, which widths dragged with a
+  trackpad before then aren't, so this rule would have deleted Dylan's saved workspaces over a
+  width. A pane's widths that are present but empty, hold a folder twice, more than 64 folders,
+  or a width `Settings.isColumnWidth` rejects are dropped alone: the pane loads with no widths
+  and its columns follow the live default, and the rest of the file loads. The store writes the
+  file back without them and reports it once (`StoreProblem` kind `widthsDropped`). That is
+  still the pre-release rule, data of another shape is discarded with no migration and no
+  rounding, at the widths' granularity. A width that isn't a number, or any other key or value
+  of another shape, still discards the file. A saved workspace and its window that stored the
+  same bad widths both load without them, so they stay alike and the window shows no edited
+  dot; a window whose widths were dropped while its snapshot's were good differs from it, and
+  shows the dot, which is right: going back to the snapshot gives the saved widths.)
 - **No undo.** A resize isn't undoable, as in Finder and as 0096 has it.
 
 ## Alternatives considered
@@ -107,8 +119,10 @@ the main display, which the build rules don't allow. It is one of the checks by 
 - **A width-only difference from the snapshot reloads the workspace** — rejected: it would close
   and rebuild every tab, list every folder again and drop scroll positions and histories, for a
   difference that a frame-only reload already avoids.
-- **Discard only the bad widths, keeping the workspace** — rejected: stored data has one shape,
-  and every other mismatch in a workspace file discards the file.
+- **Discard only the bad widths, keeping the workspace** — rejected at first: stored data has
+  one shape, and every other mismatch in a workspace file discards the file. (Taken 2026-10-25,
+  CV.14, see Stored shape: a workspace is worth more than its widths, and widths dropped alone
+  cost nothing the columns can't show again.)
 
 ## Consequences
 

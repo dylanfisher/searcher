@@ -28,8 +28,14 @@ public final class PaletteWindowController: NSWindowController, NSWindowDelegate
     /// height.
     private static let topOffset: CGFloat = 0.12
 
-    init(palette: Palette) {
-        viewController = PaletteViewController(palette: palette)
+    /// A panel over `palette`, called `label` and with `placeholder` in its empty field: Open
+    /// Quickly's unless given.
+    init(
+        palette: Palette, label: String = PaletteViewController.openQuicklyLabel,
+        placeholder: String = PaletteViewController.openQuicklyPlaceholder
+    ) {
+        viewController = PaletteViewController(
+            palette: palette, label: label, placeholder: placeholder)
         let panel = PalettePanel(
             contentRect: NSRect(
                 x: 0, y: 0, width: PaletteViewController.width,
@@ -37,12 +43,17 @@ public final class PaletteWindowController: NSWindowController, NSWindowDelegate
             styleMask: [.borderless], backing: .buffered, defer: true)
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        // The window server shapes a window's shadow from the alpha of what the window drew, and
+        // the glass is composited outside the window's own pixels, so the shadow of a glass
+        // panel is a rectangle that shows through the glass. The masked blur gives the shadow
+        // its rounded shape; the glass has no such mask, so it draws its own edge and the window
+        // has no shadow.
+        panel.hasShadow = !PaletteViewController.backdropIsGlass
         panel.isMovable = false
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = true
         panel.becomesKeyOnlyIfNeeded = false
-        panel.setAccessibilityLabel("Open Quickly")
+        panel.setAccessibilityLabel(label)
         super.init(window: panel)
         panel.contentViewController = viewController
         panel.setContentSize(
@@ -78,7 +89,7 @@ public final class PaletteWindowController: NSWindowController, NSWindowDelegate
         guard parent.isVisible else { return }
         parent.addChildWindow(panel, ordered: .above)
         panel.makeKeyAndOrderFront(nil)
-        panel.invalidateShadow()
+        if panel.hasShadow { panel.invalidateShadow() }
     }
 
     /// Closes the panel once.

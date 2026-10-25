@@ -8,6 +8,9 @@ public struct StoreProblem: Error, Equatable, Sendable, CustomStringConvertible 
         case unreadable
         /// The file isn't in the one stored shape, so it was deleted.
         case discarded
+        /// Column widths in the file weren't in the one stored shape, so they were dropped and the
+        /// file written again without them; the rest of it loaded.
+        case widthsDropped
         /// The file isn't in the one stored shape, and deleting it failed too.
         case undeletable
         /// The file couldn't be written. The one before it, if any, is left as it was.
@@ -35,6 +38,9 @@ public struct StoreProblem: Error, Equatable, Sendable, CustomStringConvertible 
         case .discarded:
             "Deleted \(file.path), which isn't a saved workspace, session or folder history"
                 + " Searcher can read: \(reason)"
+        case .widthsDropped:
+            "Dropped column widths Searcher can't use from \(file.path); the columns show the"
+                + " default width: \(reason)"
         case .undeletable:
             "Couldn't read or delete \(file.path), which isn't a saved workspace, session or"
                 + " folder history Searcher can read: \(reason)"

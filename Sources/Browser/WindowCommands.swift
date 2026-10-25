@@ -3,8 +3,9 @@
 /// move a pane to a new one, and merge one into another. They change the model only; the windows
 /// show the result (docs/decisions/0054-tabs-in-window.md,
 /// docs/decisions/0057-windows-and-tear-out.md). Operations shows or hides the window's
-/// operations panel through the context, and Open Quickly shows the command palette
-/// (docs/decisions/0087-palette-window.md).
+/// operations panel through the context, Open Quickly shows the command palette
+/// (docs/decisions/0087-palette-window.md), and Go to Item shows it over the focused pane's rows
+/// (docs/decisions/0101-go-to-item.md).
 public enum WindowCommands: CommandSet {
     /// Adds a tab after the selected one at the focused pane's folder, in its view mode and sort,
     /// and selects it.
@@ -58,10 +59,20 @@ public enum WindowCommands: CommandSet {
     public static let showPalette = Command(
         id: CommandID("window.showPalette"), title: "Open Quickly…",
         chords: [KeyChord("k", modifiers: .command)])
+    /// Shows the palette over the window in Go to Item mode: the rows the focused pane shows,
+    /// nothing nested, to select one with its row in the middle of the view
+    /// (docs/decisions/0101-go-to-item.md). Cmd-P, the key Sublime Text and VS Code go to a file
+    /// with, and Cmd-Shift-K beside Open Quickly's Cmd-K.
+    public static let goToItem = Command(
+        id: CommandID("window.goToItem"), title: "Go to Item…",
+        chords: [
+            KeyChord("p", modifiers: .command), KeyChord("k", modifiers: [.command, .shift]),
+        ])
 
     public static var bindings: [CommandBinding] {
         [
             CommandBinding(showPalette) { $0.showPalette() },
+            CommandBinding(goToItem) { $0.showItemPalette() },
             CommandBinding(toggleOperations) { $0.toggleOperations() },
             CommandBinding(newWindow) { context in
                 let focused = context.tab.focusedPane

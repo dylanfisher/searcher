@@ -1,11 +1,14 @@
-/// What the panes show and in what order: the hidden files and folders first toggles, which are
-/// app-wide `Settings`, and the sort keys, which sort the focused pane by a column. A sort key for
-/// the column already sorted by reverses it. Space opens and closes Quick Look on the selection,
-/// Cmd-F opens the pane's filter field, and Cmd-1 and Cmd-3 show the pane as a list or as columns.
+/// What the panes show and in what order: the hidden files, `.DS_Store` and folders first
+/// toggles, which are app-wide `Settings`, and the sort keys, which sort the focused pane by a
+/// column. A sort key for the column already sorted by reverses it. Space opens and closes Quick
+/// Look on the selection, Cmd-F opens the pane's filter field, and Cmd-1 and Cmd-3 show the pane
+/// as a list or as columns. The appearance commands make the app light, dark or follow the system.
 public enum ViewCommands: CommandSet {
     public static let toggleHidden = Command(
         id: CommandID("view.toggleHidden"), title: "Show Hidden Files",
         chords: [KeyChord(".", modifiers: [.command, .shift])])
+    public static let toggleHideDSStore = Command(
+        id: CommandID("view.toggleHideDSStore"), title: "Always Hide .DS_Store", chords: [])
     public static let toggleFoldersFirst = Command(
         id: CommandID("view.toggleFoldersFirst"), title: "Folders First", chords: [])
     public static let sortByName = Command(
@@ -32,11 +35,23 @@ public enum ViewCommands: CommandSet {
         id: CommandID("view.asColumns"), title: "as Columns",
         chords: [KeyChord("3", modifiers: .command)])
 
+    public static let autoAppearance = Command(
+        id: CommandID("view.autoAppearance"), title: "Auto Appearance", chords: [])
+    public static let lightAppearance = Command(
+        id: CommandID("view.lightAppearance"), title: "Light Appearance", chords: [])
+    public static let darkAppearance = Command(
+        id: CommandID("view.darkAppearance"), title: "Dark Appearance", chords: [])
+    /// The title of the submenu that holds the appearance commands.
+    public static let appearanceTitle = "Appearance"
+
     public static var bindings: [CommandBinding] {
         [
             CommandBinding(
                 toggleHidden, isChecked: { $0.showHidden },
                 run: { $0.pane.settings.showHidden.toggle() }),
+            CommandBinding(
+                toggleHideDSStore, isChecked: { $0.hideDSStore },
+                run: { $0.pane.settings.hideDSStore.toggle() }),
             CommandBinding(
                 toggleFoldersFirst, isChecked: { $0.foldersFirst },
                 run: { $0.pane.settings.foldersFirst.toggle() }),
@@ -52,7 +67,20 @@ public enum ViewCommands: CommandSet {
             CommandBinding(
                 asColumns, isCurrent: { tile(of: $0.pane).viewMode == .column },
                 run: { tile(of: $0.pane).setViewMode(.column) }),
+            appearance(autoAppearance, .auto),
+            appearance(lightAppearance, .light),
+            appearance(darkAppearance, .dark),
         ]
+    }
+
+    /// The binding of `command`, which sets the app's appearance to `appearance` and shows a check
+    /// mark while it is the one set.
+    private static func appearance(_ command: Command, _ appearance: Settings.Appearance)
+        -> CommandBinding
+    {
+        CommandBinding(
+            command, isChecked: { $0.appearance == appearance },
+            run: { $0.pane.settings.appearance = appearance })
     }
 
     /// The pane that has the view mode: the trail's owner when `pane` is a column's.

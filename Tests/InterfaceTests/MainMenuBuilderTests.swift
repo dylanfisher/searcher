@@ -303,10 +303,14 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(
         view.items.map(\.title) == [
             "as List", "as Columns", "", "Show Sidebar", "Focus Sidebar", "", "Show Hidden Files",
-            "Folders First", "", "Sort by Name",
+            "Always Hide .DS_Store", "Folders First", "", "Sort by Name",
             "Sort by Kind",
             "Sort by Date Modified", "Sort by Size", "", "Calculate All Sizes", "Calculate Sizes",
+            "", "Appearance",
         ])
+    let appearance = try #require(view.items.last?.submenu)
+    #expect(
+        appearance.items.map(\.title) == ["Auto Appearance", "Light Appearance", "Dark Appearance"])
     let table = ListingTableView()
     let log = CommandLog()
     table.runCommand = { log.ids.append($0) }
@@ -362,6 +366,28 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(sortByName.state == .off)
 }
 
+@MainActor @Test func theDSStoreAndAppearanceItemsAreCheckedFromTheSettings() throws {
+    let folder = try TemporaryFolder("MainMenuBuilderTests")
+    let settings = storedSettings(in: folder)
+    let menu = try buildMenu(try AppCommands.registry())
+    MainMenuBuilder.showChecks(in: menu, settings: settings)
+    let dsStore = try #require(allItems(menu).first { $0.title == "Always Hide .DS_Store" })
+    let appearances = try ["Auto", "Light", "Dark"].map { name in
+        try #require(allItems(menu).first { $0.title == "\(name) Appearance" })
+    }
+    #expect(dsStore.state == .on)
+    #expect(appearances.map(\.state) == [.on, .off, .off])
+
+    settings.hideDSStore = false
+    #expect(dsStore.state == .off)
+
+    settings.appearance = .dark
+    #expect(appearances.map(\.state) == [.off, .off, .on])
+    settings.appearance = .light
+    #expect(appearances.map(\.state) == [.off, .on, .off])
+    #expect(dsStore.state == .off)
+}
+
 @MainActor @Test func goMenuHasBackForwardAndGoToFolderWithTheirChords() throws {
     let menu = try buildMenu(try AppCommands.registry())
     let go = try #require(menu.items.first { $0.title == "Go" }?.submenu)
@@ -369,7 +395,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
         go.items.map(\.title) == [
             "Back", "Forward", "", "Open", "Open in New Tab", "Open in Other Pane",
             "Go to Parent", "", "Into Selected Folder", "To Parent Column", "",
-            "Same Folder in Other Pane", "Go to Folder…", "Open Quickly…",
+            "Same Folder in Other Pane", "Go to Folder…", "Open Quickly…", "Go to Item…",
         ])
     let table = ListingTableView()
     let log = CommandLog()
@@ -378,6 +404,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     let presses = [
         try keyEvent("[", modifiers: .command), try keyEvent("]", modifiers: .command),
         try keyEvent("g", characters: "G", modifiers: [.command, .shift]),
+        try keyEvent("p", modifiers: .command),
     ]
     for press in presses {
         let item = try item(for: press, in: menu)
@@ -387,7 +414,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(
         log.ids == [
             NavigationCommands.back.id, NavigationCommands.forward.id,
-            NavigationCommands.goToFolder.id,
+            NavigationCommands.goToFolder.id, WindowCommands.goToItem.id,
         ])
 }
 

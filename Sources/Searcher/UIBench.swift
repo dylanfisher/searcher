@@ -110,7 +110,7 @@ final class UIBench {
         launchInterval = signposter.beginInterval(UIBenchRecord.launchSpan)
         // No store: the bench never reads or writes the user's caches.
         cache = options.scenario == .revisit ? ListingCache(store: nil) : nil
-        service = ListingService(cache: cache)
+        service = ListingService(cache: cache, thumbnails: ThumbnailService())
         // The launch span starts at the process start, moved onto the watchdog's clock.
         spanStart = .now - .seconds(FrameCommitTimer.now - processStart)
         activity = ProcessInfo.processInfo.beginActivity(

@@ -59,6 +59,8 @@ public final class PaneViewController: NSViewController {
         let focusSidebar: @MainActor () -> Void
         /// Shows the command palette over the window.
         let showPalette: @MainActor () -> Void
+        /// Shows the palette over the window in Go to Item mode.
+        let showItemPalette: @MainActor () -> Void
         /// Runs the file commands; nil where nothing answers its questions.
         let fileOperations: FileOperationQueue?
         /// The app's clipboard, for Cut, Copy and Paste; nil where there is none.
@@ -98,15 +100,15 @@ public final class PaneViewController: NSViewController {
     }
 
     /// Draws a ring around the pane, for the pane with the keys while another pane shows.
-    var showsFocus = false {
-        didSet {
-            guard showsFocus != oldValue else { return }
-            view.wantsLayer = true
-            view.layer?.borderWidth = showsFocus ? Self.focusRingWidth : 0
-            view.layer?.borderColor = NSColor.keyboardFocusIndicatorColor.cgColor
+    var showsFocus: Bool {
+        get { container.showsFocusRing }
+        set {
+            loadViewIfNeeded()
+            container.showsFocusRing = newValue
         }
     }
-    private static let focusRingWidth = 2.0
+    /// The root view, which `loadView` fills.
+    private let container = PaneContainerView()
 
     /// Shows the list scrolled as `other`'s is, for a pane a split or grid key copied from
     /// `other`'s. Column view keeps its own scrolling.
@@ -238,7 +240,6 @@ public final class PaneViewController: NSViewController {
     }
 
     public override func loadView() {
-        let container = NSView()
         let list = listingViewController.view
         let columns = columnViewController.view
         // Constraints rather than autoresizing: the container starts at zero size, where a list
@@ -291,6 +292,10 @@ public final class PaneViewController: NSViewController {
                 lessThanOrEqualTo: container.widthAnchor, constant: -40),
             deniedWidth,
         ])
+        container.onPress = { [weak self] in
+            guard let self else { return }
+            view.window?.makeFirstResponder(keyView)
+        }
         view = container
     }
 
@@ -382,7 +387,7 @@ public final class PaneViewController: NSViewController {
             toggleOperations: link.toggleOperations,
             askForWorkspaceName: link.askForWorkspaceName, saveWorkspace: link.saveWorkspace,
             askToDeleteWorkspace: link.askToDeleteWorkspace, focusSidebar: link.focusSidebar,
-            showPalette: link.showPalette, folder: folder,
+            showPalette: link.showPalette, showItemPalette: link.showItemPalette, folder: folder,
             fileOperations: link.fileOperations,
             editName: { [weak self] in self?.editName() }, clipboard: link.clipboard,
             undoHistory: link.undoHistory, isKeyRepeat: isKeyRepeat)

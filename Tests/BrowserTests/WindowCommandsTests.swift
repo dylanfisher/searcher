@@ -219,3 +219,21 @@ private func list(_ workspaces: Workspace...) -> WorkspaceList {
     #expect(shown.all == [true])
     #expect(binding.isEnabled == nil)
 }
+
+@MainActor @Test func cmdPAndCmdShiftKResolveToGoToItemWhichAsksTheWindowToShowIt() async throws {
+    let registry = try AppCommands.registry()
+    for chord in [
+        KeyChord("p", modifiers: .command), KeyChord("k", modifiers: [.command, .shift]),
+    ] {
+        #expect(registry.command(for: chord)?.id == WindowCommands.goToItem.id, "\(chord)")
+    }
+    let fixture = await PaneFixture.loaded()
+    let shown = EventLog<Bool>()
+    let binding = try #require(
+        WindowCommands.bindings.first { $0.command == WindowCommands.goToItem })
+
+    binding.run(CommandContext(pane: fixture.pane, showItemPalette: { shown.append(true) }))
+
+    #expect(shown.all == [true])
+    #expect(binding.isEnabled == nil)
+}

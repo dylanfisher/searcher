@@ -37,6 +37,8 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(!settings.commanderFKeys)
     #expect(settings.hideEmptyOperationsPanel)
     #expect(settings.columnWidth == 286)
+    #expect(settings.appearance == .auto)
+    #expect(settings.hideDSStore)
 }
 
 @MainActor @Test func aWrongTypedValueIsDiscardedNotCoerced() throws {
@@ -47,6 +49,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     defaults.set(1, forKey: Settings.Key.foldersFirst.rawValue)
     defaults.set(1, forKey: Settings.Key.folderSizes.rawValue)
     defaults.set(7, forKey: Settings.Key.terminalBundleID.rawValue)
+    defaults.set(0, forKey: Settings.Key.hideDSStore.rawValue)
 
     let settings = Settings(defaults: defaults)
 
@@ -58,6 +61,24 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(defaults.object(forKey: Settings.Key.foldersFirst.rawValue) == nil)
     #expect(settings.terminalBundleID == "com.apple.Terminal")
     #expect(defaults.object(forKey: Settings.Key.terminalBundleID.rawValue) == nil)
+    #expect(settings.hideDSStore)
+    #expect(defaults.object(forKey: Settings.Key.hideDSStore.rawValue) == nil)
+}
+
+/// An appearance that isn't one of the names `Settings.Appearance` has, or isn't a string,
+/// reads as Auto and is removed.
+@MainActor @Test func anAppearanceOfAnotherShapeIsDiscarded() throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let key = Settings.Key.appearance.rawValue
+    for stored: Any in ["purple", "Dark", "", 1, true] {
+        let defaults = temporarySuite(in: folder.url.path)
+        defaults.set(stored, forKey: key)
+
+        let settings = Settings(defaults: defaults)
+
+        #expect(settings.appearance == .auto, "\(stored)")
+        #expect(defaults.object(forKey: key) == nil, "\(stored)")
+    }
 }
 
 @MainActor @Test func settingsSurviveARelaunch() throws {
@@ -72,6 +93,8 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     first.commanderFKeys = true
     first.hideEmptyOperationsPanel = false
     first.columnWidth = 312
+    first.appearance = .dark
+    first.hideDSStore = false
 
     let relaunched = Settings(defaults: try #require(UserDefaults(suiteName: name)))
     #expect(relaunched.showHidden)
@@ -81,16 +104,30 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(relaunched.commanderFKeys)
     #expect(!relaunched.hideEmptyOperationsPanel)
     #expect(relaunched.columnWidth == 312)
+    #expect(relaunched.appearance == .dark)
+    #expect(!relaunched.hideDSStore)
 }
 
-/// A width of another type, a Boolean among them, or one outside the range a grip can drag to
-/// reads as the default and is removed.
+@MainActor @Test func eachAppearanceSurvivesARelaunch() throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    for appearance in Settings.Appearance.allCases {
+        let name = folder.url.appending(path: "preferences-\(appearance)").path
+        Settings(defaults: try #require(UserDefaults(suiteName: name))).appearance = appearance
+
+        let relaunched = Settings(defaults: try #require(UserDefaults(suiteName: name)))
+
+        #expect(relaunched.appearance == appearance)
+    }
+}
+
+/// A width of another type, a Boolean among them, a fraction of a point, or one outside the range
+/// a grip can drag to reads as the default and is removed.
 @MainActor @Test func aColumnWidthOfAnotherShapeIsDiscarded() throws {
     let folder = try TemporaryFolder("SettingsTests")
     let key = Settings.Key.columnWidth.rawValue
     for stored: Any in [
         "300", true, Settings.columnWidths.lowerBound - 1, Settings.columnWidths.upperBound + 1,
-        Double.nan,
+        Double.nan, 300.5,
     ] {
         let defaults = temporarySuite(in: folder.url.path)
         defaults.set(stored, forKey: key)
@@ -133,6 +170,31 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
 
 /// The suite reads through to the global domain, where the system keeps its Spring-loading
 /// setting; a value in the suite stands in for the system's.
+/// With hidden files shown, .DS_Store stays hidden in every pane until the setting is turned
+/// off, and hides again when it is turned back on.
+@MainActor @Test func hidingDSStoreReachesEveryPaneWhileHiddenFilesShow() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let settings = storedSettings(in: folder)
+    settings.showHidden = true
+    let entries = [file("a"), file(".DS_Store"), file(".hidden")]
+    let left = PaneFixture(at: "/left", folders: ["/left": entries], settings: settings)
+    let right = PaneFixture(at: "/right", folders: ["/right": entries], settings: settings)
+    await settle { left.pane.state.isLoaded && right.pane.state.isLoaded }
+    #expect(left.pane.state.names == [".hidden", "a"])
+    #expect(right.pane.state.names == [".hidden", "a"])
+
+    settings.hideDSStore = false
+    await settle {
+        left.pane.state.names == [".DS_Store", ".hidden", "a"]
+            && right.pane.state.names == [".DS_Store", ".hidden", "a"]
+    }
+
+    settings.hideDSStore = true
+    await settle {
+        left.pane.state.names == [".hidden", "a"] && right.pane.state.names == [".hidden", "a"]
+    }
+}
+
 @MainActor @Test func theSpringLoadingDelayFollowsTheSystemSetting() throws {
     let folder = try TemporaryFolder("SettingsTests")
     func delay(enabled: Any?, delay: Any?) -> Duration? {

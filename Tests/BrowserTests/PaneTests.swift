@@ -8,7 +8,8 @@ import UniformTypeIdentifiers
 
 @testable import Browser
 
-/// A pane over a `GatedLister`. Every call is released unless the test passes `held`.
+/// A pane over a `GatedLister`. Every call is released unless the test passes `held`. Its
+/// service makes thumbnails with `thumbnails`, or none.
 @MainActor
 struct PaneFixture {
     let pane: Pane
@@ -18,13 +19,14 @@ struct PaneFixture {
     init(
         at path: String, folders: [String: [DirectoryEntry]], held: Bool = false,
         settings: Settings = untouchedSettings(), sortedBy column: SortColumn = .name,
-        ascending: Bool = true
+        ascending: Bool = true, thumbnails: ThumbnailService? = nil
     ) {
         lister = GatedLister(folders.mapValues { .batches([$0]) })
         if !held { lister.releaseAll() }
         actions = StubSystemActions()
         pane = Pane(
-            location: Location(path: path), service: ListingService(lister: lister),
+            location: Location(path: path),
+            service: ListingService(lister: lister, thumbnails: thumbnails),
             systemActions: actions, settings: settings, sortedBy: column, ascending: ascending)
     }
 
@@ -1685,4 +1687,156 @@ private func shownWidths(_ pane: Pane) -> [Double] {
     #expect(copy.columnWidths == pane.columnWidths)
     #expect(new.columnWidths.isEmpty)
     for pane in [pane, copy, new] { pane.close() }
+}
+
+@MainActor @Test func aJumpSelectsTheRowAloneAsOneStepOfTheSelectionHistory() async throws {
+    let fixture = await PaneFixture.loaded()
+    fixture.select("a.txt", "b.txt")
+
+    fixture.pane.jump(to: "docs")
+
+    #expect(fixture.pane.selection == Selection([ExactName("docs")], cursor: ExactName("docs")))
+    #expect(fixture.pane.location == Location(path: "/root"))
+    fixture.pane.undoSelection()
+    #expect(fixture.selectedNames == ["a.txt", "b.txt"])
+}
+
+/// A row deleted while Go to Item was open: choosing it leaves the selection, the scroll and the
+/// selection history as they were.
+@MainActor @Test func aJumpToANameTheRowsNoLongerListChangesNothing() async throws {
+    let fixture = await PaneFixture.loaded()
+    fixture.select("a.txt")
+    fixture.select("b.txt")
+    fixture.pane.apply(.patches([.remove(name: "docs")]), at: fixture.pane.location)
+    await settle { fixture.pane.state.names == ["a.txt", "b.txt"] }
+    let selection = fixture.pane.selection
+    let centering = fixture.pane.centeringRequest
+    var changes = 0
+    fixture.pane.onChange = { changes += 1 }
+
+    fixture.pane.jump(to: "docs")
+
+    #expect(fixture.pane.selection == selection)
+    #expect(fixture.pane.centeringRequest == centering)
+    #expect(changes == 0)
+    fixture.pane.undoSelection()
+    #expect(fixture.selectedNames == ["a.txt"])
+}
+
+@MainActor @Test func aJumpToTheRowAlreadySelectedStillAsksForItToBeCentered() async throws {
+    let fixture = await PaneFixture.loaded()
+    fixture.select("docs")
+    var changes = 0
+    fixture.pane.onChange = { changes += 1 }
+    let centering = fixture.pane.centeringRequest
+
+    fixture.pane.jump(to: "docs")
+
+    #expect(fixture.pane.centeringRequest == centering + 1)
+    #expect(changes == 1)
+}
+
+/// A jump in a column is the user's choice, as a click is: the next column follows at once,
+/// without the pause a key waits for.
+@MainActor @Test func aJumpInAColumnOpensTheFoldersColumnAtOnce() async throws {
+    let fixture = PaneFixture(
+        at: "/root",
+        folders: [
+            "/root": [folder("docs"), file("a.txt")], "/root/docs": [file("inside.txt")],
+            "/": [folder("root")],
+        ])
+    await settle { fixture.pane.state.isLoaded }
+    fixture.pane.columnOpenClock = ManualClock()
+    fixture.pane.setViewMode(.column)
+    let trail = try #require(fixture.pane.columnTrail)
+    await settle { trail.focused.pane.state.isLoaded }
+
+    trail.focused.pane.jump(to: "docs")
+
+    #expect(trail.columns.map(\.pane.location.path) == ["/root", "/root/docs"])
+    #expect(trail.focused.pane.location == Location(path: "/root"))
+    fixture.pane.close()
+}
+
+// MARK: - Folder volume
+
+/// Reads each folder's volume as `disk`, at once until the test calls `hold()`; from then on
+/// each read blocks until `release()`, as `statfs` on a volume that stopped answering does.
+private final class HeldVolumeReads: @unchecked Sendable {
+    let disk = VolumeIdentity(device: "/dev/disk9s1", mountPoint: "/", kind: .local)
+    private let condition = NSCondition()
+    private var held = false
+
+    func volume(of path: String) -> VolumeIdentity {
+        condition.withLock {
+            while held { condition.wait() }
+        }
+        return disk
+    }
+
+    func hold() {
+        condition.withLock { held = true }
+    }
+
+    func release() {
+        condition.withLock {
+            held = false
+            condition.broadcast()
+        }
+    }
+}
+
+/// A pane at `/root` over `tree`, whose volume reads go through `reads`, loaded.
+@MainActor
+private func volumePane(_ reads: HeldVolumeReads) async -> Pane {
+    let lister = GatedLister([
+        "/root": .batches([[file("a.jpg")]]), "/other": .batches([[file("b.jpg")]]),
+    ])
+    lister.releaseAll()
+    let pane = Pane(
+        location: Location(path: "/root"),
+        service: ListingService(lister: lister, volumeOf: { reads.volume(of: $0) }),
+        systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true)
+    await settle { pane.state.isLoaded }
+    return pane
+}
+
+/// Listing the folder again keeps the volume the last load read until the new load reads it, so
+/// rows on screen go on asking for thumbnails through a reload.
+@MainActor @Test func theFoldersVolumeIsKeptThroughAReloadOfTheSameFolder() async {
+    let reads = HeldVolumeReads()
+    let pane = await volumePane(reads)
+    #expect(pane.folderVolume == reads.disk)
+    reads.hold()
+
+    pane.reload()
+
+    #expect(pane.folderVolume == reads.disk)
+    reads.release()
+}
+
+/// A split's copy, made with its source's rows, has its source's volume before it lists anything.
+@MainActor @Test func aCopyWithItsSourcesRowsHasItsSourcesVolume() async {
+    let reads = HeldVolumeReads()
+    let pane = await volumePane(reads)
+    reads.hold()
+
+    let copy = pane.copy(takingFocus: false)
+
+    #expect(copy.folderVolume == reads.disk)
+    reads.release()
+}
+
+/// Another folder's volume isn't known until its load reads it: the last folder's isn't used.
+@MainActor @Test func anotherFoldersVolumeIsUnknownUntilItsLoadReadsIt() async {
+    let reads = HeldVolumeReads()
+    let pane = await volumePane(reads)
+    reads.hold()
+
+    pane.navigate(to: Location(path: "/other"))
+
+    #expect(pane.location == Location(path: "/other"))
+    #expect(pane.folderVolume == nil)
+    reads.release()
+    await settle { pane.state.isLoaded && pane.folderVolume == reads.disk }
 }

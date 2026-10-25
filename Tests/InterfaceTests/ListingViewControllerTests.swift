@@ -329,6 +329,49 @@ private func shownNames(_ controller: ListingViewController) -> [String] {
     #expect(table.visibleRect.contains(table.rect(ofRow: 40)))
 }
 
+/// The part of the table's visible rect the rows show in, below the column header.
+@MainActor
+func rowArea(of table: NSTableView) -> NSRect {
+    var area = table.visibleRect
+    let header = table.headerView?.frame.height ?? 0
+    area.origin.y += header
+    area.size.height -= header
+    return area
+}
+
+@MainActor @Test func aJumpCentersTheRowInTheListAndStopsAtTheEnds() async throws {
+    let entries = (0..<2_000).map { file(String(format: "e%04d", $0)) }
+    let controller = await controller(showing: entries)
+    let table = controller.tableView
+    controller.view.layoutSubtreeIfNeeded()
+    let top = table.visibleRect
+
+    controller.pane.jump(to: "e1000")
+    #expect(table.selectedRowIndexes == [1_000])
+    #expect(abs(table.rect(ofRow: 1_000).midY - rowArea(of: table).midY) <= 1)
+
+    controller.pane.jump(to: "e0002")
+    #expect(table.visibleRect == top)
+
+    controller.pane.jump(to: "e1999")
+    #expect(abs(table.visibleRect.maxY - table.bounds.maxY) <= 1)
+}
+
+/// A jump to the row the cursor is on, already in view, still centers it.
+@MainActor @Test func aJumpToTheCursorsRowCentersIt() async throws {
+    let entries = (0..<2_000).map { file(String(format: "e%04d", $0)) }
+    let controller = await controller(showing: entries)
+    let table = controller.tableView
+    controller.view.layoutSubtreeIfNeeded()
+    controller.pane.select(Selection([ExactName("e0500")], cursor: ExactName("e0500")))
+    #expect(table.visibleRect.contains(table.rect(ofRow: 500)))
+    #expect(abs(table.rect(ofRow: 500).midY - rowArea(of: table).midY) > 10)
+
+    controller.pane.jump(to: "e0500")
+
+    #expect(abs(table.rect(ofRow: 500).midY - rowArea(of: table).midY) <= 1)
+}
+
 @MainActor @Test func theViewReportsHowManyRowsFitAsThePage() async throws {
     let entries = (0..<2_000).map { file(String(format: "e%04d", $0)) }
     let controller = await controller(showing: entries)
@@ -1353,4 +1396,178 @@ private func folderSize(_ name: String, in pane: Pane) -> Listing.FolderSizeValu
     try await Task.sleep(for: .milliseconds(50))
     #expect(walks.cancelled == ["/volume-d/music"])
     _ = controller
+}
+
+// MARK: - Thumbnails
+
+/// The icon every row's type shows in the thumbnail tests.
+@MainActor private let typeIcon = NSImage(size: NSSize(width: 1, height: 1))
+
+/// A list of `/folder`, holding `entries`, 400 points tall, whose service makes thumbnails with
+/// `maker`, its folders on `volume`, as `statfs` reads it, or on one local volume; `/other`
+/// holds `o.jpg`. Loaded and laid out.
+@MainActor
+private func photoController(
+    _ entries: [DirectoryEntry], maker: GatedThumbnailMaker,
+    volume: VolumeIdentity = ListingService.listerVolume
+) async -> ListingViewController {
+    let lister = StubLister(["/folder": entries, "/other": [file("o.jpg")]])
+    let pane = Pane(
+        location: Location(path: "/folder"),
+        service: ListingService(
+            lister: lister, volumeOf: { _ in volume },
+            thumbnails: ThumbnailService(maker: maker)),
+        systemActions: StubSystemActions(), settings: untouchedSettings())
+    let controller = ListingViewController(
+        pane: pane, iconCache: TypeIconCache { _ in typeIcon }, formatter: .init(),
+        tableView: ListingTableView())
+    pane.onChange = { [weak controller] in controller?.paneDidChange() }
+    controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 400)
+    await settle { pane.state.isLoaded }
+    controller.view.layoutSubtreeIfNeeded()
+    return controller
+}
+
+/// The paths of the rows on screen.
+@MainActor
+private func pathsOnScreen(_ controller: ListingViewController) throws -> [String] {
+    let listing = try #require(controller.listing)
+    let rows = controller.tableView.rows(in: controller.tableView.visibleRect)
+    return (rows.lowerBound..<rows.upperBound).map { "/folder/" + listing[$0].name }
+}
+
+/// The image `row`'s name cell shows, once the list has laid out the rows on screen, as the
+/// window does each frame; nil when the row has no cell.
+@MainActor
+private func rowImage(_ controller: ListingViewController, row: Int) -> NSImage? {
+    controller.view.layoutSubtreeIfNeeded()
+    let cell = controller.tableView.view(atColumn: 0, row: row, makeIfNecessary: false)
+    return (cell as? NSTableCellView)?.imageView?.image
+}
+
+/// Only rows on screen ask for thumbnails, off the main thread. A row scrolled off screen before
+/// its request starts is never made; the rows scrolled to are asked for instead, and each shows
+/// its type icon until its thumbnail lands, then the thumbnail (0102-thumbnails.md).
+@MainActor @Test func onlyRowsOnScreenAskForThumbnailsAndScrolledAwayOnesAreDropped() async throws {
+    let entries = (0..<2_000).map { file(String(format: "p%04d.jpg", $0)) }
+    let maker = GatedThumbnailMaker()
+    let controller = await photoController(entries, maker: maker)
+    let table = controller.tableView
+    let top = try pathsOnScreen(controller)
+    try #require(top.count > 8 && top.count < 40)
+    // Four at once on the volume; the rest of the screen waits.
+    #expect(await maker.waitForCalls(4))
+    let first = maker.paths
+    #expect(Set(first).isSubset(of: top))
+    #expect(rowImage(controller, row: 0) === typeIcon)
+
+    table.scrollRowToVisible(1_500)
+    let scrolled = try pathsOnScreen(controller)
+    try #require(Set(scrolled).isDisjoint(with: top))
+    for path in first + scrolled { maker.answer(path, with: testThumbnail()) }
+
+    #expect(await maker.waitForCalls(4 + scrolled.count))
+    #expect(Set(maker.paths.dropFirst(4)) == Set(scrolled))
+    #expect(maker.calls.allSatisfy { !$0.onMainThread && $0.onBlockingCallThread })
+    #expect(maker.calls.allSatisfy { $0.side == 16 && $0.scale == 2 })
+    let rows = table.rows(in: table.visibleRect)
+    await settle {
+        (rows.lowerBound..<rows.upperBound).allSatisfy { row in
+            rowImage(controller, row: row).map { $0 !== typeIcon && $0.size.width == 16 } ?? false
+        }
+    }
+    let service = try #require(controller.pane.service.thumbnails)
+    await settle { service.calls.isIdle }
+    #expect(maker.calls.count == 4 + scrolled.count)
+}
+
+/// Going to another folder drops the requests of the one left that haven't started.
+@MainActor @Test func aNewFolderDropsTheRequestsOfTheOneLeft() async throws {
+    let entries = (0..<30).map { file(String(format: "p%04d.jpg", $0)) }
+    let maker = GatedThumbnailMaker()
+    let controller = await photoController(entries, maker: maker)
+    #expect(await maker.waitForCalls(4))
+    let first = maker.paths
+
+    controller.pane.navigate(to: Location(path: "/other"))
+    await settle { controller.listing?.count == 1 }
+    for path in first { maker.answer(path, with: nil) }
+    maker.answer("/other/o.jpg", with: testThumbnail())
+
+    #expect(await maker.waitForCalls(5))
+    let service = try #require(controller.pane.service.thumbnails)
+    await settle { service.calls.isIdle }
+    #expect(maker.paths == first + ["/other/o.jpg"])
+    await settle { rowImage(controller, row: 0).map { $0 !== typeIcon } ?? false }
+}
+
+/// A file that isn't downloaded, a folder, a package and text keep their icons and ask for
+/// nothing; a photo beside them is asked for.
+@MainActor @Test func onlyFilesThatMayShowAThumbnailAskForOne() async throws {
+    let notDownloaded = DirectoryEntry(
+        name: "a.jpg", type: .regular, size: 9, modified: testDate, isHidden: false,
+        isDataless: true)
+    let maker = GatedThumbnailMaker()
+    maker.answer("/folder/e.jpg", with: testThumbnail())
+    let controller = await photoController(
+        [notDownloaded, folder("b.jpg"), package("C.app"), file("d.json"), file("e.jpg")],
+        maker: maker)
+    let service = try #require(controller.pane.service.thumbnails)
+
+    await settle { service.cached(at: "/folder/e.jpg", entry: file("e.jpg"), side: 16) != nil }
+    await settle { service.calls.isIdle }
+
+    #expect(maker.paths == ["/folder/e.jpg"])
+    for row in 0..<4 { #expect(rowImage(controller, row: row) === typeIcon) }
+}
+
+/// A file on a network volume keeps its icon: making its thumbnail would read it over the
+/// network (0004-listing-view.md). The folder's volume is the one its load read with `statfs`,
+/// so `/folder`, a path under `/` reached through a link onto a share, is on the share.
+@MainActor @Test func aFileOnANetworkVolumeAsksForNoThumbnailWhateverItsPathReads() async throws {
+    let share = VolumeIdentity(device: "//nas/share", mountPoint: "/Volumes/nas", kind: .network)
+    let maker = GatedThumbnailMaker()
+    let controller = await photoController([file("e.jpg")], maker: maker, volume: share)
+    #expect(controller.pane.folderVolume == share)
+
+    // The rows on screen were checked when they loaded and when they were laid out.
+    #expect(controller.askedThumbnails.isEmpty)
+    #expect(maker.calls.isEmpty)
+    #expect(rowImage(controller, row: 0) === typeIcon)
+}
+
+/// Rows the folder's volume hasn't answered with, as a slow listing keeps them, ask for no
+/// thumbnail: a read there can wait on a disk that stopped answering. Those asked for before the
+/// listing went slow are dropped.
+@MainActor @Test func rowsTheVolumeHasntAnsweredWithAskForNoThumbnail() async throws {
+    let lister = HoldableLister([
+        "/folder": (0..<2_000).map { file(String(format: "p%04d.jpg", $0)) }
+    ])
+    let clock = ManualClock()
+    let maker = GatedThumbnailMaker()
+    let pane = Pane(
+        location: Location(path: "/folder"),
+        service: ListingService(
+            lister: lister, clock: clock, thumbnails: ThumbnailService(maker: maker)),
+        systemActions: StubSystemActions(), settings: untouchedSettings())
+    let controller = ListingViewController(
+        pane: pane, iconCache: TypeIconCache { _ in typeIcon }, formatter: .init(),
+        tableView: ListingTableView())
+    pane.onChange = { [weak controller] in controller?.paneDidChange() }
+    controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 400)
+    await settle { pane.state.listing != nil }
+    controller.view.layoutSubtreeIfNeeded()
+    #expect(!controller.askedThumbnails.isEmpty)
+
+    lister.hold()
+    pane.reload()
+    clock.advance(by: LoadTimeouts.slow)
+    await settle {
+        if case .slow = pane.state { true } else { false }
+    }
+    controller.tableView.scrollRowToVisible(1_500)
+
+    #expect(controller.listing != nil)
+    #expect(controller.askedThumbnails.isEmpty)
+    lister.release()
 }

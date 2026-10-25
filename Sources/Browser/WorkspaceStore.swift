@@ -196,22 +196,30 @@ public actor WorkspaceStore {
     /// saved, even when it names a workspace that didn't load.
     public func load() -> Contents {
         dispatchPrecondition(condition: .notOnQueue(.main))
-        let workspaces = readWorkspaces(in: folder, at: url(for:)).merging(pending) { _, new in
-            new
-        }
+        let workspaces = readWorkspaces(in: folder, at: url(for:))
+            .mapValues { kept($0, at: url(for: $0.value.id)) }
+            .merging(pending) { _, new in new }
         var snapshots = readWorkspaces(in: snapshotFolder, at: snapshotURL(for:))
-        for (id, snapshot) in snapshots where snapshot.name == nil {
+        for (id, snapshot) in snapshots where snapshot.value.name == nil {
             snapshots[id] = nil
             discard(snapshotURL(for: id), because: "it has no name, which a saved workspace has")
         }
-        snapshots.merge(pendingSnapshots) { _, new in new }
-        let session = pendingSession ?? read(SessionState.self, from: sessionFile)
-        return Contents(session: session, workspaces: workspaces, snapshots: snapshots)
+        let loadedSnapshots = snapshots.mapValues { kept($0, at: snapshotURL(for: $0.value.id)) }
+            .merging(pendingSnapshots) { _, new in new }
+        let session =
+            pendingSession
+            ?? read(SessionState.self, from: sessionFile).map {
+                kept($0, at: sessionFile)
+            }
+        return Contents(session: session, workspaces: workspaces, snapshots: loadedSnapshots)
     }
 
-    /// The workspaces in `folder`, each of whose files must be at `url(id)`.
-    private func readWorkspaces(in folder: URL, at url: (UUID) -> URL) -> [UUID: WorkspaceState] {
-        var workspaces: [UUID: WorkspaceState] = [:]
+    /// The workspaces in `folder`, each of whose files must be at `url(id)`, as read: not yet
+    /// written back without the column widths a read dropped.
+    private func readWorkspaces(in folder: URL, at url: (UUID) -> URL) -> [UUID: Read<
+        WorkspaceState
+    >] {
+        var workspaces: [UUID: Read<WorkspaceState>] = [:]
         let names: [String]
         do {
             names = try FileManager.default.contentsOfDirectory(atPath: folder.path)
@@ -230,11 +238,11 @@ public actor WorkspaceStore {
             // Such as Finder's .DS_Store, which isn't the store's to delete.
             if name.hasPrefix(".") { continue }
             guard let workspace = read(WorkspaceState.self, from: file) else { continue }
-            guard file == url(workspace.id) else {
-                discard(file, because: "it holds workspace \(workspace.id)")
+            guard file == url(workspace.value.id) else {
+                discard(file, because: "it holds workspace \(workspace.value.id)")
                 continue
             }
-            workspaces[workspace.id] = workspace
+            workspaces[workspace.value.id] = workspace
         }
         return workspaces
     }
@@ -243,14 +251,39 @@ public actor WorkspaceStore {
     /// its file isn't in the one stored shape, which deletes it and reports it.
     public func loadFolderHistory() -> FolderHistory {
         dispatchPrecondition(condition: .notOnQueue(.main))
-        return pendingFolderHistory ?? read(FolderHistory.self, from: folderHistoryFile)
-            ?? FolderHistory()
+        return pendingFolderHistory
+            ?? read(FolderHistory.self, from: folderHistoryFile).map {
+                kept($0, at: folderHistoryFile)
+            } ?? FolderHistory()
+    }
+
+    /// A file's decoded value, and why each pane's column widths the decode dropped were dropped.
+    private struct Read<Value> {
+        let value: Value
+        let droppedWidths: [String]
+    }
+
+    /// `read`'s value, once the file it came from is kept: written back without the column widths
+    /// the read dropped, if any, and reported, so they are dropped and reported once. A file the
+    /// load deletes for another reason isn't written back first.
+    private func kept<Value: Encodable>(_ read: Read<Value>, at url: URL) -> Value {
+        if !read.droppedWidths.isEmpty {
+            store(read.value, to: url)
+            report(
+                StoreProblem(
+                    file: url, kind: .widthsDropped,
+                    reason: read.droppedWidths.joined(separator: "; ")))
+        }
+        return read.value
     }
 
     /// The file at `url`, decoded; nil when there is none or it can't be read, and when it isn't
     /// exactly what its decoded value encodes to, which deletes it. That comparison catches a
-    /// key a type doesn't declare, which decoding alone ignores, anywhere in the file.
-    private func read<Value: Codable>(_ type: Value.Type, from url: URL) -> Value? {
+    /// key a type doesn't declare, which decoding alone ignores, anywhere in the file. A pane's
+    /// column widths of another shape are dropped alone: the rest loads, and the comparison
+    /// leaves out exactly the `columnWidths` key of each pane whose widths were dropped, located by
+    /// its path in the file (0098-column-widths-per-window.md).
+    private func read<Value: Codable>(_ type: Value.Type, from url: URL) -> Read<Value>? {
         let data: Data
         do {
             data = try Data(contentsOf: url)
@@ -261,19 +294,62 @@ public actor WorkspaceStore {
             return nil
         }
         do {
-            let value = try JSONDecoder().decode(type, from: data)
-            let stored = try JSONSerialization.jsonObject(with: data) as? NSObject
+            let dropped = DroppedColumnWidths()
+            let decoder = JSONDecoder()
+            decoder.userInfo[DroppedColumnWidths.key] = dropped
+            let value = try decoder.decode(type, from: data)
             let expected = try JSONSerialization.jsonObject(with: Self.encoder.encode(value))
-            guard let stored, stored.isEqual(expected) else {
+            var stored = try JSONSerialization.jsonObject(with: data)
+            for drop in dropped.drops {
+                stored = try Self.removingColumnWidths(at: drop.pane, in: stored)
+            }
+            guard let stored = stored as? NSObject, stored.isEqual(expected) else {
                 discard(url, because: "it has keys or values its \(type) doesn't keep")
                 return nil
             }
-            return value
+            return Read(value: value, droppedWidths: dropped.drops.map(\.reason))
         } catch {
             discard(url, because: "\(error)")
             return nil
         }
     }
+
+    /// `json`, a file's decoded JSON, without the `columnWidths` key of the pane object at
+    /// `path`: the widths a decode dropped there. Nothing else is removed, so any other
+    /// difference from what the value encodes to still fails the comparison.
+    private static func removingColumnWidths(
+        at path: [DroppedColumnWidths.Step], in json: Any
+    ) throws -> Any {
+        guard let step = path.first else {
+            guard var pane = json as? [String: Any], pane["columnWidths"] != nil else {
+                throw droppedWidthsNotFound
+            }
+            pane["columnWidths"] = nil
+            return pane
+        }
+        let rest = Array(path.dropFirst())
+        switch step {
+        case .key(let key):
+            guard var object = json as? [String: Any], let value = object[key] else {
+                throw droppedWidthsNotFound
+            }
+            object[key] = try removingColumnWidths(at: rest, in: value)
+            return object
+        case .index(let index):
+            guard var array = json as? [Any], array.indices.contains(index) else {
+                throw droppedWidthsNotFound
+            }
+            array[index] = try removingColumnWidths(at: rest, in: array[index])
+            return array
+        }
+    }
+
+    /// A decode reported dropped widths where the file has none, which can't happen with
+    /// `JSONDecoder`; the file is discarded rather than kept unchecked.
+    private static let droppedWidthsNotFound = DecodingError.dataCorrupted(
+        .init(
+            codingPath: [],
+            debugDescription: "dropped column widths aren't where the decode saw them"))
 
     /// The file `id`'s window's workspace is kept in.
     nonisolated func url(for id: UUID) -> URL {

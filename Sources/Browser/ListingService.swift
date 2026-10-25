@@ -51,18 +51,21 @@ public final class ListingService: Sendable {
     private let networkVolumes = NetworkVolumes()
     /// The `readInfo` calls in flight and waiting, per volume.
     let infoReads = InfoReads()
+    /// Makes the thumbnails rows and the column preview show in place of type icons, for every
+    /// pane and column on this service; nil shows type icons only.
+    public let thumbnails: ThumbnailService?
 
     /// A service that lists folders on the file system and finds each one's volume with `statfs`.
     /// `rootVolumeName` runs once per load, on the load's thread.
     public convenience init<C: Clock<Duration>>(
         clock: C = ContinuousClock(),
         rootVolumeName: @escaping @Sendable () -> String = { readRootVolumeName() },
-        cache: ListingCache? = nil
+        cache: ListingCache? = nil, thumbnails: ThumbnailService? = nil
     ) {
         self.init(
             lister: DirectoryLister(), clock: clock, rootVolumeName: rootVolumeName,
             volumeOf: VolumeIdentity.init(path:), mountedVolumes: VolumeIdentity.mounted,
-            cache: cache)
+            cache: cache, thumbnails: thumbnails)
     }
 
     /// A service that lists folders with `lister`. `volumeOf` says which volume a path is on, and
@@ -77,11 +80,12 @@ public final class ListingService: Sendable {
             listerVolume
         },
         mountedVolumes: @escaping @Sendable () -> [VolumeIdentity] = { [] },
-        cache: ListingCache? = nil
+        cache: ListingCache? = nil, thumbnails: ThumbnailService? = nil
     ) {
         self.mountedVolumes = mountedVolumes
         self.lister = lister
         self.cache = cache
+        self.thumbnails = thumbnails
         startWait = { duration in
             let deadline = clock.now.advanced(by: duration)
             return { try await clock.sleep(until: deadline, tolerance: nil) }
@@ -100,41 +104,44 @@ public final class ListingService: Sendable {
         return FileManager.default.displayName(atPath: "/")
     }
 
-    /// Queues a load of `location`, sorted by `column`, with folders first, hidden entries shown
-    /// and names filtered as asked (`Listing`). `onUpdate` runs on the main actor with a
-    /// `cached` (a network folder the cache keeps), `firstBatch` (folders that take more than one
-    /// read), `slow` and `gaveUp` (a load that stalls) as they happen, then `full`, `failed` or
-    /// `volumeGone`, unless the load is cancelled first.
+    /// Queues a load of `location`, sorted by `column`, with folders first, hidden entries shown,
+    /// `.DS_Store` hidden and names filtered as asked (`Listing`). `onUpdate` runs on the main
+    /// actor with a `cached` (a network folder the cache keeps), `firstBatch` (folders that take
+    /// more than one read), `slow` and `gaveUp` (a load that stalls) as they happen, then `full`,
+    /// `failed` or `volumeGone`, unless the load is cancelled first.
     @discardableResult
     public func load(
         _ location: Location, sortedBy column: SortColumn = .name, ascending: Bool = true,
-        foldersFirst: Bool = false, showsHidden: Bool = true, filter: NameFilter = NameFilter(),
+        foldersFirst: Bool = false, showsHidden: Bool = true, hidesDSStore: Bool = false,
+        filter: NameFilter = NameFilter(),
         priority: ListingLoad.Priority = .visible,
         onUpdate: @escaping @MainActor @Sendable (ListingUpdate) -> Void
     ) -> ListingLoad {
         load(
             location, sortedBy: column, ascending: ascending, foldersFirst: foldersFirst,
-            showsHidden: showsHidden, filter: filter, priority: priority, prepare: { $0 },
+            showsHidden: showsHidden, hidesDSStore: hidesDSStore, filter: filter,
+            priority: priority, prepare: { $0 },
             onUpdate: onUpdate)
     }
 
-    /// Like `load(_:sortedBy:ascending:foldersFirst:showsHidden:filter:priority:onUpdate:)`, but
-    /// runs `prepare` on the load's thread for each update and hands its result to `onUpdate`, so
-    /// work on the listing stays off the main actor.
+    /// Like the `load` above, but runs `prepare` on the load's thread for each update and hands
+    /// its result to `onUpdate`, so work on the listing stays off the main actor.
     @discardableResult
     public func load<Prepared: Sendable>(
         _ location: Location, sortedBy column: SortColumn = .name, ascending: Bool = true,
-        foldersFirst: Bool = false, showsHidden: Bool = true, filter: NameFilter = NameFilter(),
+        foldersFirst: Bool = false, showsHidden: Bool = true, hidesDSStore: Bool = false,
+        filter: NameFilter = NameFilter(),
         priority: ListingLoad.Priority = .visible,
         prepare: @escaping @Sendable (ListingUpdate) -> Prepared,
         onUpdate: @escaping @MainActor @Sendable (Prepared) -> Void
     ) -> ListingLoad {
         let load = ListingLoad(
             location: location, column: column, ascending: ascending,
-            foldersFirst: foldersFirst, showsHidden: showsHidden, filter: filter,
-            priority: priority,
+            foldersFirst: foldersFirst, showsHidden: showsHidden, hidesDSStore: hidesDSStore,
+            filter: filter, priority: priority,
             onPriorityChange: { [weak self] in
-                self?.scheduler.async { self?.startWaitingLoads() }
+                guard let service = self else { return }
+                service.scheduler.async { service.startWaitingLoads() }
             },
             handOff: { update in
                 let prepared = prepare(update)
@@ -324,6 +331,7 @@ public final class ListingService: Sendable {
                     let listing = Listing(
                         folder.entries, column: load.column, ascending: load.ascending,
                         foldersFirst: load.foldersFirst, showsHidden: load.showsHidden,
+                        hidesDSStore: load.hidesDSStore,
                         filter: load.filter)
                     self.hand(
                         .cached(
@@ -387,7 +395,8 @@ public final class ListingService: Sendable {
                     let first = Listing(
                         Array(entries.all.prefix(Self.firstBatchCount)), column: load.column,
                         ascending: load.ascending, foldersFirst: load.foldersFirst,
-                        showsHidden: load.showsHidden, filter: load.filter)
+                        showsHidden: load.showsHidden,
+                        hidesDSStore: load.hidesDSStore, filter: load.filter)
                     hand(.firstBatch(first, rootVolumeName: rootVolumeName), to: load)
                 }
             }
@@ -426,6 +435,7 @@ public final class ListingService: Sendable {
                 Listing(
                     entries.all, column: load.column, ascending: load.ascending,
                     foldersFirst: load.foldersFirst, showsHidden: load.showsHidden,
+                    hidesDSStore: load.hidesDSStore,
                     filter: load.filter),
                 rootVolumeName: rootVolumeName), to: load)
         if let cache, let volume = load.volume, volume.kind == .network {
@@ -632,12 +642,14 @@ public final class ListingService: Sendable {
     }
 }
 
-/// `ListingService.readInfo` calls by volume: those holding one of the volume's
-/// `ListingService.mostReads(on:)` slots, and those waiting for one in the order asked. A volume
-/// the mount table doesn't place counts as one local volume.
+/// `ListingService.readInfo` calls, or `ThumbnailService` requests, by volume: those holding one
+/// of the volume's `ListingService.mostReads(on:)` slots, and those waiting for one in the order
+/// asked, those asked `first` ahead of the rest. A volume the mount table doesn't place counts as
+/// one local volume.
 final class InfoReads: @unchecked Sendable {
     private struct Waiter {
         let id: Int
+        let first: Bool
         let cancelled: @Sendable () -> Void
         let start: @Sendable () -> Void
     }
@@ -660,6 +672,11 @@ final class InfoReads: @unchecked Sendable {
         }
     }
 
+    /// The calls waiting for a slot on `volume`, for tests.
+    func waitingCount(on volume: VolumeIdentity?) -> Int {
+        lock.withLock { waiting[volume]?.count ?? 0 }
+    }
+
     /// Drops what is kept of the call `id` once it has returned.
     func forget(_ id: Int) {
         lock.withLock { _ = cancelledEarly.remove(id) }
@@ -672,19 +689,23 @@ final class InfoReads: @unchecked Sendable {
         }
     }
 
-    /// Runs `start` on a `BlockingCallThread` once `volume` has a slot for it, at once if it has
-    /// one now, or runs `cancelled` if the call was cancelled already.
+    /// Runs `start` once `volume` has a slot for it: at once on the calling thread if it has one
+    /// now, or later on a `BlockingCallThread`. Runs `cancelled` instead if the call was cancelled
+    /// already. A call `first` waits ahead of every call that isn't.
     func enter(
-        _ id: Int, on volume: VolumeIdentity?, cancelled: @escaping @Sendable () -> Void,
-        start: @escaping @Sendable () -> Void
+        _ id: Int, on volume: VolumeIdentity?, first: Bool = false,
+        cancelled: @escaping @Sendable () -> Void, start: @escaping @Sendable () -> Void
     ) {
         let next: (@Sendable () -> Void)? = lock.withLock {
             if cancelledEarly.remove(id) != nil { return cancelled }
             entered.insert(id)
             let limit = ListingService.mostReads(on: volume?.kind ?? .local)
             guard running[volume, default: 0] < limit else {
-                waiting[volume, default: []].append(
-                    Waiter(id: id, cancelled: cancelled, start: start))
+                var queue = waiting[volume] ?? []
+                let waiter = Waiter(id: id, first: first, cancelled: cancelled, start: start)
+                queue.insert(
+                    waiter, at: first ? queue.firstIndex { !$0.first } ?? queue.count : queue.count)
+                waiting[volume] = queue
                 return nil
             }
             running[volume, default: 0] += 1

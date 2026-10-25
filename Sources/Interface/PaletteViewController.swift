@@ -48,11 +48,16 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
         image.resizingMode = .stretch
         return image
     }()
+    /// Whether the backdrop is Liquid Glass (macOS 26 on) rather than a masked blur.
+    static var backdropIsGlass: Bool {
+        if #available(macOS 26, *) { return true }
+        return false
+    }
     /// The window's backdrop with `content` inside it. From macOS 26 it is the system's Liquid
     /// Glass (`NSGlassEffectView`), which rounds, blurs and refracts what is behind the panel
     /// itself; before that, a `.popover` blur in the same rounded shape.
     private static func makeBackdrop(holding content: NSView) -> NSView {
-        if #available(macOS 26, *) {
+        if backdropIsGlass, #available(macOS 26, *) {
             let glass = NSGlassEffectView(
                 frame: NSRect(x: 0, y: 0, width: width, height: height))
             glass.style = .regular
@@ -80,8 +85,23 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
     }
     private static let listInset: CGFloat = 6
 
-    init(palette: Palette) {
+    /// What VoiceOver calls the palette.
+    private let label: String
+    /// What the empty field says the palette searches.
+    private let placeholder: String
+    /// Open Quickly's `label` and `placeholder`.
+    static let openQuicklyLabel = "Open Quickly"
+    static let openQuicklyPlaceholder = "Commands, workspaces and folders"
+
+    /// A palette called `label`, whose empty field shows `placeholder`; Open Quickly's unless
+    /// given, as Go to Item gives its own.
+    init(
+        palette: Palette, label: String = openQuicklyLabel,
+        placeholder: String = openQuicklyPlaceholder
+    ) {
         self.palette = palette
+        self.label = label
+        self.placeholder = placeholder
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -107,8 +127,8 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
         field.drawsBackground = false
         field.focusRingType = .none
         field.font = .systemFont(ofSize: 26, weight: .light)
-        field.placeholderString = "Commands, workspaces and folders"
-        field.setAccessibilityLabel("Open Quickly")
+        field.placeholderString = placeholder
+        field.setAccessibilityLabel(label)
         field.cell?.isScrollable = true
         field.cell?.wraps = false
         field.delegate = self

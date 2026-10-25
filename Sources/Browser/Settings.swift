@@ -11,12 +11,21 @@ import Foundation
 public final class Settings {
     enum Key: String {
         case showHidden
+        case hideDSStore
         case foldersFirst
         case folderSizes
         case terminalBundleID
         case commanderFKeys
         case hideEmptyOperationsPanel
         case columnWidth
+        case appearance
+    }
+
+    /// Whether the app is light or dark. Auto follows the system's setting, as it changes.
+    public enum Appearance: String, CaseIterable, Sendable {
+        case auto
+        case light
+        case dark
     }
 
     /// The width a new column of column view gets until one is set, and the width an
@@ -24,6 +33,12 @@ public final class Settings {
     public static let defaultColumnWidth = 286.0
     /// The widths a column's grip can drag it to (0096-column-widths.md).
     public nonisolated static let columnWidths: ClosedRange<Double> = 100...1000
+
+    /// Whether `width` is one a column can have: whole points, so the columns sit on the pixel
+    /// grid, within `columnWidths` (0096-column-widths.md).
+    public nonisolated static func isColumnWidth(_ width: Double) -> Bool {
+        columnWidths.contains(width) && width == width.rounded()
+    }
 
     /// What the Settings window says about `commanderFKeys`.
     public static let commanderFKeysHelp =
@@ -40,6 +55,12 @@ public final class Settings {
     /// flag (`chflags hidden`). Off by default.
     public var showHidden: Bool {
         didSet { store(showHidden, for: .showHidden, changed: showHidden != oldValue) }
+    }
+    /// Whether panes leave out entries named exactly `.DS_Store` even while `showHidden` lists
+    /// the other hidden entries. On by default (0100-appearance-and-ds-store.md). It hides them
+    /// from the rows only: copying, moving or trashing a folder takes its `.DS_Store` along.
+    public var hideDSStore: Bool {
+        didSet { store(hideDSStore, for: .hideDSStore, changed: hideDSStore != oldValue) }
     }
     /// Whether folders come before every other entry in each sort. Off by default.
     public var foldersFirst: Bool {
@@ -82,13 +103,20 @@ public final class Settings {
     /// Finder; a plain one resizes its column alone (0096-column-widths.md). `defaultColumnWidth`
     /// by default.
     ///
-    /// - Precondition: it is within `columnWidths`.
+    /// - Precondition: `isColumnWidth(_:)` holds for it.
     public var columnWidth: Double {
         didSet {
             precondition(
-                Self.columnWidths.contains(columnWidth),
-                "column width \(columnWidth) is outside \(Self.columnWidths)")
+                Self.isColumnWidth(columnWidth),
+                "column width \(columnWidth) is not a whole number within \(Self.columnWidths)")
             store(columnWidth, for: .columnWidth, changed: columnWidth != oldValue)
+        }
+    }
+
+    /// Whether the app is light, dark or follows the system. Auto by default.
+    public var appearance: Appearance {
+        didSet {
+            store(appearance.rawValue, for: .appearance, changed: appearance != oldValue)
         }
     }
 
@@ -126,14 +154,16 @@ public final class Settings {
     public init(defaults: UserDefaults) {
         self.defaults = defaults
         showHidden = Self.bool(.showHidden, in: defaults) ?? false
+        hideDSStore = Self.bool(.hideDSStore, in: defaults) ?? true
         foldersFirst = Self.bool(.foldersFirst, in: defaults) ?? false
         folderSizes = Self.bool(.folderSizes, in: defaults) ?? false
         terminalBundleID = Self.string(.terminalBundleID, in: defaults) ?? "com.apple.Terminal"
         commanderFKeys = Self.bool(.commanderFKeys, in: defaults) ?? false
         hideEmptyOperationsPanel = Self.bool(.hideEmptyOperationsPanel, in: defaults) ?? true
         columnWidth =
-            Self.number(.columnWidth, in: defaults, within: Self.columnWidths)
+            Self.number(.columnWidth, in: defaults, where: Self.isColumnWidth)
             ?? Self.defaultColumnWidth
+        appearance = Self.appearance(in: defaults) ?? .auto
     }
 
     /// Runs `handler` after each change of a setting, for as long as `owner` exists.
@@ -163,17 +193,28 @@ public final class Settings {
     }
 
     /// The number stored under `key`; nil when there is none, it has another type, a Boolean
-    /// among them, or it is outside `range`, which is removed.
+    /// among them, or one `isValid` rejects, which is removed.
     private static func number(
-        _ key: Key, in defaults: UserDefaults, within range: ClosedRange<Double>
+        _ key: Key, in defaults: UserDefaults, where isValid: (Double) -> Bool
     ) -> Double? {
         guard let value = defaults.object(forKey: key.rawValue) else { return nil }
         if let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
-            range.contains(number.doubleValue)
+            isValid(number.doubleValue)
         {
             return number.doubleValue
         }
         defaults.removeObject(forKey: key.rawValue)
+        return nil
+    }
+
+    /// The appearance stored under its key; nil when there is none, or it isn't the name of one,
+    /// which is removed.
+    private static func appearance(in defaults: UserDefaults) -> Appearance? {
+        guard let name = string(.appearance, in: defaults) else { return nil }
+        if let appearance = Appearance(rawValue: name) {
+            return appearance
+        }
+        defaults.removeObject(forKey: Key.appearance.rawValue)
         return nil
     }
 

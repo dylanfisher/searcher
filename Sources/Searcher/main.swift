@@ -59,7 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 roots: roots, log: { logger.error("\($0, privacy: .public)") })
             let cache = ListingCache(store: store)
             self.cache = cache
-            service = ListingService(cache: cache)
+            service = ListingService(cache: cache, thumbnails: ThumbnailService())
             let sizeLogger = Logger(category: "sizes")
             let dropLogger = Logger(category: "folderSizes")
             folderSizes = FolderSizeService(
@@ -131,6 +131,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             bench.start(systemActions: systemActions)
             return
         }
+        // Before any window opens, so none shows in the system's appearance first.
+        settings.applyAppearance(to: NSApp)
         installMainMenu()
         VolumeNotifications.start()
         guard let restoring, let folderHistory, let storeProblems else {

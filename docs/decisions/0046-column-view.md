@@ -42,7 +42,19 @@ stacked single-column tables over `NSBrowser`.
   through the clip view's animator, which a new target retargets from where it is, so a held →
   or ← never queues one. The rows and the selection are set before it starts, so B6 doesn't
   change. It jumps for the first show, a new trail with no column kept (a restore, a workspace,
-  a Go to folder), a resizing drag and Reduce Motion.)
+  a Go to folder), a resizing drag and Reduce Motion.) (Amended 2026-10-25, Dylan: "when i move
+  up or down in selection the whole pane flashes and jumps scroll horizontally to left, then
+  moves back over to right." A ↓ made by keys drops the column right of the selection, or
+  clears the preview, at once and opens the next one once the keys pause
+  ([0094](0094-column-open-delay.md)). The columns' view was sized to its columns, so at the
+  right end it narrowed and the clip view clamped the scroll left, and the column or preview
+  that came back scrolled it right again. The columns' view is now no narrower than the right
+  edge of what it shows, so a column or preview that closes or narrows never scrolls the view,
+  and one that opens in its place needs no scroll. The room left past the columns goes as the
+  view scrolls it out of sight: the controller resizes the view on each move of the clip view's
+  bounds. That only ever narrows it: the room kept is never more than the view already has, so
+  a rubber-band past the right end, whose bounds reach past the view, widens nothing. The same keeps a grip under the pointer in a drag at the right end, where the clamp
+  used to slide every column left of the grip and leave the view scrolled after a drag back.)
 - **`PaneViewController`** holds the list and the columns in the same place and shows one by the
   pane's view mode. It builds `CommandContext` with `commandPane`, the filter field calls
   `setFilter` on it, and Quick Look toggles the focused column's controller. The path bar and Go
