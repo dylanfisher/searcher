@@ -91,3 +91,15 @@ them would flash as it closes. Nothing overrides the view's handling of Reduce T
 Increase Contrast. The field is 26 pt, as Spotlight's is large. This replaces the "borderless panel
 — rejected" alternative above: the system corners and shadow of a titled panel come with a title
 bar's chrome, which is what the blur had to sit under.
+
+## Update 2026-10-24: Liquid Glass
+
+Dylan found the blur still didn't read as Spotlight's translucent glass. From macOS 26 the
+backdrop is `NSGlassEffectView` (style `.regular`, `cornerRadius` 20, the palette's views as its
+`contentView`), the system's own Liquid Glass; it rounds itself, so no mask image is needed there.
+Before macOS 26 the `NSVisualEffectView` above stays, behind `#available`. The window stays
+non-opaque and clear with its shadow, and nothing overrides the glass's handling of Reduce
+Transparency or Increase Contrast. Nothing opaque sat between the blur and the desktop: the
+window, field, table and scroll view were already clear. The flat look came from the material:
+`.popover` is a heavy, nearly uniform blur with none of the glass's refraction or lensing. The scroll
+view's clip view is now set to draw no background explicitly, so the list can't paint over the glass.

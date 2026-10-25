@@ -48,6 +48,32 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
         image.resizingMode = .stretch
         return image
     }()
+    /// The window's backdrop with `content` inside it. From macOS 26 it is the system's Liquid
+    /// Glass (`NSGlassEffectView`), which rounds, blurs and refracts what is behind the panel
+    /// itself; before that, a `.popover` blur in the same rounded shape.
+    private static func makeBackdrop(holding content: NSView) -> NSView {
+        if #available(macOS 26, *) {
+            let glass = NSGlassEffectView(
+                frame: NSRect(x: 0, y: 0, width: width, height: height))
+            glass.style = .regular
+            glass.cornerRadius = cornerRadius
+            glass.contentView = content
+            return glass
+        }
+        let blur = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: width, height: height))
+        // The panel has the keys whenever it shows, so the blur never goes through the inactive
+        // state; Reduce Transparency still turns the blur opaque, which the view does itself.
+        blur.material = .popover
+        blur.blendingMode = .behindWindow
+        blur.state = .active
+        // A mask image, not a layer mask, so the window server's blur and the window's shadow
+        // take the rounded shape.
+        blur.maskImage = maskImage
+        content.frame = blur.bounds
+        content.autoresizingMask = [.width, .height]
+        blur.addSubview(content)
+        return blur
+    }
     private static let fieldHeight: CGFloat = 60
     static var height: CGFloat {
         fieldHeight + 1 + CGFloat(visibleRows) * PaletteCellView.rowHeight + 2 * listInset
@@ -65,16 +91,9 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
     }
 
     public override func loadView() {
-        let background = NSVisualEffectView(
+        let background = NSView(
             frame: NSRect(x: 0, y: 0, width: Self.width, height: Self.height))
-        // The panel has the keys whenever it shows, so the blur never goes through the inactive
-        // state; Reduce Transparency still turns the blur opaque, which the view does itself.
-        background.material = .popover
-        background.blendingMode = .behindWindow
-        background.state = .active
-        // A mask image, not a layer mask, so the window server's blur and the window's shadow
-        // take the rounded shape.
-        background.maskImage = Self.maskImage
+        view = Self.makeBackdrop(holding: background)
 
         let glass = NSImageView(
             image: NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)
@@ -116,7 +135,10 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
         scrollView.documentView = tableView
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
+        // Nothing in the list paints: the scroll view, its clip view, the table and the row
+        // views are clear, so the backdrop shows through.
         scrollView.drawsBackground = false
+        scrollView.contentView.drawsBackground = false
         scrollView.contentInsets = NSEdgeInsets(
             top: Self.listInset, left: 0, bottom: Self.listInset, right: 0)
 
@@ -140,7 +162,6 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
             scrollView.trailingAnchor.constraint(equalTo: background.trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: background.bottomAnchor),
         ])
-        view = background
         palette.onChange = { [weak self] in self?.showResults() }
         palette.setQuery("")
     }
