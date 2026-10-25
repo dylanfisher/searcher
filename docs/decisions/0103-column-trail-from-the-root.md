@@ -34,15 +34,27 @@ focused folder only ([0041](0041-column-model.md), [0096](0096-column-widths.md)
   at `/System/Volumes/Data`, and start at `/` as Finder shows them, and so does a path typed
   through `/System/Volumes/Data`. `VolumeIdentity.isBrowsable` carries the flag; it isn't part of
   the identity. With no such volume, a path under `/Volumes/X` starts at `/Volumes/X`, which is
-  where a share not mounted yet, or an ejected disk, would be; any other starts at `/`.
+  where a share not mounted yet, or an ejected disk, would be, unless a `MNT_DONTBROWSE` volume
+  is mounted there; any other starts at `/`. Names compare without case and with Unicode
+  normalized (`FileOperation.comparable`), as APFS compares them by default, so `/volumes/x/a`
+  starts at its own `/volumes/x`; the root is spelled as the path spells it, since the columns
+  are the path's folders. On a case-sensitive startup disk a folder `/volumes/x` that isn't
+  `/Volumes/x` would start at itself, losing the columns above it; such a disk is rare.
+- **The path's text, not the folder's real path.** The trail is the folders the path names. A
+  path through a link keeps the link: `/tmp/a` shows `/`, `tmp`, `a`, with `tmp` a link in the
+  `/` column, and `/Volumes/Macintosh HD/Users` (a link to `/`) shows `/`, `Volumes`,
+  `Macintosh HD`, `Users`. Resolving the path takes a file-system read, which the trail can't
+  wait for before its first frame. Finder may resolve such paths (Go to Folder `/tmp` may show
+  `private` › `tmp`); that isn't checked here and is a hand check.
 - **Built at once, checked off the main thread.** The mount table needs a read, which can't run
   on the main thread, and a trail has to show on the frame that built it. So `init` takes the
   root from the path (the rule above with an empty table, right for the startup disk and
   `/Volumes`) and asks `ListingService.trailRoot(of:)`, which reads the table on a
   `BlockingCallThread` (`getmntinfo` with `MNT_NOWAIT`, asking no volume). A different answer
-  drops the columns above the real root, or adds the ones missing above the first column. Only a
-  volume mounted outside `/Volumes`, or a `MNT_DONTBROWSE` one inside it, gives a different
-  answer, so the columns of a normal trail never move after its first frame.
+  drops the columns above the real root, or adds the ones missing above the first column (a
+  `MNT_DONTBROWSE` volume at `/Volumes/X` adds `/` and `Volumes`). Only a volume mounted outside
+  `/Volumes`, or a `MNT_DONTBROWSE` one inside it, gives a different answer, so the columns of a
+  normal trail never move after its first frame.
 - **The focused column lists first.** The columns above it are made with
   `Pane(waitingAt:)`, which lists nothing. Their loads start once the focused column's first
   update lands, whatever it is (rows, cached rows, slow, a failure), and the root check has
@@ -59,7 +71,14 @@ focused folder only ([0041](0041-column-model.md), [0096](0096-column-widths.md)
   can't be listed. Its row isn't shown or selected then. Finder shows a hidden folder dimmed in
   its parent's column; that takes a row the listing doesn't have, so it isn't done here. A column
   that can't be listed shows its message ([0046](0046-column-view.md)); the path bar names the
-  folder. Any other selection in that column follows as before.
+  folder. Any other selection in that column follows as before. Once the column's rows have
+  listed the next folder, rows that no longer list it mean it went, removed or renamed: the
+  column right of it closes, as a removed folder's column does in any column, and the column
+  follows its selection as any column does from then on.
+- **The lead column closing first.** A column above can list early, when its folder monitor
+  reports a change, and a selection there can close the column the trail was built at before
+  that column's first update. The columns still waiting then list once the root is checked, as
+  if that update had come.
 - **← at the root does nothing,** without a beep, as in Finder. Cmd-↑ is ← in column view
   ([0041](0041-column-model.md)), so it stops there too. ← no longer adds a parent's column: there
   is none above the root.

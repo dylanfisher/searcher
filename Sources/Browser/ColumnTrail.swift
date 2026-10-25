@@ -104,25 +104,35 @@ public final class ColumnTrail {
     /// the path's text, as Finder's column view starts at the volume. A folder on the startup
     /// disk, firmlinked ones such as `/Users` too, starts at `/`. A volume Finder doesn't show,
     /// mounted `MNT_DONTBROWSE`, isn't a root. A folder under `/Volumes/X` with no volume
-    /// mounted there, such as a share not mounted yet, starts at `/Volumes/X`, where it would be.
+    /// mounted there, such as a share not mounted yet, starts at `/Volumes/X`, where it would be;
+    /// one under a `MNT_DONTBROWSE` volume there starts at `/`. Names compare without case, as
+    /// APFS compares them by default (`FileOperation.comparable`), and the root is spelled as
+    /// `location` spells it, so its columns are the path's own folders.
     nonisolated static func root(of location: Location, mountedVolumes: [VolumeIdentity])
         -> Location
     {
-        let path = location.path
-        if let volume =
-            mountedVolumes
-            .filter({
-                $0.isBrowsable && $0.mountPoint != "/" && isPath(path, atOrUnder: $0.mountPoint)
-            })
-            .max(by: { $0.mountPoint.utf8.count < $1.mountPoint.utf8.count })
+        let components = pathComponents(location.path)
+        let folded = components.map { FileOperation.comparable(String($0)) }
+        /// The number of components of `mountPoint` when `location` is it or inside it.
+        func depth(of mountPoint: String) -> Int? {
+            let mount = pathComponents(mountPoint).map { FileOperation.comparable(String($0)) }
+            return folded.starts(with: mount) ? mount.count : nil
+        }
+        /// `location`'s folder `count` components below `/`.
+        func prefix(_ count: Int) -> Location {
+            Location(path: "/" + components.prefix(count).joined(separator: "/"))
+        }
+        let holding = mountedVolumes.compactMap { volume in
+            depth(of: volume.mountPoint).map { (volume, $0) }
+        }
+        if let deepest = holding.filter({ $0.0.isBrowsable && $0.1 > 0 })
+            .max(by: { $0.1 < $1.1 })
         {
-            return Location(path: volume.mountPoint)
+            return prefix(deepest.1)
         }
-        let components = pathComponents(path)
-        if components.count >= 2, components[0] == "Volumes" {
-            return Location(path: "/Volumes/" + components[1])
-        }
-        return Location(path: "/")
+        let isInVolumes = components.count >= 2 && folded[0] == FileOperation.comparable("Volumes")
+        let hidden = holding.contains { !$0.0.isBrowsable && $0.1 >= 2 }
+        return isInVolumes && !hidden ? prefix(2) : prefix(0)
     }
 
     /// A column for each folder from `root` down to the parent of `location`, each with the next
@@ -624,7 +634,12 @@ public final class ColumnTrail {
         guard let index = columns.firstIndex(where: { $0 === column }) else { return false }
         let pane = column.pane
         if column.keepsNextColumnAt == pane.selectionVersion, index + 1 < columns.count {
-            return false
+            // Kept until rows that listed the next folder lose it, as a removal or a rename
+            // does; then the columns follow the selection as any column's do.
+            let isListed =
+                pane.state.listing?.row(named: columns[index + 1].pane.location.name) != nil
+            if isListed { column.listedNextFolder = true }
+            if isListed || !column.listedNextFolder { return false }
         }
         column.keepsNextColumnAt = nil
         guard let listing = pane.state.listing else { return false }
@@ -659,7 +674,14 @@ public final class ColumnTrail {
     private func truncate(after index: Int) {
         guard index + 1 < columns.count else { return }
         if focusedIndex > index { focus(index) }
-        for column in columns[(index + 1)...] { column.close() }
+        let closed = columns[(index + 1)...]
+        for column in closed { column.close() }
         columns.removeSubrange((index + 1)...)
+        // A selection in a column above, listed early by its monitor, can close the lead column
+        // before its first update: the columns waiting on it list without it.
+        if let lead = leadColumn, closed.contains(where: { $0 === lead }) {
+            leadColumn = nil
+            listWaitingColumnsIfReady()
+        }
     }
 }
