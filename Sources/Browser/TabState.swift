@@ -1,8 +1,10 @@
 /// A tab as plain values: its layout, with ratios, focus, focus history and zoom, and for each
 /// leaf the pane's location, view mode, Back and Forward history, selection by name and sort. The
-/// only `Codable` form of a tab; `Pane` itself isn't. It leaves out the rows, the filter, hidden
-/// files, the scroll offset and the selection history, and, in column mode, every column but the
-/// focused one's folder, which is the pane's location.
+/// only `Codable` form of a tab; `Pane` itself isn't. It also keeps each pane's column widths, in
+/// list mode too, so they come back when the pane shows columns again
+/// (0098-column-widths-per-window.md). It leaves out the rows, the filter, hidden files, the
+/// scroll offset and the selection history, and, in column mode, every column but the focused
+/// one's folder, which is the pane's location.
 public struct TabState: Codable, Equatable, Sendable {
     public struct PaneState: Equatable, Sendable {
         public let location: Location
@@ -13,11 +15,12 @@ public struct TabState: Codable, Equatable, Sendable {
         public let cursor: ExactName?
         public let sortColumn: SortColumn
         public let sortAscending: Bool
+        public let columnWidths: ColumnWidths
 
         public init(
             location: Location, viewMode: ViewMode, history: History,
             selection: Set<ExactName>, cursor: ExactName?, sortColumn: SortColumn,
-            sortAscending: Bool
+            sortAscending: Bool, columnWidths: ColumnWidths
         ) {
             self.location = location
             self.viewMode = viewMode
@@ -26,6 +29,7 @@ public struct TabState: Codable, Equatable, Sendable {
             self.cursor = cursor
             self.sortColumn = sortColumn
             self.sortAscending = sortAscending
+            self.columnWidths = columnWidths
         }
     }
 
@@ -39,6 +43,25 @@ public struct TabState: Codable, Equatable, Sendable {
             Set(panes.keys) == Set(layout.panes), "the pane states don't match the layout's leaves")
         self.layout = layout
         self.panes = panes
+    }
+
+    /// The same tab with each pane's column widths taken from the pane of `other` with its ID;
+    /// a pane `other` doesn't have keeps its own.
+    public func withColumnWidths(of other: TabState) -> TabState {
+        TabState(
+            layout: layout,
+            panes: Dictionary(
+                uniqueKeysWithValues: panes.map { id, pane in
+                    let widths = other.panes[id]?.columnWidths ?? pane.columnWidths
+                    return (
+                        id,
+                        PaneState(
+                            location: pane.location, viewMode: pane.viewMode,
+                            history: pane.history, selection: pane.selection, cursor: pane.cursor,
+                            sortColumn: pane.sortColumn, sortAscending: pane.sortAscending,
+                            columnWidths: widths)
+                    )
+                }))
     }
 
     // MARK: Coding
@@ -59,6 +82,20 @@ public struct TabState: Codable, Equatable, Sendable {
         let cursor: String?
         let sortColumn: StoredSortColumn
         let sortAscending: Bool
+        /// Left out when no width was set, so a pane whose widths were never set stores what a
+        /// file without widths holds.
+        let columnWidths: StoredColumnWidths?
+    }
+
+    private struct StoredColumnWidths: Codable {
+        /// Set longest ago first.
+        let folders: [StoredFolderWidth]
+        let preview: Double?
+    }
+
+    private struct StoredFolderWidth: Codable {
+        let path: String
+        let width: Double
     }
 
     private enum StoredViewMode: String, Codable {
@@ -108,12 +145,20 @@ public struct TabState: Codable, Equatable, Sendable {
                     $0.utf8.lexicographicallyPrecedes($1.utf8)
                 },
                 cursor: pane.cursor?.name, sortColumn: sortColumn,
-                sortAscending: pane.sortAscending)
+                sortAscending: pane.sortAscending,
+                columnWidths: pane.columnWidths.isEmpty
+                    ? nil
+                    : StoredColumnWidths(
+                        folders: pane.columnWidths.folders.map {
+                            StoredFolderWidth(path: $0.location.path, width: $0.width)
+                        },
+                        preview: pane.columnWidths.preview))
         }
         try container.encode(stored, forKey: .panes)
     }
 
-    /// Stored data whose panes don't match the layout's leaves is rejected, not repaired.
+    /// Stored data whose panes don't match the layout's leaves, or whose column widths
+    /// `ColumnWidths.problem` finds wrong or are stored empty, is rejected, not repaired.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         layout = try container.decode(Layout.self, forKey: .layout)
@@ -125,8 +170,23 @@ public struct TabState: Codable, Equatable, Sendable {
                     codingPath: decoder.codingPath,
                     debugDescription: "the panes don't match the layout's leaves"))
         }
+        let widths = try stored.map { pane -> ColumnWidths in
+            guard let stored = pane.columnWidths else { return ColumnWidths() }
+            let folders = stored.folders.map {
+                ColumnWidths.Folder(location: Location(path: $0.path), width: $0.width)
+            }
+            let problem =
+                folders.isEmpty && stored.preview == nil
+                ? "pane \(pane.id) stores column widths with none in them"
+                : ColumnWidths.problem(folders: folders, preview: stored.preview)
+            if let problem {
+                throw DecodingError.dataCorrupted(
+                    .init(codingPath: decoder.codingPath, debugDescription: problem))
+            }
+            return ColumnWidths(folders: folders, preview: stored.preview)
+        }
         panes = Dictionary(
-            uniqueKeysWithValues: stored.map { pane in
+            uniqueKeysWithValues: zip(stored, widths).map { pane, columnWidths in
                 let viewMode: ViewMode =
                     switch pane.viewMode {
                     case .list: .list
@@ -147,7 +207,7 @@ public struct TabState: Codable, Equatable, Sendable {
                         location: Location(path: pane.path), viewMode: viewMode, history: history,
                         selection: Set(pane.selection.map(ExactName.init)),
                         cursor: pane.cursor.map(ExactName.init), sortColumn: sortColumn,
-                        sortAscending: pane.sortAscending)
+                        sortAscending: pane.sortAscending, columnWidths: columnWidths)
                 )
             })
     }

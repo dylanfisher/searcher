@@ -255,7 +255,8 @@ private func folder(of count: Int, at seconds: Double) -> ListingCache.Folder {
     let layout = Layout()
     let pane = TabState.PaneState(
         location: Location(path: "/fake/a/kept"), viewMode: .list, history: History(),
-        selection: [], cursor: nil, sortColumn: .name, sortAscending: true)
+        selection: [], cursor: nil, sortColumn: .name, sortAscending: true,
+        columnWidths: ColumnWidths())
     let saved = WorkspaceState(
         id: UUID(), name: "Albums", frame: Rect(x: 0, y: 0, width: 800, height: 600),
         tabs: [TabState(layout: layout, panes: [layout.focused: pane])], selectedTab: 0,

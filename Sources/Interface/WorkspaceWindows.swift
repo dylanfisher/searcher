@@ -444,9 +444,11 @@ public final class WorkspaceWindows {
 
     /// Shows saved workspace `controller`'s snapshot in its window, where the window differs
     /// from it. Only the frame differing moves the window to the snapshot's frame, moved onto a
-    /// display if it is on none, and leaves the panes as they are. Anything else loads the
-    /// snapshot's tabs, panes and sidebar as well: the tabs it had close, and the new panes start
-    /// with no selection history. A window in full screen keeps its frame.
+    /// display if it is on none, and leaves the panes as they are. Only the frame and the
+    /// column widths differing gives the panes the snapshot's widths too, and keeps them
+    /// (0098-column-widths-per-window.md). Anything else loads the snapshot's tabs, panes and
+    /// sidebar as well: the tabs it had close, and the new panes start with no selection
+    /// history. A window in full screen keeps its frame.
     private func showSnapshot(in controller: BrowserWindowController) {
         let workspace = controller.workspace
         guard let snapshot = list.snapshots[workspace.id], let window = controller.window else {
@@ -454,7 +456,10 @@ public final class WorkspaceWindows {
         }
         let state = workspace.state(frame: Rect(window.frame))
         guard differs(state, in: window, from: snapshot) else { return }
-        if state.moved(to: snapshot.frame) != snapshot {
+        let shown = state.moved(to: snapshot.frame)
+        if shown != snapshot, shown.withColumnWidths(of: snapshot) == snapshot {
+            workspace.showColumnWidths(of: snapshot)
+        } else if shown != snapshot {
             workspace.reload(
                 tabs: restoredTabs(snapshot), selectedTab: snapshot.selectedTab,
                 showsSidebar: snapshot.showsSidebar)

@@ -33,7 +33,7 @@ private func store(
 private func pane(
     _ path: String, viewMode: ViewMode = .list, selection: [String] = [], cursor: String? = nil,
     sortedBy column: SortColumn = .name, ascending: Bool = true, back: [String] = [],
-    forward: [String] = []
+    forward: [String] = [], columnWidths: ColumnWidths = ColumnWidths()
 ) -> TabState.PaneState {
     let entry = { (path: String) in
         History.Entry(location: Location(path: path), selected: ExactName("x"))
@@ -42,7 +42,7 @@ private func pane(
         location: Location(path: path), viewMode: viewMode,
         history: History(back: back.map(entry), forward: forward.map(entry)),
         selection: Set(selection.map(ExactName.init)), cursor: cursor.map(ExactName.init),
-        sortColumn: column, sortAscending: ascending)
+        sortColumn: column, sortAscending: ascending, columnWidths: columnWidths)
 }
 
 /// A tab of four panes in a grid, with a ratio moved, selections, sorts and histories both ways.
@@ -403,6 +403,128 @@ private func editJSON(_ data: Data, _ edit: (inout [String: Any]) throws -> Void
     ] {
         let text = try String(decoding: Data(contentsOf: url), as: UTF8.self)
         #expect(!text.lowercased().contains("version"))
+    }
+}
+
+// MARK: Column widths
+
+/// Widths set for two folders, the later one first in the trail, and for the preview.
+private func someColumnWidths() -> ColumnWidths {
+    var widths = ColumnWidths()
+    widths.set(312.5, of: Location(path: "/Volumes/music/library/Album"))
+    widths.set(180, of: Location(path: "/Volumes/music/library"))
+    widths.setPreview(420)
+    return widths
+}
+
+/// A one-pane tab in column view at `/Volumes/music/library` with `widths`.
+private func columnTab(_ widths: ColumnWidths, layout: Layout = Layout()) -> TabState {
+    TabState(
+        layout: layout,
+        panes: [
+            layout.focused: pane(
+                "/Volumes/music/library", viewMode: .column, columnWidths: widths)
+        ])
+}
+
+@Test func columnWidthsRoundTripThroughTheStoreInTheOrderTheyWereSet() async throws {
+    let folder = try TemporaryFolder("WorkspaceStoreTests")
+    let saved = try workspace(tabs: [columnTab(someColumnWidths()), onePaneTab()])
+    let problems = EventLog<StoreProblem>()
+    let writer = store(folder, problems: problems)
+    await writer.save(saved)
+    await writer.flush()
+
+    let loaded = await store(folder, problems: problems).load()
+
+    #expect(loaded.workspaces == [saved.id: saved])
+    let pane = try #require(loaded.workspaces[saved.id]?.tabs[0].panes.values.first)
+    #expect(pane.columnWidths.folders == someColumnWidths().folders)
+    #expect(pane.columnWidths.preview == 420)
+    #expect(problems.all.isEmpty)
+}
+
+/// A file from before panes kept column widths has no `columnWidths` key in its panes, as a
+/// pane with none set stores today; it loads, with no widths.
+@Test func aWorkspaceFileWithoutColumnWidthsLoadsWithNone() async throws {
+    let folder = try TemporaryFolder("WorkspaceStoreTests")
+    let layout = Layout()
+    let grid = try fourPaneTab()
+    let saved = try workspace(tabs: [columnTab(someColumnWidths(), layout: layout), grid])
+    let writer = store(folder)
+    await writer.save(saved)
+    await writer.flush()
+    let url = file(of: saved.id, in: folder)
+    let old = try editJSON(try Data(contentsOf: url)) { object in
+        var tabs = try #require(object["tabs"] as? [[String: Any]])
+        var panes = try #require(tabs[0]["panes"] as? [[String: Any]])
+        #expect(panes[0]["columnWidths"] != nil)
+        panes[0]["columnWidths"] = nil
+        tabs[0]["panes"] = panes
+        object["tabs"] = tabs
+    }
+    try old.write(to: url)
+
+    let problems = EventLog<StoreProblem>()
+    let loaded = await store(folder, problems: problems).load()
+
+    let expected = try workspace(
+        saved.id, tabs: [columnTab(ColumnWidths(), layout: layout), grid])
+    #expect(loaded.workspaces == [saved.id: expected])
+    #expect(problems.all.isEmpty)
+    // A pane with no widths set stores no key, so the file of an old build is the same shape.
+    let text = try String(decoding: Data(contentsOf: url), as: UTF8.self)
+    #expect(!text.contains("columnWidths"))
+}
+
+/// `data`, a workspace file whose first pane stores widths, with them changed by `edit`.
+private func editColumnWidths(_ data: Data, _ edit: (inout [String: Any]) throws -> Void)
+    throws -> Data
+{
+    try editJSON(data) { object in
+        var tabs = try #require(object["tabs"] as? [[String: Any]])
+        var panes = try #require(tabs[0]["panes"] as? [[String: Any]])
+        var widths = try #require(panes[0]["columnWidths"] as? [String: Any])
+        try edit(&widths)
+        panes[0]["columnWidths"] = widths
+        tabs[0]["panes"] = panes
+        object["tabs"] = tabs
+    }
+}
+
+/// As `expectDiscarded`, for a first pane that stores widths.
+private func expectWidthsDiscarded(
+    _ edit: (inout [String: Any]) throws -> Void,
+    sourceLocation: SourceLocation = #_sourceLocation
+) async throws {
+    let folder = try TemporaryFolder("WorkspaceStoreTests")
+    let bad = try workspace(name: "Bad", tabs: [columnTab(someColumnWidths())])
+    let writer = store(folder)
+    await writer.save(bad)
+    await writer.flush()
+    let url = file(of: bad.id, in: folder)
+    try editColumnWidths(try Data(contentsOf: url), edit).write(to: url)
+
+    let problems = EventLog<StoreProblem>()
+    let loaded = await store(folder, problems: problems).load()
+    #expect(loaded.workspaces.isEmpty, sourceLocation: sourceLocation)
+    #expect(problems.all.map(\.kind) == [.discarded], sourceLocation: sourceLocation)
+}
+
+@Test func storedColumnWidthsOfAnotherShapeAreDiscarded() async throws {
+    try await expectWidthsDiscarded { $0["preview"] = 5000 }
+    try await expectWidthsDiscarded { $0["preview"] = "wide" }
+    try await expectWidthsDiscarded { widths in
+        widths["folders"] = [["path": "/a", "width": 200], ["path": "/a", "width": 300]]
+    }
+    try await expectWidthsDiscarded { widths in
+        widths["folders"] = (0...ColumnWidths.folderLimit).map {
+            ["path": "/f\($0)", "width": 200]
+        }
+    }
+    try await expectWidthsDiscarded { widths in
+        widths["folders"] = []
+        widths["preview"] = nil
     }
 }
 

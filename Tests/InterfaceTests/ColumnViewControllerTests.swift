@@ -1514,18 +1514,112 @@ private func hit(_ point: NSPoint, in fixture: Fixture) -> NSView? {
     #expect(columnWidths(fixture)[1] > Settings.defaultColumnWidth)
 }
 
-@MainActor @Test func closedColumnsLeaveNoWidthOrGripBehind() async throws {
+@MainActor @Test func closedColumnsLeaveNoGripBehind() async throws {
     let fixture = await Fixture()
     await fixture.openThreeColumns()
-    #expect(fixture.controller.widths.count == 3)
 
     await fixture.select("a.txt", inColumn: 0)
 
-    let shown = fixture.controller.columnControllers.map { ObjectIdentifier($0.pane) }
-    #expect(Set(fixture.controller.widths.keys) == Set(shown))
+    let shown = fixture.controller.columnControllers
     #expect(fixture.controller.grip(forColumnAt: 1) == nil)
     // The shown column's grip and the preview's.
     #expect(
         fixture.controller.columnsView.subviews.filter { $0 is ColumnGripView }.count
             == shown.count + 1)
+}
+
+// MARK: - Widths kept by the pane
+
+/// A drag lays the columns out on each move but hands the pane its width once, at the release,
+/// so a drag starts one save (0098-column-widths-per-window.md).
+@MainActor @Test func aDragHandsThePaneItsWidthOnceAtTheRelease() async throws {
+    let fixture = await Fixture()
+    await fixture.openThreeColumns()
+    var reports = 0
+    fixture.pane.onTabChange = { reports += 1 }
+    let grip = try #require(fixture.controller.grip(forColumnAt: 1))
+
+    grip.mouseDown(with: gripEvent(.leftMouseDown, x: 100))
+    for x in stride(from: 110.0, through: 160, by: 10) {
+        grip.mouseDragged(with: gripEvent(.leftMouseDragged, x: x))
+    }
+
+    let standard = Settings.defaultColumnWidth
+    #expect(columnWidths(fixture) == [standard, standard + 60, standard])
+    #expect(reports == 0)
+    #expect(fixture.pane.columnWidths.isEmpty)
+
+    grip.mouseUp(with: gripEvent(.leftMouseUp, x: 160))
+
+    #expect(reports == 1)
+    #expect(fixture.pane.columnWidths.width(of: Location(path: "/r/docs")) == standard + 60)
+    #expect(columnWidths(fixture) == [standard, standard + 60, standard])
+    try expectPacked(fixture)
+}
+
+@MainActor @Test func theColumnsAndThePreviewShowThePanesWidths() async throws {
+    let fixture = await Fixture()
+    await fixture.openThreeColumns()
+    await fixture.select("one.flac", inColumn: 2)
+    var widths = ColumnWidths()
+    widths.set(300, of: Location(path: "/r"))
+    widths.set(150, of: Location(path: "/r/docs/sub"))
+    widths.setPreview(420)
+
+    fixture.pane.showColumnWidths(widths)
+
+    let standard = Settings.defaultColumnWidth
+    #expect(columnWidths(fixture) == [300, standard, 150])
+    #expect(fixture.controller.previewView.map { Double($0.frame.width) } == 420)
+    try expectPacked(fixture)
+}
+
+/// An Option-drag in another pane's columns sets the default, which this pane's columns with no
+/// width set follow on screen at once; a resized one keeps its width.
+@MainActor @Test func anOptionDragInAnotherPaneMovesTheColumnsWithNoWidthSet() async throws {
+    let folder = try TemporaryFolder("ColumnViewControllerTests")
+    let settings = storedSettings(in: folder)
+    let fixture = await Fixture(settings: settings)
+    let other = await Fixture(settings: settings)
+    await fixture.openThreeColumns()
+    await other.openThreeColumns()
+    drag(try #require(fixture.controller.grip(forColumnAt: 1)), by: 20)
+
+    drag(try #require(other.controller.grip(forColumnAt: 0)), by: 55, option: true)
+
+    let standard = Settings.defaultColumnWidth
+    let wide = standard + 55
+    #expect(columnWidths(other) == [wide, wide, wide])
+    #expect(columnWidths(fixture) == [wide, standard + 20, wide])
+    try expectPacked(fixture)
+}
+
+/// A plain drag that ends where it started hands the pane no width.
+@MainActor @Test func aDragBackToItsStartSetsNoWidth() async throws {
+    let fixture = await Fixture()
+    await fixture.openThreeColumns()
+    let grip = try #require(fixture.controller.grip(forColumnAt: 1))
+
+    grip.mouseDown(with: gripEvent(.leftMouseDown, x: 100))
+    grip.mouseDragged(with: gripEvent(.leftMouseDragged, x: 140))
+    grip.mouseDragged(with: gripEvent(.leftMouseDragged, x: 100))
+    grip.mouseUp(with: gripEvent(.leftMouseUp, x: 100))
+
+    #expect(fixture.pane.columnWidths.isEmpty)
+    #expect(columnWidths(fixture)[1] == Settings.defaultColumnWidth)
+}
+
+@MainActor @Test func theWidthsComeBackAfterTheListAndBack() async throws {
+    let fixture = await Fixture()
+    await fixture.select("a.txt", inColumn: 0)
+    drag(try #require(fixture.controller.grip(forColumnAt: 0)), by: 40)
+    drag(try #require(fixture.controller.previewGrip), by: 70)
+
+    fixture.pane.setViewMode(.list)
+    fixture.pane.setViewMode(.column)
+    await settle { fixture.trail.focused.pane.state.isLoaded && fixture.trail.preview != nil }
+
+    let standard = Settings.defaultColumnWidth
+    #expect(columnWidths(fixture) == [standard + 40])
+    #expect(fixture.controller.previewView.map { Double($0.frame.width) } == standard + 70)
 }
