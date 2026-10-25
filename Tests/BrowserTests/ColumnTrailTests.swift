@@ -216,6 +216,93 @@ private func press(_ chord: KeyChord, on pane: Pane) throws {
     #expect(root("/Volumes/Gone/a") == "/Volumes/Gone")
     #expect(root("/Volumes") == "/")
     #expect(root("/Users/me/mnt/s/docs") == "/")
+    // Without case, as APFS compares names, spelled as the path spells it.
+    #expect(root("/volumes/backup/a", mounted) == "/volumes/backup")
+    #expect(root("/volumes/gone/a") == "/volumes/gone")
+    #expect(root("/users/ME/mnt/S/docs", mounted) == "/users/ME/mnt/S")
+    // A volume Finder doesn't show, mounted under `/Volumes`, roots its folders at `/`.
+    let hidden = VolumeIdentity(
+        device: "/dev/disk9s1", mountPoint: "/Volumes/h", kind: .local, isBrowsable: false)
+    #expect(root("/Volumes/h/a", [startup, hidden]) == "/")
+}
+
+/// The root the path gives is too deep when a volume Finder doesn't show is mounted there: the
+/// check adds the columns above it, each with the next folder selected, keeping the focus.
+@MainActor @Test func aRootCheckedHigherThanThePathsAddsTheColumnsAboveIt() async {
+    let hidden = VolumeIdentity(
+        device: "/dev/disk9s1", mountPoint: "/Volumes/h", kind: .local, isBrowsable: false)
+    let lister = GatedLister([
+        "/": .batches([[folder("Volumes")]]), "/Volumes": .batches([[folder("h")]]),
+        "/Volumes/h": .batches([[folder("docs")]]),
+        "/Volumes/h/docs": .batches([[file("x.txt")]]),
+    ])
+    lister.releaseAll()
+    let pane = Pane(
+        location: Location(path: "/Volumes/h/docs"),
+        service: ListingService(lister: lister, mountedVolumes: { [hidden] }),
+        systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true,
+        viewMode: .column)
+    #expect(paths(pane) == ["/Volumes/h", "/Volumes/h/docs"])
+
+    await trail(pane).rootChecked()
+
+    #expect(paths(pane) == ["/", "/Volumes", "/Volumes/h", "/Volumes/h/docs"])
+    #expect(trail(pane).focusedIndex == 3)
+    #expect(pane.location == Location(path: "/Volumes/h/docs"))
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+    #expect(
+        trail(pane).columns.map { $0.pane.selection.cursor?.name } == ["Volumes", "h", "docs", nil])
+}
+
+/// A column above, listed early by its monitor, can close the column the trail was built at
+/// with a selection before that column's first update: the columns still waiting list anyway.
+@MainActor @Test func theLeadColumnClosedBeforeItsFirstUpdateLetsTheColumnsAboveList() async {
+    let lister = GatedLister(tree.mapValues { .batches([$0]) })
+    for path in ["/", "/r", "/r/other"] { lister.release(path) }
+    let pane = Pane(
+        location: Location(path: "/r/docs"), service: ListingService(lister: lister),
+        systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true,
+        viewMode: .column)
+    await trail(pane).rootChecked()
+    #expect(await lister.waitForCall("/r/docs"))
+    let parent = trail(pane).columns[1].pane
+    #expect(trail(pane).columns[0].pane.load == nil)
+    parent.apply(.relist, at: parent.location)
+    await settle { parent.state.isLoaded }
+
+    select("other", in: trail(pane).columns[1])
+
+    #expect(paths(pane) == ["/", "/r", "/r/other"])
+    await settle { trail(pane).columns[0].pane.state.isLoaded }
+    lister.releaseAll()
+}
+
+/// The folder a column above keeps selected goes, removed or renamed: its column closes, as a
+/// removed folder's does in any column.
+@MainActor @Test func aRemovedOrRenamedFolderAColumnAboveKeepsClosesItsColumn() async {
+    for patches: [FolderChange.Patch] in [
+        [.remove(name: "docs")], [.remove(name: "docs"), .update(folder("papers"))],
+    ] {
+        // Any column: `docs` selected by a click.
+        let any = await columnPane()
+        select("docs", in: trail(any.pane).columns[1])
+        await settle { trail(any.pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+        let anyParent = trail(any.pane).columns[1].pane
+        anyParent.apply(.patches(patches), at: anyParent.location)
+        await settle { !anyParent.state.names.contains("docs") }
+        await drainMainQueue()
+        // The column the trail built above `/r/docs`.
+        let built = await columnPane(at: "/r/docs")
+        let parent = trail(built.pane).columns[1].pane
+
+        parent.apply(.patches(patches), at: parent.location)
+
+        await settle { !parent.state.names.contains("docs") }
+        await drainMainQueue()
+        #expect(paths(any.pane) == ["/", "/r"], "\(patches)")
+        #expect(paths(built.pane) == paths(any.pane), "\(patches)")
+        #expect(trail(built.pane).focusedIndex == 1, "\(patches)")
+    }
 }
 
 /// The root taken from the path is checked against the mount table off the main thread: a volume
