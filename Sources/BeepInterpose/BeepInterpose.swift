@@ -53,6 +53,10 @@ func silentAlertSoundWithCompletion(_ id: UInt32, _ done: Completion?) {
 // the one that keeps the Swift Testing runner alive, and the process then exits normally with
 // exit status 0 and no summary. After a test calls `searcher_runloop_stops_drop`, the replacement
 // drops every stop of the main run loop except the Swift runtime's own, which ends the run.
+// The runtime's stop is recognised by `Thread.callStackSymbols[2]` containing
+// "libswift_Concurrency", which depends on the frame layout and the image name. If a toolchain
+// changes either, that stop is dropped too, and the Interface test process hangs at exit instead
+// of passing. That is loud, but there is no timeout.
 nonisolated(unsafe) private var dropsStops = false
 nonisolated(unsafe) private var droppedStops = 0
 

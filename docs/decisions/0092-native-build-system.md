@@ -53,6 +53,10 @@ naming them and the last test started. The whole-suite pass stamp (`.build/tests
 written only when both runs pass that check, so a truncated run cannot stamp. The script is an
 input of the stamp's key, so stamps written before this change no longer match.
 
+A `--filter` that matches no tests also fails now, with "no test run started". Swift Testing
+prints no closing line when nothing ran, so the check cannot tell that run from a truncated one,
+and a mistyped filter that passed would look the same as a suite that passed.
+
 ## Alternatives considered
 
 - **Keep swiftbuild and unify only the flags** — rejected: the random toolchain ID still
