@@ -139,26 +139,31 @@ private func packageColumns() async -> PaneFixture {
     #expect(fixture.actions.openedFiles.isEmpty)
 }
 
-/// Opt-↓ moves ten rows, clamped to the last, and the columns right of the selection wait for the
+/// Opt-↓ moves ten rows, not to the last row, and the columns right of the selection wait for the
 /// pause like any held key (0094-column-open-delay.md).
 @MainActor @Test func optionDownInAColumnWaitsForThePauseBeforeOpeningTheNewSelection()
     async throws
 {
     let clock = ManualClock()
-    let fixture = await columnPane()
-    fixture.pane.columnOpenClock = clock
+    let names = (0..<14).map { String(format: "d%02d", $0) }
+    var folders: [String: [DirectoryEntry]] = ["/": [folder("m")], "/m": names.map { folder($0) }]
+    for name in names { folders["/m/\(name)"] = [file("x.txt")] }
+    let fixture = PaneFixture(at: "/m", folders: folders)
+    await settle { fixture.pane.state.isLoaded }
+    fixture.pane.setViewMode(.column)
     let pane = fixture.pane
-    select("docs", in: trail(pane).columns[0])
-    #expect(paths(pane) == ["/r", "/r/docs"])
+    await settle { trail(pane).focused.pane.state.isLoaded }
+    pane.columnOpenClock = clock
+    select("d00", in: trail(pane).columns[0])
+    #expect(paths(pane) == ["/m", "/m/d00"])
 
     try press(KeyChord(.down, modifiers: .option), on: pane)
 
-    #expect(trail(pane).columns[0].pane.selection.cursor == ExactName("other"))
-    #expect(paths(pane) == ["/r"])
-    #expect(trail(pane).preview == nil)
+    #expect(trail(pane).columns[0].pane.selection.cursor == ExactName("d10"))
+    #expect(paths(pane) == ["/m"])
     await settle { clock.waitingSleeps == 1 }
     clock.advance(by: ColumnTrail.openDelay)
-    await settle { paths(pane) == ["/r", "/r/other"] }
+    await settle { paths(pane) == ["/m", "/m/d10"] }
 }
 
 /// A package selected by keys waits for the pause, as a file does, then previews and still adds

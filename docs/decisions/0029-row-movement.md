@@ -7,9 +7,10 @@
 
 M1.2 adds the row movement keys (Home and End first and last row, Opt-↑/↓ and Ctrl-Shift-↑/↓ ten
 rows, Fn-↑/↓ a page), Shift-↑/↓ to extend the selection, and Cmd-A. Until now the pane's
-selection was a set of names, and ↑ and ↓ moved it only when one row was selected. Extending needs to know where a range started and which end moves. `NSTableView` has its own selection extension on Shift-↑/↓, and those
-keys reached it, since only keys with Command, Control or Option were kept from it
-([0027](0027-key-dispatch.md)). Clicks, Shift-clicks and Cmd-clicks also change the table's
+selection was a set of names, and ↑ and ↓ moved it only when one row was selected. Extending
+needs to know where a range started and which end moves. `NSTableView` has its own selection
+extension on Shift-↑/↓, and those keys reached it, since only keys with Command, Control or
+Option were kept from it ([0027](0027-key-dispatch.md)). Clicks, Shift-clicks and Cmd-clicks also change the table's
 selection directly. B6 (16 ms on W2) applies to each of these commands, and B10 (no stall over
 50 ms) to everything on the main thread.
 
@@ -82,12 +83,11 @@ name about 32 ms, and a click selecting half the rows 32–51 ms.
   Cmd-A is registered as Select All, which the Edit menu's item runs. `KeyChord.Key` gains
   `pageUp`, `pageDown`, `home` and `end`, named Page Up, Page Down, Home and End: Fn-↓ types the
   Page Down character and Fn-→ the End one, and the keys of a full keyboard give the same
-  chords. Opt-↑/↓ and Ctrl-Shift-↑/↓ are both chords of Move Up/Down 10 Rows (Dylan, 2026-10-24:
-  "add the keyboard shortcut for jumping up/down 10 files (option+up or option+down)"), which
-  took Opt-↑/↓ from Select First/Last Row; those moved to Home and End.
-  Unbound Shift-only keys still reach `super`.
-  Shift with Page Up, Page Down, Home, End, ← and → was checked against the table and moves
-  nothing. `allowsMultipleSelection` stays on, for clicks and for showing the pane's ranges.
+  chords. Opt-↑/↓ and Ctrl-Shift-↑/↓ are both chords of Move Up/Down 10 Rows (Dylan,
+  2026-10-24: "add the keyboard shortcut for jumping up/down 10 files (option+up or
+  option+down)"), which took Opt-↑/↓ from Select First/Last Row; those moved to Home and End.
+  Unbound Shift-only keys still reach `super`. Shift with Page Up, Page Down, Home, End, ← and →
+  was checked against the table and moves nothing. `allowsMultipleSelection` stays on, for clicks and for showing the pane's ranges.
 - **Page.** A page is `Pane.visibleRowCount` rows, the whole rows that fit below the column
   header. `ListingViewController.viewDidLayout` sets it, subtracting the header's overlap with
   the clip view, since the rows scroll under the header. A pane too short for one row moves one.

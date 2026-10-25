@@ -2,8 +2,9 @@ import AppKit
 import Browser
 
 extension KeyChord {
-    /// The chord a key event spells, or nil for a key `KeyChord.Key` has no case for (forward delete, keypad Enter, backspace) or a dead key that typed nothing. The
-    /// first of `candidates(for:)`.
+    /// The chord a key event spells, or nil for a key `KeyChord.Key` has no case for (forward
+    /// delete, keypad Enter, backspace) or a dead key that typed nothing. The first of
+    /// `candidates(for:)`.
     init?(event: NSEvent) {
         guard let chord = Self.candidates(for: event).first else { return nil }
         self = chord
