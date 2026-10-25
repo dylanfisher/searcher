@@ -46,9 +46,14 @@ public final class ColumnTrail {
 
     /// → : moves into the column of the folder selected in the focused one, opening it at once
     /// if it waits for the keys to pause, and selects its first row if nothing there is
-    /// selected, or once its rows arrive if they haven't yet. Does nothing else when no folder
-    /// is selected.
+    /// selected, or once the whole folder's rows arrive if they haven't yet. Does nothing else
+    /// when no folder is selected.
     public func moveRight() {
+        moveRight(selectingFirstRow: true)
+    }
+
+    /// → , selecting the first row of the column it moves into only if `selectingFirstRow`.
+    private func moveRight(selectingFirstRow: Bool) {
         let wasHeld = focused.held != nil
         if wasHeld {
             follow(focused)
@@ -60,12 +65,9 @@ public final class ColumnTrail {
         }
         focus(focusedIndex + 1)
         let pane = focused.pane
-        if pane.selection.isEmpty {
-            if let listing = pane.state.listing {
-                if listing.count > 0 { pane.selectFirstRow() }
-            } else {
-                focused.selectsFirstRowAt = pane.selectionVersion
-            }
+        if selectingFirstRow, pane.selection.isEmpty {
+            focused.selectsFirstRowAt = pane.selectionVersion
+            selectFirstRowIfWanted(in: focused)
         }
         owner.trailDidChange()
     }
@@ -110,8 +112,8 @@ public final class ColumnTrail {
     }
 
     /// Show Package Contents on the package `name` in `pane`'s column: adds the package's column
-    /// right of it and moves into it, as Open does for a folder. The column stays while the
-    /// package stays selected (`follow`).
+    /// right of it and moves into it, as Open does for a folder, selecting nothing in it, as
+    /// Finder does. The column stays while the package stays selected (`follow`).
     func openPackage(named name: String, from pane: Pane) {
         guard let index = index(of: pane) else { return }
         // A command opens at once: the column stops waiting for the keys to pause.
@@ -122,7 +124,7 @@ public final class ColumnTrail {
                 isFocused: false))
         updatePreview()
         if index != focusedIndex { focus(index) }
-        moveRight()
+        moveRight(selectingFirstRow: false)
     }
 
     /// Closes every column, and drops the preview and the read of its info.
@@ -181,10 +183,13 @@ public final class ColumnTrail {
         owner.trailDidChange()
     }
 
-    /// Selects the first row of `column` once its rows arrive, when → moved into it before they
-    /// did and its selection hasn't changed since. Rows that arrive empty, or a folder that
-    /// can't be listed, give up the wait. Returns whether it selected: that selection reports
-    /// its own change, which the columns follow at once, since no key made it.
+    /// Selects the first row of `column` once it shows the whole folder, when → moved into it
+    /// and its selection hasn't changed since. A first batch isn't the whole folder: its first
+    /// row needn't be the folder's, and the selection, by name, would stay on it. Rows that
+    /// arrive empty, or a folder that can't be listed, give up the wait. Returns whether it
+    /// selected: that selection reports its own change, which the columns follow at once,
+    /// since no key made it.
+    @discardableResult
     private func selectFirstRowIfWanted(in column: Column) -> Bool {
         guard let version = column.selectsFirstRowAt else { return false }
         let pane = column.pane
@@ -199,11 +204,24 @@ public final class ColumnTrail {
             column.selectsFirstRowAt = nil
             return false
         }
-        guard let listing = pane.state.listing else { return false }
+        guard Self.showsWholeFolder(pane.state), let listing = pane.state.listing else {
+            return false
+        }
         column.selectsFirstRowAt = nil
         guard listing.count > 0, pane.selection.isEmpty else { return false }
         pane.selectFirstRow()
         return pane.selectionVersion != version
+    }
+
+    /// Whether `state`'s rows are the whole folder in its sort, so their first row is the
+    /// folder's: a full listing or cached rows, kept or not, but not a first batch.
+    private static func showsWholeFolder(_ state: ListingState) -> Bool {
+        switch state {
+        case .loaded, .cachedRefreshing: true
+        case .slow(let kept), .offline(let kept):
+            kept.map { $0.isComplete || $0.listedAt != nil } ?? false
+        case .loading, .partial, .denied, .failed: false
+        }
     }
 
     /// Drops the columns right of `column` that its key-made selection no longer asks for, and

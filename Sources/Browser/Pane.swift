@@ -775,6 +775,9 @@ public final class Pane {
 
     public func didLoseFocus() {
         isFocused = false
+        // A column → moved into while its rows load doesn't select its first row in a pane
+        // the keys have left.
+        columnTrail?.focused.selectsFirstRowAt = nil
         columnTrail?.focused.pane.didLoseFocus()
     }
 
