@@ -170,8 +170,11 @@ private func packageColumns() async -> PaneFixture {
     #expect(paths(pane) == ["/p", "/p/App.app"])
     #expect(trail(pane).focusedIndex == 1)
     clock.advance(by: ColumnTrail.openDelay)
+    // Finder selects nothing in the package, even once its rows land.
+    await settle { trail(pane).columns[1].pane.state.isLoaded }
     for _ in 0..<3 { await drainMainQueue() }
     #expect(paths(pane) == ["/p", "/p/App.app"])
+    #expect(trail(pane).columns[1].pane.selection.isEmpty)
 }
 
 @MainActor @Test func showPackageContentsAddsThePackagesColumnAndMovesIntoItUntilAnotherSelection()
@@ -1112,4 +1115,441 @@ private func click(_ name: String, in pane: Pane) throws {
 
     await settle { paths(pane) == ["/k", "/k/z.txt"] }
     #expect(clock.waitingSleeps == 0)
+}
+
+// MARK: - Reading the preview's info
+
+/// An `ItemInfo` whose dates are `seconds` and twice that after `testDate`, tagged `tags`.
+private func info(_ seconds: Double, tags: [String] = []) -> ItemInfo {
+    ItemInfo(
+        created: testDate.addingTimeInterval(seconds),
+        lastOpened: testDate.addingTimeInterval(2 * seconds), tags: tags)
+}
+
+@MainActor @Test func aPreviewReadsItsFilesInfoOffTheMainThread() async throws {
+    let fixture = await columnPane()
+    let reader = GatedItemInfoReader(["/r/a.txt": info(1, tags: ["Red"])])
+    fixture.pane.itemInfoReader = reader
+
+    select("a.txt", in: trail(fixture.pane).columns[0])
+
+    #expect(trail(fixture.pane).preview?.info == .reading)
+    #expect(await reader.waitForCall("/r/a.txt"))
+    #expect(reader.calls.map(\.onMainThread) == [false])
+    #expect(reader.calls.map(\.onBlockingCallThread) == [true])
+    reader.releaseAll()
+    await settle { trail(fixture.pane).preview?.info == .read(info(1, tags: ["Red"])) }
+}
+
+/// A file replaced under its name, as a save by rename replaces it, is read again; it shows
+/// what was read of it until then.
+@MainActor @Test func aChangedFileIsReadAgain() async throws {
+    let fixture = await columnPane()
+    let reader = GatedItemInfoReader(["/r/a.txt": info(1)])
+    reader.releaseAll()
+    fixture.pane.itemInfoReader = reader
+    let first = trail(fixture.pane).columns[0].pane
+    select("a.txt", in: trail(fixture.pane).columns[0])
+    await settle { trail(fixture.pane).preview?.info == .read(info(1)) }
+
+    first.apply(.patches([.update(file("a.txt", size: 5))]), at: first.location)
+
+    await settle { reader.calls.count == 2 }
+    #expect(trail(fixture.pane).preview?.entry.size == 5)
+    #expect(trail(fixture.pane).preview?.info == .read(info(1)))
+    #expect(await reader.waitForFinished(2))
+    for _ in 0..<3 { await drainMainQueue() }
+    #expect(trail(fixture.pane).preview?.info == .read(info(1)))
+}
+
+/// A failed read is tried again only once the file's entry changes, not on a patch to another.
+@MainActor @Test func aFailedReadIsReadAgainOnlyOnceItsEntryChanges() async throws {
+    let fixture = await columnPane()
+    let reader = GatedItemInfoReader(["/r/a.txt": nil])
+    reader.releaseAll()
+    fixture.pane.itemInfoReader = reader
+    let first = trail(fixture.pane).columns[0].pane
+    select("a.txt", in: trail(fixture.pane).columns[0])
+    await settle { trail(fixture.pane).preview?.info == .failed }
+
+    first.apply(.patches([.update(file("b.txt"))]), at: first.location)
+    await settle { first.state.names.contains("b.txt") }
+    for _ in 0..<3 { await drainMainQueue() }
+    #expect(reader.calls.count == 1)
+
+    first.apply(.patches([.update(file("a.txt", size: 5))]), at: first.location)
+
+    await settle { reader.calls.count == 2 }
+    #expect(await reader.waitForFinished(2))
+    await settle { trail(fixture.pane).preview?.entry.size == 5 }
+    for _ in 0..<3 { await drainMainQueue() }
+    #expect(trail(fixture.pane).preview?.info == .failed)
+}
+
+@MainActor @Test func aPatchToAnotherEntryKeepsThePreviewsRead() async throws {
+    let fixture = await columnPane()
+    let reader = GatedItemInfoReader(["/r/a.txt": info(1)])
+    reader.releaseAll()
+    fixture.pane.itemInfoReader = reader
+    let first = trail(fixture.pane).columns[0].pane
+    select("a.txt", in: trail(fixture.pane).columns[0])
+    await settle { trail(fixture.pane).preview?.info == .read(info(1)) }
+
+    first.apply(.patches([.update(file("b.txt"))]), at: first.location)
+
+    await settle { first.state.names.contains("b.txt") }
+    for _ in 0..<3 { await drainMainQueue() }
+    #expect(trail(fixture.pane).preview?.info == .read(info(1)))
+    #expect(reader.calls.count == 1)
+}
+
+@MainActor @Test func aPackagesPreviewReadsItsInfoToo() async throws {
+    var folders = tree
+    folders["/r"] = [package("App.app")]
+    let fixture = PaneFixture(at: "/r", folders: folders)
+    await settle { fixture.pane.state.isLoaded }
+    fixture.pane.setViewMode(.column)
+    await settle { trail(fixture.pane).focused.pane.state.isLoaded }
+    let reader = GatedItemInfoReader(["/r/App.app": info(3)])
+    reader.releaseAll()
+    fixture.pane.itemInfoReader = reader
+
+    select("App.app", in: trail(fixture.pane).columns[0])
+
+    await settle { trail(fixture.pane).preview?.info == .read(info(3)) }
+}
+
+@MainActor @Test func aFailedReadShowsAsFailed() async throws {
+    let fixture = await columnPane()
+    let reader = GatedItemInfoReader(["/r/a.txt": nil])
+    reader.releaseAll()
+    fixture.pane.itemInfoReader = reader
+
+    select("a.txt", in: trail(fixture.pane).columns[0])
+
+    await settle { trail(fixture.pane).preview?.info == .failed }
+}
+
+@MainActor @Test func aPreviewReachedByKeysReadsOnlyOnceTheKeysPause() async throws {
+    let clock = ManualClock()
+    let fixture = await keyedPane(clock: clock)
+    let pane = fixture.pane
+    let reader = GatedItemInfoReader(["/k/f0/m.txt": info(1), "/k/f0/n.txt": info(2)])
+    reader.releaseAll()
+    pane.itemInfoReader = reader
+    try press(KeyChord(.right), on: pane)
+    try press(KeyChord(.down), on: pane)
+    try press(KeyChord(.down), on: pane)
+
+    await drainMainQueue()
+    #expect(reader.calls.isEmpty)
+    clock.advance(by: ColumnTrail.openDelay)
+
+    await settle { trail(pane).preview?.info == .read(info(2)) }
+    #expect(reader.calls.map(\.path) == ["/k/f0/n.txt"])
+}
+
+@MainActor @Test func aReadForAFileNoLongerPreviewedIsDropped() async throws {
+    let fixture = await keyedPane(clock: ManualClock())
+    let pane = fixture.pane
+    let reader = GatedItemInfoReader(["/k/f0/m.txt": info(1), "/k/f0/n.txt": info(2)])
+    pane.itemInfoReader = reader
+    let column = trail(pane).columns[1]
+    try click("m.txt", in: column.pane)
+    #expect(await reader.waitForCall("/k/f0/m.txt"))
+
+    try click("n.txt", in: column.pane)
+    reader.release("/k/f0/m.txt")
+    #expect(await reader.waitForFinished(1))
+    for _ in 0..<3 { await drainMainQueue() }
+
+    #expect(trail(pane).preview?.location == Location(path: "/k/f0/n.txt"))
+    #expect(trail(pane).preview?.info == .reading)
+    reader.release("/k/f0/n.txt")
+    await settle { trail(pane).preview?.info == .read(info(2)) }
+}
+
+@MainActor @Test func aReadLandingAfterTheTrailClosesIsDropped() async throws {
+    for closing in ["list mode", "navigation", "pane close"] {
+        let fixture = await columnPane()
+        let pane = fixture.pane
+        let reader = GatedItemInfoReader(["/r/a.txt": info(1)])
+        pane.itemInfoReader = reader
+        let trail = trail(pane)
+        select("a.txt", in: trail.columns[0])
+        #expect(await reader.waitForCall("/r/a.txt"), "\(closing)")
+
+        switch closing {
+        case "list mode": pane.setViewMode(.list)
+        case "navigation": pane.navigate(to: Location(path: "/r/other"))
+        default: pane.close()
+        }
+        reader.releaseAll()
+        #expect(await reader.waitForFinished(1), "\(closing)")
+        for _ in 0..<3 { await drainMainQueue() }
+
+        #expect(trail.preview == nil, "\(closing)")
+    }
+}
+
+@MainActor @Test func aDatalessFileGetsNoRead() async throws {
+    var folders = tree
+    folders["/r"] = [
+        DirectoryEntry(
+            name: "cloud.txt", type: .regular, size: 9, modified: testDate, isHidden: false,
+            isDataless: true)
+    ]
+    let fixture = PaneFixture(at: "/r", folders: folders)
+    await settle { fixture.pane.state.isLoaded }
+    fixture.pane.setViewMode(.column)
+    await settle { trail(fixture.pane).focused.pane.state.isLoaded }
+    let reader = GatedItemInfoReader([:])
+    fixture.pane.itemInfoReader = reader
+
+    select("cloud.txt", in: trail(fixture.pane).columns[0])
+    for _ in 0..<3 { await drainMainQueue() }
+
+    #expect(trail(fixture.pane).preview?.location == Location(path: "/r/cloud.txt"))
+    #expect(trail(fixture.pane).preview?.info == .unread)
+    #expect(reader.calls.isEmpty)
+}
+
+/// A focused pane on a share at `/n` in column mode, showing cached rows that list `a.txt`
+/// while `lister` lists it again on `clock`.
+@MainActor
+private func cachedSharePane(lister: GatedLister, clock: ManualClock) async -> Pane {
+    let share = VolumeIdentity(device: "//me@nas.invalid/n", mountPoint: "/n", kind: .network)
+    let cache = ListingCache(store: nil)
+    await cache.insert(
+        ListingCache.Folder(entries: [file("a.txt")], listedAt: testDate), at: "/n", on: share)
+    let service = ListingService(
+        lister: lister, clock: clock, volumeOf: { _ in share }, cache: cache)
+    let pane = Pane(
+        location: Location(path: "/n"), service: service, systemActions: StubSystemActions(),
+        settings: untouchedSettings(), isFocused: true)
+    await settle { pane.state.isCachedRefreshing }
+    pane.setViewMode(.column)
+    await settle { trail(pane).columns[0].pane.state.isCachedRefreshing }
+    return pane
+}
+
+/// A share that hasn't answered might not: no read waits on it while its rows are cached, slow
+/// or offline.
+@MainActor @Test func aFileOnAShareThatDoesntAnswerGetsNoRead() async throws {
+    let clock = ManualClock()
+    let pane = await cachedSharePane(lister: GatedLister(["/n": .blockForever]), clock: clock)
+    let reader = GatedItemInfoReader([:])
+    pane.itemInfoReader = reader
+    let first = trail(pane).columns[0]
+
+    select("a.txt", in: first)
+    #expect(trail(pane).preview?.info == .unread)
+
+    clock.advance(by: LoadTimeouts.giveUp)
+    await settle { first.pane.state.isOffline }
+    for _ in 0..<3 { await drainMainQueue() }
+
+    #expect(trail(pane).preview?.location == Location(path: "/n/a.txt"))
+    #expect(trail(pane).preview?.info == .unread)
+    #expect(reader.calls.isEmpty)
+}
+
+@MainActor @Test func aFileIsReadOnceItsShareAnswers() async throws {
+    let lister = GatedLister(["/n": .batches([[file("a.txt")]])])
+    let pane = await cachedSharePane(lister: lister, clock: ManualClock())
+    let reader = GatedItemInfoReader(["/n/a.txt": info(4)])
+    reader.releaseAll()
+    pane.itemInfoReader = reader
+    select("a.txt", in: trail(pane).columns[0])
+    #expect(trail(pane).preview?.info == .unread)
+
+    lister.release("/n")
+
+    await settle { trail(pane).preview?.info == .read(info(4)) }
+}
+
+/// A focused pane at `/r` in column mode, waiting out its column-open pause on `clock`, with
+/// `docs` selected by a click and its column still loading: the lister holds `/r/docs` until the
+/// test releases it.
+@MainActor
+private func loadingDocsColumn(clock: ManualClock = ManualClock()) async -> PaneFixture {
+    let fixture = PaneFixture(at: "/r", folders: tree, held: true)
+    fixture.lister.release("/r")
+    await settle { fixture.pane.state.isLoaded }
+    fixture.pane.columnOpenClock = clock
+    fixture.pane.setViewMode(.column)
+    await settle { trail(fixture.pane).focused.pane.state.isLoaded }
+    select("docs", in: trail(fixture.pane).columns[0])
+    #expect(await fixture.lister.waitForCall("/r/docs"))
+    return fixture
+}
+
+@MainActor @Test func rightIntoALoadingColumnSelectsItsFirstRowWhenTheRowsLand() async throws {
+    let clock = ManualClock()
+    let fixture = await loadingDocsColumn(clock: clock)
+    let pane = fixture.pane
+    try press(KeyChord(.right), on: pane)
+    #expect(trail(pane).focusedIndex == 1)
+    #expect(trail(pane).focused.pane.selection.isEmpty)
+
+    fixture.lister.release("/r/docs")
+    fixture.lister.release("/r/docs/sub")
+
+    await settle { trail(pane).columns[1].pane.selection.cursor == ExactName("sub") }
+    // Not a key-made selection: the folder in row 0 opens its column at once, with no wait for
+    // the keys to pause, as → does when the rows are already there.
+    #expect(paths(pane) == ["/r", "/r/docs", "/r/docs/sub"])
+    #expect(trail(pane).focusedIndex == 1)
+    await drainWaits()
+    #expect(clock.waitingSleeps == 0)
+}
+
+/// A selection in the loading column, even one cleared again, ← out of it, a click in another
+/// column, the pane losing the keys, or navigating before its rows land each give up selecting
+/// its first row.
+@MainActor @Test func aSelectionLeftAFocusChangeOrNavigationBeforeTheRowsLandCancelsIt()
+    async throws
+{
+    let cancels: [(String, @MainActor (Pane) throws -> Void)] = [
+        ("select", { pane in select("x.txt", in: trail(pane).columns[1]) }),
+        (
+            "deselect",
+            { pane in
+                select("x.txt", in: trail(pane).columns[1])
+                trail(pane).columns[1].pane.select(Selection())
+            }
+        ),
+        ("blur", { pane in pane.didLoseFocus() }),
+        ("left", { pane in try press(KeyChord(.left), on: pane) }),
+        ("focus", { pane in trail(pane).focus(trail(pane).columns[0]) }),
+        ("navigate", { pane in pane.navigate(to: Location(path: "/r/other")) }),
+    ]
+    for (name, cancel) in cancels {
+        let fixture = await loadingDocsColumn()
+        let pane = fixture.pane
+        try press(KeyChord(.right), on: pane)
+        let docs = trail(pane).focused.pane
+
+        try cancel(pane)
+        fixture.lister.release("/r/docs")
+        fixture.lister.release("/r/other")
+        await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+        await drainMainQueue()
+
+        if name == "navigate" {
+            #expect(paths(pane) == ["/r/other"])
+            #expect(trail(pane).focused.pane.selection.isEmpty)
+        } else {
+            #expect(paths(pane) == ["/r", "/r/docs"], "after \(name)")
+        }
+        #expect(
+            docs.selection.cursor == (name == "select" ? ExactName("x.txt") : nil),
+            "after \(name)")
+    }
+}
+
+/// The first batch of a large folder is the first entries read, sorted among themselves only,
+/// so its first row isn't the folder's; → waits for the full listing.
+@MainActor @Test func rightIntoALargeLoadingFolderSelectsTheFullListingsFirstRow() async throws {
+    let late = (100..<400).map { file("m\($0)") }
+    let early = (100..<200).map { file("a\($0)") }
+    let lister = GatedLister([
+        "/r": .batches([[folder("big")]]), "/r/big": .batches([late, early]),
+    ])
+    lister.release("/r")
+    let pane = Pane(
+        location: Location(path: "/r"), service: ListingService(lister: lister),
+        systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true)
+    await settle { pane.state.isLoaded }
+    pane.setViewMode(.column)
+    await settle { trail(pane).focused.pane.state.isLoaded }
+    select("big", in: trail(pane).columns[0])
+    #expect(await lister.waitForCall("/r/big"))
+    try press(KeyChord(.right), on: pane)
+    let big = trail(pane).focused.pane
+
+    lister.release("/r/big")
+
+    await settle { big.state.isLoaded }
+    await drainMainQueue()
+    #expect(big.selection.cursor == ExactName("a100"))
+}
+
+/// Rows that land empty give up the wait, so a file added later isn't selected.
+@MainActor @Test func rightIntoALoadingFolderThatTurnsOutEmptySelectsNothingLater() async throws {
+    var folders = tree
+    folders["/r"] = [folder("empty")]
+    folders["/r/empty"] = []
+    let fixture = PaneFixture(at: "/r", folders: folders, held: true)
+    fixture.lister.release("/r")
+    let pane = fixture.pane
+    await settle { pane.state.isLoaded }
+    pane.setViewMode(.column)
+    await settle { trail(pane).focused.pane.state.isLoaded }
+    select("empty", in: trail(pane).columns[0])
+    #expect(await fixture.lister.waitForCall("/r/empty"))
+    try press(KeyChord(.right), on: pane)
+    let empty = trail(pane).focused.pane
+
+    fixture.lister.release("/r/empty")
+    await settle { empty.state.isLoaded }
+    empty.apply(.patches([.update(file("n.txt"))]), at: empty.location)
+
+    await settle { empty.state.names == ["n.txt"] }
+    await drainMainQueue()
+    #expect(empty.selection.isEmpty)
+}
+
+/// A folder that can't be listed gives up the wait.
+@MainActor @Test(arguments: [EPERM, EACCES])
+func rightIntoALoadingFolderThatFailsGivesUpTheWait(code: Int32) async throws {
+    let lister = GatedLister([
+        "/r": .batches([[folder("no")]]),
+        "/r/no": .failure(ListingError(path: "/r/no", code: code)),
+    ])
+    lister.release("/r")
+    let pane = Pane(
+        location: Location(path: "/r"), service: ListingService(lister: lister),
+        systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true)
+    await settle { pane.state.isLoaded }
+    pane.setViewMode(.column)
+    await settle { trail(pane).focused.pane.state.isLoaded }
+    select("no", in: trail(pane).columns[0])
+    #expect(await lister.waitForCall("/r/no"))
+    try press(KeyChord(.right), on: pane)
+    let column = trail(pane).focused
+    #expect(column.selectsFirstRowAt != nil)
+
+    lister.release("/r/no")
+
+    await settle { column.pane.state.error != nil }
+    #expect(column.selectsFirstRowAt == nil)
+}
+
+/// Cached rows are a whole listing in the column's sort, so → selects their first row.
+@MainActor @Test func rightIntoAColumnWhoseCachedRowsLandSelectsTheirFirstRow() async throws {
+    let share = VolumeIdentity(device: "//me@nas.invalid/n", mountPoint: "/n", kind: .network)
+    let cache = ListingCache(store: nil)
+    for (path, entries) in ["/n": [folder("docs")], "/n/docs": [file("y.txt"), file("x.txt")]] {
+        await cache.insert(
+            ListingCache.Folder(entries: entries, listedAt: testDate), at: path, on: share)
+    }
+    let lister = GatedLister(["/n": .blockForever, "/n/docs": .blockForever])
+    lister.releaseAll()
+    let service = ListingService(
+        lister: lister, clock: ManualClock(), volumeOf: { _ in share }, cache: cache)
+    let pane = Pane(
+        location: Location(path: "/n"), service: service, systemActions: StubSystemActions(),
+        settings: untouchedSettings(), isFocused: true)
+    await settle { pane.state.isCachedRefreshing }
+    pane.setViewMode(.column)
+    await settle { trail(pane).focused.pane.state.isCachedRefreshing }
+    select("docs", in: trail(pane).columns[0])
+    let docs = trail(pane).columns[1].pane
+    #expect(docs.state.isLoading)
+
+    try press(KeyChord(.right), on: pane)
+
+    await settle { docs.state.isCachedRefreshing }
+    await settle { docs.selection.cursor == ExactName("x.txt") }
 }

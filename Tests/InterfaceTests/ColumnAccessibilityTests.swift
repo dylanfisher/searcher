@@ -76,30 +76,69 @@ private final class Fixture {
     var focusChanges: [Post] { posts.filter { $0.notification == .focusedUIElementChanged } }
 }
 
-@MainActor @Test func theColumnsAreABrowsersChildrenInOrder() async throws {
+/// Each column is followed by its resize grip, and the preview by its own.
+@MainActor @Test func theColumnsAndTheirGripsAreABrowsersChildrenInOrder() async throws {
     let fixture = await Fixture()
     let browser = fixture.controller.columnsView
+    let controller = fixture.controller
 
     #expect(browser.isAccessibilityElement())
     #expect(browser.accessibilityRole() == .browser)
     let children = try #require(browser.accessibilityChildren() as? [NSView])
-    let columns = fixture.controller.columnControllers.map(\.view)
-    #expect(children.count == 3)
-    #expect(zip(children, columns).allSatisfy { $0 === $1 })
+    let expected = try (0..<3).flatMap { index in
+        [
+            controller.columnControllers[index].view,
+            try #require(controller.grip(forColumnAt: index)),
+        ]
+    }
+    #expect(children.count == 6)
+    #expect(zip(children, expected).allSatisfy { $0 === $1 })
 
     await fixture.select("a.txt", inColumn: 0)
 
-    // The file's preview follows the columns.
+    // The file's preview and its grip follow the columns.
     let remaining = try #require(browser.accessibilityChildren() as? [NSView])
-    #expect(remaining.count == 2)
-    #expect(remaining.first === fixture.controller.columnControllers[0].view)
-    #expect(remaining.last === fixture.controller.previewView)
+    #expect(remaining.count == 4)
+    #expect(remaining.first === controller.columnControllers[0].view)
+    #expect(remaining[2] === controller.previewView)
+    #expect(remaining[3] === controller.previewGrip)
 
     await fixture.select("docs", inColumn: 0)
 
     let folders = try #require(browser.accessibilityChildren() as? [NSView])
-    #expect(folders.count == 2)
+    #expect(folders.count == 4)
     #expect(!folders.contains { $0 is ColumnPreviewView })
+    #expect(!folders.contains { $0 === controller.previewGrip })
+}
+
+/// A grip is named for its column's folder, and the preview's for the preview.
+@MainActor @Test func eachGripIsLabeledWithItsColumnsFolderName() async throws {
+    let fixture = await Fixture()
+    let controller = fixture.controller
+
+    let labels = (0..<3).map { controller.grip(forColumnAt: $0)?.accessibilityLabel() }
+
+    #expect(labels == ["r column width", "docs column width", "sub column width"])
+    await fixture.select("one.flac", inColumn: 2)
+    #expect(controller.previewGrip?.accessibilityLabel() == ColumnGripView.previewLabel)
+}
+
+/// VoiceOver resizes the column it is on, and hears the new width.
+@MainActor @Test func aGripsIncrementWidensItsColumnAndReportsTheValue() async throws {
+    let fixture = await Fixture()
+    let controller = fixture.controller
+    let grip = try #require(controller.grip(forColumnAt: 1))
+
+    #expect(grip.accessibilityPerformIncrement())
+
+    let widened = Settings.defaultColumnWidth + ColumnGripView.accessibilityStep
+    #expect(Double(controller.columnControllers[1].view.frame.width) == widened)
+    #expect(grip.accessibilityValue() as? NSNumber == NSNumber(value: widened))
+    #expect(Double(controller.columnControllers[0].view.frame.width) == Settings.defaultColumnWidth)
+    #expect(
+        fixture.posts.contains {
+            ($0.element as? NSView) === grip && $0.notification == .valueChanged
+        })
 }
 
 @MainActor @Test func eachColumnIsLabeledWithItsFolderName() async throws {
@@ -180,18 +219,25 @@ private final class Fixture {
 
 @MainActor @Test func thePreviewIsAGroupNamedForItsFileThatReadsItsFields() async throws {
     let fixture = await Fixture()
+    let reader = GatedItemInfoReader([
+        "/r/docs/x.txt": ItemInfo(created: testDate, lastOpened: testDate, tags: ["Red"])
+    ])
+    reader.releaseAll()
+    fixture.pane.itemInfoReader = reader
 
     await fixture.select("x.txt", inColumn: 1)
 
     let view = try #require(fixture.controller.previewView)
+    await settle { !view.tagsField.isHidden }
     let kind = try #require(fixture.trail.preview?.kind.text)
     #expect(view.isAccessibilityElement())
     #expect(view.accessibilityRole() == .group)
     #expect(view.accessibilityLabel() == "x.txt")
     let fields = try #require(view.accessibilityChildren() as? [NSTextField])
+    let date = formatter.date(testDate)
     #expect(
         fields.map(\.stringValue) == [
-            "x.txt", "\(kind) – 2 MB", "Information", "Size", "2 MB", "Modified",
-            formatter.date(testDate),
+            "x.txt", "\(kind) – 2 MB", "Information", "Size", "2 MB", "Created", date,
+            "Modified", date, "Last opened", date, "Tags", "Red",
         ])
 }

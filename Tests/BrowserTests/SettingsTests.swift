@@ -36,6 +36,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(settings.terminalBundleID == "com.apple.Terminal")
     #expect(!settings.commanderFKeys)
     #expect(settings.hideEmptyOperationsPanel)
+    #expect(settings.columnWidth == 245)
 }
 
 @MainActor @Test func aWrongTypedValueIsDiscardedNotCoerced() throws {
@@ -70,6 +71,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     first.terminalBundleID = "com.googlecode.iterm2"
     first.commanderFKeys = true
     first.hideEmptyOperationsPanel = false
+    first.columnWidth = 312
 
     let relaunched = Settings(defaults: try #require(UserDefaults(suiteName: name)))
     #expect(relaunched.showHidden)
@@ -78,6 +80,38 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(relaunched.terminalBundleID == "com.googlecode.iterm2")
     #expect(relaunched.commanderFKeys)
     #expect(!relaunched.hideEmptyOperationsPanel)
+    #expect(relaunched.columnWidth == 312)
+}
+
+/// A width of another type, a Boolean among them, or one outside the range a grip can drag to
+/// reads as the default and is removed.
+@MainActor @Test func aColumnWidthOfAnotherShapeIsDiscarded() throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let key = Settings.Key.columnWidth.rawValue
+    for stored: Any in [
+        "300", true, Settings.columnWidths.lowerBound - 1, Settings.columnWidths.upperBound + 1,
+        Double.nan,
+    ] {
+        let defaults = temporarySuite(in: folder.url.path)
+        defaults.set(stored, forKey: key)
+
+        let settings = Settings(defaults: defaults)
+
+        #expect(settings.columnWidth == Settings.defaultColumnWidth)
+        #expect(defaults.object(forKey: key) == nil)
+    }
+}
+
+@MainActor @Test func aColumnWidthAtEitherEndOfTheRangeIsKept() throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    for width in [Settings.columnWidths.lowerBound, Settings.columnWidths.upperBound] {
+        let name = folder.url.appending(path: "preferences-\(width)").path
+        Settings(defaults: try #require(UserDefaults(suiteName: name))).columnWidth = width
+
+        let relaunched = Settings(defaults: try #require(UserDefaults(suiteName: name)))
+
+        #expect(relaunched.columnWidth == width)
+    }
 }
 
 @MainActor @Test func aChangeReachesEveryPane() async throws {
@@ -95,6 +129,27 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     await settle {
         left.pane.state.names.contains(".hidden") && right.pane.state.names.contains(".hidden")
     }
+}
+
+/// The suite reads through to the global domain, where the system keeps its Spring-loading
+/// setting; a value in the suite stands in for the system's.
+@MainActor @Test func theSpringLoadingDelayFollowsTheSystemSetting() throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    func delay(enabled: Any?, delay: Any?) -> Duration? {
+        let defaults = temporarySuite(in: folder.url.path)
+        defaults.set(enabled, forKey: Settings.springLoadingEnabledKey)
+        defaults.set(delay, forKey: Settings.springLoadingDelayKey)
+        return Settings(defaults: defaults).springLoadingDelay
+    }
+
+    #expect(delay(enabled: true, delay: 1.25) == .milliseconds(1250))
+    #expect(delay(enabled: true, delay: 0) == .zero)
+    #expect(delay(enabled: false, delay: 1.25) == nil)
+    // Values of another shape read as the system's default, and are left where they are.
+    #expect(delay(enabled: true, delay: "1") == .milliseconds(500))
+    #expect(delay(enabled: true, delay: true) == .milliseconds(500))
+    #expect(delay(enabled: true, delay: -1) == .milliseconds(500))
+    #expect(delay(enabled: "NO", delay: 1.25) == .milliseconds(1250))
 }
 
 @MainActor @Test func theCommanderPresetsHelpSaysTheFKeysNeedFn() {

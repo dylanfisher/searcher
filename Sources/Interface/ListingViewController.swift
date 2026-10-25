@@ -20,6 +20,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     static let notDownloadedLabel = "Not downloaded"
     /// The name cell's badge view, shown only for an entry that isn't downloaded.
     static let notDownloadedBadgeIdentifier = NSUserInterfaceItemIdentifier("notDownloadedBadge")
+    /// The name cell's chevron view in column view, shown only for a folder.
+    static let folderChevronIdentifier = NSUserInterfaceItemIdentifier("folderChevron")
     /// The opacity of a cut entry's cells.
     static let cutAlpha: CGFloat = 0.5
 
@@ -71,6 +73,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     var fileOperations: FileOperationQueue?
     /// Tells a drop whether its items are on the target folder's volume.
     var mountTable: MountTable?
+    /// Opens the folder row a drag hovers over; nil opens none. The pane's lists share one.
+    var springLoader: SpringLoader?
     /// The modifier keys held in the event being handled, read when a click changes the
     /// selection. Tests replace it.
     var currentModifierFlags: @MainActor () -> NSEvent.ModifierFlags = {
@@ -352,6 +356,13 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         for isLocal in [true, false] {
             tableView.setDraggingSourceOperationMask(Self.dragOperations, forLocal: isLocal)
         }
+        tableView.springLoadingOptions = { [weak self] in self?.springLoader?.options ?? [] }
+        tableView.springLoadingActivated = { [weak self] in self?.springLoader?.activate() }
+        tableView.dragExited = { [weak self] in
+            guard let self else { return }
+            springLoader?.dragExited(pane)
+        }
+        tableView.dragEnded = { [weak self] in self?.springLoader?.dragEnded() }
     }
 
     /// What a drag of rows lets its destination do with them.
@@ -475,7 +486,12 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         _ tableView: NSTableView, validateDrop info: any NSDraggingInfo, proposedRow row: Int,
         proposedDropOperation dropOperation: NSTableView.DropOperation
     ) -> NSDragOperation {
-        guard let drop = drop(info, row: row, dropOperation) else { return [] }
+        let drop = drop(info, row: row, dropOperation)
+        springLoader?.hover(
+            over: drop?.folderRow.map {
+                SpringLoader.Target(pane: pane, location: pane.location, name: $0)
+            }, info: info)
+        guard let drop else { return [] }
         if drop.pane != nil, row != -1 || dropOperation != .on {
             tableView.setDropRow(-1, dropOperation: .on)
         }
@@ -526,6 +542,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     }
 
     /// A drop the list takes: the folder it goes into, the pane when that is the pane's folder,
+    /// the folder row's name when it goes into one, which springs open while the drag hovers,
     /// and what it carries.
     private struct Drop {
         enum Content {
@@ -539,6 +556,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
 
         let folder: String
         let pane: Pane?
+        var folderRow: String?
         let content: Content
     }
 
@@ -551,11 +569,13 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         var folder = pane.location
         var target: Pane? = pane
         var app: Location?
+        var folderRow: String?
         if dropOperation == .on, let listing, row >= 0, row < listing.count {
             let kind = listing.kind(atRow: row).type
             if kind == .folder {
                 folder = pane.location.child(named: listing[row].name)
                 target = nil
+                folderRow = listing[row].name
             } else if listing[row].type == .package, kind.conforms(to: .application) {
                 app = pane.location.child(named: listing[row].name)
             }
@@ -577,12 +597,14 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
                     dropping: paths, into: folder.path,
                     allowed: info.draggingSourceOperationMask, mounts: mountTable)
             else { return nil }
-            return Drop(folder: folder.path, pane: target, content: .files(paths, operation))
+            return Drop(
+                folder: folder.path, pane: target, folderRow: folderRow,
+                content: .files(paths, operation))
         }
         guard pasteboard.canReadObject(forClasses: [NSFilePromiseReceiver.self]),
             info.draggingSourceOperationMask.contains(.copy)
         else { return nil }
-        return Drop(folder: folder.path, pane: target, content: .promises)
+        return Drop(folder: folder.path, pane: target, folderRow: folderRow, content: .promises)
     }
 
     /// The context menu for a right-click on `row`, or below the rows at -1. A row outside the
@@ -627,6 +649,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     ) {
         if column == .name {
             cell.imageView?.image = iconCache.icon(for: listing.kind(atRow: row).type)
+            showFolderChevron(listing[row].type == .directory, in: cell)
             showNotDownloadedBadge(listing[row].isDataless, in: cell)
         }
         cell.textField?.stringValue = text(column, row: row, in: listing)
@@ -699,6 +722,13 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// row refilled in place, may have shown another entry's badge.
     private func showNotDownloadedBadge(_ shown: Bool, in cell: NSTableCellView) {
         let badge = Self.badge(in: cell)
+        // Left of the chevron when the cell shows one.
+        let badgeX =
+            cell.bounds.width - 2 - badge.frame.width
+            - (Self.chevron(in: cell).map { $0.isHidden ? 0 : Self.chevronReserve } ?? 0)
+        if badge.frame.minX != badgeX {
+            badge.frame.origin.x = badgeX
+        }
         if shown, badge.image == nil {
             badge.image = iconCache.notDownloadedBadge
         }
@@ -706,15 +736,32 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         Self.fitName(in: cell)
     }
 
+    /// Shows or hides a column name cell's chevron: shown for a folder, not for a file, a package
+    /// or a link, whose target the listing doesn't hold. A list's cell has none. The name is
+    /// fitted after, by `showNotDownloadedBadge`.
+    private func showFolderChevron(_ shown: Bool, in cell: NSTableCellView) {
+        guard let chevron = Self.chevron(in: cell) else { return }
+        chevron.isHidden = !shown
+    }
+
+    private static func chevron(in cell: NSTableCellView) -> NSImageView? {
+        (cell as? ColumnNameCellView)?.chevron
+    }
+
     /// Sets the name's width from the cell's: up to the badge when it shows, else up to the
-    /// trailing padding. Set outright, since autoresizing clamps a width at zero in a column
-    /// narrower than the name and the badge, and widening the column doesn't give that back.
+    /// chevron when it shows, else up to the trailing padding. Set outright, since autoresizing
+    /// clamps a width at zero in a column narrower than the name and the badge, and widening the
+    /// column doesn't give that back.
     private static func fitName(in cell: NSTableCellView) {
         let badge = badge(in: cell)
         guard let textField = cell.textField else {
             preconditionFailure("the name cell has no text field: \(cell.subviews)")
         }
-        let end = badge.isHidden ? cell.bounds.width - 2 : badge.frame.minX - badgeGap
+        let end =
+            badge.isHidden
+            ? (chevron(in: cell).flatMap { $0.isHidden ? nil : $0.frame.minX - badgeGap }
+                ?? cell.bounds.width - 2)
+            : badge.frame.minX - badgeGap
         let width = max(end - textField.frame.minX, 0)
         if textField.frame.width != width {
             textField.frame.size.width = width
@@ -755,17 +802,70 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             width: max(cell.width - Self.nameX - 2, 0), height: cell.height)
     }
 
+    /// The font of every name cell's text, which `makeCell` leaves at a label's default.
+    static let nameFont: NSFont = {
+        guard let font = NSTextField(labelWithString: "").font else {
+            preconditionFailure("a label has no font")
+        }
+        return font
+    }()
+
+    /// What a name's text field adds to the width of its text as `NSString.size(withAttributes:)`
+    /// measures it in `nameFont`: the field's own insets.
+    private static let nameFieldPadding: Double = {
+        let sample = "M"
+        let textWidth = (sample as NSString).size(withAttributes: [.font: nameFont]).width
+        return NSTextField(labelWithString: sample).intrinsicContentSize.width - textWidth
+    }()
+
+    /// The width this column of column view needs to show, whole beside a folder's chevron, a
+    /// name `nameWidth` points wide in `nameFont`, as `NSString.size(withAttributes:)` measures
+    /// it.
+    func columnWidth(fittingNameWidth nameWidth: Double) -> Double {
+        // The table fits its column to the view's width only when it next tiles, which may not
+        // have happened since the column was resized.
+        tableView.sizeLastColumnToFit()
+        let outside = view.frame.width - tableView.tableColumns[0].width
+        // A point over, for the rounding of the field's own width.
+        let field = (nameWidth + Self.nameFieldPadding).rounded(.up) + 1
+        let trailing = Self.badgeGap + Self.chevronWidth + Self.chevronInset
+        return (outside + Self.nameX + field + trailing).rounded(.up)
+    }
+
     /// The icon's side in the Name column, and where the name starts after it.
     private static let iconSize = 16.0
     private static let nameX = 2 + iconSize + 4
 
-    /// The space between a name and its badge.
+    /// The side of the badge, which is also the height of the chevron's view.
+    private static let badgeSize = 16.0
+    /// The space between a name and its badge or chevron.
     private static let badgeGap = 4.0
+    /// The chevron's width, and its distance from the cell's right edge.
+    private static let chevronWidth = 10.0
+    private static let chevronInset = 8.0
+    /// The room a shown chevron takes from the cell's trailing padding, which a badge keeps clear
+    /// of.
+    private static let chevronReserve = chevronWidth + chevronInset - 2 + badgeGap
 
     /// A cell laid out with frames and autoresizing, which costs less per row than constraints.
     private func makeCell(for column: SortColumn) -> NSTableCellView {
         let height = tableView.rowHeight
-        let cell = NSTableCellView(frame: NSRect(x: 0, y: 0, width: column.width, height: height))
+        let frame = NSRect(x: 0, y: 0, width: column.width, height: height)
+        let cell: NSTableCellView
+        if showsNamesOnly, column == .name {
+            let named = ColumnNameCellView(frame: frame, chevronImage: iconCache.folderChevron)
+            let chevron = named.chevron
+            chevron.identifier = Self.folderChevronIdentifier
+            chevron.frame = NSRect(
+                x: column.width - Self.chevronInset - Self.chevronWidth,
+                y: (height - Self.badgeSize) / 2, width: Self.chevronWidth,
+                height: Self.badgeSize)
+            chevron.autoresizingMask = [.minXMargin, .minYMargin, .maxYMargin]
+            chevron.isHidden = true
+            cell = named
+        } else {
+            cell = NSTableCellView(frame: frame)
+        }
         cell.identifier = column.identifier
         var textX = 2.0
         if column == .name {
@@ -793,7 +893,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         if column == .name {
             // At the cell's trailing edge, as Finder draws it. Hidden until an entry needs it.
             // The row's label says the entry isn't downloaded, so the badge isn't read again.
-            let badgeSize = 16.0
+            let badgeSize = Self.badgeSize
             let badge = NSImageView(
                 frame: NSRect(
                     x: column.width - 2 - badgeSize, y: (height - badgeSize) / 2,

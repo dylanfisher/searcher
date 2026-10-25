@@ -40,6 +40,8 @@ fs_rules=(
   'lstat-family|\b(lstat|realpath|opendir|fopen)\('
   'resolving-symlinks|\bresolvingSymlinksInPath\b'
   'bundle-at-path|\bBundle\(\s*(url|path):'
+  # Spotlight's record of one item, read for the column preview's last-opened date.
+  'md-item|\bMDItemCreate\b'
   # URL(fileURLWithPath:) without isDirectory: stats the path to find out. The lookahead walks
   # the call's own arguments, two levels of parentheses deep, looking for the label.
   'url-without-directory|\bURL\(\s*fileURLWithPath:(?!(?:[^()]|\((?:[^()]|\([^()]*\))*\))*?isDirectory:)'

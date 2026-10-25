@@ -428,7 +428,8 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     let file = try #require(menu.items.first { $0.title == "File" }?.submenu)
     #expect(
         file.items.map(\.title) == [
-            "New Window", "New Folder", "New Tab", "Close Tab", "", "Rename", "Duplicate",
+            "New Window", "New Folder", "New Tab", "Close Tab", "", "Get Info", "Rename",
+            "Duplicate",
             "Copy to Other Pane", "Move to Other Pane", "", "Open With",
             "Show Package Contents", "Quick Look",
             "Reveal in Finder",
@@ -452,6 +453,29 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
             SystemCommands.copyPath.id, SystemCommands.revealInFinder.id,
             SystemCommands.openTerminal.id,
         ])
+}
+
+/// Finder's Get Info: in the File menu before Rename, on Cmd-I, and on with nothing selected.
+@MainActor @Test func getInfoHasAFileMenuItemOnCmdIThatIsOnWithNothingSelected() async throws {
+    let registry = try AppCommands.registry()
+    let menu = try buildMenu(registry)
+    let pane = Pane(
+        location: Location(path: "/folder"),
+        service: ListingService(lister: StubLister(["/folder": [file("a")]])),
+        systemActions: StubSystemActions(), settings: untouchedSettings())
+    let controller = PaneViewController(
+        pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
+        tableView: ListingTableView(), monitorsFolders: false)
+    await settle { pane.state.isLoaded }
+    let table = controller.listingViewController.tableView
+
+    let item = try item(for: try keyEvent("i", modifiers: [.command]), in: menu)
+
+    #expect(item.title == "Get Info")
+    #expect(table.validateMenuItem(item))
+    #expect(table.tryToPerform(try #require(item.action), with: item))
+    let actions = try #require(pane.systemActions as? StubSystemActions)
+    #expect(actions.shownInfo == [[URL(fileURLWithPath: "/folder", isDirectory: true)]])
 }
 
 @MainActor @Test func fileMenuRunsFilterWithCmdF() throws {

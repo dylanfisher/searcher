@@ -13,6 +13,9 @@ public protocol SystemActions: AnyObject, Sendable {
     func copyToPasteboard(_ text: String)
     /// Shows `urls` selected in Finder.
     func revealInFinder(_ urls: [URL])
+    /// Opens Finder's Info window for each of `urls` and brings Finder to the front. Asking
+    /// Finder can wait on it, so the request runs off the main thread.
+    func showInfo(_ urls: [URL])
     /// Opens `folder` in the app with `bundleID`, or shows an error naming the bundle ID when no
     /// app on the Mac has it.
     func open(_ folder: URL, inAppWithBundleID bundleID: String)

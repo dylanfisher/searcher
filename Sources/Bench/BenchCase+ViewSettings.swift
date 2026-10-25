@@ -144,6 +144,10 @@ extension BenchCase {
             preconditionFailure("the bench asked to reveal \(urls)")
         }
 
+        func showInfo(_ urls: [URL]) {
+            preconditionFailure("the bench asked for info on \(urls)")
+        }
+
         func open(_ folder: URL, inAppWithBundleID bundleID: String) {
             preconditionFailure("the bench asked to open \(folder.path) in \(bundleID)")
         }

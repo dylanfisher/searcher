@@ -28,7 +28,10 @@ extension. Finder treats a package as one file everywhere except Show Package Co
   when keys selected it, as for a file (0094); → does nothing.
 - **A link to a package opens as a file.** Homebrew links casks into /Applications, and Finder
   launches the app such a link points to. Before Open lists a link as a folder (`openLink`), the
-  pane asks `DirectoryLister.isPackage(followingLinksAt:)` off the main thread: it resolves the
+  pane asks `DirectoryLister.isPackage(followingLinksAt:)` off the main thread (amended
+  2026-10-24: on a `BlockingCallThread`, not a global dispatch queue, as
+  [0038](0038-slow-volumes.md) requires of a call that can block on a share; see
+  [0095](0095-preview-metadata.md)): it resolves the
   link with `realpath` and applies the rule to the target's own name and Finder info, since the
   link's name needn't have the extension. A link to a package goes to the system; any other
   link is listed as before, and a target that can't be read is left to that listing to report.

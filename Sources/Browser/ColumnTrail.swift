@@ -28,6 +28,11 @@ public final class ColumnTrail {
     /// The one file or package selected in the last column, shown to its right; nil for a
     /// folder, a link, several rows or none. It isn't a column: it lists, watches and takes the keys for nothing.
     public private(set) var preview: ColumnPreview?
+    /// The read of the preview's info, while it runs.
+    private var infoRead: Task<Void, Never>?
+    /// The entry, as the preview's column lists it, that the preview's info was read for or is
+    /// being read for; nil when there is no read.
+    private var readEntry: DirectoryEntry?
 
     /// One column at `location` with `name` selected, sorted like `model`: the owner when the
     /// trail starts from the list, the focused column of the trail it replaces otherwise.
@@ -41,8 +46,14 @@ public final class ColumnTrail {
 
     /// → : moves into the column of the folder selected in the focused one, opening it at once
     /// if it waits for the keys to pause, and selects its first row if nothing there is
-    /// selected. Does nothing else when no folder is selected.
+    /// selected, or once the whole folder's rows arrive if they haven't yet. Does nothing else
+    /// when no folder is selected.
     public func moveRight() {
+        moveRight(selectingFirstRow: true)
+    }
+
+    /// → , selecting the first row of the column it moves into only if `selectingFirstRow`.
+    private func moveRight(selectingFirstRow: Bool) {
         let wasHeld = focused.held != nil
         if wasHeld {
             follow(focused)
@@ -54,8 +65,9 @@ public final class ColumnTrail {
         }
         focus(focusedIndex + 1)
         let pane = focused.pane
-        if pane.selection.isEmpty, pane.state.listing.map({ $0.count > 0 }) == true {
-            pane.selectFirstRow()
+        if selectingFirstRow, pane.selection.isEmpty {
+            focused.selectsFirstRowAt = pane.selectionVersion
+            selectFirstRowIfWanted(in: focused)
         }
         owner.trailDidChange()
     }
@@ -65,6 +77,7 @@ public final class ColumnTrail {
     /// Does nothing at `/`. A column waiting for the keys to pause gives up the wait, so the
     /// folder selected in it opens no column until → or another selection.
     public func moveLeft() {
+        focused.selectsFirstRowAt = nil
         focused.held?.wait?.cancel()
         focused.held?.wait = nil
         if focusedIndex > 0 {
@@ -99,8 +112,8 @@ public final class ColumnTrail {
     }
 
     /// Show Package Contents on the package `name` in `pane`'s column: adds the package's column
-    /// right of it and moves into it, as Open does for a folder. The column stays while the
-    /// package stays selected (`follow`).
+    /// right of it and moves into it, as Open does for a folder, selecting nothing in it, as
+    /// Finder does. The column stays while the package stays selected (`follow`).
     func openPackage(named name: String, from pane: Pane) {
         guard let index = index(of: pane) else { return }
         // A command opens at once: the column stops waiting for the keys to pause.
@@ -111,18 +124,19 @@ public final class ColumnTrail {
                 isFocused: false))
         updatePreview()
         if index != focusedIndex { focus(index) }
-        moveRight()
+        moveRight(selectingFirstRow: false)
     }
 
-    /// Closes every column.
+    /// Closes every column, and drops the preview and the read of its info.
     func close() {
         for column in columns { column.close() }
         columns = []
-        preview = nil
+        setPreview(nil, in: nil)
     }
 
     /// Moves the focus to the column at `index`, without listing anything again.
     private func focus(_ index: Int) {
+        focused.selectsFirstRowAt = nil
         focused.pane.isFocused = false
         focusedIndex = index
         focused.pane.isFocused = owner.isFocused
@@ -157,6 +171,7 @@ public final class ColumnTrail {
     private func columnDidChange(_ column: Column) {
         // A closed column can still report a change it was making.
         guard columns.contains(where: { $0 === column }) else { return }
+        if selectFirstRowIfWanted(in: column) { return }
         if column.pane.selectionIsFromKeys,
             column.followedSelectionVersion != column.pane.selectionVersion
         {
@@ -166,6 +181,47 @@ public final class ColumnTrail {
         }
         updatePreview()
         owner.trailDidChange()
+    }
+
+    /// Selects the first row of `column` once it shows the whole folder, when → moved into it
+    /// and its selection hasn't changed since. A first batch isn't the whole folder: its first
+    /// row needn't be the folder's, and the selection, by name, would stay on it. Rows that
+    /// arrive empty, or a folder that can't be listed, give up the wait. Returns whether it
+    /// selected: that selection reports its own change, which the columns follow at once,
+    /// since no key made it.
+    @discardableResult
+    private func selectFirstRowIfWanted(in column: Column) -> Bool {
+        guard let version = column.selectsFirstRowAt else { return false }
+        let pane = column.pane
+        switch pane.state {
+        case .denied, .failed:
+            column.selectsFirstRowAt = nil
+            return false
+        case .loading, .partial, .loaded, .cachedRefreshing, .slow, .offline:
+            break
+        }
+        guard version == pane.selectionVersion else {
+            column.selectsFirstRowAt = nil
+            return false
+        }
+        guard Self.showsWholeFolder(pane.state), let listing = pane.state.listing else {
+            return false
+        }
+        column.selectsFirstRowAt = nil
+        guard listing.count > 0, pane.selection.isEmpty else { return false }
+        pane.selectFirstRow()
+        return pane.selectionVersion != version
+    }
+
+    /// Whether `state`'s rows are the whole folder in its sort, so their first row is the
+    /// folder's: a full listing or cached rows, kept or not, but not a first batch.
+    private static func showsWholeFolder(_ state: ListingState) -> Bool {
+        switch state {
+        case .loaded, .cachedRefreshing: true
+        case .slow(let kept), .offline(let kept):
+            kept.map { $0.isComplete || $0.listedAt != nil } ?? false
+        case .loading, .partial, .denied, .failed: false
+        }
     }
 
     /// Drops the columns right of `column` that its key-made selection no longer asks for, and
@@ -222,11 +278,76 @@ public final class ColumnTrail {
     /// keys to pause, a preview of another file is cleared and the new one waits too.
     private func updatePreview() {
         guard let last = columns.last else {
-            preview = nil
+            setPreview(nil, in: nil)
             return
         }
         let next = previewed(in: last.pane)
-        preview = last.held != nil && next?.location != preview?.location ? nil : next
+        setPreview(
+            last.held != nil && next?.location != preview?.location ? nil : next, in: last.pane)
+    }
+
+    /// Shows `next`, a file in `pane`, as the preview. The file shown already, with the entry it
+    /// had, keeps what was read of it, or the read running for it, through patches to other
+    /// entries. Another file drops that read. A file not read yet, or whose entry changed, as a
+    /// file saved by replacing it does, is read; a changed file shows what was read of it until
+    /// the new read lands. There is no read when the file's contents aren't on this Mac or `pane`
+    /// shows rows its volume hasn't answered with: cached, slow or offline
+    /// (0095-preview-metadata.md).
+    private func setPreview(_ next: ColumnPreview?, in pane: Pane?) {
+        guard var next, let pane else {
+            cancelInfoRead()
+            preview = nil
+            return
+        }
+        if let preview, preview.location == next.location {
+            next.info = preview.info
+        } else {
+            cancelInfoRead()
+            next.info = .unread
+        }
+        guard readEntry != next.entry else {
+            preview = next
+            return
+        }
+        cancelInfoRead()
+        if !next.entry.isDataless, pane.state.isAnswered {
+            if next.info == .unread { next.info = .reading }
+            startInfoRead(of: next.location, entry: next.entry)
+        } else {
+            next.info = .unread
+        }
+        preview = next
+    }
+
+    /// Reads the info of `entry`, the file at `location`, with the owner's reader, through the
+    /// listing service, which runs it on a thread of its own with at most one read in flight on a
+    /// share (docs/decisions/0038-slow-volumes.md). The result lands only if the read wasn't
+    /// cancelled and the file is still the preview.
+    private func startInfoRead(of location: Location, entry: DirectoryEntry) {
+        let service = owner.service
+        let reader = owner.itemInfoReader
+        let path = location.path
+        readEntry = entry
+        infoRead = Task { [weak self] in
+            let info: ItemInfo?
+            do {
+                info = try await service.readInfo(at: path, with: reader)
+            } catch {
+                // Cancelled before it started: the preview moved on.
+                return
+            }
+            guard let self, !Task.isCancelled, preview?.location == location else { return }
+            infoRead = nil
+            preview?.info = info.map { .read($0) } ?? .failed
+            owner.trailDidChange()
+        }
+    }
+
+    /// Stops the read of the preview's info; its result never lands.
+    private func cancelInfoRead() {
+        infoRead?.cancel()
+        infoRead = nil
+        readEntry = nil
     }
 
     /// The preview of the one file selected in `pane`; nil for a folder, a link, several rows

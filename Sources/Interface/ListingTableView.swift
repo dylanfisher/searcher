@@ -6,7 +6,7 @@ import Browser
 /// selection rather than the table's own. A main menu item for a command runs it here, so it acts
 /// on the pane whose table has focus, and AppKit disables it when no table has focus.
 @MainActor
-class ListingTableView: NSTableView, NSMenuItemValidation {
+class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestination {
     /// Where a key's chord is looked up.
     var registry = CommandRegistry()
     /// Runs a command for this table's pane: one a key or menu item found in `registry`, or Open
@@ -51,6 +51,13 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
     /// Counts mouse presses in the table, so the selection changes of one press are one step of
     /// the pane's selection history.
     var pressCount = 0
+    /// What a drag over the table hands its list's spring loading: AppKit's options for the row
+    /// it is over, Space or a force click, the drag leaving the table and the drag ending over
+    /// it. Set by the list's controller.
+    var springLoadingOptions: @MainActor () -> NSSpringLoadingOptions = { [] }
+    var springLoadingActivated: @MainActor () -> Void = {}
+    var dragExited: @MainActor () -> Void = {}
+    var dragEnded: @MainActor () -> Void = {}
     /// Signals a key that does nothing. Tests replace it.
     var beep: @MainActor () -> Void = { NSSound.beep() }
 
@@ -175,6 +182,36 @@ class ListingTableView: NSTableView, NSMenuItemValidation {
         let row = row(at: convert(event.locationInWindow, from: nil))
         guard row >= 0, !selectedRowIndexes.contains(row) else { return }
         selectRowIndexes([row], byExtendingSelection: false)
+    }
+
+    // MARK: Spring loading
+
+    func springLoadingEntered(_ draggingInfo: any NSDraggingInfo) -> NSSpringLoadingOptions {
+        springLoadingOptions()
+    }
+
+    func springLoadingUpdated(_ draggingInfo: any NSDraggingInfo) -> NSSpringLoadingOptions {
+        springLoadingOptions()
+    }
+
+    func springLoadingActivated(_ activated: Bool, draggingInfo: any NSDraggingInfo) {
+        if activated {
+            springLoadingActivated()
+        }
+    }
+
+    /// The drop highlight on the row already shows where the drag is, as Finder shows it; the
+    /// spring-loading highlight adds nothing to it.
+    func springLoadingHighlightChanged(_ draggingInfo: any NSDraggingInfo) {}
+
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+        super.draggingExited(sender)
+        dragExited()
+    }
+
+    /// `NSTableView` doesn't answer `draggingEnded`, so there is no `super` to call.
+    override func draggingEnded(_ sender: any NSDraggingInfo) {
+        dragEnded()
     }
 
     override func becomeFirstResponder() -> Bool {

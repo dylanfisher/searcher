@@ -1176,3 +1176,92 @@ private struct FailsAfterABatchLister: Lister {
     await settle { !ended.all.isEmpty }
     #expect(log.updates.isEmpty)
 }
+
+// MARK: - Info reads
+
+/// A service whose mount table has share A at `/a` on the local disk at `/`.
+private func infoService() -> ListingService {
+    ListingService(
+        lister: StubLister([:]), volumeOf: volume(of:), mountedVolumes: { [shareA, disk] })
+}
+
+private let someInfo = ItemInfo(created: testDate, lastOpened: nil, tags: ["Red"])
+
+/// A share serves one blocking read at a time (0038), so an info read stuck there holds one
+/// thread and the next waits for it without one; local reads don't wait behind it.
+@Test func infoReadsOnAShareRunOneAtATimeOnThreadsOfTheirOwn() async throws {
+    let service = infoService()
+    let reader = GatedItemInfoReader([
+        "/a/1": someInfo, "/a/2": someInfo, "/l/1": someInfo, "/l/2": someInfo,
+    ])
+    func read(_ path: String) -> Task<ItemInfo?, any Error> {
+        Task { try await service.readInfo(at: path, with: reader) }
+    }
+    var reads = [read("/a/1")]
+    #expect(await reader.waitForCall("/a/1"))
+    reads += ["/a/2", "/l/1", "/l/2"].map(read)
+    #expect(await reader.waitForCall("/l/1"))
+    #expect(await reader.waitForCall("/l/2"))
+
+    #expect(await !reader.waitForCall("/a/2", timeout: 0.3))
+
+    reader.release("/a/1")
+    #expect(await reader.waitForCall("/a/2"))
+    reader.releaseAll()
+    for read in reads { #expect(try await read.value == someInfo) }
+    #expect(reader.calls.allSatisfy { $0.onBlockingCallThread })
+}
+
+@Test func aWaitingInfoReadThatIsCancelledNeverReads() async throws {
+    let service = infoService()
+    let reader = GatedItemInfoReader(["/a/1": someInfo, "/a/2": someInfo, "/a/3": nil])
+    let first = Task { try await service.readInfo(at: "/a/1", with: reader) }
+    #expect(await reader.waitForCall("/a/1"))
+    let waiting = Task { try await service.readInfo(at: "/a/2", with: reader) }
+    try await Task.sleep(for: .milliseconds(50))
+
+    waiting.cancel()
+
+    await #expect(throws: CancellationError.self) { try await waiting.value }
+    reader.release("/a/1")
+    #expect(try await first.value == someInfo)
+    reader.releaseAll()
+    // The next read on the share gets the slot, and a read that fails returns nil.
+    #expect(try await service.readInfo(at: "/a/3", with: reader) == nil)
+    #expect(reader.calls.map(\.path) == ["/a/1", "/a/3"])
+    await settle { service.infoReads.isIdle }
+}
+
+@MainActor @Test func aReadThatThrowsFreesTheSlotForTheReadWaitingBehindIt() async throws {
+    let service = infoService()
+    let reader = GatedItemInfoReader(["/a/1": nil, "/a/2": someInfo])
+    let failing = Task { try await service.readInfo(at: "/a/1", with: reader) }
+    #expect(await reader.waitForCall("/a/1"))
+    let waiting = Task { try await service.readInfo(at: "/a/2", with: reader) }
+    #expect(await !reader.waitForCall("/a/2", timeout: 0.2))
+
+    reader.release("/a/1")
+
+    #expect(try await failing.value == nil)
+    #expect(await reader.waitForCall("/a/2"))
+    reader.releaseAll()
+    #expect(try await waiting.value == someInfo)
+    await settle { service.infoReads.isIdle }
+}
+
+/// A task cancelled before its read enters the volume's queue never reads, and leaves nothing
+/// behind.
+@MainActor @Test func aReadCancelledBeforeItEntersNeverReads() async throws {
+    let service = infoService()
+    let reader = GatedItemInfoReader(["/a/1": someInfo])
+    reader.releaseAll()
+    let read = Task {
+        withUnsafeCurrentTask { $0?.cancel() }
+        return try await service.readInfo(at: "/a/1", with: reader)
+    }
+
+    await #expect(throws: CancellationError.self) { try await read.value }
+
+    #expect(reader.calls.isEmpty)
+    await settle { service.infoReads.isIdle }
+}

@@ -618,21 +618,57 @@ private func packageLinkTree() async throws -> (Pane, StubSystemActions, Tempora
     #expect(pane.location.path == root.url.path)
 }
 
-/// Holds `pane`'s package checks on a suspended queue of their own; `resume` lets them run.
-@MainActor
-private func holdLinkChecks(of pane: Pane) -> DispatchQueue {
-    let held = DispatchQueue(label: "held link checks")
-    held.suspend()
-    pane.linkCheckQueue = held
-    return held
+/// A pane's package checks, held until `resume` lets them read, as the real check reads.
+private final class HeldLinkChecks: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var isHeld = true
+    private var finished = 0
+
+    func check(_ path: String) -> Bool {
+        condition.withLock {
+            while isHeld { condition.wait() }
+        }
+        let isPackage = DirectoryLister.isPackage(followingLinksAt: path)
+        condition.withLock {
+            finished += 1
+            condition.broadcast()
+        }
+        return isPackage
+    }
+
+    func suspend() {
+        condition.withLock { isHeld = true }
+    }
+
+    func resume() {
+        condition.withLock {
+            isHeld = false
+            condition.broadcast()
+        }
+    }
+
+    /// Suspends until `count` checks have read, and their answers have reached the main actor.
+    @MainActor
+    func finish(_ count: Int) async {
+        let deadline = Date(timeIntervalSinceNow: 5)
+        while condition.withLock({ finished < count }) {
+            guard Date() < deadline else {
+                Issue.record("\(count) link checks didn't finish")
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(2))
+        }
+        await drainMainQueue()
+        await Task.yield()
+    }
 }
 
-/// Waits until a released check has run on `held` and its answer has reached the main actor.
+/// Holds `pane`'s package checks; `resume` lets them run.
 @MainActor
-private func finishChecks(on held: DispatchQueue) async {
-    await withCheckedContinuation { continuation in held.async { continuation.resume() } }
-    await drainMainQueue()
-    await Task.yield()
+private func holdLinkChecks(of pane: Pane) -> HeldLinkChecks {
+    let held = HeldLinkChecks()
+    pane.linkIsPackage = { held.check($0) }
+    return held
 }
 
 /// A navigation, a second Open or closing the pane while a link's check is pending cancels the
@@ -658,7 +694,8 @@ private func finishChecks(on held: DispatchQueue) async {
 
     held.resume()
     await settle { pane.location.name == "plain link" && pane.state.isLoaded }
-    await finishChecks(on: held)
+    // The first Open's, the app link's and the plain link's.
+    await held.finish(3)
     #expect(actions.openedFiles.isEmpty)
 
     held.suspend()
@@ -669,7 +706,7 @@ private func finishChecks(on held: DispatchQueue) async {
     pane.close()
     #expect(!pane.isCheckingLink)
     held.resume()
-    await finishChecks(on: held)
+    await held.finish(4)
 
     #expect(actions.openedFiles.isEmpty)
     #expect(pane.location.path == root.url.path)
@@ -1344,4 +1381,141 @@ private func goBackWithBatchesHeld(_ pane: Pane, to root: String) async -> Listi
     #expect(await goBackWithBatchesHeld(pane, to: root) == .size(bytes: 42, isPartial: false))
     await settle { bigSize(pane) == .size(bytes: 84, isPartial: false) }
     #expect(walks.startedPaths == [root + "/big", root + "/big"])
+}
+
+// MARK: Spring-loaded folders
+
+/// `/root` holds the folders `docs` and `more` and the files `a.txt` and `b.txt`; `/root/docs`
+/// holds the folder `sub`.
+@MainActor
+private func springPane() async -> PaneFixture {
+    let fixture = PaneFixture(
+        at: "/root",
+        folders: [
+            "/root": [folder("docs"), folder("more"), file("a.txt"), file("b.txt")],
+            "/root/docs": [folder("sub"), file("x.txt")],
+            "/root/docs/sub": [file("y.txt")],
+            "/root/more": [file("m.txt")],
+            "/elsewhere": [],
+        ])
+    await settle { fixture.pane.state.isLoaded }
+    return fixture
+}
+
+@MainActor @Test func springingInTheListGoesIntoTheFolderAndBackWithTheSelectionAndHistory()
+    async throws
+{
+    let fixture = await springPane()
+    let pane = fixture.pane
+    fixture.select("a.txt", "b.txt")
+    let canUndo = pane.canUndoSelection
+
+    pane.springOpen("docs")
+    #expect(pane.location.path == "/root/docs")
+    await settle { pane.state.isLoaded }
+    pane.springOpen("sub")
+    #expect(pane.location.path == "/root/docs/sub")
+    pane.springBack()
+
+    #expect(pane.location.path == "/root")
+    #expect(!pane.canGoBack)
+    await settle { pane.state.isLoaded }
+    #expect(fixture.selectedNames == ["a.txt", "b.txt"])
+    #expect(pane.selection.cursor == ExactName("b.txt"))
+    #expect(pane.canUndoSelection == canUndo)
+}
+
+/// Leaving a folder clears its filter; going back puts it back. Neither the sprung folders nor
+/// the way back count as visits for the palette.
+@MainActor @Test func goingBackFromASpringKeepsTheFilterAndCountsNoVisit() async throws {
+    let fixture = await springPane()
+    let pane = fixture.pane
+    let visits = FolderVisits(store: nil)
+    pane.countVisits(in: visits)
+    pane.setFilter("o")
+    await settle { pane.state.names == ["docs", "more"] }
+
+    pane.springOpen("docs")
+    #expect(pane.filter.text == "")
+    await settle { pane.state.isLoaded }
+    pane.springOpen("sub")
+    pane.springBack()
+
+    #expect(pane.filter.text == "o")
+    await settle { pane.state.isLoaded && pane.state.names == ["docs", "more"] }
+    #expect(visits.history.folders.mapValues(\.count) == ["/root": 1])
+}
+
+@MainActor @Test func aColumnMovedAfterTheSpringKeepsWhatItWasMovedTo() async throws {
+    let fixture = await springPane()
+    let pane = fixture.pane
+    pane.setViewMode(.column)
+    let trail = try #require(pane.columnTrail)
+    await settle { trail.focused.pane.state.isLoaded }
+    let first = trail.columns[0].pane
+
+    first.springOpen("docs")
+    #expect(trail.columns.map(\.pane.location.path) == ["/root", "/root/docs"])
+    // A click in the first column during the drag.
+    first.select(Selection([ExactName("more")], cursor: ExactName("more")))
+    first.springBack()
+
+    #expect(trail.columns.map(\.pane.location.path) == ["/root", "/root/more"])
+    #expect(first.selection.cursor == ExactName("more"))
+}
+
+@MainActor @Test func aPaneMovedAfterTheSpringStaysWhereItWasMoved() async throws {
+    let fixture = await springPane()
+    let pane = fixture.pane
+
+    pane.springOpen("docs")
+    pane.navigate(to: Location(path: "/elsewhere"))
+    pane.springBack()
+
+    #expect(pane.location.path == "/elsewhere")
+    // The drag's origin is gone with it: a second end does nothing either.
+    pane.goBack()
+    pane.springBack()
+    #expect(pane.location.path == "/root/docs")
+}
+
+@MainActor @Test func goingBackWithNoSpringDoesNothing() async throws {
+    let fixture = await springPane()
+
+    fixture.pane.springBack()
+
+    #expect(fixture.pane.location.path == "/root")
+    #expect(!fixture.pane.canGoBack)
+}
+
+@MainActor @Test func springingInAColumnSelectsTheFolderAndGoesBackToTheTrailItHad()
+    async throws
+{
+    let fixture = await springPane()
+    let pane = fixture.pane
+    pane.setViewMode(.column)
+    let trail = try #require(pane.columnTrail)
+    await settle { trail.focused.pane.state.isLoaded }
+    let first = trail.columns[0].pane
+    first.select(Selection([ExactName("more")], cursor: ExactName("more")))
+    await settle { trail.columns.count == 2 && trail.columns[1].pane.state.isLoaded }
+    trail.columns[1].pane.select(Selection([ExactName("m.txt")], cursor: ExactName("m.txt")))
+    trail.moveRight()
+    #expect(trail.focusedIndex == 1)
+    let canUndo = first.canUndoSelection
+
+    first.springOpen("docs")
+    await settle { trail.columns.count == 2 && trail.columns[1].pane.state.isLoaded }
+    #expect(trail.columns.map(\.pane.location.path) == ["/root", "/root/docs"])
+    #expect(first.canUndoSelection == canUndo)
+    trail.columns[1].pane.springOpen("sub")
+    #expect(trail.columns.map(\.pane.location.path) == ["/root", "/root/docs", "/root/docs/sub"])
+    trail.columns[2].pane.springBack()
+
+    #expect(trail.columns.map(\.pane.location.path) == ["/root", "/root/more"])
+    #expect(first.selection.cursor == ExactName("more"))
+    #expect(trail.columns[1].pane.selection.cursor == ExactName("m.txt"))
+    #expect(trail.focusedIndex == 1)
+    #expect(first.canUndoSelection == canUndo)
+    #expect(pane.location.path == "/root/more")
 }

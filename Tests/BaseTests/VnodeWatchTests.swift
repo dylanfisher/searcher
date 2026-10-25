@@ -57,6 +57,16 @@ import Testing
         #expect(changed.all.isEmpty)
     }
 
+    @Test func aDescriptorNumberReusedForAPipeCountsAsClosed() throws {
+        var ends: [Int32] = [0, 0]
+        #expect(pipe(&ends) == 0)
+        defer {
+            for end in ends { close(end) }
+        }
+
+        #expect(descriptorIsClosed(ends[0], wasAt: "/some/folder"))
+    }
+
     @Test func missingFolderThrowsNotFound() {
         #expect(throws: ListingError(path: "/no/such/folder", code: ENOENT)) {
             try VnodeWatch(path: "/no/such/folder") {}

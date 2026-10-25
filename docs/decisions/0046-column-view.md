@@ -22,12 +22,17 @@ stacked single-column tables over `NSBrowser`.
   `visibleRowCount`) is the list's code. Row labels read the cells the table has and format the
   kind, size and date from the entry for the columns it doesn't.
 - **`ColumnViewController`** lays the columns out with frames in a horizontal scroll view, 240
-  points each with a separator line after each. On every change of the pane it keeps one
+  points each with a separator line after each (superseded 2026-10-24: each column has its own
+  width, 245 points for a new one, see [0096](0096-column-widths.md)). On every change of the pane it keeps one
   controller per column, matched by pane, so a column's table and its scroll position survive
   → and ←; it adds a controller for each new column and starts its folder monitor, and drops the
   controllers of closed columns. When the focus or the column count changes it scrolls the
   focused column into view, with the column right of it where that fits; a selection change
-  inside a column doesn't scroll.
+  inside a column doesn't scroll. (Superseded 2026-10-24: the scroll is animated, 0.25 seconds
+  through the clip view's animator, which a new target retargets from where it is, so a held →
+  or ← never queues one. The rows and the selection are set before it starts, so B6 doesn't
+  change. It jumps for the first show, a new trail with no column kept (a restore, a workspace,
+  a Go to folder), a resizing drag and Reduce Motion.)
 - **`PaneViewController`** holds the list and the columns in the same place and shows one by the
   pane's view mode. It builds `CommandContext` with `commandPane`, the filter field calls
   `setFilter` on it, and Quick Look toggles the focused column's controller. The path bar and Go
@@ -47,6 +52,12 @@ stacked single-column tables over `NSBrowser`.
 - **View menu.** as List (Cmd-1) and as Columns (Cmd-3) head the View menu, with a check mark on
   the pane's mode. The check comes from `CommandBinding.isCurrent`, which reads the pane through
   the command context, since view mode is per pane while `isChecked` reads app-wide `Settings`.
+- **Spring-loaded folders** (amended 2026-10-24). A drag that hovers over a folder row in a
+  column selects the folder once the system's spring-loading delay passes, so its column opens
+  to the right at once, without the keys' pause, and the drag can go on into it. The selection
+  is no step of the selection history. Once the drag ends, each column still in the trail takes
+  back the selection it had and the focus goes back to its column. See
+  [0099](0099-get-info-and-spring-loading.md).
 
 ## Alternatives considered
 
@@ -63,11 +74,31 @@ stacked single-column tables over `NSBrowser`.
 
 ## Consequences
 
-Columns are a fixed 240 points wide and can't be resized. There is no preview column
+Columns are a fixed 240 points wide and can't be resized (superseded 2026-10-24: a grip at the
+bottom of each column's right edge resizes it, Option-drag resizes every column and a double-click
+fits the widest name; a new column is 245 points, Finder's width, or the width the last
+Option-drag or Option-double-click set, see [0096](0096-column-widths.md)). There is no preview column
 (superseded 2026-10-24: one selected file in the last column shows a preview to its right, see
 [0090](0090-preview-column.md)). A folder row shows no disclosure
-chevron. A column whose folder can't be listed shows an empty table with no message; only the
-spinner is per column ([0053](0053-column-accessibility.md)). A column's table carries the list's
+chevron (superseded 2026-10-24: a folder row shows Finder's right-aligned `chevron.right`, a
+template that is white on a selected row in the focused column and secondary gray otherwise;
+files, packages and links show none, since the listing holds no link target and resolving one
+would be a read, and a name is fitted to end before the chevron). A column whose folder can't be
+listed shows an empty table with no message; only the spinner is per column ([0053](0053-column-accessibility.md)).
+(Superseded 2026-10-24: a column with no rows to show says why in its middle, in the list's
+words from `PaneViewController.message(for:)`, `AccessDeniedView` and `PaneStatusText`. Denied
+shows the access explanation and its button, since the fix is Searcher's Full Disk Access, which
+Finder doesn't need. Failed and missing show the list's error line. Slow and offline with no rows
+kept show the status note, which the path bar shows only for the focused column; with rows kept
+they show the rows, as the list does. A filter that matches nothing shows the list's line. An
+empty folder's column is blank and a loading one shows only its spinner, as in Finder. →
+into a column whose rows haven't arrived selects its first row once the whole folder's rows
+do: a full listing or cached rows, not a first batch, whose first row needn't be the folder's.
+It selects without the key flag, so a folder there opens its column at once. A selection in that
+column, ←, a focus change, the pane losing the keys or navigating first gives that up, as do
+rows that land empty and a folder that can't be listed. Show Package Contents selects nothing
+in the package's column, as in Finder. VoiceOver doesn't read a column's message yet: the browser's
+children are the columns only.) A column's table carries the list's
 `ListingViewController`, so changes to the list's rows reach columns too; a change meant for the
 list only has to check `showsNamesOnly`.
 

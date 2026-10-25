@@ -1,0 +1,110 @@
+import AppKit
+import Testing
+
+@testable import Interface
+
+/// A left-mouse event at `x` in the window's coordinates, as AppKit hands it to the grip.
+@MainActor
+func gripEvent(
+    _ type: NSEvent.EventType, x: Double, option: Bool = false, clicks: Int = 1
+) -> NSEvent {
+    guard
+        let event = NSEvent.mouseEvent(
+            with: type, location: NSPoint(x: x, y: 4), modifierFlags: option ? .option : [],
+            timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: clicks,
+            pressure: 1)
+    else { preconditionFailure("AppKit made no \(type) event") }
+    return event
+}
+
+/// Drags `grip` `offset` points to the right, Option held or not, as a press, one move and a
+/// release.
+@MainActor
+func drag(_ grip: ColumnGripView, by offset: Double, option: Bool = false) {
+    grip.mouseDown(with: gripEvent(.leftMouseDown, x: 100, option: option))
+    grip.mouseDragged(with: gripEvent(.leftMouseDragged, x: 100 + offset, option: option))
+    grip.mouseUp(with: gripEvent(.leftMouseUp, x: 100 + offset, option: option))
+}
+
+/// Double-clicks `grip`, Option held or not, as AppKit sends it: a click, then a press with a
+/// click count of two.
+@MainActor
+func doubleClick(_ grip: ColumnGripView, option: Bool = false) {
+    grip.mouseDown(with: gripEvent(.leftMouseDown, x: 100, option: option))
+    grip.mouseUp(with: gripEvent(.leftMouseUp, x: 100, option: option))
+    grip.mouseDown(with: gripEvent(.leftMouseDown, x: 100, option: option, clicks: 2))
+    grip.mouseUp(with: gripEvent(.leftMouseUp, x: 100, option: option, clicks: 2))
+}
+
+/// What a grip reported, in order.
+@MainActor
+private final class GripLog {
+    var calls: [String] = []
+    var width = 245.0
+
+    func attach(to grip: ColumnGripView) {
+        grip.beginResize = { [unowned self] all in calls.append("begin \(all)") }
+        grip.resize = { [unowned self] offset in calls.append("resize \(offset)") }
+        grip.endResize = { [unowned self] in calls.append("end") }
+        grip.fit = { [unowned self] all in calls.append("fit \(all)") }
+        grip.width = { [unowned self] in width }
+        grip.setWidth = { [unowned self] width in self.width = width }
+    }
+}
+
+@MainActor @Test func aDragReportsItsOffsetFromWhereItStarted() {
+    let grip = ColumnGripView(frame: NSRect(origin: .zero, size: ColumnGripView.size))
+    let log = GripLog()
+    log.attach(to: grip)
+
+    drag(grip, by: -30)
+    drag(grip, by: 12, option: true)
+
+    #expect(
+        log.calls == ["begin false", "resize -30.0", "end", "begin true", "resize 12.0", "end"])
+}
+
+/// The first click of a double-click starts and ends a drag that moves nothing; the second fits.
+@MainActor @Test func aDoubleClickFitsAndOptionFitsEveryColumn() {
+    let grip = ColumnGripView(frame: NSRect(origin: .zero, size: ColumnGripView.size))
+    let log = GripLog()
+    log.attach(to: grip)
+
+    doubleClick(grip)
+    doubleClick(grip, option: true)
+
+    #expect(
+        log.calls == ["begin false", "end", "fit false", "begin true", "end", "fit true"])
+}
+
+@MainActor @Test func theGripIsASplitterWhoseValueIsTheWidth() {
+    let grip = ColumnGripView(frame: NSRect(origin: .zero, size: ColumnGripView.size))
+    let log = GripLog()
+    log.attach(to: grip)
+    grip.setAccessibilityLabel(ColumnGripView.label(forColumnNamed: "docs"))
+
+    #expect(grip.isAccessibilityElement())
+    #expect(grip.accessibilityRole() == .splitter)
+    #expect(grip.accessibilityOrientation() == .vertical)
+    #expect(grip.accessibilityLabel() == "docs column width")
+    #expect(grip.accessibilityValue() as? NSNumber == 245)
+    #expect(grip.accessibilityValueDescription() == "245 points")
+
+    #expect(grip.accessibilityPerformIncrement())
+    #expect(log.width == 245 + ColumnGripView.accessibilityStep)
+    #expect(grip.accessibilityPerformDecrement())
+    #expect(log.width == 245)
+    grip.setAccessibilityValue(NSNumber(value: 300))
+    #expect(log.width == 300)
+}
+
+/// A width that isn't a finite number stops the app, as a value of the wrong type does, rather
+/// than lay the columns out at NaN.
+@Test func aWidthThatIsNotFiniteFailsLoudly() async {
+    await #expect(processExitsWith: .failure) {
+        await MainActor.run {
+            let grip = ColumnGripView(frame: NSRect(origin: .zero, size: ColumnGripView.size))
+            grip.setAccessibilityValue(NSNumber(value: Double.nan))
+        }
+    }
+}

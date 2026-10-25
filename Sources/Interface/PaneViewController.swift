@@ -88,6 +88,15 @@ public final class PaneViewController: NSViewController {
         }
     }
 
+    /// Opens the folder rows a drag hovers over, in the list and in every column. Tests give it
+    /// a clock of their own.
+    var springLoader: SpringLoader {
+        didSet {
+            listingViewController.springLoader = springLoader
+            columnViewController.springLoader = springLoader
+        }
+    }
+
     /// Draws a ring around the pane, for the pane with the keys while another pane shows.
     var showsFocus = false {
         didSet {
@@ -177,7 +186,12 @@ public final class PaneViewController: NSViewController {
             pane: pane, iconCache: iconCache, formatter: formatter, tableView: tableView)
         columnViewController = ColumnViewController(
             pane: pane, iconCache: iconCache, formatter: formatter)
+        springLoader = SpringLoader(delay: { [settings = pane.settings] in
+            settings.springLoadingDelay
+        })
         super.init(nibName: nil, bundle: nil)
+        listingViewController.springLoader = springLoader
+        columnViewController.springLoader = springLoader
         prepare(tableView)
         columnViewController.prepareTable = { [weak self] table in self?.prepare(table) }
         columnViewController.startMonitor = { [weak self] column in
@@ -520,29 +534,35 @@ public final class PaneViewController: NSViewController {
         filterBar.announceResult(count: listing.count, query: pane.filter.text)
     }
 
-    /// The access explanation or the message over the list. Columns show neither: the pane's own
-    /// state holds no rows in column mode.
+    /// The access explanation or the message over the list. In column mode each column shows its
+    /// own (`ColumnViewController`): the pane's own state holds no rows there.
     private func showState() {
         accessDeniedView.isHidden = true
         messageLabel.isHidden = true
         guard pane.viewMode == .list else { return }
+        if case .denied = pane.state { accessDeniedView.isHidden = false }
+        if let message = Self.message(for: pane) {
+            messageLabel.stringValue = message
+            messageLabel.isHidden = false
+        }
+    }
+
+    /// The line over `pane`'s rows: no rows match the filter, or why the folder couldn't be
+    /// listed. Nil for a denied folder, which shows the access explanation, and for every state
+    /// that shows its rows. Each column of column view shows its own.
+    static func message(for pane: Pane) -> String? {
         switch pane.state {
         case .loaded(let listing) where listing.count == 0 && !listing.filter.isEmpty:
             // The pane's text as typed: "Port" after "port" folds the same and filters nothing
             // again, but the message follows the field.
             let query = listing.filter == pane.filter ? pane.filter.text : listing.filter.text
-            messageLabel.stringValue = FilterBarView.noMatchMessage(query)
-            messageLabel.isHidden = false
+            return FilterBarView.noMatchMessage(query)
         // The cached, slow and offline states show their rows; their notes are the status
         // view's.
-        case .loading, .partial, .loaded, .cachedRefreshing, .slow, .offline:
-            break
-        case .denied:
-            accessDeniedView.isHidden = false
+        case .loading, .partial, .loaded, .cachedRefreshing, .slow, .offline, .denied:
+            return nil
         case .failed(let error):
-            messageLabel.stringValue =
-                pane.state.missingFolder.map(Self.missingMessage) ?? error.description
-            messageLabel.isHidden = false
+            return pane.state.missingFolder.map(missingMessage) ?? error.description
         }
     }
 
