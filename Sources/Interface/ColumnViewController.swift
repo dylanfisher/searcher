@@ -318,6 +318,7 @@ final class ColumnViewController: NSViewController {
             layoutColumns()
         }
         grip.fit = { [weak self] allColumns in self?.fit(target, allColumns: allColumns) }
+        grip.scrollTarget = { [weak self] location in self?.scrollView(under: location) }
         grip.width = { [weak self] in self?.width(of: target) ?? 0 }
         grip.setWidth = { [weak self, weak grip] width in
             guard let self, let grip, self.width(of: target) != nil else { return }
@@ -364,6 +365,17 @@ final class ColumnViewController: NSViewController {
             pane.setColumnWidth(width, of: shown.pane)
         case .preview: pane.setPreviewWidth(width)
         }
+    }
+
+    /// The scroll view of the column or the shown preview at `location`, in the window's
+    /// coordinates, a separator line counting as the view left of it; nil past them all.
+    private func scrollView(under location: NSPoint) -> NSView? {
+        let x = columnsView.convert(location, from: nil).x
+        var views = columnControllers.map { (frame: $0.view.frame, scrollView: $0.view) }
+        if let previewView, !previewView.isHidden {
+            views.append((previewView.frame, previewView.scrollView))
+        }
+        return views.first { $0.frame.minX <= x && x < $0.frame.maxX + 1 }?.scrollView
     }
 
     private static func clamped(_ width: Double) -> Double {

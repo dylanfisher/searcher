@@ -1518,6 +1518,32 @@ private func hit(_ point: NSPoint, in fixture: Fixture) -> NSView? {
     }
 }
 
+/// A vertical scroll over a grip goes to the scroll view of the column under the pointer: the
+/// column left of the separator over the line and its left side, the column or the preview right
+/// of it over its right side.
+@MainActor @Test func aGripScrollsTheColumnUnderThePointer() async throws {
+    let fixture = await Fixture()
+    await fixture.openThreeColumns()
+    await fixture.select("one.flac", inColumn: 2)
+    let controller = fixture.controller
+    let columns = controller.columnsView
+    let preview = try #require(controller.previewView)
+    func target(_ grip: ColumnGripView?, atX x: (NSRect) -> Double) throws -> NSView? {
+        let grip = try #require(grip)
+        let point = NSPoint(x: x(grip.frame), y: grip.frame.midY)
+        return grip.scrollTarget(columns.convert(point, to: nil))
+    }
+
+    let first = controller.grip(forColumnAt: 0)
+    #expect(try target(first) { $0.minX + 0.5 } === controller.columnControllers[0].view)
+    #expect(try target(first) { $0.midX } === controller.columnControllers[0].view)
+    #expect(try target(first) { $0.maxX - 0.5 } === controller.columnControllers[1].view)
+    let last = controller.grip(forColumnAt: 2)
+    #expect(try target(last) { $0.maxX - 0.5 } === preview.scrollView)
+    #expect(try target(controller.previewGrip) { $0.minX + 0.5 } === preview.scrollView)
+    #expect(try target(controller.previewGrip) { $0.maxX - 0.5 } == nil)
+}
+
 /// At the far right the last grip, and the preview's, fit inside the columns' view, so their
 /// right halves take clicks too.
 @MainActor @Test func theLastGripFitsInsideTheColumnsViewAndTakesClicks() async throws {

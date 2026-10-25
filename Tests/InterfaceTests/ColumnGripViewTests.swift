@@ -79,6 +79,105 @@ private final class GripLog {
         log.calls == ["begin false", "end", "fit false", "begin true", "end", "fit true"])
 }
 
+/// A pixel scroll event of `dx` and `dy` points, in a gesture's `phase` or its momentum's, as a
+/// trackpad sends it; with neither, a mouse wheel's click.
+@MainActor
+func scrollEvent(
+    dx: Int32 = 0, dy: Int32 = 0, phase: CGScrollPhase? = nil,
+    momentum: CGMomentumScrollPhase? = nil
+) throws -> NSEvent {
+    let cgEvent = try #require(
+        CGEvent(
+            scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: dy, wheel2: dx,
+            wheel3: 0))
+    if let phase {
+        cgEvent.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
+    }
+    if let momentum {
+        cgEvent.setIntegerValueField(
+            .scrollWheelEventMomentumPhase, value: Int64(momentum.rawValue))
+    }
+    if phase != nil || momentum != nil {
+        cgEvent.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+    }
+    return try #require(NSEvent(cgEvent: cgEvent))
+}
+
+/// A view that records the scroll events it gets, as their vertical deltas.
+@MainActor
+private final class ScrollLog: NSView {
+    var deltas: [Double] = []
+    override func scrollWheel(with event: NSEvent) { deltas.append(event.scrollingDeltaY) }
+}
+
+/// Vertical scrolling over the grip goes to the column under it, as if the grip weren't there;
+/// horizontal scrolling goes up to the columns' scroll view, as anywhere over the columns. A
+/// trackpad gesture goes to one of them from its first move through its momentum.
+@MainActor @Test func aVerticalScrollGoesToTheColumnUnderTheGrip() throws {
+    let columns = ScrollLog()
+    let column = ScrollLog()
+    let grip = ColumnGripView(
+        frame: NSRect(x: 0, y: 0, width: ColumnGripView.thickness, height: 40))
+    columns.addSubview(grip)
+    grip.scrollTarget = { _ in column }
+
+    // A vertical gesture, which drifts sideways once it moves.
+    for event in [
+        try scrollEvent(phase: .mayBegin), try scrollEvent(dy: 10, phase: .began),
+        try scrollEvent(dx: 8, dy: 2, phase: .changed), try scrollEvent(phase: .ended),
+        try scrollEvent(dy: 6, momentum: .begin), try scrollEvent(dy: 3, momentum: .continuous),
+        try scrollEvent(momentum: .end),
+    ] {
+        grip.scrollWheel(with: event)
+    }
+    #expect(column.deltas == [10, 2, 0, 6, 3, 0])
+    #expect(columns.deltas == [0])
+
+    // A horizontal one.
+    columns.deltas = []
+    column.deltas = []
+    for event in [
+        try scrollEvent(dx: 10, phase: .began), try scrollEvent(dx: 1, dy: 7, phase: .changed),
+        try scrollEvent(phase: .ended),
+    ] {
+        grip.scrollWheel(with: event)
+    }
+    #expect(columns.deltas == [0, 7, 0])
+    #expect(column.deltas.isEmpty)
+
+    // A mouse wheel's clicks, each on its own.
+    columns.deltas = []
+    grip.scrollWheel(with: try scrollEvent(dy: 4))
+    grip.scrollWheel(with: try scrollEvent(dx: 4))
+    #expect(column.deltas == [4])
+    #expect(columns.deltas == [0])
+}
+
+/// The grip is made 0 points tall and laid out later; its cursor rect, the pointer's
+/// `resizeLeftRight`, is reset for every new size, so it covers the grip's full height.
+@MainActor @Test func theCursorRectFollowsTheGripsSize() throws {
+    let window = CursorRectLog(
+        contentRect: NSRect(x: 0, y: 0, width: 100, height: 100), styleMask: .borderless,
+        backing: .buffered, defer: true)
+    let grip = ColumnGripView(frame: NSRect(x: 0, y: 0, width: ColumnGripView.thickness, height: 0))
+    try #require(window.contentView).addSubview(grip)
+    window.invalidated = []
+
+    grip.frame = NSRect(x: 10, y: 0, width: ColumnGripView.thickness, height: 100)
+
+    #expect(window.invalidated.contains { $0 === grip })
+}
+
+/// A window, never shown, that records the views whose cursor rects it was told to reset.
+@MainActor
+private final class CursorRectLog: NSWindow {
+    var invalidated: [NSView] = []
+    override func invalidateCursorRects(for view: NSView) {
+        invalidated.append(view)
+        super.invalidateCursorRects(for: view)
+    }
+}
+
 /// As in Finder, the grip draws no "||" handle and doesn't cover the separator: every pixel it
 /// draws is clear, so the separator line under it shows.
 @MainActor @Test func theGripDrawsNothing() throws {

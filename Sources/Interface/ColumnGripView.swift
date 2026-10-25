@@ -31,10 +31,16 @@ final class ColumnGripView: NSView {
     var width: @MainActor () -> Double = { 0 }
     /// Resizes the column alone, as a plain drag does, for VoiceOver.
     var setWidth: @MainActor (Double) -> Void = { _ in }
+    /// The view a vertical scroll at a point in the window's coordinates goes to: the column or
+    /// preview under it; nil past them. A horizontal scroll goes up to the columns' scroll view.
+    var scrollTarget: @MainActor (_ locationInWindow: NSPoint) -> NSView? = { _ in nil }
 
     /// Where the drag in progress started, in the window's coordinates; nil when there is none,
     /// as after a double-click.
     private var dragStartX: Double?
+    /// The column or preview the scroll gesture in progress goes to; nil when it goes up to the
+    /// columns' scroll view, or the column closed during it.
+    private weak var scrolling: NSView?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -49,6 +55,30 @@ final class ColumnGripView: NSView {
 
     override func resetCursorRects() {
         addCursorRect(bounds, cursor: .resizeLeftRight)
+    }
+
+    /// The grip is laid out after it is made, and AppKit doesn't reset a view's cursor rects
+    /// when its size changes.
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        window?.invalidateCursorRects(for: self)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        // A trackpad gesture goes to one view from its first move through its momentum, as
+        // AppKit sends a gesture to the view it began over; a wheel's click has no phase and
+        // goes on its own. A gesture's touch before it moves goes up, as a horizontal one does.
+        if event.phase == .mayBegin {
+            scrolling = nil
+        } else if event.phase == .began || (event.phase.isEmpty && event.momentumPhase.isEmpty) {
+            let isVertical = abs(event.scrollingDeltaY) > abs(event.scrollingDeltaX)
+            scrolling = isVertical ? scrollTarget(event.locationInWindow) : nil
+        }
+        if let scrolling {
+            scrolling.scrollWheel(with: event)
+        } else {
+            super.scrollWheel(with: event)
+        }
     }
 
     override func mouseDown(with event: NSEvent) {

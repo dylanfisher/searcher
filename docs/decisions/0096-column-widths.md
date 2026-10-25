@@ -9,14 +9,15 @@ Column view's columns were a fixed 240 points ([0046](0046-column-view.md)), and
 the same width ([0090](0090-preview-column.md)). Finder lets each column be resized by the "||"
 grip at the bottom of its right edge (corrected 2026-10-24 by Dylan, below: Finder's whole
 separator takes the drag and it shows no handle). Finder's own preferences
-(`defaults read com.apple.finder`, `StandardViewOptions` ▸ `ColumnViewOptions`) hold one `ColumnWidth`, 245, for the columns new
-windows get. `NSBrowser`, whose behavior Finder's column view follows, documents the gestures: a
-drag resizes one column, Option switches to resizing every column together, and a double-click
-right-sizes, one column plain and every column at one width with Option
-(`prefersAllColumnUserResizing`, `browser:sizeToFitWidthOfColumn:` in `NSBrowser.h`). B6 (16 ms
-key to frame) and B10 (no main-thread stall over 50 ms) hold while the user resizes, and the
-session and workspace files ([0080](0080-restore-at-launch.md), [0081](0081-restored-network-panes.md),
-[0088](0088-workspace-snapshots.md)) must not drift from what the window shows.
+(`defaults read com.apple.finder`, `StandardViewOptions` ▸ `ColumnViewOptions`) hold one
+`ColumnWidth`, 245, for the columns new windows get. `NSBrowser`, whose behavior Finder's column
+view follows, documents the gestures: a drag resizes one column, Option switches to resizing
+every column together, and a double-click right-sizes, one column plain and every column at one
+width with Option (`prefersAllColumnUserResizing`, `browser:sizeToFitWidthOfColumn:` in
+`NSBrowser.h`). B6 (16 ms key to frame) and B10 (no main-thread stall over 50 ms) hold while the
+user resizes, and the session and workspace files ([0080](0080-restore-at-launch.md),
+[0081](0081-restored-network-panes.md), [0088](0088-workspace-snapshots.md)) must not drift from
+what the window shows.
 
 Amended 2026-10-24 from Dylan's use of the first version: "you should be able to drag the whole
 bar in column mode, not just the little thing in the bottom, and don't show the divider icon in
@@ -33,7 +34,11 @@ grip, the double-click and the default below are the amended ones.
   and there is no "||" handle, as in Finder. The pointer anywhere over it is `resizeLeftRight`.
   The preview has its own grip at its right edge; it is hidden with the preview. The grips stay
   above the columns, which each overlaps by 3 points, so a click 4 points or more from the line
-  reaches the column's rows.
+  reaches the column's rows. A vertical scroll over a grip goes to the column or preview under
+  the pointer (the one left of the line over the line itself), a horizontal one to the columns'
+  scroll view, as over the columns; a trackpad gesture is sent to one of them from its first move
+  through its momentum. The grip resets its cursor rect when its size changes, since it is laid
+  out after it is made.
 - **Drag.** A drag resizes its column alone; the columns right of it move. An Option-drag resizes
   every column and the preview to the dragged column's new width, and on release sets
   `Settings.columnWidth`, the width new columns get. A plain drag leaves that default alone.
