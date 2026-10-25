@@ -79,6 +79,32 @@ private struct Fixture {
     #expect(result.score == FuzzyMatcher("b").score(FuzzyMatcher.Candidate("b.txt")))
 }
 
+/// A folder gets no bonus over a file: at an equal score the shorter name ranks first, then the
+/// row the pane shows first.
+@MainActor @Test func aFolderAndAFileOfEqualMatchRankByLengthThenPaneOrder() async throws {
+    let fixture = await Fixture(entries: [file("ab1.txt"), file("ab2"), folder("ab3")])
+    await fixture.search("ab")
+
+    let scores = Set(fixture.palette.results.map(\.score))
+    try #require(scores.count == 1, "\(fixture.palette.results.map { ($0.item.title, $0.score) })")
+    #expect(fixture.titles == ["ab2", "ab3", "ab1.txt"])
+}
+
+@MainActor @Test func aCancelledSourceHandsOverNothingMore() async throws {
+    let fixture = PaneFixture(
+        at: "/root", folders: ["/root": (0..<500).map { file(String(format: "f%03d", $0)) }])
+    await settle { fixture.pane.state.isLoaded }
+    let source = EntrySource(pane: fixture.pane)
+    var handedOver: [Int] = []
+    source.gather("") { handedOver.append($0.count) }
+
+    source.cancel()
+    await source.handOver?.value
+
+    #expect(source.preparing?.isCancelled == true)
+    #expect(handedOver == [Palette.limit])
+}
+
 @MainActor @Test func choosingAFolderSelectsItAloneWithoutOpeningIt() async throws {
     let fixture = await Fixture()
     await fixture.search("docs")
