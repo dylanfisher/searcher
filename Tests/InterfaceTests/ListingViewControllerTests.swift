@@ -633,10 +633,8 @@ private func docsAndFiles(in table: ListingTableView) async -> ListingViewContro
     #expect(fixture.opened.isEmpty)
 }
 
-/// A guard on how the table reports AppKit's own Cmd-click toggles, not a test of the click: a
-/// real click can't be sent, since `NSTableView.mouseDown` tracks the press in a nested run loop
-/// that stops the main run loop the test runner's async main runs on, and the test process exits.
-/// It sets the rows a Cmd-click on `docs` and then a second one would leave selected, and checks
+/// A guard on how the table reports AppKit's own Cmd-click toggles, not a test of the click (a
+/// real one is `ListingTableView.realPress`, which BrowserWindowControllerTests uses). It sets the rows a Cmd-click on `docs` and then a second one would leave selected, and checks
 /// the pane takes them without running a command or opening a tab.
 @MainActor @Test func aCmdClickOnARowStillTogglesItsSelection() async throws {
     let fixture = await DoubleClickFixture()

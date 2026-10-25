@@ -1186,6 +1186,13 @@ private struct PressFixture {
                 clickCount: 1, pressure: 1))
     }
 
+    /// Orders the window in on the second display, which a real press needs: a window that isn't
+    /// shown drops the events sent to it.
+    func show() {
+        SecondDisplay.orderFront(fixture.window)
+        fixture.window.contentView?.layoutSubtreeIfNeeded()
+    }
+
     /// Whether the left pane has the focus and its table the keys, which is what AppKit draws a
     /// selection emphasized by (a window that is shown and key aside).
     var isFocusedWithKeys: Bool {
@@ -1196,7 +1203,7 @@ private struct PressFixture {
 @MainActor @Test func aMouseDownInTheOtherPaneSelectsAndFocusesBeforeMouseUp() async throws {
     let press = try await PressFixture()
 
-    press.table.selectOnFirstPress(try press.mouseDown(on: 1))
+    press.table.selectOnPress(try press.mouseDown(on: 1))
 
     #expect(press.isFocusedWithKeys)
     #expect(press.table.selectedRowIndexes == [1])
@@ -1210,7 +1217,7 @@ func aModifiedPressInTheOtherPaneFocusesItAndLeavesTheSelectionToAppKit(
 ) async throws {
     let press = try await PressFixture()
 
-    press.table.selectOnFirstPress(try press.mouseDown(on: 1, modifiers: modifiers))
+    press.table.selectOnPress(try press.mouseDown(on: 1, modifiers: modifiers))
 
     #expect(press.isFocusedWithKeys)
     #expect(press.table.selectedRowIndexes.isEmpty)
@@ -1220,19 +1227,75 @@ func aModifiedPressInTheOtherPaneFocusesItAndLeavesTheSelectionToAppKit(
     let press = try await PressFixture()
     press.table.selectRowIndexes([0, 1], byExtendingSelection: false)
 
-    press.table.selectOnFirstPress(try press.mouseDown(on: 1))
+    press.table.selectOnPress(try press.mouseDown(on: 1))
 
     #expect(press.isFocusedWithKeys)
     #expect(press.table.selectedRowIndexes == [0, 1])
 }
 
-@MainActor @Test func aPressInTheFocusedPaneIsLeftToAppKit() async throws {
+@MainActor @Test func aPressInTheFocusedPaneSelectsItsRowBeforeMouseUpToo() async throws {
     let press = try await PressFixture()
     #expect(press.fixture.window.makeFirstResponder(press.table))
 
-    press.table.selectOnFirstPress(try press.mouseDown(on: 1))
+    press.table.selectOnPress(try press.mouseDown(on: 1))
 
-    #expect(press.table.selectedRowIndexes.isEmpty)
+    #expect(press.table.selectedRowIndexes == [1])
+}
+
+/// The cases below press with a real `NSTableView.mouseDown` (`ListingTableView.realPress`) and
+/// read the table at each change of its selection, with whether the button was still down.
+@MainActor @Test func aRealPressInTheOtherPaneSelectsItsRowWhileTheButtonIsDown() async throws {
+    let press = try await PressFixture()
+    press.show()
+    defer { press.fixture.window.orderOut(nil) }
+
+    let shots = try press.table.realPress(onRow: 1)
+
+    let held = try #require(shots.filter(\.buttonIsDown).last)
+    #expect(held.hasKeys)
+    #expect(held.rows == [1])
+    #expect(held.drawnRows == [1])
+    let listing = try #require(press.leftPane.state.listing)
+    #expect(press.leftPane.selection.rows(in: listing) == [1])
+}
+
+@MainActor @Test func aRealPressReplacesTheOtherPanesOldSelectionWhileTheButtonIsDown() async throws
+{
+    let press = try await PressFixture()
+    press.show()
+    defer { press.fixture.window.orderOut(nil) }
+    press.leftPane.select(Selection([ExactName("docs")], cursor: ExactName("docs")))
+    await settle { press.leftPane.selection.isSettled }
+    press.table.selectRowIndexes([0], byExtendingSelection: false)
+
+    let shots = try press.table.realPress(onRow: 1)
+
+    let held = try #require(shots.filter(\.buttonIsDown).last)
+    #expect(held.rows == [1])
+    #expect(held.drawnRows == [1])
+}
+
+@MainActor @Test func aRealPressInsideTheSelectionLeavesItsRowsForADrag() async throws {
+    let press = try await PressFixture()
+    press.show()
+    defer { press.fixture.window.orderOut(nil) }
+    press.table.selectRowIndexes([0, 1], byExtendingSelection: false)
+
+    let shots = try press.table.realPress(onRow: 1)
+
+    #expect(shots.filter(\.buttonIsDown).allSatisfy { $0.rows == [0, 1] })
+    #expect(press.table.window?.firstResponder === press.table)
+}
+
+@MainActor @Test func aRealShiftPressInTheOtherPaneLeavesTheRowsToAppKit() async throws {
+    let press = try await PressFixture()
+    press.show()
+    defer { press.fixture.window.orderOut(nil) }
+
+    let shots = try press.table.realPress(onRow: 1, modifiers: .shift)
+
+    #expect(shots.filter(\.buttonIsDown).isEmpty)
+    #expect(press.table.window?.firstResponder === press.table)
 }
 
 // MARK: Keys while the sidebar has them
