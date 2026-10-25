@@ -1699,6 +1699,28 @@ private func shownWidths(_ pane: Pane) -> [Double] {
     #expect(fixture.selectedNames == ["a.txt", "b.txt"])
 }
 
+/// A row deleted while Go to Item was open: choosing it leaves the selection, the scroll and the
+/// selection history as they were.
+@MainActor @Test func aJumpToANameTheRowsNoLongerListChangesNothing() async throws {
+    let fixture = await PaneFixture.loaded()
+    fixture.select("a.txt")
+    fixture.select("b.txt")
+    fixture.pane.apply(.patches([.remove(name: "docs")]), at: fixture.pane.location)
+    await settle { fixture.pane.state.names == ["a.txt", "b.txt"] }
+    let selection = fixture.pane.selection
+    let centering = fixture.pane.centeringRequest
+    var changes = 0
+    fixture.pane.onChange = { changes += 1 }
+
+    fixture.pane.jump(to: "docs")
+
+    #expect(fixture.pane.selection == selection)
+    #expect(fixture.pane.centeringRequest == centering)
+    #expect(changes == 0)
+    fixture.pane.undoSelection()
+    #expect(fixture.selectedNames == ["a.txt"])
+}
+
 @MainActor @Test func aJumpToTheRowAlreadySelectedStillAsksForItToBeCentered() async throws {
     let fixture = await PaneFixture.loaded()
     fixture.select("docs")

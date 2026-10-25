@@ -27,8 +27,9 @@ matcher ([0079](0079-fuzzy-match.md)) and the highlighting. Type-to-select
   listing has them when the palette opens: hidden entries and the filter as the pane shows them,
   in its sort. Nothing nested and no file-system call. Each item is titled with the name, its kind
   beside it, and its row shows the type's icon, as the list does. The listing is a snapshot: a
-  row that arrives while the palette is open isn't listed, and choosing one that left selects
-  nothing.
+  row that arrives while the palette is open isn't listed, and choosing one that has left the
+  rows since does nothing: the selection, the scroll and the selection history stay as they
+  were.
 - **Ranking: the match alone.** Entries are a kind of their own with no kind or frecency bonus,
   so they fall in one bucket and `FuzzyMatcher.best` ranks them by score, then the shorter name,
   then pane order. Frecency counts folders visited, not rows chosen, and a bonus for folders over
