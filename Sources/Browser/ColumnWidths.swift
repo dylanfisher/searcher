@@ -102,3 +102,17 @@ extension ColumnWidths: Equatable {
             && a.folders.allSatisfy { b.width(of: $0.location) == $0.width }
     }
 }
+
+/// The stored column widths a decode dropped, with why, for the store to report. A decoder
+/// that is given one in its `userInfo` under `key` adds to it; TabState drops a pane's bad widths
+/// either way (0098-column-widths-per-window.md).
+final class DroppedColumnWidths: @unchecked Sendable {
+    static let key = CodingUserInfoKey(rawValue: "DroppedColumnWidths")!
+
+    /// One line per pane whose widths were dropped.
+    private(set) var reasons: [String] = []
+
+    func add(_ reason: String) {
+        reasons.append(reason)
+    }
+}

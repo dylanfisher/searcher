@@ -249,7 +249,9 @@ public actor WorkspaceStore {
 
     /// The file at `url`, decoded; nil when there is none or it can't be read, and when it isn't
     /// exactly what its decoded value encodes to, which deletes it. That comparison catches a
-    /// key a type doesn't declare, which decoding alone ignores, anywhere in the file.
+    /// key a type doesn't declare, which decoding alone ignores, anywhere in the file. A pane's
+    /// column widths of another shape are dropped alone: the rest loads, and the file is written
+    /// again without them and reported (0098-column-widths-per-window.md).
     private func read<Value: Codable>(_ type: Value.Type, from url: URL) -> Value? {
         let data: Data
         do {
@@ -261,18 +263,55 @@ public actor WorkspaceStore {
             return nil
         }
         do {
-            let value = try JSONDecoder().decode(type, from: data)
-            let stored = try JSONSerialization.jsonObject(with: data) as? NSObject
-            let expected = try JSONSerialization.jsonObject(with: Self.encoder.encode(value))
-            guard let stored, stored.isEqual(expected) else {
+            let dropped = DroppedColumnWidths()
+            let decoder = JSONDecoder()
+            decoder.userInfo[DroppedColumnWidths.key] = dropped
+            let value = try decoder.decode(type, from: data)
+            let encoded = try Self.encoder.encode(value)
+            let expected = try JSONSerialization.jsonObject(with: encoded)
+            var stored = try JSONSerialization.jsonObject(with: data)
+            if !dropped.reasons.isEmpty {
+                stored = Self.removing("columnWidths", absentFrom: expected, in: stored)
+            }
+            guard let stored = stored as? NSObject, stored.isEqual(expected) else {
                 discard(url, because: "it has keys or values its \(type) doesn't keep")
                 return nil
+            }
+            if !dropped.reasons.isEmpty {
+                // Written back without them, so they are dropped and reported once.
+                store(value, to: url)
+                report(
+                    StoreProblem(
+                        file: url, kind: .widthsDropped,
+                        reason: dropped.reasons.joined(separator: "; ")))
             }
             return value
         } catch {
             discard(url, because: "\(error)")
             return nil
         }
+    }
+
+    /// `stored`, a decoded JSON value, without each `key` that the same place in `expected` lacks,
+    /// so a file whose column widths a decode dropped still has every other key checked.
+    private static func removing(_ key: String, absentFrom expected: Any, in stored: Any) -> Any {
+        if let stored = stored as? [String: Any], let expected = expected as? [String: Any] {
+            var kept: [String: Any] = [:]
+            for (name, value) in stored {
+                guard let match = expected[name] else {
+                    if name != key { kept[name] = value }
+                    continue
+                }
+                kept[name] = removing(key, absentFrom: match, in: value)
+            }
+            return kept
+        }
+        if let stored = stored as? [Any], let expected = expected as? [Any],
+            stored.count == expected.count
+        {
+            return zip(stored, expected).map { removing(key, absentFrom: $1, in: $0) }
+        }
+        return stored
     }
 
     /// The file `id`'s window's workspace is kept in.
