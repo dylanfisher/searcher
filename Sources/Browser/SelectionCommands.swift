@@ -1,5 +1,5 @@
 /// Row movement and selection: the arrows, Opt- and Ctrl-Shift-arrows (ten rows), Fn-arrows (a
-/// page), Home and End move the cursor and select its row alone, Shift-arrows extend the
+/// page), Home and End, and Cmd-Opt-↑ and Cmd-Opt-↓, move the cursor and select its row alone, Shift-arrows extend the
 /// selection from the anchor, and Cmd-A selects every row. Type-to-select, which no chord runs,
 /// selects by name. Cmd-U and Shift-Cmd-U step back and forward through the pane's selections in
 /// the folder.
@@ -17,10 +17,10 @@ public enum SelectionCommands: CommandSet {
         chords: [KeyChord(.up, modifiers: .shift)])
     public static let selectFirst = Command(
         id: CommandID("selection.first"), title: "Select First Row",
-        chords: [KeyChord(.home)])
+        chords: [KeyChord(.home), KeyChord(.up, modifiers: [.command, .option])])
     public static let selectLast = Command(
         id: CommandID("selection.last"), title: "Select Last Row",
-        chords: [KeyChord(.end)])
+        chords: [KeyChord(.end), KeyChord(.down, modifiers: [.command, .option])])
     public static let tenRowsDown = Command(
         id: CommandID("selection.tenRowsDown"), title: "Move Down 10 Rows",
         chords: [

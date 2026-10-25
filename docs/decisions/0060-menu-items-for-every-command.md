@@ -43,8 +43,9 @@ Sublime Text.
   those keys too, and every row key repeat would otherwise go through the menu bar's key
   equivalent search first. Every other command shows its first chord.
 - **Pane keys.** Focus Pane is Cmd-Opt-Shift-arrow, which Move Pane had. Move Pane is
-  Ctrl-Opt-Shift-arrow, which no command or standard item used. Cmd-Opt-arrow is unbound, and
-  a test keeps it so.
+  Ctrl-Opt-Shift-arrow, which no command or standard item used. Cmd-Opt-←/→ are unbound, and
+  a test keeps them so; Cmd-Opt-↑/↓ select the first and last row
+  ([0029](0029-row-movement.md)).
 
 ## Alternatives considered
 
