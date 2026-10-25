@@ -1172,7 +1172,7 @@ private func columnWidths(_ fixture: Fixture) -> [Double] {
 }
 
 /// Each column starts one point, its separator, after the one left of it, and its grip is
-/// centered on that separator at the bottom.
+/// centered on that separator, as tall as the column.
 @MainActor
 private func expectPacked(_ fixture: Fixture) throws {
     let controller = fixture.controller
@@ -1182,7 +1182,8 @@ private func expectPacked(_ fixture: Fixture) throws {
         let grip = try #require(controller.grip(forColumnAt: index))
         #expect(Double(grip.frame.midX) == Double(column.view.frame.maxX) + 0.5)
         #expect(grip.frame.minY == 0)
-        #expect(grip.frame.size == ColumnGripView.size)
+        #expect(Double(grip.frame.width) == ColumnGripView.thickness)
+        #expect(grip.frame.height == column.view.frame.height)
         x = Double(column.view.frame.maxX) + 1
     }
 }
@@ -1377,10 +1378,95 @@ private func nameRoom(_ name: String, in table: NSTableView) throws -> (
     try expectPacked(fixture)
 }
 
+/// Double-clicks `grip`, Option held or not, and waits for the fit to land.
+@MainActor
+private func fit(_ grip: ColumnGripView?, option: Bool = false, in fixture: Fixture) async throws {
+    doubleClick(try #require(grip), option: option)
+    await fixture.controller.fitting?.value
+}
+
+/// A double-click on a column already at its fit width puts it back at the default, with no
+/// width stored, so it follows the default as an unresized column does; the next one fits it
+/// again. A column at any other width, even after a fit, fits.
+@MainActor @Test func aDoubleClickTogglesBetweenTheFitAndTheDefault() async throws {
+    let folder = try TemporaryFolder("ColumnViewControllerTests")
+    let settings = storedSettings(in: folder)
+    settings.columnWidth = 300
+    let fixture = await Fixture(folders: fitTree, settings: settings)
+    await fixture.select("docs", inColumn: 0)
+    await fixture.select(wideName, inColumn: 1)
+    let grip = fixture.controller.grip(forColumnAt: 1)
+    let docs = Location(path: "/r/docs")
+    try await fit(grip, in: fixture)
+    let fitted = columnWidths(fixture)[1]
+    #expect(fitted > 300)
+
+    try await fit(grip, in: fixture)
+
+    #expect(columnWidths(fixture) == [300, 300, 300])
+    #expect(fixture.pane.columnWidths.isEmpty)
+    #expect(settings.columnWidth == 300)
+    try expectPacked(fixture)
+    settings.columnWidth = 320
+    #expect(columnWidths(fixture)[1] == 320)
+
+    try await fit(grip, in: fixture)
+    #expect(columnWidths(fixture)[1] == fitted)
+    #expect(fixture.pane.columnWidths.width(of: docs) == fitted)
+
+    // Dragged off its fit, the column fits again rather than going back.
+    drag(try #require(grip), by: 10)
+    try await fit(grip, in: fixture)
+    #expect(columnWidths(fixture)[1] == fitted)
+    #expect(settings.columnWidth == 320)
+}
+
+/// An Option-double-click with every column and the preview at the fit of them all puts them
+/// all back at `Settings.defaultColumnWidth`, which becomes the width new columns get again,
+/// as the Option-double-click that fitted them set the fit; the next one fits them all again.
+@MainActor @Test func anOptionDoubleClickTogglesEveryColumnBetweenTheFitAndTheDefault()
+    async throws
+{
+    let folder = try TemporaryFolder("ColumnViewControllerTests")
+    let settings = storedSettings(in: folder)
+    let fixture = await Fixture(folders: fitTree, settings: settings)
+    await fixture.select("docs", inColumn: 0)
+    await fixture.select(wideName, inColumn: 1)
+    await fixture.select("o.txt", inColumn: 2)
+    let grip = fixture.controller.grip(forColumnAt: 0)
+    try await fit(grip, option: true, in: fixture)
+    let fitted = columnWidths(fixture)[0]
+    #expect(settings.columnWidth == fitted)
+    #expect(fitted != Settings.defaultColumnWidth)
+
+    try await fit(fixture.controller.previewGrip, option: true, in: fixture)
+
+    let standard = Settings.defaultColumnWidth
+    #expect(columnWidths(fixture) == [standard, standard, standard])
+    #expect(fixture.controller.previewView.map { Double($0.frame.width) } == standard)
+    #expect(settings.columnWidth == standard)
+    #expect(fixture.pane.columnWidths.isEmpty)
+    try expectPacked(fixture)
+
+    try await fit(grip, option: true, in: fixture)
+    #expect(columnWidths(fixture) == [fitted, fitted, fitted])
+    #expect(settings.columnWidth == fitted)
+
+    // One column off the fit makes the next Option-double-click fit them all again.
+    drag(try #require(fixture.controller.grip(forColumnAt: 2)), by: 10)
+    try await fit(grip, option: true, in: fixture)
+    #expect(columnWidths(fixture) == [fitted, fitted, fitted])
+    #expect(fixture.controller.previewView.map { Double($0.frame.width) } == fitted)
+    #expect(fixture.pane.columnWidths.isEmpty)
+}
+
 @MainActor @Test func theFocusedColumnIsScrolledIntoViewAtAWiderWidth() async throws {
     let folder = try TemporaryFolder("ColumnViewControllerTests")
     let fixture = await Fixture(width: 500, settings: storedSettings(in: folder))
-    drag(try #require(fixture.controller.grip(forColumnAt: 0)), by: 155, option: true)
+    drag(
+        try #require(fixture.controller.grip(forColumnAt: 0)),
+        by: 400 - Settings.defaultColumnWidth,
+        option: true)
     await fixture.openThreeColumns()
     let scrollView = try #require(fixture.controller.view as? NSScrollView)
     #expect(columnWidths(fixture) == [400, 400, 400])
@@ -1408,22 +1494,28 @@ private func hit(_ point: NSPoint, in fixture: Fixture) -> NSView? {
     return columns.hitTest(columns.convert(point, to: superview))
 }
 
-/// A grip overlaps the bottom corner of the column left of its separator and of the one right
-/// of it; a click there goes to the grip, not to either table.
-@MainActor @Test func aGripTakesClicksOverTheTablesInItsCorner() async throws {
+/// A grip runs the whole height of its separator and a few points either side of it, over the
+/// edges of the columns left and right of it, as a split view's divider does; a click anywhere
+/// along it goes to the grip, and one a few points further out reaches the column's rows.
+@MainActor @Test func aGripTakesClicksAlongTheWholeSeparator() async throws {
     let fixture = await Fixture()
     await fixture.openThreeColumns()
     let grip = try #require(fixture.controller.grip(forColumnAt: 0))
-    let left = fixture.controller.columnControllers[0].view.frame
-    let right = fixture.controller.columnControllers[1].view.frame
+    let left = fixture.controller.columnControllers[0].view
+    let right = fixture.controller.columnControllers[1].view
 
-    let inLeft = NSPoint(x: grip.frame.minX + 1, y: grip.frame.midY)
-    let inRight = NSPoint(x: grip.frame.maxX - 1, y: grip.frame.midY)
-
-    #expect(left.contains(inLeft))
-    #expect(right.contains(inRight))
-    #expect(hit(inLeft, in: fixture) === grip)
-    #expect(hit(inRight, in: fixture) === grip)
+    for y in [left.frame.minY + 1, left.frame.midY, left.frame.maxY - 1] {
+        let inLeft = NSPoint(x: grip.frame.minX + 0.5, y: y)
+        let inRight = NSPoint(x: grip.frame.maxX - 0.5, y: y)
+        #expect(left.frame.contains(inLeft))
+        #expect(right.frame.contains(inRight))
+        #expect(hit(inLeft, in: fixture) === grip)
+        #expect(hit(inRight, in: fixture) === grip)
+        let pastLeft = NSPoint(x: grip.frame.minX - 2, y: y)
+        let pastRight = NSPoint(x: grip.frame.maxX + 2, y: y)
+        #expect(hit(pastLeft, in: fixture)?.isDescendant(of: left) == true)
+        #expect(hit(pastRight, in: fixture)?.isDescendant(of: right) == true)
+    }
 }
 
 /// At the far right the last grip, and the preview's, fit inside the columns' view, so their

@@ -19,9 +19,9 @@ public final class Settings {
         case columnWidth
     }
 
-    /// The width a new column of column view gets until one is set: Finder's, the `ColumnWidth`
-    /// of its standard column view options.
-    public static let defaultColumnWidth = 245.0
+    /// The width a new column of column view gets until one is set, and the width an
+    /// Option-double-click puts fitted columns back to (0096-column-widths.md).
+    public static let defaultColumnWidth = 286.0
     /// The widths a column's grip can drag it to (0096-column-widths.md).
     public nonisolated static let columnWidths: ClosedRange<Double> = 100...1000
 
