@@ -256,17 +256,37 @@ private func isBold(_ title: NSAttributedString, at offset: Int) -> Bool {
     #expect(fixture.ran.all.isEmpty && fixture.closes == 0)
 }
 
-@MainActor @Test func theContentIsAnActiveBehindWindowBlurWithRoundedCorners() {
+@MainActor @Test func theContentIsLiquidGlassFromMacOS26AndABlurBefore() {
     let controller = PaletteWindowController(palette: Palette(sources: []))
-    let blur = controller.viewController.view as? NSVisualEffectView
-
-    #expect(blur?.material == .popover)
-    #expect(blur?.blendingMode == .behindWindow)
-    #expect(blur?.state == .active)
+    let backdrop = controller.viewController.view
     let radius = PaletteViewController.cornerRadius
-    #expect(blur?.maskImage?.capInsets.top == radius)
-    #expect(blur?.maskImage?.capInsets.left == radius)
-    #expect(blur?.maskImage?.resizingMode == .stretch)
+
+    if #available(macOS 26, *) {
+        let glass = backdrop as? NSGlassEffectView
+        #expect(glass != nil)
+        #expect(glass?.cornerRadius == radius)
+        #expect(glass?.contentView?.subviews.contains(controller.viewController.field) == true)
+    } else {
+        let blur = backdrop as? NSVisualEffectView
+        #expect(blur?.material == .popover)
+        #expect(blur?.blendingMode == .behindWindow)
+        #expect(blur?.state == .active)
+        #expect(blur?.maskImage?.capInsets.top == radius)
+        #expect(blur?.maskImage?.capInsets.left == radius)
+        #expect(blur?.maskImage?.resizingMode == .stretch)
+    }
+}
+
+@MainActor @Test func nothingBetweenTheBackdropAndTheDesktopPaintsAnOpaqueBackground() throws {
+    let controller = PaletteWindowController(palette: Palette(sources: []))
+    let palette = controller.viewController
+    let scrollView = try #require(palette.tableView.enclosingScrollView)
+
+    #expect(scrollView.drawsBackground == false)
+    #expect(scrollView.contentView.drawsBackground == false)
+    #expect(palette.tableView.backgroundColor == .clear)
+    #expect(palette.field.drawsBackground == false)
+    #expect(palette.view.layer?.backgroundColor?.alpha ?? 0 == 0)
 }
 
 @MainActor @Test func thePanelIsBorderlessClearAndShadowed() throws {
