@@ -25,6 +25,17 @@ extension. Finder treats a package as one file everywhere except Show Package Co
 - **Open treats a package as a file.** Return, double-click and Cmd-↓ hand it to its app through
   `SystemActions.openFile`, as for any file. Open in Other Pane is off for it, as for a file
   (0047). Column view adds no column for it and shows the preview (0090); → does nothing.
+- **A link to a package opens as a file.** Homebrew links casks into /Applications, and Finder
+  launches the app such a link points to. Before Open lists a link as a folder (`openLink`), the
+  pane asks `DirectoryLister.isPackage(followingLinksAt:)` off the main thread: it resolves the
+  link with `realpath` and applies the rule to the target's own name and Finder info, since the
+  link's name needn't have the extension. A link to a package goes to the system; any other
+  link is listed as before, and a target that can't be read is left to that listing to report.
+  Open in Other Pane on such a link opens nothing, as on a link to a file. Links still add no
+  column and show no preview (0090). A navigation before the answer cancels the open, as it
+  cancels a pending go. The check is a `realpath`, an `lstat` and at most one `getattrlist` per
+  Open, so it isn't timed against the slow and offline states; a link onto a stalled share
+  waits in that read rather than in the listing that would show the slow state.
 - **Show Package Contents** (File menu and row context menu, after Open With, no key) browses
   into the one selected package as a folder: the pane moves into it, or in column view a column
   for it opens to the right and takes the keys. That column stays while the package stays
@@ -43,6 +54,8 @@ extension. Finder treats a package as one file everywhere except Show Package Co
   file drop is taken and the app decides. Dropping an app on itself, or file promises on an app,
   is refused. A drop on any other package's row goes to the pane's folder, as on a file's row;
   nothing is moved into a package.
+- **Go to folder.** The palette's path completion (`PathSource`) offers folders only, so it no
+  longer offers packages; a package's path can still be typed in full.
 - **Unchanged.** Type-select, hidden files and Quick Look (Space shows an app's Quick Look) go
   by name and selection, not type. Rename selects a package's name without its extension, as
   Finder does for a file.

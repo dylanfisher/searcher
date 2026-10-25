@@ -15,6 +15,7 @@ private let album = ListingCache.Folder(
     entries: [
         file("01 Intro.flac", size: 12_345_678),
         folder("Scans"),
+        package("Session.logicx"),
         DirectoryEntry(
             name: "Café Ünïcode.m4a", type: .regular, size: 0,
             modified: Date(timeIntervalSinceReferenceDate: 700_000_000.123_456), isHidden: true,

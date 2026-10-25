@@ -78,7 +78,7 @@ private func setBundleBit(_ path: String) throws {
     let folder = try TemporaryFolder("DirectoryListerTests")
     let path = folder.url.path
     let folders = [
-        "App.app", "Notes.rtfd", "Plugin.bundle", "Report.pages", "Kit.framework", "plain",
+        "App.app", "Notes.rtfd", "Plugin.bundle", "Helper.xpc", "Kit.framework", "plain",
         "Bundled", "Dotted.name",
     ]
     for name in folders {
@@ -96,7 +96,7 @@ private func setBundleBit(_ path: String) throws {
     #expect(
         types == [
             "App.app": .package, "Notes.rtfd": .package, "Plugin.bundle": .package,
-            "Report.pages": .package, "Kit.framework": .directory, "plain": .directory,
+            "Helper.xpc": .package, "Kit.framework": .directory, "plain": .directory,
             "Bundled": .package, "Dotted.name": .directory, "file.app": .regular,
         ])
     for name in folders {
@@ -107,6 +107,33 @@ private func setBundleBit(_ path: String) throws {
     for entry in listed {
         #expect(try DirectoryLister().entry(named: entry.name, inDirectory: path) == entry)
     }
+}
+
+/// Whether a link's target is a package goes by the target's own name and Finder info, not the
+/// link's name.
+@Test func aLinksTargetIsAPackageByTheTargetsNameOrBundleBit() throws {
+    let folder = try TemporaryFolder("DirectoryListerTests")
+    let path = folder.url.path
+    for name in ["Real.app", "plain", "Bundled"] {
+        try FileManager.default.createDirectory(
+            atPath: path + "/" + name, withIntermediateDirectories: false)
+    }
+    try setBundleBit(path + "/Bundled")
+    try Data().write(to: folder.url.appending(path: "file.txt"))
+    let links = [
+        ("app link", "Real.app"), ("link to app link", "app link"), ("bundled link", "Bundled"),
+        ("folder link.app", "plain"), ("file link", "file.txt"), ("broken link.app", "missing"),
+    ]
+    for (link, target) in links {
+        try FileManager.default.createSymbolicLink(
+            atPath: path + "/" + link, withDestinationPath: target)
+    }
+
+    let packages = Set(
+        links.map(\.0).filter { DirectoryLister.isPackage(followingLinksAt: path + "/" + $0) })
+
+    #expect(packages == ["app link", "link to app link", "bundled link"])
+    #expect(DirectoryLister.isPackage(followingLinksAt: path + "/Real.app"))
 }
 
 @Test func firstBatchArrivesBeforeListingEnds() throws {
