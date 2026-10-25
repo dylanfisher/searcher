@@ -623,9 +623,10 @@ public final class Pane {
         columnWidths.width(of: column.location) ?? settings.columnWidth
     }
 
-    /// The width the trail's preview shows at: its set width, or `Settings.columnWidth`.
+    /// The width the trail's preview shows at: its set width, or `Settings.columnWidth`, no
+    /// narrower than `Settings.previewWidths` allows.
     public var previewWidth: Double {
-        columnWidths.preview ?? settings.columnWidth
+        columnWidths.preview ?? max(settings.columnWidth, Settings.previewWidths.lowerBound)
     }
 
     /// Sets the width of `column`'s pane's folder, as a grip's drag ends or a fit lands. A
@@ -653,7 +654,7 @@ public final class Pane {
 
     /// Sets the preview's width, shown or hidden.
     ///
-    /// - Precondition: `Settings.isColumnWidth(width)`.
+    /// - Precondition: `Settings.isPreviewWidth(width)`.
     public func setPreviewWidth(_ width: Double) {
         let old = columnWidths
         columnWidths.setPreview(width)

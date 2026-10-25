@@ -64,3 +64,16 @@ private func at(_ path: String) -> Location { Location(path: path) }
     #expect(ColumnWidths.problem(folders: [folder("/a", 200.5)], preview: nil) != nil)
     #expect(ColumnWidths.problem(folders: [], preview: 286.25) != nil)
 }
+
+/// A column can be narrower than the preview: a width below `Settings.previewWidths` is stored
+/// for a folder but not for the preview.
+@Test func storedPreviewWidthsBelowThePreviewsMinimumHaveAProblem() {
+    let narrow = Settings.previewWidths.lowerBound - 1
+    #expect(Settings.isColumnWidth(narrow))
+    #expect(
+        ColumnWidths.problem(
+            folders: [ColumnWidths.Folder(location: at("/a"), width: narrow)], preview: nil)
+            == nil)
+    #expect(ColumnWidths.problem(folders: [], preview: narrow) != nil)
+    #expect(ColumnWidths.problem(folders: [], preview: Settings.previewWidths.lowerBound) == nil)
+}

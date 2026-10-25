@@ -64,9 +64,11 @@ public struct ColumnWidths: Sendable {
 
     /// Sets the preview to `width`.
     ///
-    /// - Precondition: `Settings.isColumnWidth(width)`.
+    /// - Precondition: `Settings.isPreviewWidth(width)`.
     public mutating func setPreview(_ width: Double) {
-        Self.checkWidth(width)
+        precondition(
+            Settings.isPreviewWidth(width),
+            "preview width \(width) is not a whole number within \(Settings.previewWidths)")
         preview = width
     }
 
@@ -78,7 +80,8 @@ public struct ColumnWidths: Sendable {
 
     /// What is wrong with these widths as stored data, or nil: a folder twice, more than
     /// `folderLimit` folders, or a width `Settings.isColumnWidth` rejects: a fraction of a point,
-    /// or outside `Settings.columnWidths`, NaN among them.
+    /// or outside `Settings.columnWidths`, NaN among them; or a preview width outside
+    /// `Settings.previewWidths`.
     static func problem(folders: [Folder], preview: Double?) -> String? {
         let paths = folders.map(\.location.path)
         if Set(paths).count != paths.count {
@@ -87,9 +90,11 @@ public struct ColumnWidths: Sendable {
         if folders.count > folderLimit {
             return "\(folders.count) column widths are more than the \(folderLimit) kept"
         }
-        let widths = folders.map(\.width) + (preview.map { [$0] } ?? [])
-        if let width = widths.first(where: { !Settings.isColumnWidth($0) }) {
+        if let width = folders.map(\.width).first(where: { !Settings.isColumnWidth($0) }) {
             return "column width \(width) is not a whole number within \(Settings.columnWidths)"
+        }
+        if let preview, !Settings.isPreviewWidth(preview) {
+            return "preview width \(preview) is not a whole number within \(Settings.previewWidths)"
         }
         return nil
     }
