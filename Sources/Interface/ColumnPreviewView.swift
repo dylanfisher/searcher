@@ -2,8 +2,8 @@ import AppKit
 import Browser
 
 /// Column view's preview of the one file selected in the last column, as Finder shows it: a large
-/// type icon, the name, its kind and size, then an Information section with the size and the
-/// created, modified and last-opened dates, then the tags. The name, kind, size and modified date
+/// type icon, the name, its kind and size, then an Information section with the created,
+/// modified and last-opened dates, then the tags. The name, kind, size and modified date
 /// come from the column's listing and the icon is the type's shared one from `TypeIconCache`, so
 /// they show at once; the rest is read off the main thread, and column view shows a new file once
 /// it lands, or empty after `ColumnTrail.previewHold`, filling in later without moving the rows
@@ -19,7 +19,6 @@ final class ColumnPreviewView: NSView {
     /// Between the kind and the size under the name, as Finder writes it.
     static let summarySeparator = " – "
     static let informationTitle = "Information"
-    static let sizeTitle = "Size"
     static let createdTitle = "Created"
     static let modifiedTitle = "Modified"
     static let lastOpenedTitle = "Last opened"
@@ -44,13 +43,12 @@ final class ColumnPreviewView: NSView {
     let nameField = NSTextField(wrappingLabelWithString: "")
     /// The kind, and the size when the file has one.
     let summaryField = NSTextField(labelWithString: "")
-    let sizeField = ColumnPreviewView.value()
     let createdField = ColumnPreviewView.value()
     let modifiedField = ColumnPreviewView.value()
     let lastOpenedField = ColumnPreviewView.value()
     /// The tags' names; hidden, with its title, when the file has none or they aren't read.
     let tagsField = NSTextField(wrappingLabelWithString: "")
-    /// The Information rows, top to bottom: Size, Created, Modified and Last opened, each its
+    /// The Information rows, top to bottom: Created, Modified and Last opened, each its
     /// title left, its value right and a rule below it, as Finder draws them.
     let rows: [InformationRow]
     /// The file last shown, so a change that leaves it as it was sets no field.
@@ -67,7 +65,6 @@ final class ColumnPreviewView: NSView {
         informationField = NSTextField(labelWithString: Self.informationTitle)
         tagsTitleField = NSTextField(labelWithString: Self.tagsTitle)
         rows = [
-            InformationRow(title: Self.sizeTitle, value: sizeField),
             InformationRow(title: Self.createdTitle, value: createdField),
             InformationRow(title: Self.modifiedTitle, value: modifiedField),
             InformationRow(title: Self.lastOpenedTitle, value: lastOpenedField),
@@ -82,7 +79,7 @@ final class ColumnPreviewView: NSView {
     }
 
     /// Fills the fields from `preview`. Does nothing when it is the file already shown. An entry
-    /// without a size, such as a socket, shows its kind and no Size row, as in Finder. The
+    /// without a size, such as a socket, shows only its kind under its name, as in Finder. The
     /// Created and Last opened rows are always there, empty until their dates are read; the
     /// tags sit below every other field.
     func show(_ preview: ColumnPreview) {
@@ -96,8 +93,6 @@ final class ColumnPreviewView: NSView {
         let hasSize = entry.size != nil
         summaryField.stringValue =
             hasSize ? preview.kind.text + Self.summarySeparator + size : preview.kind.text
-        sizeField.stringValue = size
-        rows[0].isShown = hasSize
         modifiedField.stringValue = formatter.longDate(entry.modified)
         let tags: [String]
         switch preview.info {
@@ -289,17 +284,6 @@ final class InformationRow: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("InformationRow is built in code")
-    }
-
-    /// Whether the row shows. A hidden row's fields are hidden too, so VoiceOver skips them.
-    var isShown: Bool {
-        get { !isHidden }
-        set {
-            guard newValue == isHidden else { return }
-            isHidden = !newValue
-            titleField.isHidden = !newValue
-            value.isHidden = !newValue
-        }
     }
 
     /// Wraps the value at what `width`, the row's, leaves beside the title.

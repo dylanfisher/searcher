@@ -76,8 +76,7 @@ and saw `["two.flac", "", "", ""]` before this change.
   first frame. Keys still clear the preview while they move ([0094](0094-column-open-delay.md));
   after the pause the new preview is held the same way.
 - **The layout doesn't move when the read lands.** The Created and Last opened rows are in the
-  Information section from the first frame, empty until read, between Size and Modified and
-  after Modified. Tags are a section below every other field, shown only when the file has tags,
+  Information section from the first frame, empty until read, before and after Modified. Tags are a section below every other field, shown only when the file has tags,
   so they only add height below. A read with no date, and a failed read, show "--", as Finder
   shows an unknown value. A file that gets no read keeps its rows empty. The one exception: a
   read that lands after the hold, on a slow share, with a date too long for one line beside its
@@ -86,9 +85,11 @@ and saw `["two.flac", "", "", ""]` before this change.
   a Finder window on this Mac, which would have shown on the main display: below the icon, the
   name in bold 15 pt and the kind and size under it, both left-aligned with the header and the
   row titles; the kind and size in secondary text at the small system size (11 pt); an
-  Information header in bold 13 pt; then each row with its title at the left in secondary text
-  and its value at the right in the label color, both 11 pt, 4 pt of space above and below the
-  text and a one-point separator rule under the row, none above the first. Dates are written in
+  Information header in bold 13 pt; then the Created, Modified and Last opened rows, with no
+  Size row, since the size is in the line under the name, as in Finder's screenshot. Each row
+  has its title at the left in secondary text and its value at the right in the label color,
+  both 11 pt, 4 pt of space above and below the text and a one-point separator rule under the
+  row, none above the first. Dates are written in
   full, "Friday, October 16, 2026 at 12:50 PM", or "Today at 12:50 PM". A value that doesn't
   fit beside its title wraps, right-aligned, instead of losing its time: at the default
   column width a full date doesn't fit beside Last opened.
