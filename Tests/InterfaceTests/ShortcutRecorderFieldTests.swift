@@ -18,6 +18,27 @@ private final class RecorderFixture {
         window.contentView?.addSubview(field)
         field.onRecord = { [weak self] in self?.recorded.append($0) }
     }
+
+    /// A key event for the window, through the app as a real one comes.
+    func key(
+        _ type: NSEvent.EventType, _ ignoringModifiers: String, keyCode: UInt16,
+        modifiers: NSEvent.ModifierFlags = [], isARepeat: Bool = false
+    ) throws -> NSEvent {
+        try #require(
+            NSEvent.keyEvent(
+                with: type, location: .zero, modifierFlags: modifiers, timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, characters: ignoringModifiers,
+                charactersIgnoringModifiers: ignoringModifiers, isARepeat: isARepeat,
+                keyCode: keyCode))
+    }
+
+    /// Releases the key a recording took, which ends the swallowing of its repeats, so no test
+    /// leaves it for the next.
+    func release(_ event: NSEvent) throws {
+        NSApplication.shared.sendEvent(
+            try key(.keyUp, event.charactersIgnoringModifiers ?? "", keyCode: event.keyCode))
+        #expect(!ShortcutRecorderField.isSwallowingHeldKey)
+    }
 }
 
 @MainActor @Test func aKeyPressWhileRecordingIsSwallowedAndRecordsItsChords() throws {
@@ -51,19 +72,25 @@ private final class RecorderFixture {
     let fixture = RecorderFixture()
 
     fixture.field.startRecording()
-    #expect(fixture.field.handle(try keyEvent("\u{1B}")) == nil)
+    let esc = try keyEvent("\u{1B}")
+    #expect(fixture.field.handle(esc) == nil)
     #expect(fixture.recorded.isEmpty)
     #expect(!fixture.field.isRecording)
+    try fixture.release(esc)
 
     fixture.field.startRecording()
-    #expect(fixture.field.handle(try keyEvent("\u{7F}")) == nil)
+    let delete = try keyEvent("\u{7F}")
+    #expect(fixture.field.handle(delete) == nil)
     #expect(fixture.recorded == [.removed])
     #expect(!fixture.field.isRecording)
+    try fixture.release(delete)
 
     // With a modifier, Esc and Delete are chords like any other.
     fixture.field.startRecording()
-    _ = fixture.field.handle(try keyEvent("\u{7F}", modifiers: .command))
+    let cmdDelete = try keyEvent("\u{7F}", modifiers: .command)
+    _ = fixture.field.handle(cmdDelete)
     #expect(fixture.recorded.last == .chords([KeyChord(.delete, modifiers: .command)]))
+    try fixture.release(cmdDelete)
 }
 
 /// Cmd-Q while recording is swallowed, so the app doesn't quit, and the settings refuse it.
@@ -74,11 +101,48 @@ private final class RecorderFixture {
     fixture.field.onRecord = { model.record($0, for: palette, at: .alternate) }
 
     fixture.field.startRecording()
-    #expect(fixture.field.handle(try keyEvent("q", modifiers: .command)) == nil)
+    let cmdQ = try keyEvent("q", modifiers: .command)
+    #expect(fixture.field.handle(cmdQ) == nil)
 
     #expect(model.settings.shortcuts.isEmpty)
     #expect(model.notices[palette]?.kind == .reserved)
     #expect(model.notices[palette]?.message.contains("⌘Q") == true)
+    try fixture.release(cmdQ)
+}
+
+/// While the key a recording took is held, a fresh press of another key passes and ends the
+/// swallowing. The held-key filter is called as its monitor calls it: the app's other local
+/// monitors, such as another test's, come before or after it in no set order.
+@MainActor @Test func aFreshPressEndsTheHeldKeysSwallowing() throws {
+    let fixture = RecorderFixture()
+    let p = try fixture.key(.keyDown, "p", keyCode: 35, modifiers: .command)
+    let j = try fixture.key(.keyDown, "j", keyCode: 38)
+    fixture.field.startRecording()
+    #expect(fixture.field.handle(p) == nil)
+    #expect(ShortcutRecorderField.isSwallowingHeldKey)
+
+    #expect(ShortcutRecorderField.filterWhileHeld(j, holding: p.keyCode) === j)
+
+    #expect(!ShortcutRecorderField.isSwallowingHeldKey)
+}
+
+/// While the key a recording took is held, another key's repeats and release pass, and the held
+/// key's repeats are still swallowed until its release.
+@MainActor @Test func anotherKeysRepeatAndReleasePassTheHeldKey() throws {
+    let fixture = RecorderFixture()
+    let p = try fixture.key(.keyDown, "p", keyCode: 35, modifiers: .command)
+    let pRepeat = try fixture.key(.keyDown, "p", keyCode: 35, modifiers: .command, isARepeat: true)
+    let jRepeat = try fixture.key(.keyDown, "j", keyCode: 38, isARepeat: true)
+    let jUp = try fixture.key(.keyUp, "j", keyCode: 38)
+    fixture.field.startRecording()
+    #expect(fixture.field.handle(p) == nil)
+
+    #expect(ShortcutRecorderField.filterWhileHeld(jRepeat, holding: p.keyCode) === jRepeat)
+    #expect(ShortcutRecorderField.filterWhileHeld(jUp, holding: p.keyCode) === jUp)
+    #expect(ShortcutRecorderField.filterWhileHeld(pRepeat, holding: p.keyCode) == nil)
+
+    #expect(ShortcutRecorderField.isSwallowingHeldKey)
+    try fixture.release(p)
 }
 
 /// No way out of recording leaves the monitor eating the app's keys.

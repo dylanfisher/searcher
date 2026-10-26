@@ -52,7 +52,7 @@ public struct UIBenchRecord: Sendable, Codable, Equatable {
     /// Folders First turned on or off → frame with the rearranged rows, on W2 (B8). Two per
     /// launch: on, then off.
     public var foldersFirstToggle: [Double]
-    /// A sort key (Ctrl-Opt-Cmd-6, then Ctrl-Opt-Cmd-1) → frame with the re-sorted rows, on W2
+    /// A sort key (Ctrl-Opt-2, then Ctrl-Opt-1) → frame with the re-sorted rows, on W2
     /// (B8). Two per launch.
     public var sortKey: [Double]
     /// A key typed in the filter field, or Esc clearing it → frame with the rows filtered by the
