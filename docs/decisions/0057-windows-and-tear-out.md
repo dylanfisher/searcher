@@ -97,3 +97,25 @@ into a window. `WorkspaceWindows.fitted` cascades it as before, then shrinks it 
 most of it is on and moves it inside that display's visible frame, so a size set on a large
 display opens whole on a small one. A window opened from a saved frame keeps that frame
 ([0080](0080-restore-at-launch.md)).
+
+## Amendment: a new window takes the frame last set by hand (2026-10-26)
+
+Dylan: "new windows should open at the position of the last window you modified." The key that
+held the size, `Settings.newWindowSize`, is now `Settings.newWindowFrame`, the only key: four
+numbers, the origin of the window's frame and the size of its content, and anything else
+discarded and removed. Nothing is stored until a window is first changed by hand, and
+`newWindowSize` reads the stored size or 900 × 600. A window stores its frame when the user ends
+a live resize, or drags it by the title bar.
+
+The drag is told from a move the app makes (restore, cascade, `fitted`, zoom, full screen,
+tests) by `windowWillMove`, which AppKit sends only when the user starts a drag, and the left
+button: after it, each `windowDidMove` with the button down stores the frame, and the first one
+with it up ends the claim. The last step of a drag is made before the button comes up, so the
+frame stored is where the window was dropped. No event monitor, no timer.
+
+A new window without a saved frame opens at the stored frame when no open window has its top
+left there; if one does, it steps down and right by the system's cascade offset
+(`cascadeTopLeft`), again for each open window at the place it lands, as Finder's new windows
+step from the last one. With no stored frame it centers and cascades from the front window as
+before. `fitted` then keeps it on a display, so a frame stored on a display that is gone opens
+on one that is there. A restored window keeps its saved frame, as before.

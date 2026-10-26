@@ -760,6 +760,78 @@ private func stopEverything(_ windows: WorkspaceWindows) async {
     #expect(window.contentRect(forFrameRect: window.frame).size == CGSize(width: 820, height: 480))
 }
 
+@MainActor @Test func onlyADragOfTheTitleBarSetsTheFrameNewWindowsOpenAt() async throws {
+    let fixture = try await Fixture()
+    let first = try #require(fixture.windows.controllers.first)
+    let window = try #require(first.window)
+    let moved = Notification(name: NSWindow.didMoveNotification)
+    first.isLeftMouseDown = { true }
+
+    // A move the app makes, with no drag begun, even with the button down.
+    window.setFrameOrigin(NSPoint(x: 30, y: 40))
+    first.windowDidMove(moved)
+    #expect(fixture.settings.newWindowFrame == nil)
+
+    first.windowWillMove(Notification(name: NSWindow.willMoveNotification))
+    window.setFrameOrigin(NSPoint(x: 50, y: 60))
+    first.windowDidMove(moved)
+    #expect(fixture.settings.newWindowFrame?.origin == NSPoint(x: 50, y: 60))
+    #expect(fixture.settings.newWindowFrame?.size == Settings.defaultWindowSize)
+
+    // The button is up: a later move, as a restore or zoom makes, isn't the user's.
+    first.isLeftMouseDown = { false }
+    window.setFrameOrigin(NSPoint(x: 70, y: 80))
+    first.windowDidMove(moved)
+    first.isLeftMouseDown = { true }
+    window.setFrameOrigin(NSPoint(x: 90, y: 100))
+    first.windowDidMove(moved)
+    #expect(fixture.settings.newWindowFrame?.origin == NSPoint(x: 50, y: 60))
+}
+
+@MainActor @Test func aLiveResizeStoresTheFrameWithItsOrigin() async throws {
+    let fixture = try await Fixture()
+    let first = try #require(fixture.windows.controllers.first)
+    let window = try #require(first.window)
+    window.setContentSize(NSSize(width: 800, height: 450))
+    window.setFrameOrigin(NSPoint(x: 12, y: 34))
+
+    first.windowDidEndLiveResize(Notification(name: NSWindow.didEndLiveResizeNotification))
+
+    #expect(
+        fixture.settings.newWindowFrame
+            == CGRect(origin: NSPoint(x: 12, y: 34), size: CGSize(width: 800, height: 450)))
+}
+
+@MainActor @Test func aNewWindowOpensWhereTheLastOneWasMovedAndStepsOffAnOpenWindowThere()
+    async throws
+{
+    let fixture = try await Fixture()
+    fixture.windows.screens = { [CGRect(x: 0, y: 0, width: 5000, height: 3000)] }
+    fixture.settings.newWindowFrame = CGRect(x: 200, y: 200, width: 820, height: 480)
+
+    let second = try await fixture.open()
+    let secondFrame = try #require(second.window).frame
+    #expect(secondFrame.origin == NSPoint(x: 200, y: 200))
+
+    // The place is taken, so the next one steps down and right of it.
+    let third = try await fixture.open()
+    let thirdFrame = try #require(third.window).frame
+    #expect(thirdFrame.minX > secondFrame.minX)
+    #expect(thirdFrame.maxY < secondFrame.maxY)
+    #expect(thirdFrame.size == secondFrame.size)
+}
+
+@MainActor @Test func aNewWindowStoredOffEveryDisplayIsFittedToOne() async throws {
+    let fixture = try await Fixture()
+    let screen = CGRect(x: 0, y: 0, width: 1440, height: 900)
+    fixture.windows.screens = { [screen] }
+    fixture.settings.newWindowFrame = CGRect(x: 9000, y: 9000, width: 820, height: 480)
+
+    let opened = try await fixture.open()
+
+    #expect(screen.contains(try #require(opened.window).frame))
+}
+
 @MainActor @Test func aNewWindowIsShrunkAndMovedToFitTheScreenItIsOn() {
     let small = CGRect(x: 1440, y: 100, width: 800, height: 500)
     let main = CGRect(x: 0, y: 0, width: 1440, height: 900)

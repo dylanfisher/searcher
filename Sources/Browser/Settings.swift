@@ -21,7 +21,7 @@ public final class Settings {
         case columnWidth
         case appearance
         case palettePlace
-        case newWindowSize
+        case newWindowFrame
         case favorites
         case showsFavoritesInSidebar
         case showsLocationsInSidebar
@@ -84,6 +84,12 @@ public final class Settings {
     /// Whether `size` is one a window can have: finite and not empty.
     public nonisolated static func isWindowSize(_ size: CGSize) -> Bool {
         size.width.isFinite && size.height.isFinite && size.width > 0 && size.height > 0
+    }
+
+    /// Whether `frame` is one a new window can open at: finite, with a size `isWindowSize(_:)`
+    /// accepts.
+    public nonisolated static func isWindowFrame(_ frame: CGRect) -> Bool {
+        frame.origin.x.isFinite && frame.origin.y.isFinite && isWindowSize(frame.size)
     }
 
     /// What the Settings window says about `commanderFKeys`.
@@ -234,18 +240,30 @@ public final class Settings {
         }
     }
 
-    /// The content size a new window opens at: the one a window last had when the user finished
-    /// resizing it by hand, as in Finder (0057-windows-and-tear-out.md). `defaultWindowSize`
-    /// until then. No pane follows it, so a change notifies no one.
+    /// The frame a new window opens at: the origin of the window's frame and the size of its
+    /// content, as the window last had them when the user finished resizing it by an edge or
+    /// moving it by its title bar, as in Finder (0057-windows-and-tear-out.md). Nil until then.
+    /// No pane follows it, so a change notifies no one.
     ///
-    /// - Precondition: `isWindowSize(_:)` holds for it.
-    public var newWindowSize: CGSize {
+    /// - Precondition: `isWindowFrame(_:)` holds for it.
+    public var newWindowFrame: CGRect? {
         didSet {
-            precondition(Self.isWindowSize(newWindowSize), "window size \(newWindowSize) is empty")
-            guard newWindowSize != oldValue else { return }
-            defaults.set(
-                [newWindowSize.width, newWindowSize.height], forKey: Key.newWindowSize.rawValue)
+            guard newWindowFrame != oldValue else { return }
+            let key = Key.newWindowFrame.rawValue
+            if let frame = newWindowFrame {
+                precondition(Self.isWindowFrame(frame), "window frame \(frame) is empty")
+                defaults.set(
+                    [frame.origin.x, frame.origin.y, frame.width, frame.height], forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
         }
+    }
+
+    /// The content size a new window opens at: that of `newWindowFrame`, `defaultWindowSize`
+    /// until one is set.
+    public var newWindowSize: CGSize {
+        newWindowFrame?.size ?? Self.defaultWindowSize
     }
 
     /// How long a drag has to hover over a folder before it springs open, as the system's
@@ -296,7 +314,7 @@ public final class Settings {
             ?? Self.defaultColumnWidth
         appearance = Self.appearance(in: defaults) ?? .auto
         palettePlace = Self.palettePlace(in: defaults)
-        newWindowSize = Self.windowSize(in: defaults) ?? Self.defaultWindowSize
+        newWindowFrame = Self.windowFrame(in: defaults)
         favorites = Self.favorites(in: defaults) ?? Favorite.defaults(home: home)
         showsFavoritesInSidebar = Self.bool(.showsFavoritesInSidebar, in: defaults) ?? true
         showsLocationsInSidebar = Self.bool(.showsLocationsInSidebar, in: defaults) ?? true
@@ -371,18 +389,24 @@ public final class Settings {
         return nil
     }
 
-    /// The window size stored under its key, two numbers `isWindowSize(_:)` accepts; nil when
+    /// The window frame stored under its key, four numbers `isWindowFrame(_:)` accepts; nil when
     /// there is none, or it is anything else, which is removed.
-    private static func windowSize(in defaults: UserDefaults) -> CGSize? {
-        let key = Key.newWindowSize.rawValue
+    private static func windowFrame(in defaults: UserDefaults) -> CGRect? {
+        let key = Key.newWindowFrame.rawValue
         guard let value = defaults.object(forKey: key) else { return nil }
-        if let sides = value as? [Any], sides.count == 2,
-            let width = sides[0] as? NSNumber, CFGetTypeID(width) != CFBooleanGetTypeID(),
-            let height = sides[1] as? NSNumber, CFGetTypeID(height) != CFBooleanGetTypeID(),
-            case let size = CGSize(width: width.doubleValue, height: height.doubleValue),
-            isWindowSize(size)
-        {
-            return size
+        if let sides = value as? [Any], sides.count == 4 {
+            let numbers = sides.compactMap { side -> Double? in
+                guard let number = side as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID()
+                else { return nil }
+                return number.doubleValue
+            }
+            if numbers.count == 4,
+                case let frame = CGRect(
+                    x: numbers[0], y: numbers[1], width: numbers[2], height: numbers[3]),
+                isWindowFrame(frame)
+            {
+                return frame
+            }
         }
         defaults.removeObject(forKey: key)
         return nil
