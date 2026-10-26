@@ -125,9 +125,14 @@ public enum MainMenuBuilder {
     /// (docs/decisions/0068-inline-rename.md).
     static let actionsRunningCommands = [undo, redo, cut, copy, paste, selectAll]
 
-    /// The Edit items' own chords, which no other item shows: the Edit item would take the key
-    /// first in a text field, and two items on one key leave which one runs to AppKit.
-    private static let editChords = Set(actionsRunningCommands.compactMap(\.chord))
+    /// The Edit items' own chords, each fixed as its command's primary: the Edit item takes the
+    /// key first wherever the keys are, so `KeyBindings` gives it to no other command
+    /// (docs/decisions/0106-primary-and-alternate-shortcuts.md).
+    public static let fixedChords: [KeyChord: CommandID] = Dictionary(
+        uniqueKeysWithValues: actionsRunningCommands.compactMap { action in
+            guard let chord = action.chord, let id = action.command else { return nil }
+            return (chord, id)
+        })
 
     /// The row keys, which all reach the table from `keyDown`: a key equivalent would take
     /// ↑, ↓, Shift-, Opt- and Ctrl-Shift-arrows, the page keys, Home and End from text fields,
@@ -505,8 +510,9 @@ public enum MainMenuBuilder {
             guard registry.command(for: id) != nil else {
                 throw .unregistered(id, menu: menu.title)
             }
+            // The command's first chord is the Edit item's own, fixed by `fixedChords`.
             let alternate = CommandItem(
-                title: standard.title, action: standard.action, command: id, position: 0,
+                title: standard.title, action: standard.action, command: id, position: 1,
                 showsChords: menu.showsChords)
             hide(alternate)
             return [menuItem, alternate]
@@ -520,21 +526,22 @@ public enum MainMenuBuilder {
         item.allowsKeyEquivalentWhenHidden = true
     }
 
-    /// The chords command `id`'s items show, in the registry's order: those a key equivalent
-    /// may have, other than the Edit items' own.
-    private static func menuChords(of id: CommandID, in registry: CommandRegistry) -> [KeyChord] {
-        guard let command = registry.command(for: id) else {
-            preconditionFailure("the menus run \(id), which the registry doesn't have")
-        }
-        return command.chords.filter { $0.canBeKeyEquivalent && !editChords.contains($0) }
+    /// The chords `command`'s menu items show, in order: those a key equivalent may have. The
+    /// context menus show the first too.
+    static func menuChords(of command: Command) -> [KeyChord] {
+        command.chords.filter(\.canBeKeyEquivalent)
     }
 
     /// Gives each command's items in `bar` the key equivalents `registry` gives the command: its
     /// item the first chord, and the hidden item beside it the second. An Edit item keeps its
-    /// own chord, and its hidden item gets the command's first other chord.
+    /// own chord, its command's first, and its hidden item gets the second.
     static func showChords(in bar: NSMenu, registry: CommandRegistry) {
         for case let item as CommandItem in allItems(in: bar) {
-            let chords = item.showsChords ? menuChords(of: item.command, in: registry) : []
+            guard let command = registry.command(for: item.command) else {
+                preconditionFailure(
+                    "the menus run \(item.command), which the registry doesn't have")
+            }
+            let chords = item.showsChords ? menuChords(of: command) : []
             if chords.indices.contains(item.position) {
                 set(chords[item.position], on: item)
             } else {

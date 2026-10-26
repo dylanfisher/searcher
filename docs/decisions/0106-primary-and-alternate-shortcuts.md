@@ -90,13 +90,20 @@ SK.1b, the menus and the routing; SK.1c, the Settings window and the recorder.
   from `PaneViewController.registry(for:)`; after each change of the settings,
   `showChords(in:registry:)` sets every command item's key equivalent again from the cached
   registry. Context menus read the registry each time they are built, and the palette shows the
-  first chord of the focused table's registry, so both follow too.
-- **Edit items run their commands by ID.** `StandardAction.command` names the command each of
-  Undo, Redo, Cut, Copy, Paste and Select All runs in the table, whatever chords the user gives
-  it. The six items keep their own chords (Cmd-Z, Shift-Cmd-Z, Cmd-X, Cmd-C, Cmd-V, Cmd-A), so a
-  text field always has them. The command's other chords go on a hidden item beside the Edit item
-  that sends the same action, so in a text field an alternate of Copy copies the text. No other
-  command's item shows one of the six chords: two items on one key leave the choice to AppKit.
+  first chord of the focused table's registry, so both follow too. The palette's closing chords
+  (Open Quickly's or Go to Item's, and Close Pane's) are read from that registry at each key
+  press, and only those a menu could show count: the palette's field types a plain one.
+- **Edit items run their commands by ID, on fixed chords.** `StandardAction.command` names the
+  command each of Undo, Redo, Cut, Copy, Paste and Select All runs in the table. The six items
+  keep their own chords (Cmd-Z, Shift-Cmd-Z, Cmd-X, Cmd-C, Cmd-V, Cmd-A), so a text field always
+  has them, and the item takes its chord first wherever the keys are. So the chord is fixed as
+  the command's primary: `MainMenuBuilder.fixedChords` goes to `KeyBindings` as `fixed`, which
+  ignores an override of that primary (listed in `dropped` as `.fixed` when it names a chord),
+  drops the chord from any other command or slot (`.reserved`), and makes `assign` answer
+  `.reserved` for the chord or the primary. One key keeps one meaning in the menus and the
+  table's `keyDown` alike. The alternates stay editable: the command's second chord goes on a
+  hidden item beside the Edit item that sends the same action, so in a text field an alternate
+  of Copy copies the text.
 - **Plain keys.** A chord with no Cmd, Ctrl or Opt that isn't an F-key never becomes a key
   equivalent (`KeyChord.canBeKeyEquivalent`); the rule moved from `.commandWithoutKey` to the
   chord ([0060](0060-menu-items-for-every-command.md)). It reaches the command from the table's
@@ -131,11 +138,6 @@ SK.1b, the menus and the routing; SK.1c, the Settings window and the recorder.
 
 A default that later moves to a chord the user gave another command is lost to that command
 until the user resets theirs.
-
-The six Edit items take their chords first wherever the keys are. A command the user gives
-Cmd-C (or another of the six) through stored data shows no key equivalent for it and never gets
-it from the keyboard; `KeyBindings` doesn't know the Edit items, so SK.1c's recorder has to treat
-the six chords as their commands' own and refuse them for any other.
 
 A Shift-digit chord, such as Cmd-Opt-Shift-1, doesn't match the "!" a US keyboard types, so as a
 hidden item's key equivalent it works only from the table's `keyDown`, as it did as a visible

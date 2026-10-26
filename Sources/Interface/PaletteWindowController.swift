@@ -9,8 +9,9 @@ import Browser
 public final class PaletteWindowController: NSWindowController, NSWindowDelegate {
     public let viewController: PaletteViewController
     /// Chords that close the palette while it has the keys: Open Quickly's, so it toggles, and
-    /// Close Pane's, as Cmd-W closes Xcode's Open Quickly. Set by the window that shows it.
-    var closingChords: Set<KeyChord> {
+    /// Close Pane's, as Cmd-W closes Xcode's Open Quickly. Set by the window that shows it, and
+    /// read at each key equivalent, so a change of the user's shortcuts applies at once.
+    var closingChords: @MainActor () -> Set<KeyChord> {
         get { panel.closingChords }
         set { panel.closingChords = newValue }
     }
@@ -181,14 +182,15 @@ public final class PaletteWindowController: NSWindowController, NSWindowDelegate
 /// items are off while the palette has the keys.
 @MainActor
 private final class PalettePanel: NSPanel {
-    var closingChords: Set<KeyChord> = []
+    var closingChords: @MainActor () -> Set<KeyChord> = { [] }
     var onClosingChord: @MainActor () -> Void = {}
 
     /// A borderless window refuses the keys unless told otherwise; the field needs them.
     override var canBecomeKey: Bool { true }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        guard KeyChord.candidates(for: event).contains(where: closingChords.contains) else {
+        let closing = closingChords()
+        guard KeyChord.candidates(for: event).contains(where: closing.contains) else {
             return super.performKeyEquivalent(with: event)
         }
         onClosingChord()

@@ -1167,6 +1167,28 @@ private func escapePalette(in fixture: Fixture) throws {
     }
 }
 
+/// A plain chord the user gives Open Quickly is typed in the palette's field, not taken to close
+/// it; a closing chord set while the palette is open closes it.
+@MainActor @Test func aPlainOpenQuicklyChordIsTypedInThePaletteNotTakenToCloseIt() async throws {
+    let folder = try TemporaryFolder("BrowserWindowControllerTests")
+    let settings = storedSettings(in: folder)
+    settings.shortcuts = [
+        WindowCommands.showPalette.id: ShortcutOverride(alternate: .chord(KeyChord("j")))
+    ]
+    let fixture = try await Fixture(settings: settings)
+    fixture.controller.showPalette()
+    let panel = try #require(fixture.controller.palette?.window)
+
+    #expect(!panel.performKeyEquivalent(with: try keyEvent("j")))
+    #expect(fixture.controller.palette != nil)
+
+    let cmdJ = KeyChord("j", modifiers: .command)
+    settings.shortcuts = [WindowCommands.showPalette.id: ShortcutOverride(alternate: .chord(cmdJ))]
+
+    #expect(panel.performKeyEquivalent(with: try keyEvent("j", modifiers: .command)))
+    #expect(fixture.controller.palette == nil)
+}
+
 @MainActor @Test func anotherCommandKeyInThePaletteDoesNothingAndDoesntBeep() async throws {
     let fixture = try await Fixture()
     fixture.controller.showPalette()
@@ -1300,6 +1322,7 @@ private func paletteTitles(in fixture: Fixture) throws -> [String] {
     // AppKit sends an item with no target to the key window's chain; the unshown test window is
     // never key, so the item gets the receiver that chain would give it.
     #expect(try receiver(of: alternate, in: fixture.window) === fixture.controller)
+    #expect(fixture.controller.validateMenuItem(alternate))
     alternate.target = fixture.controller
     // A made-up event matches a menu's Shift chord only with the unshifted key as
     // `charactersIgnoringModifiers`; a real one carries what AppKit reads it from.
