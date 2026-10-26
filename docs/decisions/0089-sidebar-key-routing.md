@@ -2,6 +2,9 @@
 
 - **Date:** 2026-10-24
 - **Status:** accepted
+- **2026-10-26:** No pane shows the focus ring while the sidebar has the keys, and the commands
+  that focus another pane move the keys out of the sidebar into it; see "The focus ring" and
+  "Where the keys stay".
 
 ## Context
 
@@ -43,7 +46,19 @@ pane, `Tab.focusedPane`, whether or not its table has the keys.
   redraws the window already did (0086). One that moves the keys itself still does: the filter
   field takes them for Filter, the rename field for Rename. Go to Folder's sheet hands them back
   to the window's first responder as it closes, so to the sidebar, the same rule as the palette's
-  ([0087](0087-palette-window.md)).
+  ([0087](0087-palette-window.md)). (Amended 2026-10-26, Dylan: "if sidebar has focus and you
+  navigate between panes with keyboard shortcut, that should move focus from sidebar to that
+  pane".) Focus Pane Left, Right, Up and Down and Focus Other Pane, run from outside the panes'
+  tables by their chord, menu item or the palette, give the keys to the pane they focus. A Focus
+  Pane key with no pane that way still moves the keys to the focused pane: the key asks for a
+  pane, not the sidebar. A click in a pane already gave it the keys.
+- **The focus ring.** (Added 2026-10-26, Dylan: "if sidebar is focused, the panes on right should
+  remove focus indicator (but tab should still go back to the correct pane that did have the
+  focus)".) While the keys are anywhere in the sidebar, no pane shows the focus ring
+  ([0054](0054-tabs-in-window.md)), as no table shows its selection as active. `Layout.focused`
+  doesn't change, so Tab, Esc and the commands still go to the focused pane, and its ring shows
+  again as soon as the keys go back to a pane. The ring is the only mark of the focused pane: its
+  path bar and status bar look the same in every pane.
 - **Quick Look stays with the lists.** Space stays the sidebar's, and the Quick Look item is off
   outside a pane's table. The panel finds its data source up the responder chain from the keys,
   and takes its keys from the table that started it only while that table has the window's

@@ -220,11 +220,12 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             guard let self, !isClosed, !workspace.isClosed else { return false }
             let table = focusedTable
             guard
-                KeyChord.candidates(for: event).contains(where: {
-                    table.registry.command(for: $0) != nil
-                })
+                let command = KeyChord.candidates(for: event).lazy.compactMap({
+                    table.registry.command(for: $0)
+                }).first
             else { return false }
             table.keyDown(with: event)
+            followFocus(after: command.id)
             return true
         }
         sidebarResizeObserver = NotificationCenter.default.addObserver(
@@ -590,6 +591,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     private func runFromPalette(_ id: CommandID) {
         guard canRunFromPalette(id) else { return }
         focusedTable.run(id)
+        followFocus(after: id)
     }
 
     // MARK: Operations panel
@@ -672,6 +674,21 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             preconditionFailure("menu item \"\(sender.title)\" can't run from outside the panes")
         }
         focusedTable.runMenuCommand(sender)
+        followFocus(after: id)
+    }
+
+    /// The commands that focus another pane: Focus Pane Left, Right, Up and Down, and Focus
+    /// Other Pane.
+    private static let paneFocusCommands = Set(TilingCommands.focus.values.map(\.id)).union([
+        DualPaneCommands.focusOtherPane.id
+    ])
+
+    /// Gives the keys to the focused pane after command `id` ran from outside the panes' tables,
+    /// if it is one that focuses a pane. Any other command leaves them where they are, as in the
+    /// sidebar (docs/decisions/0089-sidebar-key-routing.md).
+    private func followFocus(after id: CommandID) {
+        guard Self.paneFocusCommands.contains(id) else { return }
+        giveKeysBack()
     }
 
     /// Select All, Undo, Redo, Cut, Copy and Paste from the Edit menu, on the focused pane's
@@ -788,14 +805,10 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             controller.scroll(like: sourceController)
             controller.pane.finishCopyScroll()
         }
-        // One pane showing needs no mark.
-        let marksFocus = tab.layout.panes.count > 1 && !tab.layout.isZoomed
-        for (id, controller) in views.paneControllers {
-            controller.showsFocus = marksFocus && id == tab.layout.focused
-        }
         let focused = focusedController(in: views, of: tab)
         linkSidebarKeyView(to: focused.keyView)
         moveKeys(to: focused)
+        markFocusedPane(in: views, of: tab)
         updatePreviewPanel()
         showTitles()
     }
@@ -910,6 +923,22 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         return controller
     }
 
+    /// Rings the focused pane while another pane shows and the sidebar doesn't have the keys.
+    /// With the keys in the sidebar no pane is ringed, though the focused pane keeps the focus for
+    /// the commands and for the keys to go back to (docs/decisions/0089-sidebar-key-routing.md).
+    private func markFocusedPane(in views: TabViews, of tab: Tab) {
+        let marksFocus = tab.layout.panes.count > 1 && !tab.layout.isZoomed && !sidebarHasKeys
+        for (id, controller) in views.paneControllers {
+            controller.showsFocus = marksFocus && id == tab.layout.focused
+        }
+    }
+
+    /// Whether the keys are in the sidebar, in its list or anything else in it.
+    private var sidebarHasKeys: Bool {
+        guard let responder = window?.firstResponder as? NSView else { return false }
+        return responder.isDescendant(of: sidebar.view)
+    }
+
     /// Makes `controller`'s table first responder unless something in its pane already is, such
     /// as its filter field, or the sidebar has the keys while it shows.
     private func moveKeys(to controller: PaneViewController) {
@@ -940,18 +969,22 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
 
     /// The first responder moved, by a click, the key view loop or code. If it is now in another
     /// pane of the selected tab, that pane takes the focus, so the commands its keys and menu
-    /// items run act on it.
+    /// items run act on it. Into or out of the sidebar, the focused pane's ring hides or shows.
     private func firstResponderDidChange() {
-        guard !isClosed, !workspace.isClosed, let responder = window?.firstResponder as? NSView
-        else { return }
+        guard !isClosed, !workspace.isClosed else { return }
         let tab = workspace.selectedTab
-        guard let views = tabViews[tab.id],
+        guard let views = tabViews[tab.id] else {
+            updatePreviewPanel()
+            return
+        }
+        guard let responder = window?.firstResponder as? NSView,
             let id = views.paneControllers.first(where: {
                 responder.isDescendant(of: $0.value.view)
             })?
             .key,
             id != tab.layout.focused
         else {
+            markFocusedPane(in: views, of: tab)
             updatePreviewPanel()
             return
         }

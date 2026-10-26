@@ -43,7 +43,9 @@ commands on one chord. Each window already stored whether its sidebar shows
   moves the keys into it; Esc gives them back to the focused pane and leaves the sidebar
   showing. While the sidebar has the keys, a command that redraws the window leaves them there,
   and hiding the sidebar moves them to the pane. Both commands' menu items work with the keys in
-  the sidebar.
+  the sidebar. (Amended 2026-10-26: a command that focuses another pane moves the keys to it, and
+  no pane shows the focus ring while the sidebar has the keys; see
+  [0089](0089-sidebar-key-routing.md).)
 - **Drags and animations.** A drag of the divider that collapses or opens the sidebar sets
   `Workspace.showsSidebar`. The split view also resizes all through a command's animated
   collapse, with `isCollapsed` read at any point of the way, so the window ignores resizes
