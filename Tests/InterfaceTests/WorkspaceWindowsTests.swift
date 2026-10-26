@@ -1157,10 +1157,36 @@ private func showSidebar(of fixture: UndoableWindow) {
     #expect(!fixture.controller.sidebar.outlineView.isHiddenOrHasHiddenAncestor)
 }
 
-/// As in Finder, a press on a sidebar row leaves the keys in the pane. AppKit's own row
-/// tracking doesn't select or act in a window that isn't key, so the selection and the open
-/// aren't checked here.
-@MainActor @Test func aPressOnASidebarRowLeavesTheKeysInThePane() async throws {
+/// Presses at `point` in `fixture`'s window through `window.sendEvent`, as a real click is
+/// sent, with the mouse up queued first so the list's tracking ends at once.
+@MainActor
+private func sendPress(at point: NSPoint, of fixture: UndoableWindow) throws {
+    let window = fixture.window
+    func event(_ type: NSEvent.EventType) throws -> NSEvent {
+        try #require(
+            NSEvent.mouseEvent(
+                with: type, location: point, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
+                pressure: 1))
+    }
+    nonisolated(unsafe) let down = try event(.leftMouseDown)
+    try performRealPress(releasedBy: try event(.leftMouseUp)) { window.sendEvent(down) }
+}
+
+/// The middle of the sidebar's `row` in window coordinates.
+@MainActor
+private func middle(ofSidebarRow row: Int, of fixture: UndoableWindow) -> NSPoint {
+    let outline = fixture.controller.sidebar.outlineView
+    let rect = outline.rect(ofRow: row)
+    return outline.convert(NSPoint(x: rect.midX, y: rect.midY), to: nil)
+}
+
+/// As in Finder, a click on a sidebar row gives the sidebar the keys and opens the row in the
+/// focused pane, which stays the focused pane, so Tab goes back to it; ↓ then moves the
+/// sidebar's selection. AppKit's own row tracking doesn't act in a window that isn't key, so
+/// the mouse up's action is run by hand.
+@MainActor @Test func aClickOnASidebarRowGivesTheSidebarTheKeysAndOpensTheRow() async throws {
     let fixture = try await UndoableWindow()
     defer { fixture.stop() }
     showSidebar(of: fixture)
@@ -1169,10 +1195,39 @@ private func showSidebar(of fixture: UndoableWindow) {
     let row = try sidebarRow("Applications", in: fixture.controller)
     let pane = fixture.controller.workspace.selectedTab.focusedPane
 
-    try outline.realPress(onRow: row)
+    try sendPress(at: middle(ofSidebarRow: row, of: fixture), of: fixture)
+    fixture.controller.sidebar.openClicked(row: row)
+
+    #expect(fixture.window.firstResponder === outline)
+    await settle { pane.location == Location(path: "/Applications") }
+    #expect(fixture.window.firstResponder === outline)
+    #expect(pane.isFocused)
+
+    outline.selectRowIndexes([row], byExtendingSelection: false)
+    outline.keyDown(with: try keyEvent(functionKey(NSDownArrowFunctionKey), modifiers: arrowFlags))
+
+    #expect(outline.selectedRow == row + 1)
+    #expect(fixture.window.firstResponder === outline)
+
+    outline.keyDown(with: try keyEvent("\t"))
 
     #expect(fixture.window.firstResponder === fixture.table)
-    #expect(pane.isFocused)
+}
+
+/// A click on the sidebar below its rows gives it the keys too, as in Finder.
+@MainActor @Test func aClickBelowTheSidebarsRowsGivesItTheKeys() async throws {
+    let fixture = try await UndoableWindow()
+    defer { fixture.stop() }
+    showSidebar(of: fixture)
+    defer { fixture.window.orderOut(nil) }
+    let outline = fixture.controller.sidebar.outlineView
+    let last = outline.rect(ofRow: outline.numberOfRows - 1)
+    let below = NSPoint(x: last.midX, y: last.maxY + 4)
+    #expect(outline.visibleRect.contains(below) && outline.row(at: below) == -1)
+
+    try sendPress(at: outline.convert(below, to: nil), of: fixture)
+
+    #expect(fixture.window.firstResponder === outline)
 }
 
 /// With the keys in the sidebar, a press on another row keeps them there.
@@ -1191,8 +1246,9 @@ private func showSidebar(of fixture: UndoableWindow) {
 
 /// A press on the sidebar during a rename ends it as any click elsewhere does, at the mouse
 /// down, and the typed name lands, as in Finder, though the row's open then takes the pane to
-/// another folder. AppKit's own row tracking doesn't act in a window that isn't key, so the
-/// mouse up's action is run by hand, on a favorite opened at once, as a volume's row is.
+/// another folder; the sidebar then has the keys. AppKit's own row tracking doesn't act in a
+/// window that isn't key, so the mouse up's action is run by hand, on a favorite opened at
+/// once, as a volume's row is.
 @MainActor @Test func aPressOnTheSidebarDuringARenameRenames() async throws {
     let fixture = try await UndoableWindow()
     defer { fixture.stop() }
@@ -1210,30 +1266,15 @@ private func showSidebar(of fixture: UndoableWindow) {
     try sidebar.outlineView.realPress(onRow: row)
     sidebar.openClicked(row: row)
 
-    #expect(fixture.window.firstResponder === fixture.table)
+    #expect(fixture.window.firstResponder === sidebar.outlineView)
     await settle { pane.location == Location(path: "/Applications") }
     await settle { FileManager.default.fileExists(atPath: root + "/typed.txt") }
     #expect(!FileManager.default.fileExists(atPath: root + "/a2.txt"))
 }
 
-/// A press on the sidebar while typing in the filter field gives the keys to the pane's list,
-/// as a click in Finder's sidebar takes them out of its search field.
-@MainActor @Test func aPressOnTheSidebarWhileFilteringGivesTheKeysToThePane() async throws {
-    let fixture = try await UndoableWindow()
-    defer { fixture.stop() }
-    showSidebar(of: fixture)
-    defer { fixture.window.orderOut(nil) }
-    fixture.table.keyDown(with: try keyEvent("f", modifiers: .command))
-    _ = try fixture.type("a")
-
-    try fixture.controller.sidebar.outlineView.realPress(
-        onRow: try sidebarRow("Applications", in: fixture.controller))
-
-    #expect(fixture.window.firstResponder === fixture.table)
-}
-
 /// A right-click on a favorite, sent as the window sends a press on the sidebar, gives its menu
-/// and leaves the keys in the pane. The menu isn't shown: AppKit tracks it modally.
+/// and leaves the keys in the pane: only a left press gives the list the keys. The menu isn't
+/// shown: AppKit tracks it modally.
 @MainActor @Test func aRightClickOnTheSidebarGivesTheMenuAndLeavesTheKeysInThePane()
     async throws
 {
@@ -1242,8 +1283,8 @@ private func showSidebar(of fixture: UndoableWindow) {
     showSidebar(of: fixture)
     defer { fixture.window.orderOut(nil) }
     let outline = fixture.controller.sidebar.outlineView
-    let rect = outline.rect(ofRow: try sidebarRow("Applications", in: fixture.controller))
-    let point = outline.convert(NSPoint(x: rect.midX, y: rect.midY), to: nil)
+    let point = middle(
+        ofSidebarRow: try sidebarRow("Applications", in: fixture.controller), of: fixture)
     let event = try #require(
         NSEvent.mouseEvent(
             with: .rightMouseDown, location: point, modifierFlags: [], timestamp: 0,
@@ -1251,9 +1292,7 @@ private func showSidebar(of fixture: UndoableWindow) {
             clickCount: 1, pressure: 1))
     var menu: NSMenu?
 
-    outline.sendMouseDown(atWindowPoint: point) {
-        // As `NSWindow.sendEvent` does for the view a press hits.
-        if outline.acceptsFirstResponder { fixture.window.makeFirstResponder(outline) }
+    outline.sendMouseDown(.rightMouseDown, atWindowPoint: point) {
         menu = outline.menu(for: event)
     }
 
@@ -1261,50 +1300,33 @@ private func showSidebar(of fixture: UndoableWindow) {
     #expect(fixture.window.firstResponder === fixture.table)
 }
 
-/// Presses on the sidebar's `row` through `window.sendEvent`, as a real click is sent, with
-/// the mouse up queued first so the list's tracking ends at once.
-@MainActor
-private func sendPress(onSidebarRow row: Int, of fixture: UndoableWindow) throws {
-    let outline = fixture.controller.sidebar.outlineView
-    let rect = outline.rect(ofRow: row)
-    let point = outline.convert(NSPoint(x: rect.midX, y: rect.midY), to: nil)
-    let window = fixture.window
-    func event(_ type: NSEvent.EventType) throws -> NSEvent {
-        try #require(
-            NSEvent.mouseEvent(
-                with: type, location: point, modifierFlags: [],
-                timestamp: ProcessInfo.processInfo.systemUptime,
-                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
-                pressure: 1))
-    }
-    nonisolated(unsafe) let down = try event(.leftMouseDown)
-    try performRealPress(releasedBy: try event(.leftMouseUp)) { window.sendEvent(down) }
-}
-
-/// A click sent through the window onto the sidebar during a rename commits it and leaves the
-/// keys in the pane; during filter typing it takes the keys out of the field to the pane.
+/// A click sent through the window onto the sidebar during a rename commits it and gives the
+/// sidebar the keys; during filter typing it takes the keys out of the field to the sidebar.
 @MainActor @Test func aClickSentThroughTheWindowOntoTheSidebarEndsTextEditing() async throws {
     let fixture = try await UndoableWindow()
     defer { fixture.stop() }
     showSidebar(of: fixture)
     defer { fixture.window.orderOut(nil) }
+    let outline = fixture.controller.sidebar.outlineView
     let pane = fixture.controller.workspace.selectedTab.focusedPane
     pane.select(Selection([ExactName("a2.txt")], cursor: ExactName("a2.txt")))
     fixture.table.keyDown(with: try keyEvent("\r"))
     _ = try fixture.type("typed")
     let root = fixture.folder.url.path
-    let row = try sidebarRow("Applications", in: fixture.controller)
+    let point = middle(
+        ofSidebarRow: try sidebarRow("Applications", in: fixture.controller), of: fixture)
 
-    try sendPress(onSidebarRow: row, of: fixture)
+    try sendPress(at: point, of: fixture)
 
-    #expect(fixture.window.firstResponder === fixture.table)
+    #expect(fixture.window.firstResponder === outline)
     await settle { FileManager.default.fileExists(atPath: root + "/typed.txt") }
 
+    #expect(fixture.window.makeFirstResponder(fixture.table))
     fixture.table.keyDown(with: try keyEvent("f", modifiers: .command))
     _ = try fixture.type("t")
     #expect(fixture.window.firstResponder is NSTextView)
 
-    try sendPress(onSidebarRow: row, of: fixture)
+    try sendPress(at: point, of: fixture)
 
-    #expect(fixture.window.firstResponder === fixture.table)
+    #expect(fixture.window.firstResponder === outline)
 }
