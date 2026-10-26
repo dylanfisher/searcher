@@ -17,11 +17,16 @@ private final class Fixture {
     var hasWindow = true
     var presented: [NSWindow] = []
     var dismissed: [NSWindow] = []
+    /// The windows brought forward, each with how many sheets were shown before it.
+    var broughtForward: [(window: NSWindow, presentedBefore: Int)] = []
 
     init() {
         prompter = OperationPrompter()
         prompter.window = { [unowned self] _ in hasWindow ? window : nil }
         prompter.present = { [unowned self] sheet, _ in presented.append(sheet) }
+        prompter.bringForward = { [unowned self] window in
+            broughtForward.append((window, presented.count))
+        }
         prompter.dismiss = { [unowned self] sheet in dismissed.append(sheet) }
     }
 
@@ -80,6 +85,24 @@ private func ask(_ request: ConfirmRequest, of fixture: Fixture, into returned: 
     second.cancelButton.performClick(nil)
     await settle { returned.confirms == [true, false] }
     #expect(fixture.prompter.shown == nil)
+}
+
+/// The sheet's window may be behind another, minimized or on another Space, since a question
+/// goes on its operation's window: it is brought forward before the sheet shows on it, so the
+/// sheet isn't left where no one sees it, holding every later question.
+@MainActor @Test func aSheetOnAWindowThatIsNotKeyBringsItForwardFirst() async throws {
+    let fixture = Fixture()
+    let returned = Returned()
+    #expect(!fixture.window.isKeyWindow)
+
+    ask(otherPane("one"), of: fixture, into: returned)
+    await settle { fixture.presented.count == 1 }
+
+    #expect(fixture.broughtForward.count == 1)
+    #expect(fixture.broughtForward.first?.window === fixture.window)
+    #expect(fixture.broughtForward.first?.presentedBefore == 0)
+    try #require(fixture.confirmSheet).cancelButton.performClick(nil)
+    await settle { returned.confirms == [false] }
 }
 
 @MainActor @Test func aQuestionWaitsForAWindow() async throws {

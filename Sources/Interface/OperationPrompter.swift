@@ -63,6 +63,15 @@ final class OperationPrompter {
     var present: @MainActor (NSWindow, NSWindow) -> Void = { sheet, window in
         window.beginSheet(sheet)
     }
+    /// Brings the window a sheet is about to show on to the front and makes it key, out of the
+    /// Dock if it is minimized, and onto the screen from another Space, as
+    /// `makeKeyAndOrderFront` does. The sheet's window may be behind another, since a question
+    /// goes on its operation's window, and a sheet no one sees would hold every later question.
+    /// Tests replace it so nothing is shown.
+    var bringForward: @MainActor (NSWindow) -> Void = { window in
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        window.makeKeyAndOrderFront(nil)
+    }
     /// Takes a sheet off its window. Tests replace it with `present`.
     var dismiss: @MainActor (NSWindow) -> Void = { sheet in sheet.sheetParent?.endSheet(sheet) }
     /// Cancels the operation of a conflict the user cancelled.
@@ -131,6 +140,7 @@ final class OperationPrompter {
         shown = sheet
         shownQuestion = question
         shownOn = window
+        if !window.isKeyWindow { bringForward(window) }
         present(sheet.panel, window)
     }
 

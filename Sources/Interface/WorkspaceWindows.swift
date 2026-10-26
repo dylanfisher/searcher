@@ -10,9 +10,10 @@ import os
 /// its file commands through one `FileOperationQueue`. Each operation is listed in the
 /// operations panel of the window that queued it, and its questions show as sheets there; when
 /// that window closes, the operation keeps running and the most recently active window takes
-/// it over (docs/decisions/0067-operations-panel.md). Every window cuts, copies and pastes through one
-/// `CutState`, so a cut in one window pastes as a move in another. Every operation that finishes
-/// goes into one `UndoHistory`, so Undo in any window undoes the last change made in any of them.
+/// it over (docs/decisions/0067-operations-panel.md). Every window cuts, copies and pastes
+/// through one `CutState`, so a cut in one window pastes as a move in another. Every operation
+/// that finishes goes into one `UndoHistory`, so Undo in any window undoes the last change made
+/// in any of them.
 ///
 /// It saves every window's workspace and the session to its `WorkspaceStore`, once changes have
 /// stopped for `saveDelay`, and at launch rebuilds the windows the store kept
@@ -169,6 +170,11 @@ public final class WorkspaceWindows {
         undoHistory.follow(finished)
         prompter.queue = fileOperations
         prompter.window = { [weak self] id in self?.questionWindow(for: id) }
+        let bringForward = prompter.bringForward
+        // Windows that aren't put on screen aren't brought forward either.
+        prompter.bringForward = { [weak self] window in
+            if self?.showsWindows == true { bringForward(window) }
+        }
         Task { [weak self] in
             for await snapshots in stream {
                 self?.operationsChanged(snapshots)
