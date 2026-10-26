@@ -372,6 +372,14 @@ public final class ListingService: Sendable {
         }
     }
 
+    /// The loads holding a slot, counted on `scheduler`, so after every change queued before the
+    /// call, for tests.
+    func runningLoadCount() async -> Int {
+        await withCheckedContinuation { continuation in
+            scheduler.async { continuation.resume(returning: self.queue.running) }
+        }
+    }
+
     /// Runs on `scheduler`.
     private func startWaitingLoads() {
         while let load = queue.next(slotsFree: Self.mostRunningLoads - queue.running) {
