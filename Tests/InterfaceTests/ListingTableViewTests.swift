@@ -155,12 +155,20 @@ private struct RecordingTable {
     #expect(recording.beeps == 0)
 }
 
-@MainActor @Test func selectAllWithNoCommandOnItsChordBeepsAndKeepsTheSelection() throws {
-    let recording = RecordingTable(registry: CommandRegistry())
+/// Edit ▸ Select All runs Select All by its ID, though the user gave Cmd-A to another command,
+/// and the table's own select-all never runs.
+@MainActor @Test func selectAllRunsItsCommandWhicheverCommandHasCmdA() throws {
+    let bindings = try KeyBindings(
+        commands: AppCommands.commands,
+        overrides: [
+            WindowCommands.goToItem.id: ShortcutOverride(
+                primary: .chord(KeyChord("a", modifiers: .command)))
+        ])
+    let recording = RecordingTable(registry: bindings.registry)
     recording.table.selectAll(nil)
 
-    #expect(recording.beeps == 1)
-    #expect(recording.ran.isEmpty)
+    #expect(recording.beeps == 0)
+    #expect(recording.ran == [SelectionCommands.selectAll.id])
     #expect(recording.table.selectedRowIndexes == [1])
 }
 

@@ -140,9 +140,9 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
             MainMenuBuilder.undo, MainMenuBuilder.redo, MainMenuBuilder.cut,
             MainMenuBuilder.copy, MainMenuBuilder.paste,
         ].first(where: { $0.action == item.action }) {
-            guard let command = command(on: action) else { return false }
-            item.title = commandTitle(command.id) ?? action.title
-            return canRunCommand(command.id)
+            let id = command(of: action)
+            item.title = commandTitle(id) ?? action.title
+            return canRunCommand(id)
         }
         guard item.action == #selector(runMenuCommand(_:)) else { return true }
         guard let id = item.representedObject as? CommandID else {
@@ -226,15 +226,15 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
         return true
     }
 
-    /// Select All from the Edit menu runs the command bound to its chord, as the key would. The
-    /// pane owns the selection, so `NSTableView`'s own select-all never runs.
+    /// Select All from the Edit menu runs the Select All command. The pane owns the selection, so
+    /// `NSTableView`'s own select-all never runs.
     override func selectAll(_ sender: Any?) {
         runCommand(on: MainMenuBuilder.selectAll)
     }
 
-    /// Undo and Redo from the Edit menu run the undo commands on their chords. A text field keeps
-    /// its own undo: no text field is inside the table, so these actions from a field editor go to
-    /// the window, which undoes the typing with its undo manager.
+    /// Undo and Redo from the Edit menu run the undo commands. A text field keeps its own undo: no
+    /// text field is inside the table, so these actions from a field editor go to the window,
+    /// which undoes the typing with its undo manager.
     @objc func undo(_ sender: Any?) {
         runCommand(on: MainMenuBuilder.undo)
     }
@@ -243,8 +243,8 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
         runCommand(on: MainMenuBuilder.redo)
     }
 
-    /// Cut, Copy and Paste from the Edit menu run the clipboard commands on their chords. Text
-    /// fields answer these actions themselves, so they keep the keys.
+    /// Cut, Copy and Paste from the Edit menu run the clipboard commands. Text fields answer these
+    /// actions themselves, so they keep the keys.
     @objc func cut(_ sender: Any?) {
         runCommand(on: MainMenuBuilder.cut)
     }
@@ -257,17 +257,16 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
         runCommand(on: MainMenuBuilder.paste)
     }
 
-    private func command(on action: MainMenuBuilder.StandardAction) -> Command? {
-        action.chord.flatMap(registry.command(for:))
+    /// `action`'s command, which runs whatever chords the user gives it.
+    private func command(of action: MainMenuBuilder.StandardAction) -> CommandID {
+        guard let id = action.command else {
+            preconditionFailure("the Edit item \"\(action.title)\" runs no command")
+        }
+        return id
     }
 
-    /// Runs the command bound to `action`'s chord, or beeps when none is.
     private func runCommand(on action: MainMenuBuilder.StandardAction) {
-        guard let command = command(on: action) else {
-            beep()
-            return
-        }
-        run(command.id)
+        run(command(of: action))
     }
 
     /// Runs a command from a key or menu item, here or handed on by the Quick Look panel, ending

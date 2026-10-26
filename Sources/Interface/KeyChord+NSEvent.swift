@@ -104,6 +104,15 @@ extension KeyChord {
         return held.filter { modifiers.contains($0.0) }.map(\.1).joined() + key
     }
 
+    /// Whether a menu item may have the chord as its key equivalent: one with Command, Control or
+    /// Option, or an F-key. A menu takes its key equivalents before the first responder, so any
+    /// other chord, such as Space, Tab, "k" or Shift-↓, would be taken from the text fields that
+    /// type it and from type-select (docs/decisions/0060-menu-items-for-every-command.md).
+    var canBeKeyEquivalent: Bool {
+        if case .function = key { return true }
+        return !modifiers.isDisjoint(with: [.command, .control, .option])
+    }
+
     var keyEquivalentModifierMask: NSEvent.ModifierFlags {
         var mask: NSEvent.ModifierFlags = []
         if modifiers.contains(.control) { mask.insert(.control) }

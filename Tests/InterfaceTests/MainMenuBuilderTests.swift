@@ -58,7 +58,7 @@ private func buildMenu(_ registry: CommandRegistry) throws -> NSMenu {
     let registry = try AppCommands.registry()
     let menu = try buildMenu(registry)
 
-    let commandItems = allItems(menu).filter { $0.representedObject is CommandID }
+    let commandItems = allItems(menu).filter { $0.representedObject is CommandID && !$0.isHidden }
     #expect(!commandItems.isEmpty)
     for item in commandItems {
         let id = try #require(item.representedObject as? CommandID)
@@ -84,14 +84,12 @@ private func buildMenu(_ registry: CommandRegistry) throws -> NSMenu {
 @MainActor @Test func everyRegisteredCommandHasAMenuItem() throws {
     let registry = try AppCommands.registry()
     let menu = try buildMenu(registry)
-    var listed = Set(allItems(menu).compactMap { $0.representedObject as? CommandID })
-    // Edit's Cut, Copy, Paste and Select All run the commands bound to their chords when the
-    // table has the keys.
-    for action in MainMenuBuilder.actionsRunningCommands {
-        if let chord = action.chord, let command = registry.command(for: chord) {
-            listed.insert(command.id)
-        }
-    }
+    // A hidden item runs its command on a second chord; it doesn't list it.
+    var listed = Set(
+        allItems(menu).filter { !$0.isHidden }.compactMap { $0.representedObject as? CommandID })
+    // Edit's Undo, Redo, Cut, Copy, Paste and Select All run their commands when the table has
+    // the keys.
+    listed.formUnion(MainMenuBuilder.actionsRunningCommands.compactMap(\.command))
 
     let missing = AppCommands.bindings.map(\.command).filter { !listed.contains($0.id) }
 
@@ -301,7 +299,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     let menu = try buildMenu(try AppCommands.registry())
     let view = try #require(menu.items.first { $0.title == "View" }?.submenu)
     #expect(
-        view.items.map(\.title) == [
+        view.items.filter { !$0.isHidden }.map(\.title) == [
             "as List", "as Columns", "Columns Start at Home Folder", "", "Show Sidebar",
             "Focus Sidebar", "Show Favorites in Sidebar", "Show Locations in Sidebar",
             "Show Workspaces in Sidebar", "",
@@ -313,7 +311,9 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
         ])
     let appearance = try #require(view.items.last?.submenu)
     #expect(
-        appearance.items.map(\.title) == ["Auto Appearance", "Light Appearance", "Dark Appearance"])
+        appearance.items.filter { !$0.isHidden }.map(\.title) == [
+            "Auto Appearance", "Light Appearance", "Dark Appearance",
+        ])
     let table = ListingTableView()
     let log = CommandLog()
     table.runCommand = { log.ids.append($0) }
@@ -408,7 +408,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     let menu = try buildMenu(try AppCommands.registry())
     let go = try #require(menu.items.first { $0.title == "Go" }?.submenu)
     #expect(
-        go.items.map(\.title) == [
+        go.items.filter { !$0.isHidden }.map(\.title) == [
             "Back", "Forward", "", "Open", "Open in New Tab", "Open in Other Pane",
             "Go to Parent", "", "Into Selected Folder", "To Parent Column", "",
             "Same Folder in Other Pane", "Go to Folder…", "Open Quickly…", "Go to Item…",
@@ -470,7 +470,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     let menu = try buildMenu(try AppCommands.registry())
     let file = try #require(menu.items.first { $0.title == "File" }?.submenu)
     #expect(
-        file.items.map(\.title) == [
+        file.items.filter { !$0.isHidden }.map(\.title) == [
             "New Window", "New Folder", "New Tab", "Close Tab", "", "Get Info", "Rename",
             "Duplicate",
             "Copy to Other Pane", "Move to Other Pane", "", "Open With",
@@ -479,7 +479,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
             "Open Terminal Here", "", "Move to Trash", "", "Filter",
         ])
     let edit = try #require(menu.items.first { $0.title == "Edit" }?.submenu)
-    #expect(edit.items.map(\.title).contains("Copy Path"))
+    #expect(edit.items.filter { !$0.isHidden }.map(\.title).contains("Copy Path"))
     let quickLook = try #require(file.items.first { $0.title == "Quick Look" })
     #expect(quickLook.keyEquivalent.isEmpty)
     let table = ListingTableView()
@@ -539,7 +539,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     let menu = try buildMenu(try AppCommands.registry())
     let window = try #require(menu.items.first { $0.title == "Window" }?.submenu)
     #expect(
-        window.items.map(\.title) == [
+        window.items.filter { !$0.isHidden }.map(\.title) == [
             "Minimize", "Zoom", "", "Show Previous Tab", "Show Next Tab", "", "Split Right",
             "Split Down", "Columns", "Rows", "", "Focus Other Pane", "Focus Pane", "Move Pane",
             "Resize Pane",
@@ -577,7 +577,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     let selection = try #require(edit.items.first { $0.title == "Selection" }?.submenu)
 
     #expect(
-        selection.items.map(\.title) == [
+        selection.items.filter { !$0.isHidden }.map(\.title) == [
             "Select Next Row", "Select Previous Row", "Select First Row", "Select Last Row", "",
             "Move Down 10 Rows", "Move Up 10 Rows", "Page Down", "Page Up", "",
             "Extend Selection Down", "Extend Selection Up",
@@ -591,7 +591,8 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     for family in ["Focus Pane", "Move Pane", "Resize Pane"] {
         let submenu = try #require(window.items.first { $0.title == family }?.submenu, "\(family)")
         #expect(
-            submenu.items.map(\.title) == ["Left", "Right", "Up", "Down"].map { "\(family) \($0)" })
+            submenu.items.filter { !$0.isHidden }.map(\.title)
+                == ["Left", "Right", "Up", "Down"].map { "\(family) \($0)" })
     }
     let table = ListingTableView()
     let log = CommandLog()
@@ -639,8 +640,12 @@ private func usKey(
     let window = try #require(menu.items.first { $0.title == "Window" }?.submenu)
     let columns = try #require(window.items.first { $0.title == "Columns" }?.submenu)
     let rows = try #require(window.items.first { $0.title == "Rows" }?.submenu)
-    #expect(columns.items.map(\.title) == ["1 Column", "2 Columns", "3 Columns", "4 Columns"])
-    #expect(rows.items.map(\.title) == ["1 Row", "2 Rows", "3 Rows", "4 Rows"])
+    #expect(
+        columns.items.filter { !$0.isHidden }.map(\.title) == [
+            "1 Column", "2 Columns", "3 Columns", "4 Columns",
+        ])
+    #expect(
+        rows.items.filter { !$0.isHidden }.map(\.title) == ["1 Row", "2 Rows", "3 Rows", "4 Rows"])
     let table = ListingTableView()
     let log = CommandLog()
     table.runCommand = { log.ids.append($0) }
@@ -707,9 +712,7 @@ private func usKey(
     let (mainMenu, windowsMenu, helpMenu) = (app.mainMenu, app.windowsMenu, app.helpMenu)
     defer { (app.mainMenu, app.windowsMenu, app.helpMenu) = (mainMenu, windowsMenu, helpMenu) }
 
-    try MainMenuBuilder.install(
-        in: app, appName: "Searcher", registry: try AppCommands.registry(),
-        settings: untouchedSettings())
+    try MainMenuBuilder.install(in: app, appName: "Searcher", settings: untouchedSettings())
 
     let help = try #require(app.mainMenu?.items.last?.submenu)
     #expect(help.title == "Help")
@@ -725,13 +728,13 @@ private func usKey(
     let menu = try buildMenu(registry)
     let items = try ["File", "Edit"].flatMap { title in
         try #require(menu.items.first { $0.title == title }?.submenu).items
-    }
+    }.filter { !$0.isHidden }
 
     for command in (FileCommands.bindings + ClipboardCommands.bindings).map(\.command) {
         let matching = items.filter { item in
             if let id = item.representedObject as? CommandID { return id == command.id }
             return MainMenuBuilder.actionsRunningCommands.contains {
-                $0.action == item.action && $0.chord.flatMap(registry.command(for:)) == command
+                $0.action == item.action && $0.command == command.id
             }
         }
         #expect(matching.count == 1, "\(command.id)")
@@ -756,7 +759,7 @@ private func usKey(
     table.canRunCommand = { _ in false }
     let ids = Set((FileCommands.bindings + ClipboardCommands.bindings).map(\.command.id))
     let clipboardActions = [MainMenuBuilder.cut, MainMenuBuilder.copy, MainMenuBuilder.paste]
-    let items = allItems(menu).filter { item in
+    let items = allItems(menu).filter { !$0.isHidden }.filter { item in
         if let id = item.representedObject as? CommandID { return ids.contains(id) }
         return clipboardActions.contains { $0.action == item.action }
     }
@@ -782,9 +785,7 @@ private func usKey(
     let (mainMenu, windowsMenu, helpMenu) = (app.mainMenu, app.windowsMenu, app.helpMenu)
     defer { (app.mainMenu, app.windowsMenu, app.helpMenu) = (mainMenu, windowsMenu, helpMenu) }
 
-    try MainMenuBuilder.install(
-        in: app, appName: "Searcher", registry: try AppCommands.registry(),
-        settings: untouchedSettings())
+    try MainMenuBuilder.install(in: app, appName: "Searcher", settings: untouchedSettings())
 
     let services = try #require(app.servicesMenu)
     #expect(services.title == "Services")
@@ -826,7 +827,7 @@ private func usKey(
     let registry = try AppCommands.registry()
     let menu = try buildMenu(registry)
     let edit = try #require(menu.items.first { $0.title == "Edit" }?.submenu)
-    let titles = edit.items.map(\.title)
+    let titles = edit.items.filter { !$0.isHidden }.map(\.title)
     let undo = try #require(edit.items.first { $0.title == "Undo Selection" })
     let redo = try #require(edit.items.first { $0.title == "Redo Selection" })
 
@@ -848,5 +849,170 @@ private func usKey(
         MainMenuBuilder.reservedChords == [
             KeyChord("q", modifiers: .command), KeyChord("h", modifiers: .command),
             KeyChord("h", modifiers: [.option, .command]), KeyChord("m", modifiers: .command),
+            KeyChord(",", modifiers: .command),
         ])
+}
+
+// MARK: Primary and alternate chords
+
+/// The registry the app makes from `overrides`.
+@MainActor
+private func registry(_ overrides: [CommandID: ShortcutOverride]) throws -> CommandRegistry {
+    try KeyBindings(
+        commands: AppCommands.commands, overrides: overrides,
+        reserved: MainMenuBuilder.reservedChords
+    ).registry
+}
+
+/// The visible item and the hidden one that run command `id`.
+@MainActor
+private func items(for id: CommandID, in menu: NSMenu) throws -> (
+    shown: NSMenuItem, hidden: NSMenuItem
+) {
+    let running = allItems(menu).filter { $0.representedObject as? CommandID == id }
+    let shown = running.filter { !$0.isHidden }
+    let hidden = running.filter(\.isHidden)
+    #expect(shown.count == 1 && hidden.count == 1, "\(id)")
+    return (try #require(shown.first), try #require(hidden.first))
+}
+
+@MainActor
+private func expectKey(_ chord: KeyChord?, on item: NSMenuItem, _ comment: Comment? = nil) {
+    #expect(item.keyEquivalent == (chord?.keyEquivalent ?? ""), comment)
+    #expect(item.keyEquivalentModifierMask == (chord?.keyEquivalentModifierMask ?? []), comment)
+}
+
+/// Open Quickly shows Cmd-K; Cmd-Shift-P is a hidden item beside it that sends the same action
+/// with the same command, so the menu bar takes it from a text field too.
+@MainActor @Test func theItemShowsThePrimaryAndAHiddenItemBesideItHasTheAlternate() throws {
+    let menu = try buildMenu(try AppCommands.registry())
+    let (shown, hidden) = try items(for: WindowCommands.showPalette.id, in: menu)
+
+    expectKey(KeyChord("k", modifiers: .command), on: shown)
+    expectKey(KeyChord("p", modifiers: [.command, .shift]), on: hidden)
+    #expect(hidden.action == shown.action)
+    #expect(hidden.allowsKeyEquivalentWhenHidden)
+    #expect(!shown.isHidden)
+    #expect(hidden.menu === shown.menu)
+    #expect(hidden.menu?.index(of: hidden) == (shown.menu?.index(of: shown)).map { $0 + 1 })
+}
+
+/// A chord with no Command, Control or Option is typed in text fields, so the user's plain key
+/// never becomes a key equivalent, and the item shows the command's other chord.
+@MainActor @Test func aPlainChordTheUserGaveACommandIsNoKeyEquivalent() throws {
+    let menu = try buildMenu(
+        try registry([
+            WindowCommands.showPalette.id: ShortcutOverride(primary: .chord(KeyChord("j"))),
+            WindowCommands.newTab.id: ShortcutOverride(alternate: .chord(KeyChord(.escape))),
+        ]))
+
+    let palette = try items(for: WindowCommands.showPalette.id, in: menu)
+    expectKey(KeyChord("p", modifiers: [.command, .shift]), on: palette.shown)
+    expectKey(nil, on: palette.hidden)
+    let newTab = try items(for: WindowCommands.newTab.id, in: menu)
+    expectKey(KeyChord("t", modifiers: .command), on: newTab.shown)
+    expectKey(nil, on: newTab.hidden)
+    #expect(!allItems(menu).contains { $0.keyEquivalent == "j" || $0.keyEquivalent == "\u{1B}" })
+}
+
+/// An F-key has no meaning in a text field, so the preset's F5 is a key equivalent.
+@MainActor @Test func anFKeyAlternateIsAKeyEquivalent() throws {
+    let menu = try buildMenu(
+        try KeyBindings(commands: AppCommands.commands, preset: FileCommands.commanderFKeys)
+            .registry)
+
+    let (_, hidden) = try items(for: FileCommands.copyToOtherPane.id, in: menu)
+    expectKey(KeyChord(.function(5)), on: hidden)
+}
+
+@MainActor @Test func changingTheShortcutsSettingUpdatesTheInstalledItems() throws {
+    let app = NSApplication.shared
+    let (mainMenu, windowsMenu, helpMenu) = (app.mainMenu, app.windowsMenu, app.helpMenu)
+    defer { (app.mainMenu, app.windowsMenu, app.helpMenu) = (mainMenu, windowsMenu, helpMenu) }
+    let folder = try TemporaryFolder("MainMenuBuilderTests")
+    let settings = storedSettings(in: folder)
+    NSMenuItem.usesUserKeyEquivalents = false
+    try MainMenuBuilder.install(in: app, appName: "Searcher", settings: settings)
+    let menu = try #require(app.mainMenu)
+    let custom = KeyChord("o", modifiers: [.command, .shift])
+
+    settings.shortcuts = [
+        WindowCommands.showPalette.id: ShortcutOverride(
+            primary: .removed, alternate: .chord(custom))
+    ]
+
+    let (shown, hidden) = try items(for: WindowCommands.showPalette.id, in: menu)
+    expectKey(custom, on: shown)
+    expectKey(nil, on: hidden)
+
+    settings.shortcuts = [:]
+
+    expectKey(KeyChord("k", modifiers: .command), on: shown)
+    expectKey(KeyChord("p", modifiers: [.command, .shift]), on: hidden)
+}
+
+/// Copy's alternate is a hidden Edit item sending `copy:`, so a text field copies on it too.
+@MainActor @Test func anEditCommandsAlternateIsAHiddenItemSendingTheEditAction() throws {
+    let alternate = KeyChord("c", modifiers: [.control, .command])
+    let menu = try buildMenu(
+        try registry([ClipboardCommands.copy.id: ShortcutOverride(alternate: .chord(alternate))]))
+    let edit = try #require(menu.items.first { $0.title == "Edit" }?.submenu)
+
+    let copies = edit.items.filter { $0.action == MainMenuBuilder.copy.action }
+
+    #expect(copies.map(\.isHidden) == [false, true])
+    expectKey(KeyChord("c", modifiers: .command), on: copies[0])
+    expectKey(alternate, on: copies[1])
+    #expect(copies[1].allowsKeyEquivalentWhenHidden)
+}
+
+/// Edit ▸ Copy runs Copy by its ID on its fixed Cmd-C: after Copy's Cmd-C is removed or moved,
+/// and after another command is given Cmd-C, whose item then shows no Cmd-C of its own.
+@MainActor @Test func editCopyRunsCopyWhateverChordsTheUserGaveIt() throws {
+    let cmdC = KeyChord("c", modifiers: .command)
+    let cases: [[CommandID: ShortcutOverride]] = [
+        [ClipboardCommands.copy.id: ShortcutOverride(primary: .removed)],
+        [
+            ClipboardCommands.copy.id: ShortcutOverride(
+                primary: .chord(KeyChord("y", modifiers: .command)))
+        ],
+        [WindowCommands.goToItem.id: ShortcutOverride(primary: .chord(cmdC))],
+    ]
+    for overrides in cases {
+        let registry = try registry(overrides)
+        let menu = try buildMenu(registry)
+        let edit = try #require(menu.items.first { $0.title == "Edit" }?.submenu)
+        let copy = try #require(
+            edit.items.first { $0.action == MainMenuBuilder.copy.action && !$0.isHidden })
+        let table = ListingTableView()
+        table.registry = registry
+        let log = CommandLog()
+        table.runCommand = { log.ids.append($0) }
+        table.canRunCommand = { $0 == ClipboardCommands.copy.id }
+
+        expectKey(cmdC, on: copy, "\(overrides)")
+        let onCmdC = allItems(menu).filter {
+            $0.keyEquivalent == cmdC.keyEquivalent
+                && $0.keyEquivalentModifierMask == cmdC.keyEquivalentModifierMask
+        }
+        #expect(onCmdC == [copy], "\(overrides)")
+        #expect(table.validateMenuItem(copy), "\(overrides)")
+        table.copy(copy)
+
+        #expect(log.ids == [ClipboardCommands.copy.id], "\(overrides)")
+    }
+}
+
+/// Settings… is fixed on Cmd-, so the user can always get back to the window that sets keys.
+@MainActor @Test func theAppMenuHasSettingsOnCmdCommaWhichNoCommandMayTake() throws {
+    let menu = try buildMenu(try AppCommands.registry())
+    let appMenu = try #require(menu.items.first?.submenu)
+
+    let settings = try #require(appMenu.items.first { $0.title == "Settings…" })
+
+    #expect(settings.action == #selector(SettingsShowing.showSettings(_:)))
+    // Nothing in AppKit answers it, so the item is off until a responder of the app does.
+    #expect(!NSApplication.shared.responds(to: settings.action))
+    expectKey(KeyChord(",", modifiers: .command), on: settings)
+    #expect(MainMenuBuilder.reservedChords.contains(KeyChord(",", modifiers: .command)))
 }

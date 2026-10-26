@@ -1281,6 +1281,43 @@ private func paletteTitles(in fixture: Fixture) throws -> [String] {
     #expect(editor.delegate === filter)
 }
 
+/// Open Quickly's alternate, Cmd-Shift-P, is a hidden item, which the menu bar runs while the
+/// filter field has the keys, through the window controller's validation, as it runs Cmd-K.
+@MainActor @Test func theMenuBarRunsOpenQuicklysAlternateFromTheFilterField() async throws {
+    let fixture = try await Fixture()
+    try fixture.press(try keyEvent("f", modifiers: .command))
+    #expect(fixture.controller.keysAreInText)
+    let app = NSApplication.shared
+    let (mainMenu, windowsMenu, helpMenu) = (app.mainMenu, app.windowsMenu, app.helpMenu)
+    defer { (app.mainMenu, app.windowsMenu, app.helpMenu) = (mainMenu, windowsMenu, helpMenu) }
+    NSMenuItem.usesUserKeyEquivalents = false
+    try MainMenuBuilder.install(in: app, appName: "Searcher", settings: untouchedSettings())
+    let menu = try #require(app.mainMenu)
+    let alternate = try #require(
+        allMenuItems(menu).first {
+            $0.isHidden && $0.representedObject as? CommandID == WindowCommands.showPalette.id
+        })
+    // AppKit sends an item with no target to the key window's chain; the unshown test window is
+    // never key, so the item gets the receiver that chain would give it.
+    #expect(try receiver(of: alternate, in: fixture.window) === fixture.controller)
+    alternate.target = fixture.controller
+    // A made-up event matches a menu's Shift chord only with the unshifted key as
+    // `charactersIgnoringModifiers`; a real one carries what AppKit reads it from.
+    let cmdShiftP = try keyEvent("p", characters: "P", modifiers: [.command, .shift])
+
+    #expect(fixture.controller.palette == nil)
+
+    #expect(menu.performKeyEquivalent(with: cmdShiftP))
+
+    #expect(fixture.controller.palette != nil)
+}
+
+/// Every item in `menu` and its submenus, depth first.
+@MainActor
+private func allMenuItems(_ menu: NSMenu) -> [NSMenuItem] {
+    menu.items.flatMap { [$0] + ($0.submenu.map(allMenuItems) ?? []) }
+}
+
 @MainActor @Test func goToItemChosenInOpenQuicklyShowsGoToItem() async throws {
     let fixture = try await Fixture()
     try fixture.press(try keyEvent("k", modifiers: .command))
