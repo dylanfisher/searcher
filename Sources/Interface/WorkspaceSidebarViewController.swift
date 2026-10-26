@@ -195,23 +195,41 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         }
         /// The context menu for a right-click on a row, or -1 below the rows; nil for none.
         var contextMenu: @MainActor (Int) -> NSMenu? = { _ in nil }
-        /// The event the app is handling; tests replace it.
-        var currentEvent: @MainActor () -> NSEvent? = { NSApp.currentEvent }
+        /// Ends text editing for a press on the list: gives the keys from a text field, such as
+        /// a pane's rename or filter field, to the focused pane, which commits a rename as any
+        /// click elsewhere does. The window sets it; a list without it leaves the keys alone.
+        var takeKeysFromText: @MainActor () -> Void = {}
+        /// Whether the window is sending a press on the list, during which the list refuses the
+        /// keys.
+        private(set) var isPressed = false
 
         /// A click on the list leaves the keys where they were, as a click in Finder's sidebar
         /// does, so the selection shows as a list without the keys shows it: the row's icon and
-        /// name in the accent. `NSWindow` asks this before it gives the clicked view the keys.
-        /// Focus Sidebar, Tab and a click on a menu or in another window still give the list
-        /// the keys.
+        /// name in the accent. `NSWindow` asks this before it gives the pressed view the keys.
+        /// Only a press being sent counts, so Focus Sidebar, Tab and VoiceOver still give the
+        /// list the keys, whatever event came last.
         override var acceptsFirstResponder: Bool {
-            if let event = currentEvent(),
-                [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type),
-                let window, event.windowNumber == window.windowNumber,
-                visibleRect.contains(convert(event.locationInWindow, from: nil))
-            {
-                return false
+            !isPressed && super.acceptsFirstResponder
+        }
+
+        /// Whether a mouse down at `windowPoint` lands on the list as shown.
+        func isHit(atWindowPoint windowPoint: NSPoint) -> Bool {
+            window != nil && !isHiddenOrHasHiddenAncestor
+                && visibleRect.contains(convert(windowPoint, from: nil))
+        }
+
+        /// Runs `send`, the window's sending of a mouse down at `windowPoint`. One on the list
+        /// first ends text editing (`takeKeysFromText`), then is sent with the list refusing
+        /// the keys; the row is selected and opened, dragged or shows its menu as before.
+        func sendMouseDown(atWindowPoint windowPoint: NSPoint, _ send: () -> Void) {
+            guard isHit(atWindowPoint: windowPoint), !isPressed else {
+                send()
+                return
             }
-            return super.acceptsFirstResponder
+            takeKeysFromText()
+            isPressed = true
+            defer { isPressed = false }
+            send()
         }
 
         override func keyDown(with event: NSEvent) {
@@ -413,15 +431,24 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     }
 
     @objc private func rowClicked() {
-        openRow(outlineView.clickedRow)
+        openClicked(row: outlineView.clickedRow)
+    }
+
+    /// Opens the clicked row one turn of the main actor later. A press that ended a rename in a
+    /// pane started it with a hop to the main actor, and the rename names its entry in the
+    /// pane's folder then; a volume's row moves the pane at once, so opening first would drop
+    /// the typed name (docs/decisions/0068-inline-rename.md).
+    func openClicked(row index: Int) {
+        let item = outlineView.item(atRow: index)
+        Task { [weak self] in self?.open(item) }
     }
 
     private func openSelected() {
-        openRow(outlineView.selectedRow)
+        open(outlineView.item(atRow: outlineView.selectedRow))
     }
 
-    private func openRow(_ index: Int) {
-        switch outlineView.item(atRow: index) {
+    private func open(_ item: Any?) {
+        switch item {
         case let row as Row: open(row.saved.id)
         case let row as FavoriteRow: openFavorite(row.item.path)
         case let row as VolumeRow: openVolume(row.volume.mountPoint)
