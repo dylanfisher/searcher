@@ -90,7 +90,10 @@ SK.1b, the menus and the routing; SK.1c, the Settings window and the recorder.
   from `PaneViewController.registry(for:)`; after each change of the settings,
   `showChords(in:registry:)` sets every command item's key equivalent again from the cached
   registry. Context menus read the registry each time they are built, and the palette shows the
-  first chord of the focused table's registry, so both follow too. The palette's closing chords
+  first chord of the focused table's registry, so both follow too. A context menu item shows
+  the same chord as the command's menu item, the first a key equivalent can have, so F-keys
+  show there: an F-key primary, or the F-key alternate of a command whose primary is a plain
+  key. The palette's closing chords
   (Open Quickly's or Go to Item's, and Close Pane's) are read from that registry at each key
   press, and only those a menu could show count: the palette's field types a plain one.
 - **Edit items run their commands by ID, on fixed chords.** `StandardAction.command` names the
@@ -98,9 +101,12 @@ SK.1b, the menus and the routing; SK.1c, the Settings window and the recorder.
   keep their own chords (Cmd-Z, Shift-Cmd-Z, Cmd-X, Cmd-C, Cmd-V, Cmd-A), so a text field always
   has them, and the item takes its chord first wherever the keys are. So the chord is fixed as
   the command's primary: `MainMenuBuilder.fixedChords` goes to `KeyBindings` as `fixed`, which
-  ignores an override of that primary (listed in `dropped` as `.fixed` when it names a chord),
-  drops the chord from any other command or slot (`.reserved`), and makes `assign` answer
-  `.reserved` for the chord or the primary. One key keeps one meaning in the menus and the
+  ignores an override of that primary (listed in `dropped` as `.fixedPrimary` when it names
+  another chord and `.fixedPrimaryKept` when it removes the chord; naming the fixed chord itself
+  changes nothing), drops the chord from any other command or slot (`.fixedTo` its command), and
+  makes `assign` answer `.fixed(to:)` for the chord and `.fixedPrimary` for the primary's slot,
+  apart from `.reserved` for a standard item's chord, so the Settings window and the log say
+  which rule refused it. One key keeps one meaning in the menus and the
   table's `keyDown` alike. The alternates stay editable: the command's second chord goes on a
   hidden item beside the Edit item that sends the same action, so in a text field an alternate
   of Copy copies the text.
@@ -111,7 +117,7 @@ SK.1b, the menus and the routing; SK.1c, the Settings window and the recorder.
   shows no chords at all, as before.
 - **Settings….** The app menu has Settings… on Cmd-, after About. It sends `showSettings:`
   (`SettingsShowing`) up the responder chain; nothing answers it until SK.1c adds the window, so
-  AppKit shows it off. Its chord is reserved now, so no stored shortcut can take it.
+  AppKit shows it off. Its chord is reserved, so no stored shortcut can take it.
 
 ### SK.1c, the Settings window
 

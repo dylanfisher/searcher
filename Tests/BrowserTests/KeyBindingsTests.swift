@@ -218,19 +218,51 @@ private func fixedBindings(_ overrides: [CommandID: ShortcutOverride] = [:]) thr
         bindings.dropped == [
             // In `AppCommands.sets` order.
             KeyBindings.Dropped(
-                chord: cmdC, command: goToItem.id, position: .alternate, reason: .reserved),
-            KeyBindings.Dropped(chord: cmdJ, command: copy.id, position: .primary, reason: .fixed),
+                chord: cmdC, command: goToItem.id, position: .alternate, reason: .fixedTo(copy.id)),
+            KeyBindings.Dropped(
+                chord: cmdJ, command: copy.id, position: .primary, reason: .fixedPrimary),
         ])
-    let removed = try fixedBindings([copy.id: ShortcutOverride(primary: .removed)])
-    #expect(removed.chords(of: copy.id) == KeyBindings.Chords(primary: cmdC))
 }
 
-@Test func assigningAFixedChordOrAFixedPrimaryIsRefused() throws {
+/// Removing a fixed primary is ignored and listed, so the log says why the chord stayed; naming
+/// the fixed chord itself changes nothing and lists nothing.
+@Test func aRemovedFixedPrimaryIsKeptAndListedAndTheFixedChordItselfIsNot() throws {
+    let removed = try fixedBindings([copy.id: ShortcutOverride(primary: .removed)])
+    #expect(removed.chords(of: copy.id) == KeyBindings.Chords(primary: cmdC))
+    #expect(
+        removed.dropped == [
+            KeyBindings.Dropped(
+                chord: cmdC, command: copy.id, position: .primary, reason: .fixedPrimaryKept)
+        ])
+
+    let same = try fixedBindings([copy.id: ShortcutOverride(primary: .chord(cmdC))])
+    #expect(same.chords(of: copy.id) == KeyBindings.Chords(primary: cmdC))
+    #expect(same.dropped.isEmpty)
+}
+
+/// Each reason says which rule took the chord, so a log line tells a standard item's chord from
+/// another command's fixed one.
+@Test func eachDroppedReasonSaysWhichRuleTookTheChord() {
+    func line(_ reason: KeyBindings.Dropped.Reason) -> String {
+        KeyBindings.Dropped(chord: cmdC, command: goToItem.id, position: .alternate, reason: reason)
+            .description
+    }
+
+    #expect(line(.reserved).hasSuffix("a standard menu item has it"))
+    #expect(line(.fixedTo(copy.id)).hasSuffix("it is fixed to \(copy.id)"))
+    #expect(line(.fixedPrimary).hasSuffix("its primary is fixed"))
+    #expect(line(.fixedPrimaryKept).contains("keeps its alternate chord"))
+    #expect(line(.takenBy(palette.id)).hasSuffix("the user gave it to \(palette.id)"))
+}
+
+@Test func assigningAFixedChordOrAFixedPrimaryIsRefusedSayingWhich() throws {
     let bindings = try fixedBindings()
 
-    #expect(bindings.assign([cmdC], to: palette.id, at: .alternate) == .reserved)
-    #expect(bindings.assign([cmdC], to: palette.id, at: .alternate, replacing: true) == .reserved)
-    #expect(bindings.assign([cmdJ], to: copy.id, at: .primary) == .reserved)
+    #expect(bindings.assign([cmdC], to: palette.id, at: .alternate) == .fixed(to: copy))
+    #expect(
+        bindings.assign([cmdC], to: palette.id, at: .alternate, replacing: true)
+            == .fixed(to: copy))
+    #expect(bindings.assign([cmdJ], to: copy.id, at: .primary) == .fixedPrimary)
     #expect(
         bindings.assign([cmdJ], to: copy.id, at: .alternate)
             == .assigned([copy.id: ShortcutOverride(alternate: .chord(cmdJ))]))

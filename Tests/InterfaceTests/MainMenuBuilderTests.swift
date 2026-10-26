@@ -979,14 +979,17 @@ private func expectKey(_ chord: KeyChord?, on item: NSMenuItem, _ comment: Comme
     let cmdY = KeyChord("y", modifiers: .command)
     // Each case's overrides, and the command and reason of each chord they lose.
     let cases: [([CommandID: ShortcutOverride], [CommandID], [KeyBindings.Dropped.Reason])] = [
-        ([ClipboardCommands.copy.id: ShortcutOverride(primary: .removed)], [], []),
+        (
+            [ClipboardCommands.copy.id: ShortcutOverride(primary: .removed)],
+            [ClipboardCommands.copy.id], [.fixedPrimaryKept]
+        ),
         (
             [ClipboardCommands.copy.id: ShortcutOverride(primary: .chord(cmdY))],
-            [ClipboardCommands.copy.id], [.fixed]
+            [ClipboardCommands.copy.id], [.fixedPrimary]
         ),
         (
             [WindowCommands.goToItem.id: ShortcutOverride(primary: .chord(cmdC))],
-            [WindowCommands.goToItem.id], [.reserved]
+            [WindowCommands.goToItem.id], [.fixedTo(ClipboardCommands.copy.id)]
         ),
     ]
     for (overrides, losers, reasons) in cases {

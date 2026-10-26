@@ -325,7 +325,7 @@ public enum MainMenuBuilder {
     /// (`ListingViewController.serviceSendTypes`).
     /// Items for commands that toggle a setting show its state from `settings`, and every
     /// command's items show the chords `settings` gives it (`PaneViewController.registry(for:)`),
-    /// now and after each change.
+    /// from the start and after each change.
     public static func install(in app: NSApplication, appName: String, settings: Settings)
         throws(BuildError)
     {
