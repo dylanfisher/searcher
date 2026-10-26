@@ -37,6 +37,8 @@ private final class Fixture {
     let resolver = StubResolver()
     let favorites: Favorites
     var openedFavorites: [String] = []
+    /// What the sidebar is told about whether a drag that ended was cancelled.
+    var dragCancelled = false
     let own: Workspace
     let alpha: Workspace
     let beta: Workspace
@@ -73,6 +75,7 @@ private final class Fixture {
             workspace: own, list: list, favorites: favorites, settings: settings)
         sidebar.open = { [weak self] id in self?.opened.append(id) }
         sidebar.openFavorite = { [weak self] path in self?.openedFavorites.append(path) }
+        sidebar.dragWasCancelled = { [weak self] in self?.dragCancelled ?? false }
         sidebar.onEscape = { [weak self] in self?.escapes += 1 }
         sidebar.view.frame = NSRect(x: 0, y: 0, width: 200, height: 300)
         window.contentView?.addSubview(sidebar.view)
@@ -367,7 +370,8 @@ private final class Fixture {
     let sidebarView = fixture.sidebar.view
     let inside = window.convertPoint(
         toScreen: sidebarView.convert(NSPoint(x: sidebarView.bounds.midX, y: 10), to: nil))
-    let outside = window.convertPoint(toScreen: NSPoint(x: 350, y: 150))
+    // Far from any other test's sidebar, which counts as inside too.
+    let outside = NSPoint(x: -50_000, y: -50_000)
     let documents = try #require(fixture.outline.item(atRow: try fixture.row(of: "Documents")))
 
     fixture.sidebar.beginDrag(of: [documents])
@@ -378,6 +382,35 @@ private final class Fixture {
     fixture.sidebar.endDrag(at: outside, operation: [])
     #expect(try fixture.favoriteNames == ["Applications", "Desktop", "Downloads", "u"])
     #expect(!fixture.settings.favorites.map(\.path).contains("/Users/u/Documents"))
+}
+
+@MainActor @Test func aCancelledDragOfAFavoriteOutOfTheSidebarLeavesIt() throws {
+    let fixture = try Fixture()
+    fixture.dragCancelled = true
+    let documents = try #require(fixture.outline.item(atRow: try fixture.row(of: "Documents")))
+
+    fixture.sidebar.beginDrag(of: [documents])
+    fixture.sidebar.endDrag(at: NSPoint(x: -50_000, y: -50_000), operation: [])
+
+    #expect(try fixture.favoriteNames.contains("Documents"))
+}
+
+@MainActor @Test func aFavoriteDroppedOnAnotherWindowsSidebarStays() throws {
+    let fixture = try Fixture()
+    let otherWindow = KeyCatchingWindow()
+    otherWindow.setFrameOrigin(NSPoint(x: 40_000, y: 40_000))
+    let other = fixture.makeSidebar()
+    other.view.frame = NSRect(x: 0, y: 0, width: 200, height: 300)
+    otherWindow.contentView?.addSubview(other.view)
+    // On the other sidebar's workspace rows, outside this window.
+    let onOther = otherWindow.convertPoint(
+        toScreen: other.view.convert(NSPoint(x: 100, y: 250), to: nil))
+    let documents = try #require(fixture.outline.item(atRow: try fixture.row(of: "Documents")))
+
+    fixture.sidebar.beginDrag(of: [documents])
+    fixture.sidebar.endDrag(at: onOther, operation: [])
+
+    #expect(try fixture.favoriteNames.contains("Documents"))
 }
 
 @MainActor @Test func removeFromSidebarInAFavoritesMenuRemovesIt() throws {

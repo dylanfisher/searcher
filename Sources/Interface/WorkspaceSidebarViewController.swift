@@ -44,6 +44,20 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     private let workspacesGroup = Group(title: "Workspaces")
     /// The paths of the favorites a drag from this list carries, until it ends.
     private var draggedFavorites: [String] = []
+    /// Whether the drag that just ended was cancelled rather than dropped: AppKit reports both
+    /// with no operation. Esc cancels while the mouse button is still held, so the key that
+    /// ended the session is a key down, or the button is still down; a drop ends on the button's
+    /// release. Neither is checked against a real drag in a test; tests replace it.
+    var dragWasCancelled: @MainActor () -> Bool = {
+        NSApp.currentEvent?.type == .keyDown || NSEvent.pressedMouseButtons & 1 != 0
+    }
+    /// Every sidebar made, weakly, so a favorite dropped on another window's sidebar counts as
+    /// dropped inside one.
+    private static var all: [WeakSidebar] = []
+
+    private struct WeakSidebar {
+        weak var sidebar: WorkspaceSidebarViewController?
+    }
 
     private struct Shown: Equatable {
         let groups: [ObjectIdentifier]
@@ -187,6 +201,8 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         view = scrollView
         showList()
         selectOwnWorkspace()
+        Self.all.removeAll { $0.sidebar == nil }
+        Self.all.append(WeakSidebar(sidebar: self))
         list.observeSaved(for: self) { [weak self] in self?.showList() }
         favorites.observe(for: self) { [weak self] in self?.showList() }
         settings.observe(for: self) { [weak self] in self?.showList() }
@@ -347,18 +363,24 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         draggedFavorites = items.compactMap { ($0 as? FavoriteRow)?.item.path }
     }
 
-    /// The drag `beginDrag` started ended at `screenPoint`: favorites that nothing took there,
-    /// outside the sidebar, leave it, as Finder's do.
+    /// The drag `beginDrag` started ended at `screenPoint`: favorites dropped where nothing took
+    /// them, outside every window's sidebar, leave the list, as Finder's do. A cancelled drag,
+    /// as with Esc, leaves them.
     func endDrag(at screenPoint: NSPoint, operation: NSDragOperation) {
         defer { draggedFavorites = [] }
-        guard operation.isEmpty, !isInSidebar(screenPoint) else { return }
+        guard operation.isEmpty, !dragWasCancelled(),
+            !Self.all.contains(where: { $0.sidebar?.shows(screenPoint) == true })
+        else { return }
         for path in draggedFavorites {
             favorites.remove(path)
         }
     }
 
-    private func isInSidebar(_ screenPoint: NSPoint) -> Bool {
-        guard let window = view.window else { return false }
+    /// Whether the sidebar is in a window and shown at `screenPoint`.
+    private func shows(_ screenPoint: NSPoint) -> Bool {
+        guard isViewLoaded, let window = view.window, !view.isHiddenOrHasHiddenAncestor else {
+            return false
+        }
         let point = view.convert(window.convertPoint(fromScreen: screenPoint), from: nil)
         return view.bounds.contains(point)
     }

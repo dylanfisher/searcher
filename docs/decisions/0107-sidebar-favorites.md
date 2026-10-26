@@ -67,8 +67,14 @@ Tags needs search, which is on hold.
 - **Reordering and removing.** A favorite drags as its path under a type of the app's own
   (`com.dylanfisher.searcher.favorite`), with no file URL, so a pane or another app never takes
   it as a file to copy or move. Dropped within any window's Favorites it moves there. Dropped
-  anywhere outside the sidebar where nothing takes it, it leaves the list, as Finder's does; it
-  doesn't slide back. The cursor shows no poof: AppKit's `NSShowAnimationEffect` is deprecated,
+  where nothing takes it, outside every window's sidebar, it leaves the list, as Finder's does;
+  it doesn't slide back. Dropped on another window's sidebar, its Workspaces rows included, it
+  stays. A cancelled drag, as with Esc, keeps it, as Finder keeps it. AppKit reports a cancel
+  and a drop on nothing alike, with no operation, so the sidebar tells them apart from the
+  event that ended the session: the app's current event is a key down, or the mouse button is
+  still down, since Esc cancels while the button is held and a drop is the button's release.
+  This wasn't checked with a real drag: a test can't run one without moving the user's pointer,
+  so it is a hand check, and the tests replace the check. The cursor shows no poof: AppKit's `NSShowAnimationEffect` is deprecated,
   and the cursor would need the outline view's drag source methods. Remove from Sidebar in a
   favorite's context menu removes it too.
 - **Every window follows.** One `Favorites` is shared by every window, as the `WorkspaceList`
