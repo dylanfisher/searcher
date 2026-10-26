@@ -1,5 +1,6 @@
 import Base
 import Foundation
+import IOKit
 
 /// A mounted volume as the sidebar's Locations sees it: where it is mounted, its name, and what
 /// says whether Finder's default sidebar lists it and offers to eject it
@@ -19,7 +20,7 @@ public struct SidebarVolume: Equatable, Sendable {
     public let isRemovable: Bool
     public let isEjectable: Bool
     /// Whether ejecting it ejects its whole disk: it is on this machine and no other volume is
-    /// mounted from that disk (`isOnlyVolume(_:onItsDiskAmong:)`).
+    /// mounted from that physical disk (`isOnlyVolume(_:onItsDiskAmong:physicalDisk:)`).
     public let ejectsDisk: Bool
 
     public init(
@@ -59,6 +60,11 @@ public struct SidebarVolume: Equatable, Sendable {
     public static func mounted() -> [SidebarVolume] {
         BlockingCallThread.requireCurrent()
         let mounted = VolumeIdentity.mounted()
+        var physicalDisks: [String: String] = [:]
+        for disk in Set(mounted.compactMap { wholeDisk(of: $0.device) }) {
+            physicalDisks[disk] = physicalDisk(of: disk)
+        }
+        let physicalDisk = { (disk: String) in physicalDisks[disk] ?? disk }
         return mounted.compactMap { volume in
             let name = VolumeIdentity.name(mountedAt: volume.mountPoint)
             guard volume.kind == .local, volume.isBrowsable else {
@@ -82,19 +88,53 @@ public struct SidebarVolume: Equatable, Sendable {
                 isInternal: values.volumeIsInternal,
                 isRemovable: values.volumeIsRemovable ?? false,
                 isEjectable: values.volumeIsEjectable ?? false,
-                ejectsDisk: isOnlyVolume(volume, onItsDiskAmong: mounted))
+                ejectsDisk: isOnlyVolume(
+                    volume, onItsDiskAmong: mounted, physicalDisk: physicalDisk))
         }
     }
 
     /// Whether `volume` is on this machine and the only one of `mounted`, every mounted volume
-    /// browsable or not, on its whole disk: `/dev/disk5s2` is on `disk5`. It goes by the device
-    /// names alone, with no read. An APFS volume is on its container's synthesized disk, so a
-    /// volume of another kind on the same physical disk isn't counted.
-    static func isOnlyVolume(_ volume: VolumeIdentity, onItsDiskAmong mounted: [VolumeIdentity])
-        -> Bool
-    {
-        guard volume.kind == .local, let disk = wholeDisk(of: volume.device) else { return false }
-        return mounted.filter { wholeDisk(of: $0.device) == disk }.count == 1
+    /// browsable or not, on its physical disk. A volume's whole disk comes from its device name
+    /// (`/dev/disk5s2` is on `disk5`), and `physicalDisk` gives the physical disk a whole disk
+    /// is on: an APFS container's synthesized disk is on the disk of its physical store, so a
+    /// partition of another format beside the container counts.
+    static func isOnlyVolume(
+        _ volume: VolumeIdentity, onItsDiskAmong mounted: [VolumeIdentity],
+        physicalDisk: (String) -> String
+    ) -> Bool {
+        guard volume.kind == .local, let disk = wholeDisk(of: volume.device).map(physicalDisk)
+        else { return false }
+        return mounted.filter { wholeDisk(of: $0.device).map(physicalDisk) == disk }.count == 1
+    }
+
+    /// The physical disk the whole disk `disk`, such as `disk6`, is on, from the I/O Registry:
+    /// the whole disk of the first media above it with a BSD name, which for an APFS container's
+    /// synthesized disk is its physical store (`disk0s2`, so `disk0`). A disk with no media
+    /// above it is its own. One the registry doesn't list, as one just detached, is taken as
+    /// its own too: it can no longer share anything. Traps unless it runs on a
+    /// `BlockingCallThread`.
+    static func physicalDisk(of disk: String) -> String {
+        BlockingCallThread.requireCurrent()
+        // IOServiceGetMatchingService consumes the matching dictionary.
+        let service = IOServiceGetMatchingService(
+            kIOMainPortDefault, IOBSDNameMatching(kIOMainPortDefault, 0, disk))
+        guard service != IO_OBJECT_NULL else { return disk }
+        var entry = service
+        while true {
+            var parent: io_registry_entry_t = IO_OBJECT_NULL
+            let result = IORegistryEntryGetParentEntry(entry, kIOServicePlane, &parent)
+            IOObjectRelease(entry)
+            guard result == KERN_SUCCESS else { return disk }
+            if IOObjectConformsTo(parent, "IOMedia") != 0,
+                let name = IORegistryEntryCreateCFProperty(
+                    parent, "BSD Name" as CFString, kCFAllocatorDefault, 0)?
+                    .takeRetainedValue() as? String
+            {
+                IOObjectRelease(parent)
+                return wholeDisk(of: "/dev/" + name) ?? name
+            }
+            entry = parent
+        }
     }
 
     /// The whole disk a device such as `/dev/disk5s2` is a slice of, `disk5`; nil for a device
