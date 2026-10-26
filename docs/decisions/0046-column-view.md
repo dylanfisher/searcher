@@ -31,6 +31,9 @@ stacked single-column tables over `NSBrowser`.
   Everything else (rows, icons, badge, labels, selection, Quick Look, Page Up and Down through
   `visibleRowCount`) is the list's code. Row labels read the cells the table has and format the
   kind, size and date from the entry for the columns it doesn't.
+- **The columns bounce sideways always.** The scroll view holding the columns has horizontal
+  elasticity `.allowed`, so a swipe sideways overscrolls and springs back even when every column
+  fits, as a short column does vertically (2026-10-25).
 - **`ColumnViewController`** lays the columns out with frames in a horizontal scroll view, 240
   points each with a separator line after each (superseded 2026-10-24: each column has its own
   width, 286 points for a new one, see [0096](0096-column-widths.md)). On every change of the pane it keeps one
