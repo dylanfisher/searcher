@@ -454,7 +454,8 @@ private func names(in folder: String) throws -> Set<String> {
 }
 
 /// A folder the keys just selected opens its column only once they pause; a paste before then
-/// still goes into it, opening its column at once.
+/// still goes into it, opening its column at once. The pause never ends on the held clock, and
+/// the folder was never listed, so it has no kept rows that would open its column at once.
 @MainActor @Test func pasteRightAfterKeysSelectAFolderPutsTheFilesInIt() async throws {
     let source = try TemporaryFolder("ClipboardCommandsTests")
     let destination = try TemporaryFolder("ClipboardCommandsTests")
@@ -464,14 +465,16 @@ private func names(in folder: String) throws -> Set<String> {
         atPath: destination.url.path + "/_test", withIntermediateDirectories: false)
     let from = await Window(at: source.url.path)
     let to = await Window(at: destination.url.path, clipboard: from.clipboard)
-    _ = try await to.showColumns(selectingFolder: "_test")
-    let trail = try #require(to.workspace.selectedTab.focusedPane.columnTrail)
+    let owner = to.workspace.selectedTab.focusedPane
+    owner.columnOpenClock = ManualClock()
+    to.select("z.txt")
+    owner.setViewMode(.column)
+    let trail = try #require(owner.columnTrail)
+    await settle { trail.focused.pane.state.isLoaded }
     let focused = to.pane
     let listing = try #require(focused.state.listing)
     let folderRow = try #require(listing.row(named: "_test"))
     let fileRow = try #require(listing.row(named: "z.txt"))
-    to.select("z.txt")
-    await settle { trail.columns.count == trail.focusedIndex + 1 }
     from.select("a.txt")
     try from.press(copy)
 
@@ -480,9 +483,9 @@ private func names(in folder: String) throws -> Set<String> {
     #expect(trail.columns.count == trail.focusedIndex + 1)
     try to.press(paste)
 
+    #expect(trail.columns.last?.pane.location.name == "_test")
     await settle { exists(destination.url.path + "/_test/a.txt") }
     #expect(!exists(destination.url.path + "/a.txt"))
-    #expect(trail.columns.last?.pane.location.name == "_test")
 }
 
 /// With a file selected, or several rows, Paste puts the files in the focused column's folder.

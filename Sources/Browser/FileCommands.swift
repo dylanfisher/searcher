@@ -134,22 +134,27 @@ public enum FileCommands: CommandSet {
     /// operation runs doesn't move it (docs/decisions/0111-column-view-target-folder.md).
     @MainActor
     static func destination(in context: CommandContext) -> Pane {
-        context.pane.containingTrail?.selectedFolderColumn(of: context.pane)?.pane ?? context.pane
+        guard let trail = context.pane.containingTrail, trail.focused.pane === context.pane else {
+            return context.pane
+        }
+        trail.openHeldColumn()
+        return trail.selectedFolderColumn ?? context.pane
     }
 
     /// Queues `operation`, which makes items in `pane`'s folder, and selects them there once the
     /// pane lists them, as `run` does. A column without the keys then takes them, as Finder
     /// moves them into the folder it pasted into; then `selected` runs. Nothing runs if the
-    /// operation made nothing or the column's selection changed first.
+    /// operation made nothing, the column's selection changed first or the column closed.
     @MainActor
     static func make(
         _ operation: FileOperation, in pane: Pane, queue: FileOperationQueue,
         then selected: (@MainActor () -> Void)? = nil
     ) {
         run(operation, selectingIn: pane, queue: queue) { [weak pane] in
-            if let pane, let trail = pane.containingTrail,
-                let column = trail.columns.first(where: { $0.pane === pane })
-            {
+            guard let pane else { return }
+            if let trail = pane.containingTrail {
+                // A column the trail closed has no keys to take, and no name field to open.
+                guard let column = trail.columns.first(where: { $0.pane === pane }) else { return }
                 trail.focus(column)
             }
             selected?()

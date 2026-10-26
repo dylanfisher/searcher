@@ -1220,6 +1220,42 @@ func leftOrCommandUpMovesToTheParentsColumnAndDoesNothingAtTheRoot(chord: KeyCho
     #expect(pane.history.backEntries.count == back + 1)
 }
 
+/// The selected folder's column is the column right of the focused one while it shows what is
+/// selected alone there: a folder, or a package Show Package Contents opened. A file, several
+/// rows or nothing have none, and a held key selection has none until its column opens.
+@MainActor @Test func theSelectedFolderColumnIsTheShownColumnOfWhatIsSelectedAlone() async {
+    let fixture = PaneFixture(
+        at: "/root",
+        folders: [
+            "/": [folder("root")],
+            "/root": [package("App.app"), folder("docs"), file("a.txt")],
+            "/root/App.app": [folder("Contents")], "/root/docs": [file("x.txt")],
+        ])
+    let pane = fixture.pane
+    await settle { pane.state.isLoaded }
+    pane.setViewMode(.column)
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+    let root = trail(pane).focused
+
+    select("docs", in: root)
+    await settle { paths(pane).last == "/root/docs" }
+    #expect(trail(pane).selectedFolderColumn === trail(pane).columns.last?.pane)
+
+    select("a.txt", in: root)
+    #expect(trail(pane).selectedFolderColumn == nil)
+
+    root.pane.select(
+        Selection([ExactName("a.txt"), ExactName("docs")], cursor: ExactName("docs")))
+    #expect(trail(pane).selectedFolderColumn == nil)
+
+    select("App.app", in: root)
+    #expect(trail(pane).selectedFolderColumn == nil)
+    root.pane.showPackageContents()
+    trail(pane).moveLeft()
+    #expect(trail(pane).focused === root)
+    #expect(trail(pane).selectedFolderColumn?.location.path == "/root/App.app")
+}
+
 /// A press that closes the column right of the pressed one clears that column's selection, which
 /// is no step of its selection history: the press is the step, in the column it was made in.
 @MainActor @Test func aPressShowingTheNextColumnAloneLeavesItsSelectionHistoryAlone() async {
