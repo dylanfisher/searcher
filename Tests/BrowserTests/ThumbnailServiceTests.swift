@@ -302,6 +302,140 @@ private let share = VolumeIdentity(
     await bounded { clock.waitingSleeps == 0 }
 }
 
+/// A preview on a share has `shareGiveUp`, not `giveUp`: a large file can take longer than
+/// 5 s over SMB. One given up isn't kept as having none, so selecting the file again asks again.
+@Test func aPreviewOnAShareIsGivenUpAfterThirtySecondsAndAskedAgainAfter() async throws {
+    let maker = GatedThumbnailMaker()
+    let clock = ManualClock()
+    let service = ThumbnailService(maker: maker, clock: clock)
+    let path = "/Volumes/share/a.cr3"
+    func preview() -> Task<CGImage?, any Error> {
+        Task {
+            try await service.thumbnail(
+                at: path, entry: file("a.cr3"), side: 512, on: share, forPreview: true)
+        }
+    }
+    let first = preview()
+    #expect(await maker.waitForCalls(1))
+    await bounded { clock.waitingSleeps == 1 }
+
+    clock.advance(by: ThumbnailService.giveUp)
+
+    // Still waiting: its wait's deadline is further off.
+    #expect(clock.waitingSleeps == 1)
+    #expect(maker.stopped.isEmpty)
+    clock.advance(by: ThumbnailService.shareGiveUp - ThumbnailService.giveUp)
+    #expect(try await first.value == nil)
+    #expect(maker.stopped == [path])
+    #expect(service.cached(at: path, entry: file("a.cr3"), side: 512) == nil)
+    await bounded { service.calls.isIdle }
+
+    let again = preview()
+    #expect(await maker.waitForCalls(2))
+    let image = testThumbnail()
+    maker.answer(path, with: image)
+    #expect(try await again.value === image)
+    #expect(service.calls.isIdle)
+}
+
+/// A `ThumbnailMaking` whose `makeThumbnail` blocks its thread until the test releases it, as a
+/// call can on a share that stopped answering, and never answers.
+private final class StuckThumbnailMaker: ThumbnailMaking, @unchecked Sendable {
+    private let released = DispatchSemaphore(value: 0)
+    // `lock` guards everything below.
+    private let lock = NSLock()
+    private var enteredPaths: [String] = []
+    private var stoppedPaths: [String] = []
+
+    func makeThumbnail(
+        at path: String, side: Double, scale: Double,
+        done: @escaping @Sendable (CGImage?) -> Void
+    ) -> @Sendable () -> Void {
+        lock.withLock { enteredPaths.append(path) }
+        released.wait()
+        return { [self] in lock.withLock { stoppedPaths.append(path) } }
+    }
+
+    /// Lets one blocked call return.
+    func release() { released.signal() }
+
+    var entered: [String] { lock.withLock { enteredPaths } }
+    var stopped: [String] { lock.withLock { stoppedPaths } }
+}
+
+/// A preview on a share cancelled while Quick Look's call hasn't returned ends the caller's
+/// wait at once. The call keeps the share's one slot and its thread until it returns, as a hung
+/// read does, so the next request waits without a thread.
+@Test func aCancelWhileQuickLooksCallHangsEndsTheCallersWaitAtOnce() async throws {
+    let maker = StuckThumbnailMaker()
+    let service = ThumbnailService(maker: maker, clock: ManualClock())
+    let hung = Task {
+        try await service.thumbnail(
+            at: "/Volumes/share/a.jpg", entry: file("a.jpg"), side: 512, on: share,
+            forPreview: true)
+    }
+    await bounded { maker.entered == ["/Volumes/share/a.jpg"] }
+
+    hung.cancel()
+
+    #expect(await bounded(cancellation(of: hung)) == true)
+    let next = Task {
+        try await service.thumbnail(
+            at: "/Volumes/share/b.jpg", entry: file("b.jpg"), side: 512, on: share,
+            forPreview: true)
+    }
+    await bounded { service.calls.waitingCount(on: share) == 1 }
+    next.cancel()
+    await #expect(throws: CancellationError.self) { try await next.value }
+    maker.release()
+    await bounded { service.calls.isIdle }
+}
+
+/// A cancel that lands before Quick Look's call returns, and so before the making has a stop to
+/// call, stops it as soon as the call returns, and frees the slot for the next request.
+@Test func aCancelBeforeQuickLooksCallReturnsStopsItOnceItDoes() async throws {
+    let maker = StuckThumbnailMaker()
+    let service = ThumbnailService(maker: maker, clock: ManualClock())
+    let first = Task {
+        try await service.thumbnail(
+            at: "/Volumes/share/a.jpg", entry: file("a.jpg"), side: 512, on: share,
+            forPreview: true)
+    }
+    await bounded { maker.entered.count == 1 }
+    first.cancel()
+    #expect(await bounded(cancellation(of: first)) == true)
+    let second = Task {
+        try await service.thumbnail(
+            at: "/Volumes/share/b.jpg", entry: file("b.jpg"), side: 512, on: share,
+            forPreview: true)
+    }
+    await bounded { service.calls.waitingCount(on: share) == 1 }
+    #expect(maker.stopped.isEmpty)
+
+    maker.release()
+
+    await bounded { maker.stopped == ["/Volumes/share/a.jpg"] }
+    await bounded { maker.entered == ["/Volumes/share/a.jpg", "/Volumes/share/b.jpg"] }
+    second.cancel()
+    #expect(await bounded(cancellation(of: second)) == true)
+    maker.release()
+    await bounded { maker.stopped == ["/Volumes/share/a.jpg", "/Volumes/share/b.jpg"] }
+    await bounded { service.calls.isIdle }
+}
+
+/// Whether `request` ends by throwing `CancellationError`, as a task that can't hang, for
+/// `bounded` to wait on.
+private func cancellation(of request: Task<CGImage?, any Error>) -> Task<Bool, Never> {
+    Task {
+        do {
+            _ = try await request.value
+            return false
+        } catch {
+            return error is CancellationError
+        }
+    }
+}
+
 /// Polls `condition` until it holds, failing the test after 5 seconds.
 private func bounded(_ condition: @Sendable () -> Bool) async {
     let deadline = Date(timeIntervalSinceNow: 5)
