@@ -452,7 +452,8 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
                 },
                 run: { [weak self] id in self?.runFromPalette(id) }),
         ]
-        let controller = PaletteWindowController(palette: Palette(sources: sources + extra))
+        let controller = PaletteWindowController(
+            palette: Palette(sources: sources + extra), settings: settings)
         controller.viewController.isEnabled = { [weak self] item in
             guard case .command(let id) = item.id else { return true }
             return self?.canRunFromPalette(id) ?? false
@@ -469,7 +470,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         let pane = workspace.selectedTab.focusedPane.commandPane
         let label = "Go to Item"
         let controller = PaletteWindowController(
-            palette: Palette(sources: [EntrySource(pane: pane)]), label: label,
+            palette: Palette(sources: [EntrySource(pane: pane)]), settings: settings, label: label,
             placeholder: "\(label) in \(pane.location.name)")
         present(controller, closedBy: WindowCommands.goToItem.id, over: window)
     }

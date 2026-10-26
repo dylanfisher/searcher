@@ -1,10 +1,10 @@
 import AppKit
 import Browser
 
-/// The palette's window: a borderless panel over a rounded blur, as Spotlight's is, a child of the
-/// browser window it opened over, centered on it near its top as Xcode's Open Quickly sits over
-/// its window. It takes the keys while it shows and closes when it loses them, as Spotlight does,
-/// and when its view controller closes it (docs/decisions/0087-palette-window.md).
+/// The palette's window: a borderless panel over a rounded blur, as Spotlight's is, on the screen
+/// of the browser window it opened over, centered near the top or where the last one was dragged.
+/// It takes the keys while it shows and closes when it loses them, as Spotlight does, and when
+/// its view controller closes it (docs/decisions/0087-palette-window.md).
 @MainActor
 public final class PaletteWindowController: NSWindowController, NSWindowDelegate {
     public let viewController: PaletteViewController
@@ -23,17 +23,25 @@ public final class PaletteWindowController: NSWindowController, NSWindowDelegate
     /// Runs once as the palette closes, by Esc, a chosen item or losing the keys.
     var onClose: @MainActor () -> Void = {}
     private var isClosed = false
+    /// Holds where a dragged panel was left, for the next palette.
+    private let settings: Settings
+    /// The window the palette opened over, which gets the keys back.
+    private weak var opener: NSWindow?
+    /// Where `show` put the panel; a panel elsewhere at close was dragged.
+    private var shownFrame: NSRect?
 
-    /// How far under the parent window's top the panel's top sits, as a share of the window's
-    /// height.
-    private static let topOffset: CGFloat = 0.12
+    /// How far under the top of the screen's visible area the panel's top sits, as a share of
+    /// its height: in the upper part, where Spotlight opens.
+    static let topShare: CGFloat = 0.2
 
     /// A panel over `palette`, called `label` and with `placeholder` in its empty field: Open
-    /// Quickly's unless given.
+    /// Quickly's unless given. It opens where `settings` says the last one was dragged.
     init(
-        palette: Palette, label: String = PaletteViewController.openQuicklyLabel,
+        palette: Palette, settings: Settings,
+        label: String = PaletteViewController.openQuicklyLabel,
         placeholder: String = PaletteViewController.openQuicklyPlaceholder
     ) {
+        self.settings = settings
         viewController = PaletteViewController(
             palette: palette, label: label, placeholder: placeholder)
         let panel = PalettePanel(
@@ -43,13 +51,14 @@ public final class PaletteWindowController: NSWindowController, NSWindowDelegate
             styleMask: [.borderless], backing: .buffered, defer: true)
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        // The window server shapes a window's shadow from the alpha of what the window drew, and
-        // the glass is composited outside the window's own pixels, so the shadow of a glass
-        // panel is a rectangle that shows through the glass. The masked blur gives the shadow
-        // its rounded shape; the glass has no such mask, so it draws its own edge and the window
-        // has no shadow.
-        panel.hasShadow = !PaletteViewController.backdropIsGlass
-        panel.isMovable = false
+        // The content clips itself to the rounded shape, so the shadow is rounded too.
+        panel.hasShadow = true
+        // Dragged by its background, as Spotlight is; the field and the rows keep their clicks.
+        panel.isMovable = true
+        panel.isMovableByWindowBackground = true
+        // It isn't a child of the window, so it joins whatever space is showing, a full-screen
+        // window's included.
+        panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = true
         panel.becomesKeyOnlyIfNeeded = false
@@ -69,43 +78,95 @@ public final class PaletteWindowController: NSWindowController, NSWindowDelegate
         fatalError("PaletteWindowController is built in code")
     }
 
-    /// Puts the panel over `parent`, with the keys in its field. A window that isn't on screen,
-    /// as in tests, gets no panel on screen either; the panel still takes its keys in code.
-    func show(over parent: NSWindow) {
+    /// Shows the panel for `opener`, with the keys in its field, on the screen `opener` is on:
+    /// where the last panel was dragged to, or centered near the top. It is a window of its own,
+    /// not a child of `opener`, so it can be dragged anywhere, as Spotlight can. A window that
+    /// isn't on screen, as in tests, gets no panel on screen either; the panel still takes its
+    /// keys in code.
+    func show(over opener: NSWindow) {
         guard let panel = window else { preconditionFailure("the palette has no panel") }
-        let width = min(PaletteViewController.width, parent.frame.width - 40)
-        let frame = parent.frame
-        var origin = NSPoint(
-            x: frame.midX - width / 2,
-            y: frame.maxY - frame.height * Self.topOffset - PaletteViewController.height)
-        if let screen = parent.screen?.visibleFrame {
-            origin.y = max(origin.y, screen.minY)
+        guard let screen = opener.screen ?? NSScreen.main else {
+            preconditionFailure("there is no screen to show the palette on")
         }
-        panel.setFrame(
-            NSRect(
-                origin: origin, size: NSSize(width: width, height: PaletteViewController.height)),
-            display: false)
+        self.opener = opener
+        let frame = Self.frame(
+            size: NSSize(width: PaletteViewController.width, height: PaletteViewController.height),
+            on: screen.visibleFrame, at: settings.palettePlace)
+        panel.setFrame(frame, display: false)
+        shownFrame = panel.frame
         panel.makeFirstResponder(viewController.field)
-        guard parent.isVisible else { return }
-        parent.addChildWindow(panel, ordered: .above)
+        guard opener.isVisible else { return }
         panel.makeKeyAndOrderFront(nil)
-        if panel.hasShadow { panel.invalidateShadow() }
+        panel.invalidateShadow()
     }
 
-    /// Closes the panel once.
+    /// Where a panel of `size` goes on a screen whose visible area is `visible`: at `place`, or
+    /// for none, centered across it with its top `topShare` of the way down. It stays inside
+    /// `visible` where it fits.
+    static func frame(size: NSSize, on visible: NSRect, at place: Settings.PalettePlace?)
+        -> NSRect
+    {
+        let room = NSSize(
+            width: max(visible.width - size.width, 0), height: max(visible.height - size.height, 0))
+        guard let place else {
+            let top = visible.maxY - visible.height * topShare
+            return NSRect(
+                x: visible.minX + room.width / 2,
+                y: max(top - size.height, visible.minY), width: size.width, height: size.height)
+        }
+        return NSRect(
+            x: visible.minX + room.width * place.x,
+            y: visible.maxY - size.height - room.height * place.y, width: size.width,
+            height: size.height)
+    }
+
+    /// The place of a panel at `frame` on a screen whose visible area is `visible`; a panel that
+    /// reaches past an edge is put against it.
+    static func place(of frame: NSRect, on visible: NSRect) -> Settings.PalettePlace {
+        let roomX = visible.width - frame.width
+        let roomY = visible.height - frame.height
+        func share(_ offset: CGFloat, of room: CGFloat) -> Double {
+            room > 0 ? min(max(Double(offset / room), 0), 1) : 0
+        }
+        guard
+            let place = Settings.PalettePlace(
+                x: share(frame.minX - visible.minX, of: roomX),
+                y: share(visible.maxY - frame.maxY, of: roomY))
+        else { preconditionFailure("a share was clamped outside 0 and 1") }
+        return place
+    }
+
+    /// Closes the panel once. A panel dragged since it showed leaves its place for the next.
     public override func close() {
         guard !isClosed else { return }
         isClosed = true
         viewController.palette.close()
         if let panel = window {
-            let parent = panel.parent
+            rememberPlace(of: panel)
             // Esc or a chosen item hands the keys back to the window; a click elsewhere took them.
             let wasKey = panel.isKeyWindow
-            parent?.removeChildWindow(panel)
             panel.orderOut(nil)
-            if wasKey { parent?.makeKey() }
+            if wasKey { opener?.makeKey() }
         }
         onClose()
+    }
+
+    /// Keeps the place of `panel` if it was dragged, on the screen it overlaps most; a panel
+    /// dragged off every screen goes back to the palette's own place.
+    private func rememberPlace(of panel: NSWindow) {
+        guard let shownFrame, panel.frame != shownFrame else { return }
+        let frame = panel.frame
+        func overlap(_ screen: NSScreen) -> CGFloat {
+            let shared = screen.frame.intersection(frame)
+            return shared.isNull ? 0 : shared.width * shared.height
+        }
+        guard let screen = NSScreen.screens.max(by: { overlap($0) < overlap($1) }),
+            overlap(screen) > 0
+        else {
+            settings.palettePlace = nil
+            return
+        }
+        settings.palettePlace = Self.place(of: frame, on: screen.visibleFrame)
     }
 
     /// A click in another window, or another app, takes the keys: the palette closes, as

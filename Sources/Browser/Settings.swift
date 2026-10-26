@@ -19,6 +19,27 @@ public final class Settings {
         case hideEmptyOperationsPanel
         case columnWidth
         case appearance
+        case palettePlace
+    }
+
+    /// Where the palette's panel sits on a screen, as Spotlight remembers where it was dragged
+    /// (0087-palette-window.md). Each share is of the room the panel leaves on the screen's
+    /// visible area, so a place puts the panel wholly on any screen it fits.
+    public struct PalettePlace: Equatable, Sendable {
+        /// 0 puts the panel against the screen's left edge, 1 against its right.
+        public let x: Double
+        /// 0 puts the panel's top against the top of the visible area, 1 its bottom against the
+        /// bottom.
+        public let y: Double
+
+        /// The place at `x` and `y`; nil unless both are within 0 and 1.
+        public init?(x: Double, y: Double) {
+            guard Self.shares.contains(x), Self.shares.contains(y) else { return nil }
+            self.x = x
+            self.y = y
+        }
+
+        static let shares: ClosedRange<Double> = 0...1
     }
 
     /// Whether the app is light or dark. Auto follows the system's setting, as it changes.
@@ -120,6 +141,21 @@ public final class Settings {
         }
     }
 
+    /// Where the palette's panel opens, on the screen of the window that opens it; nil for its
+    /// own place, centered near the top. Dragging the panel sets it. No pane follows it, so a
+    /// change notifies no one.
+    public var palettePlace: PalettePlace? {
+        didSet {
+            guard palettePlace != oldValue else { return }
+            let key = Key.palettePlace.rawValue
+            if let place = palettePlace {
+                defaults.set([place.x, place.y], forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+        }
+    }
+
     /// How long a drag has to hover over a folder before it springs open, as the system's
     /// Spring-loading setting in Accessibility ▸ Pointer Control has it; nil while that setting is
     /// off. The system writes both keys to the global domain, which every suite reads through, and
@@ -164,6 +200,7 @@ public final class Settings {
             Self.number(.columnWidth, in: defaults, where: Self.isColumnWidth)
             ?? Self.defaultColumnWidth
         appearance = Self.appearance(in: defaults) ?? .auto
+        palettePlace = Self.palettePlace(in: defaults)
     }
 
     /// Runs `handler` after each change of a setting, for as long as `owner` exists.
@@ -215,6 +252,22 @@ public final class Settings {
             return appearance
         }
         defaults.removeObject(forKey: Key.appearance.rawValue)
+        return nil
+    }
+
+    /// The palette's place stored under its key, two numbers within 0 and 1; nil when there is
+    /// none, or it is anything else, which is removed.
+    private static func palettePlace(in defaults: UserDefaults) -> PalettePlace? {
+        let key = Key.palettePlace.rawValue
+        guard let value = defaults.object(forKey: key) else { return nil }
+        if let shares = value as? [Any], shares.count == 2,
+            let x = shares[0] as? NSNumber, CFGetTypeID(x) != CFBooleanGetTypeID(),
+            let y = shares[1] as? NSNumber, CFGetTypeID(y) != CFBooleanGetTypeID(),
+            let place = PalettePlace(x: x.doubleValue, y: y.doubleValue)
+        {
+            return place
+        }
+        defaults.removeObject(forKey: key)
         return nil
     }
 
