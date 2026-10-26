@@ -374,3 +374,131 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
 @MainActor @Test func theEmptyPanelsHelpNamesTheMenuItemThatStillShowsIt() {
     #expect(Settings.hideEmptyOperationsPanelHelp.contains("Window ▸ Operations"))
 }
+
+// MARK: Shortcuts
+
+private let shortcutsKey = Settings.Key.shortcuts.rawValue
+private let showPalette = WindowCommands.showPalette.id
+
+@MainActor @Test func missingShortcutsReadAsNoOverrides() {
+    #expect(untouchedSettings().shortcuts.isEmpty)
+}
+
+/// Shortcuts of any other shape, or with any one override of another shape, are removed whole.
+@MainActor @Test func shortcutsOfAnotherShapeAreDiscardedWhole() throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let good = ["alternate": "cmd+shift+o"]
+    let malformed: [Any] = [
+        "window.showPalette", 1, ["window.showPalette"], ["window.showPalette": "cmd+o"],
+        ["window.showPalette": [String: String]()],
+        ["window.showPalette": ["third": "cmd+o"]],
+        ["window.showPalette": ["primary": 1]],
+        ["window.showPalette": ["primary": "shift+cmd+o"]],
+        ["window.showPalette": good, "navigation.open": ["primary": "cmd+O"]],
+    ]
+    for stored in malformed {
+        let defaults = temporarySuite(in: folder.url.path)
+        defaults.set(stored, forKey: shortcutsKey)
+
+        let settings = Settings(defaults: defaults)
+
+        #expect(settings.shortcuts.isEmpty, "\(stored)")
+        #expect(defaults.object(forKey: shortcutsKey) == nil, "\(stored)")
+    }
+}
+
+/// A renamed command is a change of the code, so its entry goes and the others stay.
+@MainActor @Test func anUnknownCommandIDDropsOnlyItsEntry() throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let defaults = temporarySuite(in: folder.url.path)
+    defaults.set(
+        [
+            "window.showPalette": ["alternate": "cmd+shift+o"],
+            "window.renamedLongAgo": ["primary": "cmd+j"],
+        ], forKey: shortcutsKey)
+
+    let settings = Settings(defaults: defaults)
+
+    let alternate = KeyChord("o", modifiers: [.command, .shift])
+    #expect(settings.shortcuts == [showPalette: ShortcutOverride(alternate: .chord(alternate))])
+    #expect(
+        defaults.object(forKey: shortcutsKey) as? [String: [String: String]]
+            == ["window.showPalette": ["alternate": "cmd+shift+o"]])
+}
+
+@MainActor @Test func anEmptyStringReadsAsARemovedChord() throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let defaults = temporarySuite(in: folder.url.path)
+    defaults.set(["window.showPalette": ["primary": ""]], forKey: shortcutsKey)
+
+    let settings = Settings(defaults: defaults)
+
+    #expect(settings.shortcuts == [showPalette: ShortcutOverride(primary: .removed)])
+}
+
+/// "Default" has one stored form: no entry. A chord equal to the slot's default, or a removed
+/// slot with no default, is the default.
+@MainActor @Test func anOverrideThatChangesNothingIsNotWritten() throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let defaults = temporarySuite(in: folder.url.path)
+    let settings = Settings(defaults: defaults)
+
+    settings.shortcuts = [
+        showPalette: ShortcutOverride(primary: .chord(KeyChord("k", modifiers: .command))),
+        ViewCommands.filter.id: ShortcutOverride(alternate: .removed),
+    ]
+
+    #expect(settings.shortcuts.isEmpty)
+    #expect(defaults.object(forKey: shortcutsKey) == nil)
+
+    settings.shortcuts = [
+        showPalette: ShortcutOverride(
+            primary: .chord(KeyChord("k", modifiers: .command)), alternate: .removed)
+    ]
+
+    #expect(settings.shortcuts == [showPalette: ShortcutOverride(alternate: .removed)])
+    #expect(
+        defaults.object(forKey: shortcutsKey) as? [String: [String: String]]
+            == ["window.showPalette": ["alternate": ""]])
+
+    settings.shortcuts = [:]
+
+    #expect(defaults.object(forKey: shortcutsKey) == nil)
+}
+
+/// The Commander preset gives these an alternate, so removing it means something even while
+/// the preset is off.
+@MainActor @Test func removingAPresetAlternateIsKept() {
+    let settings = untouchedSettings()
+    let trash = FileCommands.moveToTrash.id
+
+    settings.shortcuts = [trash: ShortcutOverride(alternate: .removed)]
+
+    #expect(settings.shortcuts == [trash: ShortcutOverride(alternate: .removed)])
+}
+
+@MainActor @Test func shortcutsSurviveARelaunch() throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let name = folder.url.appending(path: "preferences").path
+    let shortcuts = [
+        showPalette: ShortcutOverride(
+            primary: .removed, alternate: .chord(KeyChord("o", modifiers: [.command, .shift]))),
+        NavigationCommands.open.id: ShortcutOverride(primary: .chord(KeyChord(.function(3)))),
+    ]
+    Settings(defaults: try #require(UserDefaults(suiteName: name))).shortcuts = shortcuts
+
+    let relaunched = Settings(defaults: try #require(UserDefaults(suiteName: name)))
+
+    #expect(relaunched.shortcuts == shortcuts)
+}
+
+@MainActor @Test func changingShortcutsNotifiesObservers() {
+    let settings = untouchedSettings()
+    var calls = 0
+    settings.observe(for: settings) { calls += 1 }
+
+    settings.shortcuts = [showPalette: ShortcutOverride(primary: .removed)]
+    settings.shortcuts = [:]
+
+    #expect(calls == 2)
+}

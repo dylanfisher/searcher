@@ -146,7 +146,9 @@ private let f7 = KeyChord(.function(7))
 private let f8 = KeyChord(.function(8))
 
 @Test func withTheCommanderPresetF5ToF8ResolveToTheirFileCommands() throws {
-    let registry = try AppCommands.registry(commanderFKeys: true)
+    let registry = try KeyBindings(
+        commands: AppCommands.commands, preset: FileCommands.commanderFKeys
+    ).registry
     let expected: [(KeyChord, CommandID)] = [
         (f5, FileCommands.copyToOtherPane.id),
         (f6, FileCommands.moveToOtherPane.id),
@@ -164,7 +166,7 @@ private let f8 = KeyChord(.function(8))
 }
 
 @Test func withoutTheCommanderPresetF5ToF8AreUnboundAndCmdShiftCAndMStayBound() throws {
-    let registry = try AppCommands.registry(commanderFKeys: false)
+    let registry = try AppCommands.registry()
 
     for chord in [f5, f6, f7, f8] {
         #expect(registry.command(for: chord) == nil, "\(chord)")
@@ -180,7 +182,9 @@ private let f8 = KeyChord(.function(8))
     let window = await Window(at: source.url.path)
     _ = try await window.splitRight(showing: destination.url.path)
     window.select("a.txt")
-    let id = try #require(try AppCommands.registry(commanderFKeys: true).command(for: f5)?.id)
+    let id = try #require(
+        try KeyBindings(commands: AppCommands.commands, preset: FileCommands.commanderFKeys)
+            .registry.command(for: f5)?.id)
     let binding = try #require(FileCommands.bindings.first { $0.command.id == id })
 
     binding.run(window.context())

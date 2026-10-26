@@ -146,6 +146,24 @@ public enum MainMenuBuilder {
     /// There is no help book, so the menu has no items of its own.
     static let helpMenu = Menu(title: "Help", items: [], isFilledBySystem: true)
 
+    /// The chords of the standard items that aren't text editing, such as Quit and Minimize. The
+    /// item always takes its chord first, so no command may have one, and `KeyBindings` drops one
+    /// that stored data gives a command (docs/decisions/0106-primary-and-alternate-shortcuts.md).
+    public static let reservedChords: Set<KeyChord> = {
+        func chords(in menu: Menu) -> [KeyChord] {
+            menu.items.flatMap { item -> [KeyChord] in
+                switch item {
+                case .standard(let standard) where !standard.isTextEditing:
+                    standard.chord.map { [$0] } ?? []
+                case .submenu(let submenu): chords(in: submenu)
+                default: []
+                }
+            }
+        }
+        // The app's name is only in titles.
+        return Set(([appMenu("")] + menus).flatMap(chords))
+    }()
+
     /// The menus after the app menu, in menu bar order. A menu with no items is left out of the
     /// bar until a step gives it some, unless the system fills it.
     static let menus = [

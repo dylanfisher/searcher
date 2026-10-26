@@ -21,22 +21,28 @@ public enum AppCommands {
         sets.flatMap { $0.bindings }
     }
 
-    /// A registry holding every command in `sets`; throws if two share an ID or a chord. With
-    /// `commanderFKeys`, the commands in `FileCommands.commanderFKeys` also take their F-key,
-    /// after their own chords, so a menu still shows the first.
-    public static func registry(commanderFKeys: Bool = false) throws(CommandRegistry.Conflict)
-        -> CommandRegistry
+    /// Every command in every set, with its default chords.
+    public static var commands: [Command] {
+        bindings.map(\.command)
+    }
+
+    /// A registry holding every command in `sets` with its default chords; throws if two share
+    /// an ID or a chord.
+    public static func registry() throws(CommandRegistry.Conflict) -> CommandRegistry {
+        try KeyBindings(commands: commands).registry
+    }
+
+    /// The bindings `settings` asks for: every command in `sets`, with the Commander F-keys
+    /// (`FileCommands.commanderFKeys`) as default alternates while `Settings.commanderFKeys` is
+    /// on, and `Settings.shortcuts` over both. No command takes a chord in `reserved`. Throws
+    /// only for a clash between defaults, as `registry()` does.
+    @MainActor
+    public static func keyBindings(settings: Settings, reserved: Set<KeyChord>)
+        throws(CommandRegistry.Conflict) -> KeyBindings
     {
-        var registry = CommandRegistry()
-        for binding in bindings {
-            let command = binding.command
-            guard commanderFKeys, let fKey = FileCommands.commanderFKeys[command.id] else {
-                try registry.register(command)
-                continue
-            }
-            try registry.register(
-                Command(id: command.id, title: command.title, chords: command.chords + [fKey]))
-        }
-        return registry
+        try KeyBindings(
+            commands: commands,
+            preset: settings.commanderFKeys ? FileCommands.commanderFKeys : [:],
+            overrides: settings.shortcuts, reserved: reserved)
     }
 }
