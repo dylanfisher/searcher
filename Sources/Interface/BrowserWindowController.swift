@@ -550,7 +550,8 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         _ controller: PaletteWindowController, closedBy id: CommandID, over window: NSWindow
     ) {
         controller.closingChords = { [weak self] in
-            guard let self else { return [] }
+            // A closed window's workspace has no focused table to read.
+            guard let self, !isClosed, !workspace.isClosed else { return [] }
             let registry = focusedTable.registry
             return Set(
                 [id, TilingCommands.closePane.id].flatMap {
