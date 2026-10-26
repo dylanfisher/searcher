@@ -61,9 +61,21 @@ Tags needs search, which is on hold.
 - **Opening.** A folder shows in the window's focused pane (`Pane.navigate`), its column view
   starting its trail there as any navigation does ([0103](0103-column-trail-from-the-root.md));
   a file or package opens in its app, as a double-click on it does. Only the latest open acts.
-- **Rows.** Each shows its name, the path's last component, and an icon with no disk read:
-  Finder's symbols for the five defaults by path, a folder symbol for other folders, and the
-  type's icon from `TypeIconCache` by extension for a file. Localized display names aren't read.
+- **Rows.** Each shows its name, the path's last component, and an icon with no disk read on
+  the main thread: Finder's own sidebar glyphs for the five defaults by path
+  (`SidebarApplicationsFolder`, `SidebarDesktopFolder`, `SidebarDocumentsFolder`,
+  `SidebarDownloadsFolder`, `SidebarHomeFolder`), `SidebarGenericFolder` for other folders, and
+  the type's icon from `TypeIconCache` by extension for a file. The glyphs are `Sidebar*.icns`
+  files in the system's CoreTypes bundle, read once, on a `BlockingCallThread`, by
+  `CoreTypesIcons` and decoded from memory as template images by `SidebarIcons`, shared by every
+  sidebar; the rows show SF Symbols (`app.dashed`, `menubar.dock.rectangle`, `doc`,
+  `arrow.down.circle`, `house`, `folder`) until the read ends, and for any glyph the bundle
+  lacks, then swap in the glyphs. The glyphs take the accent color, as Finder's do, and the
+  selected row's text color while it is emphasized, where the accent would vanish. A glyph that
+  is missing or unreadable falls back to its symbol silently: Browser and Interface have no
+  logging path (only the app target logs), and the bundle is static system content that
+  ships with every macOS, so the fallback is a guard for a changed system, not a state to
+  report. Localized display names aren't read.
 - **Drags in.** File URLs from a pane, Finder or any app dropped between favorites are added
   there, in order, leaving out those already listed; a drop on a favorite goes before it, and one
   on the group's row, or in the gap between the last favorite and the next group, at its end. A

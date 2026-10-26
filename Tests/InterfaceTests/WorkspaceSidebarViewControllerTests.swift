@@ -52,6 +52,16 @@ private final class Fixture {
     var escapes = 0
     let sidebar: WorkspaceSidebarViewController
     let window = KeyCatchingWindow()
+    /// Finder's glyphs as a stub reads them: a tiny image for each, none read yet.
+    let icons = SidebarIcons { names in
+        let data = NSImage(size: NSSize(width: 4, height: 4), flipped: false) { rect in
+            NSColor.red.set()
+            rect.fill()
+            return true
+        }.tiffRepresentation
+        return Dictionary(
+            uniqueKeysWithValues: names.compactMap { name in data.map { (name, $0) } })
+    }
 
     init() throws {
         let service = ListingService(lister: StubLister(["/root": [file("a.txt")]])) { "Disk" }
@@ -78,7 +88,8 @@ private final class Fixture {
         favorites = Favorites(settings: settings) { resolver.resolve($0) }
         volumes = mounts.list()
         sidebar = WorkspaceSidebarViewController(
-            workspace: own, list: list, favorites: favorites, volumes: volumes, settings: settings)
+            workspace: own, list: list, favorites: favorites, volumes: volumes, settings: settings,
+            icons: icons)
         sidebar.open = { [weak self] id in self?.opened.append(id) }
         sidebar.openFavorite = { [weak self] path in self?.openedFavorites.append(path) }
         sidebar.openVolume = { [weak self] path in self?.openedVolumes.append(path) }
@@ -95,7 +106,8 @@ private final class Fixture {
     /// Another sidebar over the same lists and settings, as another window has.
     func makeSidebar() -> WorkspaceSidebarViewController {
         WorkspaceSidebarViewController(
-            workspace: own, list: list, favorites: favorites, volumes: volumes, settings: settings)
+            workspace: own, list: list, favorites: favorites, volumes: volumes, settings: settings,
+            icons: icons)
     }
 
     /// Mounts `volumes` in place of those mounted, as the system reports a mount at a mount point
@@ -538,6 +550,68 @@ private final class Fixture {
     let downloads = try #require(
         try fixture.favoriteCells.first { $0.textField?.stringValue == "Downloads" })
     #expect(downloads.textField?.textColor == .tertiaryLabelColor)
+}
+
+@MainActor @Test func favoritesAndVolumesShowFindersSidebarGlyphsOnceRead() async throws {
+    let fixture = try Fixture()
+    await fixture.mount([usb, image, share])
+    await fixture.icons.load()
+    await settle {
+        (try? fixture.favoriteCells.first?.imageView?.image) === fixture.icons.image(.applications)
+    }
+
+    let glyphs = try fixture.favoriteCells.map(\.imageView?.image)
+    let favorite: [SidebarIcons.Glyph] = [.applications, .desktop, .documents, .downloads, .home]
+    for (glyph, image) in zip(favorite, glyphs) {
+        #expect(image === fixture.icons.image(glyph) && image?.isTemplate == true)
+    }
+    let volumeGlyphs = try fixture.volumeCells.map(\.imageView?.image)
+    let volume: [SidebarIcons.Glyph] = [.externalDisk, .externalDisk, .server]
+    for (glyph, image) in zip(volume, volumeGlyphs) {
+        #expect(image === fixture.icons.image(glyph))
+    }
+}
+
+@MainActor @Test func glyphsTakeTheAccentColorAndTheSelectedRowsTextColor() async throws {
+    let fixture = try Fixture()
+    await fixture.mount([usb])
+    let favorite = try #require(fixture.favoriteCells.first)
+    let volume = try #require(fixture.volumeCells.first)
+    let workspace = try #require(fixture.cells.first)
+
+    #expect(favorite.imageView?.contentTintColor == .controlAccentColor)
+    #expect(volume.imageView?.contentTintColor == .controlAccentColor)
+    #expect(workspace.imageView?.contentTintColor == nil)
+
+    favorite.backgroundStyle = .emphasized
+    #expect(favorite.imageView?.contentTintColor == .alternateSelectedControlTextColor)
+    favorite.backgroundStyle = .normal
+    #expect(favorite.imageView?.contentTintColor == .controlAccentColor)
+}
+
+@MainActor @Test func aGlyphTheBundleLacksStaysNilSoTheRowKeepsItsSymbol() async {
+    let icons = SidebarIcons { _ in [:] }
+
+    await icons.load()
+
+    #expect(SidebarIcons.Glyph.allCases.allSatisfy { icons.image($0) == nil })
+}
+
+@Test func finderPicksTheGlyphForEachKindOfFolderAndVolume() {
+    typealias Glyph = SidebarIcons.Glyph
+    #expect(Glyph.forFolder(at: "/Applications", home: "/Users/u") == .applications)
+    #expect(Glyph.forFolder(at: "/Users/u", home: "/Users/u") == .home)
+    #expect(Glyph.forFolder(at: "/Users/u/Downloads", home: "/Users/u") == .downloads)
+    #expect(Glyph.forFolder(at: "/Users/u/Work", home: "/Users/u") == .folder)
+    let card = SidebarVolume(
+        mountPoint: "/Volumes/C", name: "C", kind: .local, isInternal: true, isRemovable: true)
+    let internalDisk = SidebarVolume(
+        mountPoint: "/Volumes/I", name: "I", kind: .local, isInternal: true)
+    #expect(Glyph.forVolume(usb) == .externalDisk)
+    #expect(Glyph.forVolume(image) == .externalDisk)
+    #expect(Glyph.forVolume(share) == .server)
+    #expect(Glyph.forVolume(card) == .removableDisk)
+    #expect(Glyph.forVolume(internalDisk) == .internalDisk)
 }
 
 // MARK: Locations

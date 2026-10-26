@@ -229,37 +229,50 @@ private let infoItems = [
     #expect(error.recoverySuggestion == "Can’t get information window.")
 }
 
-/// The event AppleScript sends for `open information window of item`, one specifier per item,
-/// built without sending it, and the `activate` after it.
-@Test func theInfoEventOpensTheInformationWindowOfEachItem() throws {
-    let event = WorkspaceSystemActions.infoEvent(for: infoItems)
+/// The event AppleScript sends for `open information window of item`, one per item, built
+/// without sending it. The direct object is the specifier itself: a list makes Finder open the
+/// items, with no error.
+@Test func theInfoEventOpensTheInformationWindowOfTheItem() throws {
+    let url = try #require(infoItems.first)
+    let event = WorkspaceSystemActions.infoEvent(for: url)
 
     #expect(event.eventClass == AEEventClass(kCoreEventClass))
     #expect(event.eventID == AEEventID(kAEOpenDocuments))
     let target = try #require(event.attributeDescriptor(forKeyword: AEKeyword(keyAddressAttr)))
     #expect(target.descriptorType == DescType(typeApplicationBundleID))
     #expect(String(data: target.data, encoding: .utf8) == "com.apple.finder")
-    let windows = try #require(event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject)))
-    #expect(windows.numberOfItems == infoItems.count)
-    for (index, url) in infoItems.enumerated() {
-        let window = try #require(windows.atIndex(index + 1))
-        #expect(window.descriptorType == DescType(typeObjectSpecifier))
-        #expect(
-            window.forKeyword(AEKeyword(keyAEDesiredClass))?.typeCodeValue == DescType(cProperty))
-        #expect(
-            window.forKeyword(AEKeyword(keyAEKeyForm))?.enumCodeValue == DescType(formPropertyID))
-        #expect(
-            window.forKeyword(AEKeyword(keyAEKeyData))?.typeCodeValue
-                == WorkspaceSystemActions.informationWindow)
-        let item = try #require(window.forKeyword(AEKeyword(keyAEContainer)))
-        #expect(item.descriptorType == DescType(typeObjectSpecifier))
-        #expect(item.forKeyword(AEKeyword(keyAEDesiredClass))?.typeCodeValue == DescType(cObject))
-        #expect(
-            item.forKeyword(AEKeyword(keyAEKeyForm))?.enumCodeValue
-                == DescType(formAbsolutePosition))
-        #expect(item.forKeyword(AEKeyword(keyAEKeyData))?.fileURLValue == url)
-        #expect(item.forKeyword(AEKeyword(keyAEContainer))?.descriptorType == DescType(typeNull))
+    try expectInformationWindow(of: url, in: event)
+}
+
+@Test func eachItemGetsItsOwnInfoEventWithOneNonListDirectObject() throws {
+    let events = WorkspaceSystemActions.infoEvents(for: infoItems)
+
+    #expect(events.count == infoItems.count)
+    for (event, url) in zip(events, infoItems) {
+        try expectInformationWindow(of: url, in: event)
     }
+}
+
+private func expectInformationWindow(of url: URL, in event: NSAppleEventDescriptor) throws {
+    let window = try #require(event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject)))
+    #expect(window.descriptorType == DescType(typeObjectSpecifier))
+    #expect(window.descriptorType != DescType(typeAEList))
+    #expect(window.forKeyword(AEKeyword(keyAEDesiredClass))?.typeCodeValue == DescType(cProperty))
+    #expect(window.forKeyword(AEKeyword(keyAEKeyForm))?.enumCodeValue == DescType(formPropertyID))
+    #expect(
+        window.forKeyword(AEKeyword(keyAEKeyData))?.typeCodeValue
+            == WorkspaceSystemActions.informationWindow)
+    let item = try #require(window.forKeyword(AEKeyword(keyAEContainer)))
+    #expect(item.descriptorType == DescType(typeObjectSpecifier))
+    #expect(item.forKeyword(AEKeyword(keyAEDesiredClass))?.typeCodeValue == DescType(cObject))
+    #expect(
+        item.forKeyword(AEKeyword(keyAEKeyForm))?.enumCodeValue == DescType(formAbsolutePosition))
+    #expect(item.forKeyword(AEKeyword(keyAEKeyData))?.fileURLValue == url)
+    #expect(item.forKeyword(AEKeyword(keyAEContainer))?.descriptorType == DescType(typeNull))
+}
+
+/// The `activate` that follows the info events brings Finder to the front.
+@Test func theActivateEventIsFindersActivate() {
     let activate = WorkspaceSystemActions.activateEvent()
     #expect(activate.eventClass == AEEventClass(kAEMiscStandards))
     #expect(activate.eventID == AEEventID(kAEActivate))
