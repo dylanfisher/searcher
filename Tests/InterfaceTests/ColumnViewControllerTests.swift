@@ -2698,6 +2698,26 @@ private func hit(_ point: NSPoint, in fixture: Fixture) -> NSView? {
     #expect(fixture.controller.previewView.map { Double($0.frame.width) } == standard + 70)
 }
 
+/// A column's first row sits the shared margin below its top and, scrolled to the end, its last
+/// row the margin above its bottom, where the columns' horizontal scroller shows (Dylan,
+/// 2026-10-26).
+@MainActor @Test func aColumnsRowsKeepTheSharedMarginFromItsTopAndBottom() async throws {
+    let names = (0..<2_000).map { String(format: "e%04d", $0) }
+    let fixture = await Fixture(folders: ["/": [folder("r")], "/Volumes/r": names.map { file($0) }])
+    let table = try #require(fixture.tables.first)
+    let column = try #require(table.enclosingScrollView)
+    fixture.controller.view.layoutSubtreeIfNeeded()
+    func frame(ofRow row: Int) -> NSRect { column.convert(table.rect(ofRow: row), from: table) }
+
+    #expect(frame(ofRow: 0).minY == Margin.standard)
+
+    fixture.trail.columns[0].pane.selectLastRow()
+    #expect(column.contentView.frame.maxY - frame(ofRow: 1_999).maxY == Margin.standard)
+
+    fixture.trail.columns[0].pane.selectFirstRow()
+    #expect(frame(ofRow: 0).minY == Margin.standard)
+}
+
 @MainActor @Test func aJumpCentersTheRowInItsColumn() async throws {
     let names = (0..<2_000).map { String(format: "e%04d", $0) }
     let fixture = await Fixture(folders: ["/": [folder("r")], "/Volumes/r": names.map { file($0) }])

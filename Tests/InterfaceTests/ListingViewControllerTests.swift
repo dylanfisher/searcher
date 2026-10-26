@@ -339,6 +339,65 @@ func rowArea(of table: NSTableView) -> NSRect {
     return area
 }
 
+/// Where `row` is in the list's scroll view, whose y grows downward.
+@MainActor
+private func frame(ofRow row: Int, in controller: ListingViewController) throws -> NSRect {
+    let scrollView = try #require(controller.view as? NSScrollView)
+    let table = controller.tableView
+    return scrollView.convert(table.rect(ofRow: row), from: table)
+}
+
+/// Where the first row sits at the top of the list and the last at the end: the shared margin
+/// below the column header and above the bottom edge.
+@MainActor
+private func rowEdges(of controller: ListingViewController) throws -> (
+    top: CGFloat, bottom: CGFloat
+) {
+    let scrollView = try #require(controller.view as? NSScrollView)
+    let header = try #require(controller.tableView.headerView)
+    return (
+        scrollView.convert(header.bounds, from: header).maxY + Margin.standard,
+        scrollView.contentView.frame.maxY - Margin.standard
+    )
+}
+
+/// At the top of the list the first row sits the shared margin below the column header, and at
+/// the end the last row sits it above the bottom edge, where the horizontal scroller shows. A
+/// key that scrolls a row into view keeps it clear of the margin too (Dylan, 2026-10-26: "apply
+/// top and bottom margin around all list and column items").
+@MainActor @Test func theRowsKeepTheSharedMarginFromTheHeaderAndTheBottomEdge() async throws {
+    let entries = (0..<2_000).map { file(String(format: "e%04d", $0)) }
+    let controller = await controller(showing: entries)
+    controller.view.layoutSubtreeIfNeeded()
+    let (top, bottom) = try rowEdges(of: controller)
+
+    #expect(try frame(ofRow: 0, in: controller).minY == top)
+
+    controller.pane.selectLastRow()
+    #expect(try frame(ofRow: 1_999, in: controller).maxY == bottom)
+
+    controller.pane.moveSelection(by: -100, extending: false)
+    #expect(try frame(ofRow: 1_899, in: controller).minY == top)
+
+    controller.pane.moveSelection(by: 100, extending: false)
+    #expect(try frame(ofRow: 1_999, in: controller).maxY == bottom)
+
+    controller.pane.selectFirstRow()
+    #expect(try frame(ofRow: 0, in: controller).minY == top)
+}
+
+/// A list with fewer rows than fit keeps the margin over the first row and doesn't scroll.
+@MainActor @Test func aShortListKeepsTheMarginAndDoesNotScroll() async throws {
+    let controller = await controller(showing: [file("a"), file("b")])
+    controller.view.layoutSubtreeIfNeeded()
+    let clip = try #require((controller.view as? NSScrollView)?.contentView)
+
+    #expect(try frame(ofRow: 0, in: controller).minY == rowEdges(of: controller).top)
+    let end = clip.constrainBoundsRect(
+        NSRect(origin: NSPoint(x: 0, y: 1_000), size: clip.bounds.size))
+    #expect(end.origin == clip.bounds.origin)
+}
+
 @MainActor @Test func aJumpCentersTheRowInTheListAndStopsAtTheEnds() async throws {
     let entries = (0..<2_000).map { file(String(format: "e%04d", $0)) }
     let controller = await controller(showing: entries)
@@ -354,7 +413,7 @@ func rowArea(of table: NSTableView) -> NSRect {
     #expect(table.visibleRect == top)
 
     controller.pane.jump(to: "e1999")
-    #expect(abs(table.visibleRect.maxY - table.bounds.maxY) <= 1)
+    #expect(abs(table.visibleRect.maxY - Margin.standard - table.bounds.maxY) <= 1)
 }
 
 /// A jump to the row the cursor is on, already in view, still centers it.
@@ -386,9 +445,10 @@ func rowArea(of table: NSTableView) -> NSRect {
 
     #expect(short > 1)
     #expect(tall > short)
-    // That many rows fit between the header and the bottom edge, and one more doesn't. At the
-    // top of the list the header covers the part of the visible rect above y = 0.
-    let below = table.visibleRect.maxY
+    // That many rows fit between the margins under the header and over the bottom edge, and
+    // one more doesn't. At the top of the list the header and the margin cover the part of the
+    // visible rect above y = 0.
+    let below = table.visibleRect.maxY - Margin.standard
     func span(_ rows: Int) -> CGFloat {
         table.rect(ofRow: rows - 1).maxY - table.rect(ofRow: 0).minY
     }
