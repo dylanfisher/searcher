@@ -70,6 +70,13 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// Set once the workspace closed with its last tab or the window closed; the window shows
     /// nothing after that.
     private var isClosed = false
+
+    /// Whether the left mouse button is down, which tells a move by the title bar from one the
+    /// app makes; a test sets it.
+    var isLeftMouseDown: () -> Bool = { NSEvent.pressedMouseButtons & 1 != 0 }
+
+    /// Set when the user starts dragging the window by its title bar.
+    private var isDraggingWindow = false
     /// The favorites and the saved workspaces, left of the panes.
     let sidebar: WorkspaceSidebarViewController
     /// The sidebar's place in the window's split view, collapsed while it is hidden.
@@ -262,15 +269,40 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
 
     // MARK: Size
 
-    /// The user finished resizing the window by dragging an edge: new windows open at its size
+    /// The user finished resizing the window by dragging an edge: new windows open at its frame
     /// (0057-windows-and-tear-out.md). Zoom, full screen and restoring a frame aren't live
-    /// resizes, so they leave the size alone.
+    /// resizes, so they leave the frame alone.
     public func windowDidEndLiveResize(_ notification: Notification) {
+        recordFrame()
+    }
+
+    /// The user starts dragging the window by its title bar. AppKit sends this for that drag
+    /// only, not for a move the app makes with `setFrame`.
+    public func windowWillMove(_ notification: Notification) {
+        isDraggingWindow = true
+    }
+
+    /// A move that follows `windowWillMove` while the left button is down is the drag: the
+    /// window's frame after each step is the one a new window opens at, so the last step, made
+    /// before the button comes up, is the one that stays. A move with the button up (a cascade, a
+    /// restore, zoom, full screen, a test) ends the drag's claim and records nothing.
+    public func windowDidMove(_ notification: Notification) {
+        guard isDraggingWindow else { return }
+        guard isLeftMouseDown() else {
+            isDraggingWindow = false
+            return
+        }
+        recordFrame()
+    }
+
+    /// Stores the window's frame, unless it is full screen or its content area is empty: the
+    /// window has no minimum size, so a drag can leave it with none.
+    private func recordFrame() {
         guard let window, !isClosed, !window.styleMask.contains(.fullScreen) else { return }
-        // The window has no minimum size, so a drag can leave it with an empty content area.
-        let size = window.contentRect(forFrameRect: window.frame).size
+        let frame = window.frame
+        let size = window.contentRect(forFrameRect: frame).size
         guard Settings.isWindowSize(size) else { return }
-        settings.newWindowSize = size
+        settings.newWindowFrame = CGRect(origin: frame.origin, size: size)
     }
 
     // MARK: Key window

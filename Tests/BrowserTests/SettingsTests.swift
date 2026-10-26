@@ -256,31 +256,39 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     }
 }
 
-@MainActor @Test func theNewWindowSizeIsTheDefaultUntilSetAndSurvivesARelaunch() throws {
+@MainActor @Test func theNewWindowFrameIsUnsetUntilSetAndSurvivesARelaunch() throws {
     let folder = try TemporaryFolder("SettingsTests")
     let name = folder.url.appending(path: "preferences").path
     let first = Settings(defaults: try #require(UserDefaults(suiteName: name)))
+    #expect(first.newWindowFrame == nil)
     #expect(first.newWindowSize == CGSize(width: 900, height: 600))
 
-    first.newWindowSize = CGSize(width: 1000, height: 700.5)
+    first.newWindowFrame = CGRect(x: -40, y: 120.5, width: 1000, height: 700.5)
 
     let relaunched = Settings(defaults: try #require(UserDefaults(suiteName: name)))
+    #expect(relaunched.newWindowFrame == CGRect(x: -40, y: 120.5, width: 1000, height: 700.5))
     #expect(relaunched.newWindowSize == CGSize(width: 1000, height: 700.5))
+
+    relaunched.newWindowFrame = nil
+    let cleared = Settings(defaults: try #require(UserDefaults(suiteName: name)))
+    #expect(cleared.newWindowFrame == nil)
 }
 
-@MainActor @Test func aNewWindowSizeOfAnotherShapeIsDiscarded() throws {
+@MainActor @Test func aNewWindowFrameOfAnotherShapeIsDiscarded() throws {
     let folder = try TemporaryFolder("SettingsTests")
-    let key = Settings.Key.newWindowSize.rawValue
+    let key = Settings.Key.newWindowFrame.rawValue
     for stored: Any in [
-        [800], [800, 600, 1], ["800", 600], [true, 600], [800, false], [0, 600], [800, -1],
-        [Double.nan, 600], [800, Double.infinity], 800, "800x600", ["width": 800, "height": 600],
+        [800], [0, 0, 800], [0, 0, 800, 600, 1], [0, 0, "800", 600], [true, 0, 800, 600],
+        [0, 0, 0, 600], [0, 0, 800, -1], [Double.nan, 0, 800, 600], [0, Double.infinity, 800, 600],
+        [0, 0, Double.nan, 600], [0, 0, 800, Double.infinity], 800, "0 0 800 600",
+        ["x": 0, "y": 0, "width": 800, "height": 600],
     ] {
         let defaults = temporarySuite(in: folder.url.path)
         defaults.set(stored, forKey: key)
 
         let settings = Settings(defaults: defaults)
 
-        #expect(settings.newWindowSize == Settings.defaultWindowSize, "\(stored)")
+        #expect(settings.newWindowFrame == nil, "\(stored)")
         #expect(defaults.object(forKey: key) == nil, "\(stored)")
     }
 }

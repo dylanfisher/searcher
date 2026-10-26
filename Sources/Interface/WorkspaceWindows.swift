@@ -569,6 +569,11 @@ public final class WorkspaceWindows {
             width: width, height: height)
     }
 
+    /// Whether `frame`'s top left is `topLeft`, within a point.
+    private static func isAt(_ frame: CGRect, topLeft: NSPoint) -> Bool {
+        abs(frame.minX - topLeft.x) < 1 && abs(frame.maxY - topLeft.y) < 1
+    }
+
     private static func overlap(_ frame: CGRect, _ screen: CGRect) -> Double {
         let shown = frame.intersection(screen)
         return shown.isNull ? 0 : shown.width * shown.height
@@ -824,8 +829,9 @@ public final class WorkspaceWindows {
         scheduleSave()
     }
 
-    /// Makes `workspace`'s window: at `frame`, moved onto a display if it is on none, or
-    /// cascaded from the most recently active window.
+    /// Makes `workspace`'s window: at `frame`, moved onto a display if it is on none, or at
+    /// the frame a window last had by hand, cascaded when an open window is there (0057), or
+    /// cascaded from the most recently active window when no frame was set.
     private func makeController(for workspace: Workspace, frame: CGRect? = nil) {
         // The window it opens from, most recently active, which it cascades from.
         let front = list.workspaces.first { $0 !== workspace }.flatMap { other in
@@ -849,6 +855,17 @@ public final class WorkspaceWindows {
         }
         if let frame {
             window.setFrame(Self.placed(frame, on: screens()), display: false)
+        } else if let stored = settings.newWindowFrame {
+            // Where the user last put a window, stepped down and right from each open window
+            // already there, as Finder's new windows step from the last one.
+            let size = window.frame.size
+            var topLeft = NSPoint(x: stored.minX, y: stored.minY + size.height)
+            let open = controllers.compactMap { $0 === controller ? nil : $0.window?.frame }
+            for _ in open {
+                guard open.contains(where: { Self.isAt($0, topLeft: topLeft) }) else { break }
+                topLeft = window.cascadeTopLeft(from: topLeft)
+            }
+            window.setFrameTopLeftPoint(topLeft)
         } else if let front {
             window.setFrameTopLeftPoint(
                 window.cascadeTopLeft(from: NSPoint(x: front.frame.minX, y: front.frame.maxY)))

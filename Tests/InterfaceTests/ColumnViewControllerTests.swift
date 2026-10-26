@@ -130,6 +130,14 @@ private struct Fixture {
     #expect(scrollView.horizontalScrollElasticity == .allowed)
 }
 
+@MainActor @Test func aVerticalBounceStaysInsideTheColumn() async throws {
+    let fixture = await Fixture(width: Settings.defaultColumnWidth * 4)
+    await fixture.openThreeColumns()
+    let scrollView = try #require(fixture.controller.view as? NSScrollView)
+
+    #expect(scrollView.verticalScrollElasticity == .none)
+}
+
 @MainActor @Test func theFocusedColumnIsScrolledIntoViewWhenArrowsMovePastTheEdge() async throws {
     // Room for two columns.
     let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)
