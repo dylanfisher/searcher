@@ -24,7 +24,7 @@ public final class EventLog<Element: Sendable>: @unchecked Sendable {
     /// Blocks until `done` returns true for the elements so far, and returns false if `timeout`
     /// passes first. For code that isn't async.
     @available(*, noasync, message: "blocks a cooperative thread; use the async wait")
-    public func wait(timeout: TimeInterval = 5, until done: ([Element]) -> Bool) -> Bool {
+    public func wait(timeout: TimeInterval = patience, until done: ([Element]) -> Bool) -> Bool {
         let deadline = Date(timeIntervalSinceNow: timeout)
         condition.lock()
         defer { condition.unlock() }
@@ -39,7 +39,7 @@ public final class EventLog<Element: Sendable>: @unchecked Sendable {
     /// can start more such waits than the pool has threads, leaving the tasks that would satisfy
     /// them nowhere to run.
     public nonisolated(nonsending) func wait(
-        timeout: TimeInterval = 5, until done: ([Element]) -> Bool
+        timeout: TimeInterval = patience, until done: ([Element]) -> Bool
     ) async -> Bool {
         let deadline = Date(timeIntervalSinceNow: timeout)
         while !done(all) {

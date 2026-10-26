@@ -143,12 +143,13 @@ public final class GatedLister: Lister, @unchecked Sendable {
 
     /// Blocks until `count` calls have started, and returns false if `timeout` passes first.
     @available(*, noasync, message: "blocks a cooperative thread; use the async wait")
-    public func waitForCalls(_ count: Int, timeout: TimeInterval = 5) -> Bool {
+    public func waitForCalls(_ count: Int, timeout: TimeInterval = patience) -> Bool {
         wait(timeout: timeout) { startedCalls.count >= count }
     }
 
     /// Suspends until `count` calls have started, and returns false if `timeout` passes first.
-    public nonisolated(nonsending) func waitForCalls(_ count: Int, timeout: TimeInterval = 5) async
+    public nonisolated(nonsending) func waitForCalls(_ count: Int, timeout: TimeInterval = patience)
+        async
         -> Bool
     {
         await wait(timeout: timeout) { startedCalls.count >= count }
@@ -156,12 +157,14 @@ public final class GatedLister: Lister, @unchecked Sendable {
 
     /// Blocks until a call for `path` has started, and returns false if `timeout` passes first.
     @available(*, noasync, message: "blocks a cooperative thread; use the async wait")
-    public func waitForCall(_ path: String, timeout: TimeInterval = 5) -> Bool {
+    public func waitForCall(_ path: String, timeout: TimeInterval = patience) -> Bool {
         wait(timeout: timeout) { startedCalls.contains { $0.path == path } }
     }
 
     /// Suspends until a call for `path` has started, and returns false if `timeout` passes first.
-    public nonisolated(nonsending) func waitForCall(_ path: String, timeout: TimeInterval = 5) async
+    public nonisolated(nonsending) func waitForCall(
+        _ path: String, timeout: TimeInterval = patience
+    ) async
         -> Bool
     {
         await wait(timeout: timeout) { startedCalls.contains { $0.path == path } }
@@ -170,13 +173,15 @@ public final class GatedLister: Lister, @unchecked Sendable {
     /// Blocks until `count` calls have returned or thrown, and returns false if `timeout` passes
     /// first.
     @available(*, noasync, message: "blocks a cooperative thread; use the async wait")
-    public func waitForFinished(_ count: Int, timeout: TimeInterval = 5) -> Bool {
+    public func waitForFinished(_ count: Int, timeout: TimeInterval = patience) -> Bool {
         wait(timeout: timeout) { finishedCount >= count }
     }
 
     /// Suspends until `count` calls have returned or thrown, and returns false if `timeout`
     /// passes first.
-    public nonisolated(nonsending) func waitForFinished(_ count: Int, timeout: TimeInterval = 5)
+    public nonisolated(nonsending) func waitForFinished(
+        _ count: Int, timeout: TimeInterval = patience
+    )
         async -> Bool
     {
         await wait(timeout: timeout) { finishedCount >= count }

@@ -20,9 +20,9 @@ public final class SteppedLister: Lister, @unchecked Sendable {
         }
     }
 
-    /// Lets the next batch go and returns once the service has taken it; false after 5 seconds.
+    /// Lets the next batch go and returns once the service has taken it; false after `patience`.
     public func step() -> Bool {
         steps.signal()
-        return taken.wait(timeout: .now() + 5) == .success
+        return taken.wait(timeout: .now() + patience) == .success
     }
 }

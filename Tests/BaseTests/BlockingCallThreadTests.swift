@@ -2,6 +2,7 @@ import Base
 import Darwin
 import Dispatch
 import Foundation
+import TestSupport
 import Testing
 import os
 
@@ -31,7 +32,7 @@ import os
         there.withLock { $0 = BlockingCallThread.isCurrent }
         ran.signal()
     }
-    #expect(ran.wait(timeout: .now() + 5) == .success)
+    #expect(ran.wait(timeout: .now() + patience) == .success)
     #expect(there.withLock { $0 })
 }
 
@@ -52,16 +53,16 @@ import os
         }
     }
     for _ in 0..<count {
-        #expect(blocked.wait(timeout: .now() + 5) == .success)
+        #expect(blocked.wait(timeout: .now() + patience) == .success)
     }
 
     let ran = DispatchSemaphore(value: 0)
     Task.detached { ran.signal() }
-    #expect(ran.wait(timeout: .now() + 5) == .success)
+    #expect(ran.wait(timeout: .now() + patience) == .success)
 
     for _ in 0..<count { gate.signal() }
     for _ in 0..<count {
-        #expect(finished.wait(timeout: .now() + 5) == .success)
+        #expect(finished.wait(timeout: .now() + patience) == .success)
     }
 }
 

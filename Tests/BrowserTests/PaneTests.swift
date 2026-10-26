@@ -660,7 +660,7 @@ private final class HeldLinkChecks: @unchecked Sendable {
     /// Suspends until `count` checks have read, and their answers have reached the main actor.
     @MainActor
     func finish(_ count: Int) async {
-        let deadline = Date(timeIntervalSinceNow: 5)
+        let deadline = Date(timeIntervalSinceNow: patience)
         while condition.withLock({ finished < count }) {
             guard Date() < deadline else {
                 Issue.record("\(count) link checks didn't finish")
