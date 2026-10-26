@@ -2,9 +2,10 @@
 /// folders first toggles, which are app-wide `Settings`, as are the toggles of the sidebar's
 /// groups, and the sort keys, which sort the focused pane by a column. A sort key for the column
 /// already sorted by reverses it; Sort by Next Column moves to the next column in the header's
-/// order, and Reverse Sort Direction reverses the column sorted by. Space opens and closes Quick Look on the selection, Cmd-F opens
-/// the pane's filter field, and Cmd-1 and Cmd-3 show the pane as a list or as columns. The
-/// appearance commands make the app light, dark or follow the system.
+/// order, and Reverse Sort Direction reverses the column sorted by. Space opens and closes Quick
+/// Look on the selection, Cmd-F opens the pane's filter field, and Cmd-1 and Cmd-3 show the pane
+/// as a list or as columns. The appearance commands make the app light, dark or follow the
+/// system.
 public enum ViewCommands: CommandSet {
     public static let toggleHidden = Command(
         id: CommandID("view.toggleHidden"), title: "Show Hidden Files",
