@@ -5,7 +5,8 @@ import Foundation
 /// column that comes back to one shows its rows in the same main-actor turn that moves it, as
 /// cached rows, while the folder is listed again. Holds at most `folderCap` folders and
 /// `entryCap` entries; past either, the least recently used folders go. A folder with more than
-/// `entryCap` entries isn't kept. See docs/decisions/0109-recent-local-listings.md.
+/// `entryCap` entries isn't kept. A volume mounting or unmounting drops the folders at or under
+/// its mount point (`VolumeEvents`), since another volume there holds other folders. See docs/decisions/0109-recent-local-listings.md.
 @MainActor
 public final class RecentListings {
     /// A kept listing and when it was listed.
@@ -34,6 +35,7 @@ public final class RecentListings {
         precondition(entryCap > 0, "recent listings need room for an entry, got \(entryCap)")
         self.folderCap = folderCap
         self.entryCap = entryCap
+        VolumeEvents.add(self)
     }
 
     /// The folders kept.
