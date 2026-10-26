@@ -2,7 +2,7 @@
 /// page), Home and End, and Cmd-Opt-↑ and Cmd-Opt-↓, move the cursor and select its row alone, Shift-arrows extend the
 /// selection from the anchor, and Cmd-A selects every row. Type-to-select, which no chord runs,
 /// selects by name. Cmd-U and Shift-Cmd-U step back and forward through the selections in the
-/// tab's panes.
+/// tab's panes and the moves of the keys between its panes and columns.
 public enum SelectionCommands: CommandSet {
     public static let selectNext = Command(
         id: CommandID("selection.next"), title: "Select Next Row", chords: [KeyChord(.down)])

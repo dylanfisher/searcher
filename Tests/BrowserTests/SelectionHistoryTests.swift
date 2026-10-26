@@ -83,6 +83,53 @@ extension SelectionHistory {
     #expect(!history.canUndo())
 }
 
+/// A move of the keys is a step even from nothing selected: the focus is what changed.
+@Test func aMoveOfTheKeysFromNothingSelectedIsAStep() {
+    var history = SelectionHistory(clock: ManualClock())
+    let empty = SelectionHistory.Position(pane: left, folder: here, selection: Selection())
+
+    history.record(empty, by: .focus(.right, isRepeat: false), movingKeys: true)
+
+    #expect(history.undo(from: "z") == empty)
+}
+
+/// A held focus key's repeats join its press wherever they move the keys; each press of it, or
+/// of the focus key the other way, is a step of its own.
+@Test func aHeldFocusKeysRepeatsJoinItsPressAcrossPanesAndColumns() {
+    var history = SelectionHistory(clock: ManualClock())
+    func move(
+        _ name: String, in folder: Location, of pane: PaneID, _ direction: Direction,
+        isRepeat: Bool
+    ) {
+        history.record(
+            at(name, in: folder, of: pane), by: .focus(direction, isRepeat: isRepeat),
+            movingKeys: true)
+    }
+
+    move("a", in: here, of: left, .left, isRepeat: false)
+    move("b", in: there, of: left, .left, isRepeat: true)
+    move("c", in: here, of: right, .left, isRepeat: true)
+    move("d", in: here, of: right, .left, isRepeat: false)
+    move("e", in: there, of: right, .right, isRepeat: true)
+
+    #expect(history.undo(from: "z") == at("e", in: there, of: right))
+    #expect(history.undo(from: "z") == at("d", of: right))
+    #expect(history.undo(from: "z") == at("a"))
+    #expect(!history.canUndo())
+}
+
+/// One press is one step wherever it moves the keys: the selection it makes in the column or
+/// pane it moves them to joins the move.
+@Test func aPressJoinsItsMoveOfTheKeysInAnotherPaneAndFolder() {
+    var history = SelectionHistory(clock: ManualClock())
+
+    history.record(at("a"), by: .press(7), movingKeys: true)
+    history.record("b", in: there, of: right, by: .press(7))
+
+    #expect(history.undo(from: "z") == at("a"))
+    #expect(!history.canUndo())
+}
+
 @Test func aHeldKeysRepeatsJoinItsPressAndEachTapIsAStep() {
     let clock = ManualClock()
     var history = SelectionHistory(clock: clock)

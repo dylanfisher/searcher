@@ -285,7 +285,7 @@ public final class ColumnTrail {
         guard let first = columns.first, first.pane.location != root else { return }
         if let index = columns.firstIndex(where: { $0.pane.location == root }) {
             // The trail is being corrected, not moved: it is no step of the history.
-            if focusedIndex < index { focus(index, recordsStep: false) }
+            if focusedIndex < index { focus(index, recordsStep: false, recordingAs: nil) }
             for column in columns[..<index] { column.close() }
             columns.removeSubrange(..<index)
             focusedIndex -= index
@@ -301,14 +301,19 @@ public final class ColumnTrail {
 
     /// → : moves into the column of the folder selected in the focused one, opening it at once
     /// if it waits for the keys to pause, and selects its first row if nothing there is
-    /// selected, or once the whole folder's rows arrive if they haven't yet. Does nothing else
-    /// when no folder is selected.
-    public func moveRight() {
-        moveRight(selectingFirstRow: true)
+    /// selected, or once the whole folder's rows arrive if they haven't yet; that selection is
+    /// part of the move's step. Does nothing else when no folder is selected. `isKeyRepeat`
+    /// says → is held, so the move joins its step in the selection history.
+    public func moveRight(isKeyRepeat: Bool = false) {
+        moveRight(selectingFirstRow: true, recordingAs: .focus(.right, isRepeat: isKeyRepeat))
     }
 
-    /// → , selecting the first row of the column it moves into only if `selectingFirstRow`.
-    private func moveRight(selectingFirstRow: Bool, recordsStep: Bool = true) {
+    /// → , selecting the first row of the column it moves into only if `selectingFirstRow`,
+    /// the move a step of the selection history made by `source`.
+    private func moveRight(
+        selectingFirstRow: Bool, recordsStep: Bool = true,
+        recordingAs source: SelectionHistory.Source
+    ) {
         let wasHeld = focused.held != nil
         if wasHeld {
             follow(focused)
@@ -318,7 +323,7 @@ public final class ColumnTrail {
             if wasHeld { owner.trailDidChange() }
             return
         }
-        focus(focusedIndex + 1, recordsStep: recordsStep)
+        focus(focusedIndex + 1, recordsStep: recordsStep, recordingAs: source)
         let pane = focused.pane
         if selectingFirstRow, pane.selection.isEmpty {
             focused.selectsFirstRowAt = pane.selectionVersion
@@ -332,14 +337,15 @@ public final class ColumnTrail {
     /// wait, so the folder selected in it opens no column until → or another selection. Does
     /// nothing in the first column, the trail's root, as in Finder
     /// (0103-column-trail-from-the-root.md). Columns whose first loads wait start them, so the
-    /// column it moves to lists its folder.
-    public func moveLeft() {
+    /// column it moves to lists its folder. `isKeyRepeat` says ← is held, so the move joins its
+    /// step in the selection history.
+    public func moveLeft(isKeyRepeat: Bool = false) {
         guard focusedIndex > 0 else { return }
         focused.selectsFirstRowAt = nil
         focused.held?.wait?.cancel()
         focused.held?.wait = nil
         listWaitingColumns()
-        focus(focusedIndex - 1)
+        focus(focusedIndex - 1, recordingAs: .focus(.left, isRepeat: isKeyRepeat))
         owner.trailDidChange()
     }
 
@@ -361,13 +367,13 @@ public final class ColumnTrail {
         pathComponents(location.path).map { FileOperation.comparable(String($0)) }
     }
 
-    /// Moves the keys to `column`, as a click in it does, without selecting anything. A column
-    /// whose first load waits starts it; nothing else is listed. Does nothing when it already has
-    /// them.
-    public func focus(_ column: Column) {
+    /// Moves the keys to `column`, as a click in it does, without selecting anything; the move is
+    /// a step of the selection history made by `source`, or none for nil. A column whose first
+    /// load waits starts it; nothing else is listed. Does nothing when it already has them.
+    public func focus(_ column: Column, recordingAs source: SelectionHistory.Source? = .once) {
         guard let index = index(of: column.pane), index != focusedIndex else { return }
         listWaitingColumns()
-        focus(index)
+        focus(index, recordingAs: source)
         owner.trailDidChange()
     }
 
@@ -397,14 +403,15 @@ public final class ColumnTrail {
 
     /// Go to Item's choice of `name` in `pane`'s column: the column takes the keys, as a click
     /// in it does, and `name` is selected there with its row centered (`Pane.jump(to:)`), one
-    /// step of the column's selection history. Does nothing when the column has closed or no
-    /// longer lists `name` (docs/decisions/0101-go-to-item.md).
+    /// step of the selection history with the move of the keys. Does nothing when the column has
+    /// closed or no longer lists `name` (docs/decisions/0101-go-to-item.md).
     public func jump(to name: String, inColumnOf pane: Pane) {
         guard let column = columns.first(where: { $0.pane === pane }),
             pane.state.listing?.row(named: name) != nil
         else { return }
+        let movesKeys = column !== focused
         focus(column)
-        pane.jump(to: name)
+        pane.jump(to: name, recordingAs: movesKeys ? nil : .once)
     }
 
     /// Back or Forward to `column`'s folder, shown as it was left: the column takes the keys with
@@ -415,7 +422,7 @@ public final class ColumnTrail {
     func show(_ column: Column, selecting name: ExactName?) {
         guard let index = index(of: column.pane) else { return }
         listWaitingColumns()
-        if index != focusedIndex { focus(index) }
+        if index != focusedIndex { focus(index, recordingAs: nil) }
         column.pane.select(
             name.map { Selection([$0], cursor: $0) } ?? Selection(), recordingAs: nil)
         showNextColumnAlone(after: index)
@@ -424,12 +431,15 @@ public final class ColumnTrail {
     /// A path bar click on `column`'s folder: the column takes the keys and becomes the last
     /// one, with `cursor`, the folder the path went on to, left as its cursor, unselected, so
     /// nothing opens right of it (0103-column-trail-from-the-root.md). Nothing lists again,
-    /// except a column whose first load waits.
+    /// except a column whose first load waits. The move of the keys and the selection are one
+    /// step of the selection history.
     func showAlone(_ column: Column, cursor: ExactName) {
         guard let index = index(of: column.pane) else { return }
         listWaitingColumns()
-        if index != focusedIndex { focus(index) }
-        column.pane.select(Selection([], cursor: cursor, anchor: cursor), recordingAs: .once)
+        let movesKeys = index != focusedIndex
+        if movesKeys { focus(index, recordingAs: .once) }
+        column.pane.select(
+            Selection([], cursor: cursor, anchor: cursor), recordingAs: movesKeys ? nil : .once)
         follow(column)
         truncate(after: index)
         updatePreview()
@@ -461,7 +471,8 @@ public final class ColumnTrail {
     func openFolder(from pane: Pane) {
         guard let index = index(of: pane) else { return }
         follow(columns[index])
-        moveRight(selectingFirstRow: true, recordsStep: stepsToColumn(at: index))
+        moveRight(
+            selectingFirstRow: true, recordsStep: stepsToColumn(at: index), recordingAs: .once)
     }
 
     /// Show Package Contents on the package `name` in `pane`'s column: adds the package's column
@@ -476,7 +487,8 @@ public final class ColumnTrail {
                 at: pane.location.child(named: name), selecting: nil, sortedLike: pane,
                 isFocused: false))
         updatePreview()
-        moveRight(selectingFirstRow: false, recordsStep: stepsToColumn(at: index))
+        moveRight(
+            selectingFirstRow: false, recordsStep: stepsToColumn(at: index), recordingAs: .once)
     }
 
     /// Moves the keys to the column at `index` for a command that goes on into the column right
@@ -485,7 +497,7 @@ public final class ColumnTrail {
     /// column at `index` had the keys already.
     private func stepsToColumn(at index: Int) -> Bool {
         guard index != focusedIndex else { return true }
-        focus(index)
+        focus(index, recordingAs: .once)
         return false
     }
 
@@ -509,10 +521,13 @@ public final class ColumnTrail {
     }
 
     /// Moves the focus to the column at `index`, without listing anything again. The pane leaves
-    /// the focused column's folder for the column's, which is a step in its history
-    /// (`Pane.trailWillMoveFocus`), unless `recordsStep` is false.
-    private func focus(_ index: Int, recordsStep: Bool = true) {
-        if recordsStep { owner.trailWillMoveFocus(from: focused.pane) }
+    /// the focused column's folder for the column's, which is a step in its history, and the
+    /// keys leaving the focused column a step of the selection history made by `source`, or none
+    /// for nil (`Pane.trailWillMoveFocus`); with `recordsStep` false, neither.
+    private func focus(
+        _ index: Int, recordsStep: Bool = true, recordingAs source: SelectionHistory.Source?
+    ) {
+        if recordsStep { owner.trailWillMoveFocus(from: focused.pane, recordingAs: source) }
         focused.selectsFirstRowAt = nil
         focused.pane.isFocused = false
         focusedIndex = index
@@ -619,7 +634,7 @@ public final class ColumnTrail {
         }
         column.selectsFirstRowAt = nil
         guard listing.count > 0, pane.selection.isEmpty else { return false }
-        pane.selectFirstRow()
+        pane.selectFirstRow(byKey: false, recordingAs: nil)
         return pane.selectionVersion != version
     }
 
@@ -995,7 +1010,7 @@ public final class ColumnTrail {
     /// one at `index`.
     private func truncate(after index: Int) {
         guard index + 1 < columns.count else { return }
-        if focusedIndex > index { focus(index) }
+        if focusedIndex > index { focus(index, recordingAs: nil) }
         let closed = columns[(index + 1)...]
         for column in closed { column.close() }
         columns.removeSubrange((index + 1)...)

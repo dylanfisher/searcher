@@ -51,9 +51,18 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
     /// Whether the command running now came from a key held down, repeating. Set only while
     /// `keyDown` runs it.
     private(set) var runsKeyRepeat = false
-    /// Counts mouse presses in the table, so the selection changes of one press are one step of
-    /// the pane's selection history.
-    var pressCount = 0
+    /// The number of the last mouse press in the table, counted across every table, so the
+    /// changes of one press are one step of the tab's selection history: the rows it selects,
+    /// and the move of the keys into this table's pane or column when it gives the table them.
+    private(set) var pressCount = 0
+    /// Every table's mouse presses so far.
+    private static var presses = 0
+    /// The mouse down `pressCount` numbers. The window gives the table the keys before it sends
+    /// the press to `mouseDown`, so whichever sees the press first numbers it.
+    private weak var numberedPress: NSEvent?
+    /// Set while `mouseDown` gives the table the keys, as a press sent to the table, rather than
+    /// through the window, does.
+    private var isTakingKeysByPress = false
     /// What a drag over the table hands its list's spring loading: AppKit's options for the row
     /// it is over, Space or a force click, the drag leaving the table and the drag ending over
     /// it. Set by the list's controller.
@@ -165,9 +174,27 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
     }
 
     override func mouseDown(with event: NSEvent) {
-        pressCount += 1
+        number(event)
+        isTakingKeysByPress = true
         selectOnPress(event)
+        isTakingKeysByPress = false
         super.mouseDown(with: event)
+    }
+
+    /// Gives `press`, a mouse down, the next press number, unless it has it already.
+    private func number(_ press: NSEvent) {
+        guard press !== numberedPress else { return }
+        Self.presses += 1
+        pressCount = Self.presses
+        numberedPress = press
+    }
+
+    /// How the table taking the keys now goes into the selection history: with the rows of the
+    /// press that gives it them, as one step, or as a step of its own.
+    var keysSource: SelectionHistory.Source {
+        let byPress =
+            isTakingKeysByPress || (numberedPress != nil && window?.currentEvent === numberedPress)
+        return byPress ? .press(pressCount) : .once
     }
 
     /// A press takes the keys if the table lacks them and selects the pressed row now, before
@@ -222,6 +249,9 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
 
     override func becomeFirstResponder() -> Bool {
         guard super.becomeFirstResponder() else { return false }
+        if !isTakingKeysByPress, let event = window?.currentEvent, event.type == .leftMouseDown {
+            number(event)
+        }
         didBecomeFirstResponder()
         return true
     }
