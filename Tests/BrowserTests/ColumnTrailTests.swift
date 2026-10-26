@@ -869,6 +869,87 @@ func leftOrCommandUpMovesToTheParentsColumnAndDoesNothingAtTheRoot(chord: KeyCho
     #expect(trail(pane).preview?.location == Location(path: "/r/docs/x.txt"))
 }
 
+/// The root check can find the root past the focused column, when ← moved the focus up before
+/// the check landed. Moving the focus back is a correction of the trail, so it is no step.
+@MainActor @Test func theRootCheckMovingTheFocusRecordsNoStep() async {
+    let share = VolumeIdentity(
+        device: "//me@nas.invalid/r/docs", mountPoint: "/r/docs", kind: .network)
+    let lister = GatedLister(tree.mapValues { .batches([$0]) })
+    lister.releaseAll()
+    let pane = Pane(
+        location: Location(path: "/r/docs"),
+        service: ListingService(lister: lister, mountedVolumes: { [share] }),
+        systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true,
+        viewMode: .column)
+    trail(pane).moveLeft()
+    #expect(trail(pane).focusedIndex == 1)
+    let back = pane.history.backEntries
+
+    await trail(pane).rootChecked()
+
+    #expect(paths(pane) == ["/r/docs"])
+    #expect(trail(pane).focusedIndex == 0)
+    #expect(pane.history.backEntries == back)
+}
+
+/// Open on a folder in a column the keys aren't in is one gesture: one step, from the column
+/// that had them, so Back lands there and not on the column opened from.
+@MainActor @Test func openOnAFolderInAnotherColumnIsOneStep() async {
+    let fixture = await columnPane(at: "/r/docs/sub")
+    let pane = fixture.pane
+    #expect(trail(pane).focusedIndex == 3)
+    select("deep.txt", in: trail(pane).columns[3])
+    let back = pane.history.backEntries.count
+
+    trail(pane).openFolder(from: trail(pane).columns[1].pane)
+
+    #expect(trail(pane).focusedIndex == 2)
+    #expect(pane.history.backEntries.count == back + 1)
+    #expect(
+        pane.history.backEntries.last
+            == History.Entry(
+                location: Location(path: "/r/docs/sub"), selected: ExactName("deep.txt")))
+}
+
+/// Show Package Contents on a package in a column the keys aren't in is one step likewise.
+@MainActor @Test func showPackageContentsInAnotherColumnIsOneStep() async {
+    let fixture = PaneFixture(
+        at: "/root",
+        folders: [
+            "/": [folder("root")], "/root": [package("App.app"), folder("docs")],
+            "/root/App.app": [folder("Contents")],
+        ])
+    let pane = fixture.pane
+    await settle { pane.state.isLoaded }
+    pane.setViewMode(.column)
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+    let parent = trail(pane).columns[1].pane
+    parent.select(Selection([ExactName("App.app")], cursor: ExactName("App.app")))
+    trail(pane).focus(trail(pane).columns[0])
+    let back = pane.history.backEntries.count
+
+    parent.showPackageContents()
+
+    #expect(paths(pane).last == "/root/App.app")
+    #expect(pane.history.backEntries.count == back + 1)
+}
+
+/// A press that closes the column right of the pressed one clears that column's selection, which
+/// is no step of its selection history: the press is the step, in the column it was made in.
+@MainActor @Test func aPressShowingTheNextColumnAloneLeavesItsSelectionHistoryAlone() async {
+    let fixture = await columnPane(at: "/r/docs/sub")
+    let pane = fixture.pane
+    let docs = trail(pane).columns[2].pane
+    docs.select(Selection([ExactName("sub")], cursor: ExactName("sub")), recordingAs: nil)
+    #expect(!docs.canUndoSelection)
+    trail(pane).focus(trail(pane).columns[1])
+
+    trail(pane).columns[1].pane.pressSelectedFolder()
+
+    #expect(docs.selection.isEmpty)
+    #expect(!docs.canUndoSelection)
+}
+
 @MainActor @Test func openOnAFolderInAColumnMovesIntoItsColumn() async throws {
     let fixture = await columnPane(selecting: "docs")
     let pane = fixture.pane

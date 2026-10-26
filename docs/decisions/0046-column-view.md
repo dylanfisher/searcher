@@ -65,8 +65,8 @@ stacked single-column tables over `NSBrowser`.
   `setFilter` on it, and Quick Look toggles the focused column's controller. The path bar and Go
   to folder keep the pane, which navigates. (Amended 2026-10-25: a path bar click on a folder
   whose column shows moves the focus to that column instead, `Pane.showFolderAbove`, closing the
-  columns right of it; see [0103](0103-column-trail-from-the-root.md).) It starts no monitor for the pane in column mode,
-  and starts the list's again when the list comes back.
+  columns right of it; see [0103](0103-column-trail-from-the-root.md).) It starts no monitor for
+  the pane in column mode, and starts the list's again when the list comes back.
 - **The keys follow the focus.** If one of the pane's tables had the keys, the focused column's
   table takes them after → and ←, after a switch of view mode, and after the column that had them
   closes. A table that takes the keys by a click focuses its column (`ColumnTrail.focus`), and

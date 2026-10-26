@@ -32,6 +32,9 @@ Undo (⌘Z) stays file changes only ([0072](0072-undo.md)).
     extends).
   - One mouse press in the table is one step, whatever it selects while the button is down and
     however long it pauses. Presses are counted in `ListingTableView.mouseDown`.
+    A press on a folder selected alone closes the column right of it, whose selection that
+    clears (`ColumnTrail.showNextColumnAlone`, ⌘U's own business too): the clearing is no step
+    of that column's history, since the press is the step, in the column it was made in.
   - A type-to-select query is one step until a pause of 1 s, the pause that ends the query
     (`TypeSelect.resetInterval`).
   - Every other change is a step of its own.
