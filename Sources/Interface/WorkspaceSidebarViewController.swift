@@ -53,6 +53,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     private let favorites: Favorites
     private let volumes: SidebarVolumes
     private let settings: Settings
+    private let icons: SidebarIcons
     /// What the rows show, as last read from the lists and the settings.
     private var shown = Shown(groups: [], favorites: [], volumes: [], ejecting: [], saved: [])
     private var favoriteRows: [FavoriteRow] = []
@@ -204,8 +205,9 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     /// `workspace`, showing the groups `settings` says.
     init(
         workspace: Workspace, list: WorkspaceList, favorites: Favorites, volumes: SidebarVolumes,
-        settings: Settings
+        settings: Settings, icons: SidebarIcons = .shared
     ) {
+        self.icons = icons
         self.workspace = workspace
         self.list = list
         self.favorites = favorites
@@ -256,6 +258,26 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         favorites.observe(for: self) { [weak self] in self?.showList() }
         volumes.observe(for: self) { [weak self] in self?.showList() }
         settings.observe(for: self) { [weak self] in self?.showList() }
+        Task { [weak self, icons] in
+            await icons.load()
+            self?.refreshIcons()
+        }
+    }
+
+    /// Shows Finder's glyphs on the rows that show symbols, once they are read; the rows, their
+    /// selection and their views stay.
+    private func refreshIcons() {
+        for row in 0..<outlineView.numberOfRows {
+            guard
+                let cell = outlineView.view(atColumn: 0, row: row, makeIfNecessary: false)
+                    as? Cell
+            else { continue }
+            switch outlineView.item(atRow: row) {
+            case let item as FavoriteRow: cell.imageView?.image = icon(for: item.item)
+            case let item as VolumeRow: cell.imageView?.image = icon(for: item.volume)
+            default: break
+            }
+        }
     }
 
     /// Shows the groups the settings show, with the favorites, volumes and saved workspaces, if
@@ -632,16 +654,13 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         return cell
     }
 
-    /// A volume's row: a symbol for a disk or a share, its name, and the eject button when it
-    /// can be ejected, off while an eject of it runs. The symbol needs no read of the volume.
+    /// A volume's row: Finder's glyph for a disk or a share, its name, and the eject button when
+    /// it can be ejected, off while an eject of it runs. The glyph needs no read of the volume.
     private func volumeCell(_ volume: SidebarVolume) -> Cell {
         let cell =
             outlineView.makeView(withIdentifier: Self.volumeCellID, owner: nil) as? Cell
             ?? makeCell(Self.volumeCellID)
-        cell.imageView?.image =
-            volume.kind == .network
-            ? symbol("externaldrive.connected.to.line.below", description: "Server")
-            : symbol("externaldrive", description: "Disk")
+        cell.imageView?.image = icon(for: volume)
         cell.textField?.stringValue = volume.name
         cell.openMark.isHidden = true
         cell.ejectButton.isHidden = !volume.canEject
@@ -650,23 +669,25 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         return cell
     }
 
-    /// Finder's symbol for each of its default favorites, a folder's for any other folder, and
-    /// the type's icon for a file, by its extension, which reads nothing from the disk.
+    /// Finder's glyph for each of its default favorites, the generic folder's for any other
+    /// folder, and the type's icon for a file, by its extension, which reads nothing from the
+    /// disk.
     private func icon(for item: Favorites.Item) -> NSImage {
-        let home = Location(path: settings.home)
-        let symbols = [
-            "/Applications": "app.dashed",
-            home.child(named: "Desktop").path: "menubar.dock.rectangle",
-            home.child(named: "Documents").path: "doc",
-            home.child(named: "Downloads").path: "arrow.down.circle",
-            home.path: "house",
-        ]
-        if let name = symbols[item.path] {
-            return symbol(name, description: item.name)
+        guard item.state == .file else {
+            return glyph(.forFolder(at: item.path, home: settings.home), description: item.name)
         }
-        guard item.state == .file else { return symbol("folder", description: "Folder") }
         let pathExtension = (item.path as NSString).pathExtension
         return TypeIconCache.shared.icon(for: UTType(filenameExtension: pathExtension) ?? .data)
+    }
+
+    private func icon(for volume: SidebarVolume) -> NSImage {
+        let kind = SidebarIcons.Glyph.forVolume(volume)
+        return glyph(kind, description: volume.kind == .network ? "Server" : "Disk")
+    }
+
+    /// Finder's glyph, or its symbol while the glyphs aren't read or the bundle lacks it.
+    private func glyph(_ glyph: SidebarIcons.Glyph, description: String) -> NSImage {
+        icons.image(glyph) ?? symbol(glyph.symbol, description: description)
     }
 
     private func groupCell(_ title: String) -> NSView {
