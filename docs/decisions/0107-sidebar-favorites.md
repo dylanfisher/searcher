@@ -34,24 +34,28 @@ Tags needs search, which is on hold.
   `BlockingCallThread` ([0038](0038-slow-volumes.md)): it resolves the bookmark without mounting
   or UI. When there is no bookmark, or it doesn't resolve, or it leads into a Trash or to
   nothing, it looks at the path instead, and an item there gets a bookmark of its own, so a
-  folder deleted and made again at the same path is found. A stale bookmark is made again. It
+  folder deleted and made again at the same path is found; a folder replaced by a file at the
+  same path becomes a favorite of that file. A stale bookmark is made again. It
   says whether the item is a folder or a file, following a symbolic link to what it points at,
-  as Finder opens a link to a folder as the folder; a package is a file
+  as Finder opens a link to a folder as the folder; a broken link or a loop of links is missing,
+  and a package is a file
   ([0093](0093-packages-are-files.md)). A path the new one only names another way, as `/tmp`
   names `/private/tmp`, or a link names its target, is kept as it was. An item found at a path
   another favorite has leaves the list, so no path is in it twice; the item itself doesn't
   count, so a rename that changes only case keeps it.
 - **When items are looked for.** `Favorites.refresh` looks for every item as the app becomes
   active, the launch included, since items move while another app is in front. An item already
-  being looked for isn't looked for twice. A click or Return looks for the item first, then
-  opens it, so a favorite moved since the last refresh opens where it is now.
-- **A missing item stays, greyed.** One found neither through its bookmark nor at its path,
-  where an item in a Trash (`.Trash`, `.Trashes`) counts as not found, shows greyed, its VoiceOver label ending "not found", and
-  opens nothing. It comes back as soon as it is found again, as a share's or an ejected disk's
-  favorite does once mounted and the app is next activated, or on a click. Removing an item the
-  user may want back, because a disk is ejected, would lose data for a passing state. Finder's
-  behavior for a deleted favorite wasn't checked by hand; this is the choice made. A missing
-  item keeps its bookmark, so one put back from the Trash is found again.
+  being looked for isn't looked for twice; one removed and added again meanwhile is looked for
+  again once the first find lands, since that find was for the favorite removed. A click or Return
+  looks for the item first, then opens it, so a favorite moved since the last refresh opens where
+  it is now.
+- **A missing item stays, greyed.** One found neither through its bookmark nor at its path, where
+  an item in a Trash (`.Trash`, `.Trashes`) counts as not found, shows greyed, its VoiceOver label
+  ending "not found", and opens nothing. It comes back as soon as it is found again, as a share's
+  or an ejected disk's favorite does once mounted and the app is next activated, or on a click.
+  Removing an item the user may want back, because a disk is ejected, would lose data for a
+  passing state. Finder's behavior for a deleted favorite wasn't checked by hand; this is the
+  choice made. A missing item keeps its bookmark, so one put back from the Trash is found again.
 - **Opening.** A folder shows in the window's focused pane (`Pane.navigate`), its column view
   starting its trail there as any navigation does ([0103](0103-column-trail-from-the-root.md));
   a file or package opens in its app, as a double-click on it does. Only the latest open acts.
@@ -59,24 +63,33 @@ Tags needs search, which is on hold.
   Finder's symbols for the five defaults by path, a folder symbol for other folders, and the
   type's icon from `TypeIconCache` by extension for a file. Localized display names aren't read.
 - **Drags in.** File URLs from a pane, Finder or any app dropped between favorites are added
-  there, in order, leaving out those already listed; a drop on a favorite goes before it, and
-  one on the group's row at its end. A drag of only favorites already listed is refused. The
-  drag shows no badge where the source allows (`.generic`), since nothing is copied or moved.
-  Nothing drops among the workspaces. Dropping onto a favorite folder doesn't copy into it, as
-  Finder's sidebar would; that is left for later.
+  there, in order, leaving out those already listed; a drop on a favorite goes before it, and one
+  on the group's row, or in the gap between the last favorite and the next group, at its end. A
+  drag of only favorites already listed is refused. The drag shows no badge where the source
+  allows (`.generic`), since nothing is copied or moved. Nothing drops among the workspaces.
+  Dropping onto a favorite folder doesn't copy into it, as Finder's sidebar would; that is left
+  for later.
 - **Reordering and removing.** A favorite drags as its path under a type of the app's own
   (`com.dylanfisher.searcher.favorite`), with no file URL, so a pane or another app never takes
   it as a file to copy or move. Dropped within any window's Favorites it moves there. Dropped
-  where nothing takes it, outside every window's sidebar, it leaves the list, as Finder's does;
-  it doesn't slide back. Dropped on another window's sidebar, its Workspaces rows included, it
-  stays. A cancelled drag, as with Esc, keeps it, as Finder keeps it. AppKit reports a cancel
-  and a drop on nothing alike, with no operation, so the sidebar tells them apart from the
-  event that ended the session: the app's current event is a key down, or the mouse button is
-  still down, since Esc cancels while the button is held and a drop is the button's release.
-  This wasn't checked with a real drag: a test can't run one without moving the user's pointer,
-  so it is a hand check, and the tests replace the check. The cursor shows no poof: AppKit's `NSShowAnimationEffect` is deprecated,
-  and the cursor would need the outline view's drag source methods. Remove from Sidebar in a
-  favorite's context menu removes it too.
+  where nothing takes it, outside every shown window's sidebar, it leaves the list, as Finder's
+  does; it doesn't slide back. Dropped on another shown window's sidebar, its Workspaces rows
+  included, it stays; a minimized or ordered-out window's sidebar doesn't count.
+- **A cancelled drag keeps the favorite,** as with Esc, as Finder keeps it. AppKit reports a
+  cancel and a drop on nothing alike, with no operation, and the window server runs the drag,
+  so the app's current event at the session's end may still be the last mouse-dragged one and
+  can't be relied on. The sidebar takes the drag as cancelled when the window server's last key
+  down (`CGEventSource.secondsSinceLastEventType`) came after the drag began, or the mouse
+  button is still down: Esc cancels while the button is held, and a drop is the button's
+  release. The key down covers a user who lets go of the button before the session's end
+  reaches the app, which the button alone would turn into a removal. Any other key pressed
+  during the drag also keeps the favorite, which errs toward keeping it. `NSDraggingSession`
+  has no cancel state, and the drag's last position is the pointer's either way. Neither signal
+  was checked with a real drag: a test can't run one without moving the user's pointer, so it
+  is a hand check, and the tests replace the check.
+- **No poof, and the menu.** The cursor shows no poof: AppKit's `NSShowAnimationEffect` is
+  deprecated, and the cursor would need the outline view's drag source methods. Remove from
+  Sidebar in a favorite's context menu removes a favorite too.
 - **Every window follows.** One `Favorites` is shared by every window, as the `WorkspaceList`
   is; a list change is a `Settings` change, which every sidebar observes, and a change of what
   an item was found to be runs `Favorites`' own observers.
