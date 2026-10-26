@@ -18,7 +18,7 @@ let package = Package(
         .target(name: "Interface", dependencies: ["Browser", "Base"], swiftSettings: strict),
         .executableTarget(
             name: "Searcher", dependencies: ["Interface", "Browser", "Base"],
-            exclude: ["Info.plist"],
+            exclude: ["Info.plist", "AppIcon.svg"],
             swiftSettings: strict),
         .executableTarget(name: "Bench", dependencies: ["Browser", "Base"], swiftSettings: strict),
         // Stubs that tests share. Only test targets depend on it.

@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- The same face is drawn three times, once per slanted slat, each in its own colors and
+       shifted vertically. The white slats fade toward the bottom and the black one toward the top,
+       so the tile shows through. The tile is Apple's 824 px icon shape on a 1024 px canvas. -->
+  <defs>
+    <clipPath id="tile"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
+    <clipPath id="slat0"><path d="M0 0H372L432 1024H0Z"/></clipPath>
+    <clipPath id="slat1"><path d="M400 0H592L652 1024H460Z"/></clipPath>
+    <clipPath id="slat2"><path d="M620 0H1024V1024H680Z"/></clipPath>
+    <linearGradient id="frost" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="1"/>
+      <stop offset=".35" stop-color="#fafafa" stop-opacity="0.945"/>
+      <stop offset="1" stop-color="#faf5e7" stop-opacity="0.78"/>
+    </linearGradient>
+    <linearGradient id="frostMid" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#0a0a0a" stop-opacity="1"/>
+      <stop offset=".35" stop-color="#0a0a0a" stop-opacity="0.9575"/>
+      <stop offset="1" stop-color="#18150a" stop-opacity="0.83"/>
+    </linearGradient>
+  </defs>
+  <g clip-path="url(#tile)">
+    <rect width="1024" height="1024" fill="#fbbc05"/>
+    <g clip-path="url(#slat0)">
+      <g transform="translate(0 -50)">
+        <rect x="190" y="214" width="644" height="596" fill="url(#frost)"/>
+        <circle cx="295" cy="410" r="46" fill="#0a0a0a"/>
+        <circle cx="729" cy="410" r="46" fill="#0a0a0a"/>
+        <path d="M466 330L578 570H466Z" fill="#0a0a0a"/>
+        <path d="M300 680Q512 760 724 680" fill="none" stroke="#0a0a0a" stroke-width="30"/>
+      </g>
+    </g>
+    <g clip-path="url(#slat1)">
+      <g transform="translate(0 34)">
+        <rect x="190" y="214" width="644" height="596" fill="url(#frostMid)"/>
+        <circle cx="295" cy="410" r="46" fill="#fafafa"/>
+        <circle cx="729" cy="410" r="46" fill="#fafafa"/>
+        <path d="M466 330L578 570H466Z" fill="#fafafa"/>
+        <path d="M300 680Q512 760 724 680" fill="none" stroke="#fafafa" stroke-width="30"/>
+      </g>
+    </g>
+    <g clip-path="url(#slat2)">
+      <g transform="translate(0 -16)">
+        <rect x="190" y="214" width="644" height="596" fill="url(#frost)"/>
+        <circle cx="295" cy="410" r="46" fill="#0a0a0a"/>
+        <circle cx="729" cy="410" r="46" fill="#0a0a0a"/>
+        <path d="M466 330L578 570H466Z" fill="#0a0a0a"/>
+        <path d="M300 680Q512 760 724 680" fill="none" stroke="#0a0a0a" stroke-width="30"/>
+      </g>
+    </g>
+  </g>
+  <rect x="102" y="102" width="820" height="820" rx="183" fill="none" stroke="#000" stroke-opacity=".14" stroke-width="4"/>
+</svg>
