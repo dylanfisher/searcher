@@ -547,6 +547,27 @@ public final class WorkspaceWindows {
             x: main.midX - width / 2, y: main.midY - height / 2, width: width, height: height)
     }
 
+    /// `frame` of a new window, shrunk to the visible frame of the display most of it is on (the
+    /// main one when none) and moved to lie within it, so a size set on a large display opens
+    /// whole on a small one.
+    static func fitted(_ frame: CGRect, on screens: [CGRect]) -> CGRect {
+        let screen =
+            screens.max { overlap(frame, $0) < overlap(frame, $1) }
+            .flatMap { overlap(frame, $0) > 0 ? $0 : nil } ?? screens.first
+        guard let screen else { return frame }
+        let width = min(frame.width, screen.width)
+        let height = min(frame.height, screen.height)
+        return CGRect(
+            x: min(max(frame.minX, screen.minX), screen.maxX - width),
+            y: min(max(frame.minY, screen.minY), screen.maxY - height),
+            width: width, height: height)
+    }
+
+    private static func overlap(_ frame: CGRect, _ screen: CGRect) -> Double {
+        let shown = frame.intersection(screen)
+        return shown.isNull ? 0 : shown.width * shown.height
+    }
+
     // MARK: Saving
 
     /// Holds every save until `restore` runs, for a launch that reads the last session first.
@@ -824,6 +845,9 @@ public final class WorkspaceWindows {
         } else if let front {
             window.setFrameTopLeftPoint(
                 window.cascadeTopLeft(from: NSPoint(x: front.frame.minX, y: front.frame.maxY)))
+        }
+        if frame == nil {
+            window.setFrame(Self.fitted(window.frame, on: screens()), display: false)
         }
         watch(controller)
         if showsWindows {
