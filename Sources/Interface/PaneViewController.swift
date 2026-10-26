@@ -202,9 +202,12 @@ public final class PaneViewController: NSViewController {
         }
         pane.onChange = { [weak self] in self?.paneDidChange() }
         // The pane, not a column's: it navigates, and in column mode it's in the focused
-        // column's folder and makes a column the bar names the focused and last one.
-        pathBar.onSelect = { [weak pane] location, child in
-            pane?.showFolderAbove(location, comingFrom: child)
+        // column's folder and makes a column the bar names the focused and last one. The click
+        // takes the keys, as a click in the pane's rows does.
+        pathBar.onSelect = { [weak self] location, child in
+            guard let self else { return }
+            pane.showFolderAbove(location, comingFrom: child)
+            view.window?.makeFirstResponder(keyView)
         }
         pathBar.onOpenInNewTab = { [weak self] folder in self?.openInNewTab(folder) }
         filterBar.isHidden = true
