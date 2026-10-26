@@ -58,6 +58,9 @@ link opens were written for loads that either answer or fail. Columns are panes
   remembered network volume, the service reads the volume at that mount point again. If it
   can't, or it is another volume, the update is `volumeGone`, after the remembered volume's
   cached rows for the path, if none came yet; otherwise `failed` as before.
+- **Local folders.** A revisited local folder shows the rows a pane last showed of it, from
+  memory, before its load starts, in the `cachedRefreshing` state
+  ([0109](0109-recent-local-listings.md)).
 - **Columns.** A column keeps the columns to its right while the cursor's entry is missing from
   rows that aren't a complete listing: a first batch or cached rows, slow, offline or not.
 - **Go to folder and link opens move on fresh rows only.** Cached rows don't say whether the

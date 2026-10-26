@@ -29,6 +29,7 @@ public final class Pane {
     public private(set) var state = ListingState.loading {
         didSet {
             stateVersion += 1
+            keepRecentListing()
             startSizeScan()
             startSizeBatchAfterThisPass()
         }
@@ -1075,6 +1076,12 @@ public final class Pane {
         case .relist:
             relist()
         case .patches(let patches):
+            // A removed folder is gone, so its kept rows would show before its load fails. Only
+            // the folder itself is dropped: the folders under it fail their own loads, which drops
+            // them, and walking every kept path for each removed entry costs the main actor.
+            for case .remove(name: let name) in patches {
+                service.recentListings?.drop(location.child(named: name).path)
+            }
             waitingPatches += patches
             startPatch()
         }
@@ -1285,11 +1292,13 @@ public final class Pane {
     }
 
     /// Starts a load whose worker also resolves the selection, as it is now, against each listing
-    /// it hands over.
+    /// it hands over. A pane with no rows first shows the folder's recent listing, if the service
+    /// keeps one in the pane's arrangement, as cached rows, so it doesn't go blank for the load.
     private func startLoad() {
         if let load, let volume = load.volume { keptVolume = (load.location, volume) }
         load?.cancel()
         loadIsRunning = true
+        showRecentListing()
         let selection = selection
         let selectionVersion = selectionVersion
         // A load started with sizes the setting has since turned off drops them when it lands.
@@ -1311,6 +1320,30 @@ public final class Pane {
                 self?.receive(prepared.0, resolved: prepared.1, from: selectionVersion)
                 if keptSizes != nil { self?.dropSizesIfOff() }
             })
+    }
+
+    /// Shows the listing `service.recentListings` keeps for the folder as cached rows, when the
+    /// pane has none and it is in the pane's arrangement; one in another sort or filter would
+    /// show its rows in the wrong order until a sort landed. The lookup is a dictionary read,
+    /// and the selection, a name at most when the pane has just moved, is found in the rows on
+    /// the main actor.
+    private func showRecentListing() {
+        guard state.listing == nil,
+            let recent = service.recentListings?.listing(at: location.path),
+            isArranged(recent.listing)
+        else { return }
+        show(
+            .cachedRefreshing(recent.listing, listedAt: recent.listedAt),
+            after: .loaded(complete: false))
+    }
+
+    /// Keeps the rows shown in `service.recentListings`, when they are a full listing of a folder
+    /// on a local volume: a load's, or a patch's or sort's of one.
+    private func keepRecentListing() {
+        guard case .loaded(let listing) = state, let recent = service.recentListings,
+            folderVolume?.kind == .local
+        else { return }
+        recent.keep(listing, listedAt: loadedAt ?? Date(), at: location.path)
     }
 
     /// `selection` resolved against a load's update, on the load's worker thread; nil for a
@@ -1373,6 +1406,8 @@ public final class Pane {
             self.rootVolumeName = rootVolumeName
             self.volumeName = volumeName
             loadIsRunning = false
+            // Gone, or no longer readable: kept rows would show until the next failure.
+            service.recentListings?.drop(under: location.path)
             switch error.reason {
             case .unreachable: goOffline()
             case .privacyProtected: show(.denied(error), after: .loaded(complete: true))
@@ -1383,6 +1418,7 @@ public final class Pane {
             self.rootVolumeName = rootVolumeName
             self.volumeName = volumeName
             loadIsRunning = false
+            service.recentListings?.drop(under: location.path)
             goOffline()
         case .slow(let rootVolumeName, let volumeName):
             self.rootVolumeName = rootVolumeName
