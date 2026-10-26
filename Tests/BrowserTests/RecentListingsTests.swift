@@ -231,3 +231,79 @@ private func listing(_ names: [String]) async -> Listing {
     #expect(recent.listing(at: mountPoint + "/sub") == nil)
     #expect(recent.listing(at: "/elsewhere") != nil)
 }
+
+private let share = VolumeIdentity(
+    device: "//me@nas.invalid/share", mountPoint: "/net/share", kind: .network)
+
+/// Paths under `/net/share` are on the share until `unmount()`; then reading them fails with
+/// ENOENT. Every other path is on a local disk.
+private final class ShareMounts: @unchecked Sendable {
+    private let lock = NSLock()
+    private var mounted = true
+
+    func unmount() {
+        lock.withLock { mounted = false }
+    }
+
+    func volume(of path: String) throws(ListingError) -> VolumeIdentity {
+        guard isPath(path, atOrUnder: share.mountPoint) else { return ListingService.listerVolume }
+        guard lock.withLock({ mounted }) else { throw ListingError(path: path, code: ENOENT) }
+        return share
+    }
+}
+
+@MainActor
+private func sharePane(at path: String, recent: RecentListings, mounts: ShareMounts) -> Pane {
+    Pane(
+        location: Location(path: path),
+        service: ListingService(
+            lister: StubLister([path: [file("a")]]),
+            volumeOf: { path throws(ListingError) in try mounts.volume(of: path) },
+            recentListings: recent),
+        systemActions: StubSystemActions(), settings: untouchedSettings())
+}
+
+@MainActor @Test func aFolderOnANetworkVolumeIsNotKept() async {
+    let recent = RecentListings()
+    let pane = sharePane(at: "/net/share/music", recent: recent, mounts: ShareMounts())
+
+    await settle { pane.state.isLoaded }
+
+    #expect(recent.count == 0)
+}
+
+@MainActor @Test func aLoadThatFindsItsVolumeGoneDropsTheFolder() async {
+    let music = "/net/share/music"
+    let recent = RecentListings()
+    // As when a local folder was listed at the path before a share was mounted over it.
+    recent.keep(await listing(["old"]), listedAt: testDate, at: music)
+    let mounts = ShareMounts()
+    let pane = sharePane(at: music, recent: recent, mounts: mounts)
+    await settle { pane.state.isLoaded }
+    #expect(recent.listing(at: music) != nil)
+
+    mounts.unmount()
+    pane.didLoseFocus()
+    pane.didGainFocus()
+
+    await settle { pane.state.isOffline }
+    #expect(recent.listing(at: music) == nil)
+}
+
+@MainActor @Test func aFilteredListingIsNotShown() async {
+    let lister = HeldStubLister()
+    let pane = pane(at: "/r", lister: lister, recent: RecentListings())
+    await settle { pane.state.isLoaded }
+    pane.setFilter("a")
+    await settle { pane.state.names == ["a.txt"] }
+    pane.navigate(to: Location(path: "/r/docs"))
+    await settle { pane.state.isLoaded }
+    lister.hold()
+
+    // Leaving the folder cleared the filter, so the kept listing isn't in the pane's arrangement.
+    pane.goBack()
+
+    #expect(pane.state.isLoading)
+    lister.release()
+    await settle { pane.state.names == ["a.txt", "docs", "other"] }
+}
