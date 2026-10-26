@@ -64,25 +64,30 @@ public final class ThumbnailService: Sendable {
         volume.kind == .local || forPreview
     }
 
-    /// The thumbnail kept of `entry`, the file at `path`, at `side` points: nil when none is
-    /// kept, `.some(nil)` when it was asked for and the file has none. Reads no file.
-    public func cached(at path: String, entry: DirectoryEntry, side: Double) -> CGImage?? {
-        cache.value(for: Self.key(path, entry, side))
+    /// The thumbnail kept of `entry`, the file at `path`, at `side` points, a row's or, with
+    /// `forPreview`, the preview's: nil when none is kept, `.some(nil)` when it was asked for and
+    /// the file has none. Reads no file.
+    public func cached(
+        at path: String, entry: DirectoryEntry, side: Double, forPreview: Bool = false
+    ) -> CGImage?? {
+        cache.value(for: Self.key(path, entry, side, forPreview: forPreview))
     }
 
-    /// The largest thumbnail kept of `entry`, the file at `path`, smaller than `side` points,
-    /// such as a row's, for the preview to show scaled while its own is made; nil when none is
-    /// kept. Reads no file.
+    /// The largest preview thumbnail kept of `entry`, the file at `path`, smaller than `side`
+    /// points, one made for a narrower or shorter preview, for the preview to show scaled while
+    /// its own is made; nil when none is kept. A row's, framed, isn't one: shown in its place it
+    /// would draw Finder's icon frame and shadow, then jump to the image. Reads no file.
     public func cachedSmaller(at path: String, entry: DirectoryEntry, than side: Double)
         -> CGImage?
     {
-        cache.largestSmaller(than: Self.key(path, entry, side))
+        cache.largestSmaller(than: Self.key(path, entry, side, forPreview: true))
     }
 
     /// The thumbnail of `entry`, the file at `path` on `volume`, at `side` points, from the cache
     /// or made and kept there; nil when the file has none, took `giveUp` (`shareGiveUp` on a
     /// share), or is a row's on a network volume (`makes`). The preview's request,
-    /// `forPreview`, waits ahead of rows' for its volume's slot. Throws when the calling task is
+    /// `forPreview`, is made unframed, the image alone as Finder's preview shows it, where a
+    /// row's is framed as Finder's rows show it, and waits ahead of rows' for its volume's slot. Throws when the calling task is
     /// cancelled before the thumbnail starts being made. One already being made is still kept
     /// on a local volume; on a network volume it is stopped and throws at once, and frees the
     /// share's one slot once Quick Look's call has returned, so a selection moved on through a
@@ -91,7 +96,7 @@ public final class ThumbnailService: Sendable {
         at path: String, entry: DirectoryEntry, side: Double, on volume: VolumeIdentity,
         forPreview: Bool = false
     ) async throws(CancellationError) -> CGImage? {
-        let key = Self.key(path, entry, side)
+        let key = Self.key(path, entry, side, forPreview: forPreview)
         if let kept = cache.value(for: key) { return kept }
         guard Self.makes(on: volume, forPreview: forPreview) else { return nil }
         guard !Task.isCancelled else { throw CancellationError() }
@@ -125,8 +130,9 @@ public final class ThumbnailService: Sendable {
                         }
                     }
                     guard making.begin(watchdog: watchdog) else { return }
-                    let stop = maker.makeThumbnail(at: path, side: side, scale: Self.scale) {
-                        image in
+                    let stop = maker.makeThumbnail(
+                        at: path, side: side, scale: Self.scale, framed: !forPreview
+                    ) { image in
                         making.answer(image) { cache.store(image, for: key) }
                     }
                     making.started(stop: stop)
@@ -155,11 +161,11 @@ public final class ThumbnailService: Sendable {
         return outcome
     }
 
-    private static func key(_ path: String, _ entry: DirectoryEntry, _ side: Double)
-        -> ThumbnailCache.Key
-    {
+    private static func key(
+        _ path: String, _ entry: DirectoryEntry, _ side: Double, forPreview: Bool
+    ) -> ThumbnailCache.Key {
         ThumbnailCache.Key(
-            path: path, modified: entry.modified, size: entry.size,
+            path: path, modified: entry.modified, size: entry.size, framed: !forPreview,
             pixels: Int((side * scale).rounded()))
     }
 

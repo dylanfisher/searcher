@@ -807,8 +807,8 @@ public final class ColumnTrail {
     /// preview moves on, which on a share stops it and frees the share's slot
     /// (0102-thumbnails.md). It is asked for at `Pane.previewImageSide`; one made smaller is
     /// asked for again once that grows, and `next` keeps it until the larger one lands, or for
-    /// good if that one fails; a smaller one kept of the file, such as its row's, shows the
-    /// same way while its own is made. With `usingKept` false, a kept thumbnail lands later, as
+    /// good if that one fails; a smaller preview thumbnail kept of the file shows the same way
+    /// while its own is made. The preview's is made unframed, not as its row's is. With `usingKept` false, a kept thumbnail lands later, as
     /// a made one does, rather than in `next`.
     private func updateThumbnail(
         of next: inout ColumnPreview, in pane: Pane, usingKept: Bool = true
@@ -828,12 +828,16 @@ public final class ColumnTrail {
         let entry = next.entry
         thumbnailEntry = entry
         thumbnailSide = side
-        if usingKept, let kept = thumbnails.cached(at: location.path, entry: entry, side: side) {
+        if usingKept,
+            let kept = thumbnails.cached(
+                at: location.path, entry: entry, side: side, forPreview: true)
+        {
             next.thumbnail = kept ?? (grows ? next.thumbnail : nil)
             return
         }
-        // A smaller thumbnail kept of this version, a row's, shows scaled while this one is
-        // made, so the preview never shows the type icon of a file it has a thumbnail of.
+        // A smaller preview thumbnail kept of this version, made for a smaller preview, shows
+        // scaled while this one is made, so the preview never shows the type icon of a file it
+        // has a thumbnail of. A row's, framed, isn't used (0090-preview-column.md).
         let smaller =
             grows ? nil : thumbnails.cachedSmaller(at: location.path, entry: entry, than: side)
         if let smaller { next.thumbnail = smaller }

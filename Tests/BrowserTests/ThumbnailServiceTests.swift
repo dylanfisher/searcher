@@ -62,7 +62,7 @@ private let share = VolumeIdentity(
     #expect(
         maker.calls == [
             .init(
-                path: "/p/a.jpg", side: 16, scale: 2, onMainThread: false,
+                path: "/p/a.jpg", side: 16, scale: 2, framed: true, onMainThread: false,
                 onBlockingCallThread: true)
         ])
     #expect(service.cached(at: "/p/a.jpg", entry: entry, side: 16)! === image)
@@ -118,6 +118,29 @@ private let share = VolumeIdentity(
     #expect(ThumbnailService.makes(on: disk))
 }
 
+/// Finder's rows show a photo framed, in a rounded frame with a shadow, and its column preview
+/// shows the image alone (0090-preview-column.md). The preview's is asked for unframed and kept
+/// apart from the row's of the same file and size, so neither shows the other's.
+@Test func thePreviewsThumbnailIsUnframedAndKeptApartFromTheRows() async throws {
+    let maker = GatedThumbnailMaker()
+    let service = ThumbnailService(maker: maker)
+    let entry = file("a.jpg")
+    let row = testThumbnail(pixels: 32)
+    let preview = testThumbnail(pixels: 32)
+    maker.answer("/p/a.jpg", with: row)
+    _ = try await service.thumbnail(at: "/p/a.jpg", entry: entry, side: 16, on: disk)
+    maker.answer("/p/a.jpg", with: preview)
+
+    let made = try await service.thumbnail(
+        at: "/p/a.jpg", entry: entry, side: 16, on: disk, forPreview: true)
+
+    #expect(made === preview)
+    #expect(maker.calls.map(\.framed) == [true, false])
+    #expect(service.cached(at: "/p/a.jpg", entry: entry, side: 16)! === row)
+    #expect(service.cached(at: "/p/a.jpg", entry: entry, side: 16, forPreview: true)! === preview)
+    #expect(service.cachedSmaller(at: "/p/a.jpg", entry: entry, than: 512) === preview)
+}
+
 /// The preview's one file on a share is made, as Finder's preview shows it, on a
 /// `BlockingCallThread` in the share's slot.
 @Test func aPreviewOnANetworkVolumeIsMade() async throws {
@@ -133,8 +156,8 @@ private let share = VolumeIdentity(
     #expect(
         maker.calls == [
             .init(
-                path: "/Volumes/share/a.jpg", side: 512, scale: 2, onMainThread: false,
-                onBlockingCallThread: true)
+                path: "/Volumes/share/a.jpg", side: 512, scale: 2, framed: false,
+                onMainThread: false, onBlockingCallThread: true)
         ])
     #expect(service.calls.isIdle)
 }
@@ -348,7 +371,7 @@ private final class StuckThumbnailMaker: ThumbnailMaking, @unchecked Sendable {
     private var stoppedPaths: [String] = []
 
     func makeThumbnail(
-        at path: String, side: Double, scale: Double,
+        at path: String, side: Double, scale: Double, framed: Bool,
         done: @escaping @Sendable (CGImage?) -> Void
     ) -> @Sendable () -> Void {
         lock.withLock { enteredPaths.append(path) }

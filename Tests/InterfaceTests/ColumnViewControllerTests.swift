@@ -1018,6 +1018,47 @@ private func fieldsBottom(_ view: ColumnPreviewView) throws -> Double {
     #expect(fixture.trail.preview?.thumbnail != nil)
 }
 
+/// Dylan's screenshot of Finder's preview: the photo has no drop shadow, corners rounded a few
+/// points, and spans the fields' width, its left edge on the name's and the Information titles',
+/// its right on the values'. Its edges stay on the rows' at every preview width the grip sets.
+/// The image asked for is unframed: Quick Look's framed one, as rows show it, has a shadow,
+/// rounder corners and a transparent margin that drew the photo narrower than the rows.
+@MainActor @Test func aThumbnailSpansTheRowsWithFindersCornersAndNoShadow() async throws {
+    let maker = GatedThumbnailMaker()
+    let (fixture, view) = try await photoPreview(
+        height: 1200, maker: maker, image: testThumbnail(pixels: 1024, height: 768))
+    let document = try #require(view.scrollView.documentView)
+    let grip = try #require(fixture.controller.previewGrip)
+
+    #expect(maker.calls.contains { $0.side >= ColumnPreview.imageSideStep && !$0.framed })
+    #expect(view.iconView.layer?.cornerRadius == ColumnPreviewView.thumbnailCornerRadius)
+    #expect(view.iconView.layer?.masksToBounds == true)
+    #expect(view.iconView.shadow == nil)
+    #expect(view.iconView.layer?.shadowOpacity == 0)
+    for offset in [0.0, 37, 123] {
+        if offset > 0 { drag(grip, by: offset) }
+        fixture.controller.view.layoutSubtreeIfNeeded()
+        let image = view.iconView.convert(view.iconView.bounds, to: document)
+        let rows = view.rows[0].convert(view.rows[0].bounds, to: document)
+        let name = view.nameField.convert(view.nameField.bounds, to: document)
+        #expect(image.minX == rows.minX, "at \(view.frame.width)")
+        #expect(image.maxX == rows.maxX, "at \(view.frame.width)")
+        #expect(abs(name.minX - rows.minX) <= 2, "at \(view.frame.width)")
+    }
+}
+
+/// A type icon is drawn by its own shape, as Finder's preview draws a file's icon: it isn't
+/// clipped to the thumbnail's rounded corners.
+@MainActor @Test func aTypeIconInThePreviewIsNotClipped() async throws {
+    let fixture = await Fixture()
+    await fixture.select("docs", inColumn: 0)
+    await fixture.select("x.txt", inColumn: 1)
+    let view = try #require(fixture.controller.previewView)
+
+    #expect(view.iconView.layer?.cornerRadius == 0)
+    #expect(view.iconView.shadow == nil)
+}
+
 /// A portrait photo as wide as the fields would push them below the preview's bottom: it is
 /// scaled down, keeping its aspect, so the last Information row ends inside the preview.
 @MainActor @Test func aTallThumbnailIsScaledDownToKeepTheFieldsInView() async throws {

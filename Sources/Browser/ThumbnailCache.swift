@@ -6,24 +6,27 @@ import Foundation
 /// used dropped first. A file with no thumbnail is kept too, as nil, so a row scrolled back into
 /// view doesn't ask again. Safe to use from any thread.
 final class ThumbnailCache: @unchecked Sendable {
-    /// One version of a file at one size. A file saved again has a new modification date or size,
-    /// so its old thumbnail is never shown for it.
+    /// One version of a file at one size, framed as a row's or not as the preview's. A file saved
+    /// again has a new modification date or size, so its old thumbnail is never shown for it.
     struct Key: Hashable {
         let path: String
         let modified: Date
         let size: Int64?
+        /// Drawn in Finder's icon frame, as rows show it (`ThumbnailMaking`).
+        let framed: Bool
         /// The side asked for, in pixels.
         let pixels: Int
 
-        /// The file version, without the size asked for.
-        var file: File { File(path: path, modified: modified, size: size) }
+        /// The file version and framing, without the size asked for.
+        var file: File { File(path: path, modified: modified, size: size, framed: framed) }
     }
 
-    /// One version of a file, at any size.
+    /// One version of a file, framed or not, at any size.
     struct File: Hashable {
         let path: String
         let modified: Date
         let size: Int64?
+        let framed: Bool
     }
 
     /// What one kept entry costs beyond its pixels: the key, the node and the dictionary slot.
@@ -70,8 +73,8 @@ final class ThumbnailCache: @unchecked Sendable {
         }
     }
 
-    /// The largest thumbnail kept of `key`'s file version smaller than `key` asks for, or nil
-    /// when none is. Marks it the most recently used.
+    /// The largest thumbnail kept of `key`'s file version and framing smaller than `key` asks
+    /// for, or nil when none is. Marks it the most recently used.
     func largestSmaller(than key: Key) -> CGImage? {
         lock.withLock {
             let smaller = (pixelsByFile[key.file] ?? []).filter { $0 < key.pixels }
@@ -81,7 +84,7 @@ final class ThumbnailCache: @unchecked Sendable {
                     let node = nodes[
                         Key(
                             path: file.path, modified: file.modified, size: file.size,
-                            pixels: pixels)],
+                            framed: file.framed, pixels: pixels)],
                     let image = node.image
                 else { continue }
                 unlink(node)
