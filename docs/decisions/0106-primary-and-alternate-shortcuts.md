@@ -152,11 +152,22 @@ SK.1b, the menus and the routing; SK.1c, the Settings window and the recorder.
   Delete removes the chord; any other key gives its `KeyChord.candidates(for:)`, of which
   `assign` stores the last, the key's own character ([0031](0031-view-settings.md)). A key
   `KeyChord` can't spell, such as forward delete, is swallowed and recording goes on.
+  (Amended 2026-10-26, Dylan: "when you record a shortcut it shouldn't play that shortcut after
+  you record it. recording should never actually trigger the command." The monitor's closure
+  was `self?.handle(event) ?? event`, which turned the nil that swallows a press back into the
+  event, so `NSApplication.sendEvent` went on to the menus' key equivalents and the press ran
+  the command that had the chord, or the one recording had just given it. The closure now
+  returns `handle`'s answer. A held key's repeats came after the monitor was removed and ran
+  the command too, so a repeat while recording is swallowed and not recorded, and once a key is
+  taken a second monitor, which belongs to no field, swallows that key's repeats and its
+  release. It ends at the release or at the next fresh press of any key, which passes, so a
+  release that goes to another app leaves it eating at most repeats of one key.)
 - **The monitor never outlives recording.** Recording ends, and the monitor is removed, when a
   key is taken, the field resigns first responder, its window resigns key or closes, it leaves
   its window or is hidden, it is turned off, or it is released (the monitor removes itself in
   its `deinit`, and the field removes its window observers in its own). A monitor left behind
-  would eat every key press in the app.
+  would eat every key press in the app. The held key's monitor (amended above) is not the
+  recording monitor and is not removed by these exits.
 - **States** ([0110](0110-interaction-states.md)): the recorder draws the hover and pressed
   fills of `HoverButton`, the focus ring around its rounded shape, a 2 pt focus-colored ring
   with "Type Shortcut" while recording, and tertiary text with no fill while off. VoiceOver
