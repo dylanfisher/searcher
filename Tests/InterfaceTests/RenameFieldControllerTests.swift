@@ -294,6 +294,58 @@ private func expectFieldOverItsLabel(
 
     // A window that is never shown draws no table's selection emphasized, key or not.
     #expect(!rowView.isEmphasized)
+    #expect(!list.tableView.keepsSelectionEmphasized)
+}
+
+/// Undo in the field undoes only this rename's typing: one closed by Esc or Return leaves
+/// nothing for the next to undo.
+@MainActor @Test(arguments: [false, true])
+func eachRenameStartsWithNothingToUndo(closingByReturn: Bool) async throws {
+    let fixture = try await Fixture("song.flac", "other.txt")
+    defer { fixture.stop() }
+    await fixture.select("song.flac")
+    try fixture.press(returnKey)
+    try fixture.type("zz")
+    #expect(try fixture.editor().undoManager?.canUndo == true)
+    if closingByReturn {
+        try fixture.send(#selector(NSResponder.insertNewline(_:)))
+        await settle { fixture.exists("zz.flac") && !fixture.field.isShown }
+    } else {
+        try fixture.send(#selector(NSResponder.cancelOperation(_:)))
+    }
+
+    await fixture.select("other.txt")
+    try fixture.press(returnKey)
+
+    let editor = try fixture.editor()
+    #expect(editor.undoManager?.canUndo == false)
+    editor.undoManager?.undo()
+    #expect(editor.string == "other.txt")
+}
+
+/// Pasted styled text takes the field's font and color, as typed text does.
+@MainActor @Test func pastedStyledTextTakesTheFieldsLook() async throws {
+    let fixture = try await Fixture("song.flac")
+    defer { fixture.stop() }
+    await fixture.select("song.flac")
+    // The row's view, which the field's colors follow.
+    _ = try nameRow("song.flac", in: fixture.controller.listingViewController)
+    try fixture.press(returnKey)
+    let editor = try fixture.editor()
+    let styled = NSAttributedString(
+        string: "big",
+        attributes: [.font: NSFont.boldSystemFont(ofSize: 30), .foregroundColor: NSColor.red])
+    let pasteboard = NSPasteboard(name: NSPasteboard.Name("RN1-RenameFieldControllerTests"))
+    defer { pasteboard.releaseGlobally() }
+    pasteboard.clearContents()
+    pasteboard.writeObjects([styled])
+
+    #expect(editor.readSelection(from: pasteboard))
+
+    #expect(editor.string == "big.flac")
+    let attributes = editor.textStorage?.attributes(at: 0, effectiveRange: nil) ?? [:]
+    #expect(attributes[.font] as? NSFont == ListingViewController.nameFont)
+    #expect(attributes[.foregroundColor] as? NSColor == .alternateSelectedControlTextColor)
 }
 
 /// The field's white-on-accent colors stay in an editor of its own: the window's editor, which

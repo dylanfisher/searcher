@@ -109,6 +109,8 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
             let editor = NSTextView()
             editor.isFieldEditor = true
             editor.allowsUndo = true
+            editor.isRichText = false
+            editor.importsGraphics = false
             return editor
         }()
 
@@ -180,6 +182,14 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
         self.list = list
     }
 
+    // `close` removes the observers of the window; a list that goes with its field open
+    // removes them here.
+    isolated deinit {
+        for observer in windowObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
     /// Whether the field is open and has the keys.
     var isEditing: Bool {
         if case .editing = state { true } else { false }
@@ -222,6 +232,7 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
         }
         table.scrollRowToVisible(row)
         window.makeFirstResponder(field)
+        forgetTyping()
         selectBase(of: entry.name, isFolder: entry.type == .directory)
         observe(window)
         updateEmphasis()
@@ -275,6 +286,7 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
     /// keys stay where they went. Return and Esc move the keys themselves once the state is past
     /// editing, so the end of editing that causes does nothing here.
     func controlTextDidEndEditing(_ notification: Notification) {
+        forgetTyping()
         guard case .editing(let edit) = state else { return }
         commit(edit, keysMoved: true)
     }
@@ -399,6 +411,15 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
             self.selectBase(of: newName, isFolder: false)
             self.updateEmphasis()
         }
+    }
+
+    /// Empties the window's undo manager, where the editor's typing is undone, as an edit ends
+    /// and again as the next begins, while the editor is in the window and has the manager. The
+    /// editor lives as long as the field, so typing kept past the edit would be replayed by Undo
+    /// in the next rename, into another name. The manager holds only text fields' typing, which
+    /// is stale once its edit ends; the file changes undo through the app's history.
+    private func forgetTyping() {
+        editor.undoManager?.removeAllActions()
     }
 
     // MARK: The row's look

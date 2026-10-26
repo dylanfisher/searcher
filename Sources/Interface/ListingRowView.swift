@@ -15,7 +15,6 @@ final class ListingRowView: NSTableRowView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         identifier = Self.identifier
-        tableEmphasis = super.isEmphasized
     }
 
     @available(*, unavailable)

@@ -30,7 +30,9 @@ once the operation ends.
   of the accent (white at 30 %), as Finder draws them; on a grey row, in a window that isn't
   key or once the keys have left, they take the label's colors and AppKit's selection. The
   field edits in an editor of its own, so those colors don't stay on the window's editor that
-  every other text field in it uses.
+  every other text field in it uses. That editor outlives each edit, so the window's undo
+  manager, which holds only text fields' typing, is emptied as an edit ends and as the next
+  begins: Undo in a rename never replays another rename's typing.
 - **What is selected:** a file's name up to the extension `UniqueName.split` finds, so it splits
   as Finder's copy names do ("song.flac" selects "song", "archive.tar.gz" selects "archive.tar");
   a folder's whole name. `split` is now public for this.
