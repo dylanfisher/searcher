@@ -32,6 +32,19 @@ mkdir -p "$app/Contents/MacOS"
 cp Sources/Searcher/Info.plist "$app/Contents/Info.plist"
 cp "$bin/Searcher" "$app/Contents/MacOS/Searcher"
 
+# The icon is drawn once, as SVG; sips renders each size iconutil needs, so no
+# rendered copy is checked in. The name matches CFBundleIconFile in the plist.
+iconset=$(mktemp -d)/AppIcon.iconset
+mkdir -p "$iconset" "$app/Contents/Resources"
+for size in 16 32 128 256 512; do
+  sips -s format png -z "$size" "$size" Sources/Searcher/AppIcon.svg \
+    --out "$iconset/icon_${size}x${size}.png" >/dev/null
+  sips -s format png -z $((size * 2)) $((size * 2)) Sources/Searcher/AppIcon.svg \
+    --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
+done
+iconutil -c icns -o "$app/Contents/Resources/AppIcon.icns" "$iconset"
+rm -rf "$(dirname "$iconset")"
+
 # Full Disk Access is granted to the signature's designated requirement. An ad
 # hoc signature's requirement is the code hash, which changes with every build;
 # a certificate's requirement names the certificate, so the grant carries over.
