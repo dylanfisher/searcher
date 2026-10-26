@@ -42,8 +42,12 @@ bus, the startup disk with it, so the startup disk isn't listed. A volume mounte
   It adds itself to `VolumeEvents`, which reads it again on each did-mount and did-unmount, as
   it reads mount tables again; the list runs its observers when what it lists changes, and each
   sidebar reloads.
-- **Rows.** A symbol for a disk (`externaldrive`) or a share
-  (`externaldrive.connected.to.line.below`), chosen with no read, the name, and Finder's eject
+- **Rows.** Finder's sidebar glyph, chosen with no read of the volume and loaded as 0107's are:
+  `SidebarServerDrive` for a share, `SidebarRemovableDisk` for an internal-bus card or disc,
+  `SidebarInternalDisk` for another internal disk, and `SidebarExternalDisk` for a disk off the
+  internal bus and for a disk image; SF Symbols (`externaldrive`,
+  `externaldrive.connected.to.line.below`) show until they are read, or if the bundle lacks one.
+  The row also has the name, and Finder's eject
   button on each row that can be ejected (`canEject`: a share, a removable or ejectable disk,
   or one not on an internal bus). Every listed row can be ejected, as in Finder's default
   sidebar. A click or Return shows the volume's mount point in the window's focused pane
