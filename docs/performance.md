@@ -45,9 +45,10 @@ Warm cache unless noted. The budget is the p95 of the runs.
 | B10 | Main thread blocked while a share is slow or gone | W6 | never > 50 ms |
 | B11 | Palette keystroke → list updated, 50k candidates | W3 paths | 50 ms |
 
-No budget or bench covers a revisited local folder, which shows its last rows in the move's own
-frame ([0109](decisions/0109-recent-local-listings.md)): B4 is shares only, and the UI bench's
-service keeps no recent listings, so B2 and B6 time real loads.
+No budget or bench covers a folder revisited in the same launch, local or on a share, which
+shows its last rows in the move's own frame ([0109](decisions/0109-recent-local-listings.md)):
+the UI bench's service keeps no recent listings, so B2 and B6 time real loads and B4 times the
+listing cache's rows.
 
 ## Regression rule
 

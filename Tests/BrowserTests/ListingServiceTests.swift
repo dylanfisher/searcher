@@ -79,6 +79,18 @@ private let sentinelPath = "/sentinel"
 private let holdOutcomes: [String: GatedLister.Outcome] = Dictionary(
     uniqueKeysWithValues: (holdPaths + [sentinelPath]).map { ($0, .batches([])) })
 
+/// Returns once no load holds a slot; fails the test after 5 seconds.
+private func waitUntilNoLoadRuns(_ service: ListingService) async {
+    let deadline = Date(timeIntervalSinceNow: 5)
+    while await service.runningLoadCount() > 0 {
+        if Date() > deadline {
+            Issue.record("a load still holds a slot")
+            return
+        }
+        try? await Task.sleep(for: .milliseconds(2))
+    }
+}
+
 /// Returns once the one running load has finished and anything it handed off has run: the other
 /// three slots are held, so the focused sentinel load behind them starts only when that load's
 /// slot frees, which is after its last hand-off was queued.
@@ -103,15 +115,14 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     let lister = GatedLister(
         Dictionary(uniqueKeysWithValues: paths.map { ($0, .batches([files("f", 0..<3)])) }))
     defer { lister.releaseAll() }
-    let service = ListingService(lister: lister)
+    let service = ListingService(lister: lister, clock: ManualClock())
     let log = UpdateLog()
-    for path in paths {
-        _ = load(service, path, into: log)
-    }
+    let loads = paths.map { load(service, $0, into: log) }
 
     #expect(await lister.waitForCalls(3))
-    // A fourth load would start within this wait if the service didn't keep the slot back.
-    #expect(await !lister.waitForCalls(4, timeout: 0.2))
+    // Once every load is placed, the service has had its say on a fourth.
+    await settle { loads.allSatisfy { $0.volume != nil } }
+    #expect(await service.runningLoadCount() == ListingService.mostRunningLoads - 1)
     #expect(lister.calls.count == ListingService.mostRunningLoads - 1)
 
     for path in paths {
@@ -128,7 +139,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     let lister = GatedLister(
         Dictionary(uniqueKeysWithValues: (visible + [focused]).map { ($0, .batches([])) }))
     defer { lister.releaseAll() }
-    let service = ListingService(lister: lister)
+    let service = ListingService(lister: lister, clock: ManualClock())
     let log = UpdateLog()
     for path in visible {
         _ = load(service, path, into: log)
@@ -144,14 +155,13 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     let paths = (0..<4).map { "/visible-\($0)" }
     let lister = GatedLister(Dictionary(uniqueKeysWithValues: paths.map { ($0, .batches([])) }))
     defer { lister.releaseAll() }
-    let service = ListingService(lister: lister)
+    let service = ListingService(lister: lister, clock: ManualClock())
     let log = UpdateLog()
-    for path in paths {
-        _ = load(service, path, into: log)
-    }
+    let loads = paths.map { load(service, $0, into: log) }
 
     #expect(await lister.waitForCalls(3))
-    #expect(await !lister.waitForCalls(4, timeout: 0.2))
+    await settle { loads.allSatisfy { $0.volume != nil } }
+    #expect(await service.runningLoadCount() == 3)
 
     lister.release(paths[0])
     #expect(await lister.waitForCalls(4))
@@ -163,7 +173,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     let lister = GatedLister(
         Dictionary(uniqueKeysWithValues: (running + [raised]).map { ($0, .batches([])) }))
     defer { lister.releaseAll() }
-    let service = ListingService(lister: lister)
+    let service = ListingService(lister: lister, clock: ManualClock())
     let log = UpdateLog()
     for path in running {
         _ = load(service, path, into: log)
@@ -171,12 +181,12 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     #expect(await lister.waitForCalls(3))
     let waiting = load(service, raised, into: log)
     await settle { waiting.volume != nil }
-    #expect(await !lister.waitForCalls(4, timeout: 0.2))
+    #expect(await service.runningLoadCount() == 3)
 
     waiting.priority = .focused
 
-    // Well inside the 3 s after which a stalled load gives up its slot and would start this one.
-    #expect(await lister.waitForCalls(4, timeout: 0.5))
+    // The service's clock never moves, so no stalled load gives up its slot to start this one.
+    #expect(await lister.waitForCalls(4))
     #expect(lister.calls.map(\.path).last == raised)
 }
 
@@ -186,12 +196,12 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     let lister = GatedLister(
         Dictionary(uniqueKeysWithValues: (running + [second]).map { ($0, .batches([])) }))
     defer { lister.releaseAll() }
-    let service = ListingService(lister: lister)
+    let service = ListingService(lister: lister, clock: ManualClock())
     let log = UpdateLog()
     await runFourLoads(running, on: service, lister, into: log)
-    _ = load(service, second, priority: .focused, into: log)
-
-    #expect(await !lister.waitForCalls(5, timeout: 0.5))
+    let waiting = load(service, second, priority: .focused, into: log)
+    await settle { waiting.volume != nil }
+    #expect(await service.runningLoadCount() == ListingService.mostRunningLoads)
 
     lister.release(running[0])
     #expect(await lister.waitForCalls(5))
@@ -204,7 +214,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     let lister = GatedLister(
         Dictionary(uniqueKeysWithValues: (running + paths).map { ($0, .batches([])) }))
     defer { lister.releaseAll() }
-    let service = ListingService(lister: lister)
+    let service = ListingService(lister: lister, clock: ManualClock())
     let log = UpdateLog()
     await runFourLoads(running, on: service, lister, into: log)
     let loads = paths.map { load(service, $0, into: log) }
@@ -225,7 +235,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
         Dictionary(
             uniqueKeysWithValues: (running + hidden + visible).map { ($0, .batches([])) }))
     defer { lister.releaseAll() }
-    let service = ListingService(lister: lister)
+    let service = ListingService(lister: lister, clock: ManualClock())
     let log = UpdateLog()
     await runFourLoads(running, on: service, lister, into: log)
     // Asked first, so the order asked alone would start them first.
@@ -252,7 +262,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
 @MainActor @Test func prepareRunsOnTheLoadsWorkerAndNotTheMainThread() async {
     let lister = GatedLister(["/big": .batches([files("e", 0..<300), files("e", 300..<400)])])
     lister.release("/big")
-    let service = ListingService(lister: lister)
+    let service = ListingService(lister: lister, clock: ManualClock())
     let preparedOnMain = OSAllocatedUnfairLock(initialState: [Bool]())
     let delivered = OSAllocatedUnfairLock(initialState: 0)
 
@@ -271,7 +281,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     let entries = files("e", (0..<300).reversed())
     let lister = GatedLister(["/w1": .batches([entries])])
     lister.release("/w1")
-    let service = ListingService(lister: lister)
+    let service = ListingService(lister: lister, clock: ManualClock())
     let log = UpdateLog()
     _ = load(service, "/w1", into: log)
 
@@ -288,7 +298,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
         "/big": .batches([files("e", (300..<600).reversed()), files("e", (0..<300).reversed())])
     ])
     lister.release("/big")
-    let service = ListingService(lister: lister)
+    let service = ListingService(lister: lister, clock: ManualClock())
     let log = UpdateLog()
     _ = load(service, "/big", into: log)
 
@@ -308,7 +318,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
 @Test func listingIsSortedAsRequested() async {
     let lister = GatedLister(["/folder": .batches([files("e", 0..<10)])])
     lister.release("/folder")
-    let service = ListingService(lister: lister)
+    let service = ListingService(lister: lister, clock: ManualClock())
     let log = UpdateLog()
     service.load(Location(path: "/folder"), sortedBy: .size, ascending: false) { log.append($0) }
 
@@ -328,7 +338,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
             $1
         })
     defer { lister.releaseAll() }
-    let service = ListingService(lister: lister)
+    let service = ListingService(lister: lister, clock: ManualClock())
     let log = UpdateLog()
     let cancelled = load(service, "/big", into: log)
     #expect(await lister.waitForCalls(1))
@@ -345,7 +355,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
         "/big": .batches([files("e", 0..<300), files("e", 300..<600), files("e", 600..<900)])
     ])
     defer { lister.releaseAll() }
-    let service = ListingService(lister: lister)
+    let service = ListingService(lister: lister, clock: ManualClock())
     let log = UpdateLog()
     let cancelled = load(service, "/big", into: log)
     #expect(await lister.waitForCalls(1))
@@ -362,7 +372,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     let lister = GatedLister(
         Dictionary(uniqueKeysWithValues: (running + ["/later"]).map { ($0, .batches([])) }))
     defer { lister.releaseAll() }
-    let service = ListingService(lister: lister)
+    let service = ListingService(lister: lister, clock: ManualClock())
     let log = UpdateLog()
     for path in running {
         _ = load(service, path, into: log)
@@ -375,7 +385,9 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     }
     #expect(await log.wait(for: 3))
     #expect(await lister.waitForFinished(3))
-    #expect(await !lister.waitForCalls(4, timeout: 0.2))
+    // The cancelled load, if it had started, would hold a slot, since its path is never released.
+    await waitUntilNoLoadRuns(service)
+    #expect(lister.calls.count == 3)
 }
 
 @Test @MainActor func cancellingOnTheFirstBatchDropsTheFullListing() async {
@@ -385,7 +397,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
         ]) { $1 })
     lister.release("/big")
     defer { lister.releaseAll() }
-    let service = ListingService(lister: lister)
+    let service = ListingService(lister: lister, clock: ManualClock())
     let log = UpdateLog()
     final class Box: @unchecked Sendable { var load: ListingLoad? }
     let box = Box()
@@ -434,7 +446,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
         isHidden: false, isDataless: false)
     let lister = GatedLister(["/folder": .batches([[stale], [fresh]])])
     lister.release("/folder")
-    let service = ListingService(lister: lister)
+    let service = ListingService(lister: lister, clock: ManualClock())
     let log = UpdateLog()
     _ = load(service, "/folder", into: log)
 
@@ -465,7 +477,7 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     }
     let lister = GatedLister(["/folder": .batches([entries])])
     lister.release("/folder")
-    let service = ListingService(lister: lister)
+    let service = ListingService(lister: lister, clock: ManualClock())
     let log = UpdateLog()
     _ = load(service, "/folder", into: log)
 
@@ -489,7 +501,7 @@ private func permutations<Element>(_ elements: [Element]) -> [[Element]] {
 @Test func loadsRunOffTheMainThreadAtUserInitiated() async {
     let lister = GatedLister(["/folder": .batches([files("e", 0..<3)])])
     lister.release("/folder")
-    let service = ListingService(lister: lister)
+    let service = ListingService(lister: lister, clock: ManualClock())
     let log = UpdateLog()
     await MainActor.run {
         _ = load(service, "/folder", into: log)
@@ -824,9 +836,11 @@ private let musicShare = VolumeIdentity(
     }
     #expect(await lister.waitForCalls(stuck.count))
     let log = UpdateLog()
-    _ = load(service, "/local", into: log)
+    let local = load(service, "/local", into: log)
     // Every slot is held by a read on a share that stopped answering.
-    #expect(await !lister.waitForCall("/local", timeout: 0.2))
+    await settle { local.volume != nil }
+    #expect(await service.runningLoadCount() == stuck.count)
+    #expect(!lister.calls.contains { $0.path == "/local" })
 
     clock.advance(by: LoadTimeouts.slow)
     // The local load waited 3 s too, so a slow update can come before its listing.
@@ -847,12 +861,11 @@ private let musicShare = VolumeIdentity(
     defer { lister.releaseAll() }
     let service = service(lister)
     let log = UpdateLog()
-    for path in paths {
-        _ = load(service, path, into: log)
-    }
+    let loads = paths.map { load(service, $0, into: log) }
 
     #expect(await lister.waitForCalls(3))
-    #expect(await !lister.waitForCalls(4, timeout: 0.2))
+    await settle { loads.allSatisfy { $0.volume != nil } }
+    #expect(await service.runningLoadCount() == 3)
     lister.releaseAll()
     #expect(await log.wait(for: paths.count))
     #expect(lister.mostAtOnce == 3)
@@ -1125,10 +1138,14 @@ private struct FailsAfterABatchLister: Lister {
         DispatchSemaphore(value: 0).wait()
         preconditionFailure("a volume read that never returns returned")
     }
+    // The clock never moves, so no load reports slow, as one whose volume read hangs does after
+    // 3 s on a clock that runs, whatever the test has to wait for.
     let cached = ListingService(
-        lister: lister, volumeOf: volumeOf, mountedVolumes: { [disk, shareA] }, cache: cache)
+        lister: lister, clock: ManualClock(), volumeOf: volumeOf,
+        mountedVolumes: { [disk, shareA] }, cache: cache)
     let uncached = ListingService(
-        lister: lister, volumeOf: volumeOf, mountedVolumes: { [disk, shareA] })
+        lister: lister, clock: ManualClock(), volumeOf: volumeOf,
+        mountedVolumes: { [disk, shareA] })
     let kept = UpdateLog()
     let notKept = UpdateLog()
     let local = UpdateLog()

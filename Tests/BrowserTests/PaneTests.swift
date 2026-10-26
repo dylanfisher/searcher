@@ -19,14 +19,17 @@ struct PaneFixture {
     init(
         at path: String, folders: [String: [DirectoryEntry]], held: Bool = false,
         settings: Settings = untouchedSettings(), sortedBy column: SortColumn = .name,
-        ascending: Bool = true, thumbnails: ThumbnailService? = nil
+        ascending: Bool = true, thumbnails: ThumbnailService? = nil,
+        recentListings: RecentListings? = nil, volume: VolumeIdentity = ListingService.listerVolume
     ) {
         lister = GatedLister(folders.mapValues { .batches([$0]) })
         if !held { lister.releaseAll() }
         actions = StubSystemActions()
         pane = Pane(
             location: Location(path: path),
-            service: ListingService(lister: lister, thumbnails: thumbnails),
+            service: ListingService(
+                lister: lister, volumeOf: { _ in volume }, thumbnails: thumbnails,
+                recentListings: recentListings),
             systemActions: actions, settings: settings, sortedBy: column, ascending: ascending)
     }
 

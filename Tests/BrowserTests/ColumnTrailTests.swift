@@ -1675,10 +1675,15 @@ private let keyTree: [String: [DirectoryEntry]] = {
 }()
 
 /// A focused pane at `/k` in column mode, waiting out its column-open pause on `clock`, with
-/// `f0` selected as a click selects it and its column loaded.
+/// `f0` selected as a click selects it and its column loaded. `recentListings` and `volume`
+/// go to its service.
 @MainActor
-private func keyedPane(clock: ManualClock) async -> PaneFixture {
-    let fixture = PaneFixture(at: "/k", folders: keyTree)
+private func keyedPane(
+    clock: ManualClock, recentListings: RecentListings? = nil,
+    volume: VolumeIdentity = ListingService.listerVolume
+) async -> PaneFixture {
+    let fixture = PaneFixture(
+        at: "/k", folders: keyTree, recentListings: recentListings, volume: volume)
     await settle { fixture.pane.state.isLoaded }
     fixture.pane.columnOpenClock = clock
     fixture.pane.setViewMode(.column)
@@ -1716,6 +1721,81 @@ private func drainWaits() async {
     #expect(trail(pane).focusedIndex == 1)
     let skipped = (1...9).map { "/k/f\($0)" }
     #expect(!fixture.lister.calls.contains { skipped.contains($0.path) })
+}
+
+/// A share, so the kept-rows cases run on a network volume as well as a local one.
+private let keyShare = VolumeIdentity(
+    device: "//me@nas.invalid/k", mountPoint: "/", kind: .network)
+
+/// `keyedPane` with every folder in `names` clicked once, so its service's `RecentListings`
+/// keeps its rows, and `f0` clicked again last.
+@MainActor
+private func keyedPane(
+    clock: ManualClock, keeping names: [String], volume: VolumeIdentity
+) async throws -> PaneFixture {
+    let fixture = await keyedPane(
+        clock: clock, recentListings: RecentListings(), volume: volume)
+    let first = trail(fixture.pane).columns[1].pane
+    for name in names + ["f0"] {
+        try click(name, in: first)
+        await settle { trail(fixture.pane).columns.last?.pane.state.isLoaded == true }
+    }
+    return fixture
+}
+
+@MainActor @Test func downOntoAKeptFolderOpensItsColumnWithRowsInTheSameTurn() async throws {
+    for volume in [ListingService.listerVolume, keyShare] {
+        let clock = ManualClock()
+        let fixture = try await keyedPane(clock: clock, keeping: ["f1"], volume: volume)
+        let pane = fixture.pane
+
+        try press(KeyChord(.down), on: pane)
+
+        // As a click on it does: no wait, and the column's first draw has the rows.
+        #expect(paths(pane) == ["/", "/k", "/k/f1"])
+        let opened = try #require(trail(pane).columns.last?.pane)
+        #expect(opened.state.isCachedRefreshing)
+        #expect(opened.state.names == ["in", "m.txt", "n.txt"])
+        await drainWaits()
+        #expect(clock.waitingSleeps == 0)
+    }
+}
+
+@MainActor @Test func downOntoAFolderWithNothingKeptStillWaits() async throws {
+    let clock = ManualClock()
+    let fixture = try await keyedPane(
+        clock: clock, keeping: [], volume: ListingService.listerVolume)
+    let pane = fixture.pane
+
+    try press(KeyChord(.down), on: pane)
+
+    #expect(paths(pane) == ["/", "/k"])
+    await settle { clock.waitingSleeps == 1 }
+    clock.advance(by: ColumnTrail.openDelay)
+    await settle { paths(pane) == ["/", "/k", "/k/f1"] }
+}
+
+@MainActor @Test func heldDownThroughKeptFoldersBuildsNoColumnPerRow() async throws {
+    let clock = ManualClock()
+    let fixture = try await keyedPane(
+        clock: clock, keeping: (1...10).map { "f\($0)" }, volume: ListingService.listerVolume)
+    let pane = fixture.pane
+    let callsBefore = fixture.lister.calls.count
+
+    for _ in 0..<10 {
+        try press(KeyChord(.down), on: pane)
+        clock.advance(by: ColumnTrail.openDelay - .milliseconds(1))
+    }
+
+    // The first press found the keys paused and opened `f1` at once; each repeat came inside
+    // the pause and built nothing.
+    #expect(paths(pane) == ["/", "/k"])
+    #expect(fixture.lister.calls.dropFirst(callsBefore).map(\.path) == ["/k/f1"])
+    await settle { clock.waitingSleeps == 1 }
+
+    clock.advance(by: .milliseconds(1))
+
+    await settle { paths(pane) == ["/", "/k", "/k/f10"] }
 }
 
 @MainActor @Test func cmdOptDownSelectsTheLastRowAndItsColumnOpensOnlyAfterThePause() async throws {

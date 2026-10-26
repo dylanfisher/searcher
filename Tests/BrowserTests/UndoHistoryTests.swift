@@ -411,10 +411,11 @@ func aPressDoesNothingWhenWhatItWaitedForSettlesThenMakesAnEntry() async throws 
 // MARK: What a press waits for
 
 /// A queue on fake files whose finished operations `history` follows, with a rename of `/A/a`
-/// to `/A/b` already taken in.
+/// to `/A/b` already taken in. Its clock stands still unless a test passes another, so no
+/// operation settles past `pressWait` however long a loaded machine takes to run it.
 @MainActor
 private func queueAfterARename<C: Clock<Duration>>(
-    _ files: FakeFiles, _ history: UndoHistory, _ watcher: Watcher, clock: C = ContinuousClock()
+    _ files: FakeFiles, _ history: UndoHistory, _ watcher: Watcher, clock: C = ManualClock()
 ) async -> FileOperationQueue {
     let queue = followedQueue(
         history, fileSystem: files.fileSystem(), watcher: watcher, clock: clock)

@@ -9,7 +9,8 @@ import Foundation
 /// column Show Package Contents opens for it stays while it stays selected. A truncated column
 /// stops its load and its folder monitor (0041-column-model.md). One file or package selected
 /// in the last column is its `preview` (0090-preview-column.md, 0093-packages-are-files.md). A
-/// selection made by keys is followed once the keys pause for `openDelay`; a click's at once
+/// selection made by keys is followed once the keys pause for `openDelay`, unless it is the
+/// first after a pause and opens a folder with kept rows; a click's at once
 /// (0094-column-open-delay.md). Each move of the keys to another column is a step of the owner's
 /// Back and Forward history (0041-column-model.md).
 @MainActor
@@ -538,20 +539,39 @@ public final class ColumnTrail {
 
     /// A column's pane changed: its rows, sort or selection. The columns to its right follow
     /// its selection, at once or, for a selection made by keys, once they pause; then the owner
-    /// reports the change.
+    /// reports the change. Both go through `follow`, so a key-made selection that doesn't wait
+    /// opens exactly what a click on it opens.
     private func columnDidChange(_ column: Column) {
         // A closed column can still report a change it was making.
         guard columns.contains(where: { $0 === column }) else { return }
         if selectFirstRowIfWanted(in: column) { return }
-        if column.pane.selectionIsFromKeys,
-            column.followedSelectionVersion != column.pane.selectionVersion
-        {
+        if waitsForKeysToPause(column) {
             hold(column)
         } else {
             follow(column)
         }
         updatePreview()
         owner.trailDidChange()
+    }
+
+    /// Whether the columns right of `column` wait for the keys to pause before they follow its
+    /// selection: a key-made selection they don't follow yet waits, unless the keys had paused
+    /// before it and the folder it selects shows its kept rows the moment its column is made;
+    /// then waiting would show an empty column for nothing. A new key-made selection starts the
+    /// pause again, so a held key's repeats wait and only its first press can open at once.
+    private func waitsForKeysToPause(_ column: Column) -> Bool {
+        let pane = column.pane
+        let version = pane.selectionVersion
+        guard pane.selectionIsFromKeys, column.followedSelectionVersion != version else {
+            return false
+        }
+        if column.held?.selectionVersion == version { return true }
+        let keysHadPaused = column.keysHavePaused()
+        column.keysHavePaused = Self.startPause(on: owner.columnOpenClock, for: Self.openDelay)
+        guard keysHadPaused, let listing = pane.state.listing,
+            let entry = Self.soleSelectedEntry(in: pane, of: listing), entry.type == .directory
+        else { return true }
+        return !pane.showsRecentRowsWhenMade(at: pane.location.child(named: entry.name))
     }
 
     /// Selects the first row of `column` once it shows the whole folder, when → moved into it
@@ -631,6 +651,14 @@ public final class ColumnTrail {
     private func release(_ column: Column) {
         column.held?.wait?.cancel()
         column.held = nil
+    }
+
+    /// Takes the deadline on `clock` at once and returns whether it has passed.
+    private static func startPause<C: Clock<Duration>>(on clock: C, for duration: Duration)
+        -> () -> Bool
+    {
+        let deadline = clock.now.advanced(by: duration)
+        return { clock.now >= deadline }
     }
 
     /// Takes the deadline on `clock` at once and returns the wait for it.
@@ -913,10 +941,10 @@ public final class ColumnTrail {
         if cursorRow == nil, !pane.state.showsCompleteListing { return false }
         var folder: String?
         var package: String?
-        if let cursorRow, pane.selection.rows(in: listing) == IndexSet(integer: cursorRow) {
-            switch listing[cursorRow].type {
-            case .directory: folder = listing[cursorRow].name
-            case .package: package = listing[cursorRow].name
+        if let entry = Self.soleSelectedEntry(in: pane, of: listing) {
+            switch entry.type {
+            case .directory: folder = entry.name
+            case .package: package = entry.name
             case .regular, .symbolicLink, .other: break
             }
         }
@@ -937,6 +965,15 @@ public final class ColumnTrail {
 
     /// Closes the columns right of `index`. A focused column among them hands the focus to the
     /// one at `index`.
+    /// The entry of the one row `pane` selects in `listing`, when that row is the cursor's: a
+    /// folder there opens the next column.
+    private static func soleSelectedEntry(in pane: Pane, of listing: Listing) -> DirectoryEntry? {
+        guard let cursorRow = pane.selection.cursorRow(in: listing),
+            pane.selection.rows(in: listing) == IndexSet(integer: cursorRow)
+        else { return nil }
+        return listing[cursorRow]
+    }
+
     private func truncate(after index: Int) {
         guard index + 1 < columns.count else { return }
         if focusedIndex > index { focus(index) }

@@ -33,8 +33,17 @@ private final class LiveListing: @unchecked Sendable {
 
     init(_ listing: Listing) { self.listing = listing }
 
-    func apply(_ change: FolderChange) {
-        guard case .patches(let patches) = change else { return }
+    /// Patches the listing, or, for a `relist`, takes the folder's listing again, as a pane does.
+    func apply(_ change: FolderChange, of folder: String) {
+        guard case .patches(let patches) = change else {
+            do {
+                let fresh = try freshListing(of: folder)
+                lock.withLock { listing = fresh }
+            } catch {
+                Issue.record("listing \(folder) again failed: \(error)")
+            }
+            return
+        }
         lock.lock()
         defer { lock.unlock() }
         for patch in patches {
@@ -182,12 +191,13 @@ private func freshListing(of folder: String) throws -> Listing {
         let folder = try TemporaryFolder("FolderMonitorTests")
         let file = folder.url.appending(path: "grows")
         try Data(count: 3).write(to: file)
-        let live = LiveListing(try freshListing(of: folder.url.path))
+        let path = folder.url.path
+        let live = LiveListing(try freshListing(of: path))
         let log = EventLog<FolderChange>()
         let monitor = try FolderMonitor(
-            location: Location(path: folder.url.path), volume: .local
+            location: Location(path: path), volume: .local
         ) { change in
-            live.apply(change)
+            live.apply(change, of: path)
             log.append(change)
         }
         defer { monitor.stop() }
@@ -219,12 +229,13 @@ private func freshListing(of folder: String) throws -> Listing {
 
     @Test func burstOfCreatesLeavesTheListingEqualToAFreshOne() async throws {
         let folder = try TemporaryFolder("FolderMonitorTests")
-        let live = LiveListing(try freshListing(of: folder.url.path))
+        let path = folder.url.path
+        let live = LiveListing(try freshListing(of: path))
         let log = EventLog<FolderChange>()
         let monitor = try FolderMonitor(
-            location: Location(path: folder.url.path), volume: .local
+            location: Location(path: path), volume: .local
         ) { change in
-            live.apply(change)
+            live.apply(change, of: path)
             log.append(change)
         }
         defer { monitor.stop() }
@@ -235,8 +246,9 @@ private func freshListing(of folder: String) throws -> Listing {
 
         let fresh = rowsOf(try freshListing(of: folder.url.path))
         #expect(fresh.count == 1_000)
+        // On a loaded machine the kernel drops events and the monitor asks for a relist, which
+        // `live` answers as a pane does; patches or relists, it ends up equal to a fresh listing.
         #expect(await log.wait(timeout: 20) { _ in live.rows == fresh })
-        #expect(!log.all.contains(.relist))
     }
 }
 

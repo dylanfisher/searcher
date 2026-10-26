@@ -1211,10 +1211,22 @@ public final class Pane {
 
     /// Whether `listing` is in the pane's sort and shows what the settings ask for.
     public func isArranged(_ listing: Listing) -> Bool {
+        isArranged(listing, filteredBy: filter)
+    }
+
+    private func isArranged(_ listing: Listing, filteredBy filter: NameFilter) -> Bool {
         listing.column == sortColumn && listing.ascending == sortAscending
             && listing.foldersFirst == settings.foldersFirst
             && listing.showsHidden == settings.showHidden
             && listing.hidesDSStore == settings.hideDSStore && listing.filter == filter
+    }
+
+    /// Whether a pane made at `location` sorted like this one, with no filter, as a trail makes
+    /// a column, shows rows in the turn it is made: `service.recentListings` keeps the folder's
+    /// listing in that arrangement (`showRecentListing`). A dictionary read on the main actor.
+    func showsRecentRowsWhenMade(at location: Location) -> Bool {
+        guard let recent = service.recentListings?.listing(at: location.path) else { return false }
+        return isArranged(recent.listing, filteredBy: NameFilter())
     }
 
     /// Sorts a copy of the rows off the main actor when they aren't in the pane's sort, don't
@@ -1337,12 +1349,12 @@ public final class Pane {
             after: .loaded(complete: false))
     }
 
-    /// Keeps the rows shown in `service.recentListings`, when they are a full listing of a folder
-    /// on a local volume: a load's, or a patch's or sort's of one.
+    /// Keeps the rows shown in `service.recentListings`, when they are a full listing of the
+    /// folder: a load's, or a patch's or sort's of one.
     private func keepRecentListing() {
-        guard case .loaded(let listing) = state, let recent = service.recentListings,
-            folderVolume?.kind == .local
-        else { return }
+        guard case .loaded(let listing) = state, let recent = service.recentListings else {
+            return
+        }
         recent.keep(listing, listedAt: loadedAt ?? Date(), at: location.path)
     }
 

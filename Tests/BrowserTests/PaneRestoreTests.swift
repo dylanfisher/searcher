@@ -29,7 +29,7 @@ private func restored(
     _ state: TabState.PaneState, lister: GatedLister
 ) -> Pane {
     Pane(
-        restoring: state, service: ListingService(lister: lister),
+        restoring: state, service: ListingService(lister: lister, clock: ManualClock()),
         systemActions: StubSystemActions(), settings: untouchedSettings())
 }
 
@@ -202,7 +202,8 @@ private func restoredOnShare(
     Pane(
         restoring: saved(path),
         service: ListingService(
-            lister: lister, volumeOf: volumeOf, mountedVolumes: { mounted }, cache: cache),
+            lister: lister, clock: ManualClock(), volumeOf: volumeOf,
+            mountedVolumes: { mounted }, cache: cache),
         systemActions: StubSystemActions(), settings: untouchedSettings())
 }
 
@@ -361,7 +362,7 @@ private func cacheThatNeverAnswers() -> ListingCache {
     let pane = Pane(
         restoring: saved(album, viewMode: .column),
         service: ListingService(
-            lister: lister,
+            lister: lister, clock: ManualClock(),
             volumeOf: { _ throws(ListingError) in
                 DispatchSemaphore(value: 0).wait()
                 preconditionFailure("a volume read that never returns returned")
