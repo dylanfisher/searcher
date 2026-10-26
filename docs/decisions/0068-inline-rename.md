@@ -18,8 +18,19 @@ once the operation ends.
   of the table would put the table's `runMenuCommand` in the field's responder chain, so
   Cmd-Delete in the field would trash the file being renamed. Beside it, the file commands' menu
   items are off while the field has the keys, as 0066 expects of a text field. The clip view
-  scrolls it with the rows. It has a thin plain border and no focus ring, so it shows at once as
-  Finder's does (amended 2026-10-23, [0076](0076-dialogs.md)).
+  scrolls it with the rows.
+- **It looks as Finder's does** (amended 2026-10-26, from Dylan's screenshots of Finder's column
+  view; it replaces a thin plain border, [0076](0076-dialogs.md)). The field has no bezel,
+  border, background or focus ring, and its frame and font are the name label's, so the text
+  stays where the name was drawn; the label under it hides, as the old name would show through.
+  The row keeps its selection in the accent color while the field has the keys of the key
+  window: AppKit emphasizes a selection only while the table has them, so the list's row views
+  (`ListingRowView`) also emphasize it while the table's `keepsSelectionEmphasized` is set. On
+  the accent the name, the insertion point and the selected text are white, over a lighter shade
+  of the accent (white at 30 %), as Finder draws them; on a grey row, in a window that isn't
+  key or once the keys have left, they take the label's colors and AppKit's selection. The
+  field edits in an editor of its own, so those colors don't stay on the window's editor that
+  every other text field in it uses.
 - **What is selected:** a file's name up to the extension `UniqueName.split` finds, so it splits
   as Finder's copy names do ("song.flac" selects "song", "archive.tar.gz" selects "archive.tar");
   a folder's whole name. `split` is now public for this.
@@ -76,13 +87,18 @@ once the operation ends.
 - **Watch the selection in Interface after New Folder runs** — rejected: Interface can't see the
   operation end, so a New Folder that failed left a watch that opened the field on a file another
   app made later.
+- **A field with a white background and a border over the row** — the first look, shown at once
+  so no focus ring animated in. Replaced by Finder's look on 2026-10-26: the white box sat wider
+  than the name and off the label's position, and the row turned grey under it.
 - **Pass the queue to the field when the context is built** — the context's `editName` takes no
   arguments, so the pane's hook reads the queue from its own context when Rename runs.
 
 ## Consequences
 
-The field's frame comes from the table's cell geometry (`ListingViewController.nameFrame`), so a
-change to the name cell's layout moves the field with it. The window passes the app's queue
+The field's frame comes from the table's cell geometry (`ListingViewController.nameFrame`), which
+shares with the cells where a name ends before a badge or chevron, so a change to the name
+cell's layout moves the field with it. Every row of a list or column is a `ListingRowView`, made
+through `makeView(withIdentifier:)` so the table can reuse it. The window passes the app's queue
 ([0067](0067-operations-panel.md)); a pane without one has Rename and New Folder off, so the
 field can't be reached, and the tests run the commands with a queue of their own. If the old
 row vanishes while the rename runs, the field closes and a failure then isn't shown in the
