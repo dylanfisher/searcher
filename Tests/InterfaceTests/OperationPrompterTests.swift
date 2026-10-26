@@ -19,9 +19,11 @@ private final class Fixture {
     var dismissed: [NSWindow] = []
     /// The windows brought forward, each with how many sheets were shown before it.
     var broughtForward: [(window: NSWindow, presentedBefore: Int)] = []
+    /// Times `OperationPrompter.keyHold`.
+    let clock = ManualClock()
 
     init() {
-        prompter = OperationPrompter()
+        prompter = OperationPrompter(clock: clock)
         prompter.window = { [unowned self] _ in hasWindow ? window : nil }
         prompter.present = { [unowned self] sheet, _ in presented.append(sheet) }
         prompter.bringForward = { [unowned self] window in
@@ -103,6 +105,57 @@ private func ask(_ request: ConfirmRequest, of fixture: Fixture, into returned: 
     #expect(fixture.broughtForward.first?.presentedBefore == 0)
     try #require(fixture.confirmSheet).cancelButton.performClick(nil)
     await settle { returned.confirms == [false] }
+}
+
+/// Raising the window when the app isn't active also bounces the Dock icon; when it is active,
+/// raising it is enough.
+@MainActor @Test func bringingAWindowForwardAsksForAttentionOnlyWhenTheAppIsInactive() {
+    let window = Fixture().window
+    for appIsActive in [false, true] {
+        var raised: [NSWindow] = []
+        var attention = 0
+        OperationPrompter.bringForward(
+            window, appIsActive: appIsActive, raise: { raised.append($0) },
+            requestAttention: { attention += 1 })
+        #expect(raised.count == 1 && raised.first === window)
+        #expect(attention == (appIsActive ? 0 : 1))
+    }
+}
+
+/// A sheet that appears as the user types in another window ignores Return, Enter and Esc for
+/// `keyHold`, so the Return meant for that window doesn't press Replace; clicks work at once.
+@MainActor @Test func aNewSheetIgnoresReturnAndEscForAMoment() async throws {
+    let fixture = Fixture()
+    let prompts = fixture.prompter.prompts
+    let returned = Returned()
+    Task { @MainActor in returned.resolutions.append(await prompts.resolve(conflict(1))) }
+    await settle { fixture.presented.count == 1 }
+    let sheet = try #require(fixture.conflictSheet)
+
+    #expect(sheet.dialog.buttons.allSatisfy { $0.keyEquivalent.isEmpty })
+    await settle { fixture.clock.waitingSleeps == 1 }
+    fixture.clock.advance(by: OperationPrompter.keyHold - .milliseconds(1))
+    #expect(sheet.replaceButton.keyEquivalent.isEmpty)
+    fixture.clock.advance(by: .milliseconds(1))
+    await settle { sheet.replaceButton.keyEquivalent == "\r" }
+    #expect(sheet.stopButton.keyEquivalent == "\u{1B}")
+
+    sheet.keepBothButton.performClick(nil)
+    await settle { returned.resolutions.count == 1 }
+}
+
+/// A click answers a sheet at once, before the keys are back.
+@MainActor @Test func aClickAnswersANewSheetAtOnce() async throws {
+    let fixture = Fixture()
+    let returned = Returned()
+    ask(otherPane("one"), of: fixture, into: returned)
+    await settle { fixture.presented.count == 1 }
+    let sheet = try #require(fixture.confirmSheet)
+    #expect(sheet.confirmButton.keyEquivalent.isEmpty)
+
+    sheet.confirmButton.performClick(nil)
+
+    await settle { returned.confirms == [true] }
 }
 
 @MainActor @Test func aQuestionWaitsForAWindow() async throws {

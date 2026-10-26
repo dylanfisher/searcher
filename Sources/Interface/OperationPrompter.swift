@@ -24,7 +24,20 @@ final class OperationPrompter {
             case .confirm(let sheet): sheet.panel
             }
         }
+
+        /// The sheet's buttons, the ones Return, Enter and Esc press among them.
+        @MainActor var buttons: [NSButton] {
+            switch self {
+            case .conflict(let sheet): sheet.dialog.buttons
+            case .confirm(let sheet): sheet.alert.buttons
+            }
+        }
     }
+
+    /// How long a sheet ignores Return, Enter and Esc after it appears. A question can appear
+    /// while the user is typing in another window, and the Return meant for that window would
+    /// press the sheet's default button, which for a conflict is Replace. Clicks work at once.
+    static let keyHold: Duration = .milliseconds(500)
 
     /// A question and the call waiting for its answer.
     private enum Question {
@@ -68,9 +81,16 @@ final class OperationPrompter {
     /// `makeKeyAndOrderFront` does. The sheet's window may be behind another, since a question
     /// goes on its operation's window, and a sheet no one sees would hold every later question.
     /// Tests replace it so nothing is shown.
+    /// When the app isn't active it also bounces the Dock icon once, as Finder does, and
+    /// never activates the app.
     var bringForward: @MainActor (NSWindow) -> Void = { window in
-        if window.isMiniaturized { window.deminiaturize(nil) }
-        window.makeKeyAndOrderFront(nil)
+        OperationPrompter.bringForward(
+            window, appIsActive: NSApp.isActive,
+            raise: { window in
+                if window.isMiniaturized { window.deminiaturize(nil) }
+                window.makeKeyAndOrderFront(nil)
+            },
+            requestAttention: { _ = NSApp.requestUserAttention(.informationalRequest) })
     }
     /// Takes a sheet off its window. Tests replace it with `present`.
     var dismiss: @MainActor (NSWindow) -> Void = { sheet in sheet.sheetParent?.endSheet(sheet) }
@@ -86,7 +106,27 @@ final class OperationPrompter {
     /// Operations a snapshot has shown finished.
     private var finished: Set<FileOperationQueue.ID> = []
 
-    init() {}
+    /// Starts a wait of the given length on the clock, taking the deadline at once.
+    private let startWait: @MainActor (Duration) -> @Sendable () async throws -> Void
+
+    /// `clock` times `keyHold`; tests give a manual one.
+    init<C: Clock<Duration>>(clock: C = ContinuousClock()) {
+        startWait = { duration in
+            let deadline = clock.now.advanced(by: duration)
+            return { try await clock.sleep(until: deadline, tolerance: nil) }
+        }
+    }
+
+    /// Raises `window` with `raise`, and when the app isn't active asks for the user's
+    /// attention with `requestAttention` rather than activating it, which would take the keys
+    /// from another app.
+    static func bringForward(
+        _ window: NSWindow, appIsActive: Bool, raise: (NSWindow) -> Void,
+        requestAttention: () -> Void
+    ) {
+        raise(window)
+        if !appIsActive { requestAttention() }
+    }
 
     var waitingCount: Int { waiting.count }
 
@@ -142,6 +182,30 @@ final class OperationPrompter {
         shownOn = window
         if !window.isKeyWindow { bringForward(window) }
         present(sheet.panel, window)
+        holdKeys(of: sheet)
+    }
+
+    /// Takes the key equivalents off `sheet`'s buttons for `keyHold`, and the focus off a
+    /// focused button, as full keyboard access gives one, so a Return, Enter, Esc or Space typed
+    /// for another window as the sheet appears answers nothing.
+    private func holdKeys(of sheet: Sheet) {
+        let held = sheet.buttons.filter { !$0.keyEquivalent.isEmpty }.map {
+            ($0, $0.keyEquivalent)
+        }
+        for (button, _) in held { button.keyEquivalent = "" }
+        let panel = sheet.panel
+        let focused = panel.firstResponder as? NSButton
+        if focused != nil { panel.makeFirstResponder(panel) }
+        let wait = startWait(Self.keyHold)
+        Task {
+            do {
+                try await wait()
+            } catch {
+                preconditionFailure("the clock failed a wait with \(error)")
+            }
+            for (button, key) in held { button.keyEquivalent = key }
+            if let focused, panel.firstResponder === panel { panel.makeFirstResponder(focused) }
+        }
     }
 
     /// `window` closed: a question shown on it goes back to the front of the line and shows

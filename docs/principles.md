@@ -75,6 +75,11 @@ Every line of style guidance in an agent file is context budget spent on somethi
 deterministically and for free. Configure the formatter and linter, run them in `./scripts/check`,
 and write down only the conventions no tool can check.
 
+## Every control shows its interaction states
+
+Every interactive control has hover, pressed, focus and disabled states —
+[0110](decisions/0110-interaction-states.md).
+
 ---
 
 ## On keeping AGENTS.md small
