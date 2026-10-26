@@ -202,6 +202,35 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     }
 }
 
+@MainActor @Test func theNewWindowSizeIsTheDefaultUntilSetAndSurvivesARelaunch() throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let name = folder.url.appending(path: "preferences").path
+    let first = Settings(defaults: try #require(UserDefaults(suiteName: name)))
+    #expect(first.newWindowSize == CGSize(width: 900, height: 600))
+
+    first.newWindowSize = CGSize(width: 1000, height: 700.5)
+
+    let relaunched = Settings(defaults: try #require(UserDefaults(suiteName: name)))
+    #expect(relaunched.newWindowSize == CGSize(width: 1000, height: 700.5))
+}
+
+@MainActor @Test func aNewWindowSizeOfAnotherShapeIsDiscarded() throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let key = Settings.Key.newWindowSize.rawValue
+    for stored: Any in [
+        [800], [800, 600, 1], ["800", 600], [true, 600], [800, false], [0, 600], [800, -1],
+        [Double.nan, 600], [800, Double.infinity], 800, "800x600", ["width": 800, "height": 600],
+    ] {
+        let defaults = temporarySuite(in: folder.url.path)
+        defaults.set(stored, forKey: key)
+
+        let settings = Settings(defaults: defaults)
+
+        #expect(settings.newWindowSize == Settings.defaultWindowSize, "\(stored)")
+        #expect(defaults.object(forKey: key) == nil, "\(stored)")
+    }
+}
+
 @MainActor @Test func aChangeReachesEveryPane() async throws {
     let folder = try TemporaryFolder("SettingsTests")
     let settings = storedSettings(in: folder)

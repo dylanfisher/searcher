@@ -121,6 +121,15 @@ private struct Fixture {
     #expect(fixture.tables[0] === first)
 }
 
+@MainActor @Test func theColumnsBounceSidewaysEvenWhenTheyFit() async throws {
+    let fixture = await Fixture(width: Settings.defaultColumnWidth * 4)
+    await fixture.openThreeColumns()
+    let scrollView = try #require(fixture.controller.view as? NSScrollView)
+
+    #expect(scrollView.documentView.map { $0.frame.width <= scrollView.contentSize.width } == true)
+    #expect(scrollView.horizontalScrollElasticity == .allowed)
+}
+
 @MainActor @Test func theFocusedColumnIsScrolledIntoViewWhenArrowsMovePastTheEdge() async throws {
     // Room for two columns.
     let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)

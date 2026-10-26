@@ -21,6 +21,7 @@ public final class Settings {
         case columnWidth
         case appearance
         case palettePlace
+        case newWindowSize
     }
 
     /// Where the palette's panel sits on a screen, as Spotlight remembers where it was dragged
@@ -70,6 +71,15 @@ public final class Settings {
     /// Whether `width` is one the preview can have: a column width within `previewWidths`.
     public nonisolated static func isPreviewWidth(_ width: Double) -> Bool {
         previewWidths.contains(width) && isColumnWidth(width)
+    }
+
+    /// The content size a new window gets until a window is resized by hand
+    /// (0057-windows-and-tear-out.md).
+    public nonisolated static let defaultWindowSize = CGSize(width: 900, height: 600)
+
+    /// Whether `size` is one a window can have: finite and not empty.
+    public nonisolated static func isWindowSize(_ size: CGSize) -> Bool {
+        size.width.isFinite && size.height.isFinite && size.width > 0 && size.height > 0
     }
 
     /// What the Settings window says about `commanderFKeys`.
@@ -180,6 +190,20 @@ public final class Settings {
         }
     }
 
+    /// The content size a new window opens at: the one a window last had when the user finished
+    /// resizing it by hand, as in Finder (0057-windows-and-tear-out.md). `defaultWindowSize`
+    /// until then. No pane follows it, so a change notifies no one.
+    ///
+    /// - Precondition: `isWindowSize(_:)` holds for it.
+    public var newWindowSize: CGSize {
+        didSet {
+            precondition(Self.isWindowSize(newWindowSize), "window size \(newWindowSize) is empty")
+            guard newWindowSize != oldValue else { return }
+            defaults.set(
+                [newWindowSize.width, newWindowSize.height], forKey: Key.newWindowSize.rawValue)
+        }
+    }
+
     /// How long a drag has to hover over a folder before it springs open, as the system's
     /// Spring-loading setting in Accessibility ▸ Pointer Control has it; nil while that setting is
     /// off. The system writes both keys to the global domain, which every suite reads through, and
@@ -228,6 +252,7 @@ public final class Settings {
             ?? Self.defaultColumnWidth
         appearance = Self.appearance(in: defaults) ?? .auto
         palettePlace = Self.palettePlace(in: defaults)
+        newWindowSize = Self.windowSize(in: defaults) ?? Self.defaultWindowSize
     }
 
     /// Runs `handler` after each change of a setting, for as long as `owner` exists.
@@ -293,6 +318,23 @@ public final class Settings {
             let place = PalettePlace(x: x.doubleValue, y: y.doubleValue)
         {
             return place
+        }
+        defaults.removeObject(forKey: key)
+        return nil
+    }
+
+    /// The window size stored under its key, two numbers `isWindowSize(_:)` accepts; nil when
+    /// there is none, or it is anything else, which is removed.
+    private static func windowSize(in defaults: UserDefaults) -> CGSize? {
+        let key = Key.newWindowSize.rawValue
+        guard let value = defaults.object(forKey: key) else { return nil }
+        if let sides = value as? [Any], sides.count == 2,
+            let width = sides[0] as? NSNumber, CFGetTypeID(width) != CFBooleanGetTypeID(),
+            let height = sides[1] as? NSNumber, CFGetTypeID(height) != CFBooleanGetTypeID(),
+            case let size = CGSize(width: width.doubleValue, height: height.doubleValue),
+            isWindowSize(size)
+        {
+            return size
         }
         defaults.removeObject(forKey: key)
         return nil

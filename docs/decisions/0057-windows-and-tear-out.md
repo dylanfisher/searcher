@@ -83,3 +83,17 @@ of its own; nothing there runs the window commands.
 
 A moved pane's old window loses the first responder it had in that pane and gives it to its
 newly focused pane, so model focus and first responder stay in step in both windows.
+
+## Amendment: a new window takes the size last set by hand (2026-10-25)
+
+Finder opens a new window at the size the user last gave a window by dragging its edge.
+`BrowserWindowController.windowDidEndLiveResize` stores the window's content size in
+`Settings.newWindowSize`: one key holding two numbers, 900 × 600 (`Settings.defaultWindowSize`)
+until set, and anything else discarded and removed, as for the palette's place
+([0031](0031-view-settings.md)). Zoom, full screen and a restored frame are not live resizes and
+store nothing, so a zoomed window doesn't make every later window screen-sized. Every window the
+app makes without a saved frame uses the size: New Window, a new workspace and a pane moved out
+into a window. `WorkspaceWindows.fitted` cascades it as before, then shrinks it to the display
+most of it is on and moves it inside that display's visible frame, so a size set on a large
+display opens whole on a small one. A window opened from a saved frame keeps that frame
+([0080](0080-restore-at-launch.md)).

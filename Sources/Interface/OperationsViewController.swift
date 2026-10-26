@@ -23,6 +23,10 @@ final class OperationsViewController: NSViewController {
     static let maxHeight: CGFloat = 200
     /// The height of the line saying there are no operations.
     private static let emptyHeight: CGFloat = 32
+    /// The gap between one row and the next, beyond the rows' own insets.
+    static let rowGap: CGFloat = 12
+    /// The room above the first row, beyond its own inset.
+    static let firstRowTopInset: CGFloat = 10
 
     /// What the row buttons send for an operation.
     struct Control {
@@ -131,7 +135,7 @@ final class OperationsViewController: NSViewController {
     override func loadView() {
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 0
+        stack.spacing = Self.rowGap
         stack.translatesAutoresizingMaskIntoConstraints = false
         let document = FlippedView()
         document.translatesAutoresizingMaskIntoConstraints = false
@@ -202,6 +206,7 @@ final class OperationsViewController: NSViewController {
     /// Shows the empty line while there are no rows, and says so when the last one left.
     private func showEmpty(wasEmpty: Bool) {
         emptyRow.isHidden = !rows.isEmpty
+        stack.edgeInsets.top = rows.isEmpty ? 0 : Self.firstRowTopInset
         if rows.isEmpty, !wasEmpty { onEmptied?() }
     }
 

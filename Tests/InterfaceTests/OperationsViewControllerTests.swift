@@ -86,6 +86,22 @@ private func snapshot(
     #expect(row.bar.doubleValue == 0.75)
 }
 
+@MainActor @Test func rowsKeepAGapBetweenThemAndTheFirstKeepsATopInset() throws {
+    let fixture = Fixture()
+    let container = host(fixture, width: 400)
+
+    fixture.controller.show([snapshot(1, .running), snapshot(2, .running)])
+    container.layoutSubtreeIfNeeded()
+
+    let first = try fixture.row(1)
+    let second = try fixture.row(2)
+    let (upper, lower) = first.frame.minY < second.frame.minY ? (first, second) : (second, first)
+    #expect(lower.frame.minY - upper.frame.maxY == OperationsViewController.rowGap)
+    let document = try #require(first.enclosingScrollView?.documentView)
+    let topEdge = document.convert(first.frame, from: first.superview).minY
+    #expect(topEdge == OperationsViewController.firstRowTopInset)
+}
+
 @MainActor @Test func aRowWithoutATotalShowsAMovingBar() throws {
     let fixture = Fixture()
 
@@ -233,12 +249,13 @@ private func host(_ fixture: Fixture, width: CGFloat) -> NSView {
     let rowHeight = try fixture.row(1).frame.height
     let oneRow = panel.frame.height
     #expect(rowHeight > 0)
-    // The separator over the rows, and nothing under the last row.
-    #expect(oneRow > rowHeight && oneRow <= rowHeight + 2)
+    // The separator and the first row's top inset over the rows, and nothing under the last row.
+    let above = OperationsViewController.firstRowTopInset
+    #expect(oneRow > rowHeight + above && oneRow <= rowHeight + above + 2)
 
     fixture.controller.show([snapshot(1, .running), snapshot(2, .running)])
     container.layoutSubtreeIfNeeded()
-    #expect(panel.frame.height == oneRow + rowHeight)
+    #expect(panel.frame.height == oneRow + rowHeight + OperationsViewController.rowGap)
 
     fixture.controller.show((1...20).map { snapshot($0, .running) })
     container.layoutSubtreeIfNeeded()

@@ -34,11 +34,12 @@ private final class CountingLister: Lister, @unchecked Sendable {
 private struct Fixture {
     let windows: WorkspaceWindows
     let lister = CountingLister()
+    let settings = untouchedSettings()
 
     init() async throws {
         windows = WorkspaceWindows(
             service: ListingService(lister: lister) { "Test Disk" },
-            systemActions: StubSystemActions(), settings: untouchedSettings(), folderSizes: nil,
+            systemActions: StubSystemActions(), settings: settings, folderSizes: nil,
             clipboard: MemoryClipboard(), store: nil)
         windows.showsWindows = false
         try await open()
@@ -715,6 +716,66 @@ private func stopEverything(_ windows: WorkspaceWindows) async {
     fixture.windows.list.activate(first.workspace)
 
     #expect(!fixture.windows.open(at: Location(path: "/root")).showsSidebar)
+}
+
+// MARK: New window size
+
+@MainActor @Test func onlyTheEndOfALiveResizeSetsTheSizeNewWindowsOpenAt() async throws {
+    let fixture = try await Fixture()
+    let first = try #require(fixture.windows.controllers.first)
+    let window = try #require(first.window)
+    #expect(fixture.settings.newWindowSize == Settings.defaultWindowSize)
+
+    // Zoom, restore and the like set the frame without a live resize.
+    window.setContentSize(NSSize(width: 700, height: 500))
+    window.setFrame(window.frame.insetBy(dx: 10, dy: 10), display: false)
+    #expect(fixture.settings.newWindowSize == Settings.defaultWindowSize)
+
+    window.setContentSize(NSSize(width: 800, height: 450))
+    first.windowDidEndLiveResize(Notification(name: NSWindow.didEndLiveResizeNotification))
+    #expect(fixture.settings.newWindowSize == CGSize(width: 800, height: 450))
+}
+
+@MainActor @Test func aLiveResizeToAnEmptyContentAreaLeavesTheSizeAlone() async throws {
+    let fixture = try await Fixture()
+    let first = try #require(fixture.windows.controllers.first)
+    let window = try #require(first.window)
+    window.setContentSize(NSSize(width: 800, height: 0))
+
+    first.windowDidEndLiveResize(Notification(name: NSWindow.didEndLiveResizeNotification))
+
+    #expect(fixture.settings.newWindowSize == Settings.defaultWindowSize)
+}
+
+@MainActor @Test func aNewWindowOpensAtTheSizeSetByHand() async throws {
+    let fixture = try await Fixture()
+    fixture.windows.screens = { [CGRect(x: 0, y: 0, width: 5000, height: 3000)] }
+    let first = try #require(fixture.windows.controllers.first)
+    try #require(first.window).setContentSize(NSSize(width: 820, height: 480))
+    first.windowDidEndLiveResize(Notification(name: NSWindow.didEndLiveResizeNotification))
+
+    let opened = try await fixture.open()
+    let window = try #require(opened.window)
+
+    #expect(window.contentRect(forFrameRect: window.frame).size == CGSize(width: 820, height: 480))
+}
+
+@MainActor @Test func aNewWindowIsShrunkAndMovedToFitTheScreenItIsOn() {
+    let small = CGRect(x: 1440, y: 100, width: 800, height: 500)
+    let main = CGRect(x: 0, y: 0, width: 1440, height: 900)
+    let wide = CGRect(x: 1300, y: 50, width: 1200, height: 700)
+
+    let fitted = WorkspaceWindows.fitted(wide, on: [main, small])
+
+    #expect(fitted == CGRect(x: 1440, y: 100, width: 800, height: 500))
+    // A window that fits stays where it is.
+    let fits = CGRect(x: 100, y: 100, width: 900, height: 600)
+    #expect(WorkspaceWindows.fitted(fits, on: [main, small]) == fits)
+    // One on no display is fitted to the main one.
+    let lost = CGRect(x: 5000, y: 5000, width: 2000, height: 1000)
+    #expect(
+        WorkspaceWindows.fitted(lost, on: [main, small])
+            == CGRect(x: 0, y: 0, width: 1440, height: 900))
 }
 
 // MARK: Palette

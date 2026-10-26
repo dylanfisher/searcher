@@ -167,6 +167,9 @@ final class ColumnViewController: NSViewController {
         scrollView.hasHorizontalScroller = true
         scrollView.hasVerticalScroller = false
         scrollView.autohidesScrollers = true
+        // Sideways scrolling bounces even when the columns fit, as a short column does
+        // vertically.
+        scrollView.horizontalScrollElasticity = .allowed
         // Past the last column, the color the columns' rows are drawn on.
         scrollView.backgroundColor = .controlBackgroundColor
         // VoiceOver reads the columns as it reads `NSBrowser`'s: a browser whose children are

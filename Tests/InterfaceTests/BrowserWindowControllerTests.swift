@@ -198,6 +198,48 @@ private func shiftedBracket(_ typed: String, keyCode: UInt16) throws -> NSEvent 
         try fixture.keyTable.isDescendant(of: fixture.paneController(added.layout.focused).view))
 }
 
+@MainActor @Test func aClickInAnUnfocusedPanesPathBarNavigatesItAndGivesItTheKeys() async throws {
+    let fixture = try await Fixture()
+    let first = fixture.tab
+    let left = first.layout.focused
+    let leftPane = first.focusedPane
+    leftPane.navigate(to: Location(path: "/root/docs"))
+    await settle { leftPane.location == Location(path: "/root/docs") && leftPane.state.isLoaded }
+    let right = try fixture.splitRight()
+    #expect(first.layout.focused == right)
+    let leftController = try fixture.paneController(left)
+
+    // The bar shows the volume, then `root`, then `docs`.
+    leftController.pathBar.segments[1].performClick(nil)
+
+    await settle { leftPane.location == Location(path: "/root") }
+    #expect(first.layout.focused == left)
+    #expect(try fixture.keyTable.isDescendant(of: leftController.view))
+}
+
+@MainActor @Test func aClickInAnUnfocusedColumnPanesPathBarGivesItTheKeys() async throws {
+    let fixture = try await Fixture()
+    let first = fixture.tab
+    let left = first.layout.focused
+    let leftController = try fixture.paneController(left)
+    let leftPane = first.focusedPane
+    try fixture.press(try keyEvent("3", modifiers: .command))
+    #expect(leftPane.viewMode == .column)
+    leftPane.navigate(to: Location(path: "/root/docs"))
+    let trail = try #require(leftPane.columnTrail)
+    await settle {
+        leftController.pathBar.location == Location(path: "/root/docs")
+            && trail.columns.allSatisfy { $0.pane.state.isLoaded }
+    }
+    let right = try fixture.splitRight()
+    #expect(first.layout.focused == right)
+    leftController.pathBar.segments[1].performClick(nil)
+
+    await settle { trail.columns.last?.pane.location == Location(path: "/root") }
+    #expect(first.layout.focused == left)
+    #expect(try fixture.keyTable.isDescendant(of: leftController.view))
+}
+
 @MainActor @Test func aTablesOpenInNewTabRunsTheCommandOnItsPane() async throws {
     let fixture = try await Fixture()
     let first = fixture.tab
