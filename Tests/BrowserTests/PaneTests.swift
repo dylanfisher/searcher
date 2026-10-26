@@ -1276,8 +1276,9 @@ private func heldSettlePane() async -> (Pane, StubSystemActions, DispatchQueue) 
     #expect(!actions.openedFiles.contains { $0.lastPathComponent == "a-new" })
 }
 
-/// Folder walks that wait until the test releases them, on a local volume: 42 bytes for the
-/// first walk, 84 for the second, and so on, so a walk again reads differently.
+/// Folder walks that wait until the test releases them, on a local volume whose folders' parents
+/// are watched at once, without FSEvents: 42 bytes for the first walk, 84 for the second, and so
+/// on, so a walk again reads differently.
 private final class GatedWalks: @unchecked Sendable {
     private let condition = NSCondition()
     private var isReleased = false
@@ -1289,7 +1290,7 @@ private final class GatedWalks: @unchecked Sendable {
     func service() -> FolderSizeService {
         FolderSizeService(
             cache: cache, log: { _ in }, walk: { try self.walk($0, isCancelled: $1) },
-            volumeOf: { _ in ListingService.listerVolume })
+            volumeOf: { _ in ListingService.listerVolume }, watchParent: { _ in true })
     }
 
     func release() {
@@ -1312,16 +1313,21 @@ private final class GatedWalks: @unchecked Sendable {
     }
 }
 
-/// A pane at a real, watchable folder holding a subfolder `big`, with `walks` as its sizes.
+/// A pane at `/sized`, holding a subfolder `big`, with `walks` as its sizes. Its size batches
+/// wait out their interval on `clock`.
 @MainActor
-private func sizedPane(_ root: String, _ walks: GatedWalks) -> Pane {
+private func sizedPane(_ walks: GatedWalks, clock: ManualClock) -> Pane {
     let pane = PaneFixture(
-        at: root, folders: [root: [folder("big"), file("f")], root + "/big": [file("x")]],
+        at: sizedRoot,
+        folders: [sizedRoot: [folder("big"), file("f")], sizedRoot + "/big": [file("x")]],
         settings: sizedSettings()
     ).pane
+    pane.sizeBatchClock = clock
     pane.folderSizes = walks.service()
     return pane
 }
+
+private let sizedRoot = "/sized"
 
 @MainActor
 private func bigSize(_ pane: Pane) -> Listing.FolderSizeValue? {
@@ -1344,10 +1350,9 @@ private func goBackWithBatchesHeld(_ pane: Pane, to root: String) async -> Listi
 }
 
 @MainActor @Test func aWalkRunningWhenThePaneLeavesFinishesAndItsSizeShowsOnReturn() async throws {
-    let temp = try TemporaryFolder("PaneTests")
-    let root = temp.url.path
+    let root = sizedRoot
     let walks = GatedWalks()
-    let pane = sizedPane(root, walks)
+    let pane = sizedPane(walks, clock: ManualClock())
     await settle { walks.startedPaths == [root + "/big"] }
 
     pane.navigate(to: Location(path: root + "/big"))
@@ -1360,11 +1365,10 @@ private func goBackWithBatchesHeld(_ pane: Pane, to root: String) async -> Listi
 }
 
 @MainActor @Test func keptSizesShowOnARevisitsFirstRows() async throws {
-    let temp = try TemporaryFolder("PaneTests")
-    let root = temp.url.path
+    let root = sizedRoot
     let walks = GatedWalks()
     walks.release()
-    let pane = sizedPane(root, walks)
+    let pane = sizedPane(walks, clock: ManualClock())
     await settle { bigSize(pane) == .size(bytes: 42, isPartial: false) }
 
     pane.navigate(to: Location(path: root + "/big"))
@@ -1374,12 +1378,15 @@ private func goBackWithBatchesHeld(_ pane: Pane, to root: String) async -> Listi
 }
 
 @MainActor @Test func aMarkedSizeShowsOnARevisitsFirstRowsUntilItsWalkReplacesIt() async throws {
-    let temp = try TemporaryFolder("PaneTests")
-    let root = temp.url.path
+    let root = sizedRoot
     let walks = GatedWalks()
     walks.release()
-    let pane = sizedPane(root, walks)
+    let clock = ManualClock()
+    let pane = sizedPane(walks, clock: clock)
     await settle { bigSize(pane) == .size(bytes: 42, isPartial: false) }
+    // The next batch, with the walk again's size, waits out the interval this one started.
+    await settle { clock.waitingSleeps == 1 }
+    clock.advance(by: Pane.sizeBatchInterval)
     pane.navigate(to: Location(path: root + "/big"))
     await settle { pane.location.path == root + "/big" && pane.state.isLoaded }
 

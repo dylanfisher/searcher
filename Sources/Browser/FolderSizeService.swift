@@ -101,6 +101,9 @@ public final class FolderSizeService: Sendable {
     private let volumeOf: @Sendable (String) throws(ListingError) -> VolumeIdentity
     /// The mount table, read without asking any volume.
     private let mountedVolumes: @Sendable () -> [VolumeIdentity]
+    /// Watches the parent of a walked local folder and returns whether it is watched, in place
+    /// of FSEvents; nil watches with FSEvents (`watchParent(of:)`).
+    private let watchParentInstead: (@Sendable (String) -> Bool)?
     /// Owns `queue`; every change to it runs here.
     private let scheduler = DispatchQueue(label: "FolderSizeService", qos: .utility)
     private let queue = Queue()
@@ -116,18 +119,22 @@ public final class FolderSizeService: Sendable {
     }
 
     /// A service that walks with `walk` and finds each folder's volume with `volumeOf` and the
-    /// mount table with `mountedVolumes`, all run on `BlockingCallThread`s.
+    /// mount table with `mountedVolumes`, all run on `BlockingCallThread`s. `watchParent`, when
+    /// given, watches a walked local folder's parent instead of FSEvents, so a test's walks
+    /// don't wait on `fseventsd`.
     init(
         cache: FolderSizeCache, log: @escaping @Sendable (String) -> Void,
         walk: @escaping @Sendable (String, () -> Bool) throws -> TreeSizeWalker.Total,
         volumeOf: @escaping @Sendable (String) throws(ListingError) -> VolumeIdentity,
-        mountedVolumes: @escaping @Sendable () -> [VolumeIdentity] = { VolumeIdentity.mounted() }
+        mountedVolumes: @escaping @Sendable () -> [VolumeIdentity] = { VolumeIdentity.mounted() },
+        watchParent: (@Sendable (String) -> Bool)? = nil
     ) {
         self.cache = cache
         self.log = log
         walkFolder = walk
         self.volumeOf = volumeOf
         self.mountedVolumes = mountedVolumes
+        watchParentInstead = watchParent
     }
 
     /// Asks for the size of the folder at `path` for `pane`. `modified` is the folder's own
@@ -304,7 +311,10 @@ public final class FolderSizeService: Sendable {
                     BlockingCallThread.requireCurrent()
                     Self.throttleDiskReads()
                     // The watch starts before the walk reads, so no change during it goes unseen.
-                    let isWatched = isLocal ? self.watchParent(of: walk.path) : true
+                    let isWatched =
+                        isLocal
+                        ? self.watchParentInstead?(walk.path) ?? self.watchParent(of: walk.path)
+                        : true
                     return (try walkFolder(walk.path) { walk.isCancelled }, isWatched)
                 })
         } catch {
