@@ -1,5 +1,6 @@
 import AppKit
 import Browser
+import TestSupport
 import Testing
 
 @testable import Interface
@@ -9,8 +10,8 @@ private let cmdC = KeyChord("c", modifiers: .command)
 private let palette = WindowCommands.showPalette
 private let goToItem = WindowCommands.goToItem
 
-/// A controller over settings of its own that never shows its window, and the windows it would
-/// have brought forward.
+/// A controller over settings of its own that never shows its window or posts to VoiceOver, and
+/// the windows it would have brought forward.
 @MainActor
 private func controller(
     _ settings: Settings = untouchedSettings()
@@ -18,7 +19,67 @@ private func controller(
     let controller = SettingsWindowController(settings: settings)
     var shown: [NSWindow] = []
     controller.bringForward = { shown.append($0) }
+    controller.shortcuts.postAccessibility = { _, _, _ in }
     return (controller, { shown })
+}
+
+/// Cmd-, in the Settings window isn't the window's own key: it goes on to App ▸ Settings…, which
+/// brings the same window forward again, and leaves it open.
+@MainActor @Test func cmdCommaWithTheWindowKeyKeepsOneWindow() throws {
+    let (controller, shown) = controller()
+    controller.show()
+    let window = try #require(controller.window)
+    let settingsWindows = NSApp.windows.filter { $0 is SettingsWindow }.count
+    var closes = 0
+    let observer = NotificationCenter.default.addObserver(
+        forName: NSWindow.willCloseNotification, object: window, queue: nil
+    ) { _ in MainActor.assumeIsolated { closes += 1 } }
+    defer { NotificationCenter.default.removeObserver(observer) }
+
+    #expect(!window.performKeyEquivalent(with: try keyEvent(",", modifiers: .command)))
+    controller.show()
+
+    #expect(closes == 0)
+    #expect(shown().count == 2)
+    #expect(shown().allSatisfy { $0 === window })
+    #expect(NSApp.windows.filter { $0 is SettingsWindow }.count == settingsWindows)
+}
+
+/// Closing the window while a recorder records ends the recording and removes its monitor.
+@MainActor @Test func closingTheWindowEndsRecording() throws {
+    let (controller, _) = controller()
+    let window = try #require(controller.window)
+    let field = ShortcutRecorderField()
+    window.contentView?.addSubview(field)
+    let installed = KeyMonitor.installed
+    field.startRecording()
+    #expect(KeyMonitor.installed == installed + 1)
+
+    window.close()
+
+    #expect(!field.isRecording)
+    #expect(KeyMonitor.installed == installed)
+}
+
+/// A conflict or a refusal is read out by VoiceOver as it appears.
+@MainActor @Test func aNoticeIsAnnounced() throws {
+    let (controller, _) = controller()
+    let model = controller.shortcuts
+    var announced: [String] = []
+    model.postAccessibility = { _, notification, userInfo in
+        #expect(notification == .announcementRequested)
+        announced.append(userInfo?[.announcement] as? String ?? "")
+    }
+
+    model.record(.chords([cmdP]), for: palette.id, at: .alternate)
+    model.record(.chords([KeyChord("q", modifiers: .command)]), for: palette.id, at: .primary)
+    model.record(
+        .chords([KeyChord("j", modifiers: [.command, .option, .control])]), for: palette.id,
+        at: .alternate)
+
+    #expect(announced.count == 2)
+    #expect(announced.first == "⌘P is used by \(goToItem.title).")
+    #expect(announced.last?.contains("⌘Q") == true)
 }
 
 /// App ▸ Settings… a second time brings the same window forward, not a second one.
@@ -119,7 +180,8 @@ private func controller(
 }
 
 @MainActor @Test func resetGivesARowItsDefaultsAndResetAllEveryRow() throws {
-    let (controller, _) = controller()
+    let defaults = temporarySuite(in: FileManager.default.temporaryDirectory.path)
+    let (controller, _) = controller(Settings(defaults: defaults))
     let model = controller.shortcuts
     let cmdJ = KeyChord("j", modifiers: [.command, .option, .control])
     let cmdL = KeyChord("l", modifiers: [.command, .option, .control])
@@ -134,6 +196,7 @@ private func controller(
     #expect(try row(palette.id).isChanged)
     #expect(try row(goToItem.id).chords == KeyBindings.Chords(primary: nil, alternate: cmdL))
     #expect(model.canResetAll)
+    #expect(defaults.object(forKey: "shortcuts") != nil)
 
     model.reset(goToItem.id)
     #expect(try !row(goToItem.id).isChanged)
@@ -142,6 +205,8 @@ private func controller(
 
     model.resetAll()
     #expect(model.settings.shortcuts.isEmpty)
+    // Reset All deletes the key, the one stored form of "every default".
+    #expect(defaults.object(forKey: "shortcuts") == nil)
     #expect(try row(palette.id).chords.alternate == palette.alternate)
     #expect(!model.canResetAll)
 }
