@@ -154,6 +154,8 @@ focused folder only ([0041](0041-column-model.md), [0096](0096-column-widths.md)
   selected, and the column that entry opens is made new. The old trail's other columns close.
   The new root is taken from the path, as for any new trail, so different roots, such as home
   and `/` for `/Applications`, keep nothing, and the root check corrects the trail as before.
+  A trail whose root the check moved, as a volume mounted outside `/Volumes` moves it, starts
+  at another folder than the path gives, so it keeps nothing on a restart either.
   The kept columns take the sort of the old focused column, as the new ones do, and lose their
   filters, as a navigation clears a filter ([0041](0041-column-model.md)). Their selections are
   no steps of their selection histories, and the trail moves the keys without a step of the
@@ -172,9 +174,9 @@ focused folder only ([0041](0041-column-model.md), [0096](0096-column-widths.md)
   or the restore would wait on a thread hop for each column-mode pane.
 - **Keep a mount table in the service and read it synchronously**: still empty at launch, when
   restores build their trails, so the check is needed anyway.
-- **Ancestors at `.hidden` priority** instead of waiting for the focused column's first update:
-  they would also wait behind other panes' hidden tabs and never get ahead of a hidden load, and
-  the order within the pane would still race on each load's volume read.
+- **Ancestors at `.hidden` priority** instead of waiting for the root check: they would also
+  wait behind other panes' hidden tabs and never get ahead of a hidden load, and the order within
+  the pane would still race on each load's volume read.
 - **Reuse the old trail's columns on a navigation** within the same tree, so the folders above
   aren't listed again: a navigation closes every column and clears filters
   ([0041](0041-column-model.md)); keeping some would need rules for their filters, sorts and
@@ -190,10 +192,13 @@ focused folder only ([0041](0041-column-model.md), [0096](0096-column-widths.md)
 Building a trail N folders deep lists N folders instead of one, makes N column controllers and
 tables on the main thread instead of one, and starts N folder monitors. The folders above a
 typical one (`/`, `/Users`, `/Users/me`, `~/projects`) are small, and each read runs off the main
-thread on the service's background slots, after the focused column's first update, so the
-focused column's first rows come as they did. Each extra column costs the main thread what → into
+thread on the service's background slots. They start once the root check answers, so they can
+compete with the focused folder's first rows for the service's slots; the focused folder's load
+is still asked first, at `.focused` priority when the pane has the keys. Each extra column costs the main thread what → into
 a loaded folder costs (B6), all on the frame that builds the trail; a trail eight deep makes seven
-of them at once. No bench was run for this step. Benches to run: `./scripts/bench --ui` (the
+of them at once. No bench was run for this step, nor for the change that stopped the columns
+above waiting for the focused column's first update, which B6 and B10 have to be run again for.
+Benches to run: `./scripts/bench --ui` (the
 column-view B6 cases and B10), and `./scripts/bench --ui --scenario restored-session` (B1, 500 ms;
 its panes are list panes, so it measures the change only if a column-mode pane is added to the
 saved session). A restore of a column-mode pane asks its ancestors' loads after every other
