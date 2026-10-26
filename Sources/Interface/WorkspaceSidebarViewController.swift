@@ -2,19 +2,21 @@ import AppKit
 import Browser
 import UniformTypeIdentifiers
 
-/// A window's sidebar: a source list, as Finder's sidebar is, with two groups. Favorites holds
-/// the app's `Favorites`, and Workspaces a row per saved workspace in `WorkspaceList.saved`
-/// order; `Settings` says which groups show. A dot marks a workspace whose window is open, as
+/// A window's sidebar: a source list, as Finder's sidebar is, with three groups. Favorites holds
+/// the app's `Favorites`, Locations the mounted volumes in `SidebarVolumes`, and Workspaces a row
+/// per saved workspace in `WorkspaceList.saved` order; `Settings` says which groups show. A dot marks a workspace whose window is open, as
 /// the Dock marks a running app. The window's own workspace is selected while it is listed, as
 /// Finder's sidebar selects the window's place.
 ///
-/// A click on a favorite opens it in the window's focused pane, and a click on a workspace opens
-/// it, or focuses its window if open; with the keys in the list, the arrow keys move the
+/// A click on a favorite or a volume opens it in the window's focused pane, and a click on a
+/// workspace opens it, or focuses its window if open; a volume's eject button, or Eject in its
+/// context menu, ejects it, and an alert says why when that fails; with the keys in the list, the arrow keys move the
 /// selection and Return opens the selected row. Esc gives the keys back (`onEscape`). Files and
 /// folders dropped between the favorites are added there, a favorite dragged within the group
 /// moves, and one dragged out of the sidebar, or removed from its context menu, leaves it. The
-/// rows follow the lists and the settings as they change, from any window
-/// (docs/decisions/0086-workspace-sidebar.md, docs/decisions/0107-sidebar-favorites.md).
+/// rows follow the lists, the mounts and the settings as they change, from any window
+/// (docs/decisions/0086-workspace-sidebar.md, docs/decisions/0107-sidebar-favorites.md,
+/// docs/decisions/0108-sidebar-locations.md).
 @MainActor
 final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataSource,
     NSOutlineViewDelegate
@@ -30,17 +32,34 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     var openFavorite: @MainActor (String) -> Void = { path in
         preconditionFailure("this sidebar can't open the favorite \(path)")
     }
+    /// Shows the volume mounted at a path. The window sets it; a sidebar without it traps when
+    /// a volume is opened.
+    var openVolume: @MainActor (String) -> Void = { path in
+        preconditionFailure("this sidebar can't open the volume at \(path)")
+    }
+    /// Shows an alert about the sidebar's window: as a sheet on it, or app-modal while the
+    /// sidebar has no window. Tests replace it.
+    lazy var showAlert: @MainActor (NSAlert) -> Void = { [weak self] alert in
+        guard let window = self?.view.window else {
+            alert.runModal()
+            return
+        }
+        alert.beginSheetModal(for: window)
+    }
     /// Takes the keys back from the list, on Esc.
     var onEscape: @MainActor () -> Void = {}
     private let workspace: Workspace
     private let list: WorkspaceList
     private let favorites: Favorites
+    private let volumes: SidebarVolumes
     private let settings: Settings
     /// What the rows show, as last read from the lists and the settings.
-    private var shown = Shown(groups: [], favorites: [], saved: [])
+    private var shown = Shown(groups: [], favorites: [], volumes: [], saved: [])
     private var favoriteRows: [FavoriteRow] = []
+    private var volumeRows: [VolumeRow] = []
     private var rows: [Row] = []
     private let favoritesGroup = Group(title: "Favorites")
+    private let locationsGroup = Group(title: "Locations")
     private let workspacesGroup = Group(title: "Workspaces")
     /// The paths of the favorites a drag from this list carries, until it ends.
     private var draggedFavorites: [String] = []
@@ -71,6 +90,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     private struct Shown: Equatable {
         let groups: [ObjectIdentifier]
         let favorites: [Favorites.Item]
+        let volumes: [SidebarVolume]
         let saved: [WorkspaceList.Saved]
     }
 
@@ -92,6 +112,15 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         }
     }
 
+    /// A volume's row item.
+    private final class VolumeRow: NSObject {
+        let volume: SidebarVolume
+
+        init(_ volume: SidebarVolume) {
+            self.volume = volume
+        }
+    }
+
     /// A saved workspace's row item.
     private final class Row: NSObject {
         let saved: WorkspaceList.Saved
@@ -101,9 +130,11 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         }
     }
 
-    /// A row: its icon, its name, and, for a workspace, the dot when its window is open.
+    /// A row: its icon, its name, and, for a workspace, the dot when its window is open, or, for
+    /// a volume that can be ejected, the eject button.
     final class Cell: NSTableCellView {
         let openMark = NSImageView()
+        let ejectButton = NSButton()
 
         /// Whether the dot shows.
         var showsOpen: Bool { !openMark.isHidden }
@@ -160,16 +191,24 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     /// What a favorite dragged within the sidebars carries: its path.
     static let favoriteType = NSPasteboard.PasteboardType("com.dylanfisher.searcher.favorite")
     static let removeTitle = "Remove from Sidebar"
+
+    /// The title of the context menu item that ejects the volume `name`, as Finder's.
+    static func ejectTitle(_ name: String) -> String { "Eject “\(name)”" }
     private static let cellID = NSUserInterfaceItemIdentifier("workspace")
     private static let favoriteCellID = NSUserInterfaceItemIdentifier("favorite")
+    private static let volumeCellID = NSUserInterfaceItemIdentifier("volume")
     private static let groupCellID = NSUserInterfaceItemIdentifier("group")
 
-    /// A sidebar of `favorites` and `list`'s saved workspaces, in the window of `workspace`,
-    /// showing the groups `settings` says.
-    init(workspace: Workspace, list: WorkspaceList, favorites: Favorites, settings: Settings) {
+    /// A sidebar of `favorites`, `volumes` and `list`'s saved workspaces, in the window of
+    /// `workspace`, showing the groups `settings` says.
+    init(
+        workspace: Workspace, list: WorkspaceList, favorites: Favorites, volumes: SidebarVolumes,
+        settings: Settings
+    ) {
         self.workspace = workspace
         self.list = list
         self.favorites = favorites
+        self.volumes = volumes
         self.settings = settings
         super.init(nibName: nil, bundle: nil)
     }
@@ -214,26 +253,33 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         Self.all.append(WeakSidebar(sidebar: self))
         list.observeSaved(for: self) { [weak self] in self?.showList() }
         favorites.observe(for: self) { [weak self] in self?.showList() }
+        volumes.observe(for: self) { [weak self] in self?.showList() }
         settings.observe(for: self) { [weak self] in self?.showList() }
     }
 
-    /// Shows the groups the settings show, with the favorites and saved workspaces, if any of
-    /// them changed. A group that comes back shows expanded. With the keys in the list, the
+    /// Shows the groups the settings show, with the favorites, volumes and saved workspaces, if
+    /// any of them changed. A group that comes back shows expanded. With the keys in the list, the
     /// selection stays on the row it was on; otherwise it goes to the window's own workspace.
     private func showList() {
         var groups: [Group] = []
         if settings.showsFavoritesInSidebar { groups.append(favoritesGroup) }
+        // As Finder's, the group shows only while it has a volume to list.
+        if settings.showsLocationsInSidebar, !volumes.volumes.isEmpty {
+            groups.append(locationsGroup)
+        }
         if settings.showsWorkspacesInSidebar { groups.append(workspacesGroup) }
         let now = Shown(
             groups: groups.map(ObjectIdentifier.init), favorites: favorites.items,
-            saved: list.saved)
+            volumes: volumes.volumes, saved: list.saved)
         guard now != shown else { return }
         let selected = outlineView.item(atRow: outlineView.selectedRow)
         let selectedID = (selected as? Row)?.saved.id
         let selectedPath = (selected as? FavoriteRow)?.item.path
+        let selectedVolume = (selected as? VolumeRow)?.volume.mountPoint
         let added = groups.filter { !shown.groups.contains(ObjectIdentifier($0)) }
         shown = now
         favoriteRows = now.favorites.map(FavoriteRow.init)
+        volumeRows = now.volumes.map(VolumeRow.init)
         rows = now.saved.map(Row.init)
         outlineView.reloadData()
         for group in added {
@@ -242,6 +288,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         if outlineView.window?.firstResponder === outlineView {
             if let selectedID, select(selectedID) { return }
             if let selectedPath, selectFavorite(selectedPath) { return }
+            if let selectedVolume, selectVolume(selectedVolume) { return }
         }
         selectOwnWorkspace()
     }
@@ -249,7 +296,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     /// The groups shown, top to bottom.
     private var groups: [Group] {
         shown.groups.compactMap { id in
-            [favoritesGroup, workspacesGroup].first { ObjectIdentifier($0) == id }
+            [favoritesGroup, locationsGroup, workspacesGroup].first { ObjectIdentifier($0) == id }
         }
     }
 
@@ -272,6 +319,14 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         return selectRow(of: row)
     }
 
+    /// Selects the row of the volume mounted at `mountPoint`; false when no row shows it.
+    private func selectVolume(_ mountPoint: String) -> Bool {
+        guard let row = volumeRows.first(where: { $0.volume.mountPoint == mountPoint }) else {
+            return false
+        }
+        return selectRow(of: row)
+    }
+
     private func selectRow(of item: Any) -> Bool {
         let index = outlineView.row(forItem: item)
         guard index >= 0 else { return false }
@@ -291,15 +346,26 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         switch outlineView.item(atRow: index) {
         case let row as Row: open(row.saved.id)
         case let row as FavoriteRow: openFavorite(row.item.path)
+        case let row as VolumeRow: openVolume(row.volume.mountPoint)
         default: break
         }
     }
 
     // MARK: Context menu
 
-    /// The context menu for a right-click on `row`: Remove from Sidebar for a favorite, none for
-    /// any other row.
+    /// The context menu for a right-click on `row`: Remove from Sidebar for a favorite, Eject
+    /// for a volume that can be ejected, none for any other row.
     func contextMenu(forRow row: Int) -> NSMenu? {
+        if let volume = (outlineView.item(atRow: row) as? VolumeRow)?.volume, volume.canEject {
+            let menu = NSMenu()
+            let item = NSMenuItem(
+                title: Self.ejectTitle(volume.name), action: #selector(ejectFromMenu(_:)),
+                keyEquivalent: "")
+            item.target = self
+            item.representedObject = volume.mountPoint
+            menu.addItem(item)
+            return menu
+        }
         guard let favorite = outlineView.item(atRow: row) as? FavoriteRow else { return nil }
         let menu = NSMenu()
         let item = NSMenuItem(
@@ -317,12 +383,51 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         favorites.remove(path)
     }
 
+    // MARK: Ejecting
+
+    @objc private func ejectFromMenu(_ sender: NSMenuItem) {
+        guard let mountPoint = sender.representedObject as? String else {
+            preconditionFailure("Eject has no volume")
+        }
+        eject(mountPoint)
+    }
+
+    @objc private func ejectClicked(_ sender: NSButton) {
+        guard let row = outlineView.item(atRow: outlineView.row(for: sender)) as? VolumeRow else {
+            preconditionFailure("an eject button sits outside a volume's row")
+        }
+        eject(row.volume.mountPoint)
+    }
+
+    /// Ejects the volume at `mountPoint` off the main thread, and shows why when that fails, as
+    /// Finder's alert does. A volume that left the list meanwhile is left alone.
+    private func eject(_ mountPoint: String) {
+        guard let volume = volumes.volumes.first(where: { $0.mountPoint == mountPoint }) else {
+            return
+        }
+        Task { [weak self, volumes] in
+            do throws(SidebarVolume.EjectFailure) {
+                try await volumes.eject(volume)
+            } catch {
+                self?.showAlert(Self.ejectFailedAlert(name: volume.name, reason: error.reason))
+            }
+        }
+    }
+
+    /// The alert saying the volume `name` wasn't ejected, and the system's `reason`.
+    static func ejectFailedAlert(name: String, reason: String) -> NSAlert {
+        Dialog.alert(
+            message: "The disk “\(name)” wasn’t ejected.", information: reason, buttons: ["OK"])
+    }
+
     // MARK: Data source
 
     func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
         switch item {
         case nil: groups.count
-        case let group as Group: group === favoritesGroup ? favoriteRows.count : rows.count
+        case let group as Group where group === favoritesGroup: favoriteRows.count
+        case let group as Group where group === locationsGroup: volumeRows.count
+        case is Group: rows.count
         default: 0
         }
     }
@@ -331,6 +436,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         switch item {
         case nil: groups[index]
         case let group as Group where group === favoritesGroup: favoriteRows[index]
+        case let group as Group where group === locationsGroup: volumeRows[index]
         default: rows[index]
         }
     }
@@ -490,6 +596,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         switch item {
         case let group as Group: return groupCell(group.title)
         case let row as FavoriteRow: return favoriteCell(row.item)
+        case let row as VolumeRow: return volumeCell(row.volume)
         case let row as Row: return workspaceCell(row.saved)
         default: preconditionFailure("the sidebar has no row for \(item)")
         }
@@ -502,6 +609,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         cell.imageView?.image = symbol("macwindow", description: "Workspace")
         cell.textField?.stringValue = saved.name
         cell.openMark.isHidden = !saved.isOpen
+        cell.ejectButton.isHidden = true
         cell.setAccessibilityLabel(saved.isOpen ? "\(saved.name), open" : saved.name)
         return cell
     }
@@ -517,7 +625,25 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         cell.textField?.stringValue = item.name
         cell.textField?.textColor = isMissing ? .tertiaryLabelColor : .labelColor
         cell.openMark.isHidden = true
+        cell.ejectButton.isHidden = true
         cell.setAccessibilityLabel(isMissing ? "\(item.name), not found" : item.name)
+        return cell
+    }
+
+    /// A volume's row: a symbol for a disk or a share, its name, and the eject button when it
+    /// can be ejected. The symbol needs no read of the volume.
+    private func volumeCell(_ volume: SidebarVolume) -> Cell {
+        let cell =
+            outlineView.makeView(withIdentifier: Self.volumeCellID, owner: nil) as? Cell
+            ?? makeCell(Self.volumeCellID)
+        cell.imageView?.image =
+            volume.kind == .network
+            ? symbol("externaldrive.connected.to.line.below", description: "Server")
+            : symbol("externaldrive", description: "Disk")
+        cell.textField?.stringValue = volume.name
+        cell.openMark.isHidden = true
+        cell.ejectButton.isHidden = !volume.canEject
+        cell.setAccessibilityLabel(volume.name)
         return cell
     }
 
@@ -575,7 +701,15 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         mark.contentTintColor = .secondaryLabelColor
         // The cell's label says "open"; the dot alone adds nothing for VoiceOver.
         mark.setAccessibilityElement(false)
-        for view in [icon, label, mark] {
+        let eject = cell.ejectButton
+        eject.image = symbol("eject", description: "Eject")
+        eject.isBordered = false
+        eject.imagePosition = .imageOnly
+        eject.contentTintColor = .secondaryLabelColor
+        eject.target = self
+        eject.action = #selector(ejectClicked(_:))
+        eject.isHidden = true
+        for view in [icon, label, mark, eject] {
             add(view, to: cell)
         }
         cell.imageView = icon
@@ -590,6 +724,9 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
             mark.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 6),
             mark.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
             mark.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            eject.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 4),
+            eject.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4),
+            eject.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
         ])
         return cell
     }

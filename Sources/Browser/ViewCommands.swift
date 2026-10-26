@@ -16,6 +16,9 @@ public enum ViewCommands: CommandSet {
     public static let toggleSidebarFavorites = Command(
         id: CommandID("view.toggleSidebarFavorites"), title: "Show Favorites in Sidebar",
         chords: [])
+    public static let toggleSidebarLocations = Command(
+        id: CommandID("view.toggleSidebarLocations"), title: "Show Locations in Sidebar",
+        chords: [])
     public static let toggleSidebarWorkspaces = Command(
         id: CommandID("view.toggleSidebarWorkspaces"), title: "Show Workspaces in Sidebar",
         chords: [])
@@ -68,6 +71,9 @@ public enum ViewCommands: CommandSet {
             CommandBinding(
                 toggleSidebarFavorites, isChecked: { $0.showsFavoritesInSidebar },
                 run: { $0.pane.settings.showsFavoritesInSidebar.toggle() }),
+            CommandBinding(
+                toggleSidebarLocations, isChecked: { $0.showsLocationsInSidebar },
+                run: { $0.pane.settings.showsLocationsInSidebar.toggle() }),
             CommandBinding(
                 toggleSidebarWorkspaces, isChecked: { $0.showsWorkspacesInSidebar },
                 run: { $0.pane.settings.showsWorkspacesInSidebar.toggle() }),

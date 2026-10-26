@@ -24,6 +24,7 @@ public final class Settings {
         case newWindowSize
         case favorites
         case showsFavoritesInSidebar
+        case showsLocationsInSidebar
         case showsWorkspacesInSidebar
     }
 
@@ -200,6 +201,15 @@ public final class Settings {
         }
     }
 
+    /// Whether the sidebar shows its Locations group. On by default.
+    public var showsLocationsInSidebar: Bool {
+        didSet {
+            store(
+                showsLocationsInSidebar, for: .showsLocationsInSidebar,
+                changed: showsLocationsInSidebar != oldValue)
+        }
+    }
+
     /// Whether the sidebar shows its Workspaces group. On by default.
     public var showsWorkspacesInSidebar: Bool {
         didSet {
@@ -289,6 +299,7 @@ public final class Settings {
         newWindowSize = Self.windowSize(in: defaults) ?? Self.defaultWindowSize
         favorites = Self.favorites(in: defaults) ?? Favorite.defaults(home: home)
         showsFavoritesInSidebar = Self.bool(.showsFavoritesInSidebar, in: defaults) ?? true
+        showsLocationsInSidebar = Self.bool(.showsLocationsInSidebar, in: defaults) ?? true
         showsWorkspacesInSidebar = Self.bool(.showsWorkspacesInSidebar, in: defaults) ?? true
     }
 

@@ -27,8 +27,9 @@ private final class StubResolver: @unchecked Sendable {
 
 /// A list of two open workspaces, "beta" and "Alpha", one closed saved workspace, "Gamma", and
 /// an unnamed open one, which is the window's own; Finder's default favorites for the home folder
-/// `/Users/u`, found by a stub; and a sidebar for that window that is never shown, with the IDs
-/// and favorites it opens counted.
+/// `/Users/u`, found by a stub; no volumes until a test mounts some; and a sidebar for that
+/// window that is never shown, with the IDs, favorites and volumes it opens and the alerts it
+/// shows recorded.
 @MainActor
 private final class Fixture {
     let list = WorkspaceList()
@@ -37,6 +38,10 @@ private final class Fixture {
     let resolver = StubResolver()
     let favorites: Favorites
     var openedFavorites: [String] = []
+    let mounts = StubSidebarVolumes()
+    let volumes: SidebarVolumes
+    var openedVolumes: [String] = []
+    var alerts: [NSAlert] = []
     /// What the sidebar is told about whether a drag that ended was cancelled.
     var dragCancelled = false
     let own: Workspace
@@ -71,10 +76,13 @@ private final class Fixture {
         try list.addSaved(gamma)
         let resolver = resolver
         favorites = Favorites(settings: settings) { resolver.resolve($0) }
+        volumes = mounts.list()
         sidebar = WorkspaceSidebarViewController(
-            workspace: own, list: list, favorites: favorites, settings: settings)
+            workspace: own, list: list, favorites: favorites, volumes: volumes, settings: settings)
         sidebar.open = { [weak self] id in self?.opened.append(id) }
         sidebar.openFavorite = { [weak self] path in self?.openedFavorites.append(path) }
+        sidebar.openVolume = { [weak self] path in self?.openedVolumes.append(path) }
+        sidebar.showAlert = { [weak self] alert in self?.alerts.append(alert) }
         sidebar.dragWasCancelled = { [weak self] _ in self?.dragCancelled ?? false }
         // The window is never ordered in; the sidebar takes it as shown.
         sidebar.windowIsShown = { _ in true }
@@ -87,7 +95,25 @@ private final class Fixture {
     /// Another sidebar over the same lists and settings, as another window has.
     func makeSidebar() -> WorkspaceSidebarViewController {
         WorkspaceSidebarViewController(
-            workspace: own, list: list, favorites: favorites, settings: settings)
+            workspace: own, list: list, favorites: favorites, volumes: volumes, settings: settings)
+    }
+
+    /// Mounts `volumes` in place of those mounted, as the system reports a mount at a mount point
+    /// no other test uses, and waits for the rows to show them.
+    func mount(_ volumes: [SidebarVolume]) async {
+        mounts.set(volumes)
+        VolumeEvents.didMount(at: "/sidebar-test-\(UUID().uuidString)")
+        let names = volumes.filter(\.isShown).map(\.name)
+        await settle { (try? self.volumeNames) == names }
+    }
+
+    /// Each volume's row's cell, top to bottom.
+    var volumeCells: [WorkspaceSidebarViewController.Cell] {
+        get throws { try cells(of: "volume", in: outline) }
+    }
+
+    var volumeNames: [String] {
+        get throws { try volumeCells.map { $0.textField?.stringValue ?? "" } }
     }
 
     var outline: NSOutlineView { sidebar.outlineView }
@@ -512,4 +538,147 @@ private final class Fixture {
     let downloads = try #require(
         try fixture.favoriteCells.first { $0.textField?.stringValue == "Downloads" })
     #expect(downloads.textField?.textColor == .tertiaryLabelColor)
+}
+
+// MARK: Locations
+
+private let startup = SidebarVolume(
+    mountPoint: "/", name: "Macintosh HD", kind: .local, isRootFileSystem: true, isInternal: true)
+private let usb = SidebarVolume(
+    mountPoint: "/Volumes/USB", name: "USB", kind: .local, isInternal: false)
+private let image = SidebarVolume(mountPoint: "/Volumes/Image", name: "Image", kind: .local)
+private let share = SidebarVolume(mountPoint: "/Volumes/main", name: "main", kind: .network)
+
+@MainActor @Test func locationsListsTheMountedVolumesBetweenFavoritesAndWorkspaces() async throws {
+    let fixture = try Fixture()
+    #expect(fixture.groupTitles == ["Favorites", "Workspaces"])
+
+    await fixture.mount([startup, usb, image, share])
+
+    #expect(fixture.groupTitles == ["Favorites", "Locations", "Workspaces"])
+    #expect(try fixture.volumeNames == ["USB", "Image", "main"])
+    #expect(try fixture.volumeCells.allSatisfy { !$0.ejectButton.isHidden && !$0.showsOpen })
+    #expect(try fixture.volumeCells.allSatisfy { $0.imageView?.image != nil })
+    #expect(try fixture.row(of: "u") < (try fixture.row(of: "USB")))
+    #expect(try fixture.row(of: "main") < (try fixture.row(of: "Alpha")))
+    #expect(try fixture.cells.allSatisfy { $0.ejectButton.isHidden })
+}
+
+@MainActor @Test func mountsAndUnmountsShowInEveryWindowsLocations() async throws {
+    let fixture = try Fixture()
+    let other = fixture.makeSidebar()
+    other.view.frame = NSRect(x: 0, y: 0, width: 200, height: 300)
+
+    await fixture.mount([usb, share])
+    #expect(
+        try fixture.cells(of: "volume", in: other.outlineView).map {
+            $0.textField?.stringValue ?? ""
+        } == ["USB", "main"])
+
+    fixture.mounts.set([share])
+    VolumeEvents.didUnmount(at: "/sidebar-test-\(UUID().uuidString)")
+    await settle { (try? fixture.volumeNames) == ["main"] }
+    #expect(try fixture.cells(of: "volume", in: other.outlineView).count == 1)
+
+    await fixture.mount([])
+    #expect(fixture.groupTitles == ["Favorites", "Workspaces"])
+}
+
+@MainActor @Test func returnOnAVolumeShowsIt() async throws {
+    let fixture = try Fixture()
+    await fixture.mount([usb, share])
+    fixture.outline.selectRowIndexes([try fixture.row(of: "main")], byExtendingSelection: false)
+
+    fixture.outline.keyDown(with: try keyEvent("\r"))
+
+    #expect(fixture.openedVolumes == ["/Volumes/main"])
+    #expect(fixture.openedFavorites.isEmpty && fixture.opened.isEmpty)
+}
+
+@MainActor @Test func theEjectButtonEjectsOffTheMainThreadAndAlertsWhenItFails() async throws {
+    let fixture = try Fixture()
+    await fixture.mount([usb, share])
+
+    try #require(fixture.volumeCells.first).ejectButton.performClick(nil)
+    await settle { fixture.mounts.ejects.count == 1 }
+    #expect(fixture.mounts.ejects.map(\.mountPoint) == ["/Volumes/USB"])
+    #expect(fixture.mounts.ejects.map(\.onBlockingThread) == [true])
+    #expect(fixture.openedVolumes.isEmpty)
+
+    fixture.mounts.fail(with: "The volume is in use by another app.")
+    try #require(fixture.volumeCells.last).ejectButton.performClick(nil)
+    await settle { !fixture.alerts.isEmpty }
+    #expect(fixture.mounts.ejects.map(\.mountPoint) == ["/Volumes/USB", "/Volumes/main"])
+    let alert = try #require(fixture.alerts.first)
+    #expect(alert.messageText == "The disk “main” wasn’t ejected.")
+    #expect(alert.informativeText == "The volume is in use by another app.")
+    #expect(fixture.alerts.count == 1)
+}
+
+@MainActor @Test func aVolumesContextMenuEjectsIt() async throws {
+    let fixture = try Fixture()
+    await fixture.mount([usb])
+
+    let menu = try #require(fixture.sidebar.contextMenu(forRow: try fixture.row(of: "USB")))
+    let item = try #require(menu.items.first)
+    #expect(menu.items.count == 1)
+    #expect(item.title == "Eject “USB”")
+    _ = (item.target as? NSObject)?.perform(item.action, with: item)
+
+    await settle { fixture.mounts.ejects.count == 1 }
+    #expect(fixture.mounts.ejects.map(\.mountPoint) == ["/Volumes/USB"])
+    #expect(fixture.alerts.isEmpty)
+}
+
+@MainActor @Test func theLocationsSettingHidesTheGroupAndShowsItAgainExpanded() async throws {
+    let fixture = try Fixture()
+    await fixture.mount([usb])
+
+    fixture.settings.showsLocationsInSidebar = false
+    #expect(fixture.groupTitles == ["Favorites", "Workspaces"])
+    #expect(try fixture.volumeCells.isEmpty)
+
+    fixture.settings.showsLocationsInSidebar = true
+    #expect(fixture.groupTitles == ["Favorites", "Locations", "Workspaces"])
+    #expect(try fixture.volumeNames == ["USB"])
+}
+
+@MainActor @Test func theArrowKeysCrossFromTheFavoritesThroughLocationsToTheWorkspaces()
+    async throws
+{
+    let fixture = try Fixture()
+    await fixture.mount([usb, share])
+    fixture.outline.selectRowIndexes([try fixture.row(of: "u")], byExtendingSelection: false)
+    let down = try keyEvent(functionKey(NSDownArrowFunctionKey), modifiers: arrowFlags)
+    let up = try keyEvent(functionKey(NSUpArrowFunctionKey), modifiers: arrowFlags)
+
+    fixture.outline.keyDown(with: down)
+    #expect(fixture.outline.selectedRow == (try fixture.row(of: "USB")))
+    fixture.outline.keyDown(with: down)
+    fixture.outline.keyDown(with: down)
+    #expect(fixture.outline.selectedRow == (try fixture.row(of: "Alpha")))
+    fixture.outline.keyDown(with: up)
+    #expect(fixture.outline.selectedRow == (try fixture.row(of: "main")))
+    fixture.outline.keyDown(with: up)
+    fixture.outline.keyDown(with: up)
+    #expect(fixture.outline.selectedRow == (try fixture.row(of: "u")))
+    #expect(fixture.openedVolumes.isEmpty && fixture.openedFavorites.isEmpty)
+    #expect(fixture.mounts.ejects.isEmpty)
+}
+
+@MainActor @Test func aCommandChordFromAVolumeRowGoesToThePane() async throws {
+    let fixture = try Fixture()
+    await fixture.mount([usb])
+    fixture.outline.selectRowIndexes([try fixture.row(of: "USB")], byExtendingSelection: false)
+    var passed: [NSEvent] = []
+    fixture.sidebar.outlineView.passKey = { event in
+        passed.append(event)
+        return true
+    }
+
+    fixture.outline.keyDown(with: try keyEvent("o", modifiers: .command))
+
+    #expect(passed.count == 1)
+    #expect(fixture.outline.selectedRow == (try fixture.row(of: "USB")))
+    #expect(fixture.openedVolumes.isEmpty)
 }
