@@ -8,6 +8,14 @@ import Testing
 
 @testable import Interface
 
+/// A window that is never shown but says it is key, or not, as a test sets it, so AppKit draws
+/// its first responder's selection as in the key window.
+@MainActor
+private final class KeyWindow: NSWindow {
+    var isKey = true
+    override var isKeyWindow: Bool { isKey }
+}
+
 /// A pane over a real temporary folder in a window that is never shown, its list's table with the
 /// keys, and a queue of its own. The app has no queue for the pane's context to pass yet, so the
 /// tables run the file commands with a context that has this one, and Rename starts the field
@@ -15,7 +23,7 @@ import Testing
 @MainActor
 private final class Fixture {
     let folder: TemporaryFolder
-    let window = NSWindow(
+    let window = KeyWindow(
         contentRect: NSRect(x: 0, y: 0, width: 800, height: 400), styleMask: [.titled],
         backing: .buffered, defer: true)
     let pane: Pane
@@ -149,19 +157,208 @@ private let returnKey = "\r"
     #expect(fixture.field.isEditing)
 }
 
-/// Finder shows the field at once with a plain thin border; a focus ring would animate in.
-@MainActor @Test func theFieldHasNoFocusRingAndAPlainBorder() async throws {
+/// The row view and name cell of `name`'s row in `list`, laid out as on screen.
+@MainActor
+private func nameRow(_ name: String, in list: ListingViewController) throws
+    -> (row: NSTableRowView, cell: NSTableCellView)
+{
+    list.view.window?.contentView?.layoutSubtreeIfNeeded()
+    list.tableView.layoutSubtreeIfNeeded()
+    let row = try #require(list.listing?.row(named: name))
+    let rowView = try #require(list.tableView.rowView(atRow: row, makeIfNecessary: false))
+    // The name cell is the one with the icon.
+    let cells = (0..<rowView.numberOfColumns).compactMap {
+        rowView.view(atColumn: $0) as? NSTableCellView
+    }
+    let cell = try #require(cells.first { $0.imageView != nil })
+    return (rowView, cell)
+}
+
+/// As Finder's: the text sits where the name's label is, in its font, with no border, bezel,
+/// background or focus ring, and the label under it hides so the old name doesn't show through.
+@MainActor
+private func expectFieldOverItsLabel(
+    _ rename: RenameFieldController, in list: ListingViewController, name: String
+) throws {
+    let (_, cell) = try nameRow(name, in: list)
+    let label = try #require(cell.textField)
+    let field = rename.field
+    #expect(field.focusRingType == .none)
+    #expect(!field.isBezeled)
+    #expect(!field.isBordered)
+    #expect(!field.drawsBackground)
+    #expect(field.font == label.font)
+    let table = list.tableView
+    #expect(
+        table.convert(field.frame, from: field.superview) == table.convert(label.frame, from: cell))
+    #expect(label.isHidden)
+}
+
+@MainActor @Test func theFieldSitsBorderlessOverTheNamesLabelInTheList() async throws {
     let fixture = try await Fixture("song.flac")
     defer { fixture.stop() }
     await fixture.select("song.flac")
 
     try fixture.press(returnKey)
 
-    let field = fixture.field.field
-    #expect(field.focusRingType == .none)
-    #expect(!field.isBezeled)
-    #expect(field.isBordered)
-    #expect(field.drawsBackground)
+    let list = fixture.controller.listingViewController
+    try expectFieldOverItsLabel(fixture.field, in: list, name: "song.flac")
+    try fixture.send(#selector(NSResponder.cancelOperation(_:)))
+    #expect(try nameRow("song.flac", in: list).cell.textField?.isHidden == false)
+}
+
+/// A folder's name in a column ends before its chevron, and so does the field.
+@MainActor @Test func theFieldSitsBorderlessOverAFoldersLabelInAColumn() async throws {
+    let fixture = try await Fixture("song.flac")
+    defer { fixture.stop() }
+    try FileManager.default.createDirectory(
+        at: fixture.folder.url.appending(path: "Stuff"), withIntermediateDirectories: false)
+    await settle { fixture.pane.state.listing?.row(named: "Stuff") != nil }
+    let column = try await showColumns(fixture)
+    await fixture.select("Stuff")
+
+    try fixture.press(returnKey)
+
+    #expect(column.renameField.isEditing)
+    try expectFieldOverItsLabel(column.renameField, in: column, name: "Stuff")
+}
+
+/// Finder keeps the selected row in the accent color while its name is edited, the name white
+/// on it; the table no longer has the keys, so AppKit alone would draw the row grey.
+@MainActor @Test func theRowStaysEmphasizedWhileItsNameIsEdited() async throws {
+    let fixture = try await Fixture("song.flac", "other.txt")
+    defer { fixture.stop() }
+    await fixture.select("song.flac")
+    let list = fixture.controller.listingViewController
+
+    try fixture.press(returnKey)
+
+    let (rowView, _) = try nameRow("song.flac", in: list)
+    #expect(rowView.isSelected)
+    #expect(rowView.isEmphasized)
+    #expect(rowView.interiorBackgroundStyle == .emphasized)
+    #expect(fixture.field.field.textColor == .alternateSelectedControlTextColor)
+    #expect(try fixture.editor().insertionPointColor == .alternateSelectedControlTextColor)
+    let other = try nameRow("other.txt", in: list).row
+    #expect(other.interiorBackgroundStyle == .normal)
+}
+
+@MainActor @Test func aColumnsRowStaysEmphasizedWhileItsNameIsEdited() async throws {
+    let fixture = try await Fixture("song.flac")
+    defer { fixture.stop() }
+    let column = try await showColumns(fixture)
+    await fixture.select("song.flac")
+
+    try fixture.press(returnKey)
+
+    let (rowView, _) = try nameRow("song.flac", in: column)
+    #expect(rowView.isEmphasized)
+    #expect(column.renameField.field.textColor == .alternateSelectedControlTextColor)
+}
+
+/// In a window that isn't key the row is drawn grey, as AppKit draws a selection there, and
+/// the name in the label color; it turns back when the window is key again.
+@MainActor @Test func theRowIsNotEmphasizedWhileTheWindowIsNotKey() async throws {
+    let fixture = try await Fixture("song.flac")
+    defer { fixture.stop() }
+    await fixture.select("song.flac")
+    let list = fixture.controller.listingViewController
+    try fixture.press(returnKey)
+    let rowView = try nameRow("song.flac", in: list).row
+
+    fixture.window.isKey = false
+    NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: fixture.window)
+
+    #expect(!rowView.isEmphasized)
+    #expect(fixture.field.field.textColor == .labelColor)
+    #expect(try fixture.editor().insertionPointColor == .labelColor)
+
+    fixture.window.isKey = true
+    NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: fixture.window)
+
+    #expect(rowView.isEmphasized)
+    #expect(fixture.field.field.textColor == .alternateSelectedControlTextColor)
+}
+
+/// The row lets AppKit's emphasis back once the field closes.
+@MainActor @Test func theRowKeepsNoEmphasisOnceTheFieldCloses() async throws {
+    let fixture = try await Fixture("song.flac")
+    defer { fixture.stop() }
+    await fixture.select("song.flac")
+    let list = fixture.controller.listingViewController
+    try fixture.press(returnKey)
+    let rowView = try nameRow("song.flac", in: list).row
+    #expect(rowView.isEmphasized)
+
+    try fixture.send(#selector(NSResponder.cancelOperation(_:)))
+
+    // A window that is never shown draws no table's selection emphasized, key or not.
+    #expect(!rowView.isEmphasized)
+    #expect(!list.tableView.keepsSelectionEmphasized)
+}
+
+/// Undo in the field undoes only this rename's typing: one closed by Esc or Return leaves
+/// nothing for the next to undo.
+@MainActor @Test(arguments: [false, true])
+func eachRenameStartsWithNothingToUndo(closingByReturn: Bool) async throws {
+    let fixture = try await Fixture("song.flac", "other.txt")
+    defer { fixture.stop() }
+    await fixture.select("song.flac")
+    try fixture.press(returnKey)
+    try fixture.type("zz")
+    #expect(try fixture.editor().undoManager?.canUndo == true)
+    if closingByReturn {
+        try fixture.send(#selector(NSResponder.insertNewline(_:)))
+        await settle { fixture.exists("zz.flac") && !fixture.field.isShown }
+    } else {
+        try fixture.send(#selector(NSResponder.cancelOperation(_:)))
+    }
+
+    await fixture.select("other.txt")
+    try fixture.press(returnKey)
+
+    let editor = try fixture.editor()
+    #expect(editor.undoManager?.canUndo == false)
+    editor.undoManager?.undo()
+    #expect(editor.string == "other.txt")
+}
+
+/// Pasted styled text takes the field's font and color, as typed text does.
+@MainActor @Test func pastedStyledTextTakesTheFieldsLook() async throws {
+    let fixture = try await Fixture("song.flac")
+    defer { fixture.stop() }
+    await fixture.select("song.flac")
+    // The row's view, which the field's colors follow.
+    _ = try nameRow("song.flac", in: fixture.controller.listingViewController)
+    try fixture.press(returnKey)
+    let editor = try fixture.editor()
+    let styled = NSAttributedString(
+        string: "big",
+        attributes: [.font: NSFont.boldSystemFont(ofSize: 30), .foregroundColor: NSColor.red])
+    let pasteboard = NSPasteboard(name: NSPasteboard.Name("RN1-RenameFieldControllerTests"))
+    defer { pasteboard.releaseGlobally() }
+    pasteboard.clearContents()
+    pasteboard.writeObjects([styled])
+
+    #expect(editor.readSelection(from: pasteboard))
+
+    #expect(editor.string == "big.flac")
+    let attributes = editor.textStorage?.attributes(at: 0, effectiveRange: nil) ?? [:]
+    #expect(attributes[.font] as? NSFont == ListingViewController.nameFont)
+    #expect(attributes[.foregroundColor] as? NSColor == .alternateSelectedControlTextColor)
+}
+
+/// The field's white-on-accent colors stay in an editor of its own: the window's editor, which
+/// every other text field in it uses, keeps AppKit's.
+@MainActor @Test func theFieldEditsInAnEditorOfItsOwn() async throws {
+    let fixture = try await Fixture("song.flac")
+    defer { fixture.stop() }
+    await fixture.select("song.flac")
+
+    try fixture.press(returnKey)
+
+    let shared = fixture.window.fieldEditor(true, for: nil)
+    #expect(try fixture.editor() !== shared)
 }
 
 @MainActor @Test func aFolderNameIsSelectedWhole() async throws {

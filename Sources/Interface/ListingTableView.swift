@@ -72,6 +72,19 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
     var dragEnded: @MainActor () -> Void = {}
     /// Signals a key that does nothing. Tests replace it.
     var beep: @MainActor () -> Void = { NSSound.beep() }
+    /// Keeps the selected rows emphasized though the table doesn't have the keys: set while the
+    /// rename field over its rows has them in the key window (`ListingRowView`).
+    var keepsSelectionEmphasized = false {
+        didSet {
+            guard keepsSelectionEmphasized != oldValue else { return }
+            enumerateAvailableRowViews { rowView, _ in
+                (rowView as? ListingRowView)?.updateEmphasis()
+            }
+        }
+    }
+    /// Runs when a row's selection or its emphasis changes, which sets the style its cells
+    /// draw in. Set by the list's controller.
+    var rowStyleDidChange: @MainActor (NSTableRowView) -> Void = { _ in }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
