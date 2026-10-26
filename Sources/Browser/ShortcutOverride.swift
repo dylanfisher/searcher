@@ -47,7 +47,8 @@ public struct ShortcutOverride: Hashable, Sendable {
     /// The override with each slot that names what its default already gives set back to
     /// `.standard`: a chord equal to `command`'s default for the slot, and `.removed` for a slot
     /// with no default. `preset` is the alternate a preset can add (`FileCommands.commanderFKeys`),
-    /// so removing it isn't a no-op. Each meaning then has one stored form.
+    /// so removing it isn't a no-op. A chord equal to `preset` stays: the user chose it, and it
+    /// keeps the chord after the preset is turned off. Each meaning then has one stored form.
     func normalized(for command: Command, preset: KeyChord?) -> ShortcutOverride {
         var normal = self
         for position in Position.allCases {

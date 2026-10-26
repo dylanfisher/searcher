@@ -29,6 +29,8 @@ SK.1b, the menus and the routing; SK.1c, the Settings window and the recorder.
   - "Default" has one stored form, no entry: a chord equal to the slot's default, or a removed
     slot with no default, becomes `.standard`, and an override with both slots `.standard` is
     left out. Resetting a command deletes its entry; resetting all deletes the key.
+  - Normalizing compares against the code's defaults, not the preset: an alternate the user set
+    to F5 stays stored while the preset is on, so it keeps F5 after the preset is turned off.
   - Data of another shape, or any override in it of another shape, removes the whole key, as
     for `favorites` ([0107](0107-sidebar-favorites.md)). An entry for an ID no command has
     removes only that entry: a renamed command is a change of the code, not bad data.
@@ -62,8 +64,18 @@ SK.1b, the menus and the routing; SK.1c, the Settings window and the recorder.
   `.removed`. A chord the same command has in its other slot moves.
 - **Cached, never per key.** `PaneViewController.registry(for:)` makes the registry when the
   shortcuts or the preset change and keeps it; every table and the menus take that one.
-- **Until the Settings window.** The keys follow shortcuts set with `defaults write
-  com.dylanfisher.searcher shortcuts -dict-add ...` from the next launch.
+- **Until the Settings window.** The keys follow shortcuts set with `defaults write` from the
+  next launch. Each command's slots go in as a plist dictionary literal:
+
+  ```
+  defaults write com.dylanfisher.searcher shortcuts -dict-add \
+      window.showPalette '{ alternate = "cmd+shift+o"; }'
+  ```
+
+  `defaults delete com.dylanfisher.searcher shortcuts` resets them all.
+- **The filter field's arrows.** ↑ and ↓ in the filter field are the field's own keys, as Tab
+  is: they run Select Previous and Next Row by ID, whatever chords the user gave those commands
+  or gave ↑ and ↓ to.
 
 ### SK.1b, menus and routing
 
@@ -105,3 +117,14 @@ SK.1b, the menus and the routing; SK.1c, the Settings window and the recorder.
 A default that later moves to a chord the user gave another command is lost to that command
 until the user resets theirs. Until SK.1b the menus are built once at launch and show only the
 primary, so an alternate still works only through the pane's keys, as before.
+
+Reading drops an entry whose command ID the running build doesn't have and writes the rest back.
+Two builds that share a defaults domain, such as an older and a newer one with a renamed
+command, therefore remove each other's entries for commands only the other has.
+
+`KeyChord(stored:)` checks the spelling, not the keyboard: it accepts `cmd+shift+>` as well as
+`cmd+shift+.`, though recording only ever writes the key's own character. Which characters are a
+key's own depends on the layout ("&" is the 1 key's own on AZERTY, and Shift-7 on US), and
+Browser doesn't know the layout, so it can't reject the typed form. A hand-written
+`cmd+shift+>` runs through the typed candidate on US, but the registry sees it as a chord apart
+from `cmd+shift+.`, so a clash between the two goes unnoticed.
