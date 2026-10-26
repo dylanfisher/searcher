@@ -837,15 +837,14 @@ public final class Pane {
         reportChange()
     }
 
-    /// Closes the columns and starts the trail again at `location`, with the selection's cursor
-    /// selected there. The new columns take the focused column's sort, since the pane's own
-    /// isn't kept in step in column mode.
+    /// Starts the trail again at `location`, with the selection's cursor selected there, keeping
+    /// the columns of the folders above it that the old trail shows and closing the others
+    /// (`ColumnTrail.init(owner:at:selecting:replacing:)`). The columns take the focused column's
+    /// sort, since the pane's own isn't kept in step in column mode.
     private func restartTrail() {
         guard let old = columnTrail else { preconditionFailure("restarting a trail in list mode") }
-        let model = old.focused.pane
-        old.close()
         columnTrail = ColumnTrail(
-            owner: self, at: location, selecting: selection.cursor, sortedLike: model)
+            owner: self, at: location, selecting: selection.cursor, replacing: old)
     }
 
     /// Stops everything the pane does for the folder it leaves: its load, a pending

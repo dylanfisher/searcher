@@ -83,28 +83,29 @@ private func press(_ chord: KeyChord, on pane: Pane) throws {
     #expect(trail(pane).preview?.location == Location(path: "/r/docs/x.txt"))
 }
 
-/// The columns left of the pane's folder list only once its column's first rows land, so its
-/// load is the first one asked (0103-column-trail-from-the-root.md).
-@MainActor @Test func theFocusedFoldersLoadIsAskedBeforeTheFoldersAboveIt() async {
-    let fixture = PaneFixture(at: "/r/docs", folders: tree, held: true)
-    fixture.lister.release("/r/docs")
-    let pane = fixture.pane
-    await settle { pane.state.isLoaded }
+/// The pane's folder's load is the first one asked; the columns left of it list once the root
+/// check answers, without waiting for that folder's first rows (0103-column-trail-from-the-root.md).
+@MainActor @Test func theFoldersAboveListOnceTheRootIsCheckedBeforeTheFocusedFoldersRows() async {
+    let lister = GatedLister(tree.mapValues { .batches([$0]) })
+    lister.release("/")
+    lister.release("/r")
+    // Still, so the held load never goes slow, which would be its first update.
+    let clock = ManualClock()
 
-    pane.setViewMode(.column)
+    let pane = Pane(
+        location: Location(path: "/r/docs"), service: ListingService(lister: lister, clock: clock),
+        systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true,
+        viewMode: .column)
 
     #expect(paths(pane) == ["/", "/r", "/r/docs"])
     #expect(trail(pane).columns[2].pane.load != nil)
     #expect(trail(pane).columns[0].pane.load == nil)
     #expect(trail(pane).columns[1].pane.load == nil)
+    await trail(pane).rootChecked()
+    await settle { trail(pane).columns.prefix(2).allSatisfy { $0.pane.state.isLoaded } }
+    #expect(trail(pane).focused.pane.state.isLoading)
+    lister.releaseAll()
     await settle { trail(pane).focused.pane.state.isLoaded }
-    #expect(await fixture.lister.waitForCall("/"))
-    #expect(await fixture.lister.waitForCall("/r"))
-    // The list's load, then the column's; the columns above ask theirs together.
-    let calls = fixture.lister.calls.map(\.path)
-    #expect(calls.prefix(2) == ["/r/docs", "/r/docs"])
-    #expect(Set(calls.dropFirst(2)) == ["/", "/r"])
-    fixture.lister.releaseAll()
 }
 
 /// ← to a column whose load waits for the focused one's rows lists it at once.
@@ -268,29 +269,6 @@ private func press(_ chord: KeyChord, on pane: Pane) throws {
     await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
     #expect(
         trail(pane).columns.map { $0.pane.selection.cursor?.name } == ["Volumes", "h", "docs", nil])
-}
-
-/// A column above, listed early by its monitor, can close the column the trail was built at
-/// with a selection before that column's first update: the columns still waiting list anyway.
-@MainActor @Test func theLeadColumnClosedBeforeItsFirstUpdateLetsTheColumnsAboveList() async {
-    let lister = GatedLister(tree.mapValues { .batches([$0]) })
-    for path in ["/", "/r", "/r/other"] { lister.release(path) }
-    let pane = Pane(
-        location: Location(path: "/r/docs"), service: ListingService(lister: lister),
-        systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true,
-        viewMode: .column)
-    await trail(pane).rootChecked()
-    #expect(await lister.waitForCall("/r/docs"))
-    let parent = trail(pane).columns[1].pane
-    #expect(trail(pane).columns[0].pane.load == nil)
-    parent.apply(.relist, at: parent.location)
-    await settle { parent.state.isLoaded }
-
-    select("other", in: trail(pane).columns[1])
-
-    #expect(paths(pane) == ["/", "/r", "/r/other"])
-    await settle { trail(pane).columns[0].pane.state.isLoaded }
-    lister.releaseAll()
 }
 
 /// The folder a column above keeps selected goes, removed or renamed: its column closes, as a
@@ -931,6 +909,108 @@ func leftOrCommandUpMovesToTheParentsColumnAndDoesNothingAtTheRoot(chord: KeyCho
     #expect(trail(pane).focused.pane.selection.cursor == ExactName("sub"))
 }
 
+/// Back, Forward and a navigation to a folder the trail doesn't show keep the columns of the
+/// folders above it that the trail does show, from its root: the same panes, with their rows,
+/// listing nothing again, each selecting the next folder on the new way down, as no step of its
+/// selection history (0103-column-trail-from-the-root.md).
+@MainActor @Test func aFolderOutsideTheTrailKeepsTheColumnsAboveItThatBothShow() async throws {
+    let fixture = await columnPane(at: "/r/docs")
+    let pane = fixture.pane
+    let above = trail(pane).columns.prefix(2).map(\.pane)
+    func listings(_ path: String) -> Int {
+        fixture.lister.calls.filter { $0.path == path }.count
+    }
+    let root = listings("/")
+    let parent = listings("/r")
+    func expectKept(selecting name: String, sourceLocation: SourceLocation = #_sourceLocation) {
+        #expect(
+            trail(pane).columns.prefix(2).map(\.pane).elementsEqual(above, by: ===),
+            sourceLocation: sourceLocation)
+        #expect(
+            above[1].selection == Selection([ExactName(name)], cursor: ExactName(name)),
+            sourceLocation: sourceLocation)
+        #expect(trail(pane).focusedIndex == 2, sourceLocation: sourceLocation)
+    }
+
+    // A sidebar click.
+    pane.navigate(to: Location(path: "/r/other"))
+
+    #expect(paths(pane) == ["/", "/r", "/r/other"])
+    expectKept(selecting: "other")
+    #expect(pane.history.backEntries.count == 1)
+    await settle { trail(pane).focused.pane.state.isLoaded }
+
+    try press(KeyChord("[", modifiers: .command), on: pane)
+
+    #expect(paths(pane) == ["/", "/r", "/r/docs"])
+    expectKept(selecting: "docs")
+    #expect(!pane.canGoBack)
+    await settle { trail(pane).focused.pane.state.isLoaded }
+
+    try press(KeyChord("]", modifiers: .command), on: pane)
+
+    #expect(paths(pane) == ["/", "/r", "/r/other"])
+    expectKept(selecting: "other")
+    #expect(!pane.canGoForward)
+    #expect(!above[1].canUndoSelection)
+    await trail(pane).rootChecked()
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+    await drainMainQueue()
+    #expect(listings("/") == root)
+    #expect(listings("/r") == parent)
+}
+
+/// A folder the new trail starts at a different root for keeps no column, as a trail from home
+/// and one outside it don't share one; trails from the same root keep the root's column.
+@MainActor @Test func aTrailFromAnotherRootKeepsNoColumn() async {
+    let (pane, _) = await homePane(at: "/Users/me/docs")
+    let old = trail(pane).columns.map(\.pane)
+
+    pane.navigate(to: Location(path: "/Applications"))
+
+    #expect(paths(pane) == ["/", "/Applications"])
+    #expect(!trail(pane).columns.contains { column in old.contains { $0 === column.pane } })
+
+    let (fromRoot, _) = await homePane(
+        at: "/Users/me/docs", settings: homeSettings(startAtHome: false))
+    let rootColumn = trail(fromRoot).columns[0].pane
+
+    fromRoot.navigate(to: Location(path: "/Applications"))
+
+    #expect(paths(fromRoot) == ["/", "/Applications"])
+    #expect(trail(fromRoot).columns[0].pane === rootColumn)
+    #expect(rootColumn.selection.cursor == ExactName("Applications"))
+    #expect(!rootColumn.isFocused)
+    #expect(trail(fromRoot).focused.pane.isFocused)
+
+    // Up to the root itself: its column is kept as the focused one.
+    fromRoot.navigate(to: Location(path: "/"))
+
+    #expect(paths(fromRoot) == ["/"])
+    #expect(trail(fromRoot).focused.pane === rootColumn)
+    #expect(rootColumn.isFocused)
+    #expect(rootColumn.selection.isEmpty)
+}
+
+/// A navigation to a folder the trail shows, as a sidebar click on it, keeps that folder's
+/// column too: it takes the keys with the name asked for selected, and the column that opens
+/// for it is new.
+@MainActor @Test func aNavigationToAFolderTheTrailShowsKeepsItsColumn() async {
+    let fixture = await columnPane(at: "/r/docs/sub")
+    let pane = fixture.pane
+    let kept = trail(pane).columns.prefix(2).map(\.pane)
+
+    pane.navigate(to: Location(path: "/r"), selecting: "other")
+
+    #expect(paths(pane) == ["/", "/r", "/r/other"])
+    #expect(trail(pane).columns.prefix(2).map(\.pane).elementsEqual(kept, by: ===))
+    #expect(trail(pane).focusedIndex == 1)
+    #expect(trail(pane).focused.pane === kept[1])
+    #expect(kept[1].selection.cursor == ExactName("other"))
+    #expect(pane.location == Location(path: "/r"))
+    #expect(pane.history.backEntries.count == 1)
+}
+
 /// The folder the pane shows, its focused column's, is what History keeps in column view, as
 /// the title Finder's Back follows: → and ← into another column are steps, and Back and Forward
 /// to a folder the trail still shows move the focus there without building the trail again.
@@ -1179,6 +1259,8 @@ func leftOrCommandUpMovesToTheParentsColumnAndDoesNothingAtTheRoot(chord: KeyCho
     #expect(paths(pane) == ["/", "/r", "/r/docs"])
     #expect(trail(pane).focused.pane.sortColumn == .size)
     #expect(trail(pane).focused.pane.load?.column == .size)
+    // The columns kept above it take the sort too.
+    #expect(trail(pane).columns.allSatisfy { $0.pane.sortColumn == .size })
 }
 
 @MainActor @Test func thePaneHoldsNoRowsInColumnModeAndSortsNothingOnAToggle() async throws {
@@ -1244,7 +1326,9 @@ func leftOrCommandUpMovesToTheParentsColumnAndDoesNothingAtTheRoot(chord: KeyCho
     #expect(fixture.pane.state.listing == nil)
 }
 
-@MainActor @Test func aNavigationClosesEveryColumnItLeaves() async throws {
+/// A navigation closes the columns of the folders the new trail doesn't run through, stopping
+/// their loads and monitors; the columns above that both trails show stay, watched as before.
+@MainActor @Test func aNavigationClosesTheColumnsItLeaves() async throws {
     let fixture = PaneFixture(at: "/r", folders: tree, held: true)
     for path in ["/", "/r", "/r/docs", "/r/other"] { fixture.lister.release(path) }
     let pane = fixture.pane
@@ -1270,7 +1354,8 @@ func leftOrCommandUpMovesToTheParentsColumnAndDoesNothingAtTheRoot(chord: KeyCho
     await drainMainQueue()
 
     #expect(paths(pane) == ["/", "/r", "/r/other"])
-    #expect(monitors.map(\.stopCount) == [1, 1, 1, 1])
+    #expect(monitors.map(\.stopCount) == [0, 0, 1, 1])
+    #expect(trail(pane).columns.prefix(2).map(\.pane).elementsEqual(left.prefix(2), by: ===))
     // The held load was cancelled, so its listing never reached the closed column.
     #expect(left[3].state.isLoading)
 

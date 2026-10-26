@@ -100,10 +100,14 @@ the load through `ListingService`, the off-main sort and filter ([0025](0025-sor
   other folder starts the trail again as above, and one gone since shows the failed state
   ([0033](0033-history-and-go-to-folder.md)). `History` keeps the same two stacks of a folder
   and a name, so `TabState` stores and restores it as before
-  ([0042](0042-workspace-model.md)).)
+  ([0042](0042-workspace-model.md)).) (Amended 2026-10-25, Dylan: "in general i want to avoid
+  flash": starting the trail again keeps the old trail's columns from the root down as far as
+  both trails run through the same folders, with their rows, monitors and views; only the
+  others close. See [0103](0103-column-trail-from-the-root.md).)
 - **Filter.** The filter belongs to the column it was typed in and narrows that column only. It
   stays with the column until the column closes; a navigation closes every column, so it clears
-  the filter as it does in a list.
+  the filter as it does in a list. (Amended 2026-10-25: a navigation keeps the columns both
+  trails show ([0103](0103-column-trail-from-the-root.md)) and clears their filters.)
 - **Sort.** A sort key sorts the focused column. A new column takes the sort of the column it
   opens from. Hidden files and folders first are app-wide `Settings`, which every column observes.
 - **Keys.** → and ← are commands in `ColumnCommands`; in list mode they do nothing. Cmd-1 and
