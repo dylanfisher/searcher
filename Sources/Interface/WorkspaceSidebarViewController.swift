@@ -199,18 +199,6 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         /// a pane's rename or filter field, to the focused pane, which commits a rename as any
         /// click elsewhere does. The window sets it; a list without it leaves the keys alone.
         var takeKeysFromText: @MainActor () -> Void = {}
-        /// Whether the window is sending a press on the list, during which the list refuses the
-        /// keys.
-        private(set) var isPressed = false
-
-        /// A click on the list leaves the keys where they were, as a click in Finder's sidebar
-        /// does, so the selection shows as a list without the keys shows it: the row's icon and
-        /// name in the accent. `NSWindow` asks this before it gives the pressed view the keys.
-        /// Only a press being sent counts, so Focus Sidebar, Tab and VoiceOver still give the
-        /// list the keys, whatever event came last.
-        override var acceptsFirstResponder: Bool {
-            !isPressed && super.acceptsFirstResponder
-        }
 
         /// Whether a mouse down at `windowPoint` lands on the list as shown.
         func isHit(atWindowPoint windowPoint: NSPoint) -> Bool {
@@ -218,17 +206,18 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
                 && visibleRect.contains(convert(windowPoint, from: nil))
         }
 
-        /// Runs `send`, the window's sending of a mouse down at `windowPoint`. One on the list
-        /// first ends text editing (`takeKeysFromText`), then is sent with the list refusing
-        /// the keys; the row is selected and opened, dragged or shows its menu as before.
-        func sendMouseDown(atWindowPoint windowPoint: NSPoint, _ send: () -> Void) {
-            guard isHit(atWindowPoint: windowPoint), !isPressed else {
-                send()
-                return
+        /// Runs `send`, the window's sending of a mouse down of `type` at `windowPoint`. One on
+        /// the list first ends text editing (`takeKeysFromText`); a left one then gives the list
+        /// the keys, as a click in Finder's sidebar does, wherever on the list it lands: AppKit
+        /// gives them only to a pressed view that takes them, and a row's name doesn't. The
+        /// row is then selected and opened, dragged or shows its menu as before.
+        func sendMouseDown(
+            _ type: NSEvent.EventType, atWindowPoint windowPoint: NSPoint, _ send: () -> Void
+        ) {
+            if isHit(atWindowPoint: windowPoint) {
+                takeKeysFromText()
+                if type == .leftMouseDown { window?.makeFirstResponder(self) }
             }
-            takeKeysFromText()
-            isPressed = true
-            defer { isPressed = false }
             send()
         }
 

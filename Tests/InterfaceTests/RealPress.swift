@@ -136,7 +136,7 @@ extension WorkspaceSidebarViewController.SidebarOutlineView {
         nonisolated(unsafe) let down = try event(.leftMouseDown)
         let list = UncheckedSendable(self)
         try performRealPress(releasedBy: try event(.leftMouseUp)) {
-            list.value.sendMouseDown(atWindowPoint: point) {
+            list.value.sendMouseDown(.leftMouseDown, atWindowPoint: point) {
                 if list.value.acceptsFirstResponder { window.makeFirstResponder(list.value) }
                 list.value.mouseDown(with: down)
             }

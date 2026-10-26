@@ -265,27 +265,25 @@ private final class Fixture {
     #expect(fixture.window.unhandledKeys.isEmpty)
 }
 
-/// The list refuses the keys only while a press on it is being sent, which first ends text
-/// editing; a press elsewhere in the window is sent as it is, and the list takes the keys again
-/// once the press is over, as for Focus Sidebar, Tab or VoiceOver.
-@MainActor @Test func theListRefusesTheKeysOnlyWhileAPressOnItIsSent() throws {
+/// A press on the list first ends text editing; a left one then gives the list the keys before
+/// it is sent, as a click in Finder's sidebar does, and a right one leaves them. A press
+/// elsewhere in the window is sent as it is.
+@MainActor @Test func aPressOnTheListEndsTextEditingAndALeftOneGivesItTheKeys() throws {
     let fixture = try Fixture()
     let outline = fixture.sidebar.outlineView
     var endedEditing = 0
     outline.takeKeysFromText = { endedEditing += 1 }
     let onARow = outline.convert(
         NSPoint(x: 20, y: outline.rect(ofRow: try fixture.row(of: "Alpha")).midY), to: nil)
-    var accepted: [Bool] = []
+    var sent: [(ended: Int, listHasKeys: Bool)] = []
+    func send() { sent.append((endedEditing, fixture.window.firstResponder === outline)) }
 
-    outline.sendMouseDown(atWindowPoint: onARow) { accepted.append(outline.acceptsFirstResponder) }
-    outline.sendMouseDown(atWindowPoint: NSPoint(x: 320, y: 20)) {
-        accepted.append(outline.acceptsFirstResponder)
-    }
+    outline.sendMouseDown(.rightMouseDown, atWindowPoint: onARow, send)
+    outline.sendMouseDown(.leftMouseDown, atWindowPoint: NSPoint(x: 320, y: 20), send)
+    outline.sendMouseDown(.leftMouseDown, atWindowPoint: onARow, send)
 
-    #expect(accepted == [false, true])
-    #expect(endedEditing == 1)
-    #expect(outline.acceptsFirstResponder)
-    #expect(fixture.window.makeFirstResponder(outline))
+    #expect(sent.map(\.ended) == [1, 1, 2])
+    #expect(sent.map(\.listHasKeys) == [false, false, true])
 }
 
 /// A hidden sidebar, as a collapsed one is, takes no press: the window sends it on as it is.
