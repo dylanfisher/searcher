@@ -765,7 +765,7 @@ private func stopEverything(_ windows: WorkspaceWindows) async {
     let first = try #require(fixture.windows.controllers.first)
     let window = try #require(first.window)
     let moved = Notification(name: NSWindow.didMoveNotification)
-    first.isLeftMouseDown = { true }
+    first.isDragStep = { true }
 
     // A move the app makes, with no drag begun, even with the button down.
     window.setFrameOrigin(NSPoint(x: 30, y: 40))
@@ -778,14 +778,31 @@ private func stopEverything(_ windows: WorkspaceWindows) async {
     #expect(fixture.settings.newWindowFrame?.origin == NSPoint(x: 50, y: 60))
     #expect(fixture.settings.newWindowFrame?.size == Settings.defaultWindowSize)
 
-    // The button is up: a later move, as a restore or zoom makes, isn't the user's.
-    first.isLeftMouseDown = { false }
+    // The drag has ended, but its last step was made with the button down, so the claim is
+    // still set. A move the app makes next, as a click's does, isn't a drag event: it records
+    // nothing and ends the claim, so nor does one that follows it.
+    first.isDragStep = { false }
     window.setFrameOrigin(NSPoint(x: 70, y: 80))
     first.windowDidMove(moved)
-    first.isLeftMouseDown = { true }
+    first.isDragStep = { true }
     window.setFrameOrigin(NSPoint(x: 90, y: 100))
     first.windowDidMove(moved)
     #expect(fixture.settings.newWindowFrame?.origin == NSPoint(x: 50, y: 60))
+}
+
+@MainActor @Test func aLiveResizeEndsAClaimAStaleDragLeft() async throws {
+    let fixture = try await Fixture()
+    let first = try #require(fixture.windows.controllers.first)
+    let window = try #require(first.window)
+    first.isDragStep = { true }
+    first.windowWillMove(Notification(name: NSWindow.willMoveNotification))
+    first.windowDidEndLiveResize(Notification(name: NSWindow.didEndLiveResizeNotification))
+    let stored = fixture.settings.newWindowFrame
+
+    window.setFrameOrigin(NSPoint(x: 5, y: 6))
+    first.windowDidMove(Notification(name: NSWindow.didMoveNotification))
+
+    #expect(fixture.settings.newWindowFrame == stored)
 }
 
 @MainActor @Test func aLiveResizeStoresTheFrameWithItsOrigin() async throws {
