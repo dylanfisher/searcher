@@ -54,7 +54,9 @@ keep what they did: one sheet at a time, queued, never blocking other windows
 - **Keys:** the first responder is what NSAlert picks. With full keyboard access off, buttons
   never take focus, nothing shows a ring, Return presses the default and Esc presses Cancel.
   With it on, NSAlert focuses Cancel, so Space cancels and Return still confirms, as in every
-  system alert. Go to folder gives the keys to its field.
+  system alert. Go to folder gives the keys to its field. A file operation's question sheet,
+  which appears without a key press, ignores the keys for its first 0.5 s
+  ([0067](0067-operations-panel.md), amended 2026-10-26).
 - **Errors from the system** (an app that won't open, [0035](0035-system-commands.md)) stay
   with `NSApp.presentError`, which is the system's own alert.
 - **The rename field** ([0068](0068-inline-rename.md)) is not a dialog but had the same
