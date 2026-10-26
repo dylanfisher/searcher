@@ -108,10 +108,14 @@ discarded and removed. Nothing is stored until a window is first changed by hand
 a live resize, or drags it by the title bar.
 
 The drag is told from a move the app makes (restore, cascade, `fitted`, zoom, full screen,
-tests) by `windowWillMove`, which AppKit sends only when the user starts a drag, and the left
-button: after it, each `windowDidMove` with the button down stores the frame, and the first one
-with it up ends the claim. The last step of a drag is made before the button comes up, so the
-frame stored is where the window was dropped. No event monitor, no timer.
+tests) by `windowWillMove`, which AppKit sends as a drag starts, and by the event being handled: after
+it, each `windowDidMove` made while handling a left-button drag event stores the frame, and the
+first move that isn't one ends the claim. A drag leaves its claim set, since its last step is
+made before the button comes up, so the check on the event is what keeps a later move the app
+makes while a button is down, as a click's does, from storing a frame. The last step of a drag
+is the drop, so the frame stored is where the window was dropped; macOS's drag-to-edge tiling
+snaps after the button comes up, so the stored frame is the position before the snap. A live
+resize's end also ends the claim. No event monitor, no timer.
 
 A new window without a saved frame opens at the stored frame when no open window has its top
 left there; if one does, it steps down and right by the system's cascade offset
@@ -119,3 +123,6 @@ left there; if one does, it steps down and right by the system's cascade offset
 step from the last one. With no stored frame it centers and cascades from the front window as
 before. `fitted` then keeps it on a display, so a frame stored on a display that is gone opens
 on one that is there. A restored window keeps its saved frame, as before.
+
+The key `newWindowSize` this replaced is removed from the defaults when `Settings` starts, once
+and with no migration: its size is not carried over.
