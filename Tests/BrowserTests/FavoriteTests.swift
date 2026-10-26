@@ -137,3 +137,23 @@ import Testing
     let fresh = try #require(resolution.favorite.bookmark)
     #expect(fresh != Data([1, 2, 3]))
 }
+
+@Test func aLinkToAFileResolvesAsAFileAndALoopOfLinksAsMissing() async throws {
+    let temp = try TemporaryFolder("FavoriteTests")
+    let file = temp.url.appending(path: "a.txt")
+    let link = temp.url.appending(path: "link")
+    let loopA = temp.url.appending(path: "loopA")
+    let loopB = temp.url.appending(path: "loopB")
+    try Data().write(to: file)
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: file)
+    try FileManager.default.createSymbolicLink(at: loopA, withDestinationURL: loopB)
+    try FileManager.default.createSymbolicLink(at: loopB, withDestinationURL: loopA)
+
+    let linked = await BlockingCallThread.run { Favorite.resolve(Favorite(path: link.path)) }
+    let loop = Favorite(path: loopA.path)
+    let looped = await BlockingCallThread.run { Favorite.resolve(loop) }
+
+    #expect(linked.state == .file)
+    #expect(linked.favorite.path == link.path)
+    #expect(looped == Favorite.Resolution(favorite: loop, state: .missing))
+}
