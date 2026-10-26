@@ -276,7 +276,7 @@ private struct TextFieldWindow {
 }
 
 /// Settings for a test that never changes one, over a `temporarySuite` under the temporary
-/// directory. Nothing is written, so nothing is left. TestSupport can't build `Settings`, which
+/// directory, which removes its file with the settings. TestSupport can't build `Settings`, which
 /// is in Browser, so each test target has this and `storedSettings`.
 @MainActor
 func untouchedSettings() -> Settings {
