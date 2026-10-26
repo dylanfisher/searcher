@@ -143,6 +143,7 @@ func aSortKeySortsByItsColumnAndTheSameKeyAgainReverses(
     let pane = PaneFixture(at: "/r", folders: ["/r": []]).pane
     for (command, setting) in [
         (ViewCommands.toggleSidebarFavorites, \Settings.showsFavoritesInSidebar),
+        (ViewCommands.toggleSidebarLocations, \Settings.showsLocationsInSidebar),
         (ViewCommands.toggleSidebarWorkspaces, \Settings.showsWorkspacesInSidebar),
     ] {
         let binding = try #require(AppCommands.bindings.first { $0.command == command })

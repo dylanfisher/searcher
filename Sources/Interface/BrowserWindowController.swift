@@ -9,9 +9,10 @@ import Quartz
 /// in the most recently active window when one runs past a second. With
 /// `Settings.hideEmptyOperationsPanel` on, a panel that showed itself hides once its last row
 /// leaves; one the user opened stays until the user closes it
-/// (docs/decisions/0067-operations-panel.md). Left of all that, the sidebar lists the favorites
-/// and the saved workspaces while the workspace says it shows; dragging it closed hides it there
-/// too (docs/decisions/0086-workspace-sidebar.md, docs/decisions/0107-sidebar-favorites.md).
+/// (docs/decisions/0067-operations-panel.md). Left of all that, the sidebar lists the favorites,
+/// the mounted volumes and the saved workspaces while the workspace says it shows; dragging it
+/// closed hides it there too (docs/decisions/0086-workspace-sidebar.md,
+/// docs/decisions/0107-sidebar-favorites.md, docs/decisions/0108-sidebar-locations.md).
 /// Open Quickly shows the command palette over the window, and Esc there gives the keys back to
 /// the focused pane (docs/decisions/0087-palette-window.md).
 ///
@@ -96,11 +97,12 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     private let takePaneController: @MainActor (PaneID, Pane) -> PaneViewController?
 
     /// A window of one tab at `location`, in a list of its own, as the UI bench opens it, with
-    /// `favorites` in its sidebar. With `fileOperations`, its operations panel lists what
-    /// `showOperations` is given.
+    /// `favorites` and `volumes` in its sidebar. With `fileOperations`, its operations panel
+    /// lists what `showOperations` is given.
     public convenience init(
         location: Location, service: ListingService, systemActions: any SystemActions,
-        settings: Settings, favorites: Favorites, fileOperations: FileOperationQueue? = nil
+        settings: Settings, favorites: Favorites, volumes: SidebarVolumes,
+        fileOperations: FileOperationQueue? = nil
     ) {
         let pane = Pane(
             location: location, service: service, systemActions: systemActions, settings: settings)
@@ -108,12 +110,12 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         let workspace = Workspace(tab: Tab(pane: pane))
         workspaces.add(workspace)
         self.init(
-            workspace: workspace, workspaces: workspaces, favorites: favorites, settings: settings,
-            fileOperations: fileOperations)
+            workspace: workspace, workspaces: workspaces, favorites: favorites, volumes: volumes,
+            settings: settings, fileOperations: fileOperations)
     }
 
     /// A window showing `workspace`, one of `workspaces`, under the app's `settings`, with the
-    /// app's `favorites` in its sidebar.
+    /// app's `favorites` and `volumes` in its sidebar.
     /// `takePaneController` hands over another
     /// window's view controller for a pane that moved into `workspace`. `fileOperations` runs
     /// the file commands, which are off without it; the clipboard commands are off without
@@ -121,8 +123,9 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// `undoHistory`, and Open With without `openWith`. The sidebar and the palette open a saved
     /// workspace with `openSavedWorkspace`; the palette lists the folders in `folderVisits`.
     init(
-        workspace: Workspace, workspaces: WorkspaceList, favorites: Favorites, settings: Settings,
-        fileOperations: FileOperationQueue? = nil, clipboard: CutState? = nil,
+        workspace: Workspace, workspaces: WorkspaceList, favorites: Favorites,
+        volumes: SidebarVolumes, settings: Settings, fileOperations: FileOperationQueue? = nil,
+        clipboard: CutState? = nil,
         mountTable: MountTable? = nil, undoHistory: UndoHistory? = nil, openWith: OpenWith? = nil,
         folderVisits: FolderVisits? = nil,
         takePaneController: @escaping @MainActor (PaneID, Pane) -> PaneViewController? = {
@@ -164,7 +167,8 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         panesOverOperations = tabHost.bottomAnchor.constraint(equalTo: operations.view.topAnchor)
         panesToBottom = tabHost.bottomAnchor.constraint(equalTo: content.bottomAnchor)
         sidebar = WorkspaceSidebarViewController(
-            workspace: workspace, list: workspaces, favorites: favorites, settings: settings)
+            workspace: workspace, list: workspaces, favorites: favorites, volumes: volumes,
+            settings: settings)
         sidebar.open = openSavedWorkspace
         sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
         super.init(window: window)
@@ -200,6 +204,10 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
                 guard let self, !isClosed, !workspace.isClosed else { return nil }
                 return workspace.selectedTab.focusedPane
             }
+        }
+        sidebar.openVolume = { [weak self] path in
+            guard let self, !isClosed, !workspace.isClosed else { return }
+            workspace.selectedTab.focusedPane.navigate(to: Location(path: path))
         }
         sidebar.outlineView.passKey = { [weak self] event in
             guard let self, !isClosed, !workspace.isClosed else { return false }

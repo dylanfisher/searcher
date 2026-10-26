@@ -1,4 +1,5 @@
 import Base
+import BrowserTestSupport
 import Darwin
 import Foundation
 import TestSupport
@@ -489,6 +490,29 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
     files.releaseAll()
     #expect(await watcher.waitUntilFinished(elsewhere))
     #expect(watcher.state(of: elsewhere)?.phase == .done)
+}
+
+@Test func aRefusedEjectLeavesTheVolumesOperationsRunning() async throws {
+    let mountPoint = "/FileOperationConflictTests-eject"
+    let volume = VolumeIdentity(device: "/dev/fakeE", mountPoint: mountPoint, kind: .local)
+    let files = FakeFiles()
+    files.add(volume)
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher, prompter: Prompter())
+    let writing = await enqueue(queue, .copy(["/S/song"], into: mountPoint), watcher)
+    #expect(await files.events.wait { $0.contains("copy /S/song") })
+    let stub = StubSidebarVolumes()
+    // A copy with files open on the volume is what makes the system refuse.
+    stub.fail(with: "The volume is in use.")
+    let sidebarVolume = SidebarVolume(mountPoint: mountPoint, name: "eject", kind: .local)
+
+    await #expect(throws: SidebarVolume.EjectFailure.self) {
+        try await stub.list().eject(sidebarVolume)
+    }
+
+    files.releaseAll()
+    #expect(await watcher.waitUntilFinished(writing))
+    #expect(watcher.state(of: writing)?.phase == .done)
 }
 
 @Test func planningFindsTopLevelConflictsOnly() throws {

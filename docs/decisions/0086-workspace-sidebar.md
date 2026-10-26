@@ -7,6 +7,8 @@
   [0088](0088-workspace-snapshots.md).
 - **2026-10-25:** A Favorites group sits above Workspaces, and settings hide either group; see
   [0107](0107-sidebar-favorites.md).
+- **2026-10-25:** A Locations group of mounted volumes sits between them, with its own setting;
+  see [0108](0108-sidebar-locations.md).
 
 ## Context
 

@@ -43,6 +43,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(settings.home == NSHomeDirectory())
     #expect(settings.favorites == Favorite.defaults(home: NSHomeDirectory()))
     #expect(settings.showsFavoritesInSidebar)
+    #expect(settings.showsLocationsInSidebar)
     #expect(settings.showsWorkspacesInSidebar)
 }
 
@@ -57,6 +58,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     defaults.set(0, forKey: Settings.Key.hideDSStore.rawValue)
     defaults.set("NO", forKey: Settings.Key.columnsStartAtHome.rawValue)
     defaults.set(0, forKey: Settings.Key.showsFavoritesInSidebar.rawValue)
+    defaults.set("NO", forKey: Settings.Key.showsLocationsInSidebar.rawValue)
     defaults.set("NO", forKey: Settings.Key.showsWorkspacesInSidebar.rawValue)
 
     let settings = Settings(defaults: defaults)
@@ -75,6 +77,8 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(defaults.object(forKey: Settings.Key.columnsStartAtHome.rawValue) == nil)
     #expect(settings.showsFavoritesInSidebar)
     #expect(defaults.object(forKey: Settings.Key.showsFavoritesInSidebar.rawValue) == nil)
+    #expect(settings.showsLocationsInSidebar)
+    #expect(defaults.object(forKey: Settings.Key.showsLocationsInSidebar.rawValue) == nil)
     #expect(settings.showsWorkspacesInSidebar)
     #expect(defaults.object(forKey: Settings.Key.showsWorkspacesInSidebar.rawValue) == nil)
 }
@@ -146,6 +150,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     first.hideDSStore = false
     first.columnsStartAtHome = false
     first.showsFavoritesInSidebar = false
+    first.showsLocationsInSidebar = false
     first.showsWorkspacesInSidebar = false
 
     let relaunched = Settings(defaults: try #require(UserDefaults(suiteName: name)))
@@ -160,6 +165,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(!relaunched.hideDSStore)
     #expect(!relaunched.columnsStartAtHome)
     #expect(!relaunched.showsFavoritesInSidebar)
+    #expect(!relaunched.showsLocationsInSidebar)
     #expect(!relaunched.showsWorkspacesInSidebar)
 }
 

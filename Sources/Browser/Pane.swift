@@ -1444,6 +1444,17 @@ public final class Pane {
         relistAfterLoad = false
     }
 
+    /// The sidebar is about to eject the volume holding `location`: the load and size walks stop,
+    /// as at will-unmount, and so does the monitor, so nothing of the pane's has a folder of the
+    /// volume open. A refused eject lists the folder again and asks for a new monitor through
+    /// `volumeDidMount`. In column mode each column stops its own.
+    func volumeWillEject() {
+        volumeWillUnmount()
+        guard columnTrail == nil, !isClosed else { return }
+        monitor?.stop()
+        monitor = nil
+    }
+
     /// The volume holding `location` was unmounted. Stops the load, the folder monitor and
     /// waiting patches, and shows the folder offline with the rows shown. Until the volume
     /// mounts again or the pane leaves, nothing lists the folder: what is left at the mount
