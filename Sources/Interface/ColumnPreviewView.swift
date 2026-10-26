@@ -8,8 +8,9 @@ import Browser
 /// `TypeIconCache`, so they show at once; the rest is read, and the thumbnail made, off the main
 /// thread, and column view shows a new file once they land, or without them after
 /// `ColumnTrail.previewHold`, filling in later without moving the rows above. The icon or
-/// thumbnail is scaled, as Finder's, to the width inside the insets, or down from that to keep
-/// the fields below it in view. The rows are drawn as Finder's: title left, value right, a rule
+/// thumbnail is scaled, as Finder's, to the width inside the insets, its edges on the fields',
+/// or down from that to keep the fields below it in view; a thumbnail is the image alone, with
+/// Finder's small rounded corners and no shadow. The rows are drawn as Finder's: title left, value right, a rule
 /// under each. The name, the kind line, the values and the tags can be selected, not edited.
 /// Built once and refilled for each file (0090-preview-column.md, 0095-preview-metadata.md,
 /// 0102-thumbnails.md).
@@ -41,6 +42,9 @@ final class ColumnPreviewView: NSView {
     /// The least the image is scaled down to in a window too short for it and the fields; the
     /// fields scroll below it then.
     static let smallestImageSide = 64.0
+    /// The rounding of a thumbnail's corners, as Finder's preview draws a photo: a few points,
+    /// with no shadow. A type icon, drawn by its own shape, isn't clipped.
+    static let thumbnailCornerRadius: CGFloat = 5
 
     /// The longest side the image can be drawn at in a preview `width` by `height` points: the
     /// width inside the insets, or the height inside the margins.
@@ -124,6 +128,7 @@ final class ColumnPreviewView: NSView {
         iconView.image =
             preview.thumbnail.map(NSImage.init(thumbnail:))
             ?? iconCache.icon(for: preview.kind.type)
+        iconView.layer?.cornerRadius = preview.thumbnail == nil ? 0 : Self.thumbnailCornerRadius
         nameField.stringValue = entry.name
         let size = formatter.size(
             entry, folderSize: nil, showsFolderSizes: false, awaitsFolderSizes: false)
@@ -203,6 +208,10 @@ final class ColumnPreviewView: NSView {
 
     private func build() {
         iconView.imageScaling = .scaleProportionallyUpOrDown
+        // Clips a thumbnail to `thumbnailCornerRadius`. The image is sized to the frame's aspect
+        // (`sizeImage`), so the clip falls on its corners.
+        iconView.wantsLayer = true
+        iconView.layer?.masksToBounds = true
         iconView.setAccessibilityElement(false)
         nameField.font = Self.nameFont
         summaryField.font = Self.detailFont

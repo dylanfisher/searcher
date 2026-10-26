@@ -14,16 +14,18 @@ public final class GatedThumbnailMaker: ThumbnailMaking, @unchecked Sendable {
         public let path: String
         public let side: Double
         public let scale: Double
+        public let framed: Bool
         public let onMainThread: Bool
         public let onBlockingCallThread: Bool
 
         public init(
-            path: String, side: Double, scale: Double, onMainThread: Bool,
+            path: String, side: Double, scale: Double, framed: Bool, onMainThread: Bool,
             onBlockingCallThread: Bool
         ) {
             self.path = path
             self.side = side
             self.scale = scale
+            self.framed = framed
             self.onMainThread = onMainThread
             self.onBlockingCallThread = onBlockingCallThread
         }
@@ -39,13 +41,14 @@ public final class GatedThumbnailMaker: ThumbnailMaking, @unchecked Sendable {
     public init() {}
 
     public func makeThumbnail(
-        at path: String, side: Double, scale: Double,
+        at path: String, side: Double, scale: Double, framed: Bool,
         done: @escaping @Sendable (CGImage?) -> Void
     ) -> @Sendable () -> Void {
         let answer: CGImage?? = lock.withLock {
             startedCalls.append(
                 Call(
-                    path: path, side: side, scale: scale, onMainThread: Thread.isMainThread,
+                    path: path, side: side, scale: scale, framed: framed,
+                    onMainThread: Thread.isMainThread,
                     onBlockingCallThread: BlockingCallThread.isCurrent))
             if let answer = answers[path] { return .some(answer) }
             held[path, default: []].append(done)

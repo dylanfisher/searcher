@@ -78,7 +78,23 @@ listing doesn't make.
   its fitting size solved its layout again on every frame of a grip's drag, 0.23 ms a call in a
   debug build against 0.03 ms now, beside about 0.6 ms for the preview's own layout. The
   thumbnail is asked for at the size drawn; see
-  [0102](0102-thumbnails.md).)
+  [0102](0102-thumbnails.md).) (Amended 2026-10-26, from Dylan's screenshots of Finder's preview
+  beside ours: Finder's photo has no drop shadow, corners rounded a few points, and spans the
+  fields, its left edge on the name's and the Information titles', its right on the values'.
+  Ours had a shadow, corners rounded about 16 points and stood inside the fields. The image view
+  was already as wide as the rows; the shadow, the round corners and a transparent margin were
+  drawn into the thumbnail itself, by Quick Look's `iconMode`, which frames a photo as Finder's
+  rows show it. A probe on this Mac asking for a 400 by 300 photo at 256 points, scale 2: with
+  `iconMode` a 512-pixel square came back, the photo 28 pixels in from each side, its corners
+  rounded about 19 pixels and a shadow below; without it, the photo alone at its aspect, edge to
+  edge. So the preview's thumbnail is now asked for unframed (`ThumbnailMaking`'s `framed`
+  false), and rows keep the framed one. The cache keeps the two apart, and the preview shows a
+  smaller kept thumbnail while its own is made only if it is one of its own: a row's framed one,
+  shown in its place, would have drawn the frame and shadow and then jumped, so a file with only
+  its row's kept now waits for its own like any other, inside the 100 ms hold on local disk.
+  The preview rounds a thumbnail's corners to `ColumnPreviewView.thumbnailCornerRadius`, 5
+  points, with no shadow; the image view is sized to the image's aspect, so the clip falls on
+  its corners. A type icon, Finder's own document shape, isn't clipped.)
 - **Scrolling.** The column view scrolls when the focus, the column count or whether a preview
   shows changes. The focused column's right-hand neighbor, kept in view where it fits, is the
   next column or, from the last column, the preview.

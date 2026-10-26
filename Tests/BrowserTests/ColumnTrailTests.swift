@@ -3146,7 +3146,7 @@ private func photoPane(
     #expect(
         maker.calls == [
             .init(
-                path: "/t/a.jpg", side: 128, scale: 2, onMainThread: false,
+                path: "/t/a.jpg", side: 128, scale: 2, framed: false, onMainThread: false,
                 onBlockingCallThread: true)
         ])
     await settle { trail(pane).preview?.info == .read(info(1)) }
@@ -3164,17 +3164,18 @@ private func photoPane(
     #expect(trail(pane).shownPreview?.location == Location(path: "/t/b.jpg"))
 }
 
-/// A file whose row's thumbnail is kept shows that one, scaled, while the preview's larger one
-/// is made, so its type icon never shows; the larger one replaces it once made.
-@MainActor @Test func aRowsKeptThumbnailShowsWhileThePreviewsIsMade() async throws {
+/// A file whose preview thumbnail is kept at a smaller side, as made for a narrower preview,
+/// shows that one, scaled, while the larger one is made, so its type icon never shows; the
+/// larger one replaces it once made.
+@MainActor @Test func aSmallerKeptPreviewThumbnailShowsWhileTheLargerIsMade() async throws {
     let maker = GatedThumbnailMaker()
     let thumbnails = ThumbnailService(maker: maker)
     let small = testThumbnail(pixels: 32)
     maker.answer("/t/a.jpg", with: small)
     let disk = VolumeIdentity(device: "/dev/disk3s1", mountPoint: "/", kind: .local)
-    let row = try await thumbnails.thumbnail(
-        at: "/t/a.jpg", entry: file("a.jpg"), side: 16, on: disk)
-    #expect(row === small)
+    let kept = try await thumbnails.thumbnail(
+        at: "/t/a.jpg", entry: file("a.jpg"), side: 16, on: disk, forPreview: true)
+    #expect(kept === small)
     maker.hold("/t/a.jpg")
     let reader = GatedItemInfoReader(["/t/a.jpg": info(1)])
     reader.releaseAll()
@@ -3191,6 +3192,37 @@ private func photoPane(
     let large = testThumbnail(pixels: 256)
     maker.answer("/t/a.jpg", with: large)
     await settle { trail(pane).shownPreview?.thumbnail === large }
+}
+
+/// A row's thumbnail is drawn in Finder's icon frame, with a shadow, which Finder's preview
+/// doesn't draw: kept, it never shows in the preview, which waits for its own
+/// (0090-preview-column.md).
+@MainActor @Test func aRowsKeptThumbnailNeverShowsInThePreview() async throws {
+    let maker = GatedThumbnailMaker()
+    let thumbnails = ThumbnailService(maker: maker)
+    let row = testThumbnail(pixels: 32)
+    maker.answer("/t/a.jpg", with: row)
+    let disk = VolumeIdentity(device: "/dev/disk3s1", mountPoint: "/", kind: .local)
+    _ = try await thumbnails.thumbnail(at: "/t/a.jpg", entry: file("a.jpg"), side: 16, on: disk)
+    maker.hold("/t/a.jpg")
+    let reader = GatedItemInfoReader(["/t/a.jpg": info(1)])
+    reader.releaseAll()
+    let clock = ManualClock()
+    let fixture = await photoPane(
+        maker: maker, reader: reader, clock: clock, thumbnails: thumbnails)
+    let pane = fixture.pane
+
+    select("a.jpg", in: trail(pane).columns[1])
+
+    #expect(trail(pane).preview?.thumbnail == nil)
+    #expect(await maker.waitForCalls(2))
+    #expect(maker.calls.last?.framed == false)
+    clock.advance(by: ColumnTrail.previewHold)
+    await settle { trail(pane).shownPreview?.location == Location(path: "/t/a.jpg") }
+    #expect(trail(pane).shownPreview?.thumbnail == nil)
+    let own = testThumbnail(pixels: 256)
+    maker.answer("/t/a.jpg", with: own)
+    await settle { trail(pane).shownPreview?.thumbnail === own }
 }
 
 /// A thumbnail that takes longer than the hold shows in place of the icon once it lands.
