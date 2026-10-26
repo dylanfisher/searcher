@@ -1,10 +1,9 @@
 /// What the panes show and in what order: the hidden files, `.DS_Store`, columns from home and
 /// folders first toggles, which are app-wide `Settings`, as are the toggles of the sidebar's
-/// groups, and the sort keys, which sort the
-/// focused pane by a column. A sort key for the column already sorted by reverses it. Space
-/// opens and closes Quick Look on the selection, Cmd-F opens the pane's filter field, and Cmd-1
-/// and Cmd-3 show the pane as a list or as columns. The appearance commands make the app light,
-/// dark or follow the system.
+/// groups, and the sort keys, which sort the focused pane by a column. A sort key for the column
+/// already sorted by reverses it. Space opens and closes Quick Look on the selection, Cmd-F opens
+/// the pane's filter field, and Cmd-1 and Cmd-3 show the pane as a list or as columns. The
+/// appearance commands make the app light, dark or follow the system.
 public enum ViewCommands: CommandSet {
     public static let toggleHidden = Command(
         id: CommandID("view.toggleHidden"), title: "Show Hidden Files",

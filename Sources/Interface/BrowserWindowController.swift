@@ -11,9 +11,9 @@ import Quartz
 /// leaves; one the user opened stays until the user closes it
 /// (docs/decisions/0067-operations-panel.md). Left of all that, the sidebar lists the favorites
 /// and the saved workspaces while the workspace says it shows; dragging it closed hides it there
-/// too (docs/decisions/0086-workspace-sidebar.md, docs/decisions/0107-sidebar-favorites.md). Open Quickly shows the command palette over the
-/// window, and Esc there gives the keys back to the focused pane
-/// (docs/decisions/0087-palette-window.md).
+/// too (docs/decisions/0086-workspace-sidebar.md, docs/decisions/0107-sidebar-favorites.md).
+/// Open Quickly shows the command palette over the window, and Esc there gives the keys back to
+/// the focused pane (docs/decisions/0087-palette-window.md).
 ///
 /// Commands change the workspace, and the window shows the result after each one. The window's
 /// first responder stays in the selected tab's focused pane: a command that moves the focus moves
