@@ -67,6 +67,8 @@ private func column(in columns: NSView) -> (ColumnScrollView, NSTableView) {
     let (scrollView, table) = column(in: NSView())
     #expect(!scrollView.hasHorizontalScroller)
     #expect(scrollView.horizontalScrollElasticity == .none)
+    // It bounces vertically even when its rows fit, as Finder's columns do.
+    #expect(scrollView.verticalScrollElasticity == .allowed)
 
     table.tableColumns[0].width = 2000
     scrollView.contentView.scroll(to: NSPoint(x: 300, y: 0))
