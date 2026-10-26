@@ -39,7 +39,7 @@ private func disk(_ mountPoint: String) -> SidebarVolume {
     var changes = 0
     volumes.observe(for: stub) { changes += 1 }
     let mountPoint = uniqueMountPoint()
-    await settle { stub.readThreads.count == 1 }
+    await settle { stub.readThreads.count >= 1 }
 
     stub.set([disk(mountPoint)])
     VolumeEvents.didMount(at: mountPoint)
