@@ -21,7 +21,11 @@ the pane, which can't show a sheet: Browser has no AppKit.
   as a reload, keeping its folder monitor, which `PaneViewController` restarts only when the
   location changes. Back and Forward move without recording. `History` keeps two stacks of a
   location and the name under the cursor there, nothing else: no filter, no sort, no scroll
-  position. It has no size limit.
+  position. It has no size limit. (Amended 2026-10-25: in column view each move of the keys to
+  another column is a step too, since the pane's folder is the focused column's, and Back or
+  Forward to a folder the trail shows moves the keys to its column, selecting the remembered
+  entry against the rows it already has, instead of listing it again; see
+  [0041](0041-column-model.md).)
 - **Restoring the selection.** Back and Forward move as a navigation with a name to select does,
   by `ExactName`, so the selection is resolved on the load's worker and goes through the
   provisional and settled paths of [0029](0029-row-movement.md) if the user moves first. A

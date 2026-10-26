@@ -644,6 +644,42 @@ extension Fixture {
     #expect(fixture.pane.location == Location(path: "/Volumes/r/docs/sub"))
 }
 
+/// A press on the folder selected in a column left of the focused one closes the columns right of
+/// that folder's column at mouse down, as in Finder, and leaves nothing selected in it.
+@MainActor @Test func aPressOnTheSelectedFolderInAnEarlierColumnClosesTheColumnsPastItsOwn()
+    async throws
+{
+    // Room for every column and the preview, so moving the keys to the first column scrolls
+    // nothing out from under the press.
+    let width = Settings.defaultColumnWidth * 5
+    let fixture = await Fixture(width: width)
+    await fixture.openThreeColumns()
+    await fixture.select("one.flac", inColumn: 2)
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: width, height: 400), styleMask: [.titled],
+        backing: .buffered, defer: true)
+    window.isReleasedWhenClosed = false
+    window.contentView?.addSubview(fixture.controller.view)
+    window.contentView?.layoutSubtreeIfNeeded()
+    #expect(window.makeFirstResponder(fixture.tables[2]))
+    // The first column lists a.txt, docs, other.
+    let table = fixture.tables[0]
+    let point = table.convert(NSPoint(x: 20, y: table.rect(ofRow: 1).midY), to: nil)
+    let press = try #require(
+        NSEvent.mouseEvent(
+            with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
+            pressure: 1))
+
+    table.selectOnPress(press)
+
+    #expect(fixture.trail.focusedIndex == 0)
+    #expect(fixture.trail.columns.map(\.pane.location.name) == ["r", "docs"])
+    #expect(fixture.trail.columns[1].pane.selection.isEmpty)
+    #expect(fixture.tables.count == 2)
+    #expect(table.selectedRowIndexes == [1])
+}
+
 @MainActor @Test func aRealPressInAnotherColumnSelectsItsRowWhileTheButtonIsDown() async throws {
     let fixture = await Fixture()
     await fixture.select("docs", inColumn: 0)

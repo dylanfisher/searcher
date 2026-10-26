@@ -156,27 +156,43 @@ private func press(_ chord: KeyChord, on pane: Pane) throws {
     #expect(paths(pane) == ["/", "/r", "/r/docs"])
 }
 
-/// A path bar click on a folder whose column the trail shows moves the keys there, keeping every
-/// column and selection, and is no step in the history; one above the trail's root navigates.
-@MainActor @Test func aPathBarClickOnAShownFolderFocusesItsColumn() async throws {
+/// A path bar click on a folder whose column the trail shows moves the keys there and closes the
+/// columns right of it, leaving the folder it came from as the cursor, unselected. Nothing lists
+/// again, and it is a step in the history: Back starts the trail again at the folder left, since
+/// its column has closed.
+@MainActor @Test func aPathBarClickOnAShownFolderClosesTheColumnsRightOfIt() async throws {
     let fixture = await columnPane(at: "/r/docs", selecting: "sub")
     let pane = fixture.pane
     await settle { paths(pane) == ["/", "/r", "/r/docs", "/r/docs/sub"] }
     try press(KeyChord(.right), on: pane)
+    await settle { trail(pane).focused.pane.selection.cursor == ExactName("deep.txt") }
+    let back = pane.history.backEntries.count
     #expect(trail(pane).focusedIndex == 3)
-    let columns = trail(pane).columns.map(\.pane)
-    let selections = columns.map(\.selection)
+    let columns = trail(pane).columns.prefix(2).map(\.pane)
     let listings = fixture.lister.calls.count
 
     pane.showFolderAbove(Location(path: "/r"), comingFrom: "docs")
 
+    #expect(paths(pane) == ["/", "/r"])
     #expect(trail(pane).focusedIndex == 1)
     #expect(pane.location == Location(path: "/r"))
     #expect(trail(pane).columns.map(\.pane).elementsEqual(columns, by: ===))
-    #expect(trail(pane).columns.map(\.pane.selection) == selections)
-    #expect(!pane.canGoBack)
+    let shown = trail(pane).columns[1].pane.selection
+    #expect(shown.isEmpty)
+    #expect(shown.cursor == ExactName("docs"))
+    #expect(
+        pane.history.backEntries.last
+            == History.Entry(
+                location: Location(path: "/r/docs/sub"), selected: ExactName("deep.txt")))
+    #expect(pane.history.backEntries.count == back + 1)
     await drainMainQueue()
     #expect(fixture.lister.calls.count == listings)
+
+    try press(KeyChord("[", modifiers: .command), on: pane)
+
+    #expect(paths(pane) == ["/", "/r", "/r/docs", "/r/docs/sub"])
+    #expect(trail(pane).focusedIndex == 3)
+    #expect(trail(pane).focused.pane.selection.cursor == ExactName("deep.txt"))
 }
 
 @MainActor @Test func aPathBarClickInTheListNavigatesSelectingTheFolderLeft() async throws {
@@ -721,14 +737,12 @@ func leftOrCommandUpMovesToTheParentsColumnAndDoesNothingAtTheRoot(chord: KeyCho
     #expect(trail(pane).columns[1].pane.state.names == ["a.txt", "docs", "other"])
 }
 
-@MainActor @Test func backInColumnModeStartsTheTrailAtTheFolderLeft() async throws {
+@MainActor @Test func backInColumnModeStartsTheTrailAtAFolderLeftThatHasNoColumn() async throws {
     let fixture = await columnPane()
     let pane = fixture.pane
     select("docs", in: trail(pane).columns[1])
     await settle { trail(pane).columns[2].pane.state.isLoaded }
     try press(KeyChord(.right), on: pane)
-    // Moving between columns isn't a step in the history.
-    #expect(!pane.commandPane.canGoBack)
 
     pane.navigate(to: Location(path: "/r/other"))
     #expect(paths(pane) == ["/", "/r", "/r/other"])
@@ -739,6 +753,201 @@ func leftOrCommandUpMovesToTheParentsColumnAndDoesNothingAtTheRoot(chord: KeyCho
     #expect(paths(pane) == ["/", "/r", "/r/docs"])
     #expect(pane.location == Location(path: "/r/docs"))
     #expect(trail(pane).focused.pane.selection.cursor == ExactName("sub"))
+}
+
+/// The folder the pane shows, its focused column's, is what History keeps in column view, as
+/// the title Finder's Back follows: → and ← into another column are steps, and Back and Forward
+/// to a folder the trail still shows move the focus there without building the trail again.
+@MainActor @Test func movesBetweenColumnsAreStepsThatBackAndForwardRetrace() async throws {
+    let fixture = await columnPane(selecting: "docs")
+    let pane = fixture.pane
+    await settle { paths(pane).count == 3 && trail(pane).columns[2].pane.state.isLoaded }
+    #expect(!pane.canGoBack)
+
+    try press(KeyChord(.right), on: pane)
+
+    #expect(pane.location == Location(path: "/r/docs"))
+    #expect(pane.commandPane.canGoBack)
+    #expect(
+        pane.history.backEntries
+            == [History.Entry(location: Location(path: "/r"), selected: ExactName("docs"))])
+    await settle { paths(pane) == ["/", "/r", "/r/docs", "/r/docs/sub"] }
+    await settle { trail(pane).columns[3].pane.state.isLoaded }
+    try press(KeyChord(.right), on: pane)
+    await settle { trail(pane).focused.pane.selection.cursor == ExactName("deep.txt") }
+    #expect(pane.history.backEntries.count == 2)
+    let columns = trail(pane).columns.map(\.pane)
+    let listings = fixture.lister.calls.count
+
+    try press(KeyChord("[", modifiers: .command), on: pane)
+
+    // Back to `docs`: its column takes the keys with `sub` selected, and `sub`'s column is the
+    // last, with nothing selected, as `docs` showed it.
+    #expect(trail(pane).columns.map(\.pane).elementsEqual(columns, by: ===))
+    #expect(trail(pane).focusedIndex == 2)
+    #expect(pane.location == Location(path: "/r/docs"))
+    #expect(trail(pane).focused.pane.selection.cursor == ExactName("sub"))
+    #expect(trail(pane).columns[3].pane.selection.isEmpty)
+    #expect(pane.history.backEntries.count == 1)
+    #expect(pane.canGoForward)
+
+    try press(KeyChord("[", modifiers: .command), on: pane)
+
+    #expect(trail(pane).focusedIndex == 1)
+    #expect(pane.location == Location(path: "/r"))
+    #expect(paths(pane) == ["/", "/r", "/r/docs"])
+    #expect(trail(pane).columns[2].pane.selection.isEmpty)
+    #expect(!pane.canGoBack)
+    await drainMainQueue()
+    #expect(fixture.lister.calls.count == listings)
+
+    try press(KeyChord("]", modifiers: .command), on: pane)
+    try press(KeyChord("]", modifiers: .command), on: pane)
+
+    // Forward selects the entry remembered in each folder again.
+    #expect(trail(pane).focusedIndex == 3)
+    #expect(pane.location == Location(path: "/r/docs/sub"))
+    #expect(trail(pane).focused.pane.selection.cursor == ExactName("deep.txt"))
+    #expect(trail(pane).columns[2].pane.selection.cursor == ExactName("sub"))
+    #expect(!pane.canGoForward)
+    #expect(pane.history.backEntries.count == 2)
+
+    try press(KeyChord(.left), on: pane)
+
+    // ← is a step too, and it ends the way forward.
+    #expect(
+        pane.history.backEntries.last
+            == History.Entry(
+                location: Location(path: "/r/docs/sub"), selected: ExactName("deep.txt")))
+    try press(KeyChord("[", modifiers: .command), on: pane)
+    #expect(pane.location == Location(path: "/r/docs/sub"))
+    #expect(trail(pane).focused.pane.selection.cursor == ExactName("deep.txt"))
+}
+
+/// A held ↓ through a column of folders keeps the focus in its column, so it makes no step,
+/// however many columns open on the way.
+@MainActor @Test func downThroughFoldersMakesNoStep() async throws {
+    let clock = ManualClock()
+    let fixture = await keyedPane(clock: clock)
+    let pane = fixture.pane
+
+    for _ in 0..<3 {
+        try press(KeyChord(.down), on: pane)
+        clock.advance(by: ColumnTrail.openDelay)
+        await settle { trail(pane).columns.count == 3 }
+    }
+
+    #expect(paths(pane) == ["/", "/k", "/k/f3"])
+    #expect(!pane.canGoBack)
+}
+
+/// A click on the folder selected in a column left of the focused one, which its column opens,
+/// closes the columns right of that folder's, and leaves nothing selected in it, as in Finder.
+@MainActor @Test func aPressOnTheSelectedFolderShowsOnlyItsColumnRightOfIt() async throws {
+    let fixture = await columnPane(at: "/r/docs/sub")
+    let pane = fixture.pane
+    #expect(paths(pane) == ["/", "/r", "/r/docs", "/r/docs/sub"])
+    select("deep.txt", in: trail(pane).columns[3])
+    let first = trail(pane).columns[1]
+    let docs = trail(pane).columns[2].pane
+
+    trail(pane).focus(first)
+    first.pane.pressSelectedFolder()
+
+    #expect(paths(pane) == ["/", "/r", "/r/docs"])
+    #expect(trail(pane).columns[2].pane === docs)
+    #expect(docs.selection.isEmpty)
+    #expect(trail(pane).focusedIndex == 1)
+    #expect(first.pane.selection.cursor == ExactName("docs"))
+    #expect(trail(pane).preview == nil)
+
+    // A press on a selected file, or in the last column, closes nothing.
+    select("x.txt", in: trail(pane).columns[2])
+    #expect(trail(pane).preview?.location == Location(path: "/r/docs/x.txt"))
+    trail(pane).columns[2].pane.pressSelectedFolder()
+    #expect(paths(pane) == ["/", "/r", "/r/docs"])
+    #expect(trail(pane).preview?.location == Location(path: "/r/docs/x.txt"))
+}
+
+/// The root check can find the root past the focused column, when ← moved the focus up before
+/// the check landed. Moving the focus back is a correction of the trail, so it is no step.
+@MainActor @Test func theRootCheckMovingTheFocusRecordsNoStep() async {
+    let share = VolumeIdentity(
+        device: "//me@nas.invalid/r/docs", mountPoint: "/r/docs", kind: .network)
+    let lister = GatedLister(tree.mapValues { .batches([$0]) })
+    lister.releaseAll()
+    let pane = Pane(
+        location: Location(path: "/r/docs"),
+        service: ListingService(lister: lister, mountedVolumes: { [share] }),
+        systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true,
+        viewMode: .column)
+    trail(pane).moveLeft()
+    #expect(trail(pane).focusedIndex == 1)
+    let back = pane.history.backEntries
+
+    await trail(pane).rootChecked()
+
+    #expect(paths(pane) == ["/r/docs"])
+    #expect(trail(pane).focusedIndex == 0)
+    #expect(pane.history.backEntries == back)
+}
+
+/// Open on a folder in a column the keys aren't in is one gesture: one step, from the column
+/// that had them, so Back lands there and not on the column opened from.
+@MainActor @Test func openOnAFolderInAnotherColumnIsOneStep() async {
+    let fixture = await columnPane(at: "/r/docs/sub")
+    let pane = fixture.pane
+    #expect(trail(pane).focusedIndex == 3)
+    select("deep.txt", in: trail(pane).columns[3])
+    let back = pane.history.backEntries.count
+
+    trail(pane).openFolder(from: trail(pane).columns[1].pane)
+
+    #expect(trail(pane).focusedIndex == 2)
+    #expect(pane.history.backEntries.count == back + 1)
+    #expect(
+        pane.history.backEntries.last
+            == History.Entry(
+                location: Location(path: "/r/docs/sub"), selected: ExactName("deep.txt")))
+}
+
+/// Show Package Contents on a package in a column the keys aren't in is one step likewise.
+@MainActor @Test func showPackageContentsInAnotherColumnIsOneStep() async {
+    let fixture = PaneFixture(
+        at: "/root",
+        folders: [
+            "/": [folder("root")], "/root": [package("App.app"), folder("docs")],
+            "/root/App.app": [folder("Contents")],
+        ])
+    let pane = fixture.pane
+    await settle { pane.state.isLoaded }
+    pane.setViewMode(.column)
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+    let parent = trail(pane).columns[1].pane
+    parent.select(Selection([ExactName("App.app")], cursor: ExactName("App.app")))
+    trail(pane).focus(trail(pane).columns[0])
+    let back = pane.history.backEntries.count
+
+    parent.showPackageContents()
+
+    #expect(paths(pane).last == "/root/App.app")
+    #expect(pane.history.backEntries.count == back + 1)
+}
+
+/// A press that closes the column right of the pressed one clears that column's selection, which
+/// is no step of its selection history: the press is the step, in the column it was made in.
+@MainActor @Test func aPressShowingTheNextColumnAloneLeavesItsSelectionHistoryAlone() async {
+    let fixture = await columnPane(at: "/r/docs/sub")
+    let pane = fixture.pane
+    let docs = trail(pane).columns[2].pane
+    docs.select(Selection([ExactName("sub")], cursor: ExactName("sub")), recordingAs: nil)
+    #expect(!docs.canUndoSelection)
+    trail(pane).focus(trail(pane).columns[1])
+
+    trail(pane).columns[1].pane.pressSelectedFolder()
+
+    #expect(docs.selection.isEmpty)
+    #expect(!docs.canUndoSelection)
 }
 
 @MainActor @Test func openOnAFolderInAColumnMovesIntoItsColumn() async throws {
@@ -781,8 +990,8 @@ func leftOrCommandUpMovesToTheParentsColumnAndDoesNothingAtTheRoot(chord: KeyCho
     #expect(changes == 1)
 }
 
-@MainActor @Test func backKeepsTheFocusedColumnsSort() async throws {
-    let fixture = await columnPane()
+@MainActor @Test func backToAFolderWithNoColumnKeepsTheFocusedColumnsSort() async throws {
+    let fixture = await columnPane(at: "/r/docs")
     let pane = fixture.pane
     pane.navigate(to: Location(path: "/r/other"))
     await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
@@ -791,7 +1000,7 @@ func leftOrCommandUpMovesToTheParentsColumnAndDoesNothingAtTheRoot(chord: KeyCho
 
     try press(KeyChord("[", modifiers: .command), on: pane)
 
-    #expect(paths(pane) == ["/", "/r"])
+    #expect(paths(pane) == ["/", "/r", "/r/docs"])
     #expect(trail(pane).focused.pane.sortColumn == .size)
     #expect(trail(pane).focused.pane.load?.column == .size)
 }
@@ -893,8 +1102,9 @@ func leftOrCommandUpMovesToTheParentsColumnAndDoesNothingAtTheRoot(chord: KeyCho
     trail(pane).focused.pane.monitor = other
     try press(KeyChord("[", modifiers: .command), on: pane)
 
+    // Back to `/r`, which the trail shows, selects `docs` there again, closing `other`'s column.
     #expect(other.stopCount == 1)
-    #expect(paths(pane) == ["/", "/r"])
+    #expect(paths(pane) == ["/", "/r", "/r/docs"])
 }
 
 @MainActor @Test func goToFolderInColumnModeStartsTheTrailAtTheFolder() async {

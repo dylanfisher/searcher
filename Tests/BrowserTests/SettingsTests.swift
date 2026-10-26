@@ -6,7 +6,7 @@ import Testing
 @testable import Browser
 
 /// Settings for a test that never changes one, over a `temporarySuite` under the temporary
-/// directory. Nothing is written, so nothing is left. TestSupport can't build `Settings`, which
+/// directory, which removes its file with the settings. TestSupport can't build `Settings`, which
 /// is in Browser, so each test target has this and `storedSettings`.
 @MainActor
 func untouchedSettings() -> Settings {
@@ -148,6 +148,50 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
         let relaunched = Settings(defaults: try #require(UserDefaults(suiteName: name)))
 
         #expect(relaunched.columnWidth == width)
+    }
+}
+
+@MainActor @Test func thePalettesPlaceSurvivesARelaunchAndClearingItRemovesIt() throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let name = folder.url.appending(path: "preferences").path
+    let first = Settings(defaults: try #require(UserDefaults(suiteName: name)))
+    #expect(first.palettePlace == nil)
+
+    first.palettePlace = Settings.PalettePlace(x: 0.25, y: 1)
+    let relaunched = Settings(defaults: try #require(UserDefaults(suiteName: name)))
+    #expect(relaunched.palettePlace == Settings.PalettePlace(x: 0.25, y: 1))
+
+    relaunched.palettePlace = nil
+    let defaults = try #require(UserDefaults(suiteName: name))
+    #expect(defaults.object(forKey: Settings.Key.palettePlace.rawValue) == nil)
+    #expect(Settings(defaults: defaults).palettePlace == nil)
+}
+
+/// Anything but two numbers within 0 and 1 reads as no place, the palette's own, and is removed:
+/// a place beyond a screen's room can't be put on one.
+@MainActor @Test func aPalettePlaceOfAnotherShapeIsDiscarded() throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let key = Settings.Key.palettePlace.rawValue
+    for stored: Any in [
+        [0.5], [0.5, 0.5, 0.5], ["0.5", 0.5], [true, 0.5], [0.5, false], [-0.1, 0.5],
+        [0.5, 1.1], [Double.nan, 0.5], [0.5, Double.infinity], 0.5, "0.5,0.5",
+        ["x": 0.5, "y": 0.5],
+    ] {
+        let defaults = temporarySuite(in: folder.url.path)
+        defaults.set(stored, forKey: key)
+
+        let settings = Settings(defaults: defaults)
+
+        #expect(settings.palettePlace == nil, "\(stored)")
+        #expect(defaults.object(forKey: key) == nil, "\(stored)")
+    }
+}
+
+@MainActor @Test func aPalettePlaceIsOnlyMadeFromSharesWithinZeroAndOne() {
+    #expect(Settings.PalettePlace(x: 0, y: 0) != nil)
+    #expect(Settings.PalettePlace(x: 1, y: 1) != nil)
+    for (x, y) in [(-0.01, 0.5), (0.5, 1.01), (Double.nan, 0.5), (0.5, -Double.infinity)] {
+        #expect(Settings.PalettePlace(x: x, y: y) == nil, "\(x), \(y)")
     }
 }
 

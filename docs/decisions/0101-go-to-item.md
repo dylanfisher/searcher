@@ -22,14 +22,25 @@ matcher ([0079](0079-fuzzy-match.md)) and the highlighting. Type-to-select
 - **The palette in another mode.** The same `PaletteWindowController` and `Palette`, with one
   source, `EntrySource`, in place of Open Quickly's four. The field's placeholder says
   "Go to Item in <folder>" and VoiceOver calls the panel "Go to Item". ⌘P, ⇧⌘K and ⌘W close it, as
-  ⌘K and ⌘W close Open Quickly; Esc closes it and changes nothing.
+  ⌘K and ⌘W close Open Quickly; Esc closes it and changes nothing. (Amended 2026-10-25: Open
+  Quickly has ⇧⌘P beside ⌘K in the same way ([0087](0087-palette-window.md)), and both panels
+  open on the screen of the window that opens them, centered near its top or where the last one
+  was dragged.)
 - **Candidates.** The rows of the command pane, the focused column in column view, as its
   listing has them when the palette opens: hidden entries and the filter as the pane shows them,
   in its sort. Nothing nested and no file-system call. Each item is titled with the name, its kind
   beside it, and its row shows the type's icon, as the list does. The listing is a snapshot: a
   row that arrives while the palette is open isn't listed, and choosing one that has left the
   rows since does nothing: the selection, the scroll and the selection history stay as they
-  were.
+  were. (Amended 2026-10-25, Dylan: "multi line names in cmd p are hard to read, too tight
+  leading etc". A name too long for one line wraps, in both palettes, and its row grows to hold
+  it: 3 pt between the lines beyond the font's leading, and 7 pt above and below, where the row
+  had stayed 32 pt and the lines overflowed it. A title that fits keeps the 32 pt row. The title
+  wraps at the room the icon, the chord and the detail leave; the detail keeps up to a third of
+  the row beside the first line, so a long name doesn't squeeze its kind to a letter. Each row's
+  height comes from one never-shown cell that measures the title's height for its wrap width
+  without a layout pass, about 1.4 ms for 50 rows in a debug test build. Wrapping rather than
+  truncating keeps the whole name in view, which is what the list is searched for.)
 - **Ranking: the match alone.** Entries are a kind of their own with no kind or frecency bonus,
   so they fall in one bucket and `FuzzyMatcher.best` ranks them by score, then the shorter name,
   then pane order. Frecency counts folders visited, not rows chosen, and a bonus for folders over

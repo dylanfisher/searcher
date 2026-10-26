@@ -28,6 +28,8 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
     /// The query whose results the rows show; nil before the first results.
     public private(set) var shownQuery: String?
     private var results: [Palette.Result] = []
+    /// The column width the rows' heights were last measured at.
+    private var measuredWidth: CGFloat = 0
 
     /// What the field's editor is asked to do for a key with no binding, such as Cmd-T.
     private static let noop = Selector(("noop:"))
@@ -53,9 +55,28 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
         if #available(macOS 26, *) { return true }
         return false
     }
-    /// The window's backdrop with `content` inside it. From macOS 26 it is the system's Liquid
-    /// Glass (`NSGlassEffectView`), which rounds, blurs and refracts what is behind the panel
-    /// itself; before that, a `.popover` blur in the same rounded shape.
+    /// The window's content: the backdrop with `content` inside it, clipped to the rounded
+    /// shape, with a hairline edge over it. While the app is active the glass draws a faint dark
+    /// fill over its whole rectangle, its rounded corners included, which shows as a square
+    /// around the panel; the clip leaves the corners clear, so the window's shadow, which the
+    /// window server shapes from the alpha the window drew, is rounded too.
+    private static func makeContent(holding content: NSView) -> NSView {
+        let bounds = NSRect(x: 0, y: 0, width: width, height: height)
+        let clip = NSView(frame: bounds)
+        clip.wantsLayer = true
+        clip.layer?.cornerRadius = cornerRadius
+        clip.layer?.masksToBounds = true
+        for view in [makeBackdrop(holding: content), PaletteEdgeView(frame: bounds)] {
+            view.frame = bounds
+            view.autoresizingMask = [.width, .height]
+            clip.addSubview(view)
+        }
+        return clip
+    }
+
+    /// The backdrop with `content` inside it. From macOS 26 it is the system's Liquid Glass
+    /// (`NSGlassEffectView`), which rounds, blurs and refracts what is behind the panel itself;
+    /// before that, a `.popover` blur in the same rounded shape.
     private static func makeBackdrop(holding content: NSView) -> NSView {
         if backdropIsGlass, #available(macOS 26, *) {
             let glass = NSGlassEffectView(
@@ -113,7 +134,7 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
     public override func loadView() {
         let background = NSView(
             frame: NSRect(x: 0, y: 0, width: Self.width, height: Self.height))
-        view = Self.makeBackdrop(holding: background)
+        view = Self.makeContent(holding: background)
 
         let glass = NSImageView(
             image: NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)
@@ -296,8 +317,66 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
         return cell
     }
 
+    /// A title too long for one line wraps, and its row grows to fit it.
+    public func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        guard let column = tableView.tableColumns.first else {
+            preconditionFailure("the palette's table has no column")
+        }
+        measuredWidth = column.width
+        return PaletteCellView.height(of: results[row], width: column.width)
+    }
+
+    /// The column narrows when a scroller appears and widens when it goes, which wraps a title
+    /// that fit or frees one that wrapped, so the rows are measured again.
+    public func tableViewColumnDidResize(_ notification: Notification) {
+        guard let column = tableView.tableColumns.first, column.width != measuredWidth else {
+            return
+        }
+        tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<results.count))
+    }
+
     public func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         PaletteRowView()
+    }
+}
+
+/// The panel's edge: a light hairline around its rounded shape, as Spotlight's has, a pixel wide
+/// on any display. It takes no clicks.
+@MainActor
+final class PaletteEdgeView: NSView {
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.cornerRadius = PaletteViewController.cornerRadius
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("PaletteEdgeView is built in code")
+    }
+
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        guard let layer else { return }
+        layer.borderWidth = 1 / (window?.backingScaleFactor ?? 2)
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer.borderColor = Self.color.cgColor
+        }
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        needsDisplay = true
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    /// White over the glass: stronger in light mode, where the glass is pale, and fainter in
+    /// dark mode, where it would glare.
+    static let color = NSColor(name: nil) { appearance in
+        let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        return NSColor(white: 1, alpha: isDark ? 0.2 : 0.6)
     }
 }
 
@@ -305,6 +384,9 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
 /// as Spotlight's selected row is.
 @MainActor
 private final class PaletteRowView: NSTableRowView {
+    /// The rows keep their clicks, margins included; the panel's background is what drags.
+    override var mouseDownCanMoveWindow: Bool { false }
+
     override var isEmphasized: Bool {
         get { true }
         set {}

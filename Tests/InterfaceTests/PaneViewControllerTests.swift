@@ -426,9 +426,10 @@ private final class VolumeName: @unchecked Sendable {
     #expect(fixture.table.selectedRowIndexes == [2])
 }
 
-/// In column view a click on a folder whose column shows moves the keys to that column: every
-/// column and its selection stay and Back has no step (0103-column-trail-from-the-root.md).
-@MainActor @Test func clickingAPathBarSegmentInColumnViewFocusesThatFoldersColumn() async throws {
+/// In column view a click on a folder whose column shows moves the keys to that column and closes
+/// the columns right of it, leaving the folder it came from as the cursor; Back has a step
+/// (0103-column-trail-from-the-root.md).
+@MainActor @Test func clickingAPathBarSegmentInColumnViewShowsThatFoldersColumnLast() async throws {
     let fixture = Fixture(at: "/root/docs")
     await settle { fixture.pane.state.isLoaded }
     fixture.pane.setViewMode(.column)
@@ -438,16 +439,16 @@ private final class VolumeName: @unchecked Sendable {
             && fixture.controller.pathBar.location == Location(path: "/root/docs")
     }
     let columns = trail.columns.map(\.pane)
-    let selections = columns.map(\.selection)
     #expect(fixture.controller.pathBar.segments.map(\.title) == ["Test Disk", "root", "docs"])
 
     fixture.controller.pathBar.segments[1].performClick(nil)
 
     #expect(trail.focusedIndex == 1)
     #expect(fixture.pane.location == Location(path: "/root"))
-    #expect(trail.columns.map(\.pane).elementsEqual(columns, by: ===))
-    #expect(trail.columns.map(\.pane.selection) == selections)
-    #expect(!fixture.pane.canGoBack)
+    #expect(trail.columns.map(\.pane).elementsEqual(columns.prefix(2), by: ===))
+    #expect(trail.focused.pane.selection.isEmpty)
+    #expect(trail.focused.pane.selection.cursor == ExactName("docs"))
+    #expect(fixture.pane.canGoBack)
     #expect(fixture.controller.pathBar.location == Location(path: "/root"))
 }
 
@@ -704,9 +705,11 @@ private final class WindowFixture {
 
     pane.setViewMode(.column)
     let trail = try #require(pane.columnTrail)
+    // The ancestors above the folder are left out: they include the real temporary directory,
+    // which can hold tens of thousands of entries and list for longer than a settle waits.
     await settle {
         trail.columns.last?.pane.location.path == url.path + "/sub"
-            && trail.columns.allSatisfy { $0.pane.monitor != nil }
+            && trail.columns.suffix(2).allSatisfy { $0.pane.monitor != nil }
     }
     #expect(pane.monitor == nil)
 

@@ -1102,16 +1102,18 @@ private func escapePalette(in fixture: Fixture) throws {
     #expect(editor.delegate === filter)
 }
 
-@MainActor @Test func cmdKAndCmdWInThePaletteCloseItAsKeyEquivalents() async throws {
-    for key in ["k", "w"] {
+@MainActor @Test func cmdKCmdShiftPAndCmdWInThePaletteCloseItAsKeyEquivalents() async throws {
+    for chord in [
+        ("k", NSEvent.ModifierFlags.command), ("p", [.command, .shift]), ("w", .command),
+    ] {
         let fixture = try await Fixture()
         let table = try fixture.keyTable
         fixture.controller.showPalette()
         let panel = try #require(fixture.controller.palette?.window)
 
-        #expect(panel.performKeyEquivalent(with: try keyEvent(key, modifiers: .command)))
+        #expect(panel.performKeyEquivalent(with: try keyEvent(chord.0, modifiers: chord.1)))
 
-        #expect(fixture.controller.palette == nil, "Cmd-\(key)")
+        #expect(fixture.controller.palette == nil, "\(chord)")
         #expect(fixture.window.firstResponder === table)
         #expect(fixture.workspace.tabs.count == 1)
     }
@@ -1182,6 +1184,17 @@ private func paletteTitles(in fixture: Fixture) throws -> [String] {
         _ = try await typeInPalette("inside", in: fixture)
         #expect(try paletteTitles(in: fixture) == [])
     }
+}
+
+@MainActor @Test func cmdShiftPShowsOpenQuicklyAsCmdKDoes() async throws {
+    let fixture = try await Fixture()
+
+    try fixture.press(try keyEvent("p", modifiers: [.command, .shift]))
+
+    let palette = try #require(fixture.controller.palette)
+    #expect(
+        palette.viewController.field.placeholderString
+            == PaletteViewController.openQuicklyPlaceholder)
 }
 
 @MainActor @Test func returnInGoToItemSelectsAFolderWithoutOpeningIt() async throws {

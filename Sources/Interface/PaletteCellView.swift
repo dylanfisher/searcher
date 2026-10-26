@@ -16,15 +16,31 @@ final class PaletteCellView: NSTableCellView {
     private var shown: Palette.Result?
 
     static let identifier = NSUserInterfaceItemIdentifier("palette")
-    /// The row's height: a line of system text with room around it, as Spotlight's rows have.
+    /// The height of a row whose title fits on one line: a line of system text with room around
+    /// it, as Spotlight's rows have. A longer title wraps, and its row grows to fit it.
     static let rowHeight: CGFloat = 32
+    /// The room above and below a title that wraps.
+    static let wrappedPadding: CGFloat = 7
+    /// The space between a wrapped title's lines, beyond the font's own leading, so the lines
+    /// don't crowd each other.
+    static let lineSpacing: CGFloat = 3
     private static let fontSize = NSFont.systemFontSize + 1
     private static let iconSize: CGFloat = 20
+    /// How far the icon sits from the leading edge.
+    private static let iconInset: CGFloat = 6
+    /// The space between the icon, the title, the detail, the chord and the trailing edge.
+    private static let spacing: CGFloat = 8
+
+    /// A click on the cell selects its row; it doesn't drag the panel.
+    override var mouseDownCanMoveWindow: Bool { false }
 
     init() {
         super.init(frame: .zero)
         identifier = Self.identifier
-        titleField.lineBreakMode = .byTruncatingMiddle
+        titleField.lineBreakMode = .byWordWrapping
+        titleField.maximumNumberOfLines = 0
+        titleField.cell?.wraps = true
+        titleField.cell?.isScrollable = false
         titleField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         titleField.setContentHuggingPriority(.defaultHigh, for: .horizontal)
         detailField.lineBreakMode = .byTruncatingTail
@@ -43,17 +59,19 @@ final class PaletteCellView: NSTableCellView {
         imageView = icon
         textField = titleField
         NSLayoutConstraint.activate([
-            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.iconInset),
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
             icon.widthAnchor.constraint(equalToConstant: Self.iconSize),
             icon.heightAnchor.constraint(equalToConstant: Self.iconSize),
-            titleField.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
+            titleField.leadingAnchor.constraint(
+                equalTo: icon.trailingAnchor, constant: Self.spacing),
             titleField.centerYAnchor.constraint(equalTo: centerYAnchor),
-            detailField.leadingAnchor.constraint(equalTo: titleField.trailingAnchor, constant: 8),
+            detailField.leadingAnchor.constraint(
+                equalTo: titleField.trailingAnchor, constant: Self.spacing),
             detailField.firstBaselineAnchor.constraint(equalTo: titleField.firstBaselineAnchor),
             chordField.leadingAnchor.constraint(
-                greaterThanOrEqualTo: detailField.trailingAnchor, constant: 8),
-            chordField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+                greaterThanOrEqualTo: detailField.trailingAnchor, constant: Self.spacing),
+            chordField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Self.spacing),
             chordField.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
         setAccessibilityElement(true)
@@ -84,6 +102,46 @@ final class PaletteCellView: NSTableCellView {
         restyle()
     }
 
+    /// The title wraps at the width the cell's own width leaves it.
+    override func layout() {
+        wrapTitle(inCellOfWidth: bounds.width)
+        super.layout()
+    }
+
+    /// The height of the row that shows `result` in a cell `width` wide: `rowHeight` for a
+    /// title on one line, and a wrapped title's lines with `wrappedPadding` above and below.
+    static func height(of result: Palette.Result, width: CGFloat) -> CGFloat {
+        let item = result.item
+        sizer.titleField.attributedStringValue = title(of: result, color: .labelColor)
+        sizer.detailField.stringValue = item.detail ?? ""
+        sizer.detailField.isHidden = item.detail == nil
+        sizer.chordField.stringValue = item.chord?.symbols ?? ""
+        sizer.chordField.isHidden = item.chord == nil
+        sizer.wrapTitle(inCellOfWidth: width)
+        let title = sizer.titleField.intrinsicContentSize.height
+        return max(rowHeight, (title + 2 * wrappedPadding).rounded(.up))
+    }
+
+    /// A cell that is never shown, which measures rows without a layout pass. It takes only the
+    /// text a row's height depends on, not its icon, label or colours.
+    static let sizer = PaletteCellView()
+
+    /// Wraps the title at the widest it can be in a cell `width` wide: all of it but the icon,
+    /// the chord, the detail and the spaces between them. The detail keeps up to a third of the
+    /// cell beside the title's first line, so a long name doesn't squeeze its kind to a letter.
+    /// A wrapping field takes its width, and so its height, from `preferredMaxLayoutWidth`.
+    private func wrapTitle(inCellOfWidth width: CGFloat) {
+        let detail =
+            detailField.isHidden ? 0 : min(detailField.intrinsicContentSize.width, width / 3)
+        let others =
+            Self.iconInset + Self.iconSize + 4 * Self.spacing
+            + chordField.intrinsicContentSize.width + detail
+        let wrapWidth = max(width - others, 0)
+        if titleField.preferredMaxLayoutWidth != wrapWidth {
+            titleField.preferredMaxLayoutWidth = wrapWidth
+        }
+    }
+
     /// The row's selection changed how it is drawn: on the accent colour, text is drawn in the
     /// selected text colour.
     override var backgroundStyle: NSView.BackgroundStyle {
@@ -109,12 +167,22 @@ final class PaletteCellView: NSTableCellView {
         icon.alphaValue = isEnabled ? 1 : 0.5
     }
 
+    private static let titleStyle: NSParagraphStyle = {
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = .byWordWrapping
+        style.lineSpacing = lineSpacing
+        return style
+    }()
+
     /// `result`'s title, its matched letters bold.
     private static func title(of result: Palette.Result, color: NSColor) -> NSAttributedString {
         let title = result.item.title
         let text = NSMutableAttributedString(
             string: title,
-            attributes: [.font: NSFont.systemFont(ofSize: fontSize), .foregroundColor: color])
+            attributes: [
+                .font: NSFont.systemFont(ofSize: fontSize), .foregroundColor: color,
+                .paragraphStyle: titleStyle,
+            ])
         let bold = NSFont.boldSystemFont(ofSize: fontSize)
         for range in result.ranges {
             text.addAttribute(.font, value: bold, range: NSRange(range, in: title))

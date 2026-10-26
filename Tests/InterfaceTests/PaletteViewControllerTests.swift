@@ -257,8 +257,9 @@ private func isBold(_ title: NSAttributedString, at offset: Int) -> Bool {
 }
 
 @MainActor @Test func theContentIsLiquidGlassFromMacOS26AndABlurBefore() {
-    let controller = PaletteWindowController(palette: Palette(sources: []))
-    let backdrop = controller.viewController.view
+    let controller = PaletteWindowController(
+        palette: Palette(sources: []), settings: untouchedSettings())
+    let backdrop = controller.viewController.view.subviews.first
     let radius = PaletteViewController.cornerRadius
 
     if #available(macOS 26, *) {
@@ -278,7 +279,8 @@ private func isBold(_ title: NSAttributedString, at offset: Int) -> Bool {
 }
 
 @MainActor @Test func nothingBetweenTheBackdropAndTheDesktopPaintsAnOpaqueBackground() throws {
-    let controller = PaletteWindowController(palette: Palette(sources: []))
+    let controller = PaletteWindowController(
+        palette: Palette(sources: []), settings: untouchedSettings())
     let palette = controller.viewController
     let scrollView = try #require(palette.tableView.enclosingScrollView)
 
@@ -290,7 +292,8 @@ private func isBold(_ title: NSAttributedString, at offset: Int) -> Bool {
 }
 
 @MainActor @Test func thePanelIsBorderlessClearAndShadowed() throws {
-    let controller = PaletteWindowController(palette: Palette(sources: []))
+    let controller = PaletteWindowController(
+        palette: Palette(sources: []), settings: untouchedSettings())
     let panel = try #require(controller.window)
 
     #expect(panel.styleMask.contains(.titled) == false)
@@ -299,24 +302,275 @@ private func isBold(_ title: NSAttributedString, at offset: Int) -> Bool {
     #expect(panel.canBecomeKey)
 }
 
-@MainActor @Test func onlyAMaskedBlurGetsAWindowShadowNotLiquidGlass() throws {
-    let controller = PaletteWindowController(palette: Palette(sources: []))
+@MainActor @Test func thePanelIsDraggedByItsBackgroundAndJoinsTheSpaceShowing() throws {
+    let controller = PaletteWindowController(
+        palette: Palette(sources: []), settings: untouchedSettings())
     let panel = try #require(controller.window)
-    let backdrop = controller.viewController.view
 
-    // The window server shapes the shadow from the window's own pixels; the glass isn't among
-    // them, so a shadow would be a rectangle showing through it (docs/decisions/0087).
-    if backdrop is NSVisualEffectView {
-        #expect(panel.hasShadow)
-        #expect((backdrop as? NSVisualEffectView)?.maskImage != nil)
-    } else {
-        #expect(PaletteViewController.backdropIsGlass)
-        #expect(panel.hasShadow == false)
+    #expect(panel.isMovable)
+    #expect(panel.isMovableByWindowBackground)
+    // Beside the magnifying glass, a click lands on the background, which moves the window.
+    let content = controller.viewController.view
+    content.layoutSubtreeIfNeeded()
+    let hit = content.hitTest(NSPoint(x: 10, y: content.bounds.height - 30))
+    #expect(hit != nil)
+    #expect(hit?.mouseDownCanMoveWindow == true)
+    let field = controller.viewController.field
+    #expect(content.hitTest(field.convert(NSPoint(x: 20, y: 10), to: content)) != nil)
+    #expect(field.mouseDownCanMoveWindow == false)
+    #expect(panel.collectionBehavior.contains(.moveToActiveSpace))
+    #expect(panel.collectionBehavior.contains(.fullScreenAuxiliary))
+}
+
+/// A click anywhere in a row, its margins at each end included, selects it instead of dragging
+/// the panel.
+@MainActor @Test func aClickAnywhereInARowTakesTheClickInsteadOfDraggingThePanel() async throws {
+    let fixture = Fixture()
+    try await fixture.type("")
+    let table = fixture.controller.tableView
+    table.layoutSubtreeIfNeeded()
+    let rect = table.rect(ofRow: 0)
+
+    for x in [rect.minX + 2, rect.midX, rect.maxX - 2] {
+        let point = NSPoint(x: x, y: rect.midY)
+        let hit = try #require(table.hitTest(table.convert(point, to: table.superview)))
+        #expect(hit.mouseDownCanMoveWindow == false, "x \(x) hit \(type(of: hit))")
     }
 }
 
+@MainActor
+private var paletteSize: NSSize {
+    NSSize(width: PaletteViewController.width, height: PaletteViewController.height)
+}
+
+@MainActor @Test func withNoPlaceThePanelIsCenteredAcrossTheScreenInItsUpperPart() {
+    let visible = NSRect(x: -1600, y: 40, width: 1600, height: 1000)
+
+    let frame = PaletteWindowController.frame(size: paletteSize, on: visible, at: nil)
+
+    #expect(frame.size == paletteSize)
+    #expect(frame.midX == visible.midX)
+    #expect(frame.maxY == visible.maxY - 1000 * PaletteWindowController.topShare)
+}
+
+@MainActor @Test func withNoPlaceOnAShortScreenThePanelKeepsItsBottomOnIt() {
+    let visible = NSRect(x: 0, y: 0, width: 1024, height: 400)
+
+    let frame = PaletteWindowController.frame(size: paletteSize, on: visible, at: nil)
+
+    #expect(frame.minY == visible.minY)
+}
+
+@MainActor @Test func aPlacePutsThePanelThatShareOfTheRoomItLeaves() throws {
+    let visible = NSRect(x: 100, y: 50, width: 1640, height: 1361)
+    func frame(_ x: Double, _ y: Double) throws -> NSRect {
+        let place = try #require(Settings.PalettePlace(x: x, y: y))
+        return PaletteWindowController.frame(size: paletteSize, on: visible, at: place)
+    }
+
+    #expect(try frame(0, 0).origin == NSPoint(x: 100, y: 1411 - paletteSize.height))
+    #expect(try frame(1, 1).origin == NSPoint(x: 1740 - paletteSize.width, y: 50))
+    #expect(try frame(0.5, 0.5).origin == NSPoint(x: 600, y: 550))
+}
+
+@MainActor @Test func thePlaceOfAFrameReadsBackAsThatFrameAndOnePastAnEdgeIsPutAgainstIt() throws {
+    let visible = NSRect(x: 100, y: 50, width: 1640, height: 1361)
+    let place = try #require(Settings.PalettePlace(x: 0.3, y: 0.8))
+    let frame = PaletteWindowController.frame(size: paletteSize, on: visible, at: place)
+
+    #expect(PaletteWindowController.place(of: frame, on: visible) == place)
+    let pastTopRight = NSRect(origin: NSPoint(x: 2000, y: 1500), size: paletteSize)
+    #expect(
+        PaletteWindowController.place(of: pastTopRight, on: visible)
+            == Settings.PalettePlace(x: 1, y: 0))
+}
+
+/// A palette over a window that is never shown, which puts its panel where it would show.
+@MainActor
+private func paletteShown(with settings: Settings) throws -> PaletteWindowController {
+    let controller = PaletteWindowController(palette: Palette(sources: []), settings: settings)
+    let opener = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.titled],
+        backing: .buffered, defer: true)
+    opener.isReleasedWhenClosed = false
+    controller.show(over: opener)
+    return controller
+}
+
+@MainActor @Test func aDraggedPanelLeavesItsPlaceForTheNextPalette() throws {
+    let settings = untouchedSettings()
+    let first = try paletteShown(with: settings)
+    let panel = try #require(first.window)
+    let dragged = panel.frame.offsetBy(dx: -120, dy: -80)
+    panel.setFrame(dragged, display: false)
+
+    first.close()
+
+    #expect(settings.palettePlace != nil)
+    let next = try #require(try paletteShown(with: settings).window)
+    #expect(abs(next.frame.minX - dragged.minX) < 0.01)
+    #expect(abs(next.frame.minY - dragged.minY) < 0.01)
+}
+
+@MainActor @Test func aPanelThatWasntDraggedLeavesTheStoredPlaceAlone() throws {
+    let settings = untouchedSettings()
+    let controller = try paletteShown(with: settings)
+
+    controller.close()
+
+    #expect(settings.palettePlace == nil)
+}
+
+@MainActor @Test func aPanelDraggedOffEveryScreenGoesBackToItsOwnPlace() throws {
+    let settings = untouchedSettings()
+    settings.palettePlace = Settings.PalettePlace(x: 0, y: 0)
+    let controller = try paletteShown(with: settings)
+    let panel = try #require(controller.window)
+    let screens = NSScreen.screens.map(\.frame).reduce(NSRect.null) { $0.union($1) }
+    panel.setFrameOrigin(NSPoint(x: screens.maxX + 1000, y: screens.maxY + 1000))
+
+    controller.close()
+
+    #expect(settings.palettePlace == nil)
+}
+
+/// On screen, the panel is a window of its own on its opener's screen, not a child that moves
+/// with it. Only with a second display, where test windows go
+/// (docs/decisions/0091-test-windows-on-second-display.md).
+@MainActor @Test func thePanelShowsOnItsOpenersScreenAsAWindowOfItsOwn() async throws {
+    guard NSScreen.screens.count > 1 else { return }
+    let opener = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.titled],
+        backing: .buffered, defer: false)
+    opener.isReleasedWhenClosed = false
+    SecondDisplay.orderFront(opener)
+    defer { opener.orderOut(nil) }
+    let screen = try #require(opener.screen)
+    let controller = PaletteWindowController(
+        palette: Palette(sources: []), settings: untouchedSettings())
+    let panel = try #require(controller.window)
+
+    controller.show(over: opener)
+    defer { controller.close() }
+
+    #expect(panel.isVisible)
+    #expect(panel.parent == nil)
+    #expect(opener.childWindows?.isEmpty ?? true)
+    #expect(panel.screen == screen)
+    #expect(panel.frame.midX == screen.visibleFrame.midX)
+}
+
+/// The glass draws a faint fill over its whole rectangle while the app is active; the content
+/// clips it to the rounded shape, so the corners stay clear and the window's shadow, shaped from
+/// the window's pixels, is rounded (docs/decisions/0087).
+@MainActor @Test func theContentIsClippedToTheRoundedShapeUnderAHairlineAndShadowed() throws {
+    let controller = PaletteWindowController(
+        palette: Palette(sources: []), settings: untouchedSettings())
+    let panel = try #require(controller.window)
+    let content = controller.viewController.view
+    let radius = PaletteViewController.cornerRadius
+
+    #expect(panel.hasShadow)
+    #expect(content.layer?.masksToBounds == true)
+    #expect(content.layer?.cornerRadius == radius)
+    let edge = try #require(content.subviews.last as? PaletteEdgeView)
+    #expect(edge.frame == content.bounds)
+    edge.updateLayer()
+    #expect(edge.layer?.cornerRadius == radius)
+    #expect((edge.layer?.borderWidth ?? 0) > 0)
+    #expect((edge.layer?.borderColor?.alpha ?? 0) > 0)
+    #expect(edge.hitTest(NSPoint(x: 1, y: 1)) == nil)
+}
+
+/// The palette's results for items titled `titles`.
+@MainActor
+private func ranked(_ titles: [String]) async -> [Palette.Result] {
+    let palette = Palette(sources: [
+        FixedSource(
+            items: titles.map {
+                PaletteItem(id: .folder(path: "/Users/me/\($0)"), title: $0) {}
+            })
+    ])
+    palette.setQuery("")
+    await settle { palette.results.count == titles.count }
+    return palette.results
+}
+
+/// A scroller narrows the column; a title that just fit then wraps, and its row grows to hold it.
+@MainActor @Test func aRowIsMeasuredAgainWhenTheColumnNarrows() async throws {
+    let probe = Fixture(folders: [])
+    let width = try #require(probe.controller.tableView.tableColumns.first).width
+    let narrowed = width - 60
+    let titles = (1...30).map { Array(repeating: "word", count: $0).joined(separator: " ") }
+    let results = await ranked(titles)
+    let fits = results.filter {
+        PaletteCellView.height(of: $0, width: width) == PaletteCellView.rowHeight
+    }
+    // The longest title that fits, which the narrower column can't hold on one line.
+    let title = try #require(fits.map(\.item.title).max { $0.count < $1.count })
+    let longest = try #require(results.first { $0.item.title == title })
+    #expect(PaletteCellView.height(of: longest, width: narrowed) > PaletteCellView.rowHeight)
+
+    let fixture = Fixture(folders: [title])
+    try await fixture.type("")
+    let table = fixture.controller.tableView
+    let row = try fixture.row(titled: title)
+    table.layoutSubtreeIfNeeded()
+    #expect(table.rect(ofRow: row).height == PaletteCellView.rowHeight)
+
+    try #require(table.tableColumns.first).width = narrowed
+    table.layoutSubtreeIfNeeded()
+
+    #expect(table.rect(ofRow: row).height > PaletteCellView.rowHeight)
+}
+
+/// Measuring a row takes its title and widths, not its icon.
+@MainActor @Test func measuringARowDoesNotLookUpItsIcon() async throws {
+    let result = try #require(await ranked(["Downloads"]).first)
+
+    _ = PaletteCellView.height(of: result, width: 600)
+
+    #expect(PaletteCellView.sizer.icon.image == nil)
+}
+
+/// A name too long for one line wraps; its row grows to hold the lines, with room between them
+/// and around them, and a row whose title fits keeps its height.
+@MainActor @Test func aLongTitleWrapsInATallerRowWithRoomBetweenAndAroundItsLines() async throws {
+    let long =
+        "Quarterly report for the northern region including every appendix and the revised "
+        + "figures from March, final version two.pdf"
+    let fixture = Fixture(folders: ["Downloads", long])
+    try await fixture.type("")
+    let table = fixture.controller.tableView
+    let short = try fixture.row(titled: "Downloads")
+    let wrapped = try fixture.row(titled: long)
+    table.layoutSubtreeIfNeeded()
+
+    #expect(table.rect(ofRow: short).height == PaletteCellView.rowHeight)
+    let cell = try #require(fixture.cell(at: wrapped))
+    cell.layoutSubtreeIfNeeded()
+    let title = cell.titleField
+    let font = try #require(title.font)
+    let line = (font.ascender - font.descender + font.leading).rounded(.up)
+    let style = try #require(
+        title.attributedStringValue.attribute(.paragraphStyle, at: 0, effectiveRange: nil)
+            as? NSParagraphStyle)
+    #expect(style.lineSpacing >= 3)
+    #expect(title.frame.height >= 2 * line + style.lineSpacing)
+    #expect(title.frame.minY >= PaletteCellView.wrappedPadding - 0.5)
+    #expect(cell.bounds.height - title.frame.maxY >= PaletteCellView.wrappedPadding - 0.5)
+    #expect(table.rect(ofRow: wrapped).height == cell.bounds.height)
+    // A title on one line is as tall as a plain label: the line spacing adds nothing to it.
+    let shortTitle = try #require(fixture.cell(at: short)?.titleField)
+    let unspaced = NSMutableAttributedString(attributedString: shortTitle.attributedStringValue)
+    unspaced.removeAttribute(.paragraphStyle, range: NSRange(location: 0, length: unspaced.length))
+    let plain = NSTextField(labelWithAttributedString: unspaced)
+    #expect(shortTitle.frame.height == plain.intrinsicContentSize.height)
+}
+
 @MainActor @Test func theSearchFieldIsLargerThanTheRows() {
-    let controller = PaletteWindowController(palette: Palette(sources: []))
+    let controller = PaletteWindowController(
+        palette: Palette(sources: []), settings: untouchedSettings())
     _ = controller.viewController.view
 
     #expect((controller.viewController.field.font?.pointSize ?? 0) >= 24)

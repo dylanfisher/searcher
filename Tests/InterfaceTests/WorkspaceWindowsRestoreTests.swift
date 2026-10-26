@@ -17,6 +17,14 @@ private func roots(_ folder: TemporaryFolder) -> StoreRoots {
         applicationSupport: folder.url.appending(path: "Application Support"))
 }
 
+/// Saves `windows` as quitting does and waits for the writes to land, whatever the disk and the
+/// machine's load. The tests are not about the quit deadline, so it is an hour, which a loaded
+/// run can't pass; a save that never ends hangs the test instead of passing it by luck.
+@MainActor
+private func saveAll(_ windows: WorkspaceWindows) async -> Bool {
+    await windows.saveBeforeQuit(by: .now + .seconds(3600))
+}
+
 /// Windows that are never shown, on a lister of `/root` and `/root/docs`, saving to `store`.
 @MainActor
 private func makeWindows(
@@ -71,7 +79,7 @@ private func frame(of controller: BrowserWindowController) throws -> CGRect {
     let second = workspace.selectedTab
     _ = try #require(second.split(.horizontal, in: Rect(x: 0, y: 0, width: 1100, height: 650)))
     workspace.select(first.id)
-    #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(saving))
 
     let restoring = makeWindows(store: nil)
     let key = try #require(await restoring.restore(diskStore(folder).load()))
@@ -101,7 +109,7 @@ private func frame(of controller: BrowserWindowController) throws -> CGRect {
     let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
     let saving = makeWindows(store: diskStore(folder))
     let kept = saving.open(at: Location(path: "/root"))
-    #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(saving))
     let saved = await diskStore(folder).load()
     let missing = UUID()
     let session = SessionState(workspaces: [missing, kept.workspace.id], keyWindow: missing)
@@ -142,7 +150,7 @@ private func frame(of controller: BrowserWindowController) throws -> CGRect {
     let pane = controller.workspace.selectedTab.focusedPane
     await settle { pane.state.isLoaded }
     pane.select(Selection([ExactName("a.txt"), ExactName("b.txt")], cursor: ExactName("b.txt")))
-    #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(saving))
 
     let restoring = makeWindows(store: nil)
     let key = try #require(await restoring.restore(diskStore(folder).load()))
@@ -157,7 +165,7 @@ private func frame(of controller: BrowserWindowController) throws -> CGRect {
     let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
     let saving = makeWindows(store: diskStore(folder))
     saving.open(at: Location(path: "/root"))
-    #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(saving))
 
     let restoring = makeWindows(store: nil)
     let key = try #require(await restoring.restore(diskStore(folder).load()))
@@ -215,7 +223,7 @@ private func frame(of controller: BrowserWindowController) throws -> CGRect {
     let controller = windows.open(at: Location(path: "/root"))
     let id = controller.workspace.id
 
-    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(windows))
 
     let written = Dictionary(
         writes.all.map { ($0.1.lastPathComponent, $0.0) }, uniquingKeysWith: { _, last in last })
@@ -258,7 +266,7 @@ private func frame(of controller: BrowserWindowController) throws -> CGRect {
     let closed = windows.open(at: Location(path: "/root"))
 
     try #require(closed.window).close()
-    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(windows))
 
     let session = await diskStore(folder).load().session
     #expect(session == SessionState(workspaces: [kept.workspace.id], keyWindow: kept.workspace.id))
@@ -396,11 +404,11 @@ private final class SavingFixture {
     // On the test's screen, so the restore keeps the frame as saved.
     try #require(controller.window).setFrame(
         CGRect(x: 100, y: 200, width: 900, height: 600), display: false)
-    #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(saving))
     let fixture = try SavingFixture()
 
     await fixture.windows.restore(diskStore(folder).load())
-    #expect(await fixture.windows.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(fixture.windows))
 
     let unsaved = await fixture.handed()
     #expect(unsaved.isEmpty, "\(unsaved)")
@@ -413,7 +421,7 @@ private final class SavingFixture {
 private func savedSession(in folder: TemporaryFolder) async -> WorkspaceStore.Contents {
     let saving = makeWindows(store: diskStore(folder))
     saving.open(at: Location(path: "/root"))
-    #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(saving))
     return await diskStore(folder).load()
 }
 
@@ -425,7 +433,7 @@ private func savedSession(in folder: TemporaryFolder) async -> WorkspaceStore.Co
     // A window opened while the session is read, as New Window opens one.
     launching.open(at: Location(path: "/root"))
 
-    #expect(await launching.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(launching))
 
     let onDisk = await diskStore(folder).load()
     #expect(onDisk == saved)
@@ -438,7 +446,7 @@ private func savedSession(in folder: TemporaryFolder) async -> WorkspaceStore.Co
     launching.holdSavesUntilRestore()
 
     #expect(!launching.opensWindowOnReopen)
-    #expect(await launching.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(launching))
     let onDisk = await diskStore(folder).load()
     #expect(onDisk == saved)
 
@@ -521,13 +529,13 @@ private func drift(_ controller: BrowserWindowController) async throws {
     let windows = makeWindows(store: diskStore(folder))
     let named = try await savedWindow(in: windows)
     let unnamed = windows.open(at: Location(path: "/root"))
-    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(windows))
     let saved = await diskStore(folder).load()
     #expect(saved.workspaces.count == 2 && Array(saved.snapshots.keys) == [named.workspace.id])
 
     try #require(named.window).close()
     try #require(unnamed.window).close()
-    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(windows))
 
     let onDisk = await diskStore(folder).load()
     #expect(onDisk.workspaces.isEmpty)
@@ -629,7 +637,7 @@ private func drift(_ controller: BrowserWindowController) async throws {
     let windows = makeWindows(store: diskStore(folder))
     let controller = try await savedWindow(in: windows)
     let id = controller.workspace.id
-    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(windows))
     // Changed just before the close, within the save delay.
     try await drift(controller)
     try #require(controller.window).close()
@@ -642,7 +650,7 @@ private func drift(_ controller: BrowserWindowController) async throws {
     #expect(reopened.workspace.selectedTab.focusedPane.location == Location(path: "/root"))
     #expect(windows.list.closed.isEmpty)
     #expect(windows.list.workspaces.first === reopened.workspace)
-    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(windows))
     #expect(await diskStore(folder).load().snapshots[id]?.frame == Rect(savedFrame))
 }
 
@@ -707,7 +715,7 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
     let snapshot = try #require(windows.list.snapshots[id])
     #expect(snapshot.frame == Rect(movedFrame))
     #expect(snapshot.tabs.first?.panes.values.first?.location == Location(path: "/root/docs"))
-    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(windows))
     #expect(await diskStore(folder).load().snapshots[id] == snapshot)
 }
 
@@ -760,7 +768,7 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
     _ = await loadedPane(of: reopened)
     let placed = try frame(of: reopened)
     #expect(placed != savedFrame)
-    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(windows))
     #expect(reopened.window?.isDocumentEdited == false)
     let tab = reopened.workspace.selectedTab
 
@@ -778,7 +786,7 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
     let tab = controller.workspace.selectedTab
     let pane = tab.focusedPane
     try #require(controller.window).setFrame(movedFrame, display: false)
-    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(windows))
     #expect(controller.window?.isDocumentEdited == true)
 
     windows.open(savedWorkspace: controller.workspace.id)
@@ -835,7 +843,7 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
     let controller = try await savedWindow(in: saving)
     let id = controller.workspace.id
     try await drift(controller)
-    #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(saving))
 
     let restoring = makeWindows(store: diskStore(folder))
     restoring.holdSavesUntilRestore()
@@ -858,7 +866,7 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
     let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
     let saving = makeWindows(store: diskStore(folder))
     _ = try await savedWindow(in: saving)
-    #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(saving))
 
     let restoring = makeWindows(store: diskStore(folder))
     restoring.holdSavesUntilRestore()
@@ -875,7 +883,7 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
     let id = controller.workspace.id
     try #require(controller.window).setFrame(movedFrame, display: false)
     try #require(controller.window).close()
-    #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(saving))
 
     let restoring = makeWindows(store: diskStore(folder))
     restoring.holdSavesUntilRestore()
@@ -906,7 +914,7 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
     let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
     let saving = makeWindows(store: diskStore(folder))
     let open = try await savedWindow(in: saving)
-    #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(saving))
     let saved = await diskStore(folder).load()
     let openState = try #require(saved.snapshots[open.workspace.id])
     // As a hand edit could leave it: a closed one of the same name.
@@ -926,7 +934,7 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
             WorkspaceList.Saved(id: open.workspace.id, name: "Project 1", isOpen: true),
             WorkspaceList.Saved(id: twin.id, name: "project 1 2", isOpen: false),
         ])
-    #expect(await restoring.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(restoring))
     let onDisk = await diskStore(folder).load().snapshots
     #expect(onDisk[open.workspace.id]?.name == "Project 1")
     #expect(onDisk[twin.id]?.name == "project 1 2")
@@ -943,7 +951,7 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
     try #require(front.window).setFrame(movedFrame, display: false)
     _ = await loadedPane(of: front)
     try front.saveWorkspace(as: "Other")
-    #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(saving))
     let saved = await diskStore(folder).load()
     let writer = diskStore(folder)
     // As a hand edit could leave it: the front window renamed to the back one's name.
@@ -960,7 +968,7 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
             WorkspaceList.Saved(id: front.workspace.id, name: "Project 1", isOpen: true),
             WorkspaceList.Saved(id: back.workspace.id, name: "Project 1 2", isOpen: true),
         ])
-    #expect(await restoring.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(restoring))
     let onDisk = await diskStore(folder).load()
     #expect(onDisk.snapshots[front.workspace.id]?.name == "Project 1")
     #expect(onDisk.snapshots[back.workspace.id]?.name == "Project 1 2")
@@ -971,7 +979,7 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
     let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
     let saving = makeWindows(store: diskStore(folder))
     let controller = try await savedWindow(in: saving)
-    #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(saving))
     let saved = await diskStore(folder).load()
 
     let restoring = makeWindows(store: nil)
@@ -1003,13 +1011,13 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
     let windows = makeWindows(store: diskStore(folder))
     let named = try await savedWindow(in: windows)
     let other = windows.open(at: Location(path: "/root"))
-    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(windows))
 
     named.deleteWorkspace()
 
     #expect(windows.controllers.map(\.workspace.id) == [other.workspace.id])
     #expect(windows.list.saved.isEmpty && windows.list.closed.isEmpty)
-    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(windows))
     let onDisk = await diskStore(folder).load()
     #expect(Array(onDisk.workspaces.keys) == [other.workspace.id])
     #expect(onDisk.snapshots.isEmpty)
@@ -1024,7 +1032,7 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
     let named = try await savedWindow(in: saving)
     let stray = saving.open(at: Location(path: "/root"))
     let kept = saving.open(at: Location(path: "/root"))
-    #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(saving))
     let saved = await diskStore(folder).load()
     #expect(saved.workspaces[stray.workspace.id] != nil)
     // As a crash leaves it: a file for each window, and a session of one.
@@ -1041,7 +1049,7 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
         restoring.list.saved == [
             WorkspaceList.Saved(id: named.workspace.id, name: "Project 1", isOpen: false)
         ])
-    #expect(await restoring.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(restoring))
     let onDisk = await diskStore(folder).load()
     #expect(Array(onDisk.workspaces.keys) == [kept.workspace.id])
     #expect(Array(onDisk.snapshots.keys) == [named.workspace.id])
@@ -1107,7 +1115,7 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
     let controller = saving.open(at: Location(path: "/root"))
     let table = try #require(controller.window?.firstResponder as? ListingTableView)
     table.keyDown(with: try keyEvent("s", modifiers: [.command, .control]))
-    #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(saving))
     let contents = await diskStore(folder).load()
     #expect(contents.workspaces[controller.workspace.id]?.showsSidebar == true)
 
@@ -1152,7 +1160,7 @@ private func survivesTheCap(_ path: String, in cache: ListingCache) async -> Boo
     let windows = makeWindows(store: diskStore(folder), cache: cache)
     let controller = windows.open(at: Location(path: "/root"))
     try controller.saveWorkspace(as: "Project 1")
-    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(windows))
 
     #expect(await survivesTheCap("/root", in: cache))
 }
@@ -1165,9 +1173,9 @@ private func survivesTheCap(_ path: String, in cache: ListingCache) async -> Boo
     let windows = makeWindows(store: diskStore(folder), cache: cache)
     let controller = windows.open(at: Location(path: "/root"))
     try controller.saveWorkspace(as: "Project 1")
-    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(windows))
     controller.workspace.selectedTab.focusedPane.navigate(to: Location(path: "/root/docs"))
-    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(windows))
 
     #expect(await survivesTheCap("/root/docs", in: cache))
 }
@@ -1179,7 +1187,7 @@ private func survivesTheCap(_ path: String, in cache: ListingCache) async -> Boo
     let controller = windows.open(at: Location(path: "/root"))
     try controller.saveWorkspace(as: "Project 1")
     controller.workspace.selectedTab.focusedPane.navigate(to: Location(path: "/root/docs"))
-    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(windows))
 
     #expect(await survivesTheCap("/root", in: cache))
 }
@@ -1189,10 +1197,10 @@ private func survivesTheCap(_ path: String, in cache: ListingCache) async -> Boo
     let cache = ListingCache(entryCap: 4, store: nil)
     let windows = makeWindows(store: diskStore(folder), cache: cache)
     let controller = windows.open(at: Location(path: "/root"))
-    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(windows))
     // An unnamed workspace's file goes with its window.
     try #require(controller.window).close()
-    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(windows))
 
     #expect(await !survivesTheCap("/root", in: cache))
 }
@@ -1379,7 +1387,7 @@ private func resizedColumnWindow(in windows: WorkspaceWindows) async throws
     let saving = makeWindows(store: diskStore(folder))
     let controller = try await resizedColumnWindow(in: saving)
     let widths = controller.workspace.selectedTab.focusedPane.columnWidths
-    #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(saving))
 
     let restoring = makeWindows(store: diskStore(folder))
     restoring.holdSavesUntilRestore()
@@ -1414,7 +1422,7 @@ private func resizedColumnWindow(in windows: WorkspaceWindows) async throws
     let controller = try await resizedColumnWindow(in: windows)
     try controller.saveWorkspace(as: "Project 1")
     let id = controller.workspace.id
-    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(windows))
     #expect(controller.window?.isDocumentEdited == false)
     try #require(controller.window).close()
 
@@ -1423,7 +1431,7 @@ private func resizedColumnWindow(in windows: WorkspaceWindows) async throws
     await settle { trail.columns.count == 3 }
 
     #expect(shownColumnWidths(reopened) == [standard + 50, standard - 30])
-    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(windows))
     #expect(reopened.window?.isDocumentEdited == false)
 }
 
@@ -1442,7 +1450,7 @@ private func resizedColumnWindow(in windows: WorkspaceWindows) async throws
     let tab = controller.workspace.selectedTab
 
     try resizeColumn(1, of: controller, by: 70)
-    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(windows))
     #expect(controller.window?.isDocumentEdited == true)
 
     windows.open(savedWorkspace: controller.workspace.id)
@@ -1452,7 +1460,7 @@ private func resizedColumnWindow(in windows: WorkspaceWindows) async throws
     #expect(shownColumnWidths(controller) == [standard, standard])
     #expect(pane.columnWidths.isEmpty)
     #expect(controller.window?.isDocumentEdited == false)
-    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(windows))
     #expect(controller.window?.isDocumentEdited == false)
 }
 
@@ -1467,7 +1475,7 @@ private func resizedColumnWindow(in windows: WorkspaceWindows) async throws
     try controller.saveWorkspace(as: "Project 1")
     let id = controller.workspace.id
     try resizeColumn(0, of: controller, by: 50)
-    #expect(await saving.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(saving))
 
     let restoring = makeWindows(store: diskStore(folder))
     restoring.holdSavesUntilRestore()
@@ -1500,7 +1508,7 @@ private func resizedColumnWindow(in windows: WorkspaceWindows) async throws
 
     let columns = other.paneViewController.columnViewController
     drag(try #require(columns.grip(forColumnAt: 1)), by: 40, option: true)
-    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(windows))
 
     #expect(shownColumnWidths(saved) == [standard + 40, standard + 40])
     #expect(saved.workspace.selectedTab.focusedPane.columnWidths.isEmpty)
@@ -1523,7 +1531,7 @@ private func resizedColumnWindow(in windows: WorkspaceWindows) async throws
     grip.mouseDragged(with: gripEvent(.leftMouseDragged, x: 100))
     grip.mouseUp(with: gripEvent(.leftMouseUp, x: 100))
     drag(grip, by: 0)
-    #expect(await windows.saveBeforeQuit(by: .now + .seconds(5)))
+    #expect(await saveAll(windows))
 
     #expect(controller.window?.isDocumentEdited == false)
 }
