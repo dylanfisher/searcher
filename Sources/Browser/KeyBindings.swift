@@ -30,13 +30,19 @@ public struct KeyBindings: Sendable {
     }
 
     /// A chord that a command would have had and lost: stored data can name a reserved chord,
-    /// or a chord a default of another command has since taken.
+    /// or a chord a default of another command has since taken. Also a fixed primary that stored
+    /// data removed, which the command keeps.
     public struct Dropped: Equatable, Sendable, CustomStringConvertible {
         public enum Reason: Equatable, Sendable {
-            /// The chord is reserved, or fixed to another command (`KeyBindings.fixed`).
+            /// The chord is reserved for a standard menu item (`KeyBindings.reserved`).
             case reserved
+            /// The chord is this command's fixed primary (`KeyBindings.fixed`), so no other
+            /// command or slot may have it.
+            case fixedTo(CommandID)
             /// The command's primary is fixed, so the user's chord for it isn't used.
-            case fixed
+            case fixedPrimary
+            /// The command's primary is fixed, so removing it is ignored and `chord` stays.
+            case fixedPrimaryKept
             /// The user gave the chord to this command, which keeps it.
             case takenBy(CommandID)
         }
@@ -47,13 +53,14 @@ public struct KeyBindings: Sendable {
         public let reason: Reason
 
         public var description: String {
-            let why =
-                switch reason {
-                case .reserved: "it is reserved"
-                case .fixed: "the slot is fixed"
-                case .takenBy(let owner): "the user gave it to \(owner)"
-                }
-            return "\(command) loses its \(position.rawValue) chord \(chord): \(why)"
+            let slot = "\(position.rawValue) chord \(chord)"
+            return switch reason {
+            case .reserved: "\(command) loses its \(slot): a standard menu item has it"
+            case .fixedTo(let owner): "\(command) loses its \(slot): it is fixed to \(owner)"
+            case .fixedPrimary: "\(command) loses its \(slot): its primary is fixed"
+            case .fixedPrimaryKept: "\(command) keeps its \(slot): its primary is fixed"
+            case .takenBy(let owner): "\(command) loses its \(slot): the user gave it to \(owner)"
+            }
         }
     }
 
@@ -63,6 +70,11 @@ public struct KeyBindings: Sendable {
         case assigned([CommandID: ShortcutOverride])
         /// The chord belongs to a standard menu item such as Quit, and no command may take it.
         case reserved
+        /// The chord is a command's fixed primary (`KeyBindings.fixed`), such as Copy's Cmd-C,
+        /// and no other command or slot may take it.
+        case fixed(to: Command)
+        /// The slot is its command's primary, which is fixed.
+        case fixedPrimary
         /// Another command has the chord; `replacing` takes it from that command.
         case taken(by: Command)
     }
@@ -91,7 +103,7 @@ public struct KeyBindings: Sendable {
     /// mistake in the code, not in stored data.
     ///
     /// - Precondition: no command in `preset` has a default alternate, and each `fixed` chord is
-    /// its command's default primary.
+    ///   its command's default primary.
     public init(
         commands: [Command], preset: [CommandID: KeyChord] = [:],
         overrides: [CommandID: ShortcutOverride] = [:], reserved: Set<KeyChord> = [],
@@ -142,19 +154,30 @@ public struct KeyBindings: Sendable {
         for pass in [true, false] {
             for (command, wantedSlots) in wanted {
                 for position in ShortcutOverride.Position.allCases {
-                    guard let slot = wantedSlots[position], slot.isUsers == pass else { continue }
-                    if position == .primary, fixedPrimaries[command.id] != nil {
-                        if slot.isUsers {
+                    if position == .primary, let fixedChord = fixedPrimaries[command.id] {
+                        // Looked at once, in the first pass; the slot has its chord already.
+                        guard pass else { continue }
+                        switch wantedSlots[position] {
+                        case nil:
+                            dropped.append(
+                                Dropped(
+                                    chord: fixedChord, command: command.id, position: position,
+                                    reason: .fixedPrimaryKept))
+                        case let slot? where slot.isUsers && slot.chord != fixedChord:
                             dropped.append(
                                 Dropped(
                                     chord: slot.chord, command: command.id, position: position,
-                                    reason: .fixed))
+                                    reason: .fixedPrimary))
+                        default: break
                         }
                         continue
                     }
+                    guard let slot = wantedSlots[position], slot.isUsers == pass else { continue }
                     let reason: Dropped.Reason? =
-                        if reserved.contains(slot.chord) || fixed[slot.chord] != nil {
+                        if reserved.contains(slot.chord) {
                             .reserved
+                        } else if let fixedOwner = fixed[slot.chord] {
+                            .fixedTo(fixedOwner)
                         } else if let owner = owners[slot.chord] {
                             .takenBy(owner)
                         } else {
@@ -204,7 +227,8 @@ public struct KeyBindings: Sendable {
     /// character, is the one stored; every one is checked, so the two spellings of a shifted
     /// punctuation key on another layout count as one key. A chord `id` has in its other slot
     /// moves. A chord another command has is `.taken` unless `replacing`, which removes it from
-    /// that command. A reserved or fixed chord, or a fixed primary, is `.reserved`.
+    /// that command. A reserved chord is `.reserved`, a fixed one `.fixed(to:)` its command, and
+    /// the slot of a fixed primary `.fixedPrimary`.
     ///
     /// - Precondition: `candidates` isn't empty and `id` is registered.
     public func assign(
@@ -215,10 +239,17 @@ public struct KeyBindings: Sendable {
             preconditionFailure("a key press with no chord can't be assigned")
         }
         precondition(registry.command(for: id) != nil, "\(id) isn't registered")
-        if candidates.contains(where: { reserved.contains($0) || fixed[$0] != nil })
-            || (position == .primary && fixed.values.contains(id))
-        {
+        if position == .primary, fixed.values.contains(id) {
+            return .fixedPrimary
+        }
+        if candidates.contains(where: reserved.contains) {
             return .reserved
+        }
+        if let owner = candidates.lazy.compactMap({ self.fixed[$0] }).first {
+            guard let command = registry.command(for: owner) else {
+                preconditionFailure("\(owner) has a fixed chord and isn't registered")
+            }
+            return .fixed(to: command)
         }
         var overrides = self.overrides
         for candidate in candidates {
@@ -233,6 +264,20 @@ public struct KeyBindings: Sendable {
             }
         }
         overrides[id, default: ShortcutOverride()][position] = .chord(chord)
+        return .assigned(overrides)
+    }
+
+    /// Removes the chord of `id`'s slot at `position`: `.assigned` with the slot `.removed`, or
+    /// `.fixedPrimary` for the slot of a fixed primary, which can't be removed.
+    ///
+    /// - Precondition: `id` is registered.
+    public func remove(from id: CommandID, at position: ShortcutOverride.Position) -> Assignment {
+        precondition(registry.command(for: id) != nil, "\(id) isn't registered")
+        if position == .primary, fixed.values.contains(id) {
+            return .fixedPrimary
+        }
+        var overrides = self.overrides
+        overrides[id, default: ShortcutOverride()][position] = .removed
         return .assigned(overrides)
     }
 }

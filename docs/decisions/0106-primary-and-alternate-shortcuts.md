@@ -57,14 +57,16 @@ SK.1b, the menus and the routing; SK.1c, the Settings window and the recorder.
   `MainMenuBuilder.reservedChords` derives them from the menus, and `KeyBindings` drops one that
   stored data names.
 - **Assigning.** `KeyBindings.assign(_:to:at:replacing:)` is the only rule for recording a chord:
-  `.reserved`, `.taken(by:)` another command, or `.assigned` with the new overrides. It checks
+  `.reserved`, `.fixed(to:)` or `.fixedPrimary` (SK.1b), `.taken(by:)` another command, or
+  `.assigned` with the new overrides; `remove(from:at:)` is the rule for removing one. It checks
   every chord a key press can mean (`KeyChord.candidates(for:)`), so the two spellings of a
   shifted punctuation key on AZERTY ([0031](0031-view-settings.md)) count as one key, and stores
   the last, the key's own character. With `replacing`, the other command's slot becomes
   `.removed`. A chord the same command has in its other slot moves.
-- **Cached, never per key.** `PaneViewController.registry(for:)` makes the registry when the
-  shortcuts or the preset change and keeps it; every table and the menus take that one.
-- **Until the Settings window.** The keys follow shortcuts set with `defaults write` from the
+- **Cached, never per key.** `PaneViewController.keyBindings(for:)` makes the bindings when the
+  shortcuts or the preset change and keeps them; every table, the menus (`registry(for:)`) and
+  the Settings window take those.
+- **From the command line.** The keys also follow shortcuts set with `defaults write`, from the
   next launch. Each command's slots go in as a plist dictionary literal:
 
   ```
@@ -90,7 +92,10 @@ SK.1b, the menus and the routing; SK.1c, the Settings window and the recorder.
   from `PaneViewController.registry(for:)`; after each change of the settings,
   `showChords(in:registry:)` sets every command item's key equivalent again from the cached
   registry. Context menus read the registry each time they are built, and the palette shows the
-  first chord of the focused table's registry, so both follow too. The palette's closing chords
+  first chord of the focused table's registry, so both follow too. A context menu item shows
+  the same chord as the command's menu item, the first a key equivalent can have, so F-keys
+  show there: an F-key primary, or the F-key alternate of a command whose primary is a plain
+  key. The palette's closing chords
   (Open Quickly's or Go to Item's, and Close Pane's) are read from that registry at each key
   press, and only those a menu could show count: the palette's field types a plain one.
 - **Edit items run their commands by ID, on fixed chords.** `StandardAction.command` names the
@@ -98,9 +103,12 @@ SK.1b, the menus and the routing; SK.1c, the Settings window and the recorder.
   keep their own chords (Cmd-Z, Shift-Cmd-Z, Cmd-X, Cmd-C, Cmd-V, Cmd-A), so a text field always
   has them, and the item takes its chord first wherever the keys are. So the chord is fixed as
   the command's primary: `MainMenuBuilder.fixedChords` goes to `KeyBindings` as `fixed`, which
-  ignores an override of that primary (listed in `dropped` as `.fixed` when it names a chord),
-  drops the chord from any other command or slot (`.reserved`), and makes `assign` answer
-  `.reserved` for the chord or the primary. One key keeps one meaning in the menus and the
+  ignores an override of that primary (listed in `dropped` as `.fixedPrimary` when it names
+  another chord and `.fixedPrimaryKept` when it removes the chord; naming the fixed chord itself
+  changes nothing), drops the chord from any other command or slot (`.fixedTo` its command), and
+  makes `assign` answer `.fixed(to:)` for the chord and `.fixedPrimary` for the primary's slot,
+  apart from `.reserved` for a standard item's chord, so the Settings window and the log say
+  which rule refused it. One key keeps one meaning in the menus and the
   table's `keyDown` alike. The alternates stay editable: the command's second chord goes on a
   hidden item beside the Edit item that sends the same action, so in a text field an alternate
   of Copy copies the text.
@@ -110,16 +118,52 @@ SK.1b, the menus and the routing; SK.1c, the Settings window and the recorder.
   `keyDown` only, and a plain letter takes that letter from type-select. The Selection submenu
   shows no chords at all, as before.
 - **Settings….** The app menu has Settings… on Cmd-, after About. It sends `showSettings:`
-  (`SettingsShowing`) up the responder chain; nothing answers it until SK.1c adds the window, so
-  AppKit shows it off. Its chord is reserved now, so no stored shortcut can take it.
+  (`SettingsShowing`) up the responder chain, where the app's delegate answers it (SK.1c). Its
+  chord is reserved, so no stored shortcut can take it.
 
 ### SK.1c, the Settings window
 
-- One Settings window (App menu ▸ Settings…, Cmd-,) with a Shortcuts pane: a search field, the
-  commands grouped as the menus are, and per row the title, a recorder for each slot, Reset, and
-  "is used by" with Replace and Cancel on a conflict. Reset All in the footer.
-- The recorder takes the next key press through a local event monitor: Esc cancels, Delete
-  removes the chord, a reserved chord is refused. The monitor is removed when recording ends.
+- **One window.** `SettingsWindowController` has one window, which App ▸ Settings… (Cmd-,)
+  brings to the front, centered the first time; the app's delegate makes it on first use and
+  keeps it. An `NSToolbar` in the preference style holds the panes, Shortcuts for now. Close
+  Pane's chords close it (Cmd-W): Close Pane is a registry command whose item is off outside the
+  panes, so the window takes those chords as key equivalents before the menu bar, as the
+  palette's panel does, and only those a menu could show, since the search field types a plain
+  one.
+- **The Shortcuts pane** (SwiftUI, `ShortcutsSettingsView`) has a search field that filters by
+  title or by chord symbols such as "⇧⌘P", the commands in sections as the menus list them
+  (`MainMenuBuilder.commandsByMenu`, derived from the menus, so not a second list), and per row
+  the title, a recorder for the primary and one for the alternate, and Reset, off while the
+  command has no override. Reset All in the footer, off while there are none, deletes the
+  stored key. A Selection command's row says its chords work in the file list only (its items
+  show none, [0060](0060-menu-items-for-every-command.md)), and a row with a plain chord says a
+  shortcut without Cmd, Ctrl or Opt works in the file list only. An Edit command's primary
+  recorder is off, with a line saying it is the Edit menu's.
+- **No rules in the view.** `ShortcutsSettings`, the pane's model, sends each recording to
+  `KeyBindings.assign` or `remove` with the bindings `PaneViewController.keyBindings(for:)`
+  caches, writes `.assigned` overrides to `Settings.shortcuts`, and so the menus change at once
+  (SK.1b). Anything else becomes the row's notice: `.taken` says "⇧⌘P is used by Go to Item."
+  with Replace, which assigns again with `replacing`, and Cancel; `.reserved`, `.fixed(to:)` and
+  `.fixedPrimary` each say which rule refused the chord.
+- **The recorder** (`ShortcutRecorderField`, an `NSView` in an `NSViewRepresentable`) starts on
+  a click, or Space or Return while it has the keys, or VoiceOver's press. It installs a local
+  key-down monitor, which runs before the menus' key equivalents and returns nil, so the key
+  press reaches nothing else: Cmd-Q is recorded and refused, not quit. Esc cancels; plain
+  Delete removes the chord; any other key gives its `KeyChord.candidates(for:)`, of which
+  `assign` stores the last, the key's own character ([0031](0031-view-settings.md)). A key
+  `KeyChord` can't spell, such as forward delete, is swallowed and recording goes on.
+- **The monitor never outlives recording.** Recording ends, and the monitor is removed, when a
+  key is taken, the field resigns first responder, its window resigns key, it leaves its window
+  or is hidden, it is turned off, or it is released (the monitor removes itself in its `deinit`).
+  A monitor left behind would eat every key press in the app.
+- **States** ([0110](0110-interaction-states.md)): the recorder draws the hover and pressed
+  fills of `HoverButton`, the focus ring around its rounded shape, a 2 pt focus-colored ring
+  with "Type Shortcut" while recording, and tertiary text with no fill while off. VoiceOver
+  reads it as a button labelled with the command and slot, valued with the chord, "None" or
+  "Recording". Reset, Reset All, Replace and Cancel are bezel push buttons, which have the four
+  states already.
+- **System chords.** Chords the system takes before the app (Cmd-Tab, Cmd-Space,
+  Shift-Cmd-3/4/5, Ctrl-Cmd-Q) never reach the monitor, so the recorder never sees them.
 
 ## Alternatives considered
 
