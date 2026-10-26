@@ -1260,3 +1260,51 @@ private func showSidebar(of fixture: UndoableWindow) {
     #expect(menu?.items.map(\.title) == [WorkspaceSidebarViewController.removeTitle])
     #expect(fixture.window.firstResponder === fixture.table)
 }
+
+/// Presses on the sidebar's `row` through `window.sendEvent`, as a real click is sent, with
+/// the mouse up queued first so the list's tracking ends at once.
+@MainActor
+private func sendPress(onSidebarRow row: Int, of fixture: UndoableWindow) throws {
+    let outline = fixture.controller.sidebar.outlineView
+    let rect = outline.rect(ofRow: row)
+    let point = outline.convert(NSPoint(x: rect.midX, y: rect.midY), to: nil)
+    let window = fixture.window
+    func event(_ type: NSEvent.EventType) throws -> NSEvent {
+        try #require(
+            NSEvent.mouseEvent(
+                with: type, location: point, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
+                pressure: 1))
+    }
+    nonisolated(unsafe) let down = try event(.leftMouseDown)
+    try performRealPress(releasedBy: try event(.leftMouseUp)) { window.sendEvent(down) }
+}
+
+/// A click sent through the window onto the sidebar during a rename commits it and leaves the
+/// keys in the pane; during filter typing it takes the keys out of the field to the pane.
+@MainActor @Test func aClickSentThroughTheWindowOntoTheSidebarEndsTextEditing() async throws {
+    let fixture = try await UndoableWindow()
+    defer { fixture.stop() }
+    showSidebar(of: fixture)
+    defer { fixture.window.orderOut(nil) }
+    let pane = fixture.controller.workspace.selectedTab.focusedPane
+    pane.select(Selection([ExactName("a2.txt")], cursor: ExactName("a2.txt")))
+    fixture.table.keyDown(with: try keyEvent("\r"))
+    _ = try fixture.type("typed")
+    let root = fixture.folder.url.path
+    let row = try sidebarRow("Applications", in: fixture.controller)
+
+    try sendPress(onSidebarRow: row, of: fixture)
+
+    #expect(fixture.window.firstResponder === fixture.table)
+    await settle { FileManager.default.fileExists(atPath: root + "/typed.txt") }
+
+    fixture.table.keyDown(with: try keyEvent("f", modifiers: .command))
+    _ = try fixture.type("t")
+    #expect(fixture.window.firstResponder is NSTextView)
+
+    try sendPress(onSidebarRow: row, of: fixture)
+
+    #expect(fixture.window.firstResponder === fixture.table)
+}

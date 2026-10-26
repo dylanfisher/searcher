@@ -88,7 +88,8 @@ Tags needs search, which is on hold.
   go to the focused pane's list, which commits a rename (0068) and stops typing into the filter,
   as a click in Finder's sidebar commits a rename and leaves its search field. The clicked
   row opens one turn of the main actor later, so a rename that press started names its entry
-  before a volume's row moves the pane to another folder. Focus Sidebar and Tab still give the
+  before a volume's row moves the pane to another folder; the row is looked up again then, so
+  one that left the list in that turn opens nothing. Focus Sidebar and Tab still give the
   list the keys, and while it has them a click on a row keeps them there
   ([0089](0089-sidebar-key-routing.md)). Finder's glyphs are 16, 18 and 24 pt square for the
   system's small, medium and large sidebar icon size (System Settings ▸ Appearance), the sizes

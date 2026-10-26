@@ -437,10 +437,30 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     /// Opens the clicked row one turn of the main actor later. A press that ended a rename in a
     /// pane started it with a hop to the main actor, and the rename names its entry in the
     /// pane's folder then; a volume's row moves the pane at once, so opening first would drop
-    /// the typed name (docs/decisions/0068-inline-rename.md).
+    /// the typed name (docs/decisions/0068-inline-rename.md). The row is looked up again then,
+    /// so one that left the list in that turn, as an unmounted volume, opens nothing.
     func openClicked(row index: Int) {
         let item = outlineView.item(atRow: index)
-        Task { [weak self] in self?.open(item) }
+        Task { [weak self] in
+            guard let self else { return }
+            open(listed(item))
+        }
+    }
+
+    /// The row now listed for what `item` showed: the same workspace, favorite path or mount
+    /// point, since a reload makes new row items; nil once it isn't listed.
+    private func listed(_ item: Any?) -> Any? {
+        let now: Any? =
+            switch item {
+            case let row as Row: rows.first { $0.saved.id == row.saved.id }
+            case let row as FavoriteRow: favoriteRows.first { $0.item.path == row.item.path }
+            case let row as VolumeRow:
+                volumeRows.first { $0.volume.mountPoint == row.volume.mountPoint }
+            default: nil
+            }
+        // A row of a group hidden meanwhile isn't listed either.
+        guard let now, outlineView.row(forItem: now) >= 0 else { return nil }
+        return now
     }
 
     private func openSelected() {
