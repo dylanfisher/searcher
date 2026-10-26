@@ -25,7 +25,29 @@ Recursive search and Spotlight are a separate feature (M5b.3) and stay out.
   (⌃⌥⇧⌘ order). The selection uses the system accent colour while the field has the keys, as
   Spotlight's does. Colours are the system's label colours, so light and dark both follow
   the appearance. A sheet would block the window and look like a question
-  ([0076](0076-dialogs.md)).
+  ([0076](0076-dialogs.md)). (Amended 2026-10-25, Dylan: "you should be able to move the cmd
+  k/cmd p dialogs around anywhere on screen, separate from the window if possible (like
+  spotlight). by default it shows up centered on screen". The panel is a window of its own, not
+  a child of the window it opens over, so it moves without the window and the window moves
+  without it; it is dragged by its background (`isMovableByWindowBackground`), the field and
+  the rows keeping their clicks, as Spotlight is. A child that detached on a drag was rejected:
+  it moves with its window until the first drag, two behaviors where Spotlight has one. Being
+  its own window, it joins the space showing, a full-screen window's included
+  (`.moveToActiveSpace`, `.fullScreenAuxiliary`). It opens on the screen of the window that
+  opened it, centered across the visible area with its top a fifth of the way down, in the upper
+  part where Spotlight opens. **Where it was dragged is remembered**, as Spotlight remembers,
+  in `Settings.palettePlace` ([0031](0031-view-settings.md)), across relaunches: one place for
+  both palettes, since they are one panel of one size, as Spotlight has one place. The place is
+  kept relative to a screen, as the share of the room the panel leaves across and down its
+  visible area, two numbers within 0 and 1, and is put on the screen of the window that opens
+  the next palette. A stored place therefore always lands wholly on a current screen, a smaller
+  one included, and there is no display to be disconnected: a place tied to a display would open
+  the palette on another screen than the window being worked in, or need a fallback when that
+  display is gone. A panel dragged partly past an edge is stored against that edge; one dragged
+  off every screen clears the place. Stored data that isn't two numbers within 0 and 1 is
+  removed and reads as no place, the default. The place is saved as the panel closes, only when
+  it moved since it showed. The keys still go back to the window that opened it, and losing them
+  still closes it.)
 - **Keys.** The field keeps the keys; ↑, ↓, Page Up and Page Down move the selection, Return
   (or Option- or Shift-Return) or a click runs the selected row, Esc closes. Closing gives the
   keys back to whatever had them when the palette opened (the pane's table, the sidebar or the
@@ -120,3 +142,18 @@ shadow (`hasShadow` false) and the glass draws its own edge; before 26 the maske
 rounded shadow. The cause was inferred, not seen: screen capture isn't available to the agent that
 built it, so the look needs a check on a real display. If the glass reads flat without a shadow,
 the next option is a larger window with a layer shadow shaped to the rounded rectangle.
+(Amended 2026-10-25, Dylan: "cmd k and cmd p dialog windows still has strange artifacts around
+the corners ... we need the border color and dropshow, like spotlight". The inferred cause was
+wrong. A test can capture its own windows (`CGWindowListCreateImage` with the window's number,
+on the second display), and captures showed the shadow already rounded and no square while the
+app was inactive. With `NSApplication.isActive` swapped to true in a throwaway test, so the
+panel drew as key, the square appeared with the shadow off: the panel's own pixels outside its
+rounded corners had alpha 0.06 at the top to 0.12 at the bottom, black, a fill over the whole
+rectangle while the panel is active. None of the app's own views paints there (their layers have
+no background), so it comes from the layers inside `NSGlassEffectView`. The content is now a view whose layer clips to the
+rounded shape (`cornerRadius` 20, `masksToBounds`), holding the backdrop and, over it, a
+hairline edge: a border one pixel wide, white at 60% in light mode and 20% in dark. With the
+corners clear, the window shadow is back on (`hasShadow` true on every system) and the
+captures show it following the rounded shape, with no square, over a red window in light and
+dark mode and over the desktop. The clip applies before macOS 26 too, where the masked
+blur was already rounded.)

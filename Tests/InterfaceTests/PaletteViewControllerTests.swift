@@ -257,8 +257,9 @@ private func isBold(_ title: NSAttributedString, at offset: Int) -> Bool {
 }
 
 @MainActor @Test func theContentIsLiquidGlassFromMacOS26AndABlurBefore() {
-    let controller = PaletteWindowController(palette: Palette(sources: []))
-    let backdrop = controller.viewController.view
+    let controller = PaletteWindowController(
+        palette: Palette(sources: []), settings: untouchedSettings())
+    let backdrop = controller.viewController.view.subviews.first
     let radius = PaletteViewController.cornerRadius
 
     if #available(macOS 26, *) {
@@ -278,7 +279,8 @@ private func isBold(_ title: NSAttributedString, at offset: Int) -> Bool {
 }
 
 @MainActor @Test func nothingBetweenTheBackdropAndTheDesktopPaintsAnOpaqueBackground() throws {
-    let controller = PaletteWindowController(palette: Palette(sources: []))
+    let controller = PaletteWindowController(
+        palette: Palette(sources: []), settings: untouchedSettings())
     let palette = controller.viewController
     let scrollView = try #require(palette.tableView.enclosingScrollView)
 
@@ -290,7 +292,8 @@ private func isBold(_ title: NSAttributedString, at offset: Int) -> Bool {
 }
 
 @MainActor @Test func thePanelIsBorderlessClearAndShadowed() throws {
-    let controller = PaletteWindowController(palette: Palette(sources: []))
+    let controller = PaletteWindowController(
+        palette: Palette(sources: []), settings: untouchedSettings())
     let panel = try #require(controller.window)
 
     #expect(panel.styleMask.contains(.titled) == false)
@@ -299,24 +302,173 @@ private func isBold(_ title: NSAttributedString, at offset: Int) -> Bool {
     #expect(panel.canBecomeKey)
 }
 
-@MainActor @Test func onlyAMaskedBlurGetsAWindowShadowNotLiquidGlass() throws {
-    let controller = PaletteWindowController(palette: Palette(sources: []))
+@MainActor @Test func thePanelIsDraggedByItsBackgroundAndJoinsTheSpaceShowing() throws {
+    let controller = PaletteWindowController(
+        palette: Palette(sources: []), settings: untouchedSettings())
     let panel = try #require(controller.window)
-    let backdrop = controller.viewController.view
 
-    // The window server shapes the shadow from the window's own pixels; the glass isn't among
-    // them, so a shadow would be a rectangle showing through it (docs/decisions/0087).
-    if backdrop is NSVisualEffectView {
-        #expect(panel.hasShadow)
-        #expect((backdrop as? NSVisualEffectView)?.maskImage != nil)
-    } else {
-        #expect(PaletteViewController.backdropIsGlass)
-        #expect(panel.hasShadow == false)
+    #expect(panel.isMovable)
+    #expect(panel.isMovableByWindowBackground)
+    // Beside the magnifying glass, a click lands on the background, which moves the window.
+    let content = controller.viewController.view
+    content.layoutSubtreeIfNeeded()
+    let hit = content.hitTest(NSPoint(x: 10, y: content.bounds.height - 30))
+    #expect(hit != nil)
+    #expect(hit?.mouseDownCanMoveWindow == true)
+    let field = controller.viewController.field
+    #expect(content.hitTest(field.convert(NSPoint(x: 20, y: 10), to: content)) != nil)
+    #expect(field.mouseDownCanMoveWindow == false)
+    #expect(panel.collectionBehavior.contains(.moveToActiveSpace))
+    #expect(panel.collectionBehavior.contains(.fullScreenAuxiliary))
+}
+
+@MainActor
+private var paletteSize: NSSize {
+    NSSize(width: PaletteViewController.width, height: PaletteViewController.height)
+}
+
+@MainActor @Test func withNoPlaceThePanelIsCenteredAcrossTheScreenInItsUpperPart() {
+    let visible = NSRect(x: -1600, y: 40, width: 1600, height: 1000)
+
+    let frame = PaletteWindowController.frame(size: paletteSize, on: visible, at: nil)
+
+    #expect(frame.size == paletteSize)
+    #expect(frame.midX == visible.midX)
+    #expect(frame.maxY == visible.maxY - 1000 * PaletteWindowController.topShare)
+}
+
+@MainActor @Test func withNoPlaceOnAShortScreenThePanelKeepsItsBottomOnIt() {
+    let visible = NSRect(x: 0, y: 0, width: 1024, height: 400)
+
+    let frame = PaletteWindowController.frame(size: paletteSize, on: visible, at: nil)
+
+    #expect(frame.minY == visible.minY)
+}
+
+@MainActor @Test func aPlacePutsThePanelThatShareOfTheRoomItLeaves() throws {
+    let visible = NSRect(x: 100, y: 50, width: 1640, height: 1361)
+    func frame(_ x: Double, _ y: Double) throws -> NSRect {
+        let place = try #require(Settings.PalettePlace(x: x, y: y))
+        return PaletteWindowController.frame(size: paletteSize, on: visible, at: place)
     }
+
+    #expect(try frame(0, 0).origin == NSPoint(x: 100, y: 1411 - paletteSize.height))
+    #expect(try frame(1, 1).origin == NSPoint(x: 1740 - paletteSize.width, y: 50))
+    #expect(try frame(0.5, 0.5).origin == NSPoint(x: 600, y: 550))
+}
+
+@MainActor @Test func thePlaceOfAFrameReadsBackAsThatFrameAndOnePastAnEdgeIsPutAgainstIt() throws {
+    let visible = NSRect(x: 100, y: 50, width: 1640, height: 1361)
+    let place = try #require(Settings.PalettePlace(x: 0.3, y: 0.8))
+    let frame = PaletteWindowController.frame(size: paletteSize, on: visible, at: place)
+
+    #expect(PaletteWindowController.place(of: frame, on: visible) == place)
+    let pastTopRight = NSRect(origin: NSPoint(x: 2000, y: 1500), size: paletteSize)
+    #expect(
+        PaletteWindowController.place(of: pastTopRight, on: visible)
+            == Settings.PalettePlace(x: 1, y: 0))
+}
+
+/// A palette over a window that is never shown, which puts its panel where it would show.
+@MainActor
+private func paletteShown(with settings: Settings) throws -> PaletteWindowController {
+    let controller = PaletteWindowController(palette: Palette(sources: []), settings: settings)
+    let opener = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.titled],
+        backing: .buffered, defer: true)
+    opener.isReleasedWhenClosed = false
+    controller.show(over: opener)
+    return controller
+}
+
+@MainActor @Test func aDraggedPanelLeavesItsPlaceForTheNextPalette() throws {
+    let settings = untouchedSettings()
+    let first = try paletteShown(with: settings)
+    let panel = try #require(first.window)
+    let dragged = panel.frame.offsetBy(dx: -120, dy: -80)
+    panel.setFrame(dragged, display: false)
+
+    first.close()
+
+    #expect(settings.palettePlace != nil)
+    let next = try #require(try paletteShown(with: settings).window)
+    #expect(abs(next.frame.minX - dragged.minX) < 0.01)
+    #expect(abs(next.frame.minY - dragged.minY) < 0.01)
+}
+
+@MainActor @Test func aPanelThatWasntDraggedLeavesTheStoredPlaceAlone() throws {
+    let settings = untouchedSettings()
+    let controller = try paletteShown(with: settings)
+
+    controller.close()
+
+    #expect(settings.palettePlace == nil)
+}
+
+@MainActor @Test func aPanelDraggedOffEveryScreenGoesBackToItsOwnPlace() throws {
+    let settings = untouchedSettings()
+    settings.palettePlace = Settings.PalettePlace(x: 0, y: 0)
+    let controller = try paletteShown(with: settings)
+    let panel = try #require(controller.window)
+    let screens = NSScreen.screens.map(\.frame).reduce(NSRect.null) { $0.union($1) }
+    panel.setFrameOrigin(NSPoint(x: screens.maxX + 1000, y: screens.maxY + 1000))
+
+    controller.close()
+
+    #expect(settings.palettePlace == nil)
+}
+
+/// On screen, the panel is a window of its own on its opener's screen, not a child that moves
+/// with it. Only with a second display, where test windows go
+/// (docs/decisions/0091-test-windows-on-second-display.md).
+@MainActor @Test func thePanelShowsOnItsOpenersScreenAsAWindowOfItsOwn() async throws {
+    guard NSScreen.screens.count > 1 else { return }
+    let opener = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.titled],
+        backing: .buffered, defer: false)
+    opener.isReleasedWhenClosed = false
+    SecondDisplay.orderFront(opener)
+    defer { opener.orderOut(nil) }
+    let screen = try #require(opener.screen)
+    let controller = PaletteWindowController(
+        palette: Palette(sources: []), settings: untouchedSettings())
+    let panel = try #require(controller.window)
+
+    controller.show(over: opener)
+    defer { controller.close() }
+
+    #expect(panel.isVisible)
+    #expect(panel.parent == nil)
+    #expect(opener.childWindows?.isEmpty ?? true)
+    #expect(panel.screen == screen)
+    #expect(panel.frame.midX == screen.visibleFrame.midX)
+}
+
+/// The glass draws a faint fill over its whole rectangle while the app is active; the content
+/// clips it to the rounded shape, so the corners stay clear and the window's shadow, shaped from
+/// the window's pixels, is rounded (docs/decisions/0087).
+@MainActor @Test func theContentIsClippedToTheRoundedShapeUnderAHairlineAndShadowed() throws {
+    let controller = PaletteWindowController(
+        palette: Palette(sources: []), settings: untouchedSettings())
+    let panel = try #require(controller.window)
+    let content = controller.viewController.view
+    let radius = PaletteViewController.cornerRadius
+
+    #expect(panel.hasShadow)
+    #expect(content.layer?.masksToBounds == true)
+    #expect(content.layer?.cornerRadius == radius)
+    let edge = try #require(content.subviews.last as? PaletteEdgeView)
+    #expect(edge.frame == content.bounds)
+    edge.updateLayer()
+    #expect(edge.layer?.cornerRadius == radius)
+    #expect((edge.layer?.borderWidth ?? 0) > 0)
+    #expect((edge.layer?.borderColor?.alpha ?? 0) > 0)
+    #expect(edge.hitTest(NSPoint(x: 1, y: 1)) == nil)
 }
 
 @MainActor @Test func theSearchFieldIsLargerThanTheRows() {
-    let controller = PaletteWindowController(palette: Palette(sources: []))
+    let controller = PaletteWindowController(
+        palette: Palette(sources: []), settings: untouchedSettings())
     _ = controller.viewController.view
 
     #expect((controller.viewController.field.font?.pointSize ?? 0) >= 24)

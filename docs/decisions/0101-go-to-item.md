@@ -22,7 +22,10 @@ matcher ([0079](0079-fuzzy-match.md)) and the highlighting. Type-to-select
 - **The palette in another mode.** The same `PaletteWindowController` and `Palette`, with one
   source, `EntrySource`, in place of Open Quickly's four. The field's placeholder says
   "Go to Item in <folder>" and VoiceOver calls the panel "Go to Item". ⌘P, ⇧⌘K and ⌘W close it, as
-  ⌘K and ⌘W close Open Quickly; Esc closes it and changes nothing.
+  ⌘K and ⌘W close Open Quickly; Esc closes it and changes nothing. (Amended 2026-10-25: Open
+  Quickly has ⇧⌘P beside ⌘K in the same way ([0087](0087-palette-window.md)), and both panels
+  open on the screen of the window that opens them, centered near its top or where the last one
+  was dragged.)
 - **Candidates.** The rows of the command pane, the focused column in column view, as its
   listing has them when the palette opens: hidden entries and the filter as the pane shows them,
   in its sort. Nothing nested and no file-system call. Each item is titled with the name, its kind
