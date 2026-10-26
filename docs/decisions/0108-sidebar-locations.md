@@ -52,9 +52,13 @@ bus, the startup disk with it, so the startup disk isn't listed. A volume mounte
   it, call `SidebarVolumes.eject`. It first calls `VolumeEvents.willUnmount` for the volume, so
   the app's own loads, size walks and file operations on it stop as at the system's
   will-unmount (0049), whose notification may come only once the unmount is under way. Then it
-  runs the ejector on a `BlockingCallThread`: `FileManager.unmountVolume` with no system UI,
-  ejecting the whole disk for a volume on this machine (`allPartitionsAndEjectDisk`), which
-  detaches a disk image, and unmounting a share. The row leaves when the system reports the
+  runs the ejector on a `BlockingCallThread`: `FileManager.unmountVolume` with no system UI.
+- **The whole disk only for its last volume.** A volume on this machine that is the only one
+  mounted from its whole disk, browsable or not, ejects the disk (`allPartitionsAndEjectDisk`),
+  which detaches a disk image, as Finder's button does. The whole disk comes from the device
+  name the mount table already gives (`/dev/disk5s2` is on `disk5`), with no read. A volume
+  that shares its disk with another mounted volume is unmounted alone, and so is a share. The
+  row leaves when the system reports the
   unmount. A failure shows an alert, as a sheet on the sidebar's window: "The disk “name”
   wasn’t ejected." with the system's reason under it, where Finder says "The disk “name”
   wasn’t ejected because one or more programs may be using it." A pane whose load was stopped
@@ -73,12 +77,20 @@ bus, the startup disk with it, so the startup disk isn't listed. A volume mounte
   stopped answering would hold every row.
 - **Wait for the system's will-unmount before stopping loads** — rejected: it may come after
   the unmount has already found a folder open.
-- **Unmount only the clicked volume** — rejected: a disk image would stay attached and a disk
-  wouldn't eject, unlike Finder's button.
+- **Always unmount only the clicked volume** — rejected: a disk image would stay attached and
+  a disk wouldn't eject, unlike Finder's button.
+- **Always eject the whole disk** — rejected: it unmounts the disk's other volumes without
+  asking, where Finder asks first.
+- **Ask, as Finder does, whether to eject the disk's other volumes too** — not done yet: the
+  app would need the disk's volumes and a question of its own; unmounting the one volume loses
+  nothing.
 
 ## Consequences
 
-Ejecting a volume on a disk with other volumes ejects them all without asking, where Finder
-first asks whether to eject the others too. A volume on this machine that stops answering
+Ejecting a volume on a disk with other volumes mounted unmounts it alone, without Finder's
+question; ejecting the last one then ejects the disk. An APFS volume is on its container's
+synthesized disk, so a volume of another format on the same physical disk isn't seen as
+sharing it: ejecting the last APFS volume ejects the physical disk, and unmounts that other
+volume without asking. Telling them apart needs Disk Arbitration's disk tree. A volume on this machine that stops answering
 holds the next read of the list until it answers. A share mounted twice under one name shows
 the mount point's name, "main 1", where Finder would show the server.
