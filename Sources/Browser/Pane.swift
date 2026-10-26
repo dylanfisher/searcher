@@ -450,7 +450,8 @@ public final class Pane {
         trail.show(column, selecting: entry.selected)
     }
 
-    /// Set while Back or Forward moves the trail's focus, which is no step of the history.
+    /// Set while Back, Forward or Undo and Redo Selection move the trail's focus, which is no
+    /// step of the history.
     private var isSteppingHistory = false
 
     /// The trail is moving the keys from `column`, one of its columns, to another: the pane
@@ -560,10 +561,12 @@ public final class Pane {
     /// column has its own, so `state` holds no listing in column mode. The list
     /// starts at the focused column's folder, in its sort, with
     /// the entry under its cursor selected, and the columns close. Neither is a step in the
-    /// history. Switching to the mode the pane is in does nothing.
+    /// history; either drops the pane's selection steps, as a navigation does. Switching to the
+    /// mode the pane is in does nothing.
     public func setViewMode(_ mode: ViewMode) {
         precondition(containingTrail == nil, "a column has no view mode of its own")
         guard mode != viewMode else { return }
+        tab?.paneDidNavigate(self)
         switch mode {
         case .column:
             let cursor = selection.cursor
@@ -702,6 +705,7 @@ public final class Pane {
         containingTrail = nil
         onChange = nil
         onTabChange = nil
+        holdingTab = nil
         // Its closure can hold a command context, which holds this pane.
         namesToSelect = nil
     }
@@ -850,7 +854,10 @@ public final class Pane {
 
     /// Stops everything the pane does for the folder it leaves: its load, a pending
     /// `goToFolder`, its monitor and patches. Takes `location` with `selection` to be selected.
+    /// Leaving the folder is a navigation, which drops the pane's selection steps, unless a
+    /// drag's spring-loaded folders make it: the drag's end comes back.
     private func leave(for location: Location, selection: Selection) {
+        if !isSpringing { tab?.paneDidNavigate(self) }
         cancelGoToFolder()
         loadedAt = nil
         load?.cancel()
@@ -1655,7 +1662,7 @@ public final class Pane {
             return
         }
         if let source {
-            selectionHistory.record(self.selection, in: location, by: source)
+            tab?.paneWillChangeSelection(self, by: source)
         }
         self.selection = selection
         selectionVersion += 1
@@ -1722,8 +1729,7 @@ public final class Pane {
         }
         selection = settled
         // Settling moves no version, but a step can now equal the selection, which changes
-        // whether Undo and Redo Selection have a step left.
-        selectionStepsFound = StepsFound(state: -1, selection: -1)
+        // whether Undo and Redo Selection have a step left: the report tells the tab.
         reportChange()
     }
 
@@ -1810,54 +1816,35 @@ public final class Pane {
 
     // MARK: - Selection undo
 
-    /// The selections before each change here, per folder, for Undo and Redo Selection. Tests
-    /// replace it with one on a clock they advance.
-    var selectionHistory = SelectionHistory()
-    /// `canUndoSelection` and `canRedoSelection` as last found, at the state and selection
-    /// versions they were found at. Menus ask on every key equivalent, and each answer resolves
-    /// steps against the rows; the history changes only with the selection version. Settling,
-    /// which moves neither version, drops them.
-    private var selectionStepsFound = StepsFound(state: -1, selection: -1)
+    /// The tab holding the pane, which keeps its selection steps; the tab sets it. A column's
+    /// pane is in its trail owner's.
+    weak var holdingTab: Tab?
 
-    private struct StepsFound {
-        let state: Int
-        let selection: Int
-        var back: Bool?
-        var forward: Bool?
-    }
+    /// The tab whose selection history the pane's changes go into: its own, or its trail owner's
+    /// for a column. Nil for a pane in no tab, as a bench or a test makes one; Undo and Redo
+    /// Selection are off there.
+    var tab: Tab? { containingTrail?.owner.holdingTab ?? holdingTab }
 
-    /// Whether Undo Selection would change the selection: a step back here selects something
-    /// still listed other than the current selection.
-    public var canUndoSelection: Bool {
-        stepFound(\.back) { selectionHistory.canUndo(in: location, restoring: restorable) }
-    }
-
-    /// Whether Redo Selection would change the selection, as `canUndoSelection`.
-    public var canRedoSelection: Bool {
-        stepFound(\.forward) { selectionHistory.canRedo(in: location, restoring: restorable) }
-    }
-
-    /// Selects what was selected before the last change in this folder, with its cursor and
-    /// anchor, leaving out entries no longer listed. Skips steps that would select nothing
-    /// listed or what is selected now. Never navigates.
-    public func undoSelection() {
-        guard let step = selectionHistory.undo(selection, in: location, restoring: restorable)
-        else { return }
-        set(step, recordingAs: nil)
-    }
-
-    /// Selects what the last Undo Selection here stepped back from, skipping as it does.
-    public func redoSelection() {
-        guard let step = selectionHistory.redo(selection, in: location, restoring: restorable)
-        else { return }
-        set(step, recordingAs: nil)
+    /// Selects `selection`, a step resolved against the rows (`restorable`), for Undo or Redo
+    /// Selection, recording nothing; `owner` is this pane, or the pane whose trail this column is
+    /// in. A column without the keys takes them first, adding nothing to Back: Undo Selection
+    /// puts the keys back in a trail the pane never left.
+    func restore(_ selection: Selection, in owner: Pane) {
+        if let trail = owner.columnTrail,
+            let column = trail.columns.first(where: { $0.pane === self })
+        {
+            owner.isSteppingHistory = true
+            defer { owner.isSteppingHistory = false }
+            trail.focus(column)
+        }
+        set(selection, recordingAs: nil)
     }
 
     /// `step` resolved against the rows shown, or nil when it would select nothing listed and
     /// has no listed cursor, or would select what is selected now. A complete listing drops the
     /// names it doesn't have. Work per entry of the step, on the main thread: a step is restored
     /// at once, as a key's move is shown.
-    private func restorable(_ step: Selection) -> Selection? {
+    func restorable(_ step: Selection) -> Selection? {
         guard let listing = state.listing else { return nil }
         let complete = if case .loaded = state { true } else { false }
         let restored = onMain { step.resolved(in: listing, after: .loaded(complete: complete)) }
@@ -1865,21 +1852,6 @@ public final class Pane {
             restored != selection
         else { return nil }
         return restored
-    }
-
-    /// The answer kept in `selectionStepsFound` at `side`, or `find`'s, kept.
-    private func stepFound(
-        _ side: WritableKeyPath<StepsFound, Bool?>, _ find: () -> Bool
-    ) -> Bool {
-        var found = selectionStepsFound
-        if found.state != stateVersion || found.selection != selectionVersion {
-            found = StepsFound(state: stateVersion, selection: selectionVersion)
-        }
-        if let answer = found[keyPath: side] { return answer }
-        let answer = find()
-        found[keyPath: side] = answer
-        selectionStepsFound = found
-        return answer
     }
 
     // MARK: - The cursor after a trash

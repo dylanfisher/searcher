@@ -183,6 +183,7 @@ private func columnsWithDocsSelected(listsDocs: Bool = true) async throws -> (Pa
 
 @MainActor @Test func choosingARowOfTheSelectedFolderFocusesItsColumnAndSelectsIt() async throws {
     let (pane, trail) = try await columnsWithDocsSelected()
+    let tab = Tab(pane: pane)
     let docs = trail.columns[2].pane
     docs.select(Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
     let centering = docs.centeringRequest
@@ -199,7 +200,7 @@ private func columnsWithDocsSelected(listsDocs: Bool = true) async throws -> (Pa
     #expect(docs.centeringRequest == centering + 1)
     #expect(trail.columns[1].pane.selection.cursor == ExactName("docs"))
     #expect(trail.columns.count == 3)
-    // One step of the column's selection history.
-    docs.undoSelection()
+    // One step of the selection history.
+    tab.undoSelection()
     #expect(docs.selection == Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
 }

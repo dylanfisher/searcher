@@ -716,9 +716,11 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     }
 
     /// The commands that focus another pane: Focus Pane Left, Right, Up and Down, and Focus
-    /// Other Pane.
+    /// Other Pane, and Undo and Redo Selection, which put the keys back in the pane a selection
+    /// was made in (docs/decisions/0112-position-history.md).
     private static let paneFocusCommands = Set(TilingCommands.focus.values.map(\.id)).union([
-        DualPaneCommands.focusOtherPane.id
+        DualPaneCommands.focusOtherPane.id, SelectionCommands.undoSelection.id,
+        SelectionCommands.redoSelection.id,
     ])
 
     /// Gives the keys to the focused pane after command `id` ran from outside the panes' tables,

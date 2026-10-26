@@ -2044,6 +2044,26 @@ func aFocusPaneChordFromTheSidebarGivesThePaneItFocusesTheKeys(_ direction: Dire
     #expect(try ringed(right, in: fixture))
 }
 
+/// Cmd-U pressed in the sidebar puts back a selection of the other pane, which takes the focus
+/// and the keys (docs/decisions/0112-position-history.md).
+@MainActor @Test func commandUFromTheSidebarGivesThePaneItRestoresTheKeys() async throws {
+    let fixture = try await Fixture()
+    let (left, right) = try twoPanes(.horizontal, in: fixture)
+    let leftPane = try #require(fixture.tab.panes[left])
+    leftPane.select(Selection([ExactName("docs")], cursor: ExactName("docs")))
+    leftPane.select(Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+    #expect(fixture.window.makeFirstResponder(try fixture.paneController(right).keyView))
+    #expect(fixture.tab.layout.focused == right)
+    let outline = try keysToSidebar(in: fixture)
+
+    outline.keyDown(with: try keyEvent("u", modifiers: .command))
+
+    #expect(fixture.tab.layout.focused == left)
+    #expect(leftPane.selection.cursor == ExactName("docs"))
+    #expect(fixture.window.firstResponder === (try fixture.paneController(left).keyView))
+    #expect(try ringed(left, in: fixture))
+}
+
 // MARK: A press anywhere in a pane focuses it
 
 extension PressFixture {

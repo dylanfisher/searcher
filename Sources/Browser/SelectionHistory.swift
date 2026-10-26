@@ -1,22 +1,38 @@
 import Base
 
-/// A pane's selection undo, after Sublime Text's soft undo: each change of the selection in a
-/// folder keeps the selection before it, Undo Selection steps back through them and Redo
-/// Selection forward again, and a new change ends the way forward. It never holds file changes;
-/// those are `UndoHistory`'s (docs/decisions/0077-selection-history.md).
+/// A tab's selection undo, after Sublime Text's soft undo: each change of a selection keeps the
+/// position before it, Undo Selection steps back through them and Redo Selection forward again,
+/// and a new change ends the way forward. It never holds file changes; those are
+/// `UndoHistory`'s (docs/decisions/0077-selection-history.md,
+/// docs/decisions/0112-position-history.md).
 ///
-/// Each folder has its own steps, kept for the `folderLimit` folders changed most recently, so a
-/// step never takes the pane to another folder. A run of changes is one step: the repeats of a
-/// held row key after its press, one mouse press however long it lasts, and a type-to-select
-/// query until a pause of `queryPause`. Each separate press of a row key is a step of its own. A
-/// selection with nothing selected and no cursor isn't a step.
+/// A step is a `Position`: the pane, the folder and the selection there. The tab drops a pane's
+/// steps when the pane closes, leaves the tab, or goes to another folder other than by moving
+/// in its column trail, so a step's folder is one the pane still shows or a column of its trail.
+/// A run of changes is one step: the repeats of a held row key after its press, one mouse press
+/// however long it lasts, and a type-to-select query until a pause of `queryPause`. Each
+/// separate press of a row key is a step of its own. A selection with nothing selected and no
+/// cursor isn't a step.
 public struct SelectionHistory {
-    /// The steps kept per folder; the oldest goes first.
+    /// The steps kept per pane; the pane's oldest goes first.
     public static let limit = 100
-    /// The folders whose steps are kept; the one changed longest ago goes first.
-    public static let folderLimit = 20
     /// The pause that ends a type-to-select query, and so its step.
     public static let queryPause = TypeSelect.resetInterval
+
+    /// Where the keys were and what was selected there: the tab's pane, the folder, which in
+    /// column view names the column, and the selection, kept by name. Neither a `Pane` nor a
+    /// column index: a column's pane goes when its trail closes the column.
+    public struct Position: Equatable, Sendable {
+        public let pane: PaneID
+        public let folder: Location
+        public let selection: Selection
+
+        public init(pane: PaneID, folder: Location, selection: Selection) {
+            self.pane = pane
+            self.folder = folder
+            self.selection = selection
+        }
+    }
 
     /// What made a change, for joining a run into one step.
     public enum Source: Equatable, Sendable {
@@ -31,19 +47,13 @@ public struct SelectionHistory {
         case press(Int)
     }
 
-    private struct Steps {
-        /// Nearest last.
-        var back: [Selection] = []
-        /// Nearest last.
-        var forward: [Selection] = []
-    }
-
-    /// By folder path.
-    private var folders: [String: Steps] = [:]
-    /// Folder paths, the one changed longest ago first.
-    private var recent: [String] = []
-    /// The last change, while another from the same source can join its step.
-    private var run: (source: Source, folder: String, at: Duration)?
+    /// Nearest last.
+    private var back: [Position] = []
+    /// Nearest last.
+    private var forward: [Position] = []
+    /// The last change, while another from the same source in the same pane and folder can join
+    /// its step.
+    private var run: (source: Source, pane: PaneID, folder: Location, at: Duration)?
     /// Time on the injected clock since this was made, for the pause that ends a query; erases
     /// the clock's type, as `TypeSelect` does.
     private let elapsed: @Sendable () -> Duration
@@ -58,72 +68,76 @@ public struct SelectionHistory {
         elapsed = { start.duration(to: clock.now) }
     }
 
-    /// Whether `folder` has a step back that `restoring` turns into a selection; see `undo`.
-    public func canUndo(
-        in folder: Location, restoring: (Selection) -> Selection? = { $0 }
-    ) -> Bool {
-        folders[folder.path]?.back.contains { restoring($0) != nil } ?? false
+    /// Whether a step back is left that `restorable` accepts; see `undo`.
+    public func canUndo(where restorable: (Position) -> Bool = { _ in true }) -> Bool {
+        back.contains(where: restorable)
     }
 
-    /// Whether `folder` has a step forward that `restoring` turns into a selection.
-    public func canRedo(
-        in folder: Location, restoring: (Selection) -> Selection? = { $0 }
-    ) -> Bool {
-        folders[folder.path]?.forward.contains { restoring($0) != nil } ?? false
+    /// Whether a step forward is left that `restorable` accepts.
+    public func canRedo(where restorable: (Position) -> Bool = { _ in true }) -> Bool {
+        forward.contains(where: restorable)
     }
 
-    /// Notes that the selection in `folder` changed from `previous` by `source`. Ends the way
-    /// forward, and keeps `previous` as a step unless the change joins the run before it.
-    public mutating func record(_ previous: Selection, in folder: Location, by source: Source) {
-        let path = folder.path
+    /// Notes that a selection changed from `previous` by `source`. Ends the way forward, and
+    /// keeps `previous` as a step unless the change joins the run before it.
+    public mutating func record(_ previous: Position, by source: Source) {
         let now = elapsed()
-        defer { run = (source, path, now) }
-        var steps = folders[path] ?? Steps()
-        steps.forward = []
+        defer { run = (source, previous.pane, previous.folder, now) }
+        forward = []
         let joinsRun =
-            run.map { $0.folder == path && Self.joins(source, $0.source, now - $0.at) }
-            ?? false
-        if !joinsRun, !previous.isEmpty || previous.cursor != nil,
-            steps.back.last != Self.kept(previous)
+            run.map {
+                $0.pane == previous.pane && $0.folder == previous.folder
+                    && Self.joins(source, $0.source, now - $0.at)
+            } ?? false
+        let step = Self.kept(previous)
+        guard !joinsRun, !step.selection.isEmpty || step.selection.cursor != nil,
+            back.last != step
+        else { return }
+        back.append(step)
+        if let oldest = back.firstIndex(where: { $0.pane == step.pane }),
+            back.count(where: { $0.pane == step.pane }) > Self.limit
         {
-            steps.back.append(Self.kept(previous))
-            if steps.back.count > Self.limit { steps.back.removeFirst() }
+            back.remove(at: oldest)
         }
-        store(steps, at: path)
     }
 
-    /// The selection to go back to from `current` in `folder`: the nearest step back that
-    /// `restoring` turns into a selection, as it turns it. `current` becomes the way forward.
-    /// Steps it turns into nothing, such as ones whose entries are all gone, are dropped on the
-    /// way. Nil when none is left.
-    public mutating func undo(
-        _ current: Selection, in folder: Location,
-        restoring: (Selection) -> Selection? = { $0 }
-    ) -> Selection? {
-        guard var steps = folders[folder.path] else { return nil }
-        defer { store(steps, at: folder.path) }
-        while let step = steps.back.popLast() {
-            guard let restored = restoring(step) else { continue }
-            steps.forward.append(Self.kept(current))
-            run = nil
-            return restored
-        }
-        return nil
+    /// Steps back to the nearest step that `restoring` restores. `restoring` turns a step into
+    /// what restores it and the position that restoring it replaces, which becomes the way
+    /// forward; or into nil, for a step that would change nothing, such as one whose entries are
+    /// all gone, which is dropped on the way. Nil when none is left.
+    public mutating func undo<Restore>(
+        _ restoring: (Position) -> (Restore, replacing: Position)?
+    ) -> Restore? {
+        guard let (restore, replaced) = Self.pop(&back, restoring) else { return nil }
+        forward.append(Self.kept(replaced))
+        run = nil
+        return restore
     }
 
-    /// The selection the last undo in `folder` stepped back from, as `undo` finds it, with
-    /// `current` the way back again.
-    public mutating func redo(
-        _ current: Selection, in folder: Location,
-        restoring: (Selection) -> Selection? = { $0 }
-    ) -> Selection? {
-        guard var steps = folders[folder.path] else { return nil }
-        defer { store(steps, at: folder.path) }
-        while let step = steps.forward.popLast() {
-            guard let restored = restoring(step) else { continue }
-            steps.back.append(Self.kept(current))
-            run = nil
-            return restored
+    /// Steps forward to what the last undo stepped back from, as `undo` does.
+    public mutating func redo<Restore>(
+        _ restoring: (Position) -> (Restore, replacing: Position)?
+    ) -> Restore? {
+        guard let (restore, replaced) = Self.pop(&forward, restoring) else { return nil }
+        back.append(Self.kept(replaced))
+        run = nil
+        return restore
+    }
+
+    /// Drops every step of `pane`, back and forward: it closed, left the tab or went to another
+    /// folder, so its steps name folders it no longer shows.
+    public mutating func dropSteps(of pane: PaneID) {
+        back.removeAll { $0.pane == pane }
+        forward.removeAll { $0.pane == pane }
+        if run?.pane == pane { run = nil }
+    }
+
+    /// Pops `steps` down to the nearest one `restoring` turns into something, and returns that.
+    private static func pop<Restore>(
+        _ steps: inout [Position], _ restoring: (Position) -> (Restore, replacing: Position)?
+    ) -> (Restore, replacing: Position)? {
+        while let step = steps.popLast() {
+            if let found = restoring(step) { return found }
         }
         return nil
     }
@@ -142,20 +156,15 @@ public struct SelectionHistory {
         }
     }
 
-    private mutating func store(_ steps: Steps, at path: String) {
-        folders[path] = steps
-        recent.removeAll { $0 == path }
-        recent.append(path)
-        if recent.count > Self.folderLimit {
-            folders[recent.removeFirst()] = nil
-        }
-    }
-
-    /// `selection` as a step keeps it: by name, without the listing Select All saw, which would
-    /// keep a copy of an old listing alive per step. An unsettled selection, rare since one
-    /// settles within milliseconds, is kept as it is and named when restored.
-    private static func kept(_ selection: Selection) -> Selection {
-        guard selection.isSettled else { return selection }
-        return Selection(selection.members, cursor: selection.cursor, anchor: selection.anchor)
+    /// `position` as a step keeps it: its selection by name, without the listing Select All saw,
+    /// which would keep a copy of an old listing alive per step. An unsettled selection, rare
+    /// since one settles within milliseconds, is kept as it is and named when restored.
+    private static func kept(_ position: Position) -> Position {
+        let selection = position.selection
+        guard selection.isSettled else { return position }
+        return Position(
+            pane: position.pane, folder: position.folder,
+            selection: Selection(
+                selection.members, cursor: selection.cursor, anchor: selection.anchor))
     }
 }

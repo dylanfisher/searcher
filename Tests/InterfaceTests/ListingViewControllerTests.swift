@@ -529,6 +529,7 @@ private final class PressedTableView: ListingTableView {
     let table = PressedTableView()
     let controller = await controller(showing: [file("a"), file("b"), file("c")], tableView: table)
     let pane = controller.pane
+    let tab = Tab(pane: pane)
     pane.select(Selection([ExactName("a")], cursor: ExactName("a")))
     table.pressDown(on: 1, selecting: [1])
     await settle { pane.selection.isSettled }
@@ -537,10 +538,10 @@ private final class PressedTableView: ListingTableView {
     table.pressUp()
 
     #expect(pane.selectionVersion == version)
-    pane.undoSelection()
+    tab.undoSelection()
     await settle { pane.selection.isSettled }
     #expect(pane.selection == Selection([ExactName("a")], cursor: ExactName("a")))
-    #expect(!pane.canUndoSelection)
+    #expect(!tab.canUndoSelection)
 }
 
 /// The table reports by row the selection a key or command made by name; the same rows, cursor
@@ -549,6 +550,7 @@ private final class PressedTableView: ListingTableView {
     let table = PressedTableView()
     let controller = await controller(showing: [file("a"), file("b"), file("c")], tableView: table)
     let pane = controller.pane
+    let tab = Tab(pane: pane)
     pane.select(Selection([ExactName("a")], cursor: ExactName("a")))
     pane.select(Selection([ExactName("b")], cursor: ExactName("b")))
     #expect(table.selectedRowIndexes == [1])
@@ -558,9 +560,9 @@ private final class PressedTableView: ListingTableView {
 
     #expect(pane.selectionVersion == version)
     #expect(pane.selection == Selection([ExactName("b")], cursor: ExactName("b")))
-    pane.undoSelection()
+    tab.undoSelection()
     #expect(pane.selection == Selection([ExactName("a")], cursor: ExactName("a")))
-    #expect(!pane.canUndoSelection)
+    #expect(!tab.canUndoSelection)
 }
 
 /// A press on a row of a multi-row selection leaves the selection to the table until mouse up,
