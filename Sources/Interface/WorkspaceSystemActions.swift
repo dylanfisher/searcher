@@ -177,45 +177,46 @@ public final class WorkspaceSystemActions: SystemActions {
         }
     }
 
-    /// Finder's Get Info for `urls`: one `open` of the `information window` of each item, as
-    /// AppleScript sends `open information window of item`, then `activate`, so the windows come
-    /// to the front.
-    nonisolated static func infoEvent(for urls: [URL]) -> NSAppleEventDescriptor {
-        let windows = NSAppleEventDescriptor.list()
-        for (index, url) in urls.enumerated() {
-            // The `iwnd` property of the item, where the item is a `cobj` specifier of form
-            // `indx` with the file URL as its data, as AppleScript sends it. A bare file URL as
-            // the container gets OSStatus -1728 from Finder.
-            let item = Self.objectSpecifier()
-            item.setDescriptor(
-                NSAppleEventDescriptor(typeCode: DescType(cObject)),
-                forKeyword: AEKeyword(keyAEDesiredClass))
-            item.setDescriptor(
-                NSAppleEventDescriptor(enumCode: DescType(formAbsolutePosition)),
-                forKeyword: AEKeyword(keyAEKeyForm))
-            item.setDescriptor(
-                NSAppleEventDescriptor(fileURL: url), forKeyword: AEKeyword(keyAEKeyData))
-            item.setDescriptor(
-                NSAppleEventDescriptor.null(), forKeyword: AEKeyword(keyAEContainer))
-            let window = Self.objectSpecifier()
-            window.setDescriptor(
-                NSAppleEventDescriptor(typeCode: DescType(cProperty)),
-                forKeyword: AEKeyword(keyAEDesiredClass))
-            window.setDescriptor(
-                NSAppleEventDescriptor(enumCode: DescType(formPropertyID)),
-                forKeyword: AEKeyword(keyAEKeyForm))
-            window.setDescriptor(
-                NSAppleEventDescriptor(typeCode: informationWindow),
-                forKeyword: AEKeyword(keyAEKeyData))
-            window.setDescriptor(item, forKeyword: AEKeyword(keyAEContainer))
-            windows.insert(window, at: index + 1)
-        }
+    /// Finder's Get Info for `url`: one `open` of the `information window` of the item, as
+    /// AppleScript sends `open information window of item`. The specifier is the direct object
+    /// itself, not in a list: Finder opens the items of a list, a folder as a Finder window, and
+    /// answers without an error.
+    nonisolated static func infoEvent(for url: URL) -> NSAppleEventDescriptor {
+        // The `iwnd` property of the item, where the item is a `cobj` specifier of form
+        // `indx` with the file URL as its data, as AppleScript sends it. A bare file URL as
+        // the container gets OSStatus -1728 from Finder.
+        let item = Self.objectSpecifier()
+        item.setDescriptor(
+            NSAppleEventDescriptor(typeCode: DescType(cObject)),
+            forKeyword: AEKeyword(keyAEDesiredClass))
+        item.setDescriptor(
+            NSAppleEventDescriptor(enumCode: DescType(formAbsolutePosition)),
+            forKeyword: AEKeyword(keyAEKeyForm))
+        item.setDescriptor(
+            NSAppleEventDescriptor(fileURL: url), forKeyword: AEKeyword(keyAEKeyData))
+        item.setDescriptor(NSAppleEventDescriptor.null(), forKeyword: AEKeyword(keyAEContainer))
+        let window = Self.objectSpecifier()
+        window.setDescriptor(
+            NSAppleEventDescriptor(typeCode: DescType(cProperty)),
+            forKeyword: AEKeyword(keyAEDesiredClass))
+        window.setDescriptor(
+            NSAppleEventDescriptor(enumCode: DescType(formPropertyID)),
+            forKeyword: AEKeyword(keyAEKeyForm))
+        window.setDescriptor(
+            NSAppleEventDescriptor(typeCode: informationWindow),
+            forKeyword: AEKeyword(keyAEKeyData))
+        window.setDescriptor(item, forKeyword: AEKeyword(keyAEContainer))
         let event = NSAppleEventDescriptor.appleEvent(
             withEventClass: AEEventClass(kCoreEventClass), eventID: AEEventID(kAEOpenDocuments),
             targetDescriptor: finder(), returnID: AEReturnID(kAutoGenerateReturnID),
             transactionID: AETransactionID(kAnyTransactionID))
-        event.setParam(windows, forKeyword: AEKeyword(keyDirectObject))
+        event.setParam(window, forKeyword: AEKeyword(keyDirectObject))
         return event
+    }
+
+    /// The events that open the Info windows of `urls`: one `infoEvent` per item, in order.
+    nonisolated static func infoEvents(for urls: [URL]) -> [NSAppleEventDescriptor] {
+        urls.map { infoEvent(for: $0) }
     }
 
     private nonisolated static func objectSpecifier() -> NSAppleEventDescriptor {
@@ -242,8 +243,8 @@ public final class WorkspaceSystemActions: SystemActions {
     /// Finder's `information window` property of an item, from its scripting dictionary.
     nonisolated static let informationWindow: DescType = 0x6977_6E64  // 'iwnd'
 
-    /// Sends `infoEvent` and then `activateEvent` and waits for each reply, throwing the error
-    /// Apple Events or Finder's reply gives.
+    /// Sends `infoEvents` and then `activateEvent` and waits for each reply, throwing the first
+    /// error Apple Events or Finder's reply gives, and sending nothing after it.
     /// Asks for Automation permission first, with no timeout, so a prompt the user takes a while
     /// to answer doesn't use up the event's `finderTimeout`.
     private nonisolated static func openInfoWindows(_ urls: [URL]) throws {
@@ -256,7 +257,7 @@ public final class WorkspaceSystemActions: SystemActions {
         if permission != noErr {
             throw NSError(domain: NSOSStatusErrorDomain, code: Int(permission))
         }
-        for event in [infoEvent(for: urls), activateEvent()] {
+        for event in infoEvents(for: urls) + [activateEvent()] {
             let reply = try event.sendEvent(
                 options: [.waitForReply, .canInteract], timeout: finderTimeout)
             let code = reply.paramDescriptor(forKeyword: AEKeyword(keyErrorNumber))?.int32Value ?? 0
