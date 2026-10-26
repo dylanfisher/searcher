@@ -111,7 +111,8 @@ public struct Favorite: Hashable, Sendable {
         guard !isInTrash(favorite.path), let state = state(at: url) else {
             return Resolution(favorite: favorite, state: .missing)
         }
-        return Resolution(favorite: Favorite(path: favorite.path, bookmark: bookmark(of: url)), state: state)
+        return Resolution(
+            favorite: Favorite(path: favorite.path, bookmark: bookmark(of: url)), state: state)
     }
 
     /// `favorite` found through `bookmark`; nil when the bookmark doesn't resolve, or leads into
