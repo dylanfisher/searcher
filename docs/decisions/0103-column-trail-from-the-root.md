@@ -83,7 +83,13 @@ focused folder only ([0041](0041-column-model.md), [0096](0096-column-widths.md)
   keys ([0048](0048-pane-load-priority.md)); the others are asked after every load already
   waiting, at the pane's priority. On a share they wait behind its one read in flight
   ([0038](0038-slow-volumes.md)); a column whose folder is on a slow or gone share shows its
-  state ([0046](0046-column-view.md)) and holds nothing else.
+  state ([0046](0046-column-view.md)) and holds nothing else. (Amended 2026-10-25, Dylan: "in
+  general i want to avoid flash": the columns above wait for the root check only, not for the
+  focused column's first update. The focused column's load is still asked first: it is asked as
+  the trail is built, and the check answers after a thread hop, and `ListingService` starts
+  loads in the order asked once their volumes are known. A folder that is slow to list no
+  longer holds back the small folders above it, which before showed empty until it answered.
+  A column the check drops is closed before the waiting loads start, so it still never lists.)
 - **The way down stays.** A column built above the focused one keeps the column right of it while
   its selection is the one the trail gave it (`Column.keepsNextColumnAt`), whatever its rows show
   of the next folder: a hidden folder its rows leave out, a link the path went through (`/tmp`),
@@ -98,7 +104,8 @@ focused folder only ([0041](0041-column-model.md), [0096](0096-column-widths.md)
 - **The lead column closing first.** A column above can list early, when its folder monitor
   reports a change, and a selection there can close the column the trail was built at before
   that column's first update. The columns still waiting then list once the root is checked, as
-  if that update had come.
+  if that update had come. (Superseded 2026-10-25: the columns above no longer wait for that
+  update, so there is nothing to handle; see the amendment above.)
 - **← at the root does nothing,** without a beep, as in Finder. Cmd-↑ is ← in column view
   ([0041](0041-column-model.md)), so it stops there too. ← no longer adds a parent's column: there
   is none above the root. (Amended 2026-10-25, Dylan: "but you can still navigate up to root
@@ -131,7 +138,30 @@ focused folder only ([0041](0041-column-model.md), [0096](0096-column-widths.md)
   column, with the one right of it where that fits, ends at the right edge and the columns above
   it fill the view to its left. It jumps, as a new trail did ([0046](0046-column-view.md)). A
   trail shown before the column view had a width scrolled to nothing, so the view scrolls again,
-  once, when it first gets a width.
+  once, when it first gets a width. (Amended 2026-10-25: a trail started again with columns kept
+  (below) scrolls from where the view is, animated, as a move within the trail does; one that
+  keeps none still jumps.)
+- **Starting again keeps the columns both trails show.** (Added 2026-10-25, Dylan: "when i use
+  back/forward the panes on left flash/get re-drawn, even if it was the same pane on left
+  visible in both states … in general i want to avoid flash".) Back or Forward to a folder the
+  trail doesn't show, Go to Folder, the sidebar, the palette, a link and a path bar click above
+  the trail start it again (`ColumnTrail.init(owner:at:selecting:replacing:)`). The old trail's
+  columns from its root down, as far as their folders are the new trail's from the new root
+  down, stay: the same `Column` and `Pane`, so their rows, monitors and column views stay, and
+  nothing lists or redraws them. Each kept column above the new focused one selects the next
+  folder on the new way down and keeps the next column as a built one does (`keepsNextColumnAt`,
+  above); a kept column at the destination itself takes the keys with the remembered entry
+  selected, and the column that entry opens is made new. The old trail's other columns close.
+  The new root is taken from the path, as for any new trail, so different roots, such as home
+  and `/` for `/Applications`, keep nothing, and the root check corrects the trail as before.
+  A trail whose root the check moved, as a volume mounted outside `/Volumes` moves it, starts
+  at another folder than the path gives, so it keeps nothing on a restart either.
+  The kept columns take the sort of the old focused column, as the new ones do, and lose their
+  filters, as a navigation clears a filter ([0041](0041-column-model.md)). Their selections are
+  no steps of their selection histories, and the trail moves the keys without a step of the
+  pane's history: the step is the navigation's, or none for Back and Forward. A kept column
+  that was still waiting to list waits for the new root check, or lists at once when it is the
+  new focused column. List view is unchanged.
 
 ## Alternatives considered
 
@@ -144,13 +174,17 @@ focused folder only ([0041](0041-column-model.md), [0096](0096-column-widths.md)
   or the restore would wait on a thread hop for each column-mode pane.
 - **Keep a mount table in the service and read it synchronously**: still empty at launch, when
   restores build their trails, so the check is needed anyway.
-- **Ancestors at `.hidden` priority** instead of waiting for the focused column's first update:
-  they would also wait behind other panes' hidden tabs and never get ahead of a hidden load, and
-  the order within the pane would still race on each load's volume read.
+- **Ancestors at `.hidden` priority** instead of waiting for the root check: they would also
+  wait behind other panes' hidden tabs and never get ahead of a hidden load, and the order within
+  the pane would still race on each load's volume read.
 - **Reuse the old trail's columns on a navigation** within the same tree, so the folders above
   aren't listed again: a navigation closes every column and clears filters
   ([0041](0041-column-model.md)); keeping some would need rules for their filters, sorts and
-  selections. Not now; the cost is below.
+  selections. Not now; the cost is below. (Taken up 2026-10-25, with the rules above: see
+  "Starting again keeps the columns both trails show".)
+- **Keep the old trail's columns by folder anywhere in it**, not only the leading ones shared
+  from the root: a column right of a folder that differs shows a folder the new trail doesn't
+  run through, so there is nothing more to keep.
 - **Beep on ← at the root**: Finder doesn't.
 
 ## Consequences
@@ -158,17 +192,24 @@ focused folder only ([0041](0041-column-model.md), [0096](0096-column-widths.md)
 Building a trail N folders deep lists N folders instead of one, makes N column controllers and
 tables on the main thread instead of one, and starts N folder monitors. The folders above a
 typical one (`/`, `/Users`, `/Users/me`, `~/projects`) are small, and each read runs off the main
-thread on the service's background slots, after the focused column's first update, so the
-focused column's first rows come as they did. Each extra column costs the main thread what → into
+thread on the service's background slots. They start once the root check answers, so they can
+compete with the focused folder's first rows for the service's slots; the focused folder's load
+is still asked first, at `.focused` priority when the pane has the keys. Each extra column costs the main thread what → into
 a loaded folder costs (B6), all on the frame that builds the trail; a trail eight deep makes seven
-of them at once. No bench was run for this step. Benches to run: `./scripts/bench --ui` (the
+of them at once. No bench was run for this step, nor for the change that stopped the columns
+above waiting for the focused column's first update, which B6 and B10 have to be run again for.
+Benches to run: `./scripts/bench --ui` (the
 column-view B6 cases and B10), and `./scripts/bench --ui --scenario restored-session` (B1, 500 ms;
 its panes are list panes, so it measures the change only if a column-mode pane is added to the
 saved session). A restore of a column-mode pane asks its ancestors' loads after every other
 restored pane's focused folder, since those were asked first.
 
 Every navigation in column view lists the folders above the destination again; on a share, those
-reads queue behind the destination's on the share's one read slot. A folder above the trail's
+reads queue behind the destination's on the share's one read slot. (Amended 2026-10-25: only the
+folders above it that the old trail didn't show list; the ones it shared keep their rows. The
+columns above a new trail now ask their loads as soon as the root check answers, so they can
+take a share's read slot while the focused folder's read is still running, where before they
+waited for its first update.) A folder above the trail's
 root is reached only from the path bar or Go to Folder.
 
 The path bar still starts at `/` ([0026](0026-path-bar.md)), so for a folder on `/Volumes/X` it
