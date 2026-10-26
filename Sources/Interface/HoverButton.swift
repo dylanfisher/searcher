@@ -52,9 +52,16 @@ final class HoverButton: NSButton {
         didSet { needsDisplay = true }
     }
 
-    override var isHidden: Bool {
-        // A hidden button gets no mouseExited, so it would show the hover when shown again.
-        didSet { if isHidden { isHovered = false } }
+    // A button hidden, with or without its ancestors, or taken out of its window gets no
+    // mouseExited, so it would show the hover when shown again.
+    override func viewDidHide() {
+        super.viewDidHide()
+        isHovered = false
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        isHovered = false
     }
 
     override func mouseEntered(with event: NSEvent) {
