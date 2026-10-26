@@ -319,6 +319,8 @@ public final class Settings {
         showsFavoritesInSidebar = Self.bool(.showsFavoritesInSidebar, in: defaults) ?? true
         showsLocationsInSidebar = Self.bool(.showsLocationsInSidebar, in: defaults) ?? true
         showsWorkspacesInSidebar = Self.bool(.showsWorkspacesInSidebar, in: defaults) ?? true
+        // The key `newWindowFrame` replaced (0057-windows-and-tear-out.md).
+        defaults.removeObject(forKey: "newWindowSize")
     }
 
     /// Runs `handler` after each change of a setting, for as long as `owner` exists.
