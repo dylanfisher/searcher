@@ -134,15 +134,6 @@ private func xattrs(_ path: String) -> [String: Data] {
     return result
 }
 
-/// The ACL without the group's UUID, which `acl_to_text` prints and which is the same anyway.
-private func aclText(_ path: String) -> String? {
-    guard let acl = acl_get_link_np(path, ACL_TYPE_EXTENDED) else { return nil }
-    defer { acl_free(UnsafeMutableRawPointer(acl)) }
-    guard let text = acl_to_text(acl, nil) else { return nil }
-    defer { acl_free(UnsafeMutableRawPointer(text)) }
-    return String(cString: text)
-}
-
 /// Every entry under `root` by its path relative to `root`, with what a copy keeps of it.
 private func snapshot(_ root: String) throws -> [String: Entry] {
     var result: [String: Entry] = [:]
