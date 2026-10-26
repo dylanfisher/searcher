@@ -1847,6 +1847,48 @@ private func keyedPane(
     await settle { paths(pane) == ["/", "/k", "/k/f1"] }
 }
 
+/// A second deliberate press, once the keys have paused after the first, opens its kept folder
+/// at once too: only presses inside the pause wait.
+@MainActor @Test func aSecondPressAfterAPauseOntoAKeptFolderOpensAtOnce() async throws {
+    let clock = ManualClock()
+    let fixture = try await keyedPane(
+        clock: clock, keeping: ["f1", "f2"], volume: ListingService.listerVolume)
+    let pane = fixture.pane
+    try press(KeyChord(.down), on: pane)
+    #expect(paths(pane) == ["/", "/k", "/k/f1"])
+
+    clock.advance(by: ColumnTrail.openDelay)
+    try press(KeyChord(.down), on: pane)
+
+    #expect(paths(pane) == ["/", "/k", "/k/f2"])
+    let opened = try #require(trail(pane).columns.last?.pane)
+    #expect(opened.state.names == ["in", "m.txt", "n.txt"])
+    await drainWaits()
+    #expect(clock.waitingSleeps == 0)
+}
+
+/// A kept folder whose rows are kept in another sort than the column's would make the new
+/// column sort them before it shows any, so the press waits for the pause as with nothing kept.
+@MainActor @Test func aKeptFolderInAnotherArrangementStillWaits() async throws {
+    let clock = ManualClock()
+    let fixture = try await keyedPane(
+        clock: clock, keeping: ["f1"], volume: ListingService.listerVolume)
+    let pane = fixture.pane
+    let first = trail(pane).columns[1].pane
+    first.setSort(.name, ascending: false)
+    await settle { first.state.listing.map(first.isArranged) == true }
+    #expect(first.selection.cursor == ExactName("f0"))
+
+    // Sorted Z to A, `f1` is above `f0`.
+    try press(KeyChord(.up), on: pane)
+
+    #expect(first.selection.cursor == ExactName("f1"))
+    #expect(paths(pane) == ["/", "/k"])
+    await settle { clock.waitingSleeps == 1 }
+    clock.advance(by: ColumnTrail.openDelay)
+    await settle { paths(pane) == ["/", "/k", "/k/f1"] }
+}
+
 @MainActor @Test func heldDownThroughKeptFoldersBuildsNoColumnPerRow() async throws {
     let clock = ManualClock()
     let fixture = try await keyedPane(
