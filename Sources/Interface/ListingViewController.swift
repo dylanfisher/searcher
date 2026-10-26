@@ -242,6 +242,12 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         }
     }
 
+    /// Scrolls the cursor's row into view, as a move of the cursor does.
+    func scrollToCursor() {
+        guard let listing, let row = pane.selection.cursorRow(in: listing) else { return }
+        tableView.scrollRowToVisible(row)
+    }
+
     /// Scrolls `row` to the middle of the rows on screen, or as near as the ends of the list let
     /// it, for Go to Item (docs/decisions/0101-go-to-item.md).
     private func center(_ row: Int) {

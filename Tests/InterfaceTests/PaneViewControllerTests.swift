@@ -541,8 +541,8 @@ private final class WindowFixture {
         backing: .buffered, defer: true)
     let fixture: Fixture
 
-    init() async {
-        fixture = Fixture()
+    init(folders: [String: [DirectoryEntry]] = Fixture.folders) async {
+        fixture = Fixture(lister: StubLister(folders))
         window.isReleasedWhenClosed = false
         window.contentView?.addSubview(fixture.controller.view)
         window.makeFirstResponder(fixture.table)
@@ -615,6 +615,46 @@ private final class WindowFixture {
     #expect(setup.window.firstResponder === setup.fixture.table)
     #expect(setup.pane.location == Location(path: "/root/docs"))
     #expect(rowNames(setup.fixture.table) == ["inside.txt"])
+}
+
+/// ← and → scroll the selected row of the column they move the keys into into view, as ↑ and
+/// ↓ do and as Finder does, though the column was scrolled away from it since.
+@MainActor @Test func arrowsIntoAColumnScrollItsSelectedRowIntoView() async throws {
+    let files = (0..<60).map { file(String(format: "f%02d.txt", $0)) }
+    let setup = await WindowFixture(folders: [
+        "/root": [folder("docs")] + files, "/root/docs": files, "/": [folder("root")],
+    ])
+    try setup.press("3", .command)
+    await setup.waitForColumns()
+    let columns = setup.controller.columnViewController
+    // docs, the first row, opens its column once the keys pause; → selects its first row.
+    try setup.press(NSDownArrowFunctionKey)
+    await settle { setup.pane.columnTrail?.columns.count == 3 }
+    await setup.waitForColumns()
+    setup.window.contentView?.layoutSubtreeIfNeeded()
+    let root = columns.columnControllers[1].tableView
+    let docs = columns.columnControllers[2].tableView
+    docs.scrollRowToVisible(59)
+    try setup.press(NSRightArrowFunctionKey)
+
+    #expect(setup.window.firstResponder === docs)
+    #expect(root.selectedRowIndexes == [0] && docs.selectedRowIndexes == [0])
+    #expect(docs.visibleRect.contains(docs.rect(ofRow: 0)))
+
+    root.scrollRowToVisible(60)
+    #expect(!root.visibleRect.contains(root.rect(ofRow: 0)))
+    try setup.press(NSLeftArrowFunctionKey)
+
+    #expect(setup.window.firstResponder === root)
+    #expect(root.visibleRect.contains(root.rect(ofRow: 0)))
+
+    docs.scrollRowToVisible(59)
+    #expect(!docs.visibleRect.contains(docs.rect(ofRow: 0)))
+    try setup.press(NSRightArrowFunctionKey)
+
+    #expect(setup.window.firstResponder === docs)
+    #expect(docs.selectedRowIndexes == [0])
+    #expect(docs.visibleRect.contains(docs.rect(ofRow: 0)))
 }
 
 @MainActor @Test func theFilterNarrowsTheFocusedColumn() async throws {
