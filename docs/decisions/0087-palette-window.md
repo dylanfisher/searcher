@@ -24,8 +24,8 @@ Recursive search and Spotlight are a separate feature (M5b.3) and stay out.
   the detail in secondary text, and a command's first chord right-aligned as a menu draws it
   (⌃⌥⇧⌘ order). (Amended 2026-10-26: the first chord is the effective primary, the one the
   user's shortcuts give it, read from the focused table's registry, or the alternate when the
-  user removed the primary; [0106](0106-primary-and-alternate-shortcuts.md).) The selection uses the system accent colour while the field has the keys, as
-  Spotlight's does. Colours are the system's label colours, so light and dark both follow
+  user removed the primary; [0106](0106-primary-and-alternate-shortcuts.md).) The selection
+  uses the system accent colour while the field has the keys, as Spotlight's does. Colours are the system's label colours, so light and dark both follow
   the appearance. A sheet would block the window and look like a question
   ([0076](0076-dialogs.md)). (Amended 2026-10-25, Dylan: "you should be able to move the cmd
   k/cmd p dialogs around anywhere on screen, separate from the window if possible (like

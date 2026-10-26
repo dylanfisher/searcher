@@ -72,6 +72,15 @@ final class ShortcutsSettings {
     var search = ""
     private(set) var notices: [CommandID: Notice] = [:]
     private(set) var bindings: KeyBindings
+    /// Posts an accessibility notification. Tests replace it to record what would be posted.
+    @ObservationIgnored var postAccessibility:
+        @MainActor (
+            Any, NSAccessibility.Notification, [NSAccessibility.NotificationUserInfoKey: Any]?
+        )
+            -> Void = { element, notification, userInfo in
+                NSAccessibility.post(
+                    element: element, notification: notification, userInfo: userInfo)
+            }
 
     init(settings: Browser.Settings) {
         self.settings = settings
@@ -150,7 +159,16 @@ final class ShortcutsSettings {
         case .fixed(let owner): kind = .fixed(to: owner)
         case .fixedPrimary: kind = .fixedPrimary
         }
-        notices[id] = Notice(position: position, chord: chord, kind: kind)
+        let notice = Notice(position: position, chord: chord, kind: kind)
+        notices[id] = notice
+        // The notice shows below the row, away from the recorder VoiceOver is on, so it is read
+        // out, at high priority so the recorder's new value doesn't drop it.
+        postAccessibility(
+            NSApp as Any, .announcementRequested,
+            [
+                .announcement: notice.message,
+                .priority: NSAccessibilityPriorityLevel.high.rawValue,
+            ])
     }
 
     private func row(_ id: CommandID) -> Row {

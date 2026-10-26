@@ -153,14 +153,16 @@ SK.1b, the menus and the routing; SK.1c, the Settings window and the recorder.
   `assign` stores the last, the key's own character ([0031](0031-view-settings.md)). A key
   `KeyChord` can't spell, such as forward delete, is swallowed and recording goes on.
 - **The monitor never outlives recording.** Recording ends, and the monitor is removed, when a
-  key is taken, the field resigns first responder, its window resigns key, it leaves its window
-  or is hidden, it is turned off, or it is released (the monitor removes itself in its `deinit`).
-  A monitor left behind would eat every key press in the app.
+  key is taken, the field resigns first responder, its window resigns key or closes, it leaves
+  its window or is hidden, it is turned off, or it is released (the monitor removes itself in
+  its `deinit`, and the field removes its window observers in its own). A monitor left behind
+  would eat every key press in the app.
 - **States** ([0110](0110-interaction-states.md)): the recorder draws the hover and pressed
   fills of `HoverButton`, the focus ring around its rounded shape, a 2 pt focus-colored ring
   with "Type Shortcut" while recording, and tertiary text with no fill while off. VoiceOver
   reads it as a button labelled with the command and slot, valued with the chord, "None" or
-  "Recording". Reset, Reset All, Replace and Cancel are bezel push buttons, which have the four
+  "Recording". A notice is announced as it appears, at high priority, since it shows below the
+  row, away from the recorder VoiceOver is on. Reset, Reset All, Replace and Cancel are bezel push buttons, which have the four
   states already.
 - **System chords.** Chords the system takes before the app (Cmd-Tab, Cmd-Space,
   Shift-Cmd-3/4/5, Ctrl-Cmd-Q) never reach the monitor, so the recorder never sees them.
