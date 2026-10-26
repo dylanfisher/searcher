@@ -80,3 +80,60 @@ import Testing
     #expect(gone == Favorite.Resolution(favorite: bookmarked, state: .missing))
     #expect(missing == Favorite.Resolution(favorite: neverThere, state: .missing))
 }
+
+@Test func aLinkToAFolderResolvesAsAFolderAtTheLinksPath() async throws {
+    let temp = try TemporaryFolder("FavoriteTests")
+    let folder = temp.url.appending(path: "target")
+    let link = temp.url.appending(path: "link")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: folder)
+
+    let first = await BlockingCallThread.run { Favorite.resolve(Favorite(path: link.path)) }
+    let bookmarked = first.favorite
+    let again = await BlockingCallThread.run { Favorite.resolve(bookmarked) }
+
+    #expect(first.state == .folder)
+    #expect(first.favorite.path == link.path)
+    #expect(again.state == .folder)
+    #expect(again.favorite.path == link.path)
+}
+
+@Test func aFolderInTheTrashIsMissingUntilOneIsMadeAgainAtItsPath() async throws {
+    let temp = try TemporaryFolder("FavoriteTests")
+    let folder = temp.url.appending(path: "a")
+    let trash = temp.url.appending(path: ".Trash")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+    try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: false)
+    let bookmarked = await BlockingCallThread.run { Favorite.resolve(Favorite(path: folder.path)) }
+        .favorite
+    try FileManager.default.moveItem(at: folder, to: trash.appending(path: "a"))
+
+    let trashed = await BlockingCallThread.run { Favorite.resolve(bookmarked) }
+
+    #expect(trashed == Favorite.Resolution(favorite: bookmarked, state: .missing))
+
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+    let remade = await BlockingCallThread.run { Favorite.resolve(bookmarked) }
+
+    #expect(remade.state == .folder)
+    #expect(remade.favorite.path == folder.path)
+    let fresh = try #require(remade.favorite.bookmark)
+    #expect(fresh != bookmarked.bookmark)
+    // The new bookmark is the new folder's: it doesn't lead back into the Trash.
+    let found = await BlockingCallThread.run { Favorite.resolve(remade.favorite) }
+    #expect(found == Favorite.Resolution(favorite: remade.favorite, state: .folder))
+}
+
+@Test func aBookmarkThatDoesNotResolveFallsBackToThePathWithAFreshBookmark() async throws {
+    let temp = try TemporaryFolder("FavoriteTests")
+    let folder = temp.url.appending(path: "a")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+    let dead = Favorite(path: folder.path, bookmark: Data([1, 2, 3]))
+
+    let resolution = await BlockingCallThread.run { Favorite.resolve(dead) }
+
+    #expect(resolution.state == .folder)
+    #expect(resolution.favorite.path == folder.path)
+    let fresh = try #require(resolution.favorite.bookmark)
+    #expect(fresh != Data([1, 2, 3]))
+}

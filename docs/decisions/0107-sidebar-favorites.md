@@ -32,21 +32,26 @@ Tags needs search, which is on hold.
   shows its name on the first frame without reading the disk, and an item whose bookmark can't
   be made yet (a default folder that doesn't exist) still has a row. `Favorite.resolve` runs on a
   `BlockingCallThread` ([0038](0038-slow-volumes.md)): it resolves the bookmark without mounting
-  or UI, else looks at the path, makes a bookmark when there is none or the old one is stale, and
-  says whether the item is a folder or a file; a package is a file
+  or UI. When there is no bookmark, or it doesn't resolve, or it leads into a Trash or to
+  nothing, it looks at the path instead, and an item there gets a bookmark of its own, so a
+  folder deleted and made again at the same path is found. A stale bookmark is made again. It
+  says whether the item is a folder or a file, following a symbolic link to what it points at,
+  as Finder opens a link to a folder as the folder; a package is a file
   ([0093](0093-packages-are-files.md)). A path the new one only names another way, as `/tmp`
-  names `/private/tmp`, is kept as it was. An item found at a path another favorite has leaves
-  the list, so no path is in it twice.
+  names `/private/tmp`, or a link names its target, is kept as it was. An item found at a path
+  another favorite has leaves the list, so no path is in it twice; the item itself doesn't
+  count, so a rename that changes only case keeps it.
 - **When items are looked for.** `Favorites.refresh` looks for every item as the app becomes
   active, the launch included, since items move while another app is in front. An item already
   being looked for isn't looked for twice. A click or Return looks for the item first, then
   opens it, so a favorite moved since the last refresh opens where it is now.
-- **A missing item stays, greyed.** One whose bookmark doesn't resolve, with nothing at its path,
-  or in a Trash (`.Trash`, `.Trashes`) shows greyed, its VoiceOver label ending "not found", and
+- **A missing item stays, greyed.** One found neither through its bookmark nor at its path,
+  where an item in a Trash (`.Trash`, `.Trashes`) counts as not found, shows greyed, its VoiceOver label ending "not found", and
   opens nothing. It comes back as soon as it is found again, as a share's or an ejected disk's
   favorite does once mounted and the app is next activated, or on a click. Removing an item the
   user may want back, because a disk is ejected, would lose data for a passing state. Finder's
-  behavior for a deleted favorite wasn't checked by hand; this is the choice made.
+  behavior for a deleted favorite wasn't checked by hand; this is the choice made. A missing
+  item keeps its bookmark, so one put back from the Trash is found again.
 - **Opening.** A folder shows in the window's focused pane (`Pane.navigate`), its column view
   starting its trail there as any navigation does ([0103](0103-column-trail-from-the-root.md));
   a file or package opens in its app, as a double-click on it does. Only the latest open acts.
