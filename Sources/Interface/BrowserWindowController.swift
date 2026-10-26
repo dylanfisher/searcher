@@ -95,11 +95,12 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// Hands over the view controller another window has for a pane that moved here, or nil.
     private let takePaneController: @MainActor (PaneID, Pane) -> PaneViewController?
 
-    /// A window of one tab at `location`, in a list of its own, as the UI bench opens it. With
-    /// `fileOperations`, its operations panel lists what `showOperations` is given.
+    /// A window of one tab at `location`, in a list of its own, as the UI bench opens it, with
+    /// `favorites` in its sidebar. With `fileOperations`, its operations panel lists what
+    /// `showOperations` is given.
     public convenience init(
         location: Location, service: ListingService, systemActions: any SystemActions,
-        settings: Settings, fileOperations: FileOperationQueue? = nil
+        settings: Settings, favorites: Favorites, fileOperations: FileOperationQueue? = nil
     ) {
         let pane = Pane(
             location: location, service: service, systemActions: systemActions, settings: settings)
@@ -107,8 +108,8 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         let workspace = Workspace(tab: Tab(pane: pane))
         workspaces.add(workspace)
         self.init(
-            workspace: workspace, workspaces: workspaces, favorites: Favorites(settings: settings),
-            settings: settings, fileOperations: fileOperations)
+            workspace: workspace, workspaces: workspaces, favorites: favorites, settings: settings,
+            fileOperations: fileOperations)
     }
 
     /// A window showing `workspace`, one of `workspaces`, under the app's `settings`, with the
