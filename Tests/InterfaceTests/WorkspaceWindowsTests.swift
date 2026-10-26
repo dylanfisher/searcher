@@ -765,7 +765,7 @@ private func stopEverything(_ windows: WorkspaceWindows) async {
     let first = try #require(fixture.windows.controllers.first)
     let window = try #require(first.window)
     let moved = Notification(name: NSWindow.didMoveNotification)
-    first.isDragStep = { true }
+    first.isLeftMouseDown = { true }
 
     // A move the app makes, with no drag begun, even with the button down.
     window.setFrameOrigin(NSPoint(x: 30, y: 40))
@@ -779,12 +779,24 @@ private func stopEverything(_ windows: WorkspaceWindows) async {
     #expect(fixture.settings.newWindowFrame?.size == Settings.defaultWindowSize)
 
     // The drag has ended, but its last step was made with the button down, so the claim is
-    // still set. A move the app makes next, as a click's does, isn't a drag event: it records
-    // nothing and ends the claim, so nor does one that follows it.
-    first.isDragStep = { false }
+    // still set. The next click in the window ends it: a move the app makes after that, with a
+    // button down, records nothing.
+    let click = try #require(
+        NSEvent.mouseEvent(
+            with: .leftMouseDown, location: NSPoint(x: -10, y: -10), modifierFlags: [],
+            timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+            clickCount: 1, pressure: 1))
+    window.sendEvent(click)
+    window.setFrameOrigin(NSPoint(x: 90, y: 100))
+    first.windowDidMove(moved)
+    #expect(fixture.settings.newWindowFrame?.origin == NSPoint(x: 50, y: 60))
+
+    // A move with the button up ends the claim as well.
+    first.windowWillMove(Notification(name: NSWindow.willMoveNotification))
+    first.isLeftMouseDown = { false }
     window.setFrameOrigin(NSPoint(x: 70, y: 80))
     first.windowDidMove(moved)
-    first.isDragStep = { true }
+    first.isLeftMouseDown = { true }
     window.setFrameOrigin(NSPoint(x: 90, y: 100))
     first.windowDidMove(moved)
     #expect(fixture.settings.newWindowFrame?.origin == NSPoint(x: 50, y: 60))
@@ -794,7 +806,7 @@ private func stopEverything(_ windows: WorkspaceWindows) async {
     let fixture = try await Fixture()
     let first = try #require(fixture.windows.controllers.first)
     let window = try #require(first.window)
-    first.isDragStep = { true }
+    first.isLeftMouseDown = { true }
     first.windowWillMove(Notification(name: NSWindow.willMoveNotification))
     first.windowDidEndLiveResize(Notification(name: NSWindow.didEndLiveResizeNotification))
     let stored = fixture.settings.newWindowFrame
