@@ -9,8 +9,15 @@ import Foundation
 public final class SidebarVolumes {
     /// The volumes listed, in the mount table's order.
     public private(set) var volumes: [SidebarVolume] = []
-    /// The mount points of the volumes being ejected now.
-    public private(set) var ejecting: Set<String> = []
+    /// The mount points of the volumes being ejected now, and of those ejected that a read
+    /// still lists or hasn't been made without yet, so a row's eject button doesn't come back
+    /// for a volume that is gone.
+    public var ejecting: Set<String> { running.union(ejected) }
+    /// The mount points of the ejects running.
+    private var running: Set<String> = []
+    /// The mount points of volumes ejected that the last read landed still lists, or that no
+    /// read has landed since.
+    private var ejected: Set<String> = []
     private let read: @Sendable () -> [SidebarVolume]
     private let eject: @Sendable (SidebarVolume) throws(SidebarVolume.EjectFailure) -> Void
     /// Counts reads started, so a read that lands after a newer one started is dropped.
@@ -55,10 +62,21 @@ public final class SidebarVolumes {
         Task { [weak self] in
             let volumes = await BlockingCallThread.run { read().filter(\.isShown) }
             self?.readsLanded += 1
-            guard let self, self.readCount == count, volumes != self.volumes else { return }
+            guard let self, self.readCount == count else { return }
+            let listed = Set(volumes.map(\.mountPoint))
+            let stillEjected = ejected.intersection(listed)
+            guard volumes != self.volumes || stillEjected != ejected else { return }
             self.volumes = volumes
+            ejected = stillEjected
             notify()
         }
+    }
+
+    /// A volume mounted at `mountPoint` is a new one, which an eject of the volume that was
+    /// there doesn't cover, even before a read without the old one lands.
+    func volumeDidMount(at mountPoint: String) {
+        guard ejected.remove(mountPoint) != nil else { return }
+        notify()
     }
 
     private func notify() {
@@ -71,12 +89,14 @@ public final class SidebarVolumes {
     /// Ejects `volume`, off the main thread. The loads, size walks and monitors of panes on it
     /// stop first (`VolumeEvents.willEject`), so a folder the app has open doesn't keep it
     /// mounted; file operations go on. When the system refuses, those panes list again and are
-    /// watched again. The row leaves when the system reports the unmount. A volume already
-    /// being ejected is left to that eject: this one returns at once.
+    /// watched again. The row leaves when the system reports the unmount, and stays in
+    /// `ejecting` until a read without it lands. A volume already being ejected is left to that
+    /// eject: this one returns at once.
     ///
     /// - Throws: Why the system didn't eject it.
     public func eject(_ volume: SidebarVolume) async throws(SidebarVolume.EjectFailure) {
-        guard ejecting.insert(volume.mountPoint).inserted else { return }
+        guard !ejecting.contains(volume.mountPoint) else { return }
+        running.insert(volume.mountPoint)
         notify()
         VolumeEvents.willEject(at: volume.mountPoint)
         let eject = eject
@@ -89,7 +109,12 @@ public final class SidebarVolumes {
         } catch {
             failure = error
         }
-        ejecting.remove(volume.mountPoint)
+        running.remove(volume.mountPoint)
+        // On success, a read without the volume may have landed already, as the system can
+        // report the unmount before the eject's answer comes back; nothing would remove it then.
+        if failure == nil, volumes.contains(where: { $0.mountPoint == volume.mountPoint }) {
+            ejected.insert(volume.mountPoint)
+        }
         notify()
         if let failure {
             VolumeEvents.ejectFailed(at: volume.mountPoint)

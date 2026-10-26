@@ -37,14 +37,46 @@ import Testing
     let disk1 = VolumeIdentity(device: "/dev/disk1s1s1", mountPoint: "/Volumes/D", kind: .local)
     let mounted = [first, second, image, other, share, disk1]
 
-    #expect(!SidebarVolume.isOnlyVolume(first, onItsDiskAmong: mounted))
-    #expect(!SidebarVolume.isOnlyVolume(second, onItsDiskAmong: mounted))
-    #expect(SidebarVolume.isOnlyVolume(image, onItsDiskAmong: mounted))
-    #expect(SidebarVolume.isOnlyVolume(other, onItsDiskAmong: mounted))
-    #expect(SidebarVolume.isOnlyVolume(disk1, onItsDiskAmong: mounted))
-    #expect(!SidebarVolume.isOnlyVolume(share, onItsDiskAmong: mounted))
+    // Each whole disk is its own physical disk here.
+    let isOnly = { (volume: VolumeIdentity, mounted: [VolumeIdentity]) in
+        SidebarVolume.isOnlyVolume(volume, onItsDiskAmong: mounted) { $0 }
+    }
+
+    #expect(!isOnly(first, mounted))
+    #expect(!isOnly(second, mounted))
+    #expect(isOnly(image, mounted))
+    #expect(isOnly(other, mounted))
+    #expect(isOnly(disk1, mounted))
+    #expect(!isOnly(share, mounted))
     // Once the first is unmounted, the second is the last on disk5.
-    #expect(SidebarVolume.isOnlyVolume(second, onItsDiskAmong: [second, image]))
+    #expect(isOnly(second, [second, image]))
+}
+
+@Test func anAPFSVolumeBesideAPartitionOnItsPhysicalDiskDoesNotEjectTheDisk() {
+    // disk6 is the synthesized disk of an APFS container whose physical store is disk4s1; an
+    // HFS partition, disk4s2, sits beside it on disk4.
+    let apfs = VolumeIdentity(device: "/dev/disk6s1", mountPoint: "/Volumes/APFS", kind: .local)
+    let hfs = VolumeIdentity(device: "/dev/disk4s2", mountPoint: "/Volumes/HFS", kind: .local)
+    let physical = { (disk: String) in disk == "disk6" ? "disk4" : disk }
+
+    #expect(!SidebarVolume.isOnlyVolume(apfs, onItsDiskAmong: [apfs, hfs], physicalDisk: physical))
+    #expect(!SidebarVolume.isOnlyVolume(hfs, onItsDiskAmong: [apfs, hfs], physicalDisk: physical))
+    #expect(SidebarVolume.isOnlyVolume(apfs, onItsDiskAmong: [apfs], physicalDisk: physical))
+}
+
+@Test func theStartupDisksAPFSContainerIsOnAnotherPhysicalDisk() async throws {
+    // Reads the I/O Registry only; nothing is mounted or ejected. The startup disk is an APFS
+    // container's synthesized disk on every Mac this app runs on.
+    let (disk, physical) = try await BlockingCallThread.run {
+        () throws(ListingError) -> (String?, String?) in
+        let root = try VolumeIdentity(path: "/")
+        let disk = SidebarVolume.wholeDisk(of: root.device)
+        return (disk, disk.map(SidebarVolume.physicalDisk(of:)))
+    }
+
+    let whole = try #require(disk)
+    #expect(physical != nil && physical != whole)
+    #expect(physical?.hasPrefix("disk") == true)
 }
 
 @Test func aVolumeSharingItsDiskIsUnmountedAloneAndTheLastOneEjectsTheDisk() {

@@ -39,7 +39,7 @@ private func disk(_ mountPoint: String) -> SidebarVolume {
     var changes = 0
     volumes.observe(for: stub) { changes += 1 }
     let mountPoint = uniqueMountPoint()
-    await settle { stub.readThreads.count == 1 }
+    await settle { stub.readThreads.count >= 1 }
 
     stub.set([disk(mountPoint)])
     VolumeEvents.didMount(at: mountPoint)
@@ -131,8 +131,58 @@ private func disk(_ mountPoint: String) -> SidebarVolume {
     #expect(stub.ejects.count == 1)
     stub.releaseEjects()
     try await first.value
-    #expect(volumes.ejecting.isEmpty)
     #expect(changes == 2)
+}
+
+@MainActor @Test func anEjectedVolumeStaysEjectingUntilAReadWithoutItLands() async throws {
+    let mountPoint = uniqueMountPoint()
+    let stub = StubSidebarVolumes([disk(mountPoint)])
+    let volumes = stub.list()
+    await settle { !volumes.volumes.isEmpty }
+
+    try await volumes.eject(disk(mountPoint))
+    #expect(volumes.ejecting == [mountPoint])
+    try await volumes.eject(disk(mountPoint))
+    #expect(stub.ejects.count == 1)
+
+    // A read that still lists it, as one started before the unmount, keeps it.
+    let landed = volumes.readsLanded
+    VolumeEvents.didMount(at: uniqueMountPoint())
+    await settle { volumes.readsLanded > landed }
+    #expect(volumes.ejecting == [mountPoint])
+
+    stub.set([])
+    VolumeEvents.didUnmount(at: mountPoint)
+    await settle { volumes.volumes.isEmpty }
+    #expect(volumes.ejecting.isEmpty)
+}
+
+@MainActor @Test func aVolumeMountedAgainAtAnEjectedOnesMountPointCanBeEjected() async throws {
+    let mountPoint = uniqueMountPoint()
+    let stub = StubSidebarVolumes([disk(mountPoint)])
+    let volumes = stub.list()
+    await settle { !volumes.volumes.isEmpty }
+    try await volumes.eject(disk(mountPoint))
+    #expect(volumes.ejecting == [mountPoint])
+
+    // Its unmount's read was overtaken by the mount's, which lists the new volume.
+    VolumeEvents.didMount(at: mountPoint)
+
+    #expect(volumes.ejecting.isEmpty)
+}
+
+@MainActor @Test func aRefusedEjectIsNoLongerEjecting() async {
+    let mountPoint = uniqueMountPoint()
+    let stub = StubSidebarVolumes([disk(mountPoint)])
+    stub.fail(with: "The volume is in use.")
+    let volumes = stub.list()
+    await settle { !volumes.volumes.isEmpty }
+
+    await #expect(throws: SidebarVolume.EjectFailure.self) {
+        try await volumes.eject(disk(mountPoint))
+    }
+
+    #expect(volumes.ejecting.isEmpty)
 }
 
 /// Holds the first read until `releaseFirst()`, which then lists `first`; every later read lists

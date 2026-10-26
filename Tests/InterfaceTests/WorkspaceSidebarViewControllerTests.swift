@@ -689,6 +689,9 @@ private let share = SidebarVolume(mountPoint: "/Volumes/main", name: "main", kin
     let fixture = try Fixture()
     await fixture.mount([usb])
     fixture.mounts.holdEjects()
+    // The list tells its observers as an eject starts and as it ends.
+    var changes = 0
+    fixture.volumes.observe(for: fixture) { changes += 1 }
 
     try #require(fixture.volumeCells.first).ejectButton.performClick(nil)
     await settle { (try? fixture.volumeCells.first?.ejectButton.isEnabled) == false }
@@ -698,7 +701,26 @@ private let share = SidebarVolume(mountPoint: "/Volumes/main", name: "main", kin
     #expect(fixture.mounts.ejects.count == 1)
 
     fixture.mounts.releaseEjects()
+    await settle { changes == 2 }
+    // Ejected, the row keeps its button off while a read still lists the volume.
+    await fixture.mount([usb])
+    #expect(try fixture.volumeCells.first?.ejectButton.isEnabled == false)
+    await fixture.mount([])
+    #expect(try fixture.volumeCells.isEmpty)
+    // A volume mounted later at the same place can be ejected.
+    await fixture.mount([usb])
     await settle { (try? fixture.volumeCells.first?.ejectButton.isEnabled) == true }
     #expect(fixture.mounts.ejects.count == 1)
     #expect(fixture.alerts.isEmpty)
+}
+
+@MainActor @Test func aRefusedEjectTurnsTheButtonBackOn() async throws {
+    let fixture = try Fixture()
+    await fixture.mount([usb])
+    fixture.mounts.fail(with: "The volume is in use.")
+
+    try #require(fixture.volumeCells.first).ejectButton.performClick(nil)
+
+    await settle { !fixture.alerts.isEmpty }
+    #expect(try fixture.volumeCells.first?.ejectButton.isEnabled == true)
 }
