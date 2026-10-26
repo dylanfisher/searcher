@@ -302,9 +302,11 @@ private let returnKey = "\r"
     defer { fixture.stop() }
     try fixture.press("3", .command)
     let pane = fixture.pane
+    // Only the focused column matters. The ancestors include the real temporary directory, which
+    // can hold tens of thousands of entries and list for longer than a settle waits.
     await settle {
-        pane.columnTrail?.columns.allSatisfy { $0.pane.state.isLoaded && $0.pane.monitor != nil }
-            ?? false
+        guard let focused = pane.columnTrail?.focused.pane else { return false }
+        return focused.state.isLoaded && focused.monitor != nil
     }
     let column = try #require(fixture.controller.columnViewController.focusedController)
     #expect(fixture.window.firstResponder === column.tableView)
