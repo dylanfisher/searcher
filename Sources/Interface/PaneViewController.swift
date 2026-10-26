@@ -445,7 +445,7 @@ public final class PaneViewController: NSViewController {
         guard let window = view.window else {
             preconditionFailure("Go to folder ran for a pane with no window")
         }
-        let sheet = GoToFolderSheet(pane: pane, home: NSHomeDirectory())
+        let sheet = GoToFolderSheet(pane: pane, home: pane.settings.home)
         sheet.onClose = { [weak self] in self?.goToFolderSheet = nil }
         goToFolderSheet = sheet
         sheet.present(over: window)

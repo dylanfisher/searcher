@@ -67,33 +67,63 @@ public final class ColumnTrail {
     /// The read of the mount table that checks the trail starts at its volume's root, until it
     /// lands.
     private var rootCheck: Task<Void, Never>?
+    /// The home folder the trail starts at when it holds the trail's folders
+    /// (`Settings.columnsStartAtHome`); nil when the trail starts at its volume's root.
+    private var home: Location?
 
     /// A focused column at `location` with `name` selected, and left of it a column for each
-    /// folder from the root of its volume down, each with the next folder selected
-    /// (`root(of:mountedVolumes:)`), all sorted like `model`: the owner when the trail starts
-    /// from the list, the focused column of the trail it replaces otherwise. The focused
+    /// folder from the trail's root down, each with the next folder selected
+    /// (`root(of:mountedVolumes:home:)`), all sorted like `model`: the owner when the trail
+    /// starts from the list, the focused column of the trail it replaces otherwise. The focused
     /// column's load is asked first, and the others' once its first update lands and the root is
     /// checked, or the focus moves to one of them. The root is taken from the path first and
     /// checked against the mount table off the main thread; a volume mounted elsewhere moves it
     /// (0103-column-trail-from-the-root.md).
     init(owner: Pane, at location: Location, selecting name: ExactName?, sortedLike model: Pane) {
         self.owner = owner
+        home = Self.home(in: owner.settings)
         let focused = makeColumn(
             at: location, selecting: name, sortedLike: model, isFocused: owner.isFocused)
-        let root = Self.root(of: location, mountedVolumes: [])
+        let root = Self.root(of: location, mountedVolumes: [], home: home)
         let ancestors = makeAncestors(from: root, to: location, sortedLike: model)
         columns = ancestors + [focused]
         focusedIndex = ancestors.count
         waitingColumns = ancestors
         leadColumn = focused
+        checkRoot(of: location)
+    }
+
+    /// The home folder a trail in it starts at, from `settings`; nil when trails start at their
+    /// volume's root.
+    private static func home(in settings: Settings) -> Location? {
+        settings.columnsStartAtHome ? Location(path: settings.home) : nil
+    }
+
+    /// Reads the mount table off the main thread for the root of `location`'s trail, then makes
+    /// the trail start there (`start(at:)`) and lists the columns that wait for the check. A
+    /// check already running is dropped.
+    private func checkRoot(of location: Location) {
+        rootCheck?.cancel()
         let service = owner.service
+        let home = home
         rootCheck = Task { [weak self] in
-            let root = await service.trailRoot(of: location)
+            let root = await service.trailRoot(of: location, home: home)
             guard let self, !Task.isCancelled else { return }
             self.rootCheck = nil
             self.start(at: root)
             self.listWaitingColumnsIfReady()
         }
+    }
+
+    /// The settings changed. When `Settings.columnsStartAtHome` did, the trail starts again at
+    /// the root its focused column's folder has now, as a root check moves it: columns above it
+    /// close, or columns are added down to it, and the focused column and the columns right of
+    /// it stay (0103-column-trail-from-the-root.md).
+    func settingsDidChange() {
+        let home = Self.home(in: owner.settings)
+        guard home != self.home else { return }
+        self.home = home
+        checkRoot(of: focused.pane.location)
     }
 
     /// Returns once the trail has checked its root against the mount table.
@@ -106,34 +136,38 @@ public final class ColumnTrail {
     /// disk, firmlinked ones such as `/Users` too, starts at `/`. A volume Finder doesn't show,
     /// mounted `MNT_DONTBROWSE`, isn't a root. A folder under `/Volumes/X` with no volume
     /// mounted there, such as a share not mounted yet, starts at `/Volumes/X`, where it would be;
-    /// one under a `MNT_DONTBROWSE` volume there starts at `/`. Names compare without case, as
-    /// APFS compares them by default (`FileOperation.comparable`), and the root is spelled as
-    /// `location` spells it, so its columns are the path's own folders.
-    nonisolated static func root(of location: Location, mountedVolumes: [VolumeIdentity])
-        -> Location
-    {
+    /// one under a `MNT_DONTBROWSE` volume there starts at `/`. A folder that is `home` or inside
+    /// it starts at `home` instead, as Finder's does, unless that volume's root is deeper, as for
+    /// a share mounted inside home; nil `home` leaves the volume's root. Names compare without
+    /// case, as APFS compares them by default (`FileOperation.comparable`), and the root is
+    /// spelled as `location` spells it, so its columns are the path's own folders.
+    nonisolated static func root(
+        of location: Location, mountedVolumes: [VolumeIdentity], home: Location?
+    ) -> Location {
         let components = pathComponents(location.path)
-        let folded = components.map { FileOperation.comparable(String($0)) }
-        /// The number of components of `mountPoint` when `location` is it or inside it.
-        func depth(of mountPoint: String) -> Int? {
-            let mount = pathComponents(mountPoint).map { FileOperation.comparable(String($0)) }
-            return folded.starts(with: mount) ? mount.count : nil
-        }
-        /// `location`'s folder `count` components below `/`.
-        func prefix(_ count: Int) -> Location {
-            Location(path: "/" + components.prefix(count).joined(separator: "/"))
+        let folded = folded(location)
+        /// The number of components of `folder` when `location` is it or inside it.
+        func depth(of folder: Location) -> Int? {
+            let outer = Self.folded(folder)
+            return folded.starts(with: outer) ? outer.count : nil
         }
         let holding = mountedVolumes.compactMap { volume in
-            depth(of: volume.mountPoint).map { (volume, $0) }
+            depth(of: Location(path: volume.mountPoint)).map { (volume, $0) }
         }
+        let volumeRoot: Int
         if let deepest = holding.filter({ $0.0.isBrowsable && $0.1 > 0 })
             .max(by: { $0.1 < $1.1 })
         {
-            return prefix(deepest.1)
+            volumeRoot = deepest.1
+        } else {
+            let isInVolumes =
+                components.count >= 2 && folded[0] == FileOperation.comparable("Volumes")
+            let hidden = holding.contains { !$0.0.isBrowsable && $0.1 >= 2 }
+            volumeRoot = isInVolumes && !hidden ? 2 : 0
         }
-        let isInVolumes = components.count >= 2 && folded[0] == FileOperation.comparable("Volumes")
-        let hidden = holding.contains { !$0.0.isBrowsable && $0.1 >= 2 }
-        return isInVolumes && !hidden ? prefix(2) : prefix(0)
+        let homeRoot = home.flatMap(depth) ?? 0
+        return Location(
+            path: "/" + components.prefix(max(volumeRoot, homeRoot)).joined(separator: "/"))
     }
 
     /// A column for each folder from `root` down to the parent of `location`, each with the next
@@ -220,11 +254,12 @@ public final class ColumnTrail {
         owner.trailDidChange()
     }
 
-    /// ← and Cmd-↑: moves to the column on the left, keeping the columns to the right. A column
-    /// waiting for the keys to pause gives up the wait, so the folder selected in it opens no
-    /// column until → or another selection. Does nothing in the first column, the volume's root,
-    /// as in Finder (0103-column-trail-from-the-root.md). Columns whose first loads wait start
-    /// them, so the column it moves to lists its folder.
+    /// ← , and Cmd-↑ outside the home column (`moveUp`): moves to the column on the left,
+    /// keeping the columns to the right. A column waiting for the keys to pause gives up the
+    /// wait, so the folder selected in it opens no column until → or another selection. Does
+    /// nothing in the first column, the trail's root, as in Finder
+    /// (0103-column-trail-from-the-root.md). Columns whose first loads wait start them, so the
+    /// column it moves to lists its folder.
     public func moveLeft() {
         guard focusedIndex > 0 else { return }
         focused.selectsFirstRowAt = nil
@@ -233,6 +268,24 @@ public final class ColumnTrail {
         listWaitingColumns()
         focus(focusedIndex - 1)
         owner.trailDidChange()
+    }
+
+    /// Cmd-↑: ← , except in the first column when it is the home folder the trail starts at
+    /// (`Settings.columnsStartAtHome`). There the owner goes up to the home folder's parent,
+    /// selecting the home folder, as a navigation, so the new trail starts at that folder's root,
+    /// as Finder's Enclosing Folder goes above the home folder
+    /// (0103-column-trail-from-the-root.md).
+    func moveUp() {
+        let first = columns[0].pane.location
+        guard focusedIndex == 0, let home, let parent = first.parent,
+            Self.folded(first) == Self.folded(home)
+        else { return moveLeft() }
+        owner.navigate(to: parent, selecting: first.name)
+    }
+
+    /// `location`'s components as `root(of:mountedVolumes:home:)` compares them.
+    private nonisolated static func folded(_ location: Location) -> [String] {
+        pathComponents(location.path).map { FileOperation.comparable(String($0)) }
     }
 
     /// Moves the keys to `column`, as a click in it does, without selecting anything. A column

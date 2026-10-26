@@ -1008,9 +1008,10 @@ public final class Pane {
     }
 
     /// Shows the folder that holds this one, with this one selected. Does nothing at `/`. A
-    /// column moves to the column on its left instead, as ← does.
+    /// column moves to the column on its left instead, as ← does, except in a trail's first
+    /// column at the home folder (`ColumnTrail.moveUp`).
     public func goToParent() {
-        if let trail = containingTrail { return trail.moveLeft() }
+        if let trail = containingTrail { return trail.moveUp() }
         guard let parent = location.parent else { return }
         navigate(to: parent, selecting: location.name)
     }
@@ -1181,6 +1182,7 @@ public final class Pane {
     private func settingsDidChange() {
         // Followed in column mode too, so the list the pane switches back to has it.
         followSizeSetting()
+        columnTrail?.settingsDidChange()
         if namesToSelect?.showsHidden != settings.showHidden
             || namesToSelect?.hidesDSStore != settings.hideDSStore
         {

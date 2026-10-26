@@ -1,14 +1,18 @@
-/// What the panes show and in what order: the hidden files, `.DS_Store` and folders first
-/// toggles, which are app-wide `Settings`, and the sort keys, which sort the focused pane by a
-/// column. A sort key for the column already sorted by reverses it. Space opens and closes Quick
-/// Look on the selection, Cmd-F opens the pane's filter field, and Cmd-1 and Cmd-3 show the pane
-/// as a list or as columns. The appearance commands make the app light, dark or follow the system.
+/// What the panes show and in what order: the hidden files, `.DS_Store`, columns from home and
+/// folders first toggles, which are app-wide `Settings`, and the sort keys, which sort the
+/// focused pane by a column. A sort key for the column already sorted by reverses it. Space
+/// opens and closes Quick Look on the selection, Cmd-F opens the pane's filter field, and Cmd-1
+/// and Cmd-3 show the pane as a list or as columns. The appearance commands make the app light,
+/// dark or follow the system.
 public enum ViewCommands: CommandSet {
     public static let toggleHidden = Command(
         id: CommandID("view.toggleHidden"), title: "Show Hidden Files",
         chords: [KeyChord(".", modifiers: [.command, .shift])])
     public static let toggleHideDSStore = Command(
         id: CommandID("view.toggleHideDSStore"), title: "Always Hide .DS_Store", chords: [])
+    public static let toggleColumnsStartAtHome = Command(
+        id: CommandID("view.toggleColumnsStartAtHome"), title: "Columns Start at Home Folder",
+        chords: [])
     public static let toggleFoldersFirst = Command(
         id: CommandID("view.toggleFoldersFirst"), title: "Folders First", chords: [])
     public static let sortByName = Command(
@@ -52,6 +56,9 @@ public enum ViewCommands: CommandSet {
             CommandBinding(
                 toggleHideDSStore, isChecked: { $0.hideDSStore },
                 run: { $0.pane.settings.hideDSStore.toggle() }),
+            CommandBinding(
+                toggleColumnsStartAtHome, isChecked: { $0.columnsStartAtHome },
+                run: { $0.pane.settings.columnsStartAtHome.toggle() }),
             CommandBinding(
                 toggleFoldersFirst, isChecked: { $0.foldersFirst },
                 run: { $0.pane.settings.foldersFirst.toggle() }),

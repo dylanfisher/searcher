@@ -45,6 +45,14 @@ is no Settings window yet (M5b.8), and every command has a menu item
 - **On by default, as Finder hides it.** Finder doesn't list `.DS_Store` with hidden files
   shown (Cmd-Shift-. or `AppleShowAllFiles`); Dylan checked by hand on 2026-10-25.
 
+- **Columns Start at Home Folder.** (Amended 2026-10-25, Dylan: "add a preference to show
+  directories relative to root user (like finder) instead of / root": `Settings.columnsStartAtHome`
+  is a Boolean, on by default, stored and discarded like `hideDSStore`. View ▸ Columns Start at
+  Home Folder sits under as Columns, since it changes column view only, with a check mark while
+  it is on and no key. What it does is in [0103](0103-column-trail-from-the-root.md).
+  `Settings.home`, the home folder, isn't stored: the app takes it from `NSHomeDirectory()` once,
+  and tests pass their own.)
+
 ## Alternatives considered
 
 - **Filter .DS_Store in the lister, or as a second filter beside `NameFilter`** — rejected: the
@@ -59,7 +67,7 @@ is no Settings window yet (M5b.8), and every command has a menu item
 
 ## Consequences
 
-`UserDefaults` gains `hideDSStore` and `appearance`. With hidden files shown and `.DS_Store`
-hidden, a sort by name walks the entries to drop it rather than taking the name order as it is,
-an O(n) pass on the sort queue. Changing the system accent color doesn't recolor a focus ring
-already drawn until the appearance changes or the ring is drawn again.
+`UserDefaults` gains `hideDSStore`, `appearance` and `columnsStartAtHome`. With hidden files
+shown and `.DS_Store` hidden, a sort by name walks the entries to drop it rather than taking the
+name order as it is, an O(n) pass on the sort queue. Changing the system accent color doesn't
+recolor a focus ring already drawn until the appearance changes or the ring is drawn again.

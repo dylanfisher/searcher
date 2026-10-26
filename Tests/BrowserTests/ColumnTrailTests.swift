@@ -209,7 +209,7 @@ private func press(_ chord: KeyChord, on pane: Pane) throws {
 
 @MainActor @Test func theTrailStartsAtTheRootOfTheFoldersVolume() {
     func root(_ path: String, _ volumes: [VolumeIdentity] = []) -> String {
-        ColumnTrail.root(of: Location(path: path), mountedVolumes: volumes).path
+        ColumnTrail.root(of: Location(path: path), mountedVolumes: volumes, home: nil).path
     }
     let startup = VolumeIdentity(device: "/dev/disk3s1", mountPoint: "/", kind: .local)
     let data = VolumeIdentity(
@@ -341,6 +341,182 @@ private func press(_ chord: KeyChord, on pane: Pane) throws {
     #expect(pane.location == Location(path: "/r/docs"))
     #expect(changes > 0)
     await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+}
+
+/// `/Users/me` is the home folder of `homeSettings`; `/Applications` is outside it.
+private let homeTree: [String: [DirectoryEntry]] = [
+    "/": [folder("Applications"), folder("Users")],
+    "/Applications": [file("a.txt")],
+    "/Users": [folder("me"), folder("Shared")],
+    "/Users/me": [folder("docs"), folder("mnt")],
+    "/Users/me/docs": [folder("sub"), file("x.txt")],
+    "/Users/me/docs/sub": [file("deep.txt")],
+    "/Users/me/mnt": [folder("s")],
+    "/Users/me/mnt/s": [folder("a")],
+    "/Users/me/mnt/s/a": [file("y.txt")],
+]
+
+/// Settings whose home folder is `/Users/me`, with columns starting there or not.
+@MainActor
+private func homeSettings(startAtHome: Bool = true) -> Settings {
+    let settings = Settings(
+        defaults: temporarySuite(in: FileManager.default.temporaryDirectory.path),
+        home: "/Users/me")
+    settings.columnsStartAtHome = startAtHome
+    return settings
+}
+
+/// A focused column-mode pane at `path` over `homeTree`, with `settings`, its root checked
+/// against `mounted` and every column loaded.
+@MainActor
+private func homePane(
+    at path: String, settings: Settings = homeSettings(), mounted: [VolumeIdentity] = []
+) async -> (pane: Pane, lister: GatedLister) {
+    let lister = GatedLister(homeTree.mapValues { .batches([$0]) })
+    lister.releaseAll()
+    let pane = Pane(
+        location: Location(path: path),
+        service: ListingService(lister: lister, mountedVolumes: { mounted }),
+        systemActions: StubSystemActions(), settings: settings, isFocused: true,
+        viewMode: .column)
+    await trail(pane).rootChecked()
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+    return (pane, lister)
+}
+
+@MainActor @Test func theTrailOfAFolderInHomeStartsAtHomeWhenTheSettingIsOn() {
+    func root(_ path: String, _ volumes: [VolumeIdentity] = [], home: String? = "/Users/me")
+        -> String
+    {
+        ColumnTrail.root(
+            of: Location(path: path), mountedVolumes: volumes, home: home.map(Location.init)
+        ).path
+    }
+    let share = VolumeIdentity(
+        device: "//me@nas.invalid/s", mountPoint: "/Users/me/mnt/s", kind: .network)
+    let backup = VolumeIdentity(device: "/dev/disk5s1", mountPoint: "/Volumes/Backup", kind: .local)
+
+    #expect(root("/Users/me/docs") == "/Users/me")
+    #expect(root("/Users/me") == "/Users/me")
+    // Without case, spelled as the path spells it.
+    #expect(root("/users/ME/docs") == "/users/ME")
+    // Folders outside home keep the volume's root.
+    #expect(root("/Users") == "/")
+    #expect(root("/Users/meat/docs") == "/")
+    #expect(root("/Applications") == "/")
+    #expect(root("/Volumes/Backup/a", [backup]) == "/Volumes/Backup")
+    // A volume mounted inside home is the deeper root.
+    #expect(root("/Users/me/mnt/s/a", [share]) == "/Users/me/mnt/s")
+    #expect(root("/Users/me/mnt", [share]) == "/Users/me")
+    // A home on a volume starts at home, below the volume's root.
+    #expect(
+        root("/Volumes/Backup/me/docs", [backup], home: "/Volumes/Backup/me")
+            == "/Volumes/Backup/me")
+    // With the setting off, the volume's root.
+    #expect(root("/Users/me/docs", home: nil) == "/")
+}
+
+/// The home folder's trail starts at home on its first frame, and the check of its root keeps it
+/// there; with the setting off it starts at `/`, as before.
+@MainActor @Test func aTrailInHomeStartsAtHomeAndTheRootCheckKeepsIt() async {
+    let on = await homePane(at: "/Users/me/docs")
+    #expect(paths(on.pane) == ["/Users/me", "/Users/me/docs"])
+    #expect(trail(on.pane).focusedIndex == 1)
+    #expect(on.lister.calls.allSatisfy { $0.path.hasPrefix("/Users/me") })
+
+    let off = await homePane(at: "/Users/me/docs", settings: homeSettings(startAtHome: false))
+    #expect(paths(off.pane) == ["/", "/Users", "/Users/me", "/Users/me/docs"])
+
+    let outside = await homePane(at: "/Applications")
+    #expect(paths(outside.pane) == ["/", "/Applications"])
+
+    let share = VolumeIdentity(
+        device: "//me@nas.invalid/s", mountPoint: "/Users/me/mnt/s", kind: .network)
+    let mounted = await homePane(at: "/Users/me/mnt/s/a", mounted: [share])
+    #expect(paths(mounted.pane) == ["/Users/me/mnt/s", "/Users/me/mnt/s/a"])
+}
+
+/// ← in the home column does nothing, as at a volume's root; Cmd-↑ goes on up to the home
+/// folder's parent, a step of the history, building that folder's trail from its root, with
+/// home selected and its column open.
+@MainActor @Test func leftAtTheHomeColumnDoesNothingAndCommandUpGoesToItsParent() async throws {
+    let (pane, _) = await homePane(at: "/Users/me/docs")
+    try press(KeyChord(.left), on: pane)
+    #expect(trail(pane).focusedIndex == 0)
+    var changes = 0
+    pane.onChange = { changes += 1 }
+
+    try press(KeyChord(.left), on: pane)
+
+    #expect(trail(pane).focusedIndex == 0)
+    #expect(changes == 0)
+    #expect(paths(pane) == ["/Users/me", "/Users/me/docs"])
+
+    try press(KeyChord(.up, modifiers: .command), on: pane)
+
+    #expect(pane.location == Location(path: "/Users"))
+    #expect(paths(pane).prefix(2) == ["/", "/Users"])
+    #expect(trail(pane).focusedIndex == 1)
+    #expect(trail(pane).focused.pane.selection.cursor == ExactName("me"))
+    await settle { paths(pane) == ["/", "/Users", "/Users/me"] }
+
+    // Above home, Cmd-↑ is ← again.
+    try press(KeyChord(.up, modifiers: .command), on: pane)
+    #expect(pane.location == Location(path: "/"))
+    #expect(trail(pane).focusedIndex == 0)
+
+    // Back to home focuses its column, which the trail from `/` shows, as Back does.
+    try press(KeyChord("[", modifiers: .command), on: pane)
+    try press(KeyChord("[", modifiers: .command), on: pane)
+
+    #expect(pane.location == Location(path: "/Users/me"))
+    #expect(paths(pane).prefix(3) == ["/", "/Users", "/Users/me"])
+    #expect(trail(pane).focusedIndex == 2)
+}
+
+/// The path bar names `Users` and `/` above a home trail: a click there navigates, building that
+/// folder's trail from its root.
+@MainActor @Test func aPathBarClickAboveTheHomeColumnNavigates() async {
+    let (pane, _) = await homePane(at: "/Users/me/docs")
+
+    pane.showFolderAbove(Location(path: "/Users"), comingFrom: "me")
+
+    #expect(pane.location == Location(path: "/Users"))
+    #expect(paths(pane).prefix(2) == ["/", "/Users"])
+    #expect(trail(pane).focused.pane.selection.cursor == ExactName("me"))
+    #expect(pane.canGoBack)
+}
+
+/// Turning the setting off adds the columns above home to an open trail, and on again drops
+/// them; the focused column and the columns right of it stay, and neither is a step.
+@MainActor @Test func toggleTheSettingRestartsOpenTrailsAtTheirNewRoot() async {
+    let settings = homeSettings()
+    let (pane, _) = await homePane(at: "/Users/me/docs", settings: settings)
+    select("sub", in: trail(pane).focused)
+    await settle { paths(pane).count == 3 }
+    let kept = trail(pane).columns.map(\.pane)
+
+    settings.columnsStartAtHome = false
+    await trail(pane).rootChecked()
+
+    #expect(
+        paths(pane) == ["/", "/Users", "/Users/me", "/Users/me/docs", "/Users/me/docs/sub"])
+    #expect(trail(pane).focusedIndex == 3)
+    #expect(trail(pane).columns.suffix(3).map(\.pane).elementsEqual(kept, by: ===))
+    #expect(pane.location == Location(path: "/Users/me/docs"))
+    #expect(!pane.canGoBack)
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+    #expect(
+        Array(trail(pane).columns.prefix(2).map { $0.pane.selection.cursor?.name })
+            == ["Users", "me"])
+
+    settings.columnsStartAtHome = true
+    await trail(pane).rootChecked()
+
+    #expect(paths(pane) == ["/Users/me", "/Users/me/docs", "/Users/me/docs/sub"])
+    #expect(trail(pane).focusedIndex == 1)
+    #expect(trail(pane).columns.map(\.pane).elementsEqual(kept, by: ===))
+    #expect(!pane.canGoBack)
 }
 
 @MainActor @Test func switchingToColumnModeWithAFolderSelectedShowsItInTheNextColumn() async {
