@@ -58,17 +58,22 @@ public final class SidebarVolumes {
         }
     }
 
-    /// Ejects `volume`, off the main thread. Loads, size walks and file operations on it stop
-    /// first, as when the system says it is about to unmount, so a folder the app has open
-    /// doesn't keep it mounted (docs/decisions/0049-volume-events.md). The row leaves when the
-    /// system reports the unmount.
+    /// Ejects `volume`, off the main thread. The loads, size walks and monitors of panes on it
+    /// stop first (`VolumeEvents.willEject`), so a folder the app has open doesn't keep it
+    /// mounted; file operations go on. When the system refuses, those panes list again and are
+    /// watched again. The row leaves when the system reports the unmount.
     ///
     /// - Throws: Why the system didn't eject it.
     public func eject(_ volume: SidebarVolume) async throws(SidebarVolume.EjectFailure) {
-        VolumeEvents.willUnmount(at: volume.mountPoint)
+        VolumeEvents.willEject(at: volume.mountPoint)
         let eject = eject
-        try await BlockingCallThread.run { () throws(SidebarVolume.EjectFailure) in
-            try eject(volume)
+        do throws(SidebarVolume.EjectFailure) {
+            try await BlockingCallThread.run { () throws(SidebarVolume.EjectFailure) in
+                try eject(volume)
+            }
+        } catch {
+            VolumeEvents.ejectFailed(at: volume.mountPoint)
+            throw error
         }
     }
 }
