@@ -116,6 +116,7 @@ public final class ColumnTrail {
         home = Self.home(in: owner.settings)
         let root = Self.root(of: location, mountedVolumes: [], home: home)
         let chain = Array(location.ancestors.drop { $0 != root })
+        precondition(!chain.isEmpty, "the root \(root.path) isn't above \(location.path)")
         let keepsFocused = kept.count == chain.count
         // The kept panes' changes reach the trail before it has columns, so none is followed
         // until the trail is whole.
@@ -131,7 +132,8 @@ public final class ColumnTrail {
         if keepsFocused {
             focused = kept[kept.count - 1]
             focused.pane.isFocused = owner.isFocused
-            // Kept from the columns that waited above the old focus: it lists now, first.
+            // A column the old trail made above its focus may not have listed yet. As the
+            // focused column now, it lists at once, before the columns above it.
             focused.pane.listIfWaiting()
         } else {
             focused = makeColumn(

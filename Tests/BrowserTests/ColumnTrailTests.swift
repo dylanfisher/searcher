@@ -104,6 +104,7 @@ private func press(_ chord: KeyChord, on pane: Pane) throws {
     await trail(pane).rootChecked()
     await settle { trail(pane).columns.prefix(2).allSatisfy { $0.pane.state.isLoaded } }
     #expect(trail(pane).focused.pane.state.isLoading)
+    #expect(lister.calls.first?.path == "/r/docs")
     lister.releaseAll()
     await settle { trail(pane).focused.pane.state.isLoaded }
 }
@@ -958,6 +959,24 @@ func leftOrCommandUpMovesToTheParentsColumnAndDoesNothingAtTheRoot(chord: KeyCho
     await drainMainQueue()
     #expect(listings("/") == root)
     #expect(listings("/r") == parent)
+}
+
+/// A kept column whose filter hides the next folder on the new way down loses the filter and
+/// selects that folder, as a navigation clears a filter.
+@MainActor @Test func aKeptColumnsFilterIsClearedAndTheNextFolderSelected() async {
+    let fixture = await columnPane(at: "/r/docs")
+    let pane = fixture.pane
+    let parent = trail(pane).columns[1].pane
+    parent.setFilter("doc")
+    await settle { parent.state.names == ["docs"] }
+
+    pane.navigate(to: Location(path: "/r/other"))
+
+    #expect(trail(pane).columns[1].pane === parent)
+    #expect(parent.filter.text.isEmpty)
+    #expect(parent.selection == Selection([ExactName("other")], cursor: ExactName("other")))
+    await settle { parent.state.names.contains("other") }
+    #expect(paths(pane) == ["/", "/r", "/r/other"])
 }
 
 /// A folder the new trail starts at a different root for keeps no column, as a trail from home
