@@ -55,7 +55,9 @@ bus, the startup disk with it, so the startup disk isn't listed. A volume mounte
   unmount is under way. File operations go on: a copy with files open on the volume makes the
   system refuse the eject as busy, and the alert shows, as Finder refuses to eject a disk in
   use. Then it runs the ejector on a `BlockingCallThread`: `FileManager.unmountVolume` with no
-  system UI. The row leaves when the system reports the unmount.
+  system UI. The row leaves when the system reports the unmount. A pane that opens a folder on
+  the volume while the eject runs can hold it busy too; the system then refuses the eject and
+  the alert shows, as Finder's "in use".
 - **One eject at a time per volume.** While a volume's eject runs, its eject button is off, and
   another eject of it, from the menu or another window, does nothing. Once ejected, the volume
   stays so until a read of the mounts without it lands, so a read that still lists it can't
