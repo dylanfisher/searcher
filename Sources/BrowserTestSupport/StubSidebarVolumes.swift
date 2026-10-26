@@ -3,7 +3,8 @@ import Browser
 import Foundation
 
 /// The volumes a stub `SidebarVolumes` reads, which a test changes between reads, and the
-/// ejects it was asked for, which succeed until `fail(with:)`. Records whether each read and
+/// ejects it was asked for, which succeed until `fail(with:)` and wait while `holdEjects()`
+/// holds them. Records whether each read and
 /// eject ran on a `BlockingCallThread`. Nothing real is read or ejected.
 public final class StubSidebarVolumes: @unchecked Sendable {
     // `lock` guards everything below it.
@@ -12,6 +13,9 @@ public final class StubSidebarVolumes: @unchecked Sendable {
     private var storedReadThreads: [Bool] = []
     private var storedEjects: [(mountPoint: String, onBlockingThread: Bool)] = []
     private var failure: SidebarVolume.EjectFailure?
+    private var holdsEjects = false
+    private var heldEjects = 0
+    private let ejectGate = DispatchSemaphore(value: 0)
 
     public init(_ volumes: [SidebarVolume] = []) {
         stored = volumes
@@ -25,6 +29,23 @@ public final class StubSidebarVolumes: @unchecked Sendable {
     /// Fails every eject from now on with `reason`.
     public func fail(with reason: String) {
         lock.withLock { failure = SidebarVolume.EjectFailure(reason: reason) }
+    }
+
+    /// Makes every eject from now on wait until `releaseEjects()`.
+    public func holdEjects() {
+        lock.withLock { holdsEjects = true }
+    }
+
+    /// Lets the held ejects go on, and those that come later.
+    public func releaseEjects() {
+        let held = lock.withLock {
+            holdsEjects = false
+            defer { heldEjects = 0 }
+            return heldEjects
+        }
+        for _ in 0..<held {
+            ejectGate.signal()
+        }
     }
 
     /// For each read so far, whether it ran on a `BlockingCallThread`.
@@ -49,10 +70,12 @@ public final class StubSidebarVolumes: @unchecked Sendable {
     }
 
     private func eject(_ volume: SidebarVolume) throws(SidebarVolume.EjectFailure) {
-        let failure = lock.withLock {
+        let (failure, held) = lock.withLock {
             storedEjects.append((volume.mountPoint, BlockingCallThread.isCurrent))
-            return failure
+            if holdsEjects { heldEjects += 1 }
+            return (failure, holdsEjects)
         }
+        if held { ejectGate.wait() }
         if let failure { throw failure }
     }
 }
