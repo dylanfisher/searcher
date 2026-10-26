@@ -7,9 +7,10 @@ import Browser
 /// modified date come from the column's listing and the icon is the type's shared one from
 /// `TypeIconCache`, so they show at once; the rest is read, and the thumbnail made, off the main
 /// thread, and column view shows a new file once they land, or without them after
-/// `ColumnTrail.previewHold`, filling in later without moving the rows above. A thumbnail
-/// replaces the icon in the same square. The rows are drawn as Finder's: title left, value
-/// right, a rule under each. Built once and refilled for each file (0090-preview-column.md,
+/// `ColumnTrail.previewHold`, filling in later without moving the rows above. The icon or
+/// thumbnail is scaled, as Finder's, to the width inside the insets, or down from that to keep
+/// the fields below it in view. The rows are drawn as Finder's: title left, value right, a rule
+/// under each. Built once and refilled for each file (0090-preview-column.md,
 /// 0095-preview-metadata.md, 0102-thumbnails.md).
 ///
 /// The fields scroll vertically when the column is shorter than they are. VoiceOver reads the
@@ -36,6 +37,15 @@ final class ColumnPreviewView: NSView {
     static let detailFont = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
     /// The space above and below an Information row's text, inside the rules between rows.
     static let rowPadding = 4.0
+    /// The least the image is scaled down to in a window too short for it and the fields; the
+    /// fields scroll below it then.
+    static let smallestImageSide = 64.0
+
+    /// The longest side the image can be drawn at in a preview `width` by `height` points: the
+    /// width inside the insets, or the height inside the margins.
+    static func largestImageSide(width: Double, height: Double) -> Double {
+        max(width - 2 * inset, height - 2 * margin)
+    }
 
     /// Holds the fields, scrolling them vertically in a short window.
     let scrollView = NSScrollView()
@@ -58,6 +68,14 @@ final class ColumnPreviewView: NSView {
     private let iconCache: TypeIconCache
     private let informationField: NSTextField
     private let tagsTitleField: NSTextField
+    /// The image and the fields under it, top to bottom.
+    private let stack = NSStackView()
+    /// The Information rows, in `stack`.
+    private let rowStack = NSStackView()
+    private lazy var imageWidth = iconView.widthAnchor.constraint(
+        equalToConstant: ColumnPreview.defaultImageSide)
+    private lazy var imageHeight = iconView.heightAnchor.constraint(
+        equalToConstant: ColumnPreview.defaultImageSide)
 
     init(iconCache: TypeIconCache, formatter: EntryCellFormatter) {
         self.iconCache = iconCache
@@ -116,6 +134,7 @@ final class ColumnPreviewView: NSView {
         tagsField.isHidden = tags.isEmpty
         setAccessibilityChildren(readingOrder())
         setAccessibilityLabel(entry.name)
+        sizeImage()
     }
 
     /// Wraps the name, the rows' values and the tags at the preview's width, which its grip
@@ -127,6 +146,28 @@ final class ColumnPreviewView: NSView {
             field.preferredMaxLayoutWidth = wrapWidth
         }
         for row in rows { row.wrapValue(at: wrapWidth) }
+        sizeImage()
+    }
+
+    /// Sizes the image as Finder's preview does: as wide as the fields, at the image's aspect,
+    /// unless that would push the Information rows below the preview's bottom, when it is scaled
+    /// down to keep them in view, though to no less than `smallestImageSide`. The tags below
+    /// the rows don't count, so the read that shows them moves nothing above them; they scroll.
+    private func sizeImage() {
+        let fieldsWidth = max(bounds.width - 2 * Self.inset, 0)
+        let size = iconView.image?.size ?? .zero
+        let aspect = size.width > 0 && size.height > 0 ? size.width / size.height : 1
+        let tagsHeight =
+            tagsField.isHidden
+            ? 0
+            : stack.customSpacing(after: rowStack) + tagsTitleField.fittingSize.height
+                + stack.spacing + tagsField.fittingSize.height
+        let fieldsHeight = stack.fittingSize.height - imageHeight.constant - tagsHeight
+        let room = bounds.height - 2 * Self.margin - fieldsHeight
+        let height = min(fieldsWidth / aspect, max(room, Self.smallestImageSide))
+        let width = min(height * aspect, fieldsWidth).rounded()
+        if imageWidth.constant != width { imageWidth.constant = width }
+        if imageHeight.constant != height.rounded() { imageHeight.constant = height.rounded() }
     }
 
     private func build() {
@@ -146,14 +187,16 @@ final class ColumnPreviewView: NSView {
         tagsTitleField.isHidden = true
         tagsField.isHidden = true
 
-        let rowStack = NSStackView(views: rows)
+        for row in rows { rowStack.addArrangedSubview(row) }
         rowStack.orientation = .vertical
         rowStack.alignment = .leading
         rowStack.spacing = 0
-        let stack = NSStackView(views: [
+        for view in [
             iconView, nameField, summaryField, informationField, rowStack, tagsTitleField,
             tagsField,
-        ])
+        ] {
+            stack.addArrangedSubview(view)
+        }
         stack.orientation = .vertical
         stack.alignment = .centerX
         stack.spacing = 6
@@ -186,13 +229,12 @@ final class ColumnPreviewView: NSView {
             document.topAnchor.constraint(equalTo: clip.topAnchor),
             document.leadingAnchor.constraint(equalTo: clip.leadingAnchor),
             document.widthAnchor.constraint(equalTo: clip.widthAnchor),
-            stack.topAnchor.constraint(equalTo: document.topAnchor, constant: 24),
-            stack.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -24),
+            stack.topAnchor.constraint(equalTo: document.topAnchor, constant: Self.margin),
+            stack.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -Self.margin),
             stack.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: Self.inset),
             stack.trailingAnchor.constraint(
                 equalTo: document.trailingAnchor, constant: -Self.inset),
-            iconView.widthAnchor.constraint(equalToConstant: ColumnPreview.iconSide),
-            iconView.heightAnchor.constraint(equalToConstant: ColumnPreview.iconSide),
+            imageWidth, imageHeight,
             nameField.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
             summaryField.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
             informationField.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
@@ -234,6 +276,8 @@ final class ColumnPreviewView: NSView {
 
     /// The space at each side of the fields.
     private static let inset = 12.0
+    /// The space above the image and below the last field.
+    private static let margin = 24.0
 }
 
 /// One row of the preview's Information section, as Finder draws it: its title at the left in

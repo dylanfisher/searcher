@@ -60,7 +60,21 @@ listing doesn't make.
   (Superseded 2026-10-24: the name and the kind and size are left-aligned, the Information
   section has no Size row, since the size is in the line under the name, and its rows are drawn as Finder draws them, title left and value right with a rule under each row,
   in the small system font, and a long date wraps; see
-  [0095](0095-preview-metadata.md).)
+  [0095](0095-preview-metadata.md).) (Amended 2026-10-25, from Dylan: "always show preview
+  images so that they are scaled to fill the width of the preview space, unless that would push
+  the metadata down, in which case it should be scaled down a bit, like finder does". His
+  screenshot showed a portrait photo drawn about 150 points wide in a 550-point preview. The
+  image, thumbnail or type icon, is now as wide as the fields, the preview's width less its
+  12-point insets, at the image's aspect, a type icon square. When that is taller than the
+  preview leaves above the fields, between its 24-point margins, it is scaled down, keeping its
+  aspect, until the last Information row ends at the bottom margin, though to no less than
+  `ColumnPreviewView.smallestImageSide`, 64 points; in a window shorter than that the fields
+  scroll, as before. The tags below the rows don't count: they show only once read, and
+  counting them would shrink the image and move every row up when a read lands after the
+  hold ([0095](0095-preview-metadata.md)); they scroll instead. It is sized again when the preview's width or height changes and when its
+  file or fields change, so a thumbnail of another aspect, or tags that add a line, resize it
+  in the same layout. The thumbnail is asked for at the size drawn; see
+  [0102](0102-thumbnails.md).)
 - **Scrolling.** The column view scrolls when the focus, the column count or whether a preview
   shows changes. The focused column's right-hand neighbor, kept in view where it fits, is the
   next column or, from the last column, the preview.

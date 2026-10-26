@@ -560,6 +560,12 @@ final class ColumnViewController: NSViewController {
         }
         previewGrip?.isHidden = shownPreview == nil
         previewSeparator?.isHidden = shownPreview == nil
+        // The preview's thumbnail is asked for as large as the preview can draw it, from
+        // before the first file shows (0102-thumbnails.md).
+        let imageSide = ColumnPreview.imageSide(
+            drawingAtMost: ColumnPreviewView.largestImageSide(
+                width: shownPreviewWidth, height: height))
+        if pane.previewImageSide != imageSide { pane.previewImageSide = imageSide }
         raiseGrips()
         // Room for the right half of the last grip, past the last separator.
         columnsWidth = max(x, Self.gripFrame(atSeparator: x - 1, height: height).maxX)

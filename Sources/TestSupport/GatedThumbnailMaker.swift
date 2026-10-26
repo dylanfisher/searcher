@@ -90,11 +90,12 @@ public final class GatedThumbnailMaker: ThumbnailMaking, @unchecked Sendable {
     }
 }
 
-/// A plain `pixels`-square image for a test to answer a thumbnail request with.
-public func testThumbnail(pixels: Int = 32) -> CGImage {
+/// A plain image `pixels` wide and `height` tall, square without one, for a test to answer a
+/// thumbnail request with.
+public func testThumbnail(pixels: Int = 32, height: Int? = nil) -> CGImage {
     guard
         let context = CGContext(
-            data: nil, width: pixels, height: pixels, bitsPerComponent: 8, bytesPerRow: 0,
+            data: nil, width: pixels, height: height ?? pixels, bitsPerComponent: 8, bytesPerRow: 0,
             space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
         let image = context.makeImage()

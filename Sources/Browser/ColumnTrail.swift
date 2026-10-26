@@ -59,6 +59,8 @@ public final class ColumnTrail {
     /// The entry the preview's thumbnail was made or is being made for, or found kept for; nil
     /// when it has none of those.
     private var thumbnailEntry: DirectoryEntry?
+    /// The side `thumbnailEntry`'s thumbnail was asked for at; 0 when there is none.
+    private var thumbnailSide = 0.0
 
     /// The columns left of the one the trail was built at, whose loads wait for that column's
     /// first update, so its load is asked first, and for the check of the trail's root, so a
@@ -382,6 +384,14 @@ public final class ColumnTrail {
         return false
     }
 
+    /// The owner's `previewImageSide` grew: asks for the shown file's thumbnail again at the new
+    /// side, keeping the one it has until the new one lands. The landing reports the change.
+    func previewImageSideDidGrow() {
+        guard var next = preview, let pane = columns.last?.pane else { return }
+        updateThumbnail(of: &next, in: pane, usingKept: false)
+        preview = next
+    }
+
     /// Closes every column, and drops the preview, the read of its info, the making of its
     /// thumbnail and the check of the trail's root.
     func close() {
@@ -646,9 +656,16 @@ public final class ColumnTrail {
     /// (`ThumbnailService.shows`), one in rows its volume hasn't answered with, and one whose
     /// folder's volume isn't known or is a share, gets none and keeps its type icon. Its request
     /// waits ahead of rows' for its volume's slot, so the hold isn't spent behind them
-    /// (0102-thumbnails.md).
-    private func updateThumbnail(of next: inout ColumnPreview, in pane: Pane) {
-        guard thumbnailEntry != next.entry else { return }
+    /// (0102-thumbnails.md). It is asked for at `Pane.previewImageSide`; one made smaller is
+    /// asked for again once that grows, and `next` keeps it until the larger one lands, or for
+    /// good if that one fails. With `usingKept` false, a kept thumbnail lands later, as a made
+    /// one does, rather than in `next`.
+    private func updateThumbnail(
+        of next: inout ColumnPreview, in pane: Pane, usingKept: Bool = true
+    ) {
+        let side = owner.previewImageSide
+        let grows = thumbnailEntry == next.entry && thumbnailSide < side
+        guard thumbnailEntry != next.entry || grows else { return }
         cancelThumbnail()
         guard let thumbnails = owner.service.thumbnails,
             ThumbnailService.shows(next.entry, kind: next.kind), pane.state.isAnswered,
@@ -660,25 +677,27 @@ public final class ColumnTrail {
         let location = next.location
         let entry = next.entry
         thumbnailEntry = entry
-        if let kept = thumbnails.cached(
-            at: location.path, entry: entry, side: ColumnPreview.iconSide)
-        {
-            next.thumbnail = kept
+        thumbnailSide = side
+        if usingKept, let kept = thumbnails.cached(at: location.path, entry: entry, side: side) {
+            next.thumbnail = kept ?? (grows ? next.thumbnail : nil)
             return
         }
         thumbnailMaking = Task { [weak self] in
             let thumbnail: CGImage?
             do {
                 thumbnail = try await thumbnails.thumbnail(
-                    at: location.path, entry: entry, side: ColumnPreview.iconSide, on: volume,
-                    first: true)
+                    at: location.path, entry: entry, side: side, on: volume, first: true)
             } catch {
                 // Cancelled before it started: the preview moved on.
                 return
             }
             guard let self, !Task.isCancelled, preview?.location == location else { return }
             thumbnailMaking = nil
-            preview?.thumbnail = thumbnail
+            if let thumbnail {
+                preview?.thumbnail = thumbnail
+            } else if !grows {
+                preview?.thumbnail = nil
+            }
             releaseHeldPreviewOnceLanded()
             owner.trailDidChange()
         }
@@ -756,6 +775,7 @@ public final class ColumnTrail {
         thumbnailMaking?.cancel()
         thumbnailMaking = nil
         thumbnailEntry = nil
+        thumbnailSide = 0
     }
 
     /// The preview of the one file selected in `pane`; nil for a folder, a link, several rows
