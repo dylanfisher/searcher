@@ -22,7 +22,8 @@ segment ([0026](0026-path-bar.md)); nothing else in the app had a hover look.
   `quaternaryLabelColor` fill under the mouse, the path bar's hover color; a
   `tertiaryLabelColor` fill while pressed; the focus ring around the same rounded shape; and no
   fill, with AppKit's dimmed symbol, while disabled. Its tracking area uses `.inVisibleRect`,
-  and hiding it drops the hover, since a hidden view gets no `mouseExited`. It is 22 pt square,
+  and hiding it or an ancestor, or moving it out of its window, drops the hover, since the
+  button then gets no `mouseExited`. It is 22 pt square,
   so the fill has room around a symbol. The operations panel's row buttons use it.
 - **A row or segment that acts on a click**, such as a path bar segment, takes the same hover
   fill.

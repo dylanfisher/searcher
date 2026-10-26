@@ -111,6 +111,32 @@ private func snapshot(
 
 /// Each row button fills a rounded shape under the mouse, a darker one while pressed, and none
 /// while disabled, and its tracking area tells it when the mouse comes and goes.
+/// A button hidden with an ancestor, or taken out of its window, gets no `mouseExited`, so it
+/// drops the hover itself; shown again, it has no fill until the mouse comes back.
+@MainActor @Test func aHoverButtonDropsItsHoverWhenHiddenOrMovedOutOfItsWindow() throws {
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: [.titled],
+        backing: .buffered, defer: true)
+    let container = NSView()
+    let button = HoverButton()
+    container.addSubview(button)
+    try #require(window.contentView).addSubview(container)
+    let entered = try #require(
+        NSEvent.enterExitEvent(
+            with: .mouseEntered, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: 0, context: nil, eventNumber: 0, trackingNumber: 0, userData: nil))
+
+    button.mouseEntered(with: entered)
+    container.isHidden = true
+    #expect(!button.isHovered)
+    container.isHidden = false
+    #expect(button.fill == nil)
+
+    button.mouseEntered(with: entered)
+    container.removeFromSuperview()
+    #expect(!button.isHovered)
+}
+
 @MainActor @Test func theRowButtonsShowHoverPressedAndDisabledStates() throws {
     let fixture = Fixture()
     fixture.controller.show([snapshot(1, .running)])
