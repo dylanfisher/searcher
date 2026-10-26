@@ -533,7 +533,8 @@ public final class PaneViewController: NSViewController {
     /// Shows the list or the columns, as the pane's view mode says. If a table of this pane had
     /// the keys, `keyView` takes them, unless it is taking them already: a switch of view mode,
     /// → and ← move them to the focused column, and a column that a table had the keys in
-    /// may have closed.
+    /// may have closed. The focused column's rename field keeps them: New Folder opens it in
+    /// the middle of the change that lists the folder, which would otherwise close it.
     private func showViewMode(movingKeys tableHadKeys: Bool) {
         let list = listingViewController.view
         let columns = columnViewController.view
@@ -542,7 +543,8 @@ public final class PaneViewController: NSViewController {
         // leave it: hiding a first responder hands the keys to the next key view.
         (isList ? list : columns).isHidden = false
         if tableHadKeys, !columnViewController.isFollowingFirstResponder,
-            let window = viewIfLoaded?.window, window.firstResponder !== keyView
+            !keyListing.renameField.isEditing, let window = viewIfLoaded?.window,
+            window.firstResponder !== keyView
         {
             window.makeFirstResponder(keyView)
         }

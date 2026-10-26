@@ -44,7 +44,10 @@ monitor reports them.
   leaving the folder, before or after the operation ends, the names are dropped. They are also
   dropped when the user selects anything, even the rows already selected, when the filter
   changes, and when hidden entries show or hide: a name the filter or the setting hides would
-  otherwise be selected whenever it showed later.
+  otherwise be selected whenever it showed later. (Amended 2026-10-26, Dylan: in column view
+  New Folder makes the folder in the folder selected alone in the focused column when its column
+  shows, and selects it in that column, which then takes the keys;
+  [0111](0111-column-view-target-folder.md).)
 - **Names compare exactly.** A name the volume lists in another Unicode normalization than the
   record's, which can happen on HFS+ and exFAT, is never found, so it isn't selected; nothing
   else follows from it.

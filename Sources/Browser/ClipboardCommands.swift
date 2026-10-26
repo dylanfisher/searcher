@@ -3,11 +3,13 @@ import Foundation
 
 /// Cut, Copy and Paste of files, through the context's `CutState`. Copy and Cut put the focused
 /// pane's selection on the clipboard as file URLs; Cut also marks it cut. Paste puts what the
-/// clipboard holds in the pane's folder: it moves the files of a cut that is still on the
-/// clipboard and copies anything else, Finder's files included. Move Items Here always moves.
-/// Neither asks first. Pasted items are selected as Duplicate's copies are, and no name is
-/// edited (docs/decisions/0069-cut-and-paste.md). Every command is off without a clipboard, and
-/// the pastes are off without a queue or with no files on the clipboard.
+/// clipboard holds in the pane's folder, or in column view in the folder selected alone in the
+/// focused column (docs/decisions/0111-column-view-target-folder.md): it moves the files of a
+/// cut that is still on the clipboard and copies anything else, Finder's files included. Move
+/// Items Here always moves. Neither asks first. Pasted items are selected as Duplicate's copies
+/// are, and no name is edited (docs/decisions/0069-cut-and-paste.md). Every command is off
+/// without a clipboard, and the pastes are off without a queue or with no files on the
+/// clipboard.
 public enum ClipboardCommands: CommandSet {
     public static let copy = Command(
         id: CommandID("clipboard.copy"), title: "Copy",
@@ -18,7 +20,8 @@ public enum ClipboardCommands: CommandSet {
     public static let paste = Command(
         id: CommandID("clipboard.paste"), title: "Paste",
         chords: [KeyChord("v", modifiers: .command)])
-    /// Moves the files on the clipboard into the pane's folder, whether or not they were cut.
+    /// Moves the files on the clipboard into the pane's folder, whether or not they were cut. In
+    /// column view, as Paste, it moves them into the folder selected alone in the focused column.
     public static let moveHere = Command(
         id: CommandID("clipboard.moveHere"), title: "Move Items Here",
         chords: [KeyChord("v", modifiers: [.command, .option])])
@@ -52,8 +55,10 @@ public enum ClipboardCommands: CommandSet {
         ]
     }
 
-    /// Puts the clipboard's files in the pane's folder: a move for a cut still on the clipboard
-    /// or when `alwaysMoving`, else a copy. A move ends the cut, so a second Paste copies.
+    /// Puts the clipboard's files in the pane's folder, or in column view in the folder selected
+    /// alone in the focused column (`FileCommands.destination(in:)`): a move for a cut still on
+    /// the clipboard or when `alwaysMoving`, else a copy. A move ends the cut, so a second Paste
+    /// copies.
     @MainActor
     private static func pasteFiles(_ context: CommandContext, alwaysMoving: Bool) {
         guard canPaste(context), let clipboard = context.clipboard,
@@ -64,10 +69,11 @@ public enum ClipboardCommands: CommandSet {
         if isCut || alwaysMoving {
             clipboard.clear()
         }
-        let folder = context.pane.location.path
+        let pane = FileCommands.destination(in: context)
+        let folder = pane.location.path
         let operation: FileOperation =
             isCut || alwaysMoving ? .move(paths, into: folder) : .copy(paths, into: folder)
-        FileCommands.run(operation, selectingIn: context.pane, queue: queue)
+        FileCommands.make(operation, in: pane, queue: queue)
     }
 
     /// The selected entries' file URLs. Each says whether it is a folder, from the listing, so
