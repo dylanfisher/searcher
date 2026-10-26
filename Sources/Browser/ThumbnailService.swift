@@ -5,10 +5,11 @@ import Foundation
 /// Makes the thumbnails that list rows, column rows and the column preview show in place of a
 /// file's type icon, and keeps the latest in a `ThumbnailCache`. A request names the volume its
 /// folder's load read with `statfs`, so a folder reached through a link onto a share is on the
-/// share. A file on a network volume gets none: one costs 85 ms per audio file over SMB. On a
-/// local volume at most `ListingService.mostReads(on:)` are made at once, apart from the loads'
-/// and the info reads' slots, each started on a `BlockingCallThread`; the rest wait without a
-/// thread, and one that takes `giveUp` is cancelled and frees its slot
+/// share. Rows on a network volume get none: one costs 85 ms per audio file over SMB. The
+/// preview's one file does, as Finder's does. A volume makes at most
+/// `ListingService.mostReads(on:)` at once, one on a share, apart from the loads' and the info
+/// reads' slots, each started on a `BlockingCallThread`; the rest wait without a thread, and one
+/// that takes `giveUp` is cancelled and frees its slot
 /// (docs/decisions/0004-listing-view.md, docs/decisions/0038-slow-volumes.md,
 /// docs/decisions/0102-thumbnails.md).
 public final class ThumbnailService: Sendable {
@@ -51,9 +52,11 @@ public final class ThumbnailService: Sendable {
         entry.type == .regular && !entry.isDataless && !kind.isText
     }
 
-    /// Whether files on `volume` get thumbnails: a local volume's do, a network volume's don't.
-    public static func makes(on volume: VolumeIdentity) -> Bool {
-        volume.kind == .local
+    /// Whether files on `volume` get thumbnails: a local volume's do. A network volume's rows
+    /// don't, since a folder of them would read hundreds of files over the share; the preview's
+    /// one file does, as Finder's does.
+    public static func makes(on volume: VolumeIdentity, forPreview: Bool = false) -> Bool {
+        volume.kind == .local || forPreview
     }
 
     /// The thumbnail kept of `entry`, the file at `path`, at `side` points: nil when none is
@@ -72,28 +75,31 @@ public final class ThumbnailService: Sendable {
     }
 
     /// The thumbnail of `entry`, the file at `path` on `volume`, at `side` points, from the cache
-    /// or made and kept there; nil when the file has none, took `giveUp`, or is on a network
-    /// volume. A request `first` waits ahead of the others for its volume's slot, as the
-    /// preview's does ahead of rows'. Throws when the calling task is cancelled before the
-    /// thumbnail starts being made; one already being made is still kept.
+    /// or made and kept there; nil when the file has none, took `giveUp`, or is a row's on a
+    /// network volume (`makes`). The preview's request, `forPreview`, waits ahead of rows' for
+    /// its volume's slot. Throws when the calling task is cancelled before the thumbnail starts
+    /// being made. One already being made is still kept on a local volume; on a network volume
+    /// it is stopped, frees the share's one slot and throws, so a selection moved on through a
+    /// folder on a share leaves only the latest file's request running or waiting.
     public func thumbnail(
         at path: String, entry: DirectoryEntry, side: Double, on volume: VolumeIdentity,
-        first: Bool = false
+        forPreview: Bool = false
     ) async throws(CancellationError) -> CGImage? {
         let key = Self.key(path, entry, side)
         if let kept = cache.value(for: key) { return kept }
-        guard Self.makes(on: volume) else { return nil }
+        guard Self.makes(on: volume, forPreview: forPreview) else { return nil }
         guard !Task.isCancelled else { throw CancellationError() }
         let calls = calls
         let cache = cache
         let maker = maker
         let startWait = startWait
         let id = calls.makeID()
-        // Nil when cancelled before it started; otherwise the thumbnail, nil if there is none.
+        let making = Making()
+        let stopsOnCancel = volume.kind == .network
+        // Nil when cancelled before it ended; otherwise the thumbnail, nil if there is none.
         let outcome: CGImage?? = await withTaskCancellationHandler {
             await withCheckedContinuation {
                 (continuation: CheckedContinuation<CGImage??, Never>) in
-                let making = Making()
                 // Runs once the volume has a slot, always on a `BlockingCallThread`: a slot that
                 // frees hands it one, and a slot free now starts one from the caller's thread.
                 let start: @Sendable () -> Void = {
@@ -105,7 +111,15 @@ public final class ThumbnailService: Sendable {
                         calls.finish(id, on: volume)
                         continuation.resume(returning: .some(image))
                     }
+                    // Stops a making cancelled on a share: Quick Look's answer, if it still
+                    // comes, does nothing, and the file isn't kept as having none.
+                    let abandon: @Sendable () -> Void = {
+                        stop()
+                        calls.finish(id, on: volume)
+                        continuation.resume(returning: .none)
+                    }
                     making.watch(
+                        abandon: stopsOnCancel ? abandon : nil,
                         Task {
                             do {
                                 try await wait()
@@ -121,7 +135,7 @@ public final class ThumbnailService: Sendable {
                         })
                 }
                 calls.enter(
-                    id, on: volume, first: first,
+                    id, on: volume, first: forPreview,
                     cancelled: { continuation.resume(returning: .none) }
                 ) {
                     if BlockingCallThread.isCurrent {
@@ -133,6 +147,7 @@ public final class ThumbnailService: Sendable {
             }
         } onCancel: {
             calls.cancel(id)
+            if stopsOnCancel { making.cancel() }
         }
         // A cancel that landed after the request finished left the id behind as cancelled early;
         // no cancel can land after this.
@@ -149,19 +164,22 @@ public final class ThumbnailService: Sendable {
             pixels: Int((side * scale).rounded()))
     }
 
-    /// One thumbnail being made: whichever of Quick Look's answer and the `giveUp` wait comes
-    /// first ends it, and the other does nothing.
+    /// One thumbnail being made: whichever of Quick Look's answer, the `giveUp` wait and, on a
+    /// share, the request's cancellation comes first ends it, and the others do nothing.
     private final class Making: @unchecked Sendable {
         // `lock` guards everything below.
         private let lock = NSLock()
         private var ended = false
+        private var cancelled = false
         private var watchdog: Task<Void, Never>?
+        private var abandon: (@Sendable () -> Void)?
 
         /// Ends the making; false when it had ended already. Stops the `giveUp` wait.
         func end() -> Bool {
             let stopped: Task<Void, Never>?? = lock.withLock {
                 guard !ended else { return nil }
                 ended = true
+                abandon = nil
                 defer { watchdog = nil }
                 return .some(watchdog)
             }
@@ -170,14 +188,42 @@ public final class ThumbnailService: Sendable {
             return true
         }
 
-        /// Keeps `task`, the `giveUp` wait, to stop when the making ends; stops it at once if the
-        /// making ended already, as it does when the answer came before the wait started.
-        func watch(_ task: Task<Void, Never>) {
+        /// Keeps `task`, the `giveUp` wait, to stop when the making ends, and `abandon`, which
+        /// ends it on cancellation; stops the wait at once if the making ended already, as it
+        /// does when the answer came before the wait started, and abandons the making at once if
+        /// it was cancelled before it started.
+        func watch(abandon: (@Sendable () -> Void)?, _ task: Task<Void, Never>) {
             let ended = lock.withLock {
-                if !self.ended { watchdog = task }
+                if !self.ended {
+                    watchdog = task
+                    self.abandon = abandon
+                }
                 return self.ended
             }
-            if ended { task.cancel() }
+            if ended {
+                task.cancel()
+            } else if lock.withLock({ cancelled }) {
+                cancel()
+            }
+        }
+
+        /// The request was cancelled: ends a making that can be abandoned, or has it abandoned
+        /// as soon as it starts.
+        func cancel() {
+            let abandoned: (abandon: @Sendable () -> Void, wait: Task<Void, Never>?)? =
+                lock.withLock {
+                    cancelled = true
+                    guard !ended, let abandon else { return nil }
+                    ended = true
+                    defer {
+                        self.abandon = nil
+                        watchdog = nil
+                    }
+                    return (abandon, watchdog)
+                }
+            guard let abandoned else { return }
+            abandoned.wait?.cancel()
+            abandoned.abandon()
         }
     }
 }

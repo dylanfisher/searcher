@@ -1,4 +1,4 @@
-# 0102. Thumbnails in rows and the column preview, from Quick Look, never on a share
+# 0102. Thumbnails in rows and the column preview, from Quick Look, rows never on a share
 
 - **Date:** 2026-10-25
 - **Status:** accepted
@@ -57,7 +57,25 @@ A probe on this Mac (local APFS, generated 2000×1500 JPEGs, `QLThumbnailGenerat
   not the path's text. A folder reached through a link under `/` onto a share (`~/nas ->
   /Volumes/nas`) is on the share. A file on a network volume gets none and no request is made,
   in rows and the preview alike; a folder whose volume no load has read yet asks for none. 0004's
-  85 ms per file stands, and Quick Look would read each file over the share.
+  85 ms per file stands, and Quick Look would read each file over the share. (Amended
+  2026-10-26: the column preview's one file gets one on a share; rows still never do. Dylan:
+  "image preview isn't working for images on network drives", and Finder's column preview shows
+  the selected image on a share. A row request reads a screen of files over the network; the
+  preview reads one, after the keys pause. `ThumbnailService.makes(on:forPreview:)` holds the
+  rule. The preview's request on a share follows 0038: it takes the share's one thumbnail slot
+  (`ListingService.mostReads(on:)`), apart from the share's loads and info reads and from every
+  other volume's slots, and is started on a `BlockingCallThread`. When the selection moves on,
+  the trail cancels it, and on a share a cancelled request being made is stopped
+  (`QLThumbnailGenerator.cancel`) and frees the slot at once, rather than running on to fill the
+  cache as a local one does; one waiting is never made. So arrowing through a folder on a share
+  leaves only the latest file's request running or waiting. It isn't kept as having none, so the
+  file is asked again when selected again. The preview shows the type icon, or a smaller kept
+  thumbnail, until the image lands, and keeps it if the request fails or is given up after 5 s.
+  A share that stops answering inside Quick Look's own process holds only that slot; one that
+  stops answering the `lstat` before Quick Look holds the request's thread and slot until it
+  answers, as 0038 has a hung load hold its share's; requests behind it wait without a thread and
+  are dropped as the selection moves on. Not measured on the NAS: how long a preview thumbnail
+  takes over SMB.)
 - **Threads and slots follow 0038.** The cache, the volume and the task's cancellation are
   checked on the caller's thread first, so a row already kept, on a share or scrolled away costs
   no thread. A volume has at most `ListingService.mostReads(on:)` requests making a thumbnail at
@@ -109,10 +127,10 @@ A probe on this Mac (local APFS, generated 2000×1500 JPEGs, `QLThumbnailGenerat
   a taller window, the trail asks again for the file shown, keeping its thumbnail, not the icon,
   until the larger one lands, and keeping it if that one fails; a smaller side asks for nothing.
   The rules above stand: off the main thread, the preview's request first in its volume's
-  slots, cancelled on change, local volumes only, given up after 5 s. A thumbnail landing after
-  the hold now replaces a type icon drawn as large, a bigger jump than in the 128-point square,
-  and a thumbnail of another aspect than the icon's resizes the image, moving the fields below
-  it. A one-off measure on this Mac (local APFS, a scratch program asking
+  slots, cancelled on change, local volumes only (amended 2026-10-26: on shares too, above),
+  given up after 5 s. A thumbnail landing after the hold now replaces a type icon drawn as
+  large, a bigger jump than in the 128-point square, and a thumbnail of another aspect than the
+  icon's resizes the image, moving the fields below it. A one-off measure on this Mac (local APFS, a scratch program asking
   `QLThumbnailGenerator` for `.thumbnail` with `iconMode` at scale 2, as `QuickLookThumbnailer`
   does, for JPEGs written fresh so nothing was cached: 12 MP 4:3, 2000×1500 and 12 MP portrait,
   five files each): a file's first 256-pixel thumbnail took 14–17 ms, its first 1024-pixel one
@@ -136,9 +154,10 @@ A probe on this Mac (local APFS, generated 2000×1500 JPEGs, `QLThumbnailGenerat
   `.all` gives text files a page of text.
 - **Let Quick Look decide for text too** — rejected: it makes a page of text for JSON, where
   Dylan's screenshot of Finder shows the document icon.
-- **Thumbnails on network volumes** — rejected, per 0004's measure; the preview too, since a
-  thumbnail reads the file over the share and Quick Look's own queue can't be bounded from here.
-  Revisit with a measure on the NAS (W4) if Dylan wants them there.
+- **Thumbnails in rows on network volumes** — rejected, per 0004's measure. The preview was
+  rejected too, since a thumbnail reads the file over the share and Quick Look's own queue can't
+  be bounded from here, until Dylan asked for it (amended 2026-10-26, above): one file at a time,
+  stopped when the selection moves on, bounds it.
 - **Place a file by its path's text in the mount table** — rejected: a folder reached through a
   link onto a share places as `/`, and every photo there would be read over the share.
 - **`statfs` per request** — rejected: on a share that stopped answering each one blocks a
@@ -158,9 +177,9 @@ A probe on this Mac (local APFS, generated 2000×1500 JPEGs, `QLThumbnailGenerat
 
 This narrows 0004: rows show per-file thumbnails for local, downloaded, non-text files. B6: a key
 press asks for nothing new unless it scrolls; the preview's thumbnail starts after the pause, as
-its info read does. B10: no request blocks the main thread, and a share gets none. Scrolling a
-folder of photos starts a thread and a Quick Look request per newly visible row, four at a time;
-the UI benches and a by-hand scroll through a large photo folder should confirm scroll budgets.
+its info read does. B10: no request blocks the main thread, and a share's rows get none
+(amended 2026-10-26: the preview's one file on a share does). Scrolling a folder of photos
+starts a thread and a Quick Look request per newly visible row, four at a time; the UI benches and a by-hand scroll through a large photo folder should confirm scroll budgets.
 A file replaced by another with the same path, date and size keeps the old thumbnail until the
 cache drops it. A thumbnail Quick Look is slow to make once, past 5 s, as a large video on a
 disk that is spinning up, stays an icon until the file changes or the cache drops it. Folders with custom icons still show the generic icon. A list whose controller is
