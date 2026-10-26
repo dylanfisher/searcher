@@ -9,7 +9,7 @@ import Foundation
 /// preview's one file does, as Finder's does. A volume makes at most
 /// `ListingService.mostReads(on:)` at once, one on a share, apart from the loads' and the info
 /// reads' slots, each started on a `BlockingCallThread`; the rest wait without a thread, and one
-/// that takes `giveUp` is cancelled and frees its slot
+/// that takes `giveUp`, or `shareGiveUp` on a share, is cancelled and frees its slot
 /// (docs/decisions/0004-listing-view.md, docs/decisions/0038-slow-volumes.md,
 /// docs/decisions/0102-thumbnails.md).
 public final class ThumbnailService: Sendable {
@@ -23,6 +23,11 @@ public final class ThumbnailService: Sendable {
     /// file, a stalled disk or a Quick Look that stopped answering, and four of them would
     /// otherwise stop every thumbnail on the volume.
     public static let giveUp: Duration = .seconds(5)
+    /// `giveUp` for the preview's thumbnail on a share, which only the preview asks for there:
+    /// a large file such as a RAW photo can take longer than 5 s over SMB, and moving the
+    /// selection on cancels it. One that takes this long isn't kept as having none, so selecting
+    /// the file again asks again.
+    public static let shareGiveUp: Duration = .seconds(30)
 
     private let maker: any ThumbnailMaking
     private let cache: ThumbnailCache
@@ -75,11 +80,12 @@ public final class ThumbnailService: Sendable {
     }
 
     /// The thumbnail of `entry`, the file at `path` on `volume`, at `side` points, from the cache
-    /// or made and kept there; nil when the file has none, took `giveUp`, or is a row's on a
-    /// network volume (`makes`). The preview's request, `forPreview`, waits ahead of rows' for
-    /// its volume's slot. Throws when the calling task is cancelled before the thumbnail starts
-    /// being made. One already being made is still kept on a local volume; on a network volume
-    /// it is stopped, frees the share's one slot and throws, so a selection moved on through a
+    /// or made and kept there; nil when the file has none, took `giveUp` (`shareGiveUp` on a
+    /// share), or is a row's on a network volume (`makes`). The preview's request,
+    /// `forPreview`, waits ahead of rows' for its volume's slot. Throws when the calling task is
+    /// cancelled before the thumbnail starts being made. One already being made is still kept
+    /// on a local volume; on a network volume it is stopped and throws at once, and frees the
+    /// share's one slot once Quick Look's call has returned, so a selection moved on through a
     /// folder on a share leaves only the latest file's request running or waiting.
     public func thumbnail(
         at path: String, entry: DirectoryEntry, side: Double, on volume: VolumeIdentity,
@@ -94,49 +100,40 @@ public final class ThumbnailService: Sendable {
         let maker = maker
         let startWait = startWait
         let id = calls.makeID()
-        let making = Making()
-        let stopsOnCancel = volume.kind == .network
+        let making = Making(freeSlot: { calls.finish(id, on: volume) })
+        let onShare = volume.kind == .network
         // Nil when cancelled before it ended; otherwise the thumbnail, nil if there is none.
         let outcome: CGImage?? = await withTaskCancellationHandler {
             await withCheckedContinuation {
                 (continuation: CheckedContinuation<CGImage??, Never>) in
+                making.wait { continuation.resume(returning: $0) }
                 // Runs once the volume has a slot, always on a `BlockingCallThread`: a slot that
                 // frees hands it one, and a slot free now starts one from the caller's thread.
                 let start: @Sendable () -> Void = {
-                    let wait = startWait(Self.giveUp)
+                    let wait = startWait(onShare ? Self.shareGiveUp : Self.giveUp)
+                    let watchdog = Task {
+                        do {
+                            try await wait()
+                        } catch {
+                            // Cancelled: the thumbnail came in time, or the making ended.
+                            return
+                        }
+                        // A share's is asked again when the file is selected again: it is slow,
+                        // not broken, and the selection moving on is what bounds it.
+                        making.abandon(with: .some(nil)) {
+                            if !onShare { cache.store(nil, for: key) }
+                        }
+                    }
+                    guard making.begin(watchdog: watchdog) else { return }
                     let stop = maker.makeThumbnail(at: path, side: side, scale: Self.scale) {
                         image in
-                        guard making.end() else { return }
-                        cache.store(image, for: key)
-                        calls.finish(id, on: volume)
-                        continuation.resume(returning: .some(image))
+                        making.answer(image) { cache.store(image, for: key) }
                     }
-                    // Stops a making cancelled on a share: Quick Look's answer, if it still
-                    // comes, does nothing, and the file isn't kept as having none.
-                    let abandon: @Sendable () -> Void = {
-                        stop()
-                        calls.finish(id, on: volume)
-                        continuation.resume(returning: .none)
-                    }
-                    making.watch(
-                        abandon: stopsOnCancel ? abandon : nil,
-                        Task {
-                            do {
-                                try await wait()
-                            } catch {
-                                // Cancelled: the thumbnail came in time.
-                                return
-                            }
-                            guard making.end() else { return }
-                            stop()
-                            cache.store(nil, for: key)
-                            calls.finish(id, on: volume)
-                            continuation.resume(returning: .some(nil))
-                        })
+                    making.started(stop: stop)
                 }
                 calls.enter(
                     id, on: volume, first: forPreview,
-                    cancelled: { continuation.resume(returning: .none) }
+                    cancelled: { making.abandon(with: .none) {} }
                 ) {
                     if BlockingCallThread.isCurrent {
                         start()
@@ -147,7 +144,9 @@ public final class ThumbnailService: Sendable {
             }
         } onCancel: {
             calls.cancel(id)
-            if stopsOnCancel { making.cancel() }
+            // On a share, one being made is stopped, and the caller's wait ends at once even when
+            // Quick Look's call hasn't returned; the slot is freed once it has.
+            if onShare { making.abandon(with: .none) {} }
         }
         // A cancel that landed after the request finished left the id behind as cancelled early;
         // no cancel can land after this.
@@ -164,66 +163,118 @@ public final class ThumbnailService: Sendable {
             pixels: Int((side * scale).rounded()))
     }
 
-    /// One thumbnail being made: whichever of Quick Look's answer, the `giveUp` wait and, on a
-    /// share, the request's cancellation comes first ends it, and the others do nothing.
+    /// One thumbnail request: whichever of Quick Look's answer, the give-up wait, a cancel while
+    /// it waits for a slot and, on a share, a cancel while it is made comes first ends it, once,
+    /// and the others do nothing. Ending it ends the caller's wait at once. Its slot is freed
+    /// once Quick Look's call has returned, so a call that never returns holds its slot and
+    /// thread, as a hung read holds its volume's (0038-slow-volumes.md).
     private final class Making: @unchecked Sendable {
+        private let freeSlot: @Sendable () -> Void
         // `lock` guards everything below.
         private let lock = NSLock()
+        private var resume: (@Sendable (CGImage??) -> Void)?
         private var ended = false
-        private var cancelled = false
+        /// Ended by Quick Look's answer, so there is nothing to stop.
+        private var answered = false
+        private var hasStarted = false
+        private var slotFreed = false
+        private var stop: (@Sendable () -> Void)?
         private var watchdog: Task<Void, Never>?
-        private var abandon: (@Sendable () -> Void)?
 
-        /// Ends the making; false when it had ended already. Stops the `giveUp` wait.
-        func end() -> Bool {
-            let stopped: Task<Void, Never>?? = lock.withLock {
-                guard !ended else { return nil }
-                ended = true
-                abandon = nil
-                defer { watchdog = nil }
-                return .some(watchdog)
-            }
-            guard let stopped else { return false }
-            stopped?.cancel()
-            return true
+        init(freeSlot: @escaping @Sendable () -> Void) {
+            self.freeSlot = freeSlot
         }
 
-        /// Keeps `task`, the `giveUp` wait, to stop when the making ends, and `abandon`, which
-        /// ends it on cancellation; stops the wait at once if the making ended already, as it
-        /// does when the answer came before the wait started, and abandons the making at once if
-        /// it was cancelled before it started.
-        func watch(abandon: (@Sendable () -> Void)?, _ task: Task<Void, Never>) {
+        /// Keeps `resume`, which ends the caller's wait with the outcome; calls it at once with
+        /// none when the request was cancelled before it got here.
+        func wait(_ resume: @escaping @Sendable (CGImage??) -> Void) {
             let ended = lock.withLock {
-                if !self.ended {
-                    watchdog = task
-                    self.abandon = abandon
-                }
+                if !self.ended { self.resume = resume }
                 return self.ended
             }
-            if ended {
-                task.cancel()
-            } else if lock.withLock({ cancelled }) {
-                cancel()
+            if ended { resume(.none) }
+        }
+
+        /// Keeps `watchdog`, the give-up wait, and returns whether the making may start: false,
+        /// with the wait stopped and the slot freed, when it was cancelled before its thread
+        /// started it.
+        func begin(watchdog: Task<Void, Never>) -> Bool {
+            let begins = lock.withLock {
+                if !ended { self.watchdog = watchdog }
+                return !ended
+            }
+            if !begins {
+                // Cancelled on a share after the slot was granted and before its thread ran
+                // this: the gap is a thread starting, too short to land a cancel in from a test
+                // without a hook in `BlockingCallThread`, so this path has no test of its own.
+                watchdog.cancel()
+                releaseSlot()
+            }
+            return begins
+        }
+
+        /// Quick Look's call returned `stop`. A making given up or cancelled while the call ran
+        /// is stopped now and frees its slot; one Quick Look answered isn't stopped.
+        func started(stop: @escaping @Sendable () -> Void) {
+            let endedMeanwhile = lock.withLock {
+                hasStarted = true
+                self.stop = stop
+                return ended && !answered
+            }
+            if endedMeanwhile {
+                stop()
+                releaseSlot()
             }
         }
 
-        /// The request was cancelled: ends a making that can be abandoned, or has it abandoned
-        /// as soon as it starts.
-        func cancel() {
-            let abandoned: (abandon: @Sendable () -> Void, wait: Task<Void, Never>?)? =
-                lock.withLock {
-                    cancelled = true
-                    guard !ended, let abandon else { return nil }
-                    ended = true
-                    defer {
-                        self.abandon = nil
-                        watchdog = nil
-                    }
-                    return (abandon, watchdog)
+        /// Quick Look answered: unless the making ended already, runs `keep`, frees the slot and
+        /// ends the caller's wait with `image`.
+        func answer(_ image: CGImage?, keep: () -> Void) {
+            guard let ending = end(answered: true) else { return }
+            ending.watchdog?.cancel()
+            keep()
+            releaseSlot()
+            ending.resume?(.some(image))
+        }
+
+        /// Ends the making with `outcome`, unless it ended already: runs `keep`, stops a making
+        /// whose call has returned and frees its slot, and ends the caller's wait.
+        func abandon(with outcome: CGImage??, keep: () -> Void) {
+            guard let ending = end() else { return }
+            ending.watchdog?.cancel()
+            keep()
+            if let stop = ending.stop {
+                stop()
+                releaseSlot()
+            }
+            ending.resume?(outcome)
+        }
+
+        /// Marks the making ended, once, and hands back what ending it needs: the caller's
+        /// resume, the give-up wait, and Quick Look's stop if its call has returned. `answered`
+        /// when Quick Look's answer ends it.
+        private func end(answered: Bool = false) -> (
+            resume: (@Sendable (CGImage??) -> Void)?, watchdog: Task<Void, Never>?,
+            stop: (@Sendable () -> Void)?
+        )? {
+            lock.withLock {
+                guard !ended else { return nil }
+                ended = true
+                self.answered = answered
+                defer {
+                    resume = nil
+                    watchdog = nil
                 }
-            guard let abandoned else { return }
-            abandoned.wait?.cancel()
-            abandoned.abandon()
+                return (resume, watchdog, hasStarted ? stop : nil)
+            }
+        }
+
+        private func releaseSlot() {
+            let frees = lock.withLock {
+                defer { slotFreed = true }
+                return !slotFreed
+            }
+            if frees { freeSlot() }
         }
     }
 }

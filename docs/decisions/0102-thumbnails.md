@@ -51,31 +51,37 @@ A probe on this Mac (local APFS, generated 2000×1500 JPEGs, `QLThumbnailGenerat
   microseconds between that `lstat` and Quick Look's open can still be downloaded; nothing short
   of the process-wide `IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES` policy, which 0030 declined,
   closes that.
-- **Never on a network volume, placed by the folder's volume.** A request names the volume of
-  its folder as the folder's load read it with `statfs` (`Pane.folderVolume`, from
-  `ListingLoad.volume`, kept through a reload of the same folder and copied into a split's copy),
-  not the path's text. A folder reached through a link under `/` onto a share (`~/nas ->
-  /Volumes/nas`) is on the share. A file on a network volume gets none and no request is made,
-  in rows and the preview alike; a folder whose volume no load has read yet asks for none. 0004's
-  85 ms per file stands, and Quick Look would read each file over the share. (Amended
-  2026-10-26: the column preview's one file gets one on a share; rows still never do. Dylan:
-  "image preview isn't working for images on network drives", and Finder's column preview shows
-  the selected image on a share. A row request reads a screen of files over the network; the
-  preview reads one, after the keys pause. `ThumbnailService.makes(on:forPreview:)` holds the
-  rule. The preview's request on a share follows 0038: it takes the share's one thumbnail slot
-  (`ListingService.mostReads(on:)`), apart from the share's loads and info reads and from every
-  other volume's slots, and is started on a `BlockingCallThread`. When the selection moves on,
-  the trail cancels it, and on a share a cancelled request being made is stopped
-  (`QLThumbnailGenerator.cancel`) and frees the slot at once, rather than running on to fill the
-  cache as a local one does; one waiting is never made. So arrowing through a folder on a share
-  leaves only the latest file's request running or waiting. It isn't kept as having none, so the
-  file is asked again when selected again. The preview shows the type icon, or a smaller kept
-  thumbnail, until the image lands, and keeps it if the request fails or is given up after 5 s.
-  A share that stops answering inside Quick Look's own process holds only that slot; one that
-  stops answering the `lstat` before Quick Look holds the request's thread and slot until it
-  answers, as 0038 has a hung load hold its share's; requests behind it wait without a thread and
-  are dropped as the selection moves on. Not measured on the NAS: how long a preview thumbnail
-  takes over SMB.)
+- **Rows never on a network volume, the preview's one file yes, placed by the folder's
+  volume.** A request names the volume of its folder as the folder's load read it with `statfs`
+  (`Pane.folderVolume`, from `ListingLoad.volume`, kept through a reload of the same folder and
+  copied into a split's copy), not the path's text. A folder reached through a link under `/`
+  onto a share (`~/nas -> /Volumes/nas`) is on the share. A row on a network volume gets none
+  and no request is made: 0004's 85 ms per file stands, and a screen of rows would have Quick
+  Look read each file over the share. A folder whose volume no load has read yet asks for none.
+  The column preview's one file on a share does get one (2026-10-26). Dylan: "image preview
+  isn't working for images on network drives", and Finder's column preview shows the selected
+  image on a share. The preview reads one file, after the keys pause.
+  `ThumbnailService.makes(on:forPreview:)` holds the rule. The preview's request on a share
+  follows 0038: it takes the share's one thumbnail slot (`ListingService.mostReads(on:)`),
+  apart from the share's loads and info reads and from every other volume's slots, and is
+  started on a `BlockingCallThread`. When the selection moves on, the trail cancels it. On a
+  share a cancelled request being made is stopped (`QLThumbnailGenerator.cancel`) and ends the
+  caller's wait at once, rather than running on to fill the cache as a local one does; one
+  waiting is never made. So arrowing through a folder on a share leaves only the latest file's
+  request running or waiting. `QLThumbnailGenerator.cancel` doesn't promise that Quick Look's
+  process stops reading the file, so the stopped read and the next one may overlap on the share
+  for a moment; how long, if at all, isn't measured. A stopped request isn't kept as having
+  none, so the file is asked again when selected again. A share's preview is given up after
+  `ThumbnailService.shareGiveUp`, 30 s, not 5 s: a RAW photo over SMB can take longer than
+  5 s, nothing else needs that slot, and moving the selection cancels it. One given up isn't
+  kept as having none either, so reselecting the file asks again. The preview shows the type
+  icon, or a smaller kept thumbnail, until the image lands, and keeps it if the request fails
+  or is given up. A share that stops answering inside Quick Look's own process holds only that
+  slot. One that stops answering the `lstat` before Quick Look holds the request's thread and
+  slot until it answers, as 0038 has a hung load hold its share's; the caller's wait still
+  ends on cancel or give-up, and the slot is freed once the call returns. Requests behind it
+  wait without a thread and are dropped as the selection moves on. Not measured on the NAS:
+  how long a preview thumbnail takes over SMB.
 - **Threads and slots follow 0038.** The cache, the volume and the task's cancellation are
   checked on the caller's thread first, so a row already kept, on a share or scrolled away costs
   no thread. A volume has at most `ListingService.mostReads(on:)` requests making a thumbnail at
@@ -94,14 +100,16 @@ A probe on this Mac (local APFS, generated 2000×1500 JPEGs, `QLThumbnailGenerat
   row scrolls into view; it is asked again once it changes or the cache drops it. A local
   thumbnail takes 1–112 ms, so 5 s is a broken file, a stalled disk or a Quick Look that stopped
   answering, and without it four such requests would stop every thumbnail on the volume and
-  leave the preview held until its 100 ms ran out on every file.
+  leave the preview held until its 100 ms ran out on every file. The preview on a share has
+  30 s and keeps nothing when it gives up (above).
 - **One cache.** `ThumbnailService` keeps thumbnails in a `ThumbnailCache`: least recently used
   dropped first past 32 MB (about 7,000 row thumbnails or 120 preview ones; amended 2026-10-25:
   about eight preview ones at the largest side, below, which can evict most of the 32 MB, so
   row thumbnails are asked for again on scroll-back; the cache is plain LRU), keyed by path,
   modification date, size and pixel side, so a file saved again is asked for again. A file with
-  no thumbnail, and one given up, is kept as having none, so scrolling back asks nothing. `ListingService.thumbnails` holds the service, so every pane, column and copy shares
-  it; nil, as in tests and benches that don't pass one, shows type icons only.
+  no thumbnail, and one given up, is kept as having none, so scrolling back asks nothing.
+  `ListingService.thumbnails` holds the service, so every pane, column and copy shares it; nil,
+  as in tests and benches that don't pass one, shows type icons only.
 - **Rows: only on screen.** `ListingViewController`, which draws list view and each column of
   column view, asks for the rows in `visibleRect` after each reload or patch and on each scroll
   or resize (the clip view's bounds and frame, the table's frame). Requests of rows that left the
@@ -130,19 +138,19 @@ A probe on this Mac (local APFS, generated 2000×1500 JPEGs, `QLThumbnailGenerat
   slots, cancelled on change, local volumes only (amended 2026-10-26: on shares too, above),
   given up after 5 s. A thumbnail landing after the hold now replaces a type icon drawn as
   large, a bigger jump than in the 128-point square, and a thumbnail of another aspect than the
-  icon's resizes the image, moving the fields below it. A one-off measure on this Mac (local APFS, a scratch program asking
-  `QLThumbnailGenerator` for `.thumbnail` with `iconMode` at scale 2, as `QuickLookThumbnailer`
-  does, for JPEGs written fresh so nothing was cached: 12 MP 4:3, 2000×1500 and 12 MP portrait,
-  five files each): a file's first 256-pixel thumbnail took 14–17 ms, its first 1024-pixel one
-  35–39 ms (median 35), and either again 1.4–2.7 ms from the cache. So a local photo's preview
-  thumbnail lands well inside the 100 ms hold. These test photos carry no embedded thumbnail;
-  HEIC, RAW and video files and a busy or spinning disk weren't measured, and can take longer.
-  Whatever it takes, a file whose smaller thumbnail is kept, such as its row's, never shows its
-  type icon in the preview: the trail shows the largest smaller one kept of that version
-  (`ThumbnailService.cachedSmaller`, from a per-file index of the sizes the cache holds, so
-  nothing walks the cache), scaled up, until the preview's own lands, and keeps it if that one
-  fails. That shown thumbnail also ends the hold's wait for one, so the file shows as soon as
-  its info is read.)
+  icon's resizes the image, moving the fields below it. A one-off measure on this Mac (local
+  APFS, a scratch program asking `QLThumbnailGenerator` for `.thumbnail` with `iconMode` at
+  scale 2, as `QuickLookThumbnailer` does, for JPEGs written fresh so nothing was cached: 12 MP
+  4:3, 2000×1500 and 12 MP portrait, five files each): a file's first 256-pixel thumbnail took
+  14–17 ms, its first 1024-pixel one 35–39 ms (median 35), and either again 1.4–2.7 ms from
+  the cache. So a local photo's preview thumbnail lands well inside the 100 ms hold. These test
+  photos carry no embedded thumbnail; HEIC, RAW and video files and a busy or spinning disk
+  weren't measured, and can take longer. Whatever it takes, a file whose smaller thumbnail is
+  kept, such as its row's, never shows its type icon in the preview: the trail shows the
+  largest smaller one kept of that version (`ThumbnailService.cachedSmaller`, from a per-file
+  index of the sizes the cache holds, so nothing walks the cache), scaled up, until the
+  preview's own lands, and keeps it if that one fails. That shown thumbnail also ends the
+  hold's wait for one, so the file shows as soon as its info is read.)
 - **The CV.12 hold waits for the thumbnail too.** A newly previewed file is held until its info
   is read and its thumbnail made, or `previewHold` (100 ms) passes. A local thumbnail, 1–28 ms,
   lands inside it, so the file shows with its thumbnail from its first frame and no icon flashes
@@ -179,8 +187,10 @@ This narrows 0004: rows show per-file thumbnails for local, downloaded, non-text
 press asks for nothing new unless it scrolls; the preview's thumbnail starts after the pause, as
 its info read does. B10: no request blocks the main thread, and a share's rows get none
 (amended 2026-10-26: the preview's one file on a share does). Scrolling a folder of photos
-starts a thread and a Quick Look request per newly visible row, four at a time; the UI benches and a by-hand scroll through a large photo folder should confirm scroll budgets.
+starts a thread and a Quick Look request per newly visible row, four at a time; the UI benches
+and a by-hand scroll through a large photo folder should confirm scroll budgets.
 A file replaced by another with the same path, date and size keeps the old thumbnail until the
 cache drops it. A thumbnail Quick Look is slow to make once, past 5 s, as a large video on a
-disk that is spinning up, stays an icon until the file changes or the cache drops it. Folders with custom icons still show the generic icon. A list whose controller is
-dropped leaves its waiting requests to run.
+disk that is spinning up, stays an icon until the file changes or the cache drops it. Folders
+with custom icons still show the generic icon. A list whose controller is dropped leaves its
+waiting requests to run.
