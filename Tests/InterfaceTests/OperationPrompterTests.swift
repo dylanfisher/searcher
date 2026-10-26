@@ -20,7 +20,7 @@ private final class Fixture {
 
     init() {
         prompter = OperationPrompter()
-        prompter.window = { [unowned self] in hasWindow ? window : nil }
+        prompter.window = { [unowned self] _ in hasWindow ? window : nil }
         prompter.present = { [unowned self] sheet, _ in presented.append(sheet) }
         prompter.dismiss = { [unowned self] sheet in dismissed.append(sheet) }
     }
@@ -108,7 +108,7 @@ private func ask(_ request: ConfirmRequest, of fixture: Fixture, into returned: 
         contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled],
         backing: .buffered, defer: true)
     var shownOn: [NSWindow] = []
-    fixture.prompter.window = { next }
+    fixture.prompter.window = { _ in next }
     fixture.prompter.present = { _, window in shownOn.append(window) }
 
     fixture.prompter.windowClosed(closed)

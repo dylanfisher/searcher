@@ -41,11 +41,30 @@ public actor FileOperationQueue {
         public var description: String { "operation \(value)" }
     }
 
+    /// The ID of the workspace whose window queues the operations of the task it is bound in.
+    /// Each window binds its own around the commands, drops and renames it runs, and every
+    /// operation takes the value bound when it is submitted, enqueued or reported; the
+    /// operations panel lists an operation in its own window. Nil outside any window, as in
+    /// the benches and most tests (docs/decisions/0067-operations-panel.md).
+    @TaskLocal public static var workspace: UUID?
+
     /// One operation as the observer sees it.
     public struct Snapshot: Equatable, Sendable {
         public let id: ID
         public let operation: FileOperation
         public let state: OperationState
+        /// The workspace whose window queued it (`FileOperationQueue.workspace`); nil when no
+        /// window did.
+        public let workspace: UUID?
+
+        public init(
+            id: ID, operation: FileOperation, state: OperationState, workspace: UUID? = nil
+        ) {
+            self.id = id
+            self.operation = operation
+            self.state = state
+            self.workspace = workspace
+        }
     }
 
     /// What an operation copies with: `FileCopier` outside tests. One serves one operation, and
@@ -192,6 +211,11 @@ public actor FileOperationQueue {
     /// moment `submit` or `enqueue` returns; the app asks before quitting while it isn't zero.
     public nonisolated var unfinishedCount: Int { intake.unfinishedCount }
 
+    /// The workspace whose window queued the unfinished operation `id`; nil once it has
+    /// finished, or when no window queued it. Read without waiting for the actor, so a question
+    /// about it can go on that window's sheet before a snapshot has shown it.
+    public nonisolated func workspace(of id: ID) -> UUID? { intake.workspace(of: id) }
+
     /// How many operations have been submitted, reported failures included; each of them
     /// finishes once. Read without waiting for the actor, so a key press can note it.
     public nonisolated var submittedCount: Int { intake.nextID }
@@ -268,11 +292,11 @@ public actor FileOperationQueue {
 
     /// Queues every submitted operation not yet queued, in the order submitted.
     private func takeIn() {
-        for (id, operation, onFinish) in intake.takeAll() {
+        for (id, operation, workspace, onFinish) in intake.takeAll() {
             let inUse = pathInUse(by: operation)
             let entry = Entry(
-                id: id, operation: operation, copier: fileSystem.makeCopier(),
-                onFinish: onFinish)
+                id: id, operation: operation, workspace: workspace,
+                copier: fileSystem.makeCopier(), onFinish: onFinish)
             entries.append(entry)
             if let inUse {
                 finish(entry, as: .refused(.inUse(path: inUse)))
@@ -559,8 +583,8 @@ public actor FileOperationQueue {
         }
         takeIn()
         let entry = Entry(
-            id: intake.reserveID(), operation: operation, copier: fileSystem.makeCopier(),
-            onFinish: { _ in })
+            id: intake.reserveID(), operation: operation, workspace: Self.workspace,
+            copier: fileSystem.makeCopier(), onFinish: { _ in })
         entry.errors = errors
         entry.progress.itemCount = errors.count
         entry.progress.itemsDone = errors.count
@@ -1379,7 +1403,8 @@ public actor FileOperationQueue {
         return Snapshot(
             id: entry.id, operation: entry.operation,
             state: OperationState(
-                phase: phase, progress: progress, errors: entry.errors, record: entry.record))
+                phase: phase, progress: progress, errors: entry.errors, record: entry.record),
+            workspace: entry.workspace)
     }
 
     private func unfinished(_ id: ID) -> Entry? {
@@ -1393,6 +1418,8 @@ public actor FileOperationQueue {
     private final class Entry {
         let id: ID
         let operation: FileOperation
+        /// The workspace whose window queued it, if any.
+        let workspace: UUID?
         let copier: any Copier
         let control = Control()
         let onFinish: @Sendable (Snapshot) -> Void
@@ -1415,11 +1442,12 @@ public actor FileOperationQueue {
         var pendingAnswer: CheckedContinuation<Bool?, Never>?
 
         init(
-            id: ID, operation: FileOperation, copier: any Copier,
+            id: ID, operation: FileOperation, workspace: UUID?, copier: any Copier,
             onFinish: @escaping @Sendable (Snapshot) -> Void
         ) {
             self.id = id
             self.operation = operation
+            self.workspace = workspace
             self.copier = copier
             self.onFinish = onFinish
         }
@@ -1434,7 +1462,7 @@ public actor FileOperationQueue {
     /// Operations submitted from any thread, in the order submitted, until the actor takes
     /// them in; and the IDs, given in the same order.
     private final class Intake: @unchecked Sendable {
-        typealias Submission = (ID, FileOperation, @Sendable (Snapshot) -> Void)
+        typealias Submission = (ID, FileOperation, UUID?, @Sendable (Snapshot) -> Void)
 
         // `lock` guards everything below.
         private let lock = NSLock()
@@ -1443,6 +1471,8 @@ public actor FileOperationQueue {
         /// Submissions not yet finished, by ID, and whether each is settled (`PressMark`). IDs
         /// `reserveID` gives aren't here: those entries finish as they are made.
         private var open: [ID: Bool] = [:]
+        /// The workspaces of the submissions in `open` that a window queued.
+        private var workspaces: [ID: UUID] = [:]
 
         /// The ID the next submission gets; every lower one is taken.
         var nextID: Int { lock.withLock { next } }
@@ -1453,9 +1483,11 @@ public actor FileOperationQueue {
         func add(_ operation: FileOperation, onFinish: @escaping @Sendable (Snapshot) -> Void)
             -> ID
         {
-            lock.withLock {
+            let workspace = FileOperationQueue.workspace
+            return lock.withLock {
                 let id = ID(next)
                 next += 1
+                workspaces[id] = workspace
                 // A copy or a duplicate always copies, so it is settled from the start.
                 open[id] =
                     switch operation {
@@ -1465,9 +1497,12 @@ public actor FileOperationQueue {
                     }
                 waiting.append(
                     (
-                        id, operation,
+                        id, operation, workspace,
                         { [self] snapshot in
-                            lock.withLock { _ = open.removeValue(forKey: id) }
+                            lock.withLock {
+                                open.removeValue(forKey: id)
+                                workspaces.removeValue(forKey: id)
+                            }
                             onFinish(snapshot)
                         }
                     ))
@@ -1486,6 +1521,8 @@ public actor FileOperationQueue {
         func isAwaitable(_ id: ID) -> Bool { lock.withLock { open[id] == false } }
 
         func isUnfinished(_ id: ID) -> Bool { lock.withLock { open[id] != nil } }
+
+        func workspace(of id: ID) -> UUID? { lock.withLock { workspaces[id] } }
 
         func mark() -> PressMark {
             lock.withLock {
