@@ -89,49 +89,73 @@ public struct Favorite: Hashable, Sendable {
         }
     }
 
-    /// Finds the item on the disk: through its bookmark when it has one, else at its path. An
-    /// item that moved has its new path; one at a path the old one only names another way, as
-    /// `/tmp` names `/private/tmp`, keeps its path. A missing item is returned as it was.
-    /// Volumes aren't mounted to look, and no UI is shown.
+    /// Finds the item on the disk: through its bookmark when it has one, else, or when the
+    /// bookmark doesn't resolve or leads into a Trash, at its path, with a new bookmark made
+    /// there, so a folder deleted and made again at the same path is found. An item that moved
+    /// has its new path; one at a path the old one only names another way, as `/tmp` names
+    /// `/private/tmp`, keeps its path. A symbolic link is what it points to, as Finder opens a
+    /// link to a folder as the folder. A missing item is returned as it was, bookmark included,
+    /// so one put back from the Trash is found again. Volumes aren't mounted to look, and no UI
+    /// is shown.
     ///
     /// It reads the disk, which a share that has stopped answering can block, so it runs on a
     /// `BlockingCallThread` (docs/decisions/0038-slow-volumes.md).
     public nonisolated static func resolve(_ favorite: Favorite) -> Resolution {
         BlockingCallThread.requireCurrent()
-        let missing = Resolution(favorite: favorite, state: .missing)
-        var url = URL(fileURLWithPath: favorite.path, isDirectory: false)
-        var bookmark = favorite.bookmark
-        if let data = favorite.bookmark {
-            var isStale = false
-            do {
-                url = try URL(
-                    resolvingBookmarkData: data, options: [.withoutUI, .withoutMounting],
-                    relativeTo: nil, bookmarkDataIsStale: &isStale)
-            } catch {
-                return missing
-            }
-            if isStale { bookmark = nil }
+        if let bookmark = favorite.bookmark,
+            let resolution = resolve(favorite, through: bookmark)
+        {
+            return resolution
         }
-        let values: URLResourceValues
+        let url = URL(fileURLWithPath: favorite.path, isDirectory: false)
+        guard !isInTrash(favorite.path), let state = state(at: url) else {
+            return Resolution(favorite: favorite, state: .missing)
+        }
+        return Resolution(favorite: Favorite(path: favorite.path, bookmark: bookmark(of: url)), state: state)
+    }
+
+    /// `favorite` found through `bookmark`; nil when the bookmark doesn't resolve, or leads into
+    /// a Trash or to nothing.
+    private nonisolated static func resolve(_ favorite: Favorite, through bookmark: Data)
+        -> Resolution?
+    {
+        var isStale = false
+        let url: URL
         do {
-            values = try url.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey])
+            url = try URL(
+                resolvingBookmarkData: bookmark, options: [.withoutUI, .withoutMounting],
+                relativeTo: nil, bookmarkDataIsStale: &isStale)
         } catch {
-            return missing
+            return nil
         }
-        guard !isInTrash(url.path) else { return missing }
+        guard !isInTrash(url.path), let state = state(at: url) else { return nil }
         var path = url.path
         if path != favorite.path, let real = realPath(path), real == realPath(favorite.path) {
             path = favorite.path
         }
-        if bookmark == nil {
-            // An item the system can't bookmark keeps its path alone; the next resolve tries
-            // again.
-            bookmark = try? url.bookmarkData(
-                options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
-        }
-        let isFolder = values.isDirectory == true && values.isPackage != true
         return Resolution(
-            favorite: Favorite(path: path, bookmark: bookmark), state: isFolder ? .folder : .file)
+            favorite: Favorite(path: path, bookmark: isStale ? self.bookmark(of: url) : bookmark),
+            state: state)
+    }
+
+    /// What is at `url`, following links: a folder, or a file or package; nil for nothing or a
+    /// broken link.
+    private nonisolated static func state(at url: URL) -> State? {
+        guard let real = realPath(url.path) else { return nil }
+        let target = URL(fileURLWithPath: real, isDirectory: false)
+        let values: URLResourceValues
+        do {
+            values = try target.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey])
+        } catch {
+            return nil
+        }
+        return values.isDirectory == true && values.isPackage != true ? .folder : .file
+    }
+
+    /// A bookmark of `url`; nil when the system can't make one, and the item keeps its path
+    /// alone until the next resolve tries again.
+    private nonisolated static func bookmark(of url: URL) -> Data? {
+        try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
     }
 
     /// Whether `path` is in a Trash: the user's, or a volume's.
