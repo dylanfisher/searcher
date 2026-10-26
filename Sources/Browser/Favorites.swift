@@ -128,7 +128,10 @@ public final class Favorites {
         let found = resolution.favorite
         if found.path != favorite.path {
             let comparable = FileOperation.comparable(found.path)
-            if list.contains(where: { FileOperation.comparable($0.path) == comparable }) {
+            // The item itself compares equal after a rename that changes only case.
+            if list.indices.contains(where: {
+                $0 != index && FileOperation.comparable(list[$0].path) == comparable
+            }) {
                 list.remove(at: index)
                 states[favorite.path] = nil
                 settings.favorites = list

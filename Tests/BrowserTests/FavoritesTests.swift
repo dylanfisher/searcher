@@ -189,3 +189,23 @@ private let defaultPaths = [
     #expect(pane.location.path == "/Users/u/Documents")
     #expect(paneFixture.actions.openedFiles.count == 1)
 }
+
+@MainActor @Test func aFavoriteRenamedOnlyInCaseKeepsItsPlaceUnderTheNewName() async throws {
+    let fixture = try Fixture()
+    let favorites = Favorites(settings: fixture.settings) { favorite in
+        guard favorite.path == "/Users/u/Documents" else {
+            return Favorite.Resolution(favorite: favorite, state: .folder)
+        }
+        return Favorite.Resolution(
+            favorite: Favorite(path: "/Users/u/documents", bookmark: Data([1])), state: .folder)
+    }
+
+    favorites.refresh()
+
+    await settle { !favorites.items.contains { $0.state == .unknown } }
+    #expect(
+        favorites.items.map(\.path) == [
+            "/Applications", "/Users/u/Desktop", "/Users/u/documents", "/Users/u/Downloads",
+            "/Users/u",
+        ])
+}
