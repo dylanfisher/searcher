@@ -174,6 +174,8 @@ public final class ThumbnailService: Sendable {
         private let lock = NSLock()
         private var resume: (@Sendable (CGImage??) -> Void)?
         private var ended = false
+        /// Ended by Quick Look's answer, so there is nothing to stop.
+        private var answered = false
         private var hasStarted = false
         private var slotFreed = false
         private var stop: (@Sendable () -> Void)?
@@ -202,6 +204,9 @@ public final class ThumbnailService: Sendable {
                 return !ended
             }
             if !begins {
+                // Cancelled on a share after the slot was granted and before its thread ran
+                // this: the gap is a thread starting, too short to land a cancel in from a test
+                // without a hook in `BlockingCallThread`, so this path has no test of its own.
                 watchdog.cancel()
                 releaseSlot()
             }
@@ -209,12 +214,12 @@ public final class ThumbnailService: Sendable {
         }
 
         /// Quick Look's call returned `stop`. A making given up or cancelled while the call ran
-        /// is stopped now and frees its slot.
+        /// is stopped now and frees its slot; one Quick Look answered isn't stopped.
         func started(stop: @escaping @Sendable () -> Void) {
             let endedMeanwhile = lock.withLock {
                 hasStarted = true
                 self.stop = stop
-                return ended && !slotFreed
+                return ended && !answered
             }
             if endedMeanwhile {
                 stop()
@@ -225,7 +230,7 @@ public final class ThumbnailService: Sendable {
         /// Quick Look answered: unless the making ended already, runs `keep`, frees the slot and
         /// ends the caller's wait with `image`.
         func answer(_ image: CGImage?, keep: () -> Void) {
-            guard let ending = end() else { return }
+            guard let ending = end(answered: true) else { return }
             ending.watchdog?.cancel()
             keep()
             releaseSlot()
@@ -246,14 +251,16 @@ public final class ThumbnailService: Sendable {
         }
 
         /// Marks the making ended, once, and hands back what ending it needs: the caller's
-        /// resume, the give-up wait, and Quick Look's stop if its call has returned.
-        private func end() -> (
+        /// resume, the give-up wait, and Quick Look's stop if its call has returned. `answered`
+        /// when Quick Look's answer ends it.
+        private func end(answered: Bool = false) -> (
             resume: (@Sendable (CGImage??) -> Void)?, watchdog: Task<Void, Never>?,
             stop: (@Sendable () -> Void)?
         )? {
             lock.withLock {
                 guard !ended else { return nil }
                 ended = true
+                self.answered = answered
                 defer {
                     resume = nil
                     watchdog = nil

@@ -69,18 +69,19 @@ A probe on this Mac (local APFS, generated 2000×1500 JPEGs, `QLThumbnailGenerat
   caller's wait at once, rather than running on to fill the cache as a local one does; one
   waiting is never made. So arrowing through a folder on a share leaves only the latest file's
   request running or waiting. `QLThumbnailGenerator.cancel` doesn't promise that Quick Look's
-  process stops reading the file, so the stopped read and the next one can overlap on the share
-  for a moment. A stopped request isn't kept as having none, so the file is asked again when
-  selected again. A share's preview is given up after `ThumbnailService.shareGiveUp`, 30 s, not
-  5 s: a RAW photo over SMB can take longer than 5 s, nothing else needs that slot, and moving
-  the selection cancels it. One given up isn't kept as having none either, so reselecting the
-  file asks again. The preview shows the type icon, or a smaller kept thumbnail, until the
-  image lands, and keeps it if the request fails or is given up. A share that stops answering
-  inside Quick Look's own process holds only that slot. One that stops answering the `lstat`
-  before Quick Look holds the request's thread and slot until it answers, as 0038 has a hung
-  load hold its share's; the caller's wait still ends on cancel or give-up, and the slot is
-  freed once the call returns. Requests behind it wait without a thread and are dropped as the
-  selection moves on. Not measured on the NAS: how long a preview thumbnail takes over SMB.
+  process stops reading the file, so the stopped read and the next one may overlap on the share
+  for a moment; how long, if at all, isn't measured. A stopped request isn't kept as having
+  none, so the file is asked again when selected again. A share's preview is given up after
+  `ThumbnailService.shareGiveUp`, 30 s, not 5 s: a RAW photo over SMB can take longer than
+  5 s, nothing else needs that slot, and moving the selection cancels it. One given up isn't
+  kept as having none either, so reselecting the file asks again. The preview shows the type
+  icon, or a smaller kept thumbnail, until the image lands, and keeps it if the request fails
+  or is given up. A share that stops answering inside Quick Look's own process holds only that
+  slot. One that stops answering the `lstat` before Quick Look holds the request's thread and
+  slot until it answers, as 0038 has a hung load hold its share's; the caller's wait still
+  ends on cancel or give-up, and the slot is freed once the call returns. Requests behind it
+  wait without a thread and are dropped as the selection moves on. Not measured on the NAS:
+  how long a preview thumbnail takes over SMB.
 - **Threads and slots follow 0038.** The cache, the volume and the task's cancellation are
   checked on the caller's thread first, so a row already kept, on a share or scrolled away costs
   no thread. A volume has at most `ListingService.mostReads(on:)` requests making a thumbnail at
