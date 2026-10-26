@@ -315,6 +315,14 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
         return cell
     }
 
+    /// A title too long for one line wraps, and its row grows to fit it.
+    public func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        guard let column = tableView.tableColumns.first else {
+            preconditionFailure("the palette's table has no column")
+        }
+        return PaletteCellView.height(of: results[row], width: column.width)
+    }
+
     public func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         PaletteRowView()
     }
