@@ -98,7 +98,7 @@ other-pane confirm names nothing, and two Cmd-Shift-C presses ask two questions 
   empty or not, until the user closes it, so a copy ending in another window never closes it.
   Turning the setting on while an empty panel that showed itself is up hides it. Off, the empty
   panel stays and says "No operations".
-- **Insets.** Each row sits 9 pt from the panel's sides, `BarInset.horizontal`, shared with the
+- **Insets.** Each row sits 9 pt from the panel's sides, `Margin.standard`, shared with the
   path bar so its first folder lines up with the rows' text, and 9 pt above and below (12 and 6
   until 2026-10-23, when Dylan asked for less across and more up and down). Rows sit
   `OperationsViewController.rowGap` (4 pt) apart beyond those insets, and the first has

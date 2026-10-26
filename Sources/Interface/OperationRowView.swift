@@ -248,7 +248,7 @@ final class OperationRowView: NSView {
         row.alignment = .centerY
         row.spacing = 8
         row.edgeInsets = NSEdgeInsets(
-            top: 9, left: BarInset.horizontal, bottom: 9, right: BarInset.horizontal)
+            top: 9, left: Margin.standard, bottom: 9, right: Margin.standard)
         row.translatesAutoresizingMaskIntoConstraints = false
         addSubview(row)
         NSLayoutConstraint.activate([
