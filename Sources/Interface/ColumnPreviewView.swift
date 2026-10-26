@@ -10,8 +10,9 @@ import Browser
 /// `ColumnTrail.previewHold`, filling in later without moving the rows above. The icon or
 /// thumbnail is scaled, as Finder's, to the width inside the insets, or down from that to keep
 /// the fields below it in view. The rows are drawn as Finder's: title left, value right, a rule
-/// under each. Built once and refilled for each file (0090-preview-column.md,
-/// 0095-preview-metadata.md, 0102-thumbnails.md).
+/// under each. The name, the kind line, the values and the tags can be selected, not edited.
+/// Built once and refilled for each file (0090-preview-column.md, 0095-preview-metadata.md,
+/// 0102-thumbnails.md).
 ///
 /// The fields scroll vertically when the column is shorter than they are. VoiceOver reads the
 /// preview as a group named for the file, its text fields in reading order. It takes no keys.
@@ -181,9 +182,13 @@ final class ColumnPreviewView: NSView {
             header.font = Self.headerFont
         }
         tagsField.font = Self.detailFont
-        // A selectable field takes the keys on a press and tracks the mouse itself, so a press
-        // on the text wouldn't reach the pane (0090-preview-column.md).
-        for field in [nameField, tagsField] { field.isSelectable = false }
+        // Finder's preview text can be selected and copied. A press on it takes the keys into
+        // the text, which focuses the pane holding it; a press on the preview's empty space
+        // gives the focused column the keys back (0090-preview-column.md).
+        for field in [nameField, summaryField, tagsField] {
+            field.isSelectable = true
+            field.isEditable = false
+        }
         tagsTitleField.isHidden = true
         tagsField.isHidden = true
 
@@ -265,12 +270,14 @@ final class ColumnPreviewView: NSView {
             + [tagsTitleField, tagsField]).filter { !$0.isHidden }
     }
 
-    /// An Information row's value: wrapping, right-aligned, in the label color.
+    /// An Information row's value: wrapping, right-aligned, in the label color, selectable as
+    /// Finder's is.
     private static func value() -> NSTextField {
         let field = NSTextField(wrappingLabelWithString: "")
         field.font = detailFont
         field.alignment = .right
-        field.isSelectable = false
+        field.isSelectable = true
+        field.isEditable = false
         return field
     }
 
