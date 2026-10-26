@@ -239,6 +239,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         settings.observe(for: self) { [weak self] in self?.settingsChanged() }
         tabStrip.didSelectTab = { [weak self] in self?.showWorkspace() }
         window.didChangeFirstResponder = { [weak self] in self?.firstResponderDidChange() }
+        workspace.onActiveChange = { [weak self] in self?.markFocusedPane() }
         window.willSendMouseDown = { [weak self] in self?.isDraggingWindow = false }
         window.takeKey = { [weak self] event in self?.runControlTab(event) ?? false }
         window.sidebarList = sidebar.outlineView
@@ -966,11 +967,24 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// Rings the focused pane while another pane shows and the sidebar doesn't have the keys.
     /// With the keys in the sidebar no pane is ringed, though the focused pane keeps the focus for
     /// the commands and for the keys to go back to (docs/decisions/0089-sidebar-key-routing.md).
+    /// The focused pane's path bar is emphasized while the window is key, alone or not and with
+    /// the keys in the sidebar too, since its pane is still the one the commands act on
+    /// (docs/decisions/0026-path-bar.md).
     private func markFocusedPane(in views: TabViews, of tab: Tab) {
         let marksFocus = tab.layout.panes.count > 1 && !tab.layout.isZoomed && !sidebarHasKeys
         for (id, controller) in views.paneControllers {
-            controller.showsFocus = marksFocus && id == tab.layout.focused
+            let isFocused = id == tab.layout.focused
+            controller.showsFocus = marksFocus && isFocused
+            controller.pathBar.isEmphasized = workspace.isActive && isFocused
         }
+    }
+
+    /// Marks the selected tab's focused pane, once its views are built.
+    private func markFocusedPane() {
+        guard !isClosed, !workspace.isClosed else { return }
+        let tab = workspace.selectedTab
+        guard let views = tabViews[tab.id] else { return }
+        markFocusedPane(in: views, of: tab)
     }
 
     /// Whether the keys are in the sidebar, in its list or anything else in it.

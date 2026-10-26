@@ -34,6 +34,18 @@ final class PathBarView: NSView {
         NSApp?.currentEvent?.modifierFlags ?? []
     }
 
+    /// Whether the titles are drawn in the label color, for the pane the window's commands act
+    /// on, rather than the secondary label color. Only the color changes, so no segment moves.
+    var isEmphasized = false {
+        didSet {
+            guard isEmphasized != oldValue else { return }
+            for segment in segments {
+                segment.contentTintColor = titleColor
+            }
+        }
+    }
+    private var titleColor: NSColor { isEmphasized ? .labelColor : .secondaryLabelColor }
+
     /// The location shown; nil until the first `show`.
     private(set) var location: Location?
     private(set) var segments: [NSButton] = []
@@ -85,6 +97,7 @@ final class PathBarView: NSView {
                 action: #selector(segmentClicked(_:)))
             button.isBordered = false
             button.font = Self.font
+            button.contentTintColor = titleColor
             button.lineBreakMode = .byTruncatingMiddle
             button.tag = index
             return button

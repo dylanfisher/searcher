@@ -1928,6 +1928,46 @@ private func ringed(_ id: PaneID?, in fixture: Fixture) throws -> Bool {
     }
 }
 
+/// Whether `id`'s pane is the only one whose path bar is emphasized, or with `id` nil, whether
+/// none is.
+@MainActor
+private func emphasizesPath(_ id: PaneID?, in fixture: Fixture) throws -> Bool {
+    try fixture.tab.layout.panes.allSatisfy {
+        try fixture.paneController($0).pathBar.isEmphasized == ($0 == id)
+    }
+}
+
+/// The focused pane's path bar is emphasized, alone or in a split, with the keys in the sidebar
+/// too, and moves with the focus; a window that isn't key emphasizes none
+/// (docs/decisions/0026-path-bar.md).
+@MainActor @Test func theFocusedPanesPathBarIsEmphasizedWhileTheWindowIsKey() async throws {
+    let fixture = try await Fixture()
+    let only = fixture.tab.layout.focused
+    #expect(try emphasizesPath(only, in: fixture))
+
+    let (left, right) = try twoPanes(.horizontal, in: fixture)
+    #expect(left == only)
+    #expect(try emphasizesPath(left, in: fixture))
+
+    #expect(fixture.window.makeFirstResponder(try fixture.paneController(right).keyView))
+    #expect(try emphasizesPath(right, in: fixture))
+
+    _ = try keysToSidebar(in: fixture)
+    #expect(try emphasizesPath(right, in: fixture))
+
+    fixture.controller.windowDidResignKey(
+        Notification(name: NSWindow.didResignKeyNotification, object: fixture.window))
+    #expect(try emphasizesPath(nil, in: fixture))
+    fixture.controller.windowDidBecomeKey(
+        Notification(name: NSWindow.didBecomeKeyNotification, object: fixture.window))
+    #expect(try emphasizesPath(right, in: fixture))
+
+    #expect(fixture.window.makeFirstResponder(try fixture.paneController(right).keyView))
+    try fixture.press(try keyEvent("w", modifiers: .command))
+    #expect(fixture.tab.layout.panes == [left])
+    #expect(try emphasizesPath(left, in: fixture))
+}
+
 /// Splits the window's pane in two along `axis` and returns the first pane and the second, with
 /// the first focused and its table the window's first responder.
 @MainActor
@@ -2042,6 +2082,7 @@ func aFocusPaneChordFromTheSidebarGivesThePaneItFocusesTheKeys(_ direction: Dire
     #expect(fixture.tab.layout.focused == right)
     #expect(fixture.window.firstResponder === (try fixture.paneController(right).keyView))
     #expect(try ringed(right, in: fixture))
+    #expect(try emphasizesPath(right, in: fixture))
 }
 
 /// Cmd-U pressed in the sidebar gives the keys back to the pane they left, with its selection,
@@ -2062,6 +2103,7 @@ func aFocusPaneChordFromTheSidebarGivesThePaneItFocusesTheKeys(_ direction: Dire
     #expect(leftPane.selection.cursor == ExactName("a.txt"))
     #expect(fixture.window.firstResponder === (try fixture.paneController(left).keyView))
     #expect(try ringed(left, in: fixture))
+    #expect(try emphasizesPath(left, in: fixture))
 }
 
 // MARK: A press anywhere in a pane focuses it

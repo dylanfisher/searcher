@@ -65,6 +65,20 @@ name can't ride in the listing itself.
   below, as Finder does; the color is darker grey in light mode and lighter in dark. Segments keep
   their intrinsic height, because a taller button draws its title lower than its baseline offset
   reports, which put the chevrons off center. A new path clears the highlight.
+- **The focused pane's bar** (added 2026-10-26, BC.1b, at Dylan's request) draws its titles in
+  `labelColor`, and every other bar in `secondaryLabelColor`, as Finder and Xcode set the active
+  tab's title apart. The chevrons stay tertiary, and nothing else changes: no weight, size or
+  background, so the titles keep their widths and nothing moves as the focus does. The focused
+  pane is `Layout.focused`, and the window marks it where it rings it, so the bar follows every
+  focus change the ring does: a click, Tab, the palette, Cmd-U, a closed pane. It is emphasized
+  - **with one pane too**, since that pane is the one the commands act on, and a split then
+    leaves the bar the user was reading as it was;
+  - **with the keys in the sidebar**, though the ring hides then: the pane is still the one the
+    commands act on and the keys go back to, as Finder's window keeps its target while its
+    sidebar has the keys;
+  - **only while the window is key**, read from `Workspace.isActive`, which the window sets as
+    it gains and loses key. Another window's bars, and this one's under a sheet or the palette,
+    all show unemphasized, as the selection's highlight turns grey there.
 
 ## Alternatives considered
 
@@ -82,6 +96,10 @@ name can't ride in the listing itself.
   mouse, and a tooltip or click mid-slide lands on a moving target.
 - **A tooltip only, no expanding** — rejected: Finder expands, and the tooltip waits for the
   hover delay.
+- **The focused pane's folder in semibold** — rejected: a bolder title is wider, so the row
+  would shift as the focus moves.
+- **A tinted background for the focused bar** — rejected: new chrome, and the ring already marks
+  the pane in a split.
 - **A tracking area per segment** — replaced: each segment reported the mouse against its
   current frame, so an expansion that moved a neighbor under the mouse handed the hover on.
 
