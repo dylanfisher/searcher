@@ -251,7 +251,14 @@ private let infoItems = [
         #expect(
             window.forKeyword(AEKeyword(keyAEKeyData))?.typeCodeValue
                 == WorkspaceSystemActions.informationWindow)
-        #expect(window.forKeyword(AEKeyword(keyAEContainer))?.fileURLValue == url)
+        let item = try #require(window.forKeyword(AEKeyword(keyAEContainer)))
+        #expect(item.descriptorType == DescType(typeObjectSpecifier))
+        #expect(item.forKeyword(AEKeyword(keyAEDesiredClass))?.typeCodeValue == DescType(cObject))
+        #expect(
+            item.forKeyword(AEKeyword(keyAEKeyForm))?.enumCodeValue
+                == DescType(formAbsolutePosition))
+        #expect(item.forKeyword(AEKeyword(keyAEKeyData))?.fileURLValue == url)
+        #expect(item.forKeyword(AEKeyword(keyAEContainer))?.descriptorType == DescType(typeNull))
     }
     let activate = WorkspaceSystemActions.activateEvent()
     #expect(activate.eventClass == AEEventClass(kAEMiscStandards))

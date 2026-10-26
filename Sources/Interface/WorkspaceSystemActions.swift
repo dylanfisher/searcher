@@ -183,13 +183,21 @@ public final class WorkspaceSystemActions: SystemActions {
     nonisolated static func infoEvent(for urls: [URL]) -> NSAppleEventDescriptor {
         let windows = NSAppleEventDescriptor.list()
         for (index, url) in urls.enumerated() {
-            // An object specifier: the `iwnd` property of the item at the file URL.
-            guard
-                let window = NSAppleEventDescriptor.record().coerce(
-                    toDescriptorType: DescType(typeObjectSpecifier))
-            else {
-                preconditionFailure("an Apple Event record didn't coerce to an object specifier")
-            }
+            // The `iwnd` property of the item, where the item is a `cobj` specifier of form
+            // `indx` with the file URL as its data, as AppleScript sends it. A bare file URL as
+            // the container gets OSStatus -1728 from Finder.
+            let item = Self.objectSpecifier()
+            item.setDescriptor(
+                NSAppleEventDescriptor(typeCode: DescType(cObject)),
+                forKeyword: AEKeyword(keyAEDesiredClass))
+            item.setDescriptor(
+                NSAppleEventDescriptor(enumCode: DescType(formAbsolutePosition)),
+                forKeyword: AEKeyword(keyAEKeyForm))
+            item.setDescriptor(
+                NSAppleEventDescriptor(fileURL: url), forKeyword: AEKeyword(keyAEKeyData))
+            item.setDescriptor(
+                NSAppleEventDescriptor.null(), forKeyword: AEKeyword(keyAEContainer))
+            let window = Self.objectSpecifier()
             window.setDescriptor(
                 NSAppleEventDescriptor(typeCode: DescType(cProperty)),
                 forKeyword: AEKeyword(keyAEDesiredClass))
@@ -199,8 +207,7 @@ public final class WorkspaceSystemActions: SystemActions {
             window.setDescriptor(
                 NSAppleEventDescriptor(typeCode: informationWindow),
                 forKeyword: AEKeyword(keyAEKeyData))
-            window.setDescriptor(
-                NSAppleEventDescriptor(fileURL: url), forKeyword: AEKeyword(keyAEContainer))
+            window.setDescriptor(item, forKeyword: AEKeyword(keyAEContainer))
             windows.insert(window, at: index + 1)
         }
         let event = NSAppleEventDescriptor.appleEvent(
@@ -209,6 +216,16 @@ public final class WorkspaceSystemActions: SystemActions {
             transactionID: AETransactionID(kAnyTransactionID))
         event.setParam(windows, forKeyword: AEKeyword(keyDirectObject))
         return event
+    }
+
+    private nonisolated static func objectSpecifier() -> NSAppleEventDescriptor {
+        guard
+            let specifier = NSAppleEventDescriptor.record().coerce(
+                toDescriptorType: DescType(typeObjectSpecifier))
+        else {
+            preconditionFailure("an Apple Event record didn't coerce to an object specifier")
+        }
+        return specifier
     }
 
     /// Finder's `activate`, with no window named, which brings Finder to the front.
