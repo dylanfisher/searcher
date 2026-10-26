@@ -411,7 +411,7 @@ private func host(_ fixture: Fixture, width: CGFloat) -> NSView {
     #expect(emptied == 2)
 }
 
-@MainActor @Test func aRowsContentSitsAtTheSharedBarInset() throws {
+@MainActor @Test func aRowsContentSitsAtTheSharedMargin() throws {
     let fixture = Fixture()
     let container = host(fixture, width: 600)
     fixture.controller.show([snapshot(1, .running)])
@@ -420,8 +420,8 @@ private func host(_ fixture: Fixture, width: CGFloat) -> NSView {
 
     let bar = row.convert(row.bar.bounds, from: row.bar)
     let cancel = row.convert(row.cancelButton.bounds, from: row.cancelButton)
-    #expect(bar.minX == BarInset.horizontal)
-    #expect(row.bounds.maxX - cancel.maxX == BarInset.horizontal)
+    #expect(bar.minX == Margin.standard)
+    #expect(row.bounds.maxX - cancel.maxX == Margin.standard)
 }
 
 private let bigTotal = TreeSizeWalker.Total(bytes: 6_000_000_000, files: 700, isPartial: false)

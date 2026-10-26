@@ -184,10 +184,10 @@ private func pathBar(
     #expect(bar.hoveredSegment == nil)
 }
 
-@MainActor @Test func theRowStartsAtTheSharedBarInset() {
+@MainActor @Test func theRowStartsAtTheSharedMargin() {
     let bar = pathBar(showing: "/Users/dylan/Projects")
 
-    #expect(bar.segments.first?.frame.minX == BarInset.horizontal)
+    #expect(bar.segments.first?.frame.minX == Margin.standard)
 }
 
 /// A bar `cut` points too narrow for its row, so its middle folders truncate, and each
@@ -196,7 +196,7 @@ private func pathBar(
     let path = "/Users/dylan/a fairly long folder name/another fairly long folder name/Projects"
     let wide = pathBar(showing: path, width: 4000)
     let natural = wide.segments.map(\.frame.width)
-    let rowWidth = (wide.segments.last?.frame.maxX ?? 0) + BarInset.horizontal
+    let rowWidth = (wide.segments.last?.frame.maxX ?? 0) + Margin.standard
     return (pathBar(showing: path, width: rowWidth - cut), natural)
 }
 
