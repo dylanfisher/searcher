@@ -1729,6 +1729,130 @@ private typealias SidebarOutline = WorkspaceSidebarViewController.SidebarOutline
     #expect(fixture.controller.showsSidebar)
 }
 
+/// Whether `id`'s pane is the only one ringed, or with `id` nil, whether none is.
+@MainActor
+private func ringed(_ id: PaneID?, in fixture: Fixture) throws -> Bool {
+    try fixture.tab.layout.panes.allSatisfy {
+        try fixture.paneController($0).showsFocus == ($0 == id)
+    }
+}
+
+/// Splits the window's pane in two along `axis` and returns the first pane and the second, with
+/// the first focused and its table the window's first responder.
+@MainActor
+private func twoPanes(_ axis: Axis, in fixture: Fixture) throws -> (PaneID, PaneID) {
+    let first = fixture.tab.layout.focused
+    switch axis {
+    case .horizontal: try fixture.press(try keyEvent("T", modifiers: [.command, .shift]))
+    case .vertical:
+        try fixture.press(try keyEvent("T", characters: "ˇ", modifiers: [.option, .shift]))
+    }
+    let second = try #require(fixture.tab.layout.panes.first { $0 != first })
+    #expect(fixture.window.makeFirstResponder(try fixture.paneController(first).keyView))
+    return (first, second)
+}
+
+@MainActor @Test func withTheKeysInTheSidebarNoPaneIsRingedAndEscRingsTheFocusedOneAgain()
+    async throws
+{
+    let fixture = try await Fixture()
+    let (left, _) = try twoPanes(.horizontal, in: fixture)
+    #expect(try ringed(left, in: fixture))
+
+    let outline = try keysToSidebar(in: fixture)
+
+    #expect(try ringed(nil, in: fixture))
+    #expect(fixture.tab.layout.focused == left)
+
+    outline.keyDown(with: try keyEvent("\u{1B}"))
+
+    #expect(fixture.window.firstResponder === (try fixture.paneController(left).keyView))
+    #expect(try ringed(left, in: fixture))
+}
+
+/// The ring stays off while a command that redraws the window runs from the sidebar.
+@MainActor @Test func aCommandFromTheSidebarThatKeepsTheKeysThereLeavesNoPaneRinged() async throws {
+    let fixture = try await Fixture()
+    _ = try twoPanes(.horizontal, in: fixture)
+    let outline = try keysToSidebar(in: fixture)
+
+    outline.keyDown(with: try keyEvent("T", modifiers: [.command, .shift]))
+
+    #expect(fixture.tab.layout.panes.count == 3)
+    #expect(fixture.window.firstResponder === outline)
+    #expect(try ringed(nil, in: fixture))
+}
+
+@MainActor @Test func tabFromTheSidebarGivesTheFocusedPaneTheKeysAndTheRing() async throws {
+    let fixture = try await Fixture()
+    // The first pane has the focus, not the one the split added.
+    let (left, _) = try twoPanes(.horizontal, in: fixture)
+    let outline = try keysToSidebar(in: fixture)
+    #expect(try ringed(nil, in: fixture))
+
+    outline.keyDown(with: try keyEvent("\t"))
+
+    #expect(fixture.window.firstResponder === (try fixture.paneController(left).keyView))
+    #expect(try ringed(left, in: fixture))
+}
+
+/// Each Focus Pane chord pressed in the sidebar focuses the pane that way and gives it the keys.
+@MainActor @Test(arguments: Direction.allCases)
+func aFocusPaneChordFromTheSidebarGivesThePaneItFocusesTheKeys(_ direction: Direction)
+    async throws
+{
+    let fixture = try await Fixture()
+    let (first, second) = try twoPanes(direction.axis, in: fixture)
+    let (from, to) = direction == .left || direction == .up ? (second, first) : (first, second)
+    #expect(fixture.window.makeFirstResponder(try fixture.paneController(from).keyView))
+    let outline = try keysToSidebar(in: fixture)
+    let code =
+        switch direction {
+        case .left: NSLeftArrowFunctionKey
+        case .right: NSRightArrowFunctionKey
+        case .up: NSUpArrowFunctionKey
+        case .down: NSDownArrowFunctionKey
+        }
+
+    outline.keyDown(with: try arrow(code, [.command, .option, .shift]))
+
+    #expect(fixture.tab.layout.focused == to)
+    #expect(fixture.window.firstResponder === (try fixture.paneController(to).keyView))
+    #expect(try ringed(to, in: fixture))
+}
+
+@MainActor @Test func focusOtherPaneFromTheMenuWithTheKeysInTheSidebarGivesThatPaneTheKeys()
+    async throws
+{
+    let fixture = try await Fixture()
+    let (_, right) = try twoPanes(.horizontal, in: fixture)
+    _ = try keysToSidebar(in: fixture)
+    let menu = try MainMenuBuilder.build(appName: "Searcher", registry: AppCommands.registry())
+
+    _ = try choose(
+        try #require(menuItem(DualPaneCommands.focusOtherPane.id, in: menu)), in: fixture.window)
+
+    #expect(fixture.tab.layout.focused == right)
+    #expect(fixture.window.firstResponder === (try fixture.paneController(right).keyView))
+    #expect(try ringed(right, in: fixture))
+}
+
+@MainActor @Test func focusOtherPaneFromThePaletteOverTheSidebarGivesThatPaneTheKeys() async throws
+{
+    let fixture = try await Fixture()
+    let (_, right) = try twoPanes(.horizontal, in: fixture)
+    _ = try keysToSidebar(in: fixture)
+    fixture.controller.showPalette()
+
+    let editor = try await typeInPalette(DualPaneCommands.focusOtherPane.title, in: fixture)
+    #expect(try paletteTitles(in: fixture).first == DualPaneCommands.focusOtherPane.title)
+    editor.keyDown(with: try keyEvent("\r"))
+
+    #expect(fixture.tab.layout.focused == right)
+    #expect(fixture.window.firstResponder === (try fixture.paneController(right).keyView))
+    #expect(try ringed(right, in: fixture))
+}
+
 // MARK: A press anywhere in a pane focuses it
 
 extension PressFixture {
