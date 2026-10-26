@@ -1435,6 +1435,33 @@ private func allMenuItems(_ menu: NSMenu) -> [NSMenuItem] {
     #expect(try ringed(first, in: fixture))
 }
 
+/// In column view, going to a folder rebuilds the columns: the keys end in the new focused
+/// column's table, not in a column the move closed.
+@MainActor @Test func aFolderChosenInOpenQuicklyInColumnViewGivesTheNewColumnTheKeys() async throws
+{
+    let fixture = try await Fixture()
+    let pane = fixture.tab.focusedPane
+    pane.setViewMode(.column)
+    let trail = try #require(pane.columnTrail)
+    await settle { trail.columns.allSatisfy { $0.pane.state.isLoaded } }
+    _ = try keysToSidebar(in: fixture)
+    fixture.controller.showPalette()
+
+    let editor = try await typeInPalette("/root/do", in: fixture)
+    await settle { (try? paletteTitles(in: fixture).first) == "/root/docs" }
+    editor.keyDown(with: try keyEvent("\r"))
+    // Going to a folder builds the pane a new trail.
+    await settle {
+        guard let trail = pane.columnTrail else { return false }
+        return trail.focused.pane.location == Location(path: "/root/docs")
+            && trail.columns.allSatisfy { $0.pane.state.isLoaded }
+    }
+
+    let table = try #require(fixture.window.firstResponder as? ListingTableView)
+    #expect(table === (try fixture.paneController(fixture.tab.layout.focused).keyView))
+    #expect(table.window === fixture.window)
+}
+
 @MainActor @Test func aRowChosenInGoToItemOverTheSidebarGivesItsPaneTheKeys() async throws {
     let fixture = try await Fixture()
     let (first, _) = try twoPanes(.horizontal, in: fixture)

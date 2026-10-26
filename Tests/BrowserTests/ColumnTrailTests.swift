@@ -300,6 +300,42 @@ private func press(_ chord: KeyChord, on pane: Pane) throws {
     }
 }
 
+/// Go to Item's choice in a column that closed while the palette was open does nothing: no
+/// column takes the keys and no selection changes.
+@MainActor @Test func goToItemInAClosedColumnDoesNothing() async {
+    let fixture = await columnPane(selecting: "docs")
+    await settle { trail(fixture.pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+    let docs = trail(fixture.pane).columns[2].pane
+    select("a.txt", in: trail(fixture.pane).columns[1])
+    #expect(paths(fixture.pane) == ["/", "/r"])
+
+    trail(fixture.pane).jump(to: "x.txt", inColumnOf: docs)
+
+    #expect(paths(fixture.pane) == ["/", "/r"])
+    #expect(trail(fixture.pane).focusedIndex == 1)
+    #expect(
+        trail(fixture.pane).columns[1].pane.selection
+            == Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+    #expect(docs.selection.isEmpty)
+}
+
+/// Go to Item's choice of a row its column no longer lists does nothing: the focused column
+/// keeps the keys and the column's selection stays.
+@MainActor @Test func goToItemOfAGoneRowDoesNothing() async {
+    let fixture = await columnPane(selecting: "docs")
+    await settle { trail(fixture.pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+    let parent = trail(fixture.pane).columns[1].pane
+    trail(fixture.pane).focus(trail(fixture.pane).columns[2])
+    parent.apply(.patches([.remove(name: "other")]), at: parent.location)
+    await settle { !parent.state.names.contains("other") }
+
+    trail(fixture.pane).jump(to: "other", inColumnOf: parent)
+
+    #expect(paths(fixture.pane) == ["/", "/r", "/r/docs"])
+    #expect(trail(fixture.pane).focusedIndex == 2)
+    #expect(parent.selection == Selection([ExactName("docs")], cursor: ExactName("docs")))
+}
+
 /// The root taken from the path is checked against the mount table off the main thread: a volume
 /// mounted below `/` outside `/Volumes` drops the columns above it.
 @MainActor @Test func aVolumeMountedOutsideVolumesStartsTheTrailAtItsMountPoint() async {
