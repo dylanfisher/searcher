@@ -13,6 +13,8 @@ import SwiftUI
 /// (docs/decisions/0110-interaction-states.md). Recording ends, and the monitor goes, when a key
 /// is taken, the field loses the keys, its window loses the keys or closes, it leaves its window,
 /// it is turned off, or it is released, so no exit leaves a monitor eating the app's keys.
+/// After a key is taken, a second monitor swallows that key's repeats and its release, which
+/// would otherwise reach the menus, where the chord may now run a command.
 @MainActor
 final class ShortcutRecorderField: NSView {
     /// What a recording gave.
@@ -53,6 +55,12 @@ final class ShortcutRecorderField: NSView {
     var isRecording: Bool { monitor != nil }
 
     private var monitor: KeyMonitor?
+    /// Swallows the repeats and the release of the key just taken, while it is held. It belongs
+    /// to no field, so the key stays swallowed if the settings change takes the field away or
+    /// the keys from it.
+    private static var heldKey: KeyMonitor?
+    /// Whether the key just taken is still held, its repeats and release swallowed.
+    static var isSwallowingHeldKey: Bool { heldKey != nil }
     private var isHovered = false {
         didSet {
             if isHovered != oldValue { needsDisplay = true }
@@ -110,7 +118,11 @@ final class ShortcutRecorderField: NSView {
         if let window, window.firstResponder !== self {
             guard window.makeFirstResponder(self) else { return }
         }
-        monitor = KeyMonitor { [weak self] event in self?.handle(event) ?? event }
+        // Not `self?.handle(event) ?? event`: that passes on the nil that swallows a press.
+        monitor = KeyMonitor { [weak self] event in
+            guard let self else { return event }
+            return self.handle(event)
+        }
         if let window {
             // A window closed without having the keys, as in code, never resigns key.
             windowObservers = [NSWindow.didResignKeyNotification, NSWindow.willCloseNotification]
@@ -138,18 +150,35 @@ final class ShortcutRecorderField: NSView {
         updateAccessibilityValue()
     }
 
-    /// Takes a key press while recording: nil swallows it, so no menu or view sees it.
+    /// Takes a key press while recording: nil swallows it, so no menu or view sees it. A repeat,
+    /// such as of the Return that started recording, is swallowed and not recorded.
     func handle(_ event: NSEvent) -> NSEvent? {
         guard isRecording, event.type == .keyDown else { return event }
+        if event.isARepeat { return nil }
         let candidates = KeyChord.candidates(for: event)
         // A key `KeyChord` can't spell, such as forward delete, is not a shortcut; recording
         // goes on.
         guard let first = candidates.first else { return nil }
         let isPlain = first.modifiers.isEmpty
         stopRecording()
+        Self.swallowRepeatsAndRelease(of: event.keyCode)
         if isPlain, first.key == .escape { return nil }
         onRecord(isPlain && first.key == .delete ? .removed : .chords(candidates))
         return nil
+    }
+
+    /// Swallows the repeats of the key with `keyCode` and its release, until the release or the
+    /// next fresh press of any key, which passes.
+    private static func swallowRepeatsAndRelease(of keyCode: UInt16) {
+        heldKey = KeyMonitor(matching: [.keyDown, .keyUp]) { event in
+            guard event.type == .keyUp || event.isARepeat else {
+                heldKey = nil
+                return event
+            }
+            guard event.keyCode == keyCode else { return event }
+            if event.type == .keyUp { heldKey = nil }
+            return nil
+        }
     }
 
     // MARK: Ending on every exit
@@ -295,16 +324,19 @@ final class ShortcutRecorderField: NSView {
     }
 }
 
-/// A local key-down monitor, removed when released, so a field released while recording leaves
-/// none behind.
+/// A local key monitor, removed when released, so a field released while recording leaves none
+/// behind.
 @MainActor
 final class KeyMonitor {
     /// How many are installed, for the tests to see none is left behind.
     private(set) static var installed = 0
     private let token: Any
 
-    init(_ handler: @escaping @MainActor (NSEvent) -> NSEvent?) {
-        guard let token = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: handler)
+    init(
+        matching mask: NSEvent.EventTypeMask = .keyDown,
+        _ handler: @escaping @MainActor (NSEvent) -> NSEvent?
+    ) {
+        guard let token = NSEvent.addLocalMonitorForEvents(matching: mask, handler: handler)
         else {
             preconditionFailure("AppKit refused a local key monitor")
         }

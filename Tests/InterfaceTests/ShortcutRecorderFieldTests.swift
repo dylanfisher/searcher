@@ -34,9 +34,17 @@ private final class RecorderFixture {
 
     #expect(fixture.recorded == [.chords([KeyChord("o", modifiers: [.command, .shift])])])
     #expect(!fixture.field.isRecording)
-    #expect(KeyMonitor.installed == installed)
+    // What is left watches for the held key's release, until it comes.
+    #expect(ShortcutRecorderField.isSwallowingHeldKey)
     // Once recording ends, keys pass.
     #expect(fixture.field.handle(event) === event)
+    NSApplication.shared.sendEvent(
+        try #require(
+            NSEvent.keyEvent(
+                with: .keyUp, location: .zero, modifierFlags: [.command, .shift], timestamp: 0,
+                windowNumber: 0, context: nil, characters: "O", charactersIgnoringModifiers: "o",
+                isARepeat: false, keyCode: event.keyCode)))
+    #expect(!ShortcutRecorderField.isSwallowingHeldKey)
 }
 
 @MainActor @Test func escCancelsAndDeleteRemoves() throws {
@@ -138,4 +146,71 @@ private final class RecorderFixture {
     #expect(!field.acceptsFirstResponder)
     field.startRecording()
     #expect(!field.isRecording)
+}
+
+/// Counts the runs of a menu item's action.
+@MainActor
+private final class ActionCounter: NSObject {
+    var runs = 0
+    @objc func run(_ sender: Any?) { runs += 1 }
+}
+
+/// Recording a chord never runs a command, through the real path a key press takes: the app's
+/// `sendEvent`, which hands the press to the local monitors and then to the menus' key
+/// equivalents. The recording gives a menu item the chord at once, as the settings do
+/// (`MainMenuBuilder.showChords`), and the key is held: neither the press, its repeats nor its
+/// release runs the item. The next press of the chord does. The repeats of a held Return, which
+/// started recording, record nothing.
+@MainActor @Test func recordingAChordThroughTheAppNeverRunsItsCommand() throws {
+    let app = NSApplication.shared
+    let counter = ActionCounter()
+    let item = NSMenuItem(
+        title: "Command", action: #selector(ActionCounter.run(_:)), keyEquivalent: "")
+    item.target = counter
+    let menu = NSMenu(title: "Menu")
+    menu.addItem(item)
+    let menuItem = NSMenuItem(title: "Menu", action: nil, keyEquivalent: "")
+    menuItem.submenu = menu
+    let bar = NSMenu()
+    bar.addItem(menuItem)
+    let mainMenu = app.mainMenu
+    app.mainMenu = bar
+    defer { app.mainMenu = mainMenu }
+
+    let fixture = RecorderFixture()
+    fixture.field.onRecord = { recording in
+        fixture.recorded.append(recording)
+        guard case .chords(let candidates) = recording, let chord = candidates.last else { return }
+        item.keyEquivalent = chord.keyEquivalent
+        item.keyEquivalentModifierMask = chord.keyEquivalentModifierMask
+    }
+    func key(_ type: NSEvent.EventType, isARepeat: Bool = false) throws -> NSEvent {
+        try #require(
+            NSEvent.keyEvent(
+                with: type, location: .zero, modifierFlags: [.command, .option], timestamp: 0,
+                windowNumber: fixture.window.windowNumber, context: nil, characters: "π",
+                charactersIgnoringModifiers: "p", isARepeat: isARepeat, keyCode: 35))
+    }
+    fixture.field.startRecording()
+    let heldReturn = try #require(
+        NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: fixture.window.windowNumber, context: nil, characters: "\r",
+            charactersIgnoringModifiers: "\r", isARepeat: true, keyCode: 36))
+    app.sendEvent(heldReturn)
+    #expect(fixture.recorded.isEmpty)
+    #expect(fixture.field.isRecording)
+    app.sendEvent(try key(.keyDown))
+    app.sendEvent(try key(.keyDown, isARepeat: true))
+    app.sendEvent(try key(.keyDown, isARepeat: true))
+    app.sendEvent(try key(.keyUp))
+
+    #expect(fixture.recorded == [.chords([KeyChord("p", modifiers: [.command, .option])])])
+    #expect(counter.runs == 0)
+    #expect(!fixture.field.isRecording)
+    #expect(!ShortcutRecorderField.isSwallowingHeldKey)
+
+    // Recording is over: the next press is the command's.
+    app.sendEvent(try key(.keyDown))
+    #expect(counter.runs == 1)
 }
