@@ -11,8 +11,8 @@ import SwiftUI
 ///
 /// It draws hover, pressed, focused, recording and disabled
 /// (docs/decisions/0110-interaction-states.md). Recording ends, and the monitor goes, when a key
-/// is taken, the field loses the keys, its window loses the keys, it leaves its window, it is
-/// turned off, or it is released, so no exit leaves a monitor eating the app's keys.
+/// is taken, the field loses the keys, its window loses the keys or closes, it leaves its window,
+/// it is turned off, or it is released, so no exit leaves a monitor eating the app's keys.
 @MainActor
 final class ShortcutRecorderField: NSView {
     /// What a recording gave.
@@ -63,7 +63,8 @@ final class ShortcutRecorderField: NSView {
             if isPressed != oldValue { needsDisplay = true }
         }
     }
-    private var resignKeyObserver: NSObjectProtocol?
+    /// Observers of the window losing the keys and closing, while recording.
+    private var windowObservers: [NSObjectProtocol] = []
 
     static let height: CGFloat = 22
     private static let cornerRadius: CGFloat = 5
@@ -90,6 +91,13 @@ final class ShortcutRecorderField: NSView {
         fatalError("ShortcutRecorderField is built in code")
     }
 
+    // The monitor removes itself as it goes; the observers of the window are removed here.
+    isolated deinit {
+        for observer in windowObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
     override var intrinsicContentSize: NSSize {
         NSSize(width: NSView.noIntrinsicMetric, height: Self.height)
     }
@@ -104,11 +112,15 @@ final class ShortcutRecorderField: NSView {
         }
         monitor = KeyMonitor { [weak self] event in self?.handle(event) ?? event }
         if let window {
-            resignKeyObserver = NotificationCenter.default.addObserver(
-                forName: NSWindow.didResignKeyNotification, object: window, queue: nil
-            ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.stopRecording() }
-            }
+            // A window closed without having the keys, as in code, never resigns key.
+            windowObservers = [NSWindow.didResignKeyNotification, NSWindow.willCloseNotification]
+                .map { name in
+                    NotificationCenter.default.addObserver(
+                        forName: name, object: window, queue: nil
+                    ) { [weak self] _ in
+                        MainActor.assumeIsolated { self?.stopRecording() }
+                    }
+                }
         }
         needsDisplay = true
         updateAccessibilityValue()
@@ -118,10 +130,10 @@ final class ShortcutRecorderField: NSView {
     func stopRecording() {
         guard isRecording else { return }
         monitor = nil
-        if let resignKeyObserver {
-            NotificationCenter.default.removeObserver(resignKeyObserver)
+        for observer in windowObservers {
+            NotificationCenter.default.removeObserver(observer)
         }
-        resignKeyObserver = nil
+        windowObservers = []
         needsDisplay = true
         updateAccessibilityValue()
     }
