@@ -278,6 +278,53 @@ private func shownNames(_ controller: ListingViewController) -> [String] {
     #expect(!table.visibleRect.intersects(table.rect(ofRow: 2)))
 }
 
+/// A row that leaves the folder goes at once, as in Finder: the table keeps no row view past the
+/// new last row fading out, as it does when the count drops inside an animation.
+@MainActor @Test func aRowThatLeavesGoesAtOnceWithNoFade() async throws {
+    let controller = await controller(showing: ["a", "b", "c", "d"].map { file($0) })
+    let window = KeyCatchingWindow()
+    window.contentView = controller.view
+    let pane = controller.pane
+    let table = controller.tableView
+    controller.view.layoutSubtreeIfNeeded()
+    try #require(table.subviews.compactMap { $0 as? NSTableRowView }.count == 4)
+
+    pane.apply(.patches([.remove(name: "b")]), at: pane.location)
+    await settle { controller.listing?.count == 3 }
+
+    let rowViews = table.subviews.compactMap { $0 as? NSTableRowView }
+    #expect(rowViews.map { table.row(for: $0) }.sorted() == [0, 1, 2])
+    #expect(rowViews.allSatisfy { $0.layer?.animationKeys() == nil })
+}
+
+/// When a trashed row leaves, the row that took its place, or the one before when it was the
+/// last, is selected in the same pass that drops the row, as in Finder: no pass shows the rows
+/// without the trashed one and with nothing selected.
+@MainActor @Test(arguments: [("b", 1, "c"), ("d", 2, "c")])
+func aTrashedRowHandsItsSelectionOnInThePassThatDropsIt(
+    trashed: String, row: Int, next: String
+) async throws {
+    let controller = await controller(showing: ["a", "b", "c", "d"].map { file($0) })
+    let pane = controller.pane
+    let table = controller.tableView
+    controller.view.layoutSubtreeIfNeeded()
+    pane.select(Selection([ExactName(trashed)], cursor: ExactName(trashed)))
+    var shown: [(rows: Int, selected: IndexSet)] = []
+    pane.onChange = { [weak controller] in
+        guard let controller else { return }
+        controller.paneDidChange()
+        shown.append((controller.tableView.numberOfRows, controller.tableView.selectedRowIndexes))
+    }
+
+    _ = pane.moveCursorPastSelectionOnceGone()
+    pane.apply(.patches([.remove(name: trashed)]), at: pane.location)
+    await settle { controller.listing?.count == 3 }
+
+    #expect(table.selectedRowIndexes == [row])
+    #expect(controller.listing?[row].name == next)
+    #expect(!shown.contains { $0.rows == 3 && $0.selected.isEmpty })
+}
+
 @MainActor @Test func aListOpenedLikeAnotherStillListingTakesItsScrollOnceTheRowsShow() async throws
 {
     let entries = (0..<2_000).map { file(String(format: "e%04d", $0)) }
