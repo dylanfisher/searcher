@@ -78,7 +78,8 @@ A probe on this Mac (local APFS, generated 2000×1500 JPEGs, `QLThumbnailGenerat
   answering, and without it four such requests would stop every thumbnail on the volume and
   leave the preview held until its 100 ms ran out on every file.
 - **One cache.** `ThumbnailService` keeps thumbnails in a `ThumbnailCache`: least recently used
-  dropped first past 32 MB (about 7,000 row thumbnails or 120 preview ones), keyed by path,
+  dropped first past 32 MB (about 7,000 row thumbnails or 120 preview ones; amended 2026-10-25:
+  about ten preview ones at the largest side, below, which push rows' out first), keyed by path,
   modification date, size and pixel side, so a file saved again is asked for again. A file with
   no thumbnail, and one given up, is kept as having none, so scrolling back asks nothing. `ListingService.thumbnails` holds the service, so every pane, column and copy shares
   it; nil, as in tests and benches that don't pass one, shows type icons only.
@@ -94,7 +95,25 @@ A probe on this Mac (local APFS, generated 2000×1500 JPEGs, `QLThumbnailGenerat
   thumbnail beside its info read, under the same rules (none for a dataless file or rows the
   volume hasn't answered with), and keeps it through patches until the new one lands, as the info
   is kept. `ColumnPreview.thumbnail` replaces the type icon in the same 128-point square, so
-  nothing moves when it lands.
+  nothing moves when it lands. (Amended 2026-10-25: the preview now draws its image as wide as
+  its fields, or smaller to keep them in view ([0090](0090-preview-column.md)), up to 976
+  points at the widest preview, so a 128-point thumbnail would be drawn scaled up, blurred.
+  Column view works out, at each layout, the longest side the preview could draw its image at,
+  its width inside the insets or its height inside the margins, whichever is longer, since a
+  portrait image's aspect isn't known before it is made, and sets it as
+  `Pane.previewImageSide`, rounded up to 64 points (`ColumnPreview.imageSide`) so a resize of a
+  few points asks for nothing, and at most `ColumnPreview.largestImageSide`, 512 points: 1024
+  pixels at scale 2, about 3 MB for a 4:3 photo. The trail asks for the thumbnail at that side;
+  a column view 560 points tall or more asks for 512. When the side grows, by a grip's drag or
+  a taller window, the trail asks again for the file shown, keeping its thumbnail, not the icon,
+  until the larger one lands, and keeping it if that one fails; a smaller side asks for nothing.
+  The rules above stand: off the main thread, the preview's request first in its volume's
+  slots, cancelled on change, local volumes only, given up after 5 s. A thumbnail landing after
+  the hold now replaces a type icon drawn as large, a bigger jump than in the 128-point square,
+  and a thumbnail of another aspect than the icon's resizes the image, moving the fields below
+  it. How much longer Quick Look takes to make a 1024-pixel thumbnail the first time than a
+  256-pixel one wasn't measured; if it often passes the 100 ms hold, first previews show their
+  icon before it, which the by-hand check of a photo folder should show.)
 - **The CV.12 hold waits for the thumbnail too.** A newly previewed file is held until its info
   is read and its thumbnail made, or `previewHold` (100 ms) passes. A local thumbnail, 1–28 ms,
   lands inside it, so the file shows with its thumbnail from its first frame and no icon flashes

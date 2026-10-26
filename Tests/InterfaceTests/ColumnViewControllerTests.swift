@@ -853,7 +853,9 @@ private struct LoadingThirdColumn {
         view.frame.size == NSSize(width: Settings.defaultColumnWidth, height: last.height))
     #expect(fixture.controller.columnsView.frame.width >= view.frame.maxX)
     #expect(view.iconView.image === iconCache.icon(for: preview.kind.type))
-    #expect(view.iconView.frame.size == NSSize(width: 128, height: 128))
+    // Scaled up from the icon's size, square, as Finder draws a type icon.
+    #expect(view.iconView.frame.width == view.iconView.frame.height)
+    #expect(view.iconView.frame.width > ColumnPreview.defaultImageSide)
     #expect(view.nameField.stringValue == "x.txt")
     #expect(view.summaryField.stringValue == "\(preview.kind.text) – 1 byte")
     #expect(view.modifiedField.stringValue == EntryCellFormatter().longDate(testDate))
@@ -886,6 +888,96 @@ private struct LoadingThirdColumn {
     #expect(view.iconView.image?.size == NSSize(width: 128, height: 128))
     fixture.controller.view.layoutSubtreeIfNeeded()
     #expect(view.iconView.frame == square)
+}
+
+/// A pane at `/Volumes/r`, holding `photo.jpg`, in a column view `height` points tall whose
+/// service makes thumbnails with `maker`, with `photo.jpg` previewed and its thumbnail, `image`,
+/// shown.
+@MainActor
+private func photoPreview(
+    height: Double, maker: GatedThumbnailMaker, image: CGImage
+) async throws -> (Fixture, ColumnPreviewView) {
+    var folders = tree
+    folders["/Volumes/r"] = [file("photo.jpg")]
+    maker.answer("/Volumes/r/photo.jpg", with: image)
+    let fixture = await Fixture(folders: folders, thumbnails: ThumbnailService(maker: maker))
+    fixture.controller.view.frame.size.height = height
+    fixture.controller.view.layoutSubtreeIfNeeded()
+    await fixture.select("photo.jpg", inColumn: 0)
+    let view = try #require(fixture.controller.previewView)
+    await settle { view.iconView.image?.size.width == Double(image.width) / 2 }
+    fixture.controller.view.layoutSubtreeIfNeeded()
+    return (fixture, view)
+}
+
+/// The bottom of the preview's last field shown, in its scrolled document's flipped coordinates.
+@MainActor
+private func fieldsBottom(_ view: ColumnPreviewView) throws -> Double {
+    let document = try #require(view.scrollView.documentView)
+    let last = view.rows[view.rows.count - 1]
+    return Double(last.convert(last.bounds, to: document).maxY)
+}
+
+/// Dylan: "always show preview images so that they are scaled to fill the width of the preview
+/// space, unless that would push the metadata down, in which case it should be scaled down a
+/// bit, like finder does". A landscape photo in a tall preview is as wide as the fields.
+@MainActor @Test func aThumbnailFillsThePreviewsWidth() async throws {
+    let (fixture, view) = try await photoPreview(
+        height: 800, maker: GatedThumbnailMaker(), image: testThumbnail(pixels: 1024, height: 768))
+
+    let width = Settings.defaultColumnWidth - 24
+    #expect(Double(view.iconView.frame.width) == width)
+    #expect(Double(view.iconView.frame.height) == (width * 0.75).rounded())
+    #expect(try fieldsBottom(view) <= Double(view.scrollView.contentSize.height))
+    #expect(fixture.trail.preview?.thumbnail != nil)
+}
+
+/// A portrait photo as wide as the fields would push them below the preview's bottom: it is
+/// scaled down, keeping its aspect, so the last Information row ends inside the preview.
+@MainActor @Test func aTallThumbnailIsScaledDownToKeepTheFieldsInView() async throws {
+    let (_, view) = try await photoPreview(
+        height: 400, maker: GatedThumbnailMaker(), image: testThumbnail(pixels: 600, height: 1200))
+
+    let image = view.iconView.frame
+    #expect(image.width < Settings.defaultColumnWidth - 24)
+    #expect(abs(image.height - 2 * image.width) <= 2)
+    #expect(image.height > ColumnPreviewView.smallestImageSide)
+    #expect(try fieldsBottom(view) <= Double(view.scrollView.contentSize.height))
+    #expect(try fieldsBottom(view) >= Double(view.scrollView.contentSize.height) - 24 - 2)
+}
+
+/// The thumbnail is asked for as large as the preview can draw it, at Retina scale, rather than
+/// scaled up from a small one; a wider preview asks again for the file shown, which keeps its
+/// thumbnail until the larger one lands.
+@MainActor @Test func thePreviewAsksForAThumbnailAsLargeAsItDraws() async throws {
+    let maker = GatedThumbnailMaker()
+    let small = testThumbnail(pixels: 512, height: 384)
+    let (fixture, view) = try await photoPreview(height: 400, maker: maker, image: small)
+    let path = "/Volumes/r/photo.jpg"
+    // The preview's requests, not the row's.
+    func sides() -> [Double] {
+        maker.calls.filter { $0.side >= ColumnPreview.imageSideStep }.map(\.side)
+    }
+    // 262 points wide, or 352 tall inside the margins, rounded up to a step.
+    #expect(sides() == [384])
+    #expect(maker.calls.allSatisfy { $0.scale == ThumbnailService.scale })
+    let before = maker.calls.count
+    let large = testThumbnail(pixels: 1024, height: 768)
+    maker.answer(path, with: large)
+    var shown: [CGImage?] = []
+    let controller = fixture.controller
+    fixture.pane.onChange = {
+        controller.paneDidChange()
+        shown.append(fixture.trail.shownPreview?.thumbnail)
+    }
+
+    drag(try #require(fixture.controller.previewGrip), by: 300)
+
+    #expect(await maker.waitForCalls(before + 1))
+    #expect(sides() == [384, ColumnPreview.largestImageSide])
+    await settle { fixture.trail.shownPreview?.thumbnail === large }
+    #expect(shown.allSatisfy { $0 === small || $0 === large }, "\(shown)")
+    await settle { view.iconView.image?.size.width == 512 }
 }
 
 @MainActor @Test func aFolderOrNoSelectionHidesThePreviewAndTheNextFileReusesIt() async throws {

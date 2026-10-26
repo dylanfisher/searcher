@@ -138,6 +138,15 @@ public final class Pane {
     /// Where the trail in column mode waits out `ColumnTrail.openDelay`. Tests pass a clock they
     /// advance.
     var columnOpenClock: any Clock<Duration> = ContinuousClock()
+    /// The side, in points, the trail in column mode asks the preview's thumbnail for: the
+    /// largest the preview can draw its image, as column view lays it out, rounded by
+    /// `ColumnPreview.imageSide(drawingAtMost:)`. A larger side asks again for the file shown,
+    /// which keeps its thumbnail until the larger one lands (0102-thumbnails.md).
+    public var previewImageSide = ColumnPreview.defaultImageSide {
+        didSet {
+            if previewImageSide > oldValue { columnTrail?.previewImageSideDidGrow() }
+        }
+    }
     /// Where the trail in column mode waits out `ColumnTrail.previewHold`. Tests pass a clock
     /// they advance.
     var previewHoldClock: any Clock<Duration> = ContinuousClock()
