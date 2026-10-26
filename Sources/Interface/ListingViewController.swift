@@ -34,6 +34,20 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     public let pane: Pane
     /// Edits the selected entry's name over its row, for Rename.
     private(set) lazy var renameField = RenameFieldController(list: self)
+    /// The name whose label the rename field covers, hidden so it doesn't show through the
+    /// field; nil while the field doesn't show.
+    var coveredName: String? {
+        didSet {
+            guard coveredName != oldValue, let listing else { return }
+            let column = tableView.column(withIdentifier: SortColumn.name.identifier)
+            tableView.enumerateAvailableRowViews { rowView, row in
+                guard row < listing.count,
+                    let cell = rowView.view(atColumn: column) as? NSTableCellView
+                else { return }
+                cell.textField?.isHidden = listing[row].name == coveredName
+            }
+        }
+    }
 
     /// The rows on screen: the pane's listing when `paneDidChange` last ran; nil while it has none.
     public private(set) var listing: Listing?
@@ -443,6 +457,9 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         tableView.doubleAction = #selector(openClickedRow(_:))
         tableView.contextMenu = { [weak self] row in self?.contextMenu(forRow: row) }
         tableView.pressedSelectedRow = { [weak self] in self?.pane.pressSelectedFolder() }
+        tableView.rowStyleDidChange = { [weak self] rowView in
+            self?.renameField.rowStyleDidChange(rowView)
+        }
         let promiseTypes = NSFilePromiseReceiver.readableDraggedTypes.map {
             NSPasteboard.PasteboardType($0)
         }
@@ -760,6 +777,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
                 ?? iconCache.icon(for: listing.kind(atRow: row).type)
             showFolderChevron(listing[row].type == .directory, in: cell)
             showNotDownloadedBadge(listing[row].isDataless, in: cell)
+            cell.textField?.isHidden = listing[row].name == coveredName
         }
         cell.textField?.stringValue = text(column, row: row, in: listing)
         cell.alphaValue = cutNames.contains(listing[row].name) ? Self.cutAlpha : 1
@@ -875,11 +893,18 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         }
     }
 
+    /// A row view that keeps its selection emphasized while the rename field has the keys.
+    public func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        tableView.makeView(withIdentifier: ListingRowView.identifier, owner: self)
+            as? ListingRowView ?? ListingRowView()
+    }
+
     /// Labels each row view the table adds, its cells already filled, so a label is built only
-    /// for the rows on screen.
+    /// for the rows on screen, and emphasizes its selection if the table keeps it so.
     public func tableView(
         _ tableView: NSTableView, didAdd rowView: NSTableRowView, forRow row: Int
     ) {
+        (rowView as? ListingRowView)?.updateEmphasis()
         guard let listing, row < listing.count else { return }
         label(rowView, row: row, in: listing)
     }
@@ -926,10 +951,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// row refilled in place, may have shown another entry's badge.
     private func showNotDownloadedBadge(_ shown: Bool, in cell: NSTableCellView) {
         let badge = Self.badge(in: cell)
-        // Left of the chevron when the cell shows one.
-        let badgeX =
-            cell.bounds.width - 2 - badge.frame.width
-            - (Self.chevron(in: cell).map { $0.isHidden ? 0 : Self.chevronReserve } ?? 0)
+        let badgeX = Self.badgeX(cellWidth: cell.bounds.width, chevron: Self.showsChevron(cell))
         if badge.frame.minX != badgeX {
             badge.frame.origin.x = badgeX
         }
@@ -952,20 +974,35 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         (cell as? ColumnNameCellView)?.chevron
     }
 
+    private static func showsChevron(_ cell: NSTableCellView) -> Bool {
+        chevron(in: cell).map { !$0.isHidden } ?? false
+    }
+
+    /// Where a name cell `cellWidth` wide puts its badge: at its trailing edge, left of the
+    /// chevron when it shows one.
+    private static func badgeX(cellWidth: Double, chevron: Bool) -> Double {
+        cellWidth - 2 - badgeSize - (chevron ? chevronReserve : 0)
+    }
+
+    /// Where the name ends in a name cell `cellWidth` wide: before the badge when it shows,
+    /// else before the chevron when it shows, else at the trailing padding.
+    private static func nameEnd(cellWidth: Double, chevron: Bool, badge: Bool) -> Double {
+        if badge { return badgeX(cellWidth: cellWidth, chevron: chevron) - badgeGap }
+        if chevron { return cellWidth - chevronInset - chevronWidth - badgeGap }
+        return cellWidth - 2
+    }
+
     /// Sets the name's width from the cell's: up to the badge when it shows, else up to the
     /// chevron when it shows, else up to the trailing padding. Set outright, since autoresizing
     /// clamps a width at zero in a column narrower than the name and the badge, and widening the
     /// column doesn't give that back.
     private static func fitName(in cell: NSTableCellView) {
-        let badge = badge(in: cell)
         guard let textField = cell.textField else {
             preconditionFailure("the name cell has no text field: \(cell.subviews)")
         }
-        let end =
-            badge.isHidden
-            ? (chevron(in: cell).flatMap { $0.isHidden ? nil : $0.frame.minX - badgeGap }
-                ?? cell.bounds.width - 2)
-            : badge.frame.minX - badgeGap
+        let end = nameEnd(
+            cellWidth: cell.bounds.width, chevron: showsChevron(cell),
+            badge: !badge(in: cell).isHidden)
         let width = max(end - textField.frame.minX, 0)
         if textField.frame.width != width {
             textField.frame.size.width = width
@@ -996,15 +1033,26 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         renameField.layout()
     }
 
-    /// Where `row`'s name is drawn, in the table's coordinates: the Name column after the icon.
+    /// The frame of `row`'s name label, in the table's coordinates: in the Name column after
+    /// the icon, centered in the row, and ending where `fitName` ends it for the row's entry.
     func nameFrame(atRow row: Int) -> NSRect {
+        guard let listing, row < listing.count else {
+            preconditionFailure("no row \(row) to frame the name of")
+        }
         let column = tableView.column(withIdentifier: SortColumn.name.identifier)
         precondition(column >= 0, "the table has no Name column")
         let cell = tableView.frameOfCell(atColumn: column, row: row)
+        let entry = listing[row]
+        let end = Self.nameEnd(
+            cellWidth: cell.width, chevron: showsNamesOnly && entry.type == .directory,
+            badge: entry.isDataless)
         return NSRect(
-            x: cell.minX + Self.nameX, y: cell.minY,
-            width: max(cell.width - Self.nameX - 2, 0), height: cell.height)
+            x: cell.minX + Self.nameX, y: cell.minY + (cell.height - Self.labelHeight) / 2,
+            width: max(end - Self.nameX, 0), height: Self.labelHeight)
     }
+
+    /// The height of every cell's text field, a label's in `nameFont`.
+    private static let labelHeight = NSTextField(labelWithString: "").intrinsicContentSize.height
 
     /// The font of every name cell's text, which `makeCell` leaves at a label's default.
     static let nameFont: NSFont = {
@@ -1087,7 +1135,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         let textField = NSTextField(labelWithString: "")
         textField.lineBreakMode = column == .name ? .byTruncatingMiddle : .byTruncatingTail
         textField.alignment = column.alignment
-        let textHeight = textField.intrinsicContentSize.height
+        let textHeight = Self.labelHeight
         textField.frame = NSRect(
             x: textX, y: (height - textHeight) / 2, width: column.width - textX - 2,
             height: textHeight)
