@@ -62,7 +62,10 @@ stacked single-column tables over `NSBrowser`.
   is scrolled from the left end: the focused column, with the one right of it where that fits,
   ends at the right edge and the columns above it fill the view to its left. A trail shown
   before the view had a width scrolled to nothing, so the view scrolls again, once, when it
-  first gets one. See [0103](0103-column-trail-from-the-root.md).)
+  first gets one. See [0103](0103-column-trail-from-the-root.md).) (Amended 2026-10-25: a
+  navigation, Back or Forward that starts the trail again keeps the columns both trails show,
+  so the view keeps their controllers and animates the scroll from where it is; only a trail
+  from another root, which keeps none, jumps. See [0103](0103-column-trail-from-the-root.md).)
 - **`PaneViewController`** holds the list and the columns in the same place and shows one by the
   pane's view mode. It builds `CommandContext` with `commandPane`, the filter field calls
   `setFilter` on it, and Quick Look toggles the focused column's controller. The path bar and Go

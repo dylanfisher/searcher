@@ -365,19 +365,50 @@ final class ClipAnimation {
 }
 
 @MainActor @Test func aNewTrailJumpsToItsFocus() async throws {
-    let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)
+    var folders = tree
+    folders["/Volumes/s"] = [file("s.txt")]
+    let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20, folders: folders)
     await fixture.openThreeColumns()
     fixture.trail.moveRight()
     fixture.trail.moveRight()
     let log = fixture.logScrolls()
     fixture.controller.reduceMotion = { false }
 
-    // A workspace or a Go to folder replaces every column.
-    fixture.pane.navigate(to: Location(path: "/Volumes/r/other"))
+    // A Go to folder on another volume keeps no column.
+    fixture.pane.navigate(to: Location(path: "/Volumes/s"))
     await settle { fixture.trail.focused.pane.state.isLoaded }
 
     #expect(!log.requests.isEmpty)
     #expect(log.requests.allSatisfy { !$0.animated })
+}
+
+/// A navigation, Back or Forward to a folder outside the trail keeps the views of the columns
+/// both trails show, so they don't redraw, and scrolls to the new focus as a move within the
+/// trail does (0103-column-trail-from-the-root.md).
+@MainActor @Test func aNewTrailFromTheSameRootKeepsTheSharedColumnsViews() async throws {
+    let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)
+    await fixture.openThreeColumns()
+    fixture.trail.moveRight()
+    fixture.trail.moveRight()
+    let first = fixture.controller.columnControllers[0]
+    let log = fixture.logScrolls()
+    fixture.controller.reduceMotion = { false }
+
+    fixture.pane.navigate(to: Location(path: "/Volumes/r/other"))
+    await settle { fixture.trail.focused.pane.state.isLoaded }
+
+    #expect(fixture.controller.columnControllers.count == 2)
+    #expect(fixture.controller.columnControllers[0] === first)
+    #expect(first.view.superview != nil)
+    #expect(fixture.tables[0].selectedRowIndexes == [2])
+    #expect(!log.requests.isEmpty)
+    #expect(log.requests.allSatisfy { $0.animated })
+
+    fixture.pane.goBack()
+
+    #expect(fixture.controller.columnControllers.count == 3)
+    #expect(fixture.controller.columnControllers[0] === first)
+    #expect(fixture.tables[0].selectedRowIndexes == [1])
 }
 
 @MainActor @Test func theSelectionMovesAtOnceWhileTheScrollAnimates() async throws {
