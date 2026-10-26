@@ -628,9 +628,12 @@ final class ColumnViewController: NSViewController {
     /// Shows the trail's shown preview right of the last column, making its view the first time,
     /// or hides it when there is none. While a newly previewed file's info is first read, that
     /// is what showed before it, so a local file's rows don't show empty first
-    /// (0095-preview-metadata.md).
+    /// (0095-preview-metadata.md). Text selected in the preview that has the keys gives them
+    /// back to the focused column when the preview hides or its text changes, so
+    /// the keys never stay in text that is gone or changed (0090-preview-column.md).
     private func showPreview() {
         guard let preview = pane.columnTrail?.shownPreview else {
+            if previewView?.textHasKeys == true { returnKeysToFocusedColumn() }
             previewView?.isHidden = true
             return
         }
@@ -638,6 +641,9 @@ final class ColumnViewController: NSViewController {
             previewView
             ?? {
                 let view = ColumnPreviewView(iconCache: iconCache, formatter: formatter)
+                view.returnKeys = { [weak self] event in
+                    self?.returnKeysToFocusedColumn(passing: event)
+                }
                 columnsView.addSubview(view)
                 previewView = view
                 let separator = NSBox()
@@ -649,8 +655,22 @@ final class ColumnViewController: NSViewController {
                 previewGrip = grip
                 return view
             }()
+        // A thumbnail landing changes no text.
+        let textChanges =
+            view.shown?.location != preview.location || view.shown?.entry != preview.entry
+            || view.shown?.info != preview.info
+        if textChanges, view.textHasKeys { returnKeysToFocusedColumn() }
         view.show(preview)
         view.isHidden = false
+    }
+
+    /// Makes the focused column's table first responder, taking the keys from the preview's
+    /// text, and has it handle `event`, an arrow pressed there, as its own.
+    private func returnKeysToFocusedColumn(passing event: NSEvent? = nil) {
+        guard let table = focusedController?.tableView, let window = view.window,
+            window.makeFirstResponder(table)
+        else { return }
+        if let event { table.keyDown(with: event) }
     }
 
     /// The side of a column's small spinner, and its distance from the column's bottom and right

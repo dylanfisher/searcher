@@ -64,6 +64,22 @@ final class ColumnPreviewView: NSView {
     let rows: [InformationRow]
     /// The file last shown, so a change that leaves it as it was sets no field.
     private(set) var shown: ColumnPreview?
+    /// Gives the keys back to the focused column, from the preview's text: Esc, Tab and
+    /// Shift-Tab pass nil, ↑ and ↓ their key press, which the column then takes as its own.
+    var returnKeys: @MainActor (NSEvent?) -> Void = { _ in }
+
+    /// The fields whose text can be selected: the name, the kind line, the values and the tags.
+    var selectableFields: [NSTextField] {
+        [nameField, summaryField] + rows.map(\.value) + [tagsField]
+    }
+
+    /// Whether one of the preview's fields has the keys, through the window's field editor.
+    var textHasKeys: Bool {
+        guard let editor = window?.firstResponder as? NSText,
+            let field = editor.delegate as? NSTextField
+        else { return false }
+        return selectableFields.contains { $0 === field }
+    }
 
     private let formatter: EntryCellFormatter
     private let iconCache: TypeIconCache
@@ -158,17 +174,31 @@ final class ColumnPreviewView: NSView {
         let fieldsWidth = max(bounds.width - 2 * Self.inset, 0)
         let size = iconView.image?.size ?? .zero
         let aspect = size.width > 0 && size.height > 0 ? size.width / size.height : 1
-        let tagsHeight =
-            tagsField.isHidden
-            ? 0
-            : stack.customSpacing(after: rowStack) + tagsTitleField.fittingSize.height
-                + stack.spacing + tagsField.fittingSize.height
-        let fieldsHeight = stack.fittingSize.height - imageHeight.constant - tagsHeight
-        let room = bounds.height - 2 * Self.margin - fieldsHeight
+        let room = bounds.height - 2 * Self.margin - fieldsHeight()
         let height = min(fieldsWidth / aspect, max(room, Self.smallestImageSide))
         let width = min(height * aspect, fieldsWidth).rounded()
         if imageWidth.constant != width { imageWidth.constant = width }
         if imageHeight.constant != height.rounded() { imageHeight.constant = height.rounded() }
+    }
+
+    /// The height of the fields from the image's bottom to the last Information row's, worked
+    /// out from each field's own height at the wrap widths `setFrameSize` set and the stack's
+    /// spacing, as the stack lays them out. Measuring each field's text costs a few
+    /// microseconds; asking the stack for its fitting size solved its layout again, about 0.2 ms
+    /// a call in a debug build, on every frame of a grip's drag.
+    private func fieldsHeight() -> Double {
+        let padding = Self.rowPadding
+        let rows = rows.reduce(0.0) { sum, row in
+            sum
+                + max(
+                    row.titleField.intrinsicContentSize.height,
+                    row.value.intrinsicContentSize.height) + 2 * padding + 1
+        }
+        return [nameField, summaryField, informationField].reduce(
+            stack.customSpacing(after: iconView) + rows
+        ) { sum, field in
+            sum + field.intrinsicContentSize.height + stack.customSpacing(after: field)
+        }
     }
 
     private func build() {
@@ -189,6 +219,7 @@ final class ColumnPreviewView: NSView {
             field.isSelectable = true
             field.isEditable = false
         }
+        for field in selectableFields { field.delegate = self }
         tagsTitleField.isHidden = true
         tagsField.isHidden = true
 
@@ -285,6 +316,46 @@ final class ColumnPreviewView: NSView {
     private static let inset = 12.0
     /// The space above the image and below the last field.
     private static let margin = 24.0
+}
+
+extension ColumnPreviewView: NSTextFieldDelegate {
+    /// Keys in the preview's selected text that would otherwise leave no way back to the
+    /// columns by keyboard: Esc, Tab and Shift-Tab give the focused column the keys, and ↑ and
+    /// ↓ give it the keys and move its selection, as they would have there. Shift-arrows still
+    /// extend the text's selection, and Cmd-C copies it (0090-preview-column.md).
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector)
+        -> Bool
+    {
+        switch selector {
+        case #selector(NSResponder.cancelOperation(_:)), #selector(NSResponder.insertTab(_:)),
+            #selector(NSResponder.insertBacktab(_:)):
+            returnKeys(nil)
+        case #selector(NSResponder.moveUp(_:)):
+            returnKeys(Self.arrowPress(NSUpArrowFunctionKey, in: window))
+        case #selector(NSResponder.moveDown(_:)):
+            returnKeys(Self.arrowPress(NSDownArrowFunctionKey, in: window))
+        default:
+            return false
+        }
+        return true
+    }
+
+    /// The key press being handled when it is the arrow `key`, or else one made for it: a
+    /// command can reach the field editor without a key press, as from a test.
+    private static func arrowPress(_ key: Int, in window: NSWindow?) -> NSEvent? {
+        let characters = String(Character(Unicode.Scalar(UInt16(key))!))
+        if let event = NSApp.currentEvent, event.type == .keyDown,
+            event.charactersIgnoringModifiers == characters
+        {
+            return event
+        }
+        return NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [.numericPad, .function],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window?.windowNumber ?? 0, context: nil, characters: characters,
+            charactersIgnoringModifiers: characters, isARepeat: false,
+            keyCode: key == NSUpArrowFunctionKey ? 126 : 125)
+    }
 }
 
 /// One row of the preview's Information section, as Finder draws it: its title at the left in

@@ -1725,13 +1725,19 @@ extension PressFixture {
     /// A press at `point`, in `view`'s coordinates, sent to the view hit there, as
     /// `NSWindow.sendEvent` does, with its mouse up queued first so any tracking ends at once.
     /// `selectsText` says the press lands on selectable text, whose tracking keeps the mouse up.
+    /// The up is stamped 50 ms after the down, as a real click's is: `NSTextView` takes the up
+    /// before its tracking starts when the press lands in the field's selection, as on a value
+    /// no wider than its text, and drops one stamped no later than its down, so its tracking
+    /// then waits for an up that never comes (0090-preview-column.md).
     func press(at point: NSPoint, in view: NSView, selectsText: Bool = false) throws {
         let window = fixture.window
         let location = view.convert(point, to: nil)
+        let now = ProcessInfo.processInfo.systemUptime
         func event(_ type: NSEvent.EventType) throws -> NSEvent {
             try #require(
                 NSEvent.mouseEvent(
-                    with: type, location: location, modifierFlags: [], timestamp: 0,
+                    with: type, location: location, modifierFlags: [],
+                    timestamp: type == .leftMouseUp ? now + 0.05 : now,
                     windowNumber: window.windowNumber, context: nil, eventNumber: 0,
                     clickCount: 1, pressure: 1))
         }
@@ -1792,6 +1798,11 @@ extension PressFixture {
         #expect(!title.isSelectable, "\(title.stringValue)")
     }
 
+    // A value no wider than its text, which a press stamped like its down hung on.
+    preview.lastOpenedField.stringValue = ColumnPreviewView.noDate
+    container.layoutSubtreeIfNeeded()
+    #expect(preview.lastOpenedField.frame.width < 20)
+
     for field in plain {
         try press.focusRightPane()
 
@@ -1800,15 +1811,16 @@ extension PressFixture {
         #expect(press.leftPane.isFocused, "a press on \(type(of: field)) at \(field.frame)")
         #expect(press.fixture.window.firstResponder === controller.keyView, "\(field)")
     }
+    for field in selectable where !field.stringValue.isEmpty {
+        try press.focusRightPane()
 
-    try press.focusRightPane()
-    try press.press(
-        at: press.shownCenter(of: preview.nameField, in: container), in: container,
-        selectsText: true)
+        try press.press(
+            at: press.shownCenter(of: field, in: container), in: container, selectsText: true)
 
-    #expect(press.leftPane.isFocused)
-    #expect(preview.nameField.currentEditor() != nil)
-    #expect(press.fixture.window.firstResponder === preview.nameField.currentEditor())
+        #expect(press.leftPane.isFocused, "a press on \(field.stringValue)")
+        #expect(field.currentEditor() != nil, "\(field.stringValue)")
+        #expect(press.fixture.window.firstResponder === field.currentEditor())
+    }
 }
 
 /// Text selected in the preview has the keys; a press on the preview's empty space gives them
@@ -1832,6 +1844,71 @@ extension PressFixture {
     #expect(press.fixture.window.firstResponder === column.tableView)
     #expect(preview.nameField.currentEditor() == nil)
     column.tableView.keyDown(with: try arrow(NSDownArrowFunctionKey, []))
+    #expect(column.pane.selection.cursor == ExactName("docs"))
+}
+
+extension PressFixture {
+    /// Selects the left pane's preview name's text with a press, so its field editor has the
+    /// keys, and returns the editor and the focused column.
+    func selectPreviewText(
+        in controller: PaneViewController
+    ) throws -> (NSTextView, ListingViewController) {
+        let preview = try #require(controller.columnViewController.previewView)
+        let column = try #require(controller.columnViewController.focusedController)
+        try press(
+            at: shownCenter(of: preview.nameField, in: controller.view), in: controller.view,
+            selectsText: true)
+        let editor = try #require(fixture.window.firstResponder as? NSTextView)
+        #expect(editor === preview.nameField.currentEditor())
+        return (editor, column)
+    }
+}
+
+/// Text selected in the preview has the keys, but Esc, Tab and Shift-Tab give them back to the
+/// focused column, leaving its selection as it was.
+@MainActor @Test func escAndTabInThePreviewsTextGiveTheColumnItsKeys() async throws {
+    let press = try await PressFixture()
+    defer { press.fixture.window.orderOut(nil) }
+    let controller = try await press.showPreviewInLeftPane()
+    let keys: [(String, NSEvent)] = [
+        ("Esc", try keyEvent("\u{1B}")), ("Tab", try keyEvent("\t")),
+        ("Shift-Tab", try keyEvent("\u{19}", modifiers: .shift)),
+    ]
+
+    for (name, key) in keys {
+        let (editor, column) = try press.selectPreviewText(in: controller)
+
+        editor.keyDown(with: key)
+
+        #expect(press.fixture.window.firstResponder === column.tableView, "\(name)")
+        #expect(column.pane.selection.cursor == ExactName("a.txt"), "\(name)")
+    }
+}
+
+/// ↓ in the preview's text gives the focused column the keys and moves its selection, as ↓
+/// there does; Shift-↓ extends the text's selection and keeps the keys in the text, and the
+/// selected text can be copied.
+@MainActor @Test func arrowsInThePreviewsTextMoveTheColumnsSelection() async throws {
+    let press = try await PressFixture()
+    defer { press.fixture.window.orderOut(nil) }
+    let controller = try await press.showPreviewInLeftPane()
+    let (editor, column) = try press.selectPreviewText(in: controller)
+
+    editor.keyDown(with: try arrow(NSDownArrowFunctionKey, .shift))
+    #expect(press.fixture.window.firstResponder === editor)
+    editor.selectAll(nil)
+    #expect(
+        editor.attributedSubstring(forProposedRange: editor.selectedRange(), actualRange: nil)?
+            .string == "a.txt")
+    // Cmd-C's Copy reaches the text that has the keys, which takes it; the window controller
+    // leaves it alone.
+    let copy = NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+    #expect(editor.validateMenuItem(copy))
+    #expect(!press.fixture.controller.validateMenuItem(copy))
+
+    editor.keyDown(with: try arrow(NSDownArrowFunctionKey, []))
+
+    #expect(press.fixture.window.firstResponder === column.tableView)
     #expect(column.pane.selection.cursor == ExactName("docs"))
 }
 
