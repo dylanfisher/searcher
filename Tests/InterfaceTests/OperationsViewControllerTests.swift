@@ -102,6 +102,49 @@ private func snapshot(
     #expect(topEdge == OperationsViewController.firstRowTopInset)
 }
 
+/// The rows' own 9 pt insets already part them, so the gap and the first row's extra room are
+/// small: rows read apart, not loose (Dylan, 2026-10-26).
+@MainActor @Test func theGapBetweenRowsAndAboveTheFirstIsSmall() {
+    #expect(OperationsViewController.rowGap == 4)
+    #expect(OperationsViewController.firstRowTopInset == 2)
+}
+
+/// Each row button fills a rounded shape under the mouse, a darker one while pressed, and none
+/// while disabled, and its tracking area tells it when the mouse comes and goes.
+@MainActor @Test func theRowButtonsShowHoverPressedAndDisabledStates() throws {
+    let fixture = Fixture()
+    fixture.controller.show([snapshot(1, .running)])
+    let row = try fixture.row(1)
+
+    for button in [row.pauseButton, row.cancelButton] {
+        #expect(
+            button.trackingAreas.contains {
+                $0.owner === button && $0.options.contains(.mouseEnteredAndExited)
+            })
+        #expect(button.fill == nil)
+        let entered = try #require(
+            NSEvent.enterExitEvent(
+                with: .mouseEntered, location: .zero, modifierFlags: [], timestamp: 0,
+                windowNumber: 0, context: nil, eventNumber: 0, trackingNumber: 0, userData: nil))
+        button.mouseEntered(with: entered)
+        #expect(button.isHovered)
+        #expect(button.fill == HoverButton.hoverFill)
+        button.highlight(true)
+        #expect(button.fill == HoverButton.pressedFill)
+        button.highlight(false)
+        button.isEnabled = false
+        #expect(button.fill == nil)
+        button.isEnabled = true
+        let exited = try #require(
+            NSEvent.enterExitEvent(
+                with: .mouseExited, location: .zero, modifierFlags: [], timestamp: 0,
+                windowNumber: 0, context: nil, eventNumber: 0, trackingNumber: 0, userData: nil))
+        button.mouseExited(with: exited)
+        #expect(!button.isHovered)
+        #expect(button.fill == nil)
+    }
+}
+
 @MainActor @Test func aRowWithoutATotalShowsAMovingBar() throws {
     let fixture = Fixture()
 

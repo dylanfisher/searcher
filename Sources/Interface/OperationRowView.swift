@@ -12,9 +12,9 @@ final class OperationRowView: NSView {
     let detailLabel = NSTextField(labelWithString: "")
     let bar = NSProgressIndicator()
     /// Pause while the operation runs, Resume while it is paused.
-    let pauseButton = NSButton()
+    let pauseButton = HoverButton()
     /// Cancel while the operation is unfinished, Clear once it has finished.
-    let cancelButton = NSButton()
+    let cancelButton = HoverButton()
 
     var onPause: @MainActor () -> Void = {}
     var onResume: @MainActor () -> Void = {}
@@ -232,9 +232,6 @@ final class OperationRowView: NSView {
         bar.minValue = 0
         bar.maxValue = 1
         for button in [pauseButton, cancelButton] {
-            button.bezelStyle = .accessoryBarAction
-            button.isBordered = false
-            button.imagePosition = .imageOnly
             button.target = self
         }
         pauseButton.action = #selector(pauseClicked(_:))
