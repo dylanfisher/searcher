@@ -98,12 +98,17 @@ other-pane confirm names nothing, and two Cmd-Shift-C presses ask two questions 
   empty or not, until the user closes it, so a copy ending in another window never closes it.
   Turning the setting on while an empty panel that showed itself is up hides it. Off, the empty
   panel stays and says "No operations".
-- **Insets.** Each row sits 9 pt from the panel's sides, `Margin.standard`, shared with the
-  path bar so its first folder lines up with the rows' text, and 9 pt above and below (12 and 6
-  until 2026-10-23, when Dylan asked for less across and more up and down). Rows sit
-  `OperationsViewController.rowGap` (4 pt) apart beyond those insets, and the first has
-  `firstRowTopInset` (2 pt) more above it, so rows read apart but not loose. They were 12 and
-  10 pt from 2026-10-25 until 2026-10-26, when Dylan found the gap and the top margin too big.
+- **Insets.** Each row's content sits `Margin.standard` (9 pt) from the panel's sides, shared
+  with the path bar so its first folder lines up with the rows' text. The first row's content
+  sits the same 9 pt below the panel's top, the last row's 9 pt above its bottom, and rows sit
+  9 pt apart: the panel's stack keeps the margin above, below and between rows, and a row has
+  no inset of its own above or below. The "No operations" line has none, centered in its own
+  height. (Amended 2026-10-26, Dylan: "update so top and bottom margins, and gaps between
+  multiple operations, match the left margin". Until then each row had 9 pt above and below
+  itself, rows sat `rowGap` (4 pt) apart beyond that and the first had `firstRowTopInset`
+  (2 pt) more above it: 11 pt at the top, 22 pt between rows and 9 pt at the bottom. Before
+  2026-10-26 the gap and the extra top room were 12 and 10 pt, and before 2026-10-23 a row's
+  insets were 12 across and 6 up and down.)
 - **Row buttons** are `HoverButton`s, with a hover, pressed, focused and disabled look
   ([0110](0110-interaction-states.md)).
 - **Size.** The panel is as tall as its rows, up to 200 pt (about three rows), past which they

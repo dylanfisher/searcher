@@ -247,8 +247,9 @@ final class OperationRowView: NSView {
         row.distribution = .fill
         row.alignment = .centerY
         row.spacing = 8
+        // The panel keeps the room above, below and between rows.
         row.edgeInsets = NSEdgeInsets(
-            top: 9, left: Margin.standard, bottom: 9, right: Margin.standard)
+            top: 0, left: Margin.standard, bottom: 0, right: Margin.standard)
         row.translatesAutoresizingMaskIntoConstraints = false
         addSubview(row)
         NSLayoutConstraint.activate([

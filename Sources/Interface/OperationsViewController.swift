@@ -23,10 +23,6 @@ final class OperationsViewController: NSViewController {
     static let maxHeight: CGFloat = 200
     /// The height of the line saying there are no operations.
     private static let emptyHeight: CGFloat = 32
-    /// The gap between one row and the next, beyond the rows' own insets.
-    static let rowGap: CGFloat = 4
-    /// The room above the first row, beyond its own inset.
-    static let firstRowTopInset: CGFloat = 2
 
     /// What the row buttons send for an operation.
     struct Control {
@@ -135,7 +131,9 @@ final class OperationsViewController: NSViewController {
     override func loadView() {
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = Self.rowGap
+        // Rows sit the margin their text has from the sides from each other and, by
+        // `showEmpty`, from the panel's top and bottom.
+        stack.spacing = Margin.standard
         stack.translatesAutoresizingMaskIntoConstraints = false
         let document = FlippedView()
         document.translatesAutoresizingMaskIntoConstraints = false
@@ -203,10 +201,14 @@ final class OperationsViewController: NSViewController {
         showEmpty(wasEmpty: wasEmpty)
     }
 
-    /// Shows the empty line while there are no rows, and says so when the last one left.
+    /// Shows the empty line while there are no rows, and says so when the last one left. The
+    /// rows have the margin above and below them; the empty line, centered in its own height,
+    /// has none.
     private func showEmpty(wasEmpty: Bool) {
         emptyRow.isHidden = !rows.isEmpty
-        stack.edgeInsets.top = rows.isEmpty ? 0 : Self.firstRowTopInset
+        let margin = rows.isEmpty ? 0 : Margin.standard
+        stack.edgeInsets.top = margin
+        stack.edgeInsets.bottom = margin
         if rows.isEmpty, !wasEmpty { onEmptied?() }
     }
 
