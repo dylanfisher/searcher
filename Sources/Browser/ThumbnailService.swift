@@ -62,6 +62,15 @@ public final class ThumbnailService: Sendable {
         cache.value(for: Self.key(path, entry, side))
     }
 
+    /// The largest thumbnail kept of `entry`, the file at `path`, smaller than `side` points,
+    /// such as a row's, for the preview to show scaled while its own is made; nil when none is
+    /// kept. Reads no file.
+    public func cachedSmaller(at path: String, entry: DirectoryEntry, than side: Double)
+        -> CGImage?
+    {
+        cache.largestSmaller(than: Self.key(path, entry, side))
+    }
+
     /// The thumbnail of `entry`, the file at `path` on `volume`, at `side` points, from the cache
     /// or made and kept there; nil when the file has none, took `giveUp`, or is on a network
     /// volume. A request `first` waits ahead of the others for its volume's slot, as the
