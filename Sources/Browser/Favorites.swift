@@ -116,6 +116,13 @@ public final class Favorites {
             guard let self else { return }
             resolving.remove(favorite.path)
             apply(resolution, to: favorite)
+            // A favorite removed and added again at this path while it was looked for is a new
+            // one, which the find didn't apply to and `insert` couldn't look for meanwhile.
+            if let added = settings.favorites.first(where: { $0.path == favorite.path }),
+                states[added.path] == nil
+            {
+                look(for: added)
+            }
         }
     }
 
