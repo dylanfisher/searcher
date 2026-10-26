@@ -64,10 +64,16 @@ bus, the startup disk with it, so the startup disk isn't listed. A volume mounte
   their folders again at once and get new monitors, through the did-mount path
   (`VolumeEvents.ejectFailed`).
 - **The whole disk only for its last volume.** A volume on this machine that is the only one
-  mounted from its whole disk, browsable or not, ejects the disk (`allPartitionsAndEjectDisk`),
-  which detaches a disk image, as Finder's button does. The whole disk comes from the device
-  name the mount table already gives (`/dev/disk5s2` is on `disk5`), with no read. A volume
-  that shares its disk with another mounted volume is unmounted alone, and so is a share.
+  mounted from its physical disk, browsable or not, ejects the disk
+  (`allPartitionsAndEjectDisk`), which detaches a disk image, as Finder's button does. A
+  volume's whole disk comes from the device name the mount table gives (`/dev/disk5s2` is on
+  `disk5`). Its physical disk comes from the I/O Registry, read in the same pass off the main
+  thread: the whole disk of the first media above the whole disk with a BSD name, which for an
+  APFS container's synthesized disk is its physical store (`disk3` is on `disk0s2`, so
+  `disk0`); a disk with no media above it, as a plain partitioned disk or a disk image, is its
+  own. So an HFS or ExFAT partition beside an APFS container counts as sharing the disk. A
+  volume that shares its physical disk with another mounted volume is unmounted alone, and so
+  is a share.
 - **Toggle.** `Settings.showsLocationsInSidebar`, on by default, stored and discarded as
   0107's group toggles are, with View ▸ Show Locations in Sidebar between the other two.
 - **Keys.** 0089's routing is unchanged: group rows can't be selected, so the arrows move from
@@ -95,9 +101,9 @@ bus, the startup disk with it, so the startup disk isn't listed. A volume mounte
 ## Consequences
 
 Ejecting a volume on a disk with other volumes mounted unmounts it alone, without Finder's
-question; ejecting the last one then ejects the disk. An APFS volume is on its container's
-synthesized disk, so a volume of another format on the same physical disk isn't seen as
-sharing it: ejecting the last APFS volume ejects the physical disk, and unmounts that other
-volume without asking. Telling them apart needs Disk Arbitration's disk tree. A volume on this machine that stops answering
-holds the next read of the list until it answers. A share mounted twice under one name shows
+question; ejecting the last one then ejects the disk. Hidden volumes count: an external disk
+with macOS installed may have its Preboot or VM volume mounted `MNT_DONTBROWSE`, which the
+sidebar doesn't list, so ejecting its last listed volume unmounts that volume alone and the
+disk stays attached until the hidden ones go, where Finder would eject the disk. A volume on
+this machine that stops answering holds the next read of the list until it answers. A share mounted twice under one name shows
 the mount point's name, "main 1", where Finder would show the server.
