@@ -292,10 +292,15 @@ private func receiver(of item: NSMenuItem, in window: NSWindow) throws -> NSResp
 @MainActor
 private final class SheetLog {
     var presented: [(sheet: NSWindow, over: NSWindow)] = []
+    /// The windows the prompter brought forward for a sheet.
+    var broughtForward: [NSWindow] = []
 
     init(_ windows: WorkspaceWindows) {
         windows.prompter.present = { [unowned self] sheet, window in
             presented.append((sheet, window))
+        }
+        windows.prompter.bringForward = { [unowned self] window in
+            broughtForward.append(window)
         }
         windows.prompter.dismiss = { _ in }
     }
@@ -669,6 +674,9 @@ private func stopEverything(_ windows: WorkspaceWindows) async {
     await settle { sheets.presented.count == 1 }
 
     #expect(sheets.presented.first?.over === first.window)
+    // The window behind is brought forward, so the sheet doesn't wait where no one sees it.
+    #expect(sheets.broughtForward.count == 1)
+    #expect(sheets.broughtForward.first === first.window)
     await stopEverything(fixture.windows)
 }
 

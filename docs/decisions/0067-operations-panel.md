@@ -34,10 +34,12 @@ other-pane confirm names nothing, and two Cmd-Shift-C presses ask two questions 
   first as a sheet on the window that lists its operation, or, before a snapshot has shown it,
   the one that queued it (`FileOperationQueue.workspace(of:)`); the other-pane confirm, asked
   before anything is queued, goes on the most recently active window
-  (`WorkspaceList.workspaces.first`). Until 2026-10-26 every question went there. The
-  next shows when it is answered. With no window open a question waits, and the next window to
-  open shows it. Each question is an awaited call, never a modal loop, so other windows keep
-  their keys while a sheet is up.
+  (`WorkspaceList.workspaces.first`). Until 2026-10-26 every question went there. A window
+  that isn't key is brought forward first, out of the Dock if minimized and from another Space,
+  as `makeKeyAndOrderFront` does: the sheet's window may be behind another, and a sheet no one
+  sees would hold every later question. The next shows when it is answered. With no window open
+  a question waits, and the next window to open shows it. Each question is an awaited call,
+  never a modal loop, so other windows keep their keys while a sheet is up.
 - **Closing questions.** A snapshot that shows an operation finished closes its question, shown
   or waiting, and a question asked about an operation already seen finished returns at once. The
   queue drops what either returns. Cancel on the conflict sheet cancels the operation through the
@@ -52,9 +54,9 @@ other-pane confirm names nothing, and two Cmd-Shift-C presses ask two questions 
   `Dialog.rowSheet`; their hand-built panels were replaced on 2026-10-23
   ([0076](0076-dialogs.md)).
 - **The panel** sits under the panes of every window and lists the window's operations, from
-  snapshots only; its buttons send pause, resume and cancel to the queue by ID. A finished operation leaves
-  it, except one that failed, was refused or left part of an item behind: that row shows the
-  error with its full path until the user clears it.
+  snapshots only; its buttons send pause, resume and cancel to the queue by ID. A finished
+  operation leaves it, except one that failed, was refused or left part of an item behind: that
+  row shows the error with its full path until the user clears it.
 - **Failed rows outlive their window.** `WorkspaceWindows` keeps the uncleared ones, so a
   window that takes over a closed window's operations lists them, and a failure reported while
   no window was open shows in the next one. A cleared row is gone for good. Until 2026-10-26
@@ -73,13 +75,13 @@ other-pane confirm names nothing, and two Cmd-Shift-C presses ask two questions 
   later tick the bytes left are divided by the rate since that sample; when that leaves 2 s or
   more (`longEstimate`), the panel shows then, on the tick after the first sampled one, about
   100 ms (one snapshot interval) after that sample rather than after the operation started; a
-  pre-scan comes first. Paused, stalled or not yet running, sampling starts over. The rule uses the rate, not the size or the volume
-  kind: a same-volume copy of 6 GB is an APFS clone that ends in one tick, and a copy to a fast
-  share can be quicker than one to a slow USB disk. 2 s rather than 1 s because the first tick's
-  rate can be off by half, as a network write fills its buffers; at 2 s a copy estimated long
-  still runs about 1 s after the panel shows, so it doesn't flicker. A copy estimated shorter,
-  and anything without bytes to count (trash, rename, a pre-scan still running), waits the 1 s
-  as before.
+  pre-scan comes first. Paused, stalled or not yet running, sampling starts over. The rule uses
+  the rate, not the size or the volume kind: a same-volume copy of 6 GB is an APFS clone that
+  ends in one tick, and a copy to a fast share can be quicker than one to a slow USB disk. 2 s
+  rather than 1 s because the first tick's rate can be off by half, as a network write fills
+  its buffers; at 2 s a copy estimated long still runs about 1 s after the panel shows, so it
+  doesn't flicker. A copy estimated shorter, and anything without bytes to count (trash,
+  rename, a pre-scan still running), waits the 1 s as before.
 - **Hiding when empty.** `Settings.hideEmptyOperationsPanel`, on by default, as Finder shows
   no panel while idle: a panel that showed itself hides when its last row leaves, cleared or
   finished, and shows again by the rule above. A panel the user opened with Operations stays,
