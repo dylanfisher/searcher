@@ -176,8 +176,8 @@ private final class FirstReadGate: @unchecked Sendable {
     let new = disk(mountPoint + "-new")
     let gate = FirstReadGate(first: [old], later: [new])
     let volumes = SidebarVolumes(read: gate.read, eject: { _ in })
-    // The list's own first read is the one held.
-    await settle { gate.readsStarted == 1 }
+    // The read held started before the mount event's, so it is the older one.
+    await settle { gate.readsStarted >= 1 }
 
     VolumeEvents.didMount(at: mountPoint)
     await settle { volumes.volumes == [new] }
