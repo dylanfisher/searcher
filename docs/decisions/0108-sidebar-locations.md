@@ -47,6 +47,9 @@ bus, the startup disk with it, so the startup disk isn't listed. A volume mounte
   `SidebarInternalDisk` for another internal disk, and `SidebarExternalDisk` for a disk off the
   internal bus and for a disk image; SF Symbols (`externaldrive`,
   `externaldrive.connected.to.line.below`) show until they are read, or if the bundle lacks one.
+  A missing glyph falls back silently, as 0107 says. An optical disc shows the removable-disk
+  glyph, since nothing in `SidebarVolume` says it is optical media, though the bundle has
+  `SidebarOpticalDisk`. Tinted as 0107's.
   The row also has the name, and Finder's eject
   button on each row that can be ejected (`canEject`: a share, a removable or ejectable disk,
   or one not on an internal bus). Every listed row can be ejected, as in Finder's default
