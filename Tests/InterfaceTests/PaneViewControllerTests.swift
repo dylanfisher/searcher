@@ -890,6 +890,32 @@ private final class WindowFixture {
     withExtendedLifetime(controller) {}
 }
 
+/// Until the Settings window can change them, shortcuts are set with `defaults write`; the
+/// pane's keys follow what is stored (docs/decisions/0106-primary-and-alternate-shortcuts.md).
+@MainActor @Test func aShortcutWrittenToTheDefaultsChangesWhatAKeyRunsInThePane() async throws {
+    let folder = try TemporaryFolder("PaneViewControllerTests")
+    let defaults = temporarySuite(in: folder.url.path)
+    defaults.set(["view.toggleHidden": ["primary": "cmd+j"]], forKey: "shortcuts")
+    let settings = Settings(defaults: defaults)
+    let pane = Pane(
+        location: Location(path: "/root"),
+        service: ListingService(lister: StubLister(Fixture.folders)),
+        systemActions: StubSystemActions(), settings: settings, isFocused: true)
+    let table = ListingTableView()
+    table.beep = {}
+    let controller = PaneViewController(
+        pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
+        tableView: table, monitorsFolders: false)
+    await settle { pane.state.isLoaded }
+
+    table.keyDown(with: try keyEvent(".", modifiers: [.command, .shift]))
+    #expect(!settings.showHidden)
+
+    table.keyDown(with: try keyEvent("j", modifiers: .command))
+    #expect(settings.showHidden)
+    withExtendedLifetime(controller) {}
+}
+
 /// `keyboardFocusIndicatorColor` is a lighter blue in Dark Mode. The ring is a layer's border,
 /// whose `CGColor` is fixed when it is set, so it is resolved again when the appearance changes.
 @MainActor @Test func theFocusRingTakesTheColorOfThePanesAppearance() throws {

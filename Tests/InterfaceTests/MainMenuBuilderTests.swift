@@ -841,3 +841,12 @@ private func usKey(
     #expect(table.validateMenuItem(undo))
     #expect(!table.validateMenuItem(redo))
 }
+
+/// The always-on standard items' chords are reserved; the text-editing ones a command may share.
+@MainActor @Test func theReservedChordsAreTheNonTextEditingStandardItems() {
+    #expect(
+        MainMenuBuilder.reservedChords == [
+            KeyChord("q", modifiers: .command), KeyChord("h", modifiers: .command),
+            KeyChord("h", modifiers: [.option, .command]), KeyChord("m", modifiers: .command),
+        ])
+}

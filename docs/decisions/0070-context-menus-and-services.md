@@ -100,3 +100,11 @@ same writer, so a change to Copy's pasteboard shape changes all three.
 
   Services that take files and aren't limited to Finder already show in the context menu
   (above). A Quick Actions submenu waits for a public API.
+
+## Amendment: the preset is a default alternate (2026-10-26)
+
+`AppCommands.registry(commanderFKeys:)` and `PaneViewController`'s two registries are gone.
+While the setting is on, each F-key is its command's default alternate, which none of the four
+has otherwise; the user's own alternate replaces it, and removing it is stored
+([0106](0106-primary-and-alternate-shortcuts.md)). `PaneViewController.registry(for:)` makes
+the registry again only when the setting or the shortcuts change, not per key.

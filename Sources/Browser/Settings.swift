@@ -26,6 +26,7 @@ public final class Settings {
         case showsFavoritesInSidebar
         case showsLocationsInSidebar
         case showsWorkspacesInSidebar
+        case shortcuts
     }
 
     /// Where the palette's panel sits on a screen, as Spotlight remembers where it was dragged
@@ -145,8 +146,8 @@ public final class Settings {
                 changed: terminalBundleID != oldValue)
         }
     }
-    /// Whether the Commander F-key preset is on: F5 to F8 run the file commands in
-    /// `FileCommands.commanderFKeys`, beside their own keys. Off by default.
+    /// Whether the Commander F-key preset is on: F5 to F8 are the default alternates of the file
+    /// commands in `FileCommands.commanderFKeys`. Off by default.
     public var commanderFKeys: Bool {
         didSet {
             store(commanderFKeys, for: .commanderFKeys, changed: commanderFKeys != oldValue)
@@ -222,6 +223,28 @@ public final class Settings {
             store(
                 showsWorkspacesInSidebar, for: .showsWorkspacesInSidebar,
                 changed: showsWorkspacesInSidebar != oldValue)
+        }
+    }
+
+    /// The user's changes to the commands' chords, by command; empty by default. A command
+    /// missing from it keeps its defaults. Each override is kept in one form: a slot set to
+    /// what its default gives is `.standard`, and an override with both slots `.standard` is
+    /// left out, so it is never written (docs/decisions/0106-primary-and-alternate-shortcuts.md).
+    /// `KeyBindings` applies them.
+    ///
+    /// - Precondition: every ID is a command's in `AppCommands.commands`.
+    public var shortcuts: [CommandID: ShortcutOverride] {
+        didSet {
+            let normal = Self.normalized(shortcuts, dropUnknown: false)
+            if normal != shortcuts { shortcuts = normal }
+            guard shortcuts != oldValue else { return }
+            let key = Key.shortcuts.rawValue
+            if shortcuts.isEmpty {
+                defaults.removeObject(forKey: key)
+                notifyObservers()
+            } else {
+                store(Self.stored(shortcuts), for: .shortcuts, changed: true)
+            }
         }
     }
 
@@ -319,6 +342,7 @@ public final class Settings {
         showsFavoritesInSidebar = Self.bool(.showsFavoritesInSidebar, in: defaults) ?? true
         showsLocationsInSidebar = Self.bool(.showsLocationsInSidebar, in: defaults) ?? true
         showsWorkspacesInSidebar = Self.bool(.showsWorkspacesInSidebar, in: defaults) ?? true
+        shortcuts = Self.shortcuts(in: defaults)
         // The key `newWindowFrame` replaced (0057-windows-and-tear-out.md).
         defaults.removeObject(forKey: "newWindowSize")
     }
@@ -331,6 +355,10 @@ public final class Settings {
     private func store(_ value: Any, for key: Key, changed: Bool) {
         guard changed else { return }
         defaults.set(value, forKey: key.rawValue)
+        notifyObservers()
+    }
+
+    private func notifyObservers() {
         observers.removeAll { $0.owner == nil }
         for observer in observers {
             observer.handler()
@@ -428,6 +456,65 @@ public final class Settings {
         }
         defaults.removeObject(forKey: key)
         return nil
+    }
+
+    /// The shortcuts stored under their key: a dictionary of command IDs to overrides in their
+    /// stored shape. Empty when there is none, or when it or any override in it has another
+    /// shape, and the whole key is removed, as for `favorites`. An entry for an ID no command
+    /// has, as after a command is renamed, is a change of the code rather than bad data: only
+    /// that entry is removed.
+    private static func shortcuts(in defaults: UserDefaults) -> [CommandID: ShortcutOverride] {
+        let key = Key.shortcuts.rawValue
+        guard let value = defaults.object(forKey: key) else { return [:] }
+        if let dictionary = value as? [String: Any] {
+            let overrides = dictionary.compactMapValues(ShortcutOverride.init(stored:))
+            if overrides.count == dictionary.count {
+                let read = Dictionary(
+                    uniqueKeysWithValues: overrides.map { (CommandID($0.key), $0.value) })
+                let known = normalized(read, dropUnknown: true)
+                if known != read {
+                    if known.isEmpty {
+                        defaults.removeObject(forKey: key)
+                    } else {
+                        defaults.set(stored(known), forKey: key)
+                    }
+                }
+                return known
+            }
+        }
+        defaults.removeObject(forKey: key)
+        return [:]
+    }
+
+    /// `shortcuts` with each override `ShortcutOverride.normalized(for:preset:)` and those that
+    /// change nothing left out. With `dropUnknown`, an ID no command has is left out too;
+    /// without it, one stops at a precondition.
+    private static func normalized(
+        _ shortcuts: [CommandID: ShortcutOverride], dropUnknown: Bool
+    ) -> [CommandID: ShortcutOverride] {
+        guard !shortcuts.isEmpty else { return shortcuts }
+        let commands = Dictionary(
+            AppCommands.commands.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var normal: [CommandID: ShortcutOverride] = [:]
+        for (id, override) in shortcuts {
+            guard let command = commands[id] else {
+                precondition(dropUnknown, "no command has the ID \(id)")
+                continue
+            }
+            let kept = override.normalized(
+                for: command, preset: FileCommands.commanderFKeys[id])
+            if !kept.isStandard {
+                normal[id] = kept
+            }
+        }
+        return normal
+    }
+
+    /// `shortcuts` in their stored shape, by the IDs' raw values.
+    private static func stored(_ shortcuts: [CommandID: ShortcutOverride]) -> [String: [String:
+        String]]
+    {
+        Dictionary(uniqueKeysWithValues: shortcuts.map { ($0.key.rawValue, $0.value.stored) })
     }
 
     /// The string stored under `key`; nil when there is none or it has another type, which is

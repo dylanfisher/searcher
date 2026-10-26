@@ -33,8 +33,10 @@ public enum FileCommands: CommandSet {
         id: CommandID("file.moveToOtherPane"), title: "Move to Other Pane",
         chords: [KeyChord("m", modifiers: [.command, .shift])])
 
-    /// The Commander F-key preset: the chord each command gets, after its own, while
-    /// `Settings.commanderFKeys` is on. F5 and F6 ask first, as Cmd-Shift-C and M do.
+    /// The Commander F-key preset: the default alternate each command gets while
+    /// `Settings.commanderFKeys` is on, which none has otherwise; the user's own alternate
+    /// replaces it (docs/decisions/0106-primary-and-alternate-shortcuts.md). F5 and F6 ask
+    /// first, as Cmd-Shift-C and M do.
     public static let commanderFKeys: [CommandID: KeyChord] = [
         copyToOtherPane.id: KeyChord(.function(5)),
         moveToOtherPane.id: KeyChord(.function(6)),
