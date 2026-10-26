@@ -218,6 +218,42 @@ public enum MainMenuBuilder {
         return Set(([appMenu("")] + menus).flatMap(chords))
     }()
 
+    /// The commands each menu runs, in menu bar order, those of its submenus in their places and
+    /// the Edit items' commands included; menus with none are left out. The Settings window
+    /// lists the commands so.
+    static let commandsByMenu: [(menu: String, commands: [CommandID])] = {
+        func commands(in menu: Menu) -> [CommandID] {
+            menu.items.flatMap { item -> [CommandID] in
+                switch item {
+                case .command(let id): [id]
+                case .standard(let standard): standard.command.map { [$0] } ?? []
+                case .submenu(let submenu): commands(in: submenu)
+                case .openWith, .separator: []
+                }
+            }
+        }
+        return ([appMenu("")] + menus).compactMap { menu in
+            let ids = commands(in: menu)
+            return ids.isEmpty ? nil : (menu.title, ids)
+        }
+    }()
+
+    /// The commands whose items show no chords (`Menu.showsChords`), such as the row keys: their
+    /// chords reach them from the table's `keyDown` only.
+    static let commandsWithoutMenuChords: Set<CommandID> = {
+        func commands(in menu: Menu, showsChords: Bool) -> [CommandID] {
+            let shows = showsChords && menu.showsChords
+            return menu.items.flatMap { item -> [CommandID] in
+                switch item {
+                case .command(let id): shows ? [] : [id]
+                case .submenu(let submenu): commands(in: submenu, showsChords: shows)
+                case .standard, .openWith, .separator: []
+                }
+            }
+        }
+        return Set(menus.flatMap { commands(in: $0, showsChords: true) })
+    }()
+
     /// The menus after the app menu, in menu bar order. A menu with no items is left out of the
     /// bar until a step gives it some, unless the system fills it.
     static let menus = [

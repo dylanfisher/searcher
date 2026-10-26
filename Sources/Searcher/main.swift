@@ -5,7 +5,7 @@ import Interface
 import os
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, SettingsShowing {
     /// Listings of network folders, kept in the user's caches folder; nil in a bench launch,
     /// which must not read or write the user's stores and brings its own service.
     private let cache: ListingCache?
@@ -22,6 +22,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         service: service, systemActions: systemActions, settings: settings,
         folderSizes: folderSizes, clipboard: PasteboardFileClipboard(pasteboard: .general),
         store: workspaceStore, cache: cache)
+    /// The one Settings window, made the first time App ▸ Settings… asks for it.
+    private lazy var settingsWindow = SettingsWindowController(settings: settings)
     private let bench: UIBench?
     /// The windows' workspaces and the session, in the user's application support folder; nil
     /// in a bench launch.
@@ -191,6 +193,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             preconditionFailure("menu item \"\(sender.title)\" reached the app without a window")
         }
         openHomeWindow()
+    }
+
+    /// App ▸ Settings… brings the one Settings window to the front, making it the first time.
+    func showSettings(_ sender: Any?) {
+        settingsWindow.show()
     }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {

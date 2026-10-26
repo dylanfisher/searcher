@@ -267,3 +267,12 @@ private func fixedBindings(_ overrides: [CommandID: ShortcutOverride] = [:]) thr
         bindings.assign([cmdJ], to: copy.id, at: .alternate)
             == .assigned([copy.id: ShortcutOverride(alternate: .chord(cmdJ))]))
 }
+
+@Test func removingASlotStoresItRemovedUnlessItIsAFixedPrimary() throws {
+    let bindings = try fixedBindings()
+
+    #expect(
+        bindings.remove(from: palette.id, at: .alternate)
+            == .assigned([palette.id: ShortcutOverride(alternate: .removed)]))
+    #expect(bindings.remove(from: copy.id, at: .primary) == .fixedPrimary)
+}

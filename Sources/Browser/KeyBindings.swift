@@ -266,4 +266,18 @@ public struct KeyBindings: Sendable {
         overrides[id, default: ShortcutOverride()][position] = .chord(chord)
         return .assigned(overrides)
     }
+
+    /// Removes the chord of `id`'s slot at `position`: `.assigned` with the slot `.removed`, or
+    /// `.fixedPrimary` for the slot of a fixed primary, which can't be removed.
+    ///
+    /// - Precondition: `id` is registered.
+    public func remove(from id: CommandID, at position: ShortcutOverride.Position) -> Assignment {
+        precondition(registry.command(for: id) != nil, "\(id) isn't registered")
+        if position == .primary, fixed.values.contains(id) {
+            return .fixedPrimary
+        }
+        var overrides = self.overrides
+        overrides[id, default: ShortcutOverride()][position] = .removed
+        return .assigned(overrides)
+    }
 }

@@ -134,20 +134,26 @@ public final class PaneViewController: NSViewController {
         columnViewController.focusedController ?? listingViewController
     }
 
-    /// The settings the last registry was made for, and that registry.
-    private static var madeRegistry:
-        (shortcuts: [CommandID: ShortcutOverride], commanderFKeys: Bool, registry: CommandRegistry)?
+    /// The settings the last bindings were made for, and those bindings.
+    private static var madeBindings:
+        (shortcuts: [CommandID: ShortcutOverride], commanderFKeys: Bool, bindings: KeyBindings)?
 
-    /// The app's commands with the chords `settings` gives them: the Commander F-key preset
-    /// while it is on and the user's shortcuts (`AppCommands.keyBindings(settings:reserved:fixed:)`),
-    /// with `MainMenuBuilder.reservedChords` kept for the menus and the Edit items' chords
-    /// (`MainMenuBuilder.fixedChords`) kept for their commands. Made again only when those
-    /// settings change, never per key; the menus use the same one.
+    /// The app's commands with the chords `settings` gives them: `keyBindings(for:)`'s registry.
+    /// The menus use the same one.
     public static func registry(for settings: Settings) -> CommandRegistry {
-        if let made = madeRegistry, made.shortcuts == settings.shortcuts,
+        keyBindings(for: settings).registry
+    }
+
+    /// The bindings `settings` gives the app's commands: the Commander F-key preset while it is
+    /// on and the user's shortcuts (`AppCommands.keyBindings(settings:reserved:fixed:)`), with
+    /// `MainMenuBuilder.reservedChords` kept for the menus and the Edit items' chords
+    /// (`MainMenuBuilder.fixedChords`) kept for their commands. Made again only when those
+    /// settings change, never per key; the Settings window records chords against the same ones.
+    public static func keyBindings(for settings: Settings) -> KeyBindings {
+        if let made = madeBindings, made.shortcuts == settings.shortcuts,
             made.commanderFKeys == settings.commanderFKeys
         {
-            return made.registry
+            return made.bindings
         }
         let bindings: KeyBindings
         do {
@@ -161,8 +167,8 @@ public final class PaneViewController: NSViewController {
         for dropped in bindings.dropped {
             logger.error("\(dropped.description, privacy: .public)")
         }
-        madeRegistry = (settings.shortcuts, settings.commanderFKeys, bindings.registry)
-        return bindings.registry
+        madeBindings = (settings.shortcuts, settings.commanderFKeys, bindings)
+        return bindings
     }
 
     /// The commands the keys run, with the chords the settings give them.
