@@ -1724,7 +1724,8 @@ extension PressFixture {
 
     /// A press at `point`, in `view`'s coordinates, sent to the view hit there, as
     /// `NSWindow.sendEvent` does, with its mouse up queued first so any tracking ends at once.
-    func press(at point: NSPoint, in view: NSView) throws {
+    /// `selectsText` says the press lands on selectable text, whose tracking keeps the mouse up.
+    func press(at point: NSPoint, in view: NSView, selectsText: Bool = false) throws {
         let window = fixture.window
         let location = view.convert(point, to: nil)
         func event(_ type: NSEvent.EventType) throws -> NSEvent {
@@ -1737,8 +1738,11 @@ extension PressFixture {
         let content = try #require(window.contentView)
         let frameView = try #require(content.superview)
         let hit = try #require(content.hitTest(frameView.convert(location, from: nil)))
+        if selectsText {
+            try #require(hit is NSTextField, "the press hits \(hit), not selectable text")
+        }
         nonisolated(unsafe) let down = try event(.leftMouseDown)
-        try performRealPress(releasedBy: try event(.leftMouseUp)) {
+        try performRealPress(releasedBy: try event(.leftMouseUp), selectsText: selectsText) {
             hit.mouseDown(with: down)
         }
     }
@@ -1769,28 +1773,66 @@ extension PressFixture {
     #expect(focusedColumn.selectedRowIndexes == rowsBefore)
 }
 
+/// Dylan: "the text in finder's preview is selectable - ours should be too." The name, the kind
+/// line, the Information values and the tags select their text on a press, as Finder's do, and
+/// can't be edited; the press takes the keys into the text and focuses its pane. A press on the
+/// image or a title, which aren't selectable, gives the focused column the keys.
 @MainActor @Test func aPressOnEveryFieldOfThePreviewFocusesItsPane() async throws {
     let press = try await PressFixture()
     defer { press.fixture.window.orderOut(nil) }
     let controller = try await press.showPreviewInLeftPane()
     let preview = try #require(controller.columnViewController.previewView)
     let container = controller.view
-    let fields: [NSView] =
-        [preview.iconView, preview.nameField, preview.summaryField]
-        + preview.rows.flatMap { [$0.titleField, $0.value] }
-    // A selectable field would take the keys and track the press itself.
-    for case let field as NSTextField in fields + [preview.tagsField] {
-        try #require(!field.isSelectable, "\(field.frame) is selectable")
+    let selectable = [preview.nameField, preview.summaryField] + preview.rows.map(\.value)
+    let plain: [NSView] = [preview.iconView] + preview.rows.map(\.titleField)
+    for field in selectable + [preview.tagsField] {
+        #expect(field.isSelectable && !field.isEditable, "\(field.stringValue)")
+    }
+    for title in preview.rows.map(\.titleField) {
+        #expect(!title.isSelectable, "\(title.stringValue)")
     }
 
-    for field in fields {
+    for field in plain {
         try press.focusRightPane()
 
         try press.press(at: press.shownCenter(of: field, in: container), in: container)
 
         #expect(press.leftPane.isFocused, "a press on \(type(of: field)) at \(field.frame)")
-        #expect(press.fixture.window.firstResponder === controller.keyView)
+        #expect(press.fixture.window.firstResponder === controller.keyView, "\(field)")
     }
+
+    try press.focusRightPane()
+    try press.press(
+        at: press.shownCenter(of: preview.nameField, in: container), in: container,
+        selectsText: true)
+
+    #expect(press.leftPane.isFocused)
+    #expect(preview.nameField.currentEditor() != nil)
+    #expect(press.fixture.window.firstResponder === preview.nameField.currentEditor())
+}
+
+/// Text selected in the preview has the keys; a press on the preview's empty space gives them
+/// back to the focused column, and ↓ moves its selection again.
+@MainActor @Test func aPressPastThePreviewsTextGivesTheColumnItsArrowsBack() async throws {
+    let press = try await PressFixture()
+    defer { press.fixture.window.orderOut(nil) }
+    let controller = try await press.showPreviewInLeftPane()
+    let preview = try #require(controller.columnViewController.previewView)
+    let container = controller.view
+    let column = try #require(controller.columnViewController.focusedController)
+    try press.press(
+        at: press.shownCenter(of: preview.nameField, in: container), in: container,
+        selectsText: true)
+    #expect(preview.nameField.currentEditor() != nil)
+
+    let shown = container.convert(preview.bounds, from: preview).intersection(container.bounds)
+    try press.press(
+        at: NSPoint(x: shown.maxX - 4, y: shown.minY + PathBarView.height + 10), in: container)
+
+    #expect(press.fixture.window.firstResponder === column.tableView)
+    #expect(preview.nameField.currentEditor() == nil)
+    column.tableView.keyDown(with: try arrow(NSDownArrowFunctionKey, []))
+    #expect(column.pane.selection.cursor == ExactName("docs"))
 }
 
 @MainActor @Test func aPressInAColumnViewsGapsAndBarsFocusesItsPane() async throws {

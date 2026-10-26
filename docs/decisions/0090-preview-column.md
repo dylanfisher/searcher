@@ -127,7 +127,20 @@ bar's buttons, the filter field, the rename field, Access Denied's button.
 The preview's name, tags and values were selectable wrapping labels. A selectable label takes the
 keys and tracks the mouse itself, so a press on its text would not have reached the pane; they are
 no longer selectable. Finder's preview text is not selectable either, as recalled; Dylan to
-confirm. A press on empty space below a table's rows is left to AppKit, which clears the selection in
+confirm. (Amended 2026-10-25: Dylan confirmed the opposite, "the text in finder's preview is
+selectable - ours should be too". The name, the kind line, the Information values and the tags
+are selectable again, and not editable; the Information titles, the section headers and the
+image aren't. A press on selectable text starts AppKit's text selection, which makes the
+field's editor first responder; that view is inside the pane, so
+`BrowserWindowController.firstResponderDidChange` focuses the pane, as a press anywhere in it
+does. While the text has the keys, arrows move in the text and Cmd-C copies it, as in a text
+field. A press on a row, or on the preview's empty space, the gaps or the bars, gives the
+focused column its keys back, so arrows move the selection again (tested). The container's
+press still reaches nothing that takes presses itself, so a press on a title or the image
+gives the focused column the keys, as before. The tests press the name for real; a synthetic
+press on an Information value never ended, its text tracking waiting on a mouse up the test's
+queue had already given up, so the values and tags are checked as selectable instead.) A press
+on empty space below a table's rows is left to AppKit, which clears the selection in
 that table at mouse up, as Finder's columns do ([0077](0077-selection-history.md) relies on it);
 it is not tested, since the test windows are not key (0091) and AppKit selects nothing then. A
 press in the preview's empty space, the gaps or the bars changes no selection (tested).
