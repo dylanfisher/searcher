@@ -211,7 +211,7 @@ private let defaultPaths = [
 }
 
 /// Finds each favorite as `.folder` at its path, holding the finds of the paths in `held` until
-/// the test releases them, each on its own thread.
+/// the test releases them, each on its own thread; a released path isn't held again.
 private final class HeldResolver: @unchecked Sendable {
     private let gates: [String: DispatchSemaphore]
 
@@ -224,7 +224,11 @@ private final class HeldResolver: @unchecked Sendable {
     }
 
     func resolve(_ favorite: Favorite) -> Favorite.Resolution {
-        gates[favorite.path]?.wait()
+        if let gate = gates[favorite.path] {
+            // Passed on, so a released path stays open for the finds after it.
+            gate.wait()
+            gate.signal()
+        }
         return Favorite.Resolution(
             favorite: Favorite(path: favorite.path, bookmark: Data(favorite.path.utf8)),
             state: .folder)
@@ -268,4 +272,22 @@ private final class HeldResolver: @unchecked Sendable {
     #expect(favorites.items.map(\.path) == paths)
     #expect(favorites.items.allSatisfy { $0.state == .folder })
     #expect(try fixture.relaunched().favorites.map(\.path) == paths)
+}
+
+@MainActor @Test func aFavoriteRemovedAndAddedAgainWhileLookedForIsLookedForAgain() async throws {
+    let fixture = try Fixture()
+    let resolver = HeldResolver(holding: ["/Users/u/Desktop"])
+    let favorites = Favorites(settings: fixture.settings) { resolver.resolve($0) }
+    // Bookmarked, so the favorite added again, which has none yet, isn't the one looked for.
+    fixture.settings.favorites[1] = Favorite(path: "/Users/u/Desktop", bookmark: Data([9]))
+    favorites.refresh()
+    await settle { favorites.resolving == ["/Users/u/Desktop"] }
+
+    favorites.remove("/Users/u/Desktop")
+    favorites.insert(["/Users/u/Desktop"], at: 1)
+    resolver.release("/Users/u/Desktop")
+
+    await settle { favorites.items[1].state == .folder }
+    #expect(favorites.items.map(\.path) == defaultPaths)
+    #expect(favorites.resolving.isEmpty)
 }
