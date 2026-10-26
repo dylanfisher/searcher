@@ -40,6 +40,26 @@ focused folder only ([0041](0041-column-model.md), [0096](0096-column-widths.md)
   starts at its own `/volumes/x`; the root is spelled as the path spells it, since the columns
   are the path's folders. On a case-sensitive startup disk a folder `/volumes/x` that isn't
   `/Volumes/x` would start at itself, losing the columns above it; such a disk is rare.
+  (Amended 2026-10-25, Dylan: "add a preference to show directories relative to root user (like
+  finder) instead of / root (but you can still navigate up to root either way, like finder)":
+  with `Settings.columnsStartAtHome` on, the default, as Finder's column view starts a folder
+  in the home folder at the home folder, a trail for the home folder or a folder inside it
+  starts at the home folder, so its first column is `~`. `root(of:mountedVolumes:home:)` takes
+  the deeper of the volume's root and the home folder, compared by the same text rule, so a
+  share mounted at `~/mnt/share` still starts at its mount point, and a home folder on another
+  volume starts at the home folder. It needs no read: the home folder is `Settings.home`, the
+  one place it is read, which `~` in Go to Folder and the palette and a new window's folder
+  also use. The trail keeps the home folder it was built with, and the root check passes it to
+  `ListingService.trailRoot(of:home:)`, so the check doesn't add the columns above home back.
+  Off, a trail starts at the volume's root as above. Folders outside home, such as
+  `/Applications`, `/Users`, `/tmp` or `/Volumes/X`, start at the volume's root either way.
+  Turning the setting on or off restarts each open trail at the root its focused column's
+  folder has then, as a root check that answers differently does: the columns above home close,
+  or are added, each with the next folder selected; the focused column and the columns right of
+  it stay, nothing lists again but the added columns, and it is no step of the history. Finder
+  applies such view options to the windows it opens next; here every open column view follows
+  at once, as the other View menu settings do. `TabState` still keeps the focused folder only, so
+  a restore or a workspace load builds its trail with the setting as it is then.)
 - **The path's text, not the folder's real path.** The trail is the folders the path names. A
   path through a link keeps the link: `/tmp/a` shows `/`, `tmp`, `a`, with `tmp` a link in the
   `/` column, and `/Volumes/Macintosh HD/Users` (a link to `/`) shows `/`, `Volumes`,
@@ -81,7 +101,17 @@ focused folder only ([0041](0041-column-model.md), [0096](0096-column-widths.md)
   if that update had come.
 - **← at the root does nothing,** without a beep, as in Finder. Cmd-↑ is ← in column view
   ([0041](0041-column-model.md)), so it stops there too. ← no longer adds a parent's column: there
-  is none above the root.
+  is none above the root. (Amended 2026-10-25, Dylan: "but you can still navigate up to root
+  either way, like finder": ← in a first column at the home folder does nothing too, as Finder's
+  ← does in its leftmost column. Cmd-↑ there goes on up: the pane navigates to the home folder's
+  parent, selecting the home folder, as Finder's Enclosing Folder goes above the home folder, so
+  it is a step of the history and the new trail starts at that folder's root, `/`, with the
+  home folder selected in `Users` and its column open (`ColumnTrail.moveUp`). Everywhere else
+  Cmd-↑ is still ←, and at a volume's root it still does nothing, so with the setting off
+  nothing changes. The path bar, Go to Folder, the sidebar and Back reach `/` and `Users` as any
+  folder above the root: they navigate, and the trail is built at that folder by the rule. Back
+  to a folder the current trail shows still focuses its column, so Back from `/Users` to `~`
+  after a Cmd-↑ keeps the trail from `/`.)
 - **A path bar click focuses the column** that shows the clicked folder (`Pane.showFolderAbove`),
   as a click in that column does: no selection changes, the columns right of it stay, nothing
   lists again, and it is no step of the history. The pane's location, the path bar and the title
@@ -142,4 +172,6 @@ reads queue behind the destination's on the share's one read slot. A folder abov
 root is reached only from the path bar or Go to Folder.
 
 The path bar still starts at `/` ([0026](0026-path-bar.md)), so for a folder on `/Volumes/X` it
-shows `/` and `Volumes`, which have no columns. The trail's first column is `/Volumes/X`.
+shows `/` and `Volumes`, which have no columns. The trail's first column is `/Volumes/X`. With
+`Settings.columnsStartAtHome` on, the same holds for `/` and `Users` above the home folder, and
+a trail in the home folder lists two fewer folders on each navigation.

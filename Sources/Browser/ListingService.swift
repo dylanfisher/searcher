@@ -167,11 +167,12 @@ public final class ListingService: Sendable {
     }
 
     /// The folder column view's trail for `location` starts at, from the mount table, which it
-    /// reads on a `BlockingCallThread` without asking any volume (`ColumnTrail.root`).
-    public func trailRoot(of location: Location) async -> Location {
+    /// reads on a `BlockingCallThread` without asking any volume, and `home`, nil when trails
+    /// start at their volume's root (`ColumnTrail.root`).
+    public func trailRoot(of location: Location, home: Location?) async -> Location {
         let mountedVolumes = mountedVolumes
         return await BlockingCallThread.run {
-            ColumnTrail.root(of: location, mountedVolumes: mountedVolumes())
+            ColumnTrail.root(of: location, mountedVolumes: mountedVolumes(), home: home)
         }
     }
 

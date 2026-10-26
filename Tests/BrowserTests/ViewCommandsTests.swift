@@ -126,6 +126,19 @@ func aSortKeySortsByItsColumnAndTheSameKeyAgainReverses(
     await settle { pane.state.names == ["a"] }
 }
 
+@MainActor @Test func columnsStartAtHomeFolderTogglesTheSetting() throws {
+    let pane = PaneFixture(at: "/r", folders: ["/r": []]).pane
+    let binding = try #require(
+        AppCommands.bindings.first { $0.command == ViewCommands.toggleColumnsStartAtHome })
+    let isChecked = try #require(binding.isChecked)
+    #expect(isChecked(pane.settings))
+
+    try run(ViewCommands.toggleColumnsStartAtHome, on: pane)
+
+    #expect(!pane.settings.columnsStartAtHome)
+    #expect(!isChecked(pane.settings))
+}
+
 /// Select All, type-to-select and the status bar's counts read the rows, so a hidden .DS_Store
 /// is in none of them.
 @MainActor @Test func selectAllAndTypeToSelectSkipAHiddenDSStore() async throws {
