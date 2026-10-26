@@ -85,3 +85,14 @@ Listings keep hidden entries in memory while they are hidden: W2's 1% dot files 
 only once the full listing arrives. Whether AppKit's menu takes Cmd-Shift-. with a real key
 press is unchecked; the command runs either way. The table doesn't scroll to the cursor after
 a toggle, as it doesn't after a folder change patch.
+
+## Amendment: shortcuts (2026-10-26)
+
+`Settings.shortcuts` adds the key `shortcuts`, a dictionary of command IDs to the slots the user
+changed, with chords in `KeyChord.stored` spelling
+([0106](0106-primary-and-alternate-shortcuts.md)). It follows "stored data has one shape": a
+missing key is no overrides, an override equal to the default is never written, and data of
+another shape removes the key. An entry for an unknown command ID removes only that entry.
+Recording a chord checks every chord `KeyChord.candidates(for:)` gives the key press, so both
+AppKit spellings of a shifted punctuation key count, and stores the last, the key's own
+character.

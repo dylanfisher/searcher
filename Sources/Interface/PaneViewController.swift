@@ -134,25 +134,37 @@ public final class PaneViewController: NSViewController {
         columnViewController.focusedController ?? listingViewController
     }
 
-    /// The app's commands without and with the Commander F-key preset, made once each.
-    private static let registries: [Bool: CommandRegistry] = {
+    /// The settings the last registry was made for, and that registry.
+    private static var madeRegistry:
+        (shortcuts: [CommandID: ShortcutOverride], commanderFKeys: Bool, registry: CommandRegistry)?
+
+    /// The app's commands with the chords `settings` gives them: the Commander F-key preset
+    /// while it is on and the user's shortcuts (`AppCommands.keyBindings(settings:reserved:)`),
+    /// with `MainMenuBuilder.reservedChords` kept for the menus. Made again only when those
+    /// settings change, never per key; the menus use the same one.
+    public static func registry(for settings: Settings) -> CommandRegistry {
+        if let made = madeRegistry, made.shortcuts == settings.shortcuts,
+            made.commanderFKeys == settings.commanderFKeys
+        {
+            return made.registry
+        }
+        let bindings: KeyBindings
         do {
-            return [
-                false: try AppCommands.registry(commanderFKeys: false),
-                true: try AppCommands.registry(commanderFKeys: true),
-            ]
+            bindings = try AppCommands.keyBindings(
+                settings: settings, reserved: MainMenuBuilder.reservedChords)
         } catch {
             preconditionFailure("the app's commands clash: \(error)")
         }
-    }()
-
-    /// The commands the keys run, with the F-key preset while the setting has it on.
-    private var registry: CommandRegistry {
-        guard let registry = Self.registries[pane.settings.commanderFKeys] else {
-            preconditionFailure("no registry for commanderFKeys \(pane.settings.commanderFKeys)")
+        let logger = Logger(category: "keys")
+        for dropped in bindings.dropped {
+            logger.error("\(dropped.description, privacy: .public)")
         }
-        return registry
+        madeRegistry = (settings.shortcuts, settings.commanderFKeys, bindings.registry)
+        return bindings.registry
     }
+
+    /// The commands the keys run, with the chords the settings give them.
+    private var registry: CommandRegistry { Self.registry(for: pane.settings) }
     private static let bindings = Dictionary(
         uniqueKeysWithValues: AppCommands.bindings.map { ($0.command.id, $0) })
 
@@ -214,13 +226,14 @@ public final class PaneViewController: NSViewController {
         pathBar.onOpenInNewTab = { [weak self] folder in self?.openInNewTab(folder) }
         filterBar.isHidden = true
         filterBar.onChange = { [weak pane] text in pane?.commandPane.setFilter(text) }
+        // ↑ and ↓ are the field's own keys, as Tab is: they move the row whatever chords the
+        // user gave Select Next and Previous Row, or gave ↑ and ↓ to
+        // (docs/decisions/0106-primary-and-alternate-shortcuts.md).
         filterBar.onArrow = { [weak self] chord in
-            guard let table = self?.keyListing.tableView,
-                let command = self?.registry.command(for: chord)
-            else {
-                preconditionFailure("no command is bound to \(chord) for the filter field")
-            }
-            table.run(command.id)
+            guard let table = self?.keyListing.tableView else { return }
+            table.run(
+                chord.key == .up
+                    ? SelectionCommands.selectPrevious.id : SelectionCommands.selectNext.id)
         }
         // Tab in the field does what it does in the list: with two panes or more, the other
         // pane takes the keys.
@@ -312,7 +325,7 @@ public final class PaneViewController: NSViewController {
     /// Connects `table`, the list's or a column's, to the pane's commands.
     private func prepare(_ table: ListingTableView) {
         table.registry = registry
-        // The F-key preset can change while the table lives.
+        // The F-key preset and the shortcuts can change while the table lives.
         pane.settings.observe(for: table) { [weak self, weak table] in
             guard let self, let table else { return }
             table.registry = registry

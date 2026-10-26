@@ -1,0 +1,207 @@
+/// The chords each command has once the user's changes apply: its defaults, a preset's
+/// alternates, the user's `ShortcutOverride`s and the chords no command may take, combined into
+/// one `CommandRegistry`. The only place those rules live, so the Settings window and the key
+/// routing can't disagree (docs/decisions/0106-primary-and-alternate-shortcuts.md).
+public struct KeyBindings: Sendable {
+    /// A command's two slots once everything applies; nil for a slot with no chord.
+    public struct Chords: Equatable, Sendable {
+        public var primary: KeyChord?
+        public var alternate: KeyChord?
+
+        public init(primary: KeyChord? = nil, alternate: KeyChord? = nil) {
+            self.primary = primary
+            self.alternate = alternate
+        }
+
+        public subscript(position: ShortcutOverride.Position) -> KeyChord? {
+            get {
+                switch position {
+                case .primary: primary
+                case .alternate: alternate
+                }
+            }
+            set {
+                switch position {
+                case .primary: primary = newValue
+                case .alternate: alternate = newValue
+                }
+            }
+        }
+    }
+
+    /// A chord that a command would have had and lost: stored data can name a reserved chord,
+    /// or a chord a default of another command has since taken.
+    public struct Dropped: Equatable, Sendable, CustomStringConvertible {
+        public enum Reason: Equatable, Sendable {
+            case reserved
+            /// The user gave the chord to this command, which keeps it.
+            case takenBy(CommandID)
+        }
+
+        public let chord: KeyChord
+        public let command: CommandID
+        public let position: ShortcutOverride.Position
+        public let reason: Reason
+
+        public var description: String {
+            let why =
+                switch reason {
+                case .reserved: "it is reserved"
+                case .takenBy(let owner): "the user gave it to \(owner)"
+                }
+            return "\(command) loses its \(position.rawValue) chord \(chord): \(why)"
+        }
+    }
+
+    /// What `assign(_:to:at:replacing:)` found.
+    public enum Assignment: Equatable, Sendable {
+        /// The overrides with the chord assigned, for `Settings.shortcuts`.
+        case assigned([CommandID: ShortcutOverride])
+        /// The chord belongs to a standard menu item such as Quit, and no command may take it.
+        case reserved
+        /// Another command has the chord; `replacing` takes it from that command.
+        case taken(by: Command)
+    }
+
+    /// Every command with its effective chords, primary first: what the keys and menus use.
+    public let registry: CommandRegistry
+    /// The overrides these bindings applied.
+    public let overrides: [CommandID: ShortcutOverride]
+    /// The chords no command may have.
+    public let reserved: Set<KeyChord>
+    /// The chords stored data asked for that couldn't be kept, for the caller to log.
+    public let dropped: [Dropped]
+    private let slots: [CommandID: Chords]
+
+    /// Bindings for `commands`, whose `chords` are their defaults. `preset` gives commands with
+    /// no default alternate one, which an override of the alternate replaces. An override's
+    /// chord wins over a default or preset one: the other command loses its chord. A reserved
+    /// chord is dropped wherever it comes from. Stored data never makes this throw or trap; an
+    /// override for a command not in `commands` is ignored.
+    ///
+    /// Throws if two of `commands` share an ID, or their defaults and `preset` share a chord: a
+    /// mistake in the code, not in stored data.
+    ///
+    /// - Precondition: no command in `preset` has a default alternate.
+    public init(
+        commands: [Command], preset: [CommandID: KeyChord] = [:],
+        overrides: [CommandID: ShortcutOverride] = [:], reserved: Set<KeyChord> = []
+    ) throws(CommandRegistry.Conflict) {
+        var defaults = CommandRegistry()
+        for command in commands {
+            var chords = command.chords
+            if let alternate = preset[command.id] {
+                precondition(
+                    command.alternate == nil, "\(command.id) has a default alternate and a preset")
+                chords.append(alternate)
+            }
+            try defaults.register(Command(id: command.id, title: command.title, chords: chords))
+        }
+
+        // Each slot's chord and whether the user chose it.
+        typealias Wanted = (chord: KeyChord, isUsers: Bool)
+        var wanted: [(command: Command, slots: [ShortcutOverride.Position: Wanted])] = []
+        for command in defaults.commands {
+            let override = overrides[command.id] ?? ShortcutOverride()
+            var slots: [ShortcutOverride.Position: Wanted] = [:]
+            for position in ShortcutOverride.Position.allCases {
+                let standard = position == .primary ? command.primary : command.alternate
+                switch override[position] {
+                case .standard: slots[position] = standard.map { ($0, false) }
+                case .removed: slots[position] = nil
+                case .chord(let chord): slots[position] = (chord, true)
+                }
+            }
+            wanted.append((command, slots))
+        }
+
+        // The user's chords claim theirs first, in command order; then the defaults take what
+        // is left.
+        var owners: [KeyChord: CommandID] = [:]
+        var slots: [CommandID: Chords] = [:]
+        var dropped: [Dropped] = []
+        for pass in [true, false] {
+            for (command, wantedSlots) in wanted {
+                for position in ShortcutOverride.Position.allCases {
+                    guard let slot = wantedSlots[position], slot.isUsers == pass else { continue }
+                    let reason: Dropped.Reason? =
+                        if reserved.contains(slot.chord) {
+                            .reserved
+                        } else if let owner = owners[slot.chord] {
+                            .takenBy(owner)
+                        } else {
+                            nil
+                        }
+                    if let reason {
+                        dropped.append(
+                            Dropped(
+                                chord: slot.chord, command: command.id, position: position,
+                                reason: reason))
+                        continue
+                    }
+                    owners[slot.chord] = command.id
+                    slots[command.id, default: Chords()][position] = slot.chord
+                }
+            }
+        }
+
+        var registry = CommandRegistry()
+        for command in defaults.commands {
+            let chords = slots[command.id] ?? Chords()
+            let effective = Command(
+                id: command.id, title: command.title,
+                chords: [chords.primary, chords.alternate].compactMap { $0 })
+            do {
+                try registry.register(effective)
+            } catch {
+                preconditionFailure("a chord was given to two commands: \(error)")
+            }
+        }
+        self.registry = registry
+        self.overrides = overrides
+        self.reserved = reserved
+        self.dropped = dropped
+        self.slots = slots
+    }
+
+    /// `id`'s two slots as they apply. A removed primary leaves the primary slot empty, though
+    /// the registry's command then lists the alternate first.
+    public func chords(of id: CommandID) -> Chords {
+        slots[id] ?? Chords()
+    }
+
+    /// Gives `id`'s slot at `position` the chord a key press recorded. `candidates` are the
+    /// chords the press can mean (`KeyChord.candidates(for:)`), and the last, the key's own
+    /// character, is the one stored; every one is checked, so the two spellings of a shifted
+    /// punctuation key on another layout count as one key. A chord `id` has in its other slot
+    /// moves. A chord another command has is `.taken` unless `replacing`, which removes it from
+    /// that command.
+    ///
+    /// - Precondition: `candidates` isn't empty and `id` is registered.
+    public func assign(
+        _ candidates: [KeyChord], to id: CommandID, at position: ShortcutOverride.Position,
+        replacing: Bool = false
+    ) -> Assignment {
+        guard let chord = candidates.last else {
+            preconditionFailure("a key press with no chord can't be assigned")
+        }
+        precondition(registry.command(for: id) != nil, "\(id) isn't registered")
+        if candidates.contains(where: reserved.contains) {
+            return .reserved
+        }
+        var overrides = self.overrides
+        for candidate in candidates {
+            guard let owner = registry.command(for: candidate) else { continue }
+            if owner.id != id, !replacing {
+                return .taken(by: owner)
+            }
+            let ownerChords = chords(of: owner.id)
+            for slot in ShortcutOverride.Position.allCases where ownerChords[slot] == candidate {
+                guard owner.id != id || slot != position else { continue }
+                overrides[owner.id, default: ShortcutOverride()][slot] = .removed
+            }
+        }
+        overrides[id, default: ShortcutOverride()][position] = .chord(chord)
+        return .assigned(overrides)
+    }
+}

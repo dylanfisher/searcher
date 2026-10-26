@@ -75,6 +75,92 @@ public struct KeyChord: Hashable, Sendable, CustomStringConvertible {
         return (held + [keyName]).joined(separator: "-")
     }
 
+    // MARK: Stored spelling
+
+    /// The modifiers in the order `stored` writes them, with their names.
+    private static let storedModifiers: [(Modifiers, String)] = [
+        (.control, "ctrl"), (.option, "opt"), (.command, "cmd"), (.shift, "shift"),
+    ]
+
+    /// The keys `stored` spells by a name rather than a character or an F-key's number.
+    private static let namedKeys: [Key] = [
+        .up, .down, .left, .right, .pageUp, .pageDown, .home, .end, .tab, .return, .delete, .space,
+        .escape,
+    ]
+
+    /// The chord as `Settings` stores it: the modifiers held, in the order ctrl, opt, cmd,
+    /// shift, then the key, joined by "+", such as "cmd+shift+k", "cmd++", "f5" or "pageup".
+    /// `init?(stored:)` reads it back (docs/decisions/0106-primary-and-alternate-shortcuts.md).
+    public var stored: String {
+        let held = Self.storedModifiers.filter { modifiers.contains($0.0) }.map(\.1)
+        return (held + [Self.storedName(of: key)]).joined(separator: "+")
+    }
+
+    /// The chord `stored` spells; nil for a string `stored` wouldn't write, such as
+    /// "shift+cmd+k", "cmd+K", "Cmd+k" or "f36", so each chord reads back from one spelling.
+    public init?(stored: String) {
+        // The key follows the last "+", unless the key is "+" itself.
+        let name: Substring
+        let held: Substring
+        if stored.hasSuffix("++") {
+            name = "+"
+            held = stored.dropLast(2)
+        } else if stored != "+", let plus = stored.lastIndex(of: "+") {
+            name = stored[stored.index(after: plus)...]
+            held = stored[..<plus]
+        } else {
+            name = Substring(stored)
+            held = ""
+        }
+        var modifiers: Modifiers = []
+        if !held.isEmpty {
+            for part in held.split(separator: "+", omittingEmptySubsequences: false) {
+                guard let modifier = Self.storedModifiers.first(where: { $0.1 == part }) else {
+                    return nil
+                }
+                modifiers.insert(modifier.0)
+            }
+        }
+        guard let key = Self.key(storedName: name) else { return nil }
+        let chord = KeyChord(key, modifiers: modifiers)
+        guard chord.stored == stored else { return nil }
+        self = chord
+    }
+
+    private static func storedName(of key: Key) -> String {
+        switch key {
+        case .character(let character): String(character)
+        case .up: "up"
+        case .down: "down"
+        case .left: "left"
+        case .right: "right"
+        case .pageUp: "pageup"
+        case .pageDown: "pagedown"
+        case .home: "home"
+        case .end: "end"
+        case .tab: "tab"
+        case .return: "return"
+        case .delete: "delete"
+        case .space: "space"
+        case .escape: "escape"
+        case .function(let number): "f\(number)"
+        }
+    }
+
+    /// The key `storedName(of:)` gives `name`; nil for none.
+    private static func key(storedName name: Substring) -> Key? {
+        if let named = namedKeys.first(where: { storedName(of: $0) == name }) {
+            return named
+        }
+        if name.count > 1, name.first == "f", let number = Int(name.dropFirst()),
+            functionKeys.contains(number)
+        {
+            return .function(number)
+        }
+        guard name.count == 1, let character = name.first, accepts(character) else { return nil }
+        return .character(character)
+    }
+
     private var keyName: String {
         switch key {
         case .character(let character): character.uppercased()

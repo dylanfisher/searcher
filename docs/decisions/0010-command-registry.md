@@ -44,3 +44,11 @@ and Caps Lock, but a shifted punctuation key still arrives shifted (Shift-. as `
 that binds one reads `characters(byApplyingModifiers:)` instead. Keys other than
 characters, arrows, Tab, Return, Delete, Space and Esc (Page Up/Down, F-keys, Fn) are added to
 `KeyChord.Key` when a step binds them.
+
+## Amendment: two chords and user overrides (2026-10-26)
+
+A command has two default chords at most, its primary and its alternate, which `Command.init`
+checks. The registry the keys and menus use is built by `KeyBindings` from the defaults, the
+Commander preset and the user's overrides ([0106](0106-primary-and-alternate-shortcuts.md)). A
+clash between two defaults still throws; a clash that stored data makes is settled in favor of
+the user's chord and never throws.

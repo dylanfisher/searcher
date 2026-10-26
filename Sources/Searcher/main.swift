@@ -205,7 +205,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         do {
             try MainMenuBuilder.install(
-                in: NSApp, appName: appName, registry: AppCommands.registry(), settings: settings)
+                in: NSApp, appName: appName, registry: PaneViewController.registry(for: settings),
+                settings: settings)
         } catch {
             preconditionFailure("the main menu doesn't match the app's commands: \(error)")
         }

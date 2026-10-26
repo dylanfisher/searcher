@@ -15,6 +15,13 @@ import Testing
     }
 }
 
+/// Each default fills a primary and at most an alternate, the two slots the user can change.
+@Test func noDefaultHasMoreThanTwoChords() {
+    for command in AppCommands.commands {
+        #expect(command.chords.count <= 2, "\(command.id)")
+    }
+}
+
 @Test func registryHelperRegistersEverySet() throws {
     let registry = try AppCommands.registry()
 
