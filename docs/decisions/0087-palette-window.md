@@ -63,7 +63,15 @@ Recursive search and Spotlight are a separate feature (M5b.3) and stay out.
   Code and Sublime Text open their command palette with, as Go to Item has ⇧⌘K beside ⌘P
   ([0101](0101-go-to-item.md)). No command had it: the app has no Print item. The menu shows
   ⌘K, the first chord, and ⇧⌘P closes the panel as ⌘K does, since the panel takes every chord
-  of the command that opened it.)
+  of the command that opened it.) (Amended 2026-10-26, Dylan: "if a command window is open
+  (cmd+k or cmd+p), pressing a keyboard shortcut for another command window should close that
+  one and open the other". The panel also takes the chords of the other palette's command, Go
+  to Item's in Open Quickly and Open Quickly's in Go to Item, each with its primary and
+  alternate as the user's shortcuts give them, read from the focused table's registry at each
+  key as the closing chords are. One closes the panel, which gives the keys back to whatever had
+  them, and opens the other palette, which finds them there; so the second palette gives them
+  back to the same place the first would have. The closing chords are checked first, and the
+  registry refuses a chord two commands claim, so no chord does both.)
 - **Commands that can never run from the palette are left out**, in one set,
   `CommandSource.unlisted`: Open in New Tab (it needs a clicked folder), Open Quickly itself,
   and the row keys, which move a selection the palette covers.
@@ -75,7 +83,16 @@ Recursive search and Spotlight are a separate feature (M5b.3) and stay out.
 - **Commands run on the focused pane's table**, as their key would, through its registry, so a
   chord shown is the one that works now, and the command's own check runs again when it runs.
   Folders open in the focused pane; saved workspaces open through
-  `WorkspaceWindows.open(savedWorkspace:)`, the sidebar's path.
+  `WorkspaceWindows.open(savedWorkspace:)`, the sidebar's path. (Amended 2026-10-26, Dylan:
+  "after using cmd+k to go to a file or directory, always put focus back into that pane (if you
+  were focused on sidebar it should focus on the pane where you just went to the new directory
+  or file)". Once a chosen folder has opened, the focused pane, the one it opened in, takes the
+  keys, even if the sidebar or the filter field had them; the filter is cleared by the
+  navigation anyway. Its focus ring shows again, as when a Focus Pane command moves the keys out
+  of the sidebar ([0089](0089-sidebar-key-routing.md)). A command or a saved workspace still
+  gives the keys back to whatever had them; a command that moves them itself, such as Focus
+  Other Pane or Filter, still does. Go to Item's rows do the same as folders
+  ([0101](0101-go-to-item.md)).)
 - **Folder visits.** `FolderVisits`, one per app, counts a visit each time a pane's location
   changes (navigation, Back and Forward, column view following its focused column) and once for
   each new pane: a new window, tab or split. A restored pane counts only where it goes next: it

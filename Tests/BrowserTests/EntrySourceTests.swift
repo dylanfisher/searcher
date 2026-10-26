@@ -116,3 +116,90 @@ private struct Fixture {
     #expect(fixture.pane.location == Location(path: "/root"))
     #expect(fixture.pane.centeringRequest == centering + 1)
 }
+
+/// A pane in column view at `/root`, holding `docs`, `a.txt` and `b.txt`, with `docs` selected
+/// in the focused column and its column, holding `inside.txt` and `a.txt`, listed right of it.
+/// With `listsDocs` false, `docs`'s column is shown but hasn't listed.
+@MainActor
+private func columnsWithDocsSelected(listsDocs: Bool = true) async throws -> (Pane, ColumnTrail) {
+    let fixture = PaneFixture(
+        at: "/root",
+        folders: [
+            "/": [folder("root")],
+            "/root": [folder("docs"), file("a.txt"), file("b.txt")],
+            "/root/docs": [file("inside.txt"), file("a.txt")],
+        ], held: true)
+    fixture.lister.release("/")
+    fixture.lister.release("/root")
+    if listsDocs { fixture.lister.release("/root/docs") }
+    let pane = fixture.pane
+    await settle { pane.state.isLoaded }
+    pane.setViewMode(.column)
+    let trail = try #require(pane.columnTrail)
+    await settle { trail.columns.allSatisfy { $0.pane.state.isLoaded } }
+    trail.focused.pane.select(Selection([ExactName("docs")], cursor: ExactName("docs")))
+    await settle { trail.columns.count == 3 }
+    if listsDocs { await settle { trail.columns[2].pane.state.isLoaded } }
+    #expect(trail.focused.pane.location == Location(path: "/root"))
+    return (pane, trail)
+}
+
+@MainActor @Test func inColumnViewTheSelectedFoldersRowsFollowTheFocusedColumns() async throws {
+    let (pane, _) = try await columnsWithDocsSelected()
+    let source = EntrySource(pane: pane)
+    let palette = Palette(sources: [source])
+
+    palette.setQuery("")
+    await settle { !palette.isRanking }
+
+    #expect(source.folderNames == ["root", "docs"])
+    #expect(
+        palette.results.map(\.item.title) == ["a.txt", "b.txt", "docs", "a.txt", "inside.txt"])
+    let details = palette.results.map { $0.item.detail ?? "" }
+    try #require(details.count == 5)
+    #expect(details[0...2].allSatisfy { !$0.hasSuffix(" in docs") })
+    #expect(details[3...4].allSatisfy { $0.hasSuffix(" in docs") })
+    #expect(Set(palette.results.map(\.item.id)).count == 5)
+
+    // Equal matches rank the focused column's row first.
+    palette.setQuery("a.txt")
+    await settle { !palette.isRanking }
+    #expect(palette.results.map(\.item.title) == ["a.txt", "a.txt"])
+    #expect(palette.results.last?.item.detail?.hasSuffix(" in docs") == true)
+}
+
+@MainActor @Test func aSelectedFoldersColumnThatHasntListedAddsNothing() async throws {
+    let (pane, trail) = try await columnsWithDocsSelected(listsDocs: false)
+    #expect(trail.columns[2].pane.state.listing == nil)
+    let source = EntrySource(pane: pane)
+    let palette = Palette(sources: [source])
+
+    palette.setQuery("")
+    await settle { !palette.isRanking }
+
+    #expect(source.folderNames == ["root"])
+    #expect(palette.results.map(\.item.title) == ["a.txt", "b.txt", "docs"])
+}
+
+@MainActor @Test func choosingARowOfTheSelectedFolderFocusesItsColumnAndSelectsIt() async throws {
+    let (pane, trail) = try await columnsWithDocsSelected()
+    let docs = trail.columns[2].pane
+    docs.select(Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+    let centering = docs.centeringRequest
+    let palette = Palette(sources: [EntrySource(pane: pane)])
+    palette.setQuery("inside")
+    await settle { !palette.isRanking }
+
+    palette.run(try #require(palette.results.first { $0.item.title == "inside.txt" }))
+
+    #expect(trail.focused.pane === docs)
+    #expect(pane.location == Location(path: "/root/docs"))
+    #expect(
+        docs.selection == Selection([ExactName("inside.txt")], cursor: ExactName("inside.txt")))
+    #expect(docs.centeringRequest == centering + 1)
+    #expect(trail.columns[1].pane.selection.cursor == ExactName("docs"))
+    #expect(trail.columns.count == 3)
+    // One step of the column's selection history.
+    docs.undoSelection()
+    #expect(docs.selection == Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+}

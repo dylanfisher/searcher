@@ -40,12 +40,27 @@ matcher ([0079](0079-fuzzy-match.md)) and the highlighting. Type-to-select
   the row beside the first line, so a long name doesn't squeeze its kind to a letter. Each row's
   height comes from one never-shown cell that measures the title's height for its wrap width
   without a layout pass, about 1.4 ms for 50 rows in a debug test build. Wrapping rather than
-  truncating keeps the whole name in view, which is what the list is searched for.)
+  truncating keeps the whole name in view, which is what the list is searched for.) (Amended
+  2026-10-26, Dylan: "cmd+p in column mode should search the current directory and the
+  highlighted directory". In column view, when the folder selected in the focused column shows
+  its column to the right, its rows are listed too, after the focused column's, from the
+  listing that column already has: still no file-system call, and a column that hasn't listed
+  yet adds nothing. A preview, a file or several rows selected, or nothing selected adds
+  nothing either, since no column shows right of the focused one. Their detail is the kind
+  followed by "in" and the folder's name, "PNG image in png", so a name that is in both
+  folders reads apart; the focused column's rows keep the kind alone. The placeholder names
+  both folders: "Go to Item in images and png". Nothing deeper is listed: the folder is the one
+  the columns already show, as Dylan's screenshot shows.)
 - **Ranking: the match alone.** Entries are a kind of their own with no kind or frecency bonus,
   so they fall in one bucket and `FuzzyMatcher.best` ranks them by score, then the shorter name,
   then pane order. Frecency counts folders visited, not rows chosen, and a bonus for folders over
   files would rank a worse folder match above the file typed. An empty query lists the first 50
-  rows in pane order.
+  rows in pane order. (Amended 2026-10-26: the selected folder's rows in column view are ranked
+  with the same scores, in the same bucket, after the focused column's rows in pane order. So an
+  equal score ranks the shorter name first, and at an equal name the focused column's row first,
+  as the folder the keys are in. A penalty for the other folder's rows was rejected: a better
+  match there would rank below a worse one in the focused column, which is what the fuzzy match
+  exists to avoid.)
 - **Choosing a row** runs `Pane.jump(to:)`: the entry is selected alone with the cursor on it, as
   a click selects it. A folder is selected, not opened, and a file isn't opened.
   - **One step of the selection history** ([0077](0077-selection-history.md)): the jump is a
@@ -58,6 +73,18 @@ matcher ([0079](0079-fuzzy-match.md)) and the highlighting. Type-to-select
     selection, below the list's column header. `NSClipView.constrainBoundsRect` clamps it, so a
     row near the top or bottom sits as near the middle as the ends allow. A jump to the row
     already selected still centers it.
+  - **The keys go to the pane.** (Amended 2026-10-26, Dylan: "after using cmd+k to go to a file
+    or directory, always put focus back into that pane".) Once the row is selected, the pane's
+    table, or the focused column's, takes the keys, even if the sidebar or the filter field had
+    them, as a folder chosen in Open Quickly gives them ([0087](0087-palette-window.md)): the
+    jump is a choice of a row there, and the keys are what act on it next. The filter stays as
+    it was.
+  - **A row of the selected folder**, in column view (amended 2026-10-26), runs
+    `ColumnTrail.jump(to:inColumnOf:)`: that column takes the keys, as a click in it does, which
+    is a step of the pane's Back and Forward history as any move between columns is (0041), and
+    the row is selected there by `Pane.jump(to:)`, one `.once` step of that column's selection
+    history, centered. The focused column keeps its selection, so the column stays. A column
+    closed since the palette opened, or a row gone from it, does nothing.
 - **Off the main actor.** The source makes the first 50 rows' items on the main actor, which is
   all an empty query shows, and the rest in a detached task as the palette opens; until then a
   query is ranked over the first 50. Closing the palette cancels the task. With one source the

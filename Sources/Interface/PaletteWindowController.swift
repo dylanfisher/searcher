@@ -15,6 +15,17 @@ public final class PaletteWindowController: NSWindowController, NSWindowDelegate
         get { panel.closingChords }
         set { panel.closingChords = newValue }
     }
+    /// Chords that close the palette and open the other one: Go to Item's in Open Quickly, and
+    /// Open Quickly's in Go to Item. Read at each key equivalent, as `closingChords` is.
+    var switchingChords: @MainActor () -> Set<KeyChord> {
+        get { panel.switchingChords }
+        set { panel.switchingChords = newValue }
+    }
+    /// Runs on one of `switchingChords`.
+    var onSwitchingChord: @MainActor () -> Void {
+        get { panel.onSwitchingChord }
+        set { panel.onSwitchingChord = newValue }
+    }
     private var panel: PalettePanel {
         guard let panel = window as? PalettePanel else {
             preconditionFailure("the palette's window isn't its panel")
@@ -177,23 +188,30 @@ public final class PaletteWindowController: NSWindowController, NSWindowDelegate
     }
 }
 
-/// The palette's panel, which closes the palette on one of `closingChords`. A key window is
-/// offered a key equivalent before the menu bar, so these chords never reach the menu, whose
-/// items are off while the palette has the keys.
+/// The palette's panel, which closes the palette on one of `closingChords` and switches to the
+/// other palette on one of `switchingChords`. A key window is offered a key equivalent before
+/// the menu bar, so these chords never reach the menu, whose items are off while the palette has
+/// the keys.
 @MainActor
 private final class PalettePanel: NSPanel {
     var closingChords: @MainActor () -> Set<KeyChord> = { [] }
     var onClosingChord: @MainActor () -> Void = {}
+    var switchingChords: @MainActor () -> Set<KeyChord> = { [] }
+    var onSwitchingChord: @MainActor () -> Void = {}
 
     /// A borderless window refuses the keys unless told otherwise; the field needs them.
     override var canBecomeKey: Bool { true }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        let closing = closingChords()
-        guard KeyChord.candidates(for: event).contains(where: closing.contains) else {
-            return super.performKeyEquivalent(with: event)
+        let candidates = KeyChord.candidates(for: event)
+        if candidates.contains(where: closingChords().contains) {
+            onClosingChord()
+            return true
         }
-        onClosingChord()
-        return true
+        if candidates.contains(where: switchingChords().contains) {
+            onSwitchingChord()
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
     }
 }

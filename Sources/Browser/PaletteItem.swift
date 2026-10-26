@@ -10,7 +10,9 @@ public struct PaletteItem: Sendable {
         case workspace(UUID)
         case folder(path: String)
         case command(CommandID)
-        case entry(name: String)
+        /// A row of the pane, or of its focused column, or, `isInSelectedFolder`, of the
+        /// folder selected there.
+        case entry(name: String, isInSelectedFolder: Bool)
     }
 
     /// The kinds in the order an empty query lists them, and equal scores rank them.

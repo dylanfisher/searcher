@@ -3,8 +3,11 @@ import Foundation
 
 /// Go to Item's items: the rows a pane shows, in its order, from the listing it has when the
 /// palette opens, so hidden entries and the filter are as the pane shows them and nothing is
-/// read from disk. Each is titled with the entry's name and its kind beside it; choosing one
-/// selects it in the pane with its row in the middle of the view (`Pane.jump(to:)`).
+/// read from disk. In column view they are the focused column's rows, then the rows of the folder
+/// selected in it, as its column right of it lists them, if it has listed. Each is titled with
+/// the entry's name and its kind beside it, with "in" and the folder for the selected folder's
+/// rows; choosing one selects it where it is listed with its row in the middle of the view
+/// (`Pane.jump(to:)`, `ColumnTrail.jump(to:inColumnOf:)`).
 ///
 /// A streaming source. The items are prepared off the main actor once, as the palette opens,
 /// and handed over on every key after that. Until they are, it hands over the first
@@ -22,19 +25,49 @@ public final class EntrySource: PaletteSource {
     /// Hands over the items for the latest query; nil once the palette closed.
     private var deliver: (@MainActor ([PaletteItem]) -> Void)?
 
-    /// `pane`'s rows as they are now; a chosen one is selected in `pane`.
+    /// The names of the folders whose rows are listed: the focused column's, or the pane's, then
+    /// the folder selected in it when its column is listed right of it.
+    public let folderNames: [String]
+
+    /// One listing's rows: the focused column's, or the pane's, or the selected folder's, whose
+    /// items name `folder` in their detail.
+    private struct Part: Sendable {
+        let listing: Listing
+        let folder: String?
+        let jump: @MainActor @Sendable (String) -> Void
+    }
+
+    /// `pane`'s rows as they are now, or in column view its focused column's, followed by the
+    /// rows of the folder selected there when its column is listed right of it. A chosen row is
+    /// selected where it is listed; one in the selected folder's column moves the keys into that
+    /// column.
     public init(pane: Pane) {
-        let jump: @MainActor @Sendable (String) -> Void = { [weak pane] name in
-            pane?.jump(to: name)
+        let focused = pane.commandPane
+        var names = [focused.location.name]
+        var parts: [Part] = []
+        if let listing = focused.state.listing {
+            parts.append(
+                Part(listing: listing, folder: nil) { [weak focused] name in
+                    focused?.jump(to: name)
+                })
         }
-        guard let listing = pane.state.listing else {
-            items = []
-            return
+        if let trail = pane.columnTrail, let next = trail.selectedFolderColumn,
+            let listing = next.state.listing
+        {
+            let folder = next.location.name
+            names.append(folder)
+            parts.append(
+                Part(listing: listing, folder: folder) { [weak trail, weak next] name in
+                    guard let trail, let next else { return }
+                    trail.jump(to: name, inColumnOf: next)
+                })
         }
-        items = Self.items(in: listing, rows: 0..<min(listing.count, Palette.limit), jump: jump)
-        guard listing.count > Palette.limit else { return }
+        folderNames = names
+        let count = parts.reduce(0) { $0 + $1.listing.count }
+        items = Self.items(in: parts, upTo: min(count, Palette.limit))
+        guard count > Palette.limit else { return }
         let preparing = Task.detached(priority: .userInitiated) {
-            Self.items(in: listing, rows: 0..<listing.count, jump: jump)
+            Self.items(in: parts, upTo: count)
         }
         self.preparing = preparing
         handOver = Task { [weak self] in
@@ -55,21 +88,26 @@ public final class EntrySource: PaletteSource {
         deliver = nil
     }
 
-    /// The items of `listing`'s `rows`; none once the task making them is cancelled, since
-    /// nothing will show them.
-    nonisolated private static func items(
-        in listing: Listing, rows: Range<Int>, jump: @escaping @MainActor @Sendable (String) -> Void
-    ) -> [PaletteItem] {
+    /// The items of the first `count` rows of `parts`, in order; none once the task making them
+    /// is cancelled, since nothing will show them.
+    nonisolated private static func items(in parts: [Part], upTo count: Int) -> [PaletteItem] {
         var items: [PaletteItem] = []
-        items.reserveCapacity(rows.count)
-        for row in rows {
-            if row % 1_024 == 0, Task.isCancelled { return [] }
-            let name = listing[row].name
-            let kind = listing.kind(atRow: row)
-            items.append(
-                PaletteItem(
-                    id: .entry(name: name), title: name, detail: kind.text, iconType: kind.type
-                ) { jump(name) })
+        items.reserveCapacity(count)
+        for part in parts {
+            let listing = part.listing
+            for row in 0..<min(listing.count, count - items.count) {
+                if row % 1_024 == 0, Task.isCancelled { return [] }
+                let name = listing[row].name
+                let kind = listing.kind(atRow: row)
+                let jump = part.jump
+                items.append(
+                    PaletteItem(
+                        id: .entry(name: name, isInSelectedFolder: part.folder != nil),
+                        title: name,
+                        detail: part.folder.map { "\(kind.text) in \($0)" } ?? kind.text,
+                        iconType: kind.type
+                    ) { jump(name) })
+            }
         }
         return items
     }
