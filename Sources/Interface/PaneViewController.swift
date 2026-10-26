@@ -491,12 +491,13 @@ public final class PaneViewController: NSViewController {
         onShow?()
     }
 
-    /// Whether one of this pane's tables, the list's or a column's, has the window's keys.
+    /// Whether one of this pane's tables, the list's or a column's, or text selected in the
+    /// column preview, has the window's keys. The preview's text gives them back to a table
+    /// (0090), so a switch of view mode moves them like a table's.
     private var tableHasKeys: Bool {
-        guard let table = viewIfLoaded?.window?.firstResponder as? ListingTableView else {
-            return false
-        }
-        return table.isDescendant(of: view)
+        guard let responder = viewIfLoaded?.window?.firstResponder as? NSView else { return false }
+        if responder is ListingTableView { return responder.isDescendant(of: view) }
+        return responder is NSTextView && responder.isDescendant(of: columnViewController.view)
     }
 
     /// Shows the list or the columns, as the pane's view mode says. If a table of this pane had
