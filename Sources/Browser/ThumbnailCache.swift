@@ -14,6 +14,16 @@ final class ThumbnailCache: @unchecked Sendable {
         let size: Int64?
         /// The side asked for, in pixels.
         let pixels: Int
+
+        /// The file version, without the size asked for.
+        var file: File { File(path: path, modified: modified, size: size) }
+    }
+
+    /// One version of a file, at any size.
+    struct File: Hashable {
+        let path: String
+        let modified: Date
+        let size: Int64?
     }
 
     /// What one kept entry costs beyond its pixels: the key, the node and the dictionary slot.
@@ -41,6 +51,9 @@ final class ThumbnailCache: @unchecked Sendable {
     private var oldest: Node?
     private var newest: Node?
     private var bytes = 0
+    /// The sizes kept of each file version, in pixels, so a smaller one is found without a
+    /// walk of every entry.
+    private var pixelsByFile: [File: Set<Int>] = [:]
 
     init(mostBytes: Int) {
         self.mostBytes = mostBytes
@@ -57,6 +70,28 @@ final class ThumbnailCache: @unchecked Sendable {
         }
     }
 
+    /// The largest thumbnail kept of `key`'s file version smaller than `key` asks for, or nil
+    /// when none is. Marks it the most recently used.
+    func largestSmaller(than key: Key) -> CGImage? {
+        lock.withLock {
+            let smaller = (pixelsByFile[key.file] ?? []).filter { $0 < key.pixels }
+            for pixels in smaller.sorted(by: >) {
+                let file = key.file
+                guard
+                    let node = nodes[
+                        Key(
+                            path: file.path, modified: file.modified, size: file.size,
+                            pixels: pixels)],
+                    let image = node.image
+                else { continue }
+                unlink(node)
+                append(node)
+                return image
+            }
+            return nil
+        }
+    }
+
     /// Keeps `image`, or that the file has none, for `key`, dropping the least recently used
     /// entries past `mostBytes`.
     func store(_ image: CGImage?, for key: Key) {
@@ -68,11 +103,16 @@ final class ThumbnailCache: @unchecked Sendable {
             }
             let node = Node(key: key, image: image, bytes: cost)
             nodes[key] = node
+            pixelsByFile[key.file, default: []].insert(key.pixels)
             append(node)
             bytes += cost
             while bytes > mostBytes, let drop = oldest {
                 unlink(drop)
                 nodes[drop.key] = nil
+                pixelsByFile[drop.key.file]?.remove(drop.key.pixels)
+                if pixelsByFile[drop.key.file]?.isEmpty == true {
+                    pixelsByFile[drop.key.file] = nil
+                }
                 bytes -= drop.bytes
             }
         }

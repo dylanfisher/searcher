@@ -39,7 +39,18 @@ listing doesn't make.
   is previewed, keeps it in the columns' document view, hides it when there is no preview and
   refills its fields only when the preview changes. It sits right of the last column's separator,
   one column wide (240 points). Its icon is the type's shared icon from `TypeIconCache` at 128
-  points, so showing it reads nothing.
+  points, so showing it reads nothing. (Amended 2026-10-25, from Dylan: "preview area needs a
+  right border to show where you can drag to resize it", and "metadata area should have a
+  minimum width". The preview has the columns' one-point separator line at its right edge,
+  under its grip ([0096](0096-column-widths.md)), shown and hidden with it. Its width is at
+  least `Settings.previewWidths`' lower bound, 200 points, where a column's is 100: at 100 the
+  icon, 128 points then, was wider than the preview and the centered fields ran off its left
+  edge, cutting off the Information titles. 200 leaves, inside the 12-point insets, the widest
+  title, "Last opened", whole and about 110 points beside it for the value, room for
+  "Wednesday," and a date's other words, so a long date wraps by words onto three lines. The
+  preview's grip stops there; an Option-drag or Option-double-click that takes the columns
+  narrower leaves the preview at 200, and the default width a preview with none set follows
+  is held to it. A stored preview width below it is discarded, like one out of range.)
 - **Layout follows Finder's preview.** The icon at the top, the name below it centered and
   wrapping, the kind and size in secondary text, then an Information section with Size and
   Modified rows, titles right-aligned in secondary text. Colors are system colors, so it follows
@@ -49,7 +60,25 @@ listing doesn't make.
   (Superseded 2026-10-24: the name and the kind and size are left-aligned, the Information
   section has no Size row, since the size is in the line under the name, and its rows are drawn as Finder draws them, title left and value right with a rule under each row,
   in the small system font, and a long date wraps; see
-  [0095](0095-preview-metadata.md).)
+  [0095](0095-preview-metadata.md).) (Amended 2026-10-25, from Dylan: "always show preview
+  images so that they are scaled to fill the width of the preview space, unless that would push
+  the metadata down, in which case it should be scaled down a bit, like finder does". His
+  screenshot showed a portrait photo drawn about 150 points wide in a 550-point preview. The
+  image, thumbnail or type icon, is now as wide as the fields, the preview's width less its
+  12-point insets, at the image's aspect, a type icon square. When that is taller than the
+  preview leaves above the fields, between its 24-point margins, it is scaled down, keeping its
+  aspect, until the last Information row ends at the bottom margin, though to no less than
+  `ColumnPreviewView.smallestImageSide`, 64 points; in a window shorter than that the fields
+  scroll, as before. The tags below the rows don't count: they show only once read, and
+  counting them would shrink the image and move every row up when a read lands after the
+  hold ([0095](0095-preview-metadata.md)); they scroll instead. It is sized again when the
+  preview's width or height changes and when its file or fields change, so a thumbnail of
+  another aspect, or tags that add a line, resize it in the same layout. The fields' height is
+  added up from each field's own text height and the stack's spacing, not asked of the stack:
+  its fitting size solved its layout again on every frame of a grip's drag, 0.23 ms a call in a
+  debug build against 0.03 ms now, beside about 0.6 ms for the preview's own layout. The
+  thumbnail is asked for at the size drawn; see
+  [0102](0102-thumbnails.md).)
 - **Scrolling.** The column view scrolls when the focus, the column count or whether a preview
   shows changes. The focused column's right-hand neighbor, kept in view where it fits, is the
   next column or, from the last column, the preview.
@@ -101,8 +130,37 @@ bar's buttons, the filter field, the rename field, Access Denied's button.
 
 The preview's name, tags and values were selectable wrapping labels. A selectable label takes the
 keys and tracks the mouse itself, so a press on its text would not have reached the pane; they are
-no longer selectable. Finder's preview text is not selectable either, as recalled; Dylan to
-confirm. A press on empty space below a table's rows is left to AppKit, which clears the selection in
+no longer selectable, on the belief that Finder's preview text is not selectable either.
+(Corrected 2026-10-25: that belief was wrong. Dylan: "the text in finder's preview is
+selectable - ours should be too". The name, the kind line, the Information values and the tags
+are selectable again, and not editable; the Information titles, the section headers and the
+image aren't. A press on selectable text starts AppKit's text selection, which makes the
+field's editor first responder; that view is inside the pane, so
+`BrowserWindowController.firstResponderDidChange` focuses the pane, as a press anywhere in it
+does. While the text has the keys, Shift-arrows and → and ← work in the text and Cmd-C copies
+it: the window controller leaves Copy to the text (`keysAreInText`), and the pane's commands,
+Space and Quick Look among them, are off until the keys go back. Ways back, each tested: a
+press on a row, or on the preview's empty space, the gaps or the bars; Esc, Tab and Shift-Tab,
+which give the focused column its keys and leave its selection alone; and ↑ and ↓, which give
+it the keys and move its selection as they would have there (`ColumnPreviewView` handles their
+commands as the fields' delegate and passes the key press on). When the preview hides, or its
+text changes to another file, version or read, while its text has the keys, column view gives
+them back to the focused column first, so they never stay in text that is gone; a thumbnail
+landing changes no text and leaves them. The container's press still reaches nothing that
+takes presses itself, so a press on a title or the image gives the focused column the keys, as
+before.
+
+The tests press every selectable field for real. A press on a value no wider than its text,
+such as "--", first hung the test: `NSTextView.mouseDown` takes the mouse up out of the queue
+before its tracking starts when the press lands in the field's selection, which covers a value
+that narrow, and the tests' mouse up was stamped at time 0, like its down. An up stamped no
+later than its down is not put back, so the tracking waited for another. Swapping
+`nextEvent(matching:until:inMode:dequeue:)` in a scratch test showed the up taken at
+`-[NSTextView mouseDown:]` with the mask for mouse up and drag, then the tracking loop finding
+the queue empty; the same press with the up stamped 50 ms after the down, as a real click's
+always is, ended at once, and a value 17 points wide or more never hit the early take. So it is
+the test harness, not a press Dylan can make, and the tests now stamp the up after the down.) A
+press on empty space below a table's rows is left to AppKit, which clears the selection in
 that table at mouse up, as Finder's columns do ([0077](0077-selection-history.md) relies on it);
 it is not tested, since the test windows are not key (0091) and AppKit selects nothing then. A
 press in the preview's empty space, the gaps or the bars changes no selection (tested).

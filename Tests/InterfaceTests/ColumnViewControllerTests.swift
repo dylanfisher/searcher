@@ -426,8 +426,8 @@ extension Fixture {
 }
 
 /// ↓ and ↑ between files in the last column, scrolled to its right end, leave the columns where
-/// they are: the preview clears while the keys pause and comes back in the same place, and the
-/// view doesn't scroll left as it clears and back right as it comes back.
+/// they are: the file shown stays while the keys pause and the next one shows in its place, and
+/// the view doesn't scroll.
 @MainActor @Test func arrowsBetweenFilesInTheLastColumnDoNotScroll() async throws {
     let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)
     await fixture.openThreeColumns()
@@ -443,7 +443,7 @@ extension Fixture {
 
     fixture.trail.focused.pane.moveSelection(by: 1)
 
-    #expect(fixture.trail.shownPreview == nil)
+    #expect(fixture.trail.shownPreview?.location.name == "one.flac")
     #expect(clip.bounds.origin.x == start)
 
     await fixture.pauseKeys(on: clock) { fixture.trail.shownPreview?.location.name == "two.flac" }
@@ -714,16 +714,17 @@ extension Fixture {
     #expect(fixture.trail.focusedIndex == 0)
 }
 
-/// The views and children of the shown columns, and nothing else but the preview and its grip: a
-/// column, its separator, its spinner and its grip each.
+/// The views and children of the shown columns, and nothing else but the preview, its grip and
+/// its separator: a column, its separator, its spinner and its grip each.
 @MainActor
 private func expectOnlyShownColumns(in controller: ColumnViewController) {
     let shown = controller.columnControllers
     #expect(controller.children.count == shown.count)
     #expect(zip(controller.children, shown).allSatisfy { $0 === $1 })
-    // The preview view and its grip stay once made, shown or hidden.
+    // The preview view, its grip and its separator stay once made, shown or hidden.
     let subviews = controller.columnsView.subviews.filter {
         !($0 is ColumnPreviewView) && $0 !== controller.previewGrip
+            && $0 !== controller.previewSeparator
     }
     #expect(subviews.count == shown.count * 4)
     #expect(subviews.filter { $0 is ColumnGripView }.count == shown.count)
@@ -853,7 +854,9 @@ private struct LoadingThirdColumn {
         view.frame.size == NSSize(width: Settings.defaultColumnWidth, height: last.height))
     #expect(fixture.controller.columnsView.frame.width >= view.frame.maxX)
     #expect(view.iconView.image === iconCache.icon(for: preview.kind.type))
-    #expect(view.iconView.frame.size == NSSize(width: 128, height: 128))
+    // Scaled up from the icon's size, square, as Finder draws a type icon.
+    #expect(view.iconView.frame.width == view.iconView.frame.height)
+    #expect(view.iconView.frame.width > ColumnPreview.defaultImageSide)
     #expect(view.nameField.stringValue == "x.txt")
     #expect(view.summaryField.stringValue == "\(preview.kind.text) – 1 byte")
     #expect(view.modifiedField.stringValue == EntryCellFormatter().longDate(testDate))
@@ -886,6 +889,96 @@ private struct LoadingThirdColumn {
     #expect(view.iconView.image?.size == NSSize(width: 128, height: 128))
     fixture.controller.view.layoutSubtreeIfNeeded()
     #expect(view.iconView.frame == square)
+}
+
+/// A pane at `/Volumes/r`, holding `photo.jpg`, in a column view `height` points tall whose
+/// service makes thumbnails with `maker`, with `photo.jpg` previewed and its thumbnail, `image`,
+/// shown.
+@MainActor
+private func photoPreview(
+    height: Double, maker: GatedThumbnailMaker, image: CGImage
+) async throws -> (Fixture, ColumnPreviewView) {
+    var folders = tree
+    folders["/Volumes/r"] = [file("photo.jpg")]
+    maker.answer("/Volumes/r/photo.jpg", with: image)
+    let fixture = await Fixture(folders: folders, thumbnails: ThumbnailService(maker: maker))
+    fixture.controller.view.frame.size.height = height
+    fixture.controller.view.layoutSubtreeIfNeeded()
+    await fixture.select("photo.jpg", inColumn: 0)
+    let view = try #require(fixture.controller.previewView)
+    await settle { view.iconView.image?.size.width == Double(image.width) / 2 }
+    fixture.controller.view.layoutSubtreeIfNeeded()
+    return (fixture, view)
+}
+
+/// The bottom of the preview's last field shown, in its scrolled document's flipped coordinates.
+@MainActor
+private func fieldsBottom(_ view: ColumnPreviewView) throws -> Double {
+    let document = try #require(view.scrollView.documentView)
+    let last = view.rows[view.rows.count - 1]
+    return Double(last.convert(last.bounds, to: document).maxY)
+}
+
+/// Dylan: "always show preview images so that they are scaled to fill the width of the preview
+/// space, unless that would push the metadata down, in which case it should be scaled down a
+/// bit, like finder does". A landscape photo in a tall preview is as wide as the fields.
+@MainActor @Test func aThumbnailFillsThePreviewsWidth() async throws {
+    let (fixture, view) = try await photoPreview(
+        height: 800, maker: GatedThumbnailMaker(), image: testThumbnail(pixels: 1024, height: 768))
+
+    let width = Settings.defaultColumnWidth - 24
+    #expect(Double(view.iconView.frame.width) == width)
+    #expect(Double(view.iconView.frame.height) == (width * 0.75).rounded())
+    #expect(try fieldsBottom(view) <= Double(view.scrollView.contentSize.height))
+    #expect(fixture.trail.preview?.thumbnail != nil)
+}
+
+/// A portrait photo as wide as the fields would push them below the preview's bottom: it is
+/// scaled down, keeping its aspect, so the last Information row ends inside the preview.
+@MainActor @Test func aTallThumbnailIsScaledDownToKeepTheFieldsInView() async throws {
+    let (_, view) = try await photoPreview(
+        height: 400, maker: GatedThumbnailMaker(), image: testThumbnail(pixels: 600, height: 1200))
+
+    let image = view.iconView.frame
+    #expect(image.width < Settings.defaultColumnWidth - 24)
+    #expect(abs(image.height - 2 * image.width) <= 2)
+    #expect(image.height > ColumnPreviewView.smallestImageSide)
+    #expect(try fieldsBottom(view) <= Double(view.scrollView.contentSize.height))
+    #expect(try fieldsBottom(view) >= Double(view.scrollView.contentSize.height) - 24 - 2)
+}
+
+/// The thumbnail is asked for as large as the preview can draw it, at Retina scale, rather than
+/// scaled up from a small one; a wider preview asks again for the file shown, which keeps its
+/// thumbnail until the larger one lands.
+@MainActor @Test func thePreviewAsksForAThumbnailAsLargeAsItDraws() async throws {
+    let maker = GatedThumbnailMaker()
+    let small = testThumbnail(pixels: 512, height: 384)
+    let (fixture, view) = try await photoPreview(height: 400, maker: maker, image: small)
+    let path = "/Volumes/r/photo.jpg"
+    // The preview's requests, not the row's.
+    func sides() -> [Double] {
+        maker.calls.filter { $0.side >= ColumnPreview.imageSideStep }.map(\.side)
+    }
+    // 262 points wide, or 352 tall inside the margins, rounded up to a step.
+    #expect(sides() == [384])
+    #expect(maker.calls.allSatisfy { $0.scale == ThumbnailService.scale })
+    let before = maker.calls.count
+    let large = testThumbnail(pixels: 1024, height: 768)
+    maker.answer(path, with: large)
+    var shown: [CGImage?] = []
+    let controller = fixture.controller
+    fixture.pane.onChange = {
+        controller.paneDidChange()
+        shown.append(fixture.trail.shownPreview?.thumbnail)
+    }
+
+    drag(try #require(fixture.controller.previewGrip), by: 300)
+
+    #expect(await maker.waitForCalls(before + 1))
+    #expect(sides() == [384, ColumnPreview.largestImageSide])
+    await settle { fixture.trail.shownPreview?.thumbnail === large }
+    #expect(shown.allSatisfy { $0 === small || $0 === large }, "\(shown)")
+    await settle { view.iconView.image?.size.width == 512 }
 }
 
 @MainActor @Test func aFolderOrNoSelectionHidesThePreviewAndTheNextFileReusesIt() async throws {
@@ -1442,6 +1535,55 @@ private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
     #expect(shown.last == twoShown)
 }
 
+/// Dylan saw the preview flash blank between files reached by ↓: the view hid while the keys
+/// paused and stayed hidden until the next file's info and thumbnail landed. Now each refill of
+/// the view, from the key to the next file's thumbnail, shows one whole file: the view never
+/// hides, and the name, rows and image it shows are one file's.
+@MainActor @Test func arrowsBetweenFilesNeverShowABlankPreview() async throws {
+    let maker = GatedThumbnailMaker()
+    let sub = "/Volumes/r/docs/sub"
+    maker.answer("\(sub)/one.flac", with: testThumbnail(pixels: 256))
+    let typeIcon = NSImage(size: NSSize(width: 1, height: 1))
+    let fixture = await Fixture(
+        iconCache: TypeIconCache { _ in typeIcon }, thumbnails: ThumbnailService(maker: maker))
+    let one = ItemInfo(created: testDate, lastOpened: nil, tags: [])
+    let two = ItemInfo(created: testDate.addingTimeInterval(120), lastOpened: nil, tags: [])
+    let reader = GatedItemInfoReader(["\(sub)/one.flac": one, "\(sub)/two.flac": two])
+    reader.release("\(sub)/one.flac")
+    fixture.pane.itemInfoReader = reader
+    await fixture.openThreeColumns()
+    await fixture.select("one.flac", inColumn: 2)
+    let view = try #require(fixture.controller.previewView)
+    #expect(view.iconView.image !== typeIcon)
+    let clock = ManualClock()
+    fixture.pane.columnOpenClock = clock
+    var shown: [[String]] = []
+    let controller = fixture.controller
+    fixture.pane.onChange = {
+        controller.paneDidChange()
+        shown.append([
+            view.isHidden ? "hidden" : view.nameField.stringValue, view.createdField.stringValue,
+            view.iconView.image === typeIcon ? "icon" : "thumbnail",
+        ])
+    }
+
+    fixture.trail.columns[2].pane.moveSelection(by: 1)
+    await settle { clock.waitingSleeps == 1 }
+    clock.advance(by: ColumnTrail.openDelay)
+    #expect(await reader.waitForCall("\(sub)/two.flac"))
+    reader.release("\(sub)/two.flac")
+    #expect(await maker.waitForCalls(2))
+    maker.answer("\(sub)/two.flac", with: testThumbnail(pixels: 256))
+    await settle { view.nameField.stringValue == "two.flac" }
+
+    let formatter = EntryCellFormatter()
+    let oneShown = ["one.flac", formatter.longDate(testDate), "thumbnail"]
+    let twoShown = ["two.flac", formatter.longDate(testDate.addingTimeInterval(120)), "thumbnail"]
+    #expect(!shown.isEmpty)
+    #expect(shown.allSatisfy { $0 == oneShown || $0 == twoShown }, "\(shown)")
+    #expect(shown.last == twoShown)
+}
+
 /// As Finder draws its preview's Information section: each row's title at the left in
 /// secondary text and its value at the right in the label color, both in the small system
 /// font, with a rule under each row and none above the first.
@@ -1874,6 +2016,158 @@ private let gripDrags: [[Double]] = [[-30.37, -60.81, -90.13], [-60.4, -20.77, 4
     #expect(fixture.controller.columnsView.frame.width >= grip.frame.maxX)
     // The wrapped name follows the preview's width.
     #expect(Double(preview.nameField.preferredMaxLayoutWidth) == Double(preview.frame.width) - 24)
+}
+
+/// Dylan: the preview "needs a right border to show where you can drag to resize it". It has the
+/// columns' separator line at its right edge, under its grip, shown and hidden with it.
+@MainActor @Test func thePreviewHasTheColumnsSeparatorAtItsRightEdge() async throws {
+    let fixture = await Fixture()
+    await fixture.select("a.txt", inColumn: 0)
+    let preview = try #require(fixture.controller.previewView)
+    let grip = try #require(fixture.controller.previewGrip)
+    let line = try #require(fixture.controller.previewSeparator)
+
+    #expect(line.superview === fixture.controller.columnsView)
+    #expect(line.boxType == .separator)
+    #expect(!line.isHidden)
+    #expect(
+        line.frame == NSRect(x: preview.frame.maxX, y: 0, width: 1, height: preview.frame.height))
+    #expect(grip.frame.midX == line.frame.midX)
+    drag(grip, by: 40)
+    #expect(line.frame.minX == preview.frame.maxX)
+
+    await fixture.select("docs", inColumn: 0)
+    #expect(line.isHidden)
+}
+
+/// Dylan: "metadata area should have a minimum width". Narrower than `Settings.previewWidths`
+/// the Information titles were cut off; the preview's grip stops there, and an Option-drag that
+/// takes the columns narrower leaves the preview there.
+@MainActor @Test func thePreviewStopsAtItsMinimumWidth() async throws {
+    let fixture = await Fixture()
+    await fixture.select("a.txt", inColumn: 0)
+    let preview = try #require(fixture.controller.previewView)
+    let minimum = Settings.previewWidths.lowerBound
+    #expect(minimum > Settings.columnWidths.lowerBound)
+
+    drag(try #require(fixture.controller.previewGrip), by: -1000)
+    #expect(Double(preview.frame.width) == minimum)
+    #expect(fixture.pane.previewWidth == minimum)
+
+    drag(try #require(fixture.controller.grip(forColumnAt: 0)), by: -1000, option: true)
+    #expect(columnWidths(fixture) == [Settings.columnWidths.lowerBound])
+    #expect(Double(preview.frame.width) == minimum)
+    #expect(preview.frame.minX == fixture.controller.columnControllers[0].view.frame.maxX + 1)
+}
+
+/// At its minimum width, with a date that wraps, every field of the preview is inside it, each
+/// Information title is whole, and each value has room for a word of a date on a line.
+/// Text in the preview that has the keys gives them back to the focused column when the preview
+/// shows other text or hides, so they never stay in text that changed or is gone: a patch to the
+/// shown file refills it, and the file's removal hides it.
+@MainActor @Test func aRefillOrHideUnderTheKeysGivesTheFocusedColumnTheKeys() async throws {
+    let fixture = await Fixture()
+    await fixture.select("a.txt", inColumn: 0)
+    // On the second display: a field takes the keys through the field editor only in a window
+    // that is shown.
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 800, height: 400), styleMask: [.titled],
+        backing: .buffered, defer: true)
+    window.isReleasedWhenClosed = false
+    defer { window.orderOut(nil) }
+    window.contentView = fixture.controller.view
+    SecondDisplay.orderFront(window)
+    window.contentView?.layoutSubtreeIfNeeded()
+    let view = try #require(fixture.controller.previewView)
+    let table = try #require(fixture.controller.focusedController).tableView
+    let column = fixture.trail.columns[0].pane
+    /// Presses `field`'s text, as a click does, so the field editor takes the keys.
+    func select(_ field: NSTextField) throws {
+        let point = field.convert(NSPoint(x: field.bounds.midX, y: field.bounds.midY), to: nil)
+        let now = ProcessInfo.processInfo.systemUptime
+        func event(_ type: NSEvent.EventType, at time: Double) throws -> NSEvent {
+            try #require(
+                NSEvent.mouseEvent(
+                    with: type, location: point, modifierFlags: [], timestamp: time,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                    clickCount: 1, pressure: 1))
+        }
+        nonisolated(unsafe) let down = try event(.leftMouseDown, at: now)
+        try performRealPress(releasedBy: try event(.leftMouseUp, at: now + 0.05), selectsText: true)
+        {
+            field.mouseDown(with: down)
+        }
+    }
+    try select(view.nameField)
+    #expect(view.textHasKeys)
+
+    column.apply(.patches([.update(file("a.txt", size: 2_000_000))]), at: column.location)
+
+    await settle { view.summaryField.stringValue.hasSuffix(" – 2 MB") }
+    #expect(window.firstResponder === table)
+
+    try select(view.modifiedField)
+    #expect(view.textHasKeys)
+    column.apply(.patches([.remove(name: "a.txt")]), at: column.location)
+
+    await settle { view.isHidden }
+    #expect(window.firstResponder === table)
+}
+
+/// ↑ and ↓ in the preview's text hand their press to the column, and Esc, Tab and Shift-Tab
+/// hand the keys back alone; Shift-↓ and → stay with the text, extending or moving its
+/// selection.
+@MainActor @Test func thePreviewsTextHandsTheColumnOnlyItsWayOut() async throws {
+    let fixture = await Fixture()
+    await fixture.select("a.txt", inColumn: 0)
+    let view = try #require(fixture.controller.previewView)
+    var handed: [String?] = []
+    view.returnKeys = { event in handed.append(event?.charactersIgnoringModifiers) }
+    let editor = NSTextView()
+    func command(_ selector: Selector) -> Bool {
+        view.control(view.nameField, textView: editor, doCommandBy: selector)
+    }
+
+    #expect(command(#selector(NSResponder.moveUp(_:))))
+    #expect(command(#selector(NSResponder.moveDown(_:))))
+    #expect(command(#selector(NSResponder.cancelOperation(_:))))
+    #expect(command(#selector(NSResponder.insertTab(_:))))
+    #expect(command(#selector(NSResponder.insertBacktab(_:))))
+    #expect(!command(#selector(NSResponder.moveDownAndModifySelection(_:))))
+    #expect(!command(#selector(NSResponder.moveRight(_:))))
+
+    let up = String(Character(Unicode.Scalar(UInt16(NSUpArrowFunctionKey))!))
+    let down = String(Character(Unicode.Scalar(UInt16(NSDownArrowFunctionKey))!))
+    #expect(handed == [up, down, nil, nil, nil])
+}
+
+@MainActor @Test func atItsMinimumWidthThePreviewsFieldsAreWhole() async throws {
+    let fixture = await Fixture()
+    let reader = GatedItemInfoReader([
+        "/Volumes/r/a.txt": ItemInfo(created: testDate, lastOpened: testDate, tags: ["Red"])
+    ])
+    reader.releaseAll()
+    fixture.pane.itemInfoReader = reader
+    await fixture.select("a.txt", inColumn: 0)
+    let view = try #require(fixture.controller.previewView)
+    await settle { !view.tagsField.isHidden }
+    drag(try #require(fixture.controller.previewGrip), by: -1000)
+    view.modifiedField.stringValue = "Wednesday, September 30, 2026 at 12:50 PM"
+    fixture.controller.view.layoutSubtreeIfNeeded()
+
+    let fields = try #require(view.accessibilityChildren() as? [NSTextField])
+    for field in fields {
+        let frame = field.convert(field.bounds, to: view)
+        #expect(frame.minX >= 0, "\(field.stringValue)")
+        #expect(frame.maxX <= view.bounds.width, "\(field.stringValue)")
+    }
+    let word = ("Wednesday," as NSString).size(withAttributes: [
+        .font: ColumnPreviewView.detailFont
+    ]).width
+    for row in view.rows {
+        #expect(row.titleField.frame.width >= row.titleField.intrinsicContentSize.width)
+        #expect(row.value.frame.width >= word, "\(row.titleField.stringValue)")
+    }
 }
 
 @MainActor @Test func aNewColumnAndThePreviewGetTheStoredDefaultWidth() async throws {

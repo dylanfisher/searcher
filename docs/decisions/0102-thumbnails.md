@@ -78,7 +78,8 @@ A probe on this Mac (local APFS, generated 2000×1500 JPEGs, `QLThumbnailGenerat
   answering, and without it four such requests would stop every thumbnail on the volume and
   leave the preview held until its 100 ms ran out on every file.
 - **One cache.** `ThumbnailService` keeps thumbnails in a `ThumbnailCache`: least recently used
-  dropped first past 32 MB (about 7,000 row thumbnails or 120 preview ones), keyed by path,
+  dropped first past 32 MB (about 7,000 row thumbnails or 120 preview ones; amended 2026-10-25:
+  about ten preview ones at the largest side, below, which push rows' out first), keyed by path,
   modification date, size and pixel side, so a file saved again is asked for again. A file with
   no thumbnail, and one given up, is kept as having none, so scrolling back asks nothing. `ListingService.thumbnails` holds the service, so every pane, column and copy shares
   it; nil, as in tests and benches that don't pass one, shows type icons only.
@@ -94,7 +95,35 @@ A probe on this Mac (local APFS, generated 2000×1500 JPEGs, `QLThumbnailGenerat
   thumbnail beside its info read, under the same rules (none for a dataless file or rows the
   volume hasn't answered with), and keeps it through patches until the new one lands, as the info
   is kept. `ColumnPreview.thumbnail` replaces the type icon in the same 128-point square, so
-  nothing moves when it lands.
+  nothing moves when it lands. (Amended 2026-10-25: the preview now draws its image as wide as
+  its fields, or smaller to keep them in view ([0090](0090-preview-column.md)), up to 976
+  points at the widest preview, so a 128-point thumbnail would be drawn scaled up, blurred.
+  Column view works out, at each layout, the longest side the preview could draw its image at,
+  its width inside the insets or its height inside the margins, whichever is longer, since a
+  portrait image's aspect isn't known before it is made, and sets it as
+  `Pane.previewImageSide`, rounded up to 64 points (`ColumnPreview.imageSide`) so a resize of a
+  few points asks for nothing, and at most `ColumnPreview.largestImageSide`, 512 points: 1024
+  pixels at scale 2, about 3 MB for a 4:3 photo. The trail asks for the thumbnail at that side;
+  a column view 560 points tall or more asks for 512. When the side grows, by a grip's drag or
+  a taller window, the trail asks again for the file shown, keeping its thumbnail, not the icon,
+  until the larger one lands, and keeping it if that one fails; a smaller side asks for nothing.
+  The rules above stand: off the main thread, the preview's request first in its volume's
+  slots, cancelled on change, local volumes only, given up after 5 s. A thumbnail landing after
+  the hold now replaces a type icon drawn as large, a bigger jump than in the 128-point square,
+  and a thumbnail of another aspect than the icon's resizes the image, moving the fields below
+  it. A one-off measure on this Mac (local APFS, a scratch program asking
+  `QLThumbnailGenerator` for `.thumbnail` with `iconMode` at scale 2, as `QuickLookThumbnailer`
+  does, for JPEGs written fresh so nothing was cached: 12 MP 4:3, 2000×1500 and 12 MP portrait,
+  five files each): a file's first 256-pixel thumbnail took 14–17 ms, its first 1024-pixel one
+  35–39 ms (median 35), and either again 1.4–2.7 ms from the cache. So a local photo's preview
+  thumbnail lands well inside the 100 ms hold. These test photos carry no embedded thumbnail;
+  HEIC, RAW and video files and a busy or spinning disk weren't measured, and can take longer.
+  Whatever it takes, a file whose smaller thumbnail is kept, such as its row's, never shows its
+  type icon in the preview: the trail shows the largest smaller one kept of that version
+  (`ThumbnailService.cachedSmaller`, from a per-file index of the sizes the cache holds, so
+  nothing walks the cache), scaled up, until the preview's own lands, and keeps it if that one
+  fails. That shown thumbnail also ends the hold's wait for one, so the file shows as soon as
+  its info is read.)
 - **The CV.12 hold waits for the thumbnail too.** A newly previewed file is held until its info
   is read and its thumbnail made, or `previewHold` (100 ms) passes. A local thumbnail, 1–28 ms,
   lands inside it, so the file shows with its thumbnail from its first frame and no icon flashes

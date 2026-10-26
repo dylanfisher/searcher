@@ -2123,6 +2123,83 @@ private func previewedM(holdingOn clock: ManualClock, reader: GatedItemInfoReade
     }
 }
 
+/// Dylan saw the preview flash blank between files reached by ↓: the keys cleared it while they
+/// paused, and the next file was held with nothing to show before it. Now the file shown stays
+/// while the keys pause and while the next file's info is read.
+@MainActor @Test func arrowsBetweenFilesKeepTheShownPreviewUntilTheNextIsRead() async throws {
+    let reader = GatedItemInfoReader(["/k/f0/m.txt": info(1), "/k/f0/n.txt": info(2)])
+    let fixture = try await previewedM(holdingOn: ManualClock(), reader: reader)
+    let pane = fixture.pane
+    let clock = ManualClock()
+    pane.columnOpenClock = clock
+    let m = try #require(trail(pane).shownPreview)
+
+    trail(pane).columns[2].pane.moveSelection(by: 1)
+
+    #expect(trail(pane).preview == nil)
+    #expect(trail(pane).shownPreview == m)
+    await settle { clock.waitingSleeps == 1 }
+    clock.advance(by: ColumnTrail.openDelay)
+    await settle { trail(pane).preview?.location == Location(path: "/k/f0/n.txt") }
+    #expect(trail(pane).shownPreview == m)
+    reader.release("/k/f0/n.txt")
+    await settle { trail(pane).shownPreview?.info == .read(info(2)) }
+}
+
+/// ↓ then ↑ back to the file shown keeps it, with what was read of it, until it is read again.
+@MainActor @Test func arrowsBackToTheShownFileKeepItsRowsUntilItIsReadAgain() async throws {
+    let reader = GatedItemInfoReader(["/k/f0/m.txt": info(1), "/k/f0/n.txt": info(2)])
+    let fixture = try await previewedM(holdingOn: ManualClock(), reader: reader)
+    let pane = fixture.pane
+    let clock = ManualClock()
+    pane.columnOpenClock = clock
+    let m = try #require(trail(pane).shownPreview)
+    let column = trail(pane).columns[2].pane
+
+    column.moveSelection(by: 1)
+    column.moveSelection(by: -1)
+    #expect(trail(pane).shownPreview == m)
+    await settle { clock.waitingSleeps == 1 }
+    clock.advance(by: ColumnTrail.openDelay)
+    await settle { trail(pane).preview?.location == Location(path: "/k/f0/m.txt") }
+
+    #expect(trail(pane).shownPreview == m)
+    await settle { trail(pane).shownPreview?.info == .read(info(1)) }
+}
+
+/// ↑ from a file to a folder keeps the file shown until the keys pause and the folder's column
+/// opens in its place.
+@MainActor @Test func arrowsFromAFileToAFolderKeepThePreviewUntilTheColumnOpens() async throws {
+    let reader = GatedItemInfoReader(["/k/f0/m.txt": info(1)])
+    let fixture = try await previewedM(holdingOn: ManualClock(), reader: reader)
+    let pane = fixture.pane
+    let clock = ManualClock()
+    pane.columnOpenClock = clock
+    let m = try #require(trail(pane).shownPreview)
+
+    trail(pane).columns[2].pane.moveSelection(by: -1)
+
+    #expect(trail(pane).shownPreview == m)
+    await settle { clock.waitingSleeps == 1 }
+    clock.advance(by: ColumnTrail.openDelay)
+    await settle { paths(pane) == ["/", "/k", "/k/f0", "/k/f0/in"] }
+    #expect(trail(pane).shownPreview == nil)
+}
+
+/// Keys in a column left of the preview's drop the preview's column at once, and the preview
+/// with it: its file is no longer in the trail.
+@MainActor @Test func arrowsInAColumnLeftOfThePreviewDropItAtOnce() async throws {
+    let reader = GatedItemInfoReader(["/k/f0/m.txt": info(1)])
+    let fixture = try await previewedM(holdingOn: ManualClock(), reader: reader)
+    let pane = fixture.pane
+    pane.columnOpenClock = ManualClock()
+
+    trail(pane).columns[1].pane.moveSelection(by: 1)
+
+    #expect(paths(pane) == ["/", "/k"])
+    #expect(trail(pane).shownPreview == nil)
+}
+
 @MainActor @Test func aReadLandingAfterTheTrailClosesIsDropped() async throws {
     for closing in ["list mode", "navigation", "pane close"] {
         let fixture = await columnPane()
@@ -2429,7 +2506,8 @@ func rightIntoALoadingFolderThatFailsGivesUpTheWait(code: Int32) async throws {
 /// downloaded.
 @MainActor
 private func photoPane(
-    maker: GatedThumbnailMaker, reader: GatedItemInfoReader, clock: ManualClock
+    maker: GatedThumbnailMaker, reader: GatedItemInfoReader, clock: ManualClock,
+    thumbnails: ThumbnailService? = nil
 ) async -> PaneFixture {
     let notDownloaded = DirectoryEntry(
         name: "d.jpg", type: .regular, size: 9, modified: testDate, isHidden: false,
@@ -2440,7 +2518,7 @@ private func photoPane(
             "/": [folder("t")],
             "/t": [file("a.jpg"), file("b.jpg"), file("c.txt"), notDownloaded],
         ],
-        thumbnails: ThumbnailService(maker: maker))
+        thumbnails: thumbnails ?? ThumbnailService(maker: maker))
     await settle { fixture.pane.state.isLoaded }
     fixture.pane.previewHoldClock = clock
     fixture.pane.itemInfoReader = reader
@@ -2485,6 +2563,35 @@ private func photoPane(
     maker.answer("/t/b.jpg", with: b)
     await settle { trail(pane).shownPreview?.thumbnail === b }
     #expect(trail(pane).shownPreview?.location == Location(path: "/t/b.jpg"))
+}
+
+/// A file whose row's thumbnail is kept shows that one, scaled, while the preview's larger one
+/// is made, so its type icon never shows; the larger one replaces it once made.
+@MainActor @Test func aRowsKeptThumbnailShowsWhileThePreviewsIsMade() async throws {
+    let maker = GatedThumbnailMaker()
+    let thumbnails = ThumbnailService(maker: maker)
+    let small = testThumbnail(pixels: 32)
+    maker.answer("/t/a.jpg", with: small)
+    let disk = VolumeIdentity(device: "/dev/disk3s1", mountPoint: "/", kind: .local)
+    let row = try await thumbnails.thumbnail(
+        at: "/t/a.jpg", entry: file("a.jpg"), side: 16, on: disk)
+    #expect(row === small)
+    maker.hold("/t/a.jpg")
+    let reader = GatedItemInfoReader(["/t/a.jpg": info(1)])
+    reader.releaseAll()
+    let fixture = await photoPane(
+        maker: maker, reader: reader, clock: ManualClock(), thumbnails: thumbnails)
+    let pane = fixture.pane
+
+    select("a.jpg", in: trail(pane).columns[1])
+
+    #expect(trail(pane).preview?.thumbnail === small)
+    await settle { trail(pane).shownPreview?.info == .read(info(1)) }
+    #expect(trail(pane).shownPreview?.thumbnail === small)
+    #expect(await maker.waitForCalls(2))
+    let large = testThumbnail(pixels: 256)
+    maker.answer("/t/a.jpg", with: large)
+    await settle { trail(pane).shownPreview?.thumbnail === large }
 }
 
 /// A thumbnail that takes longer than the hold shows in place of the icon once it lands.

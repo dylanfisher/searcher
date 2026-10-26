@@ -85,7 +85,9 @@ grip, the double-click and the default below are the amended ones.
   stops the app, as a value of the wrong type does. The columns' view is wide enough for the
   last grip's right half. A fit stops at `ColumnViewController.fitWidthCap`, 600 points,
   about two default columns, so one very long name doesn't make a column wider than most
-  windows; a drag can still go past it.
+  windows; a drag can still go past it. (Amended 2026-10-25: the preview's limits are
+  `Settings.previewWidths`, 200…1000 points, so its fields stay readable; see
+  [0090](0090-preview-column.md).)
 - **Default and storage.** `Settings.defaultColumnWidth` is 286, the width Dylan asked for, and
   the only copy of the number; the old 240 and Finder's 245 are gone. `Settings.columnWidth` is
   a number in the app's `UserDefaults` suite, read in `Settings` only, like every other

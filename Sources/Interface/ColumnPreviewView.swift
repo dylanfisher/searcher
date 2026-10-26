@@ -7,10 +7,12 @@ import Browser
 /// modified date come from the column's listing and the icon is the type's shared one from
 /// `TypeIconCache`, so they show at once; the rest is read, and the thumbnail made, off the main
 /// thread, and column view shows a new file once they land, or without them after
-/// `ColumnTrail.previewHold`, filling in later without moving the rows above. A thumbnail
-/// replaces the icon in the same square. The rows are drawn as Finder's: title left, value
-/// right, a rule under each. Built once and refilled for each file (0090-preview-column.md,
-/// 0095-preview-metadata.md, 0102-thumbnails.md).
+/// `ColumnTrail.previewHold`, filling in later without moving the rows above. The icon or
+/// thumbnail is scaled, as Finder's, to the width inside the insets, or down from that to keep
+/// the fields below it in view. The rows are drawn as Finder's: title left, value right, a rule
+/// under each. The name, the kind line, the values and the tags can be selected, not edited.
+/// Built once and refilled for each file (0090-preview-column.md, 0095-preview-metadata.md,
+/// 0102-thumbnails.md).
 ///
 /// The fields scroll vertically when the column is shorter than they are. VoiceOver reads the
 /// preview as a group named for the file, its text fields in reading order. It takes no keys.
@@ -36,6 +38,15 @@ final class ColumnPreviewView: NSView {
     static let detailFont = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
     /// The space above and below an Information row's text, inside the rules between rows.
     static let rowPadding = 4.0
+    /// The least the image is scaled down to in a window too short for it and the fields; the
+    /// fields scroll below it then.
+    static let smallestImageSide = 64.0
+
+    /// The longest side the image can be drawn at in a preview `width` by `height` points: the
+    /// width inside the insets, or the height inside the margins.
+    static func largestImageSide(width: Double, height: Double) -> Double {
+        max(width - 2 * inset, height - 2 * margin)
+    }
 
     /// Holds the fields, scrolling them vertically in a short window.
     let scrollView = NSScrollView()
@@ -53,11 +64,35 @@ final class ColumnPreviewView: NSView {
     let rows: [InformationRow]
     /// The file last shown, so a change that leaves it as it was sets no field.
     private(set) var shown: ColumnPreview?
+    /// Gives the keys back to the focused column, from the preview's text: Esc, Tab and
+    /// Shift-Tab pass nil, ↑ and ↓ their key press, which the column then takes as its own.
+    var returnKeys: @MainActor (NSEvent?) -> Void = { _ in }
+
+    /// The fields whose text can be selected: the name, the kind line, the values and the tags.
+    var selectableFields: [NSTextField] {
+        [nameField, summaryField] + rows.map(\.value) + [tagsField]
+    }
+
+    /// Whether one of the preview's fields has the keys, through the window's field editor.
+    var textHasKeys: Bool {
+        guard let editor = window?.firstResponder as? NSText,
+            let field = editor.delegate as? NSTextField
+        else { return false }
+        return selectableFields.contains { $0 === field }
+    }
 
     private let formatter: EntryCellFormatter
     private let iconCache: TypeIconCache
     private let informationField: NSTextField
     private let tagsTitleField: NSTextField
+    /// The image and the fields under it, top to bottom.
+    private let stack = NSStackView()
+    /// The Information rows, in `stack`.
+    private let rowStack = NSStackView()
+    private lazy var imageWidth = iconView.widthAnchor.constraint(
+        equalToConstant: ColumnPreview.defaultImageSide)
+    private lazy var imageHeight = iconView.heightAnchor.constraint(
+        equalToConstant: ColumnPreview.defaultImageSide)
 
     init(iconCache: TypeIconCache, formatter: EntryCellFormatter) {
         self.iconCache = iconCache
@@ -116,6 +151,7 @@ final class ColumnPreviewView: NSView {
         tagsField.isHidden = tags.isEmpty
         setAccessibilityChildren(readingOrder())
         setAccessibilityLabel(entry.name)
+        sizeImage()
     }
 
     /// Wraps the name, the rows' values and the tags at the preview's width, which its grip
@@ -127,6 +163,42 @@ final class ColumnPreviewView: NSView {
             field.preferredMaxLayoutWidth = wrapWidth
         }
         for row in rows { row.wrapValue(at: wrapWidth) }
+        sizeImage()
+    }
+
+    /// Sizes the image as Finder's preview does: as wide as the fields, at the image's aspect,
+    /// unless that would push the Information rows below the preview's bottom, when it is scaled
+    /// down to keep them in view, though to no less than `smallestImageSide`. The tags below
+    /// the rows don't count, so the read that shows them moves nothing above them; they scroll.
+    private func sizeImage() {
+        let fieldsWidth = max(bounds.width - 2 * Self.inset, 0)
+        let size = iconView.image?.size ?? .zero
+        let aspect = size.width > 0 && size.height > 0 ? size.width / size.height : 1
+        let room = bounds.height - 2 * Self.margin - fieldsHeight()
+        let height = min(fieldsWidth / aspect, max(room, Self.smallestImageSide))
+        let width = min(height * aspect, fieldsWidth).rounded()
+        if imageWidth.constant != width { imageWidth.constant = width }
+        if imageHeight.constant != height.rounded() { imageHeight.constant = height.rounded() }
+    }
+
+    /// The height of the fields from the image's bottom to the last Information row's, worked
+    /// out from each field's own height at the wrap widths `setFrameSize` set and the stack's
+    /// spacing, as the stack lays them out. Measuring each field's text costs a few
+    /// microseconds; asking the stack for its fitting size solved its layout again, about 0.2 ms
+    /// a call in a debug build, on every frame of a grip's drag.
+    private func fieldsHeight() -> Double {
+        let padding = Self.rowPadding
+        let rows = rows.reduce(0.0) { sum, row in
+            sum
+                + max(
+                    row.titleField.intrinsicContentSize.height,
+                    row.value.intrinsicContentSize.height) + 2 * padding + 1
+        }
+        return [nameField, summaryField, informationField].reduce(
+            stack.customSpacing(after: iconView) + rows
+        ) { sum, field in
+            sum + field.intrinsicContentSize.height + stack.customSpacing(after: field)
+        }
     }
 
     private func build() {
@@ -140,20 +212,27 @@ final class ColumnPreviewView: NSView {
             header.font = Self.headerFont
         }
         tagsField.font = Self.detailFont
-        // A selectable field takes the keys on a press and tracks the mouse itself, so a press
-        // on the text wouldn't reach the pane (0090-preview-column.md).
-        for field in [nameField, tagsField] { field.isSelectable = false }
+        // Finder's preview text can be selected and copied. A press on it takes the keys into
+        // the text, which focuses the pane holding it; a press on the preview's empty space
+        // gives the focused column the keys back (0090-preview-column.md).
+        for field in [nameField, summaryField, tagsField] {
+            field.isSelectable = true
+            field.isEditable = false
+        }
+        for field in selectableFields { field.delegate = self }
         tagsTitleField.isHidden = true
         tagsField.isHidden = true
 
-        let rowStack = NSStackView(views: rows)
+        for row in rows { rowStack.addArrangedSubview(row) }
         rowStack.orientation = .vertical
         rowStack.alignment = .leading
         rowStack.spacing = 0
-        let stack = NSStackView(views: [
+        for view in [
             iconView, nameField, summaryField, informationField, rowStack, tagsTitleField,
             tagsField,
-        ])
+        ] {
+            stack.addArrangedSubview(view)
+        }
         stack.orientation = .vertical
         stack.alignment = .centerX
         stack.spacing = 6
@@ -186,13 +265,12 @@ final class ColumnPreviewView: NSView {
             document.topAnchor.constraint(equalTo: clip.topAnchor),
             document.leadingAnchor.constraint(equalTo: clip.leadingAnchor),
             document.widthAnchor.constraint(equalTo: clip.widthAnchor),
-            stack.topAnchor.constraint(equalTo: document.topAnchor, constant: 24),
-            stack.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -24),
+            stack.topAnchor.constraint(equalTo: document.topAnchor, constant: Self.margin),
+            stack.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -Self.margin),
             stack.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: Self.inset),
             stack.trailingAnchor.constraint(
                 equalTo: document.trailingAnchor, constant: -Self.inset),
-            iconView.widthAnchor.constraint(equalToConstant: ColumnPreview.iconSide),
-            iconView.heightAnchor.constraint(equalToConstant: ColumnPreview.iconSide),
+            imageWidth, imageHeight,
             nameField.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
             summaryField.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
             informationField.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
@@ -223,17 +301,61 @@ final class ColumnPreviewView: NSView {
             + [tagsTitleField, tagsField]).filter { !$0.isHidden }
     }
 
-    /// An Information row's value: wrapping, right-aligned, in the label color.
+    /// An Information row's value: wrapping, right-aligned, in the label color, selectable as
+    /// Finder's is.
     private static func value() -> NSTextField {
         let field = NSTextField(wrappingLabelWithString: "")
         field.font = detailFont
         field.alignment = .right
-        field.isSelectable = false
+        field.isSelectable = true
+        field.isEditable = false
         return field
     }
 
     /// The space at each side of the fields.
     private static let inset = 12.0
+    /// The space above the image and below the last field.
+    private static let margin = 24.0
+}
+
+extension ColumnPreviewView: NSTextFieldDelegate {
+    /// Keys in the preview's selected text that would otherwise leave no way back to the
+    /// columns by keyboard: Esc, Tab and Shift-Tab give the focused column the keys, and ↑ and
+    /// ↓ give it the keys and move its selection, as they would have there. Shift-arrows still
+    /// extend the text's selection, and Cmd-C copies it (0090-preview-column.md).
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector)
+        -> Bool
+    {
+        switch selector {
+        case #selector(NSResponder.cancelOperation(_:)), #selector(NSResponder.insertTab(_:)),
+            #selector(NSResponder.insertBacktab(_:)):
+            returnKeys(nil)
+        case #selector(NSResponder.moveUp(_:)):
+            returnKeys(Self.arrowPress(NSUpArrowFunctionKey, in: window))
+        case #selector(NSResponder.moveDown(_:)):
+            returnKeys(Self.arrowPress(NSDownArrowFunctionKey, in: window))
+        default:
+            return false
+        }
+        return true
+    }
+
+    /// The key press being handled when it is the arrow `key`, or else one made for it: a
+    /// command can reach the field editor without a key press, as from a test.
+    private static func arrowPress(_ key: Int, in window: NSWindow?) -> NSEvent? {
+        let characters = String(Character(Unicode.Scalar(UInt16(key))!))
+        if let event = NSApp.currentEvent, event.type == .keyDown,
+            event.charactersIgnoringModifiers == characters
+        {
+            return event
+        }
+        return NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [.numericPad, .function],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window?.windowNumber ?? 0, context: nil, characters: characters,
+            charactersIgnoringModifiers: characters, isARepeat: false,
+            keyCode: key == NSUpArrowFunctionKey ? 126 : 125)
+    }
 }
 
 /// One row of the preview's Information section, as Finder draws it: its title at the left in

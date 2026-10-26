@@ -75,10 +75,14 @@ extension ListingTableView {
 
 /// Runs `press`, a `mouseDown` on a view, the way a real press runs, with `up` queued first so
 /// any tracking ends at once, and leaves the event queue empty. The one copy of this logic: both
-/// `ListingTableView.realPress` and the tests that press a view without tracking use it.
+/// `ListingTableView.realPress` and the tests that press a view without tracking use it. A press
+/// that selects text, `selectsText`, ends its tracking on the mouse up and keeps it. Its up must
+/// be stamped later than its down, as a real click's is: `NSTextView` takes the up before its
+/// tracking starts when the press lands in the field's selection, drops one stamped no later
+/// than the down, and its tracking then waits for an up that never comes.
 @MainActor
 func performRealPress(
-    releasedBy up: NSEvent, _ press: @escaping @MainActor () -> Void
+    releasedBy up: NSEvent, selectsText: Bool = false, _ press: @escaping @MainActor () -> Void
 ) throws {
     nonisolated(unsafe) let up = up
     // Once events are pulled with `NSApp.nextEvent`, HIToolbox queues blocks that stop the
@@ -98,11 +102,15 @@ func performRealPress(
         CFRunLoopRunInMode(.defaultMode, 0, true)
     }
     // The tracking loop put back the mouse up it took, and the press is over, so it is in
-    // the queue now. Take it and anything else the press posted, so the next press starts
-    // with an empty queue.
+    // the queue now, unless text selection took it. Take it and anything else the press
+    // posted, so the next press starts with an empty queue.
     let reposted = NSApp.nextEvent(
         matching: .leftMouseUp, until: .distantPast, inMode: .default, dequeue: true)
-    try #require(reposted != nil, "the press left no mouse up in the queue")
+    if selectsText {
+        try #require(reposted == nil, "the text selection left its mouse up in the queue")
+    } else {
+        try #require(reposted != nil, "the press left no mouse up in the queue")
+    }
     while NSApp.nextEvent(matching: .any, until: .distantPast, inMode: .default, dequeue: true)
         != nil
     {}

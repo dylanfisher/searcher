@@ -138,6 +138,15 @@ public final class Pane {
     /// Where the trail in column mode waits out `ColumnTrail.openDelay`. Tests pass a clock they
     /// advance.
     var columnOpenClock: any Clock<Duration> = ContinuousClock()
+    /// The side, in points, the trail in column mode asks the preview's thumbnail for: the
+    /// largest the preview can draw its image, as column view lays it out, rounded by
+    /// `ColumnPreview.imageSide(drawingAtMost:)`. A larger side asks again for the file shown,
+    /// which keeps its thumbnail until the larger one lands (0102-thumbnails.md).
+    public var previewImageSide = ColumnPreview.defaultImageSide {
+        didSet {
+            if previewImageSide > oldValue { columnTrail?.previewImageSideDidGrow() }
+        }
+    }
     /// Where the trail in column mode waits out `ColumnTrail.previewHold`. Tests pass a clock
     /// they advance.
     var previewHoldClock: any Clock<Duration> = ContinuousClock()
@@ -623,9 +632,10 @@ public final class Pane {
         columnWidths.width(of: column.location) ?? settings.columnWidth
     }
 
-    /// The width the trail's preview shows at: its set width, or `Settings.columnWidth`.
+    /// The width the trail's preview shows at: its set width, or `Settings.columnWidth`, no
+    /// narrower than `Settings.previewWidths` allows.
     public var previewWidth: Double {
-        columnWidths.preview ?? settings.columnWidth
+        columnWidths.preview ?? max(settings.columnWidth, Settings.previewWidths.lowerBound)
     }
 
     /// Sets the width of `column`'s pane's folder, as a grip's drag ends or a fit lands. A
@@ -653,7 +663,7 @@ public final class Pane {
 
     /// Sets the preview's width, shown or hidden.
     ///
-    /// - Precondition: `Settings.isColumnWidth(width)`.
+    /// - Precondition: `Settings.isPreviewWidth(width)`.
     public func setPreviewWidth(_ width: Double) {
         let old = columnWidths
         columnWidths.setPreview(width)

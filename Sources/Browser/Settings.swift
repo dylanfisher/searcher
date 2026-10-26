@@ -62,6 +62,16 @@ public final class Settings {
         columnWidths.contains(width) && width == width.rounded()
     }
 
+    /// The widths the preview's grip can drag it to: up to a column's widest, but no narrower
+    /// than keeps the Information rows' titles whole and a word of each value on a line
+    /// (0090-preview-column.md).
+    public nonisolated static let previewWidths = 200...columnWidths.upperBound
+
+    /// Whether `width` is one the preview can have: a column width within `previewWidths`.
+    public nonisolated static func isPreviewWidth(_ width: Double) -> Bool {
+        previewWidths.contains(width) && isColumnWidth(width)
+    }
+
     /// What the Settings window says about `commanderFKeys`.
     public static let commanderFKeysHelp =
         "F5 copies and F6 moves the selection to the other pane, F7 makes a new folder and F8 "
