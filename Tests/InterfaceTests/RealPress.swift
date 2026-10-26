@@ -77,9 +77,10 @@ extension ListingTableView {
 /// any tracking ends at once, and leaves the event queue empty. The one copy of this logic: both
 /// `ListingTableView.realPress` and the tests that press a view without tracking use it. A press
 /// that selects text, `selectsText`, ends its tracking on the mouse up and keeps it. Its up must
-/// be stamped later than its down, as a real click's is: `NSTextView` takes the up before its
-/// tracking starts when the press lands in the field's selection, drops one stamped no later
-/// than the down, and its tracking then waits for an up that never comes.
+/// not be stamped 0: `NSTextView` takes the up before its tracking starts when the press lands
+/// in the field's selection, and an up with a zero timestamp hangs the press, whatever the
+/// down's stamp is. Stamps of 0/0 and now/0 (down/up) hung; now/now, now/now-0.05 and
+/// now/now+0.05 passed (0090-preview-column.md).
 @MainActor
 func performRealPress(
     releasedBy up: NSEvent, selectsText: Bool = false, _ press: @escaping @MainActor () -> Void

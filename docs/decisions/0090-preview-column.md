@@ -39,7 +39,7 @@ listing doesn't make.
   is previewed, keeps it in the columns' document view, hides it when there is no preview and
   refills its fields only when the preview changes. It sits right of the last column's separator,
   one column wide (240 points). Its icon is the type's shared icon from `TypeIconCache` at 128
-  points, so showing it reads nothing. (Amended 2026-10-25, from Dylan: "preview area needs a
+  points (a later amendment changes the size), so showing it reads nothing. (Amended 2026-10-25, from Dylan: "preview area needs a
   right border to show where you can drag to resize it", and "metadata area should have a
   minimum width". The preview has the columns' one-point separator line at its right edge,
   under its grip ([0096](0096-column-widths.md)), shown and hidden with it. Its width is at
@@ -153,13 +153,16 @@ before.
 The tests press every selectable field for real. A press on a value no wider than its text,
 such as "--", first hung the test: `NSTextView.mouseDown` takes the mouse up out of the queue
 before its tracking starts when the press lands in the field's selection, which covers a value
-that narrow, and the tests' mouse up was stamped at time 0, like its down. An up stamped no
-later than its down is not put back, so the tracking waited for another. Swapping
+that narrow, and the tests' mouse up was stamped at time 0, like its down. An up with a zero
+timestamp is not put back, so the tracking waited for another. Measured on the "--" field, down
+and up stamps of 0 and 0 hung, now and 0 hung, now and now passed, now and now minus 0.05
+passed, and now and now plus 0.05 passed: the trigger is the zero stamp on the up, not the order
+of the two. Swapping
 `nextEvent(matching:until:inMode:dequeue:)` in a scratch test showed the up taken at
 `-[NSTextView mouseDown:]` with the mask for mouse up and drag, then the tracking loop finding
 the queue empty; the same press with the up stamped 50 ms after the down, as a real click's
-always is, ended at once, and a value 17 points wide or more never hit the early take. So it is
-the test harness, not a press Dylan can make, and the tests now stamp the up after the down.) A
+always is, ended at once. So it is the test harness, not a press Dylan can make, and the tests
+stamp the up 50 ms after the down.) A
 press on empty space below a table's rows is left to AppKit, which clears the selection in
 that table at mouse up, as Finder's columns do ([0077](0077-selection-history.md) relies on it);
 it is not tested, since the test windows are not key (0091) and AppKit selects nothing then. A

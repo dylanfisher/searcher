@@ -79,7 +79,8 @@ A probe on this Mac (local APFS, generated 2000×1500 JPEGs, `QLThumbnailGenerat
   leave the preview held until its 100 ms ran out on every file.
 - **One cache.** `ThumbnailService` keeps thumbnails in a `ThumbnailCache`: least recently used
   dropped first past 32 MB (about 7,000 row thumbnails or 120 preview ones; amended 2026-10-25:
-  about ten preview ones at the largest side, below, which push rows' out first), keyed by path,
+  about eight preview ones at the largest side, below, which can evict most of the 32 MB, so
+  row thumbnails are asked for again on scroll-back; the cache is plain LRU), keyed by path,
   modification date, size and pixel side, so a file saved again is asked for again. A file with
   no thumbnail, and one given up, is kept as having none, so scrolling back asks nothing. `ListingService.thumbnails` holds the service, so every pane, column and copy shares
   it; nil, as in tests and benches that don't pass one, shows type icons only.

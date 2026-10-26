@@ -1725,10 +1725,10 @@ extension PressFixture {
     /// A press at `point`, in `view`'s coordinates, sent to the view hit there, as
     /// `NSWindow.sendEvent` does, with its mouse up queued first so any tracking ends at once.
     /// `selectsText` says the press lands on selectable text, whose tracking keeps the mouse up.
-    /// The up is stamped 50 ms after the down, as a real click's is: `NSTextView` takes the up
-    /// before its tracking starts when the press lands in the field's selection, as on a value
-    /// no wider than its text, and drops one stamped no later than its down, so its tracking
-    /// then waits for an up that never comes (0090-preview-column.md).
+    /// The up is stamped 50 ms after the down, as a real click's is. What matters is that it is
+    /// not 0: `NSTextView` takes the up before its tracking starts when the press lands in the
+    /// field's selection, as on a value no wider than its text, and an up with a zero timestamp
+    /// hangs the press (0090-preview-column.md).
     func press(at point: NSPoint, in view: NSView, selectsText: Bool = false) throws {
         let window = fixture.window
         let location = view.convert(point, to: nil)
@@ -1951,4 +1951,20 @@ extension PressFixture {
     try press.press(at: NSPoint(x: 20, y: press.table.bounds.maxY - 1), in: press.table)
 
     #expect(press.isFocusedWithKeys)
+}
+
+/// Text selected in the preview has the keys; switching the pane to list view moves them to the
+/// list's table, as after any switch of view mode (0046), not into a field editor that is gone.
+@MainActor @Test func switchingToListViewMovesTheKeysFromThePreviewsTextToTheList() async throws {
+    let press = try await PressFixture()
+    defer { press.fixture.window.orderOut(nil) }
+    let controller = try await press.showPreviewInLeftPane()
+    let (editor, _) = try press.selectPreviewText(in: controller)
+    #expect(press.fixture.window.firstResponder === editor)
+
+    controller.pane.setViewMode(.list)
+
+    #expect(press.fixture.window.firstResponder === controller.keyView)
+    #expect(
+        controller.listingViewController.tableView.window?.firstResponder === controller.keyView)
 }
