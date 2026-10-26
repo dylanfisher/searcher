@@ -572,6 +572,23 @@ private final class Fixture {
     }
 }
 
+@MainActor @Test func glyphsTakeTheAccentColorAndTheSelectedRowsTextColor() async throws {
+    let fixture = try Fixture()
+    await fixture.mount([usb])
+    let favorite = try #require(fixture.favoriteCells.first)
+    let volume = try #require(fixture.volumeCells.first)
+    let workspace = try #require(fixture.cells.first)
+
+    #expect(favorite.imageView?.contentTintColor == .controlAccentColor)
+    #expect(volume.imageView?.contentTintColor == .controlAccentColor)
+    #expect(workspace.imageView?.contentTintColor == nil)
+
+    favorite.backgroundStyle = .emphasized
+    #expect(favorite.imageView?.contentTintColor == .alternateSelectedControlTextColor)
+    favorite.backgroundStyle = .normal
+    #expect(favorite.imageView?.contentTintColor == .controlAccentColor)
+}
+
 @MainActor @Test func aGlyphTheBundleLacksStaysNilSoTheRowKeepsItsSymbol() async {
     let icons = SidebarIcons { _ in [:] }
 

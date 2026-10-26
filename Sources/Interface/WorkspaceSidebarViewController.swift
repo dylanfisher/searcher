@@ -140,6 +140,24 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
 
         /// Whether the dot shows.
         var showsOpen: Bool { !openMark.isHidden }
+
+        /// Whether the icon is Finder's glyph, which takes the accent color as Finder's does, and
+        /// the selected row's text color while that row is emphasized, where the accent would
+        /// vanish on the selection. A file's type icon isn't a template and ignores the tint.
+        var tintsIcon = false {
+            didSet { updateIconTint() }
+        }
+
+        override var backgroundStyle: NSView.BackgroundStyle {
+            didSet { updateIconTint() }
+        }
+
+        func updateIconTint() {
+            imageView?.contentTintColor =
+                tintsIcon
+                ? (backgroundStyle == .emphasized
+                    ? .alternateSelectedControlTextColor : .controlAccentColor) : nil
+        }
     }
 
     /// The list, which takes Return and Esc for the sidebar. The other plain and Shift-only keys
@@ -631,6 +649,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
             outlineView.makeView(withIdentifier: Self.cellID, owner: nil) as? Cell
             ?? makeCell(Self.cellID)
         cell.imageView?.image = symbol("macwindow", description: "Workspace")
+        cell.tintsIcon = false
         cell.textField?.stringValue = saved.name
         cell.openMark.isHidden = !saved.isOpen
         cell.ejectButton.isHidden = true
@@ -645,6 +664,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
             ?? makeCell(Self.favoriteCellID)
         let isMissing = item.state == .missing
         cell.imageView?.image = icon(for: item)
+        cell.tintsIcon = true
         cell.imageView?.alphaValue = isMissing ? 0.4 : 1
         cell.textField?.stringValue = item.name
         cell.textField?.textColor = isMissing ? .tertiaryLabelColor : .labelColor
@@ -661,6 +681,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
             outlineView.makeView(withIdentifier: Self.volumeCellID, owner: nil) as? Cell
             ?? makeCell(Self.volumeCellID)
         cell.imageView?.image = icon(for: volume)
+        cell.tintsIcon = true
         cell.textField?.stringValue = volume.name
         cell.openMark.isHidden = true
         cell.ejectButton.isHidden = !volume.canEject

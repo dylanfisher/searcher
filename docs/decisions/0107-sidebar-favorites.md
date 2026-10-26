@@ -70,7 +70,12 @@ Tags needs search, which is on hold.
   `CoreTypesIcons` and decoded from memory as template images by `SidebarIcons`, shared by every
   sidebar; the rows show SF Symbols (`app.dashed`, `menubar.dock.rectangle`, `doc`,
   `arrow.down.circle`, `house`, `folder`) until the read ends, and for any glyph the bundle
-  lacks, then swap in the glyphs. Localized display names aren't read.
+  lacks, then swap in the glyphs. The glyphs take the accent color, as Finder's do, and the
+  selected row's text color while it is emphasized, where the accent would vanish. A glyph that
+  is missing or unreadable falls back to its symbol silently: Browser and Interface have no
+  logging path (only the app target logs), and the bundle is static system content that
+  ships with every macOS, so the fallback is a guard for a changed system, not a state to
+  report. Localized display names aren't read.
 - **Drags in.** File URLs from a pane, Finder or any app dropped between favorites are added
   there, in order, leaving out those already listed; a drop on a favorite goes before it, and one
   on the group's row, or in the gap between the last favorite and the next group, at its end. A
