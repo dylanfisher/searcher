@@ -41,6 +41,10 @@ private func link(_ name: String) -> DirectoryEntry {
 /// The local volume the tests' files are on.
 private let disk = VolumeIdentity(device: "/dev/disk3s1", mountPoint: "/", kind: .local)
 
+/// A network volume.
+private let share = VolumeIdentity(
+    device: "//nas/share", mountPoint: "/Volumes/share", kind: .network)
+
 @Test func aThumbnailIsMadeOnABlockingCallThreadAndKeptForThatVersionOfTheFile() async throws {
     let maker = GatedThumbnailMaker()
     let service = ThumbnailService(maker: maker)
@@ -95,11 +99,10 @@ private let disk = VolumeIdentity(device: "/dev/disk3s1", mountPoint: "/", kind:
     #expect(service.cached(at: "/p/a.bin", entry: file("a.bin"), side: 16) == .some(nil))
 }
 
-/// A file is placed by the volume its folder's load read, not by its path's text: a folder
-/// reached through a link under `/` onto a share is on the share, and gets none.
-@Test func aFileOnANetworkVolumeIsNeverAskedForWhateverItsPathReads() async throws {
+/// A row's file is placed by the volume its folder's load read, not by its path's text: a folder
+/// reached through a link under `/` onto a share is on the share, and its rows get none.
+@Test func aRowOnANetworkVolumeIsNeverAskedForWhateverItsPathReads() async throws {
     let maker = GatedThumbnailMaker()
-    let share = VolumeIdentity(device: "//nas/share", mountPoint: "/Volumes/share", kind: .network)
     // Answered, so a request that reached the maker would show rather than wait.
     maker.answer("/Users/me/nas/a.jpg", with: testThumbnail())
     let service = ThumbnailService(maker: maker)
@@ -111,7 +114,95 @@ private let disk = VolumeIdentity(device: "/dev/disk3s1", mountPoint: "/", kind:
     #expect(maker.calls.isEmpty)
     #expect(service.calls.isIdle)
     #expect(!ThumbnailService.makes(on: share))
+    #expect(ThumbnailService.makes(on: share, forPreview: true))
     #expect(ThumbnailService.makes(on: disk))
+}
+
+/// The preview's one file on a share is made, as Finder's preview shows it, on a
+/// `BlockingCallThread` in the share's slot.
+@Test func aPreviewOnANetworkVolumeIsMade() async throws {
+    let maker = GatedThumbnailMaker()
+    let image = testThumbnail()
+    maker.answer("/Volumes/share/a.jpg", with: image)
+    let service = ThumbnailService(maker: maker)
+
+    let thumbnail = try await service.thumbnail(
+        at: "/Volumes/share/a.jpg", entry: file("a.jpg"), side: 512, on: share, forPreview: true)
+
+    #expect(thumbnail === image)
+    #expect(
+        maker.calls == [
+            .init(
+                path: "/Volumes/share/a.jpg", side: 512, scale: 2, onMainThread: false,
+                onBlockingCallThread: true)
+        ])
+    #expect(service.calls.isIdle)
+}
+
+/// A share makes one at a time. A preview request cancelled on a share, as when the selection
+/// moves on, is stopped and frees the slot for the next, rather than reading on over the
+/// network; one cancelled while it waits is never made. It isn't kept as having none, and its
+/// late answer does nothing.
+@Test func aCancelledPreviewOnAShareIsStoppedAndFreesTheSharesSlot() async throws {
+    let maker = GatedThumbnailMaker()
+    // A clock never advanced, so no request is given up.
+    let service = ThumbnailService(maker: maker, clock: ManualClock())
+    let paths = (0..<3).map { "/Volumes/share/\($0).jpg" }
+    func preview(_ path: String) -> Task<CGImage?, any Error> {
+        Task {
+            try await service.thumbnail(
+                at: path, entry: file("x.jpg"), side: 512, on: share, forPreview: true)
+        }
+    }
+    let first = preview(paths[0])
+    #expect(await maker.waitForCalls(1))
+    let second = preview(paths[1])
+    await bounded { service.calls.waitingCount(on: share) == 1 }
+    let third = preview(paths[2])
+    await bounded { service.calls.waitingCount(on: share) == 2 }
+
+    // The selection moved on twice: the waiting one goes, then the one being made.
+    second.cancel()
+    first.cancel()
+
+    #expect(await maker.waitForCalls(2))
+    #expect(maker.paths == [paths[0], paths[2]])
+    // A request left running would never end, so the test stops here rather than wait on it.
+    try #require(maker.stopped == [paths[0]])
+    await #expect(throws: CancellationError.self) { try await first.value }
+    await #expect(throws: CancellationError.self) { try await second.value }
+    maker.answer(paths[0], with: testThumbnail())
+    #expect(service.cached(at: paths[0], entry: file("x.jpg"), side: 512) == nil)
+    let image = testThumbnail()
+    maker.answer(paths[2], with: image)
+    #expect(try await third.value === image)
+    #expect(service.calls.isIdle)
+}
+
+/// A share that never answers holds only its own slot: the preview of a file on another volume
+/// is made meanwhile.
+@Test func aShareThatNeverAnswersDoesntHoldAnotherVolumesPreview() async throws {
+    let maker = GatedThumbnailMaker()
+    let service = ThumbnailService(maker: maker, clock: ManualClock())
+    let hung = Task {
+        try await service.thumbnail(
+            at: "/Volumes/share/a.jpg", entry: file("a.jpg"), side: 512, on: share,
+            forPreview: true)
+    }
+    #expect(await maker.waitForCalls(1))
+    let image = testThumbnail()
+    maker.answer("/p/b.jpg", with: image)
+
+    let local = try await service.thumbnail(
+        at: "/p/b.jpg", entry: file("b.jpg"), side: 512, on: disk, forPreview: true)
+
+    #expect(local === image)
+    hung.cancel()
+    // A request left running would never end, so the test stops here rather than wait on it.
+    await bounded { maker.stopped == ["/Volumes/share/a.jpg"] }
+    try #require(maker.stopped == ["/Volumes/share/a.jpg"])
+    await #expect(throws: CancellationError.self) { try await hung.value }
+    #expect(service.calls.isIdle)
 }
 
 /// A volume makes at most four at once; a request cancelled while it waits for a slot, as for a
@@ -159,7 +250,7 @@ private let disk = VolumeIdentity(device: "/dev/disk3s1", mountPoint: "/", kind:
     await bounded { !service.calls.isIdle && service.calls.waitingCount(on: disk) == 1 }
     let preview = Task {
         try await service.thumbnail(
-            at: "/p/preview.jpg", entry: file("x.jpg"), side: 128, on: disk, first: true)
+            at: "/p/preview.jpg", entry: file("x.jpg"), side: 128, on: disk, forPreview: true)
     }
     await bounded { service.calls.waitingCount(on: disk) == 2 }
 
