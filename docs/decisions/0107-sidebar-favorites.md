@@ -70,12 +70,36 @@ Tags needs search, which is on hold.
   `CoreTypesIcons` and decoded from memory as template images by `SidebarIcons`, shared by every
   sidebar; the rows show SF Symbols (`app.dashed`, `menubar.dock.rectangle`, `doc`,
   `arrow.down.circle`, `house`, `folder`) until the read ends, and for any glyph the bundle
-  lacks, then swap in the glyphs. The glyphs take the accent color, as Finder's do, and the
-  selected row's text color while it is emphasized, where the accent would vanish. A glyph that
-  is missing or unreadable falls back to its symbol silently: Browser and Interface have no
-  logging path (only the app target logs), and the bundle is static system content that
-  ships with every macOS, so the fallback is a guard for a changed system, not a state to
-  report. Localized display names aren't read.
+  lacks, then swap in the glyphs. (Amended 2026-10-26, Dylan: "sidebar icons should use same
+  color and highlight scheme as finder, and same icon size".) The glyphs have no tint of their
+  own: the source list draws a template icon as it draws the name, which is Finder's scheme. On
+  macOS 26 that is the label color at rest; on the selected row, the accent for the icon and
+  the name while the list doesn't have the keys, and white on the accent fill while it has them
+  in the key window (the row is emphasized); with the keys in a window that isn't key, a grey
+  fill with the label color. These were read from AppKit by drawing a source list off screen
+  in both appearances, not taken from a guess. A click on the sidebar's list leaves the keys
+  where they were, as a click in Finder's sidebar does, so a clicked row shows Finder's look,
+  the accent icon and name, rather than the emphasized fill. The window sends a mouse down on
+  the list through `SidebarOutlineView.sendMouseDown`, and the list refuses the keys only while
+  that press is being sent (`acceptsFirstResponder`, which `NSWindow` asks before giving the
+  pressed view the keys), so a stale `NSApp.currentEvent` can't keep VoiceOver or a later
+  `makeFirstResponder` from giving it the keys. The press first ends text editing, as any click
+  elsewhere does: with the keys in a text field, such as a pane's rename or filter field, they
+  go to the focused pane's list, which commits a rename (0068) and stops typing into the filter,
+  as a click in Finder's sidebar commits a rename and leaves its search field. The clicked
+  row opens one turn of the main actor later, so a rename that press started names its entry
+  before a volume's row moves the pane to another folder; the row is looked up again then, so
+  one that left the list in that turn opens nothing. Focus Sidebar and Tab still give the
+  list the keys, and while it has them a click on a row keeps them there
+  ([0089](0089-sidebar-key-routing.md)). Finder's glyphs are 16, 18 and 24 pt square for the
+  system's small, medium and large sidebar icon size (System Settings ▸ Appearance), the sizes
+  the `.icns` files are drawn at and the widths AppKit's own cell layout gives an image there;
+  the table's `.default` row size follows the setting, and the cell's row size picks the side.
+  The name's font and the size of a symbol, the workspace's and the fallbacks', are AppKit's
+  for the row size. A glyph that is missing or unreadable falls back to its symbol silently:
+  Browser and Interface have no logging path (only the app target logs), and the bundle is
+  static system content that ships with every macOS, so the fallback is a guard for a changed
+  system, not a state to report. Localized display names aren't read.
 - **Drags in.** File URLs from a pane, Finder or any app dropped between favorites are added
   there, in order, leaving out those already listed; a drop on a favorite goes before it, and one
   on the group's row, or in the gap between the last favorite and the next group, at its end. A

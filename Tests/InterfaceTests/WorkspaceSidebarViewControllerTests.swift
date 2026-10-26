@@ -265,6 +265,58 @@ private final class Fixture {
     #expect(fixture.window.unhandledKeys.isEmpty)
 }
 
+/// The list refuses the keys only while a press on it is being sent, which first ends text
+/// editing; a press elsewhere in the window is sent as it is, and the list takes the keys again
+/// once the press is over, as for Focus Sidebar, Tab or VoiceOver.
+@MainActor @Test func theListRefusesTheKeysOnlyWhileAPressOnItIsSent() throws {
+    let fixture = try Fixture()
+    let outline = fixture.sidebar.outlineView
+    var endedEditing = 0
+    outline.takeKeysFromText = { endedEditing += 1 }
+    let onARow = outline.convert(
+        NSPoint(x: 20, y: outline.rect(ofRow: try fixture.row(of: "Alpha")).midY), to: nil)
+    var accepted: [Bool] = []
+
+    outline.sendMouseDown(atWindowPoint: onARow) { accepted.append(outline.acceptsFirstResponder) }
+    outline.sendMouseDown(atWindowPoint: NSPoint(x: 320, y: 20)) {
+        accepted.append(outline.acceptsFirstResponder)
+    }
+
+    #expect(accepted == [false, true])
+    #expect(endedEditing == 1)
+    #expect(outline.acceptsFirstResponder)
+    #expect(fixture.window.makeFirstResponder(outline))
+}
+
+/// A hidden sidebar, as a collapsed one is, takes no press: the window sends it on as it is.
+@MainActor @Test func aHiddenSidebarIsNotHit() throws {
+    let fixture = try Fixture()
+    let outline = fixture.sidebar.outlineView
+    let onARow = outline.convert(
+        NSPoint(x: 20, y: outline.rect(ofRow: try fixture.row(of: "Alpha")).midY), to: nil)
+    #expect(outline.isHit(atWindowPoint: onARow))
+
+    fixture.sidebar.view.isHidden = true
+
+    #expect(!outline.isHit(atWindowPoint: onARow))
+}
+
+/// A clicked row opens a turn later, as it is listed then: a favorite removed in that turn
+/// opens nothing.
+@MainActor @Test func aClickedRowOpensATurnLaterUnlessItLeftTheList() async throws {
+    let fixture = try Fixture()
+
+    fixture.sidebar.openClicked(row: try fixture.row(of: "Documents"))
+    #expect(fixture.openedFavorites.isEmpty)
+    await Task {}.value
+    #expect(fixture.openedFavorites == ["/Users/u/Documents"])
+
+    fixture.sidebar.openClicked(row: try fixture.row(of: "Desktop"))
+    fixture.favorites.remove("/Users/u/Desktop")
+    await Task {}.value
+    #expect(fixture.openedFavorites == ["/Users/u/Documents"])
+}
+
 @MainActor @Test func aRenameInTheModelUpdatesTheRow() throws {
     let fixture = try Fixture()
 
@@ -572,21 +624,143 @@ private final class Fixture {
     }
 }
 
-@MainActor @Test func glyphsTakeTheAccentColorAndTheSelectedRowsTextColor() async throws {
+/// As Finder's, in both appearances: a glyph is drawn in the label color at rest, in the accent
+/// on the selected row while the list doesn't have the keys, and white on the selected row while
+/// that row is emphasized, as AppKit draws it while the list has the keys of the key window. The
+/// stub glyphs are filled squares, so the pixel at a glyph's center is its color.
+@MainActor @Test func glyphsTakeTheLabelColorAtRestAndTheSelectedRowsColor() async throws {
     let fixture = try Fixture()
     await fixture.mount([usb])
-    let favorite = try #require(fixture.favoriteCells.first)
-    let volume = try #require(fixture.volumeCells.first)
-    let workspace = try #require(fixture.cells.first)
+    await fixture.icons.load()
+    await settle {
+        (try? fixture.favoriteCells.first?.imageView?.image) === fixture.icons.image(.applications)
+    }
+    fixture.window.makeFirstResponder(nil)
+    let desktop = try fixture.row(of: "Desktop")
+    let atRest = [try fixture.row(of: "Documents"), try fixture.row(of: "USB")]
+    fixture.outline.selectRowIndexes([desktop], byExtendingSelection: false)
 
-    #expect(favorite.imageView?.contentTintColor == .controlAccentColor)
-    #expect(volume.imageView?.contentTintColor == .controlAccentColor)
-    #expect(workspace.imageView?.contentTintColor == nil)
+    for name in [NSAppearance.Name.aqua, .darkAqua] {
+        let appearance = try #require(NSAppearance(named: name))
+        fixture.window.appearance = appearance
+        var label = NSColor.clear
+        var accent = NSColor.clear
+        appearance.performAsCurrentDrawingAppearance {
+            label = NSColor.labelColor.usingColorSpace(.sRGB) ?? .clear
+            accent = NSColor.controlAccentColor.usingColorSpace(.sRGB) ?? .clear
+        }
+        let rowView = try #require(fixture.outline.rowView(atRow: desktop, makeIfNecessary: true))
 
-    favorite.backgroundStyle = .emphasized
-    #expect(favorite.imageView?.contentTintColor == .alternateSelectedControlTextColor)
-    favorite.backgroundStyle = .normal
-    #expect(favorite.imageView?.contentTintColor == .controlAccentColor)
+        rowView.isEmphasized = false
+        var colors = try glyphColors(in: fixture.outline, rows: [desktop] + atRest)
+        for color in colors.dropFirst() {
+            #expect(isClose(color, to: label), "\(name.rawValue): \(color) at rest")
+        }
+        #expect(hasHue(colors[0], of: accent), "\(name.rawValue): \(colors[0]) selected")
+
+        rowView.isEmphasized = true
+        colors = try glyphColors(in: fixture.outline, rows: [desktop] + atRest)
+        #expect(isClose(colors[0], to: .white), "\(name.rawValue): \(colors[0]) emphasized")
+        for color in colors.dropFirst() {
+            #expect(isClose(color, to: label), "\(name.rawValue): \(color) at rest")
+        }
+    }
+}
+
+/// Draws `outline` and gives the color at the center of each of `rows`' icons, in sRGB.
+@MainActor
+private func glyphColors(in outline: NSOutlineView, rows: [Int]) throws -> [NSColor] {
+    let bitmap = try #require(outline.bitmapImageRepForCachingDisplay(in: outline.bounds))
+    outline.cacheDisplay(in: outline.bounds, to: bitmap)
+    let scale = CGFloat(bitmap.pixelsWide) / outline.bounds.width
+    return try rows.map { row in
+        let cell = try #require(
+            outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? NSTableCellView)
+        let icon = try #require(cell.imageView)
+        let center = outline.convert(NSPoint(x: icon.bounds.midX, y: icon.bounds.midY), from: icon)
+        let color = try #require(bitmap.colorAt(x: Int(center.x * scale), y: Int(center.y * scale)))
+        return try #require(color.usingColorSpace(.sRGB))
+    }
+}
+
+/// Whether `color` is `other`, give or take what drawing does to it. The alpha isn't compared: a
+/// source list draws a template glyph opaque in the label color, whose alpha is under 1.
+private func isClose(_ color: NSColor, to other: NSColor) -> Bool {
+    guard let other = other.usingColorSpace(.sRGB) else { return false }
+    return abs(color.redComponent - other.redComponent) < 0.1
+        && abs(color.greenComponent - other.greenComponent) < 0.1
+        && abs(color.blueComponent - other.blueComponent) < 0.1
+}
+
+/// Whether `color` is a shade of `accent`: AppKit draws the accent on a selected row a little
+/// lighter than `controlAccentColor`, so the hue is compared, or, for a grey accent, the lack
+/// of one.
+private func hasHue(_ color: NSColor, of accent: NSColor) -> Bool {
+    guard accent.saturationComponent > 0.3 else { return color.saturationComponent < 0.15 }
+    return color.saturationComponent > 0.3 && abs(color.hueComponent - accent.hueComponent) < 0.04
+}
+
+/// As Finder's, Finder's glyphs take the size drawn for the system's sidebar icon size, which
+/// gives the rows their size, and the eject glyph the size AppKit gives a sidebar's symbols.
+@MainActor @Test func glyphsFollowTheSidebarIconSize() async throws {
+    let fixture = try Fixture()
+    await fixture.mount([usb])
+    await fixture.icons.load()
+    await settle {
+        (try? fixture.favoriteCells.first?.imageView?.image) === fixture.icons.image(.applications)
+    }
+    let sides: [(NSTableView.RowSizeStyle, CGFloat)] = [(.small, 16), (.medium, 18), (.large, 24)]
+
+    for (style, side) in sides {
+        fixture.outline.rowSizeStyle = style
+        fixture.outline.reloadData()
+        fixture.outline.expandItem(nil, expandChildren: true)
+        fixture.sidebar.view.layoutSubtreeIfNeeded()
+        for cell in try fixture.favoriteCells + fixture.volumeCells {
+            cell.layoutSubtreeIfNeeded()
+            #expect(cell.imageView?.frame.size == NSSize(width: side, height: side), "\(style)")
+        }
+        let volume = try #require(fixture.volumeCells.first)
+        let symbolSize = try #require(volume.imageView?.symbolConfiguration)
+        #expect(volume.ejectButton.symbolConfiguration == symbolSize, "\(style)")
+    }
+}
+
+/// Finder's eject glyph, filled, light at rest, darker under the mouse and darker still
+/// pressed, faint while off, and the selected row's text color on an emphasized row.
+@MainActor @Test func theEjectButtonShowsFindersGlyphDarkerUnderTheMouseAndPressed()
+    async throws
+{
+    let fixture = try Fixture()
+    await fixture.mount([usb])
+    let eject = try #require(fixture.volumeCells.first).ejectButton
+    let entered = try #require(
+        NSEvent.enterExitEvent(
+            with: .mouseEntered, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: 0, context: nil, eventNumber: 0, trackingNumber: 0, userData: nil))
+
+    #expect(String(describing: eject.image).contains("eject.fill"))
+    #expect(eject.fill == nil)
+    #expect(eject.glyphTint == .tertiaryLabelColor)
+    eject.mouseEntered(with: entered)
+    #expect(eject.glyphTint == .secondaryLabelColor)
+    #expect(eject.fill == nil)
+    eject.highlight(true)
+    #expect(eject.glyphTint == .labelColor)
+    #expect(eject.fill == nil)
+    eject.highlight(false)
+    eject.isEnabled = false
+    #expect(eject.glyphTint == .quaternaryLabelColor)
+    eject.isEnabled = true
+    eject.mouseExited(with: entered)
+    #expect(eject.glyphTint == .tertiaryLabelColor)
+
+    try #require(fixture.volumeCells.first).backgroundStyle = .emphasized
+    #expect(eject.glyphTint == HoverButton.glyphTint(.rest, onEmphasizedSelection: true))
+    eject.mouseEntered(with: entered)
+    #expect(eject.glyphTint == HoverButton.glyphTint(.hovered, onEmphasizedSelection: true))
+    try #require(fixture.volumeCells.first).backgroundStyle = .normal
+    #expect(eject.glyphTint == .secondaryLabelColor)
 }
 
 @MainActor @Test func aGlyphTheBundleLacksStaysNilSoTheRowKeepsItsSymbol() async {

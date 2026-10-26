@@ -27,6 +27,13 @@ segment ([0026](0026-path-bar.md)); nothing else in the app had a hover look.
   so the fill has room around a symbol. The operations panel's row buttons use it.
 - **A row or segment that acts on a click**, such as a path bar segment, takes the same hover
   fill.
+- **The sidebar's eject button darkens its glyph instead.** (Amended 2026-10-26, Dylan: "eject
+  icon should hover darker color".) Finder's sidebar eject button has no fill: its glyph is
+  light at rest and darker under the mouse. `HoverButton`'s `.glyph` look draws that: the
+  tertiary label color at rest, secondary under the mouse, the label color while pressed and
+  quaternary while disabled, the focus ring as the `.fill` look draws it. A tint change on a
+  small symbol is harder to see than a fill, as the alternative below says, but here it is
+  Finder's look and the pressed state has its own tint.
 
 ## Alternatives considered
 
@@ -37,6 +44,6 @@ segment ([0026](0026-path-bar.md)); nothing else in the app had a hover look.
 
 ## Consequences
 
-Controls built before this rule don't all have the four states: the sidebar's eject button is
-a borderless button without a hover look. They get one when next changed, with `HoverButton`
-where it fits.
+Controls built before this rule don't all have the four states. They get them when next
+changed, with `HoverButton` where it fits; the sidebar's eject button has them since
+2026-10-26.

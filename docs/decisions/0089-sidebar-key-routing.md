@@ -5,6 +5,8 @@
 - **2026-10-26:** No pane shows the focus ring while the sidebar has the keys, and the commands
   that focus another pane move the keys out of the sidebar into it; see "The focus ring" and
   "Where the keys stay".
+- **2026-10-26:** A click in the sidebar's list no longer gives it the keys; see "Where the keys
+  stay" and 0107's "Rows".
 
 ## Context
 
@@ -51,7 +53,9 @@ pane, `Tab.focusedPane`, whether or not its table has the keys.
   pane".) Focus Pane Left, Right, Up and Down and Focus Other Pane, run from outside the panes'
   tables by their chord, menu item or the palette, give the keys to the pane they focus. A Focus
   Pane key with no pane that way still moves the keys to the focused pane: the key asks for a
-  pane, not the sidebar. A click in a pane already gave it the keys.
+  pane, not the sidebar. A click in a pane already gave it the keys. A click in the sidebar's list
+  leaves the keys where they were, as Finder's does: Focus Sidebar or Tab gives the list the keys
+  ([0107](0107-sidebar-favorites.md), amended 2026-10-26).
 - **The focus ring.** (Added 2026-10-26, Dylan: "if sidebar is focused, the panes on right should
   remove focus indicator (but tab should still go back to the correct pane that did have the
   focus)".) While the keys are anywhere in the sidebar, no pane shows the focus ring

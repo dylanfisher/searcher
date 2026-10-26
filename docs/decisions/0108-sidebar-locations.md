@@ -49,12 +49,18 @@ bus, the startup disk with it, so the startup disk isn't listed. A volume mounte
   `externaldrive.connected.to.line.below`) show until they are read, or if the bundle lacks one.
   A missing glyph falls back silently, as 0107 says. An optical disc shows the removable-disk
   glyph, since nothing in `SidebarVolume` says it is optical media, though the bundle has
-  `SidebarOpticalDisk`. Tinted as 0107's.
+  `SidebarOpticalDisk`. Colored and sized as 0107's.
   The row also has the name, and Finder's eject
   button on each row that can be ejected (`canEject`: a share, a removable or ejectable disk,
-  or one not on an internal bus). Every listed row can be ejected, as in Finder's default
-  sidebar. A click or Return shows the volume's mount point in the window's focused pane
-  (`Pane.navigate`), as a favorite folder's click does.
+  or one not on an internal bus). (Amended 2026-10-26, Dylan: "some icons are still different
+  compared to searcher (e.g. eject)" and "eject icon should hover darker color".) The button
+  shows Finder's filled glyph, `eject.fill`, at the size AppKit gives the row's symbols, with
+  no fill under it: tertiary label color at rest, secondary under the mouse, the label color
+  pressed and quaternary while off; on an emphasized row, the selected row's text color at those
+  levels. It is a `HoverButton` with the `.glyph` look ([0110](0110-interaction-states.md)).
+  Every listed row can be ejected, as in Finder's default sidebar. A click or Return shows the
+  volume's mount point in the window's focused pane (`Pane.navigate`), as a favorite folder's
+  click does.
 - **Eject.** The eject button and the row's context menu item, `Eject “name”` as Finder titles
   it, call `SidebarVolumes.eject`. It first calls `VolumeEvents.willEject` for the volume: the
   loads, size walks and folder monitors of panes on it stop, so the app holds none of its
@@ -116,6 +122,6 @@ Ejecting a volume on a disk with other volumes mounted unmounts it alone, withou
 question; ejecting the last one then ejects the disk. Hidden volumes don't count: an external disk
 with macOS installed may have its Preboot or VM volume mounted `MNT_DONTBROWSE`, which the
 sidebar doesn't list, so ejecting its last listed volume ejects the disk and the hidden ones
-go with it, as in Finder. A volume on
-this machine that stops answering holds the next read of the list until it answers. A share mounted twice under one name shows
-the mount point's name, "main 1", where Finder would show the server.
+go with it, as in Finder. A volume on this machine that stops answering holds the next read of
+the list until it answers. A share mounted twice under one name shows the mount point's name,
+"main 1", where Finder would show the server.

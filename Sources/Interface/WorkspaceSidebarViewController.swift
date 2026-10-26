@@ -133,30 +133,49 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     }
 
     /// A row: its icon, its name, and, for a workspace, the dot when its window is open, or, for
-    /// a volume that can be ejected, the eject button.
+    /// a volume that can be ejected, the eject button. The icon has no tint of its own: the
+    /// source list draws a template icon as Finder's sidebar does, in the label color at rest and
+    /// in the selected row's colors, as it draws the name.
     final class Cell: NSTableCellView {
         let openMark = NSImageView()
-        let ejectButton = NSButton()
+        let ejectButton = HoverButton(look: .glyph)
+        /// The icon's width and height, which follow the row size.
+        var iconSize: [NSLayoutConstraint] = []
 
         /// Whether the dot shows.
         var showsOpen: Bool { !openMark.isHidden }
 
-        /// Whether the icon is Finder's glyph, which takes the accent color as Finder's does, and
-        /// the selected row's text color while that row is emphasized, where the accent would
-        /// vanish on the selection. A file's type icon isn't a template and ignores the tint.
-        var tintsIcon = false {
-            didSet { updateIconTint() }
-        }
-
         override var backgroundStyle: NSView.BackgroundStyle {
-            didSet { updateIconTint() }
+            didSet { ejectButton.isOnEmphasizedSelection = backgroundStyle == .emphasized }
         }
 
-        func updateIconTint() {
-            imageView?.contentTintColor =
-                tintsIcon
-                ? (backgroundStyle == .emphasized
-                    ? .alternateSelectedControlTextColor : .controlAccentColor) : nil
+        /// The table sets it to the row size the system's sidebar icon size gives; AppKit then
+        /// sizes the name's font and the icon's symbols for it.
+        override var rowSizeStyle: NSTableView.RowSizeStyle {
+            didSet {
+                for constraint in iconSize {
+                    constraint.constant = Self.iconSide(rowSizeStyle)
+                }
+            }
+        }
+
+        // AppKit gives the icon its symbols' size as it lays the cell out; the eject glyph
+        // takes the same size.
+        override func layout() {
+            super.layout()
+            if ejectButton.symbolConfiguration != imageView?.symbolConfiguration {
+                ejectButton.symbolConfiguration = imageView?.symbolConfiguration
+            }
+        }
+
+        /// The side of Finder's glyphs for a row size: the sizes the `Sidebar*.icns` files are
+        /// drawn at for the small, medium and large sidebar icon sizes.
+        static func iconSide(_ style: NSTableView.RowSizeStyle) -> CGFloat {
+            switch style {
+            case .small: 16
+            case .large: 24
+            default: 18
+            }
         }
     }
 
@@ -176,6 +195,42 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         }
         /// The context menu for a right-click on a row, or -1 below the rows; nil for none.
         var contextMenu: @MainActor (Int) -> NSMenu? = { _ in nil }
+        /// Ends text editing for a press on the list: gives the keys from a text field, such as
+        /// a pane's rename or filter field, to the focused pane, which commits a rename as any
+        /// click elsewhere does. The window sets it; a list without it leaves the keys alone.
+        var takeKeysFromText: @MainActor () -> Void = {}
+        /// Whether the window is sending a press on the list, during which the list refuses the
+        /// keys.
+        private(set) var isPressed = false
+
+        /// A click on the list leaves the keys where they were, as a click in Finder's sidebar
+        /// does, so the selection shows as a list without the keys shows it: the row's icon and
+        /// name in the accent. `NSWindow` asks this before it gives the pressed view the keys.
+        /// Only a press being sent counts, so Focus Sidebar, Tab and VoiceOver still give the
+        /// list the keys, whatever event came last.
+        override var acceptsFirstResponder: Bool {
+            !isPressed && super.acceptsFirstResponder
+        }
+
+        /// Whether a mouse down at `windowPoint` lands on the list as shown.
+        func isHit(atWindowPoint windowPoint: NSPoint) -> Bool {
+            window != nil && !isHiddenOrHasHiddenAncestor
+                && visibleRect.contains(convert(windowPoint, from: nil))
+        }
+
+        /// Runs `send`, the window's sending of a mouse down at `windowPoint`. One on the list
+        /// first ends text editing (`takeKeysFromText`), then is sent with the list refusing
+        /// the keys; the row is selected and opened, dragged or shows its menu as before.
+        func sendMouseDown(atWindowPoint windowPoint: NSPoint, _ send: () -> Void) {
+            guard isHit(atWindowPoint: windowPoint), !isPressed else {
+                send()
+                return
+            }
+            takeKeysFromText()
+            isPressed = true
+            defer { isPressed = false }
+            send()
+        }
 
         override func keyDown(with event: NSEvent) {
             switch KeyChord(event: event) {
@@ -376,15 +431,44 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     }
 
     @objc private func rowClicked() {
-        openRow(outlineView.clickedRow)
+        openClicked(row: outlineView.clickedRow)
+    }
+
+    /// Opens the clicked row one turn of the main actor later. A press that ended a rename in a
+    /// pane started it with a hop to the main actor, and the rename names its entry in the
+    /// pane's folder then; a volume's row moves the pane at once, so opening first would drop
+    /// the typed name (docs/decisions/0068-inline-rename.md). The row is looked up again then,
+    /// so one that left the list in that turn, as an unmounted volume, opens nothing.
+    func openClicked(row index: Int) {
+        let item = outlineView.item(atRow: index)
+        Task { [weak self] in
+            guard let self else { return }
+            open(listed(item))
+        }
+    }
+
+    /// The row now listed for what `item` showed: the same workspace, favorite path or mount
+    /// point, since a reload makes new row items; nil once it isn't listed.
+    private func listed(_ item: Any?) -> Any? {
+        let now: Any? =
+            switch item {
+            case let row as Row: rows.first { $0.saved.id == row.saved.id }
+            case let row as FavoriteRow: favoriteRows.first { $0.item.path == row.item.path }
+            case let row as VolumeRow:
+                volumeRows.first { $0.volume.mountPoint == row.volume.mountPoint }
+            default: nil
+            }
+        // A row of a group hidden meanwhile isn't listed either.
+        guard let now, outlineView.row(forItem: now) >= 0 else { return nil }
+        return now
     }
 
     private func openSelected() {
-        openRow(outlineView.selectedRow)
+        open(outlineView.item(atRow: outlineView.selectedRow))
     }
 
-    private func openRow(_ index: Int) {
-        switch outlineView.item(atRow: index) {
+    private func open(_ item: Any?) {
+        switch item {
         case let row as Row: open(row.saved.id)
         case let row as FavoriteRow: openFavorite(row.item.path)
         case let row as VolumeRow: openVolume(row.volume.mountPoint)
@@ -649,7 +733,6 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
             outlineView.makeView(withIdentifier: Self.cellID, owner: nil) as? Cell
             ?? makeCell(Self.cellID)
         cell.imageView?.image = symbol("macwindow", description: "Workspace")
-        cell.tintsIcon = false
         cell.textField?.stringValue = saved.name
         cell.openMark.isHidden = !saved.isOpen
         cell.ejectButton.isHidden = true
@@ -664,7 +747,6 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
             ?? makeCell(Self.favoriteCellID)
         let isMissing = item.state == .missing
         cell.imageView?.image = icon(for: item)
-        cell.tintsIcon = true
         cell.imageView?.alphaValue = isMissing ? 0.4 : 1
         cell.textField?.stringValue = item.name
         cell.textField?.textColor = isMissing ? .tertiaryLabelColor : .labelColor
@@ -681,7 +763,6 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
             outlineView.makeView(withIdentifier: Self.volumeCellID, owner: nil) as? Cell
             ?? makeCell(Self.volumeCellID)
         cell.imageView?.image = icon(for: volume)
-        cell.tintsIcon = true
         cell.textField?.stringValue = volume.name
         cell.openMark.isHidden = true
         cell.ejectButton.isHidden = !volume.canEject
@@ -747,10 +828,8 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         // The cell's label says "open"; the dot alone adds nothing for VoiceOver.
         mark.setAccessibilityElement(false)
         let eject = cell.ejectButton
-        eject.image = symbol("eject", description: "Eject")
-        eject.isBordered = false
-        eject.imagePosition = .imageOnly
-        eject.contentTintColor = .secondaryLabelColor
+        // Finder's eject glyph is the filled one.
+        eject.image = symbol("eject.fill", description: "Eject")
         eject.target = self
         eject.action = #selector(ejectClicked(_:))
         eject.isHidden = true
@@ -759,20 +838,26 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         }
         cell.imageView = icon
         cell.textField = label
-        NSLayoutConstraint.activate([
-            icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
-            icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 18),
-            icon.heightAnchor.constraint(equalToConstant: 18),
-            label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 6),
-            label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-            mark.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 6),
-            mark.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
-            mark.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-            eject.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 4),
-            eject.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4),
-            eject.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-        ])
+        let side = Cell.iconSide(cell.rowSizeStyle)
+        cell.iconSize = [
+            icon.widthAnchor.constraint(equalToConstant: side),
+            icon.heightAnchor.constraint(equalToConstant: side),
+        ]
+        NSLayoutConstraint.activate(
+            cell.iconSize + [
+                icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
+                icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 6),
+                label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                mark.leadingAnchor.constraint(
+                    greaterThanOrEqualTo: label.trailingAnchor, constant: 6),
+                mark.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
+                mark.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                eject.leadingAnchor.constraint(
+                    greaterThanOrEqualTo: label.trailingAnchor, constant: 4),
+                eject.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -2),
+                eject.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            ])
         return cell
     }
 
