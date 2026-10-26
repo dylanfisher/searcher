@@ -75,7 +75,9 @@ private final class Fixture {
             workspace: own, list: list, favorites: favorites, settings: settings)
         sidebar.open = { [weak self] id in self?.opened.append(id) }
         sidebar.openFavorite = { [weak self] path in self?.openedFavorites.append(path) }
-        sidebar.dragWasCancelled = { [weak self] in self?.dragCancelled ?? false }
+        sidebar.dragWasCancelled = { [weak self] _ in self?.dragCancelled ?? false }
+        // The window is never ordered in; the sidebar takes it as shown.
+        sidebar.windowIsShown = { _ in true }
         sidebar.onEscape = { [weak self] in self?.escapes += 1 }
         sidebar.view.frame = NSRect(x: 0, y: 0, width: 200, height: 300)
         window.contentView?.addSubview(sidebar.view)
@@ -400,6 +402,7 @@ private final class Fixture {
     let otherWindow = KeyCatchingWindow()
     otherWindow.setFrameOrigin(NSPoint(x: 40_000, y: 40_000))
     let other = fixture.makeSidebar()
+    other.windowIsShown = { _ in true }
     other.view.frame = NSRect(x: 0, y: 0, width: 200, height: 300)
     otherWindow.contentView?.addSubview(other.view)
     // On the other sidebar's workspace rows, outside this window.
@@ -411,6 +414,46 @@ private final class Fixture {
     fixture.sidebar.endDrag(at: onOther, operation: [])
 
     #expect(try fixture.favoriteNames.contains("Documents"))
+}
+
+@MainActor @Test func aSidebarInAWindowThatIsNotShownDoesNotCountAsInside() throws {
+    let fixture = try Fixture()
+    let otherWindow = KeyCatchingWindow()
+    otherWindow.setFrameOrigin(NSPoint(x: 45_000, y: 45_000))
+    // Ordered out or minimized, as the window server reports it.
+    let other = fixture.makeSidebar()
+    other.view.frame = NSRect(x: 0, y: 0, width: 200, height: 300)
+    otherWindow.contentView?.addSubview(other.view)
+    let onOther = otherWindow.convertPoint(
+        toScreen: other.view.convert(NSPoint(x: 100, y: 250), to: nil))
+    let documents = try #require(fixture.outline.item(atRow: try fixture.row(of: "Documents")))
+
+    fixture.sidebar.beginDrag(of: [documents])
+    fixture.sidebar.endDrag(at: onOther, operation: [])
+
+    #expect(try !fixture.favoriteNames.contains("Documents"))
+}
+
+@MainActor @Test func aDragIsCancelledByAKeyDuringItOrAButtonStillDown() {
+    let cancelled = WorkspaceSidebarViewController.wasCancelled
+    // Esc during the drag, the button let go before the end reached the app.
+    #expect(cancelled(0.05, 2, false))
+    // Esc with the button still down.
+    #expect(cancelled(30, 2, true))
+    // A drop: the button released, no key since the drag began.
+    #expect(!cancelled(30, 2, false))
+}
+
+@MainActor @Test func aDropBetweenTheLastFavoriteAndTheWorkspacesGoesAtTheEnd() throws {
+    let fixture = try Fixture()
+
+    // AppKit proposes the gap between the two groups, at the root.
+    let operation = fixture.drop(fixture.drag(["/p/end"]), parentRow: -1, index: 1)
+
+    #expect(!operation.isEmpty)
+    #expect(try fixture.favoriteNames.last == "end")
+    // Above the first group is no place among the favorites.
+    #expect(fixture.drop(fixture.drag(["/p/top"]), parentRow: -1, index: 0).isEmpty)
 }
 
 @MainActor @Test func removeFromSidebarInAFavoritesMenuRemovesIt() throws {

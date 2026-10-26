@@ -44,13 +44,22 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     private let workspacesGroup = Group(title: "Workspaces")
     /// The paths of the favorites a drag from this list carries, until it ends.
     private var draggedFavorites: [String] = []
-    /// Whether the drag that just ended was cancelled rather than dropped: AppKit reports both
-    /// with no operation. Esc cancels while the mouse button is still held, so the key that
-    /// ended the session is a key down, or the button is still down; a drop ends on the button's
-    /// release. Neither is checked against a real drag in a test; tests replace it.
-    var dragWasCancelled: @MainActor () -> Bool = {
-        NSApp.currentEvent?.type == .keyDown || NSEvent.pressedMouseButtons & 1 != 0
+    /// When the drag of `draggedFavorites` began, as `ProcessInfo.systemUptime`.
+    private var dragBegan: TimeInterval = 0
+    /// Whether the drag that began at the given `systemUptime` and just ended was cancelled
+    /// rather than dropped: AppKit reports both with no operation. It reads the window server's
+    /// time since the last key down and the mouse button's state (`wasCancelled`); tests
+    /// replace it.
+    var dragWasCancelled: @MainActor (TimeInterval) -> Bool = { began in
+        WorkspaceSidebarViewController.wasCancelled(
+            keyDownAge: CGEventSource.secondsSinceLastEventType(
+                .combinedSessionState, eventType: .keyDown),
+            dragAge: ProcessInfo.processInfo.systemUptime - began,
+            buttonIsDown: NSEvent.pressedMouseButtons & 1 != 0)
     }
+    /// Whether the window server reports another window's sidebar as shown; tests replace it,
+    /// since their windows are never ordered in.
+    var windowIsShown: @MainActor (NSWindow) -> Bool = { $0.isVisible && !$0.isMiniaturized }
     /// Every sidebar made, weakly, so a favorite dropped on another window's sidebar counts as
     /// dropped inside one.
     private static var all: [WeakSidebar] = []
@@ -361,6 +370,21 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     /// Keeps the paths of the favorites among `items`, which a drag from the list carries.
     func beginDrag(of items: [Any]) {
         draggedFavorites = items.compactMap { ($0 as? FavoriteRow)?.item.path }
+        dragBegan = ProcessInfo.processInfo.systemUptime
+    }
+
+    /// Whether a drag that ended with no operation was cancelled: a key went down since it began
+    /// `dragAge` seconds ago, the last key down being `keyDownAge` seconds ago, or the mouse
+    /// button is still down. Esc cancels a drag while the button is held, and a drop is the
+    /// button's release. AppKit's current event can't tell them apart, since the window server
+    /// runs the drag and the app may still be on its last mouse-dragged event. The button alone
+    /// would turn Esc into a drop for a user who lets go before the session's end reaches the
+    /// app; the key down covers that, and any other key pressed during the drag keeps the
+    /// favorites too, which loses nothing.
+    static func wasCancelled(
+        keyDownAge: TimeInterval, dragAge: TimeInterval, buttonIsDown: Bool
+    ) -> Bool {
+        buttonIsDown || keyDownAge <= dragAge
     }
 
     /// The drag `beginDrag` started ended at `screenPoint`: favorites dropped where nothing took
@@ -368,7 +392,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     /// as with Esc, leaves them.
     func endDrag(at screenPoint: NSPoint, operation: NSDragOperation) {
         defer { draggedFavorites = [] }
-        guard operation.isEmpty, !dragWasCancelled(),
+        guard operation.isEmpty, !dragWasCancelled(dragBegan),
             !Self.all.contains(where: { $0.sidebar?.shows(screenPoint) == true })
         else { return }
         for path in draggedFavorites {
@@ -376,11 +400,11 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         }
     }
 
-    /// Whether the sidebar is in a window and shown at `screenPoint`.
+    /// Whether the sidebar is in a window on screen, not minimized, and shown at `screenPoint`.
     private func shows(_ screenPoint: NSPoint) -> Bool {
-        guard isViewLoaded, let window = view.window, !view.isHiddenOrHasHiddenAncestor else {
-            return false
-        }
+        guard isViewLoaded, let window = view.window, windowIsShown(window),
+            !view.isHiddenOrHasHiddenAncestor
+        else { return false }
         let point = view.convert(window.convertPoint(fromScreen: screenPoint), from: nil)
         return view.bounds.contains(point)
     }
@@ -420,7 +444,13 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     /// Where among the favorites a drop proposed on `item` at `childIndex` goes; nil for a drop
     /// outside the Favorites group.
     private func favoritesIndex(item: Any?, childIndex: Int) -> Int? {
-        guard groups.contains(where: { $0 === favoritesGroup }) else { return nil }
+        guard let groupIndex = groups.firstIndex(where: { $0 === favoritesGroup }) else {
+            return nil
+        }
+        // Between the last favorite and the next group, AppKit proposes the gap between groups.
+        if item == nil, childIndex == groupIndex + 1 {
+            return favoriteRows.count
+        }
         if let group = item as? Group, group === favoritesGroup {
             return childIndex == NSOutlineViewDropOnItemIndex ? favoriteRows.count : childIndex
         }
