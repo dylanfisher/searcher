@@ -77,20 +77,21 @@ Tags needs search, which is on hold.
   the name while the list doesn't have the keys, and white on the accent fill while it has them
   in the key window (the row is emphasized); with the keys in a window that isn't key, a grey
   fill with the label color. These were read from AppKit by drawing a source list off screen
-  in both appearances, not taken from a guess. A click on the sidebar's list leaves the keys
-  where they were, as a click in Finder's sidebar does, so a clicked row shows Finder's look,
-  the accent icon and name, rather than the emphasized fill. The window sends a mouse down on
-  the list through `SidebarOutlineView.sendMouseDown`, and the list refuses the keys only while
-  that press is being sent (`acceptsFirstResponder`, which `NSWindow` asks before giving the
-  pressed view the keys), so a stale `NSApp.currentEvent` can't keep VoiceOver or a later
-  `makeFirstResponder` from giving it the keys. The press first ends text editing, as any click
-  elsewhere does: with the keys in a text field, such as a pane's rename or filter field, they
-  go to the focused pane's list, which commits a rename (0068) and stops typing into the filter,
-  as a click in Finder's sidebar commits a rename and leaves its search field. The clicked
-  row opens one turn of the main actor later, so a rename that press started names its entry
-  before a volume's row moves the pane to another folder; the row is looked up again then, so
-  one that left the list in that turn opens nothing. Focus Sidebar and Tab still give the
-  list the keys, and while it has them a click on a row keeps them there
+  in both appearances, not taken from a guess. (Amended 2026-10-26, Dylan: "you should still be
+  able to focus sidebar by clicking on it (right now you have to do shift+tab)".) A click on the
+  sidebar's list, on a row or below the rows, gives it the keys, as a click in Finder's sidebar
+  does, so a clicked row shows the emphasized fill and ↑ and ↓ then move in the list. The
+  window sends a mouse down on the list through `SidebarOutlineView.sendMouseDown`, which first
+  ends text editing, as any click elsewhere does: with the keys in a text field, such as a
+  pane's rename or filter field, they go to the focused pane's list, which commits a rename
+  (0068) and stops typing into the filter, as a click in Finder's sidebar commits a rename and
+  leaves its search field. A left press then makes the list first responder itself: `NSWindow`
+  gives the keys only to the pressed view when that view takes them, and a row's name field
+  doesn't. A right press leaves the keys where they were. The clicked row opens one turn of the
+  main actor later, so a rename that press started names its entry before a volume's row moves
+  the pane to another folder; the row is looked up again then, so one that left the list in
+  that turn opens nothing. The open leaves the keys in the list, and the pane it moved stays the
+  window's focused pane, so Tab or Esc gives it the keys
   ([0089](0089-sidebar-key-routing.md)). Finder's glyphs are 16, 18 and 24 pt square for the
   system's small, medium and large sidebar icon size (System Settings ▸ Appearance), the sizes
   the `.icns` files are drawn at and the widths AppKit's own cell layout gives an image there;

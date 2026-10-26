@@ -7,6 +7,8 @@
   "Where the keys stay".
 - **2026-10-26:** A click in the sidebar's list no longer gives it the keys; see "Where the keys
   stay" and 0107's "Rows".
+- **2026-10-26:** A click in the sidebar's list gives it the keys again, as Finder's does; see
+  "Where the keys stay".
 
 ## Context
 
@@ -53,9 +55,15 @@ pane, `Tab.focusedPane`, whether or not its table has the keys.
   pane".) Focus Pane Left, Right, Up and Down and Focus Other Pane, run from outside the panes'
   tables by their chord, menu item or the palette, give the keys to the pane they focus. A Focus
   Pane key with no pane that way still moves the keys to the focused pane: the key asks for a
-  pane, not the sidebar. A click in a pane already gave it the keys. A click in the sidebar's list
-  leaves the keys where they were, as Finder's does: Focus Sidebar or Tab gives the list the keys
-  ([0107](0107-sidebar-favorites.md), amended 2026-10-26).
+  pane, not the sidebar. A click in a pane already gave it the keys. (Amended 2026-10-26, Dylan:
+  "you should still be able to focus sidebar by clicking on it (right now you have to do
+  shift+tab)".) A left click in the sidebar's list, on a row or below the rows, gives the list
+  the keys, as a click in Finder's sidebar does, after ending a rename or filter edit in a pane;
+  a right click leaves them where they were. The row's open moves the focused pane and leaves
+  the keys in the list; Tab or Esc then gives them to that pane, which is still the focused one
+  ([0107](0107-sidebar-favorites.md)). Moving the keys into the sidebar is no step of the
+  position history: "Not steps: the sidebar, which is not a position, so moving the keys into
+  or out of it is none" ([0112](0112-position-history.md)).
 - **The focus ring.** (Added 2026-10-26, Dylan: "if sidebar is focused, the panes on right should
   remove focus indicator (but tab should still go back to the correct pane that did have the
   focus)".) While the keys are anywhere in the sidebar, no pane shows the focus ring

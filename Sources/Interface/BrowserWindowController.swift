@@ -1052,8 +1052,8 @@ private final class BrowserWindow: NSWindow {
     /// Runs before a left mouse down is handled, so the one that starts a title-bar drag comes
     /// ahead of the `windowWillMove` it causes.
     var willSendMouseDown: @MainActor () -> Void = {}
-    /// The sidebar's list, which a mouse down on it is sent through, so the list leaves the keys
-    /// where they were (`SidebarOutlineView.sendMouseDown`).
+    /// The sidebar's list, which a mouse down on it is sent through, so a press there ends text
+    /// editing before the list takes the keys (`SidebarOutlineView.sendMouseDown`).
     weak var sidebarList: WorkspaceSidebarViewController.SidebarOutlineView?
 
     override func sendEvent(_ event: NSEvent) {
@@ -1062,7 +1062,7 @@ private final class BrowserWindow: NSWindow {
         if [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type),
             let sidebarList
         {
-            sidebarList.sendMouseDown(atWindowPoint: event.locationInWindow) {
+            sidebarList.sendMouseDown(event.type, atWindowPoint: event.locationInWindow) {
                 super.sendEvent(event)
             }
             return
