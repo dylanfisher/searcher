@@ -109,6 +109,17 @@ public final class GatedLister: Lister, @unchecked Sendable {
         condition.unlock()
     }
 
+    /// Holds every call for `path` made from now on until `release` lets it go again, as a
+    /// folder listed once whose next listing is slow.
+    ///
+    /// - Precondition: `releaseAll` hasn't run.
+    public func hold(_ path: String) {
+        condition.lock()
+        defer { condition.unlock() }
+        precondition(!allReleased, "every call was released; \(path) can't be held")
+        released.remove(path)
+    }
+
     /// Lets every call go ahead, held now or made later.
     public func releaseAll() {
         condition.lock()

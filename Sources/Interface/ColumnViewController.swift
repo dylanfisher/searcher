@@ -285,13 +285,13 @@ final class ColumnViewController: NSViewController {
         prepareTable(table)
         table.setAccessibilityLabel(column.pane.location.name)
         controller.view.setAccessibilityLabel(column.pane.location.name)
-        table.didBecomeFirstResponder = { [weak self, weak column, weak controller] in
-            guard let self, let column, let trail = self.pane.columnTrail else { return }
+        table.didBecomeFirstResponder = { [weak self, weak column, weak controller, weak table] in
+            guard let self, let column, let table, let trail = self.pane.columnTrail else { return }
             self.isFollowingFirstResponder = true
             defer { self.isFollowingFirstResponder = false }
             // AppKit tells VoiceOver of the table taking the keys.
             self.reportedFocus = controller
-            trail.focus(column)
+            trail.focus(column, recordingAs: table.keysSource)
         }
         addChild(controller)
         columnsView.addSubview(controller.view)

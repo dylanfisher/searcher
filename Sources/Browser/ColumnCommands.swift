@@ -10,8 +10,12 @@ public enum ColumnCommands: CommandSet {
 
     public static var bindings: [CommandBinding] {
         [
-            CommandBinding(intoFolder) { $0.pane.containingTrail?.moveRight() },
-            CommandBinding(toParent) { $0.pane.containingTrail?.moveLeft() },
+            CommandBinding(intoFolder) {
+                $0.pane.containingTrail?.moveRight(isKeyRepeat: $0.isKeyRepeat)
+            },
+            CommandBinding(toParent) {
+                $0.pane.containingTrail?.moveLeft(isKeyRepeat: $0.isKeyRepeat)
+            },
         ]
     }
 }

@@ -456,10 +456,13 @@ public final class Pane {
 
     /// The trail is moving the keys from `column`, one of its columns, to another: the pane
     /// leaves `column`'s folder, so the folder goes into the history with the entry under its
-    /// cursor, as a navigation records the folder it leaves. Back and Forward and a drag's
-    /// spring-loaded folders move the focus without a step.
-    func trailWillMoveFocus(from column: Pane) {
+    /// cursor, as a navigation records the folder it leaves. The keys leaving where they are is
+    /// a step of the selection history made by `source`, or none for nil. Back and Forward,
+    /// Undo and Redo Selection, and a drag's spring-loaded folders move the focus without a
+    /// step in either.
+    func trailWillMoveFocus(from column: Pane, recordingAs source: SelectionHistory.Source?) {
         guard !isSteppingHistory, !isSpringing else { return }
+        if let source { tab?.keysWillMove(by: source) }
         history.leave(History.Entry(location: column.location, selected: column.selection.cursor))
     }
 
@@ -830,9 +833,9 @@ public final class Pane {
     }
 
     /// Moves to `location` without touching the history, with `selection` to be selected once
-    /// it is listed.
-    private func move(to location: Location, selection: Selection) {
-        leave(for: location, selection: selection)
+    /// it is listed. Not `isNavigation` only for Undo and Redo Selection, which keep the steps.
+    private func move(to location: Location, selection: Selection, isNavigation: Bool = true) {
+        leave(for: location, selection: selection, isNavigation: isNavigation)
         if columnTrail != nil {
             restartTrail()
         } else {
@@ -855,9 +858,10 @@ public final class Pane {
     /// Stops everything the pane does for the folder it leaves: its load, a pending
     /// `goToFolder`, its monitor and patches. Takes `location` with `selection` to be selected.
     /// Leaving the folder is a navigation, which drops the pane's selection steps, unless a
-    /// drag's spring-loaded folders make it: the drag's end comes back.
-    private func leave(for location: Location, selection: Selection) {
-        if !isSpringing { tab?.paneDidNavigate(self) }
+    /// drag's spring-loaded folders make it, since the drag's end comes back, or it isn't one
+    /// (`isNavigation`).
+    private func leave(for location: Location, selection: Selection, isNavigation: Bool = true) {
+        if isNavigation, !isSpringing { tab?.paneDidNavigate(self) }
         cancelGoToFolder()
         loadedAt = nil
         load?.cancel()
@@ -1570,11 +1574,17 @@ public final class Pane {
     /// selection history. A name the rows no longer list, as one deleted while the palette was
     /// open, changes nothing (docs/decisions/0101-go-to-item.md).
     public func jump(to name: String) {
+        jump(to: name, recordingAs: .once)
+    }
+
+    /// Go to Item's choice, recording the selection it replaces as made by `source`, or not at
+    /// all when it is nil: the move of the keys into this column was the step.
+    func jump(to name: String, recordingAs source: SelectionHistory.Source?) {
         guard state.listing?.row(named: name) != nil else { return }
         let name = ExactName(name)
         let version = selectionVersion
         centeringRequest += 1
-        select(Selection([name], cursor: name))
+        select(Selection([name], cursor: name), recordingAs: source)
         // Selecting what is selected reports no change, but the row still has to be centered.
         if selectionVersion == version { reportChange() }
     }
@@ -1796,8 +1806,17 @@ public final class Pane {
     /// Selects the first row alone. `byKey` says a key asked for it, as Home does; → into a
     /// column asks without it, so the folder in that row opens its column at once.
     public func selectFirstRow(byKey: Bool = false) {
+        selectFirstRow(byKey: byKey, recordingAs: .once)
+    }
+
+    /// Selects the first row alone, recording the selection it replaces as made by `source`, or
+    /// not at all when it is nil: → 's selection in the column it moves into is part of its
+    /// step.
+    func selectFirstRow(byKey: Bool, recordingAs source: SelectionHistory.Source?) {
         guard let listing = state.listing else { return }
-        set(onMain { selection.moved(toRow: 0, in: listing, extending: false) }, byKey: byKey)
+        set(
+            onMain { selection.moved(toRow: 0, in: listing, extending: false) },
+            recordingAs: source, byKey: byKey)
     }
 
     /// Selects the last row alone. `byKey` says a key asked for it, as End does.
@@ -1835,19 +1854,36 @@ public final class Pane {
         {
             owner.isSteppingHistory = true
             defer { owner.isSteppingHistory = false }
-            trail.focus(column)
+            trail.focus(column, recordingAs: nil)
         }
         set(selection, recordingAs: nil)
     }
 
-    /// `step` resolved against the rows shown, or nil when it would select nothing listed and
-    /// has no listed cursor, or would select what is selected now. A complete listing drops the
-    /// names it doesn't have. Work per entry of the step, on the main thread: a step is restored
-    /// at once, as a key's move is shown.
-    func restorable(_ step: Selection) -> Selection? {
-        guard let listing = state.listing else { return nil }
+    /// Starts the trail again at `location`, a folder of it whose column has closed, as a
+    /// navigation does, keeping the columns above it, with `selection` in its column, recording
+    /// nothing: for Undo and Redo Selection, which put the keys back in a trail the pane never
+    /// left, so nothing goes to Back and the selection steps stay. The selection's names wait
+    /// for the column's rows, as any selection made before them does.
+    func reopenColumn(at location: Location, selecting selection: Selection) {
+        guard columnTrail != nil else { preconditionFailure("reopening a column in list mode") }
+        move(to: location, selection: selection, isNavigation: false)
+        commandPane.select(selection, recordingAs: nil)
+    }
+
+    /// `step` resolved against the rows shown, or nil when it would change nothing: unless it
+    /// `movingKeys` to this pane or column, when it would select nothing listed and has no
+    /// listed cursor, or would select what is selected now. A complete listing drops the names
+    /// it doesn't have. Rows not listed yet, as in a column just opened, can't tell: the step
+    /// is kept by name until they land, and is nil only when it is the selection now. Work per
+    /// entry of the step, on the main thread: a step is restored at once, as a key's move is
+    /// shown.
+    func restorable(_ step: Selection, movingKeys: Bool) -> Selection? {
+        guard let listing = state.listing else {
+            return movingKeys || step != selection ? step : nil
+        }
         let complete = if case .loaded = state { true } else { false }
         let restored = onMain { step.resolved(in: listing, after: .loaded(complete: complete)) }
+        if movingKeys { return restored }
         guard !restored.isEmpty || restored.cursorRow(in: listing) != nil,
             restored != selection
         else { return nil }

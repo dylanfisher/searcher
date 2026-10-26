@@ -26,7 +26,8 @@ public enum DualPaneCommands: CommandSet {
                 focusOtherPane, isEnabled: { $0.tab.layout.otherPane != nil },
                 run: { context in
                     if let other = context.tab.layout.otherPane {
-                        context.tab.focus(other)
+                        context.tab.focus(
+                            other, recordingAs: .focus(nil, isRepeat: context.isKeyRepeat))
                     }
                 }),
             CommandBinding(sameFolderInOtherPane) { context in
@@ -78,7 +79,7 @@ public enum DualPaneCommands: CommandSet {
         if tab.layout.otherPane == nil {
             let focused = tab.layout.focused
             guard tab.split(.horizontal, in: context.tabBounds()) != nil else { return nil }
-            tab.focus(focused)
+            tab.focus(focused, recordingAs: nil)
         }
         guard let id = tab.layout.otherPane, let pane = tab.panes[id] else {
             preconditionFailure("the tab has no other pane after a split")
