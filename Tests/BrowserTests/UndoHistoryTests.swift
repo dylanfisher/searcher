@@ -940,6 +940,31 @@ func aPressWaitingItsTurnWhileANewChangeIsMadeDoesNothing() async throws {
         try await image.detach()
     }
 
+    /// A duplicate of ~/Downloads carries `group:everyone deny delete`, which refuses a move out
+    /// of the Trash as it refuses one in; both go, and it keeps the ACL in each place
+    /// (docs/decisions/0105-trash-past-a-deny-delete-acl.md).
+    @Test func aFolderWhoseACLDeniesDeletingItIsTrashedAndPutBackKeepingIt() async throws {
+        let image = try await DiskImage("UndoHistoryTests")
+        let folder = image.mountPoint + "/Downloads copy"
+        try makeFolder(folder)
+        try denyDelete(folder)
+        let acl = try #require(aclText(folder))
+        let harness = Harness()
+
+        let trashed = await harness.perform(.trash([folder]))
+        guard case .trashed(_, let url) = trashed.record.changes.first else {
+            Issue.record("the trash recorded \(trashed.record.changes) \(trashed.errors)")
+            return
+        }
+        #expect(aclText(url.path) == acl)
+
+        let undone = try await harness.undo()
+        #expect(undone.record.changes == [.putBack(from: url, to: folder)])
+        #expect(!exists(url.path))
+        #expect(aclText(folder) == acl)
+        try await image.detach()
+    }
+
     @Test func undoingAReplaceTrashesTheNewItemAndPutsTheOriginalBack() async throws {
         let image = try await DiskImage("UndoHistoryTests")
         let source = image.mountPoint + "/new"

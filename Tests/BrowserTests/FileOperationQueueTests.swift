@@ -163,7 +163,18 @@ final class FakeFiles: @unchecked Sendable {
     }
 
     func fileSystem() -> FileOperationQueue.FileSystem {
-        FileOperationQueue.FileSystem(
+        // A put back is the move it ends in, here.
+        let move: @Sendable (String, String) throws(FileOperationError) -> Void = {
+            source, destination throws(FileOperationError) in
+            if let failure = self.condition.withLock({
+                self.moveFailures.removeValue(forKey: destination)
+            }) {
+                self.events.append("move failed \(source) to \(destination)")
+                throw failure
+            }
+            self.events.append("move \(source) to \(destination)")
+        }
+        return FileOperationQueue.FileSystem(
             volumeOf: { path throws(ListingError) in
                 let volumes = self.condition.withLock {
                     if self.heldVolumes.contains(path) {
@@ -185,15 +196,7 @@ final class FakeFiles: @unchecked Sendable {
                 return TreeSizeWalker.Total(bytes: 10, files: 1, isPartial: false)
             },
             makeCopier: { FakeCopier(files: self) },
-            move: { source, destination throws(FileOperationError) in
-                if let failure = self.condition.withLock({
-                    self.moveFailures.removeValue(forKey: destination)
-                }) {
-                    self.events.append("move failed \(source) to \(destination)")
-                    throw failure
-                }
-                self.events.append("move \(source) to \(destination)")
-            },
+            move: move,
             trash: { path throws(FileOperationError) in
                 if self.condition.withLock({ self.hasNoTrash }) {
                     throw FileOperationError(reason: .noTrash, path: path, errno: nil)
@@ -201,6 +204,9 @@ final class FakeFiles: @unchecked Sendable {
                 self.events.append("trash \(path)")
                 return URL(
                     fileURLWithPath: "/S/.Trashes/501/" + (path as NSString).lastPathComponent)
+            },
+            putBack: { url, destination throws(FileOperationError) in
+                try move(url.path, destination)
             },
             deletePermanently: { path throws(FileOperationError) in
                 if let failure = self.condition.withLock({

@@ -1,7 +1,7 @@
 # 0059. Move to Trash with FileManager.trashItem, one item at a time
 
 - **Date:** 2026-10-22
-- **Status:** accepted
+- **Status:** Amended by [0105](0105-trash-past-a-deny-delete-acl.md)
 
 ## Context
 

@@ -109,6 +109,8 @@ public actor FileOperationQueue {
         var makeCopier: @Sendable () -> any Copier
         var move: @Sendable (String, String) throws(FileOperationError) -> Void
         var trash: @Sendable (String) throws(FileOperationError) -> URL
+        /// Moves an item from where `trash` put it back to a path.
+        var putBack: @Sendable (URL, String) throws(FileOperationError) -> Void
         var deletePermanently: @Sendable (String) throws(FileOperationError) -> Void
         var makeUntitledFolder: @Sendable (String) throws(FileOperationError) -> String
         /// Makes a folder by the name given first in the folder given second, and returns its
@@ -129,7 +131,7 @@ public actor FileOperationQueue {
             volumeOf: VolumeIdentity.init(path:), measure: OperationPlan.measure,
             makeCopier: { FileCopier() }, move: FileMover.move,
             trash: { path throws(FileOperationError) in try Trasher().trash(path) },
-            deletePermanently: Trasher.deletePermanently,
+            putBack: Trasher.putBack(_:to:), deletePermanently: Trasher.deletePermanently,
             makeUntitledFolder: FolderMaker.makeUntitledFolder,
             makeFolder: FolderMaker.makeFolder(named:in:),
             isTaken: UniqueName.isTaken, inspect: OperationPlan.inspect,
@@ -1030,7 +1032,7 @@ public actor FileOperationQueue {
         } catch {
             guard let trashed else { return failed(error, changes: [original]) }
             do {
-                try fileSystem.move(trashed.path, destination)
+                try fileSystem.putBack(trashed, destination)
             } catch let restore {
                 return .failed(restore, changes: [original])
             }
@@ -1270,7 +1272,7 @@ public actor FileOperationQueue {
                 case .make(let path, .drop):
                     preconditionFailure("\(path) is put back from the Trash, not made again")
                 case .putBack(let url, let path):
-                    try fileSystem.move(url.path, path)
+                    try fileSystem.putBack(url, path)
                     return .done([.putBack(from: url, to: path)], copied: none)
                 case .move(let from, let to):
                     guard item.crossesVolumes else {
