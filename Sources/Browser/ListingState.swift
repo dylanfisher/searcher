@@ -24,8 +24,8 @@ public enum ListingState: Sendable {
     /// The first entries of a large folder, while the rest is still being read.
     case partial(Listing)
     case loaded(Listing)
-    /// The folder's rows as the listing cache, or for a local folder `RecentListings`, kept them
-    /// from a listing at `listedAt`, shown while the folder is listed again.
+    /// The folder's rows as the listing cache, or `RecentListings` for a folder a pane showed,
+    /// kept them from a listing at `listedAt`, shown while the folder is listed again.
     case cachedRefreshing(Listing, listedAt: Date)
     /// The load has read nothing for `LoadTimeouts.slow` and is still waiting, showing the rows
     /// shown before, if any.

@@ -20,6 +20,9 @@ pass. Tests and bench mode must never read or write the user's Library folders.
 - **Network volumes only.** `ListingCache` keeps folders by `VolumeIdentity` and path, and
   ignores any volume whose kind is `.local`, which covers external disks: listing them again
   costs about what a cache read would. `ListingCacheStore.save` traps on a local volume.
+  (Amended 2026-10-26: a share folder revisited in the same launch now shows the rows a pane
+  last showed of it from `RecentListings` instead, in the move's turn
+  ([0109](0109-recent-local-listings.md)). This cache still serves first visits and relaunches.)
 - **What is kept.** `ListingCache.Folder`: the entries as the lister returned them and the date
   they were listed. Sort keys, folded names and kinds are rebuilt by `Listing` from the entries.
 - **Memory.** An actor holding the `defaultVolumeCap` (8) most recently used volumes, each with

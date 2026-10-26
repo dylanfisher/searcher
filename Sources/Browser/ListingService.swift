@@ -54,8 +54,8 @@ public final class ListingService: Sendable {
     /// Makes the thumbnails rows and the column preview show in place of type icons, for every
     /// pane and column on this service; nil shows type icons only.
     public let thumbnails: ThumbnailService?
-    /// The listings this service's panes last showed of local folders, which a pane coming back
-    /// to one shows at once (0109); nil keeps none.
+    /// The listings this service's panes last showed of folders, which a pane coming back to one
+    /// shows at once (0109); nil keeps none.
     public let recentListings: RecentListings?
 
     /// A service that lists folders on the file system and finds each one's volume with `statfs`.

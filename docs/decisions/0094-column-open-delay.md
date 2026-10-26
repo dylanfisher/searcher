@@ -23,7 +23,18 @@ opens the selected folder's column, or shows the file's preview, only once the k
   wait again, so only the selection the keys stop on opens anything. A click, a command's selection,
   Select All, Undo Selection and a selection that names rows a load brings follow at once, as
   before. A click on the row the keys selected follows it at once too, even though it changes no
-  row.
+  row. (Amended 2026-10-26, Dylan: "move up/down between directories still causes all items to
+  flash … if i click on the items instead of using arrow keys it actually loads faster … this
+  behavior should otherwise be identical." A key-made selection now waits only when waiting
+  saves something. When the keys had paused for `openDelay` before it, and it selects one folder
+  whose listing `RecentListings` keeps in the arrangement a new column takes
+  (`Pane.showsRecentRowsWhenMade`), its column opens at once with those rows, as a click's does,
+  instead of showing an empty column for 120 ms and then a blank one until the load lands. Every
+  other key-made selection waits as before. Each new key-made selection starts the pause again
+  (`Column.keysHavePaused`), so a held key's repeats, which come inside it, always wait: a held
+  ↓ through kept folders opens the first press's column and the one it stops on, and none
+  between. A click and a key-made selection both reach the columns through `ColumnTrail.follow`;
+  the wait is the only difference between them.)
 - **Only the new selection waits.** Once the columns follow a key-made selection, after the pause or
   →, a later change that keeps it, such as a patch that turns the selected entry into a folder, is
   followed at once. `Column.followedSelectionVersion` tells such a change from a new selection.
@@ -72,4 +83,6 @@ since its presses come faster than the pause, as a held key's do; the column the
 opens after the pause and is no key's frame. Its cost shows as a stall, if any, in B10. The → and ←
 cases are unchanged: the bench waits for the column to open before them.
 
-One press on a folder now shows its column 120 ms later than before.
+One press on a folder now shows its column 120 ms later than before. (Amended 2026-10-26: unless
+the folder's rows are kept, when it shows at once. The UI bench's service keeps no recent
+listings, so B6's column cases are unchanged.)

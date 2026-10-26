@@ -27,7 +27,13 @@ first update.
   the entry follows the folder as the pane saw it. `Listing` is a value whose arrays are shared
   with the pane showing it, so a folder still on screen costs nothing extra. Only folders whose
   pane's volume (`Pane.folderVolume`) is local are kept; network folders keep using
-  `ListingCache`.
+  `ListingCache`. (Amended 2026-10-26, Dylan, on folders that are "mostly on an SMB share":
+  "move up/down between directories still causes all items to flash. it seems like these could
+  be cached or more performant if i've just viewed them." Folders on every volume are kept, a
+  share's too, so a share folder revisited in the same launch shows its rows in the move's turn
+  as a local one does, then refreshes. `ListingCache` is unchanged and still gives a share's
+  rows on a folder's first visit of a launch and across launches; once a pane shows kept rows,
+  its cached update is ignored, as any cached update is when the pane has rows (0045).)
 - **Memory only.** Nothing is written to disk, and nothing is kept across launches.
 - **Shown in the move's turn.** `Pane.startLoad`, which every move, Back and Forward, a new
   pane and a new column go through, looks the folder up when the pane has no rows and shows the
@@ -49,6 +55,11 @@ first update.
   that name; folders under it go when their own loads fail. A volume mounting or unmounting
   (`VolumeEvents`, [0049](0049-volume-events.md)) drops every folder at or under its mount
   point, so a different volume mounted at the same path never shows the old one's rows.
+  (Amended 2026-10-26: so do will-unmount and the sidebar's will-eject
+  ([0108](0108-sidebar-locations.md)), so a folder opened while the volume goes doesn't show its
+  rows. A share that goes slow or gives up keeps its folders: the pane shows them slow or
+  offline, as it would the listing cache's (0045). A load that fails, `unreachable` included,
+  or finds its volume gone, drops them as above.)
 - **Bench mode keeps none.** The UI bench's service is made without one, so B2's and B6's cases
   keep timing a real load.
 
@@ -66,6 +77,7 @@ first update.
 ## Consequences
 
 A folder changed while no pane showed it shows its old rows until its listing lands, a few
-milliseconds on a local disk, with the spinner's wait. A folder deleted under a kept folder whose
+milliseconds on a local disk, with the spinner's wait; on a share, as long as the share takes to
+list it, as the listing cache's rows already did. A folder deleted under a kept folder whose
 parent wasn't shown shows its old rows until its load fails. Folder sizes in a kept listing are
 the ones it showed. The UI bench doesn't measure revisits of local folders.

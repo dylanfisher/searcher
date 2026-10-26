@@ -9,6 +9,10 @@ public final class Column {
     /// follow yet, and the wait for the keys to pause before they do; the wait is nil once ←
     /// gave it up. Nil while they follow the selection (0094-column-open-delay.md).
     var held: (selectionVersion: Int, wait: Task<Void, Never>?)?
+    /// Whether `ColumnTrail.openDelay` has passed since keys last made a new selection here. A
+    /// key-made selection of a folder with kept rows opens its column at once only then, so a
+    /// held key's repeats, which come faster, open none.
+    var keysHavePaused: () -> Bool = { true }
     /// The selection version the columns right of this one last followed. A change that keeps
     /// it, such as a patch, is followed at once even when keys made the selection.
     var followedSelectionVersion: Int?
