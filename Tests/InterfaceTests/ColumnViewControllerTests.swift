@@ -714,16 +714,17 @@ extension Fixture {
     #expect(fixture.trail.focusedIndex == 0)
 }
 
-/// The views and children of the shown columns, and nothing else but the preview and its grip: a
-/// column, its separator, its spinner and its grip each.
+/// The views and children of the shown columns, and nothing else but the preview, its grip and
+/// its separator: a column, its separator, its spinner and its grip each.
 @MainActor
 private func expectOnlyShownColumns(in controller: ColumnViewController) {
     let shown = controller.columnControllers
     #expect(controller.children.count == shown.count)
     #expect(zip(controller.children, shown).allSatisfy { $0 === $1 })
-    // The preview view and its grip stay once made, shown or hidden.
+    // The preview view, its grip and its separator stay once made, shown or hidden.
     let subviews = controller.columnsView.subviews.filter {
         !($0 is ColumnPreviewView) && $0 !== controller.previewGrip
+            && $0 !== controller.previewSeparator
     }
     #expect(subviews.count == shown.count * 4)
     #expect(subviews.filter { $0 is ColumnGripView }.count == shown.count)
