@@ -6,13 +6,16 @@ import Base
 /// `UndoHistory`'s (docs/decisions/0077-selection-history.md,
 /// docs/decisions/0112-position-history.md).
 ///
-/// A step is a `Position`: the pane, the folder and the selection there. The tab drops a pane's
-/// steps when the pane closes, leaves the tab, or goes to another folder other than by moving
-/// in its column trail, so a step's folder is one the pane still shows or a column of its trail.
-/// A run of changes is one step: the repeats of a held row key after its press, one mouse press
-/// however long it lasts, and a type-to-select query until a pause of `queryPause`. Each
-/// separate press of a row key is a step of its own. A selection with nothing selected and no
-/// cursor isn't a step.
+/// A step is a `Position`: the pane, the folder and the selection there. Each move of the keys
+/// to another pane or column keeps the position they leave too. The tab drops a pane's steps
+/// when the pane closes, leaves the tab, or goes to another folder other than by moving in its
+/// column trail, so a step's folder is one the pane still shows or a folder of its trail, which
+/// may have closed that folder's column since.
+/// A run of changes is one step: the repeats of a held row or focus key after its press, one
+/// mouse press however long it lasts, whatever panes and columns it moves the keys through, and
+/// a type-to-select query until a pause of `queryPause`. Each separate press of a key is a step
+/// of its own. A selection change from nothing selected and no cursor isn't a step; a move of
+/// the keys from there is.
 public struct SelectionHistory {
     /// The steps kept per pane; the pane's oldest goes first.
     public static let limit = 100
@@ -43,8 +46,14 @@ public struct SelectionHistory {
         case move(by: Int, extending: Bool, isRepeat: Bool)
         /// A key typed into a type-to-select query.
         case typing
-        /// The changes one mouse press makes in the table, numbered per press.
+        /// The changes one mouse press makes, numbered per press across every table, so the
+        /// press's move of the keys into another pane or column joins its selection there.
         case press(Int)
+        /// A key's move of the keys to another column or pane: ← and → in column view, toward
+        /// `Direction`, or the focus keys of a split; nil for Focus Other Pane. A repeat joins
+        /// the move before it when that was the same key's, whichever panes and columns they
+        /// moved the keys through.
+        case focus(Direction?, isRepeat: Bool)
     }
 
     /// Nearest last.
@@ -78,19 +87,17 @@ public struct SelectionHistory {
         forward.contains(where: restorable)
     }
 
-    /// Notes that a selection changed from `previous` by `source`. Ends the way forward, and
-    /// keeps `previous` as a step unless the change joins the run before it.
-    public mutating func record(_ previous: Position, by source: Source) {
+    /// Notes that a selection changed from `previous` by `source`, or with `movingKeys` that the
+    /// keys moved from `previous` to another pane or column. Ends the way forward, and keeps
+    /// `previous` as a step unless the change joins the run before it. A move of the keys is a
+    /// step even with nothing selected: the focus is what changed.
+    public mutating func record(_ previous: Position, by source: Source, movingKeys: Bool = false) {
         let now = elapsed()
         defer { run = (source, previous.pane, previous.folder, now) }
         forward = []
-        let joinsRun =
-            run.map {
-                $0.pane == previous.pane && $0.folder == previous.folder
-                    && Self.joins(source, $0.source, now - $0.at)
-            } ?? false
+        let joinsRun = run.map { Self.joins(source, at: previous, $0, now) } ?? false
         let step = Self.kept(previous)
-        guard !joinsRun, !step.selection.isEmpty || step.selection.cursor != nil,
+        guard !joinsRun, movingKeys || !step.selection.isEmpty || step.selection.cursor != nil,
             back.last != step
         else { return }
         back.append(step)
@@ -142,17 +149,25 @@ public struct SelectionHistory {
         return nil
     }
 
-    /// Whether a change from `source` joins the run of the last one, from `last` `pause` ago.
-    private static func joins(_ source: Source, _ last: Source, _ pause: Duration) -> Bool {
-        switch (source, last) {
+    /// Whether a change from `source` at `position` joins `run`, the last change's, at `now`.
+    /// A press and a held focus key join wherever they move the keys; the rest only in the same
+    /// pane and folder.
+    private static func joins(
+        _ source: Source, at position: Position,
+        _ run: (source: Source, pane: PaneID, folder: Location, at: Duration), _ now: Duration
+    ) -> Bool {
+        let samePlace = run.pane == position.pane && run.folder == position.folder
+        switch (source, run.source) {
         case (.move(let by, let extending, true), .move(let lastBy, let lastExtending, _)):
-            by == lastBy && extending == lastExtending
+            return samePlace && by == lastBy && extending == lastExtending
         case (.press(let press), .press(let lastPress)):
-            press == lastPress
+            return press == lastPress
+        case (.focus(let direction, true), .focus(let lastDirection, _)):
+            return direction == lastDirection
         case (.typing, .typing):
-            pause < queryPause
+            return samePlace && now - run.at < queryPause
         default:
-            false
+            return false
         }
     }
 

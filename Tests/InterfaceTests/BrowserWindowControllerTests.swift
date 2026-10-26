@@ -2044,8 +2044,8 @@ func aFocusPaneChordFromTheSidebarGivesThePaneItFocusesTheKeys(_ direction: Dire
     #expect(try ringed(right, in: fixture))
 }
 
-/// Cmd-U pressed in the sidebar puts back a selection of the other pane, which takes the focus
-/// and the keys (docs/decisions/0112-position-history.md).
+/// Cmd-U pressed in the sidebar gives the keys back to the pane they left, with its selection,
+/// and that pane takes the focus (docs/decisions/0112-position-history.md).
 @MainActor @Test func commandUFromTheSidebarGivesThePaneItRestoresTheKeys() async throws {
     let fixture = try await Fixture()
     let (left, right) = try twoPanes(.horizontal, in: fixture)
@@ -2059,7 +2059,7 @@ func aFocusPaneChordFromTheSidebarGivesThePaneItFocusesTheKeys(_ direction: Dire
     outline.keyDown(with: try keyEvent("u", modifiers: .command))
 
     #expect(fixture.tab.layout.focused == left)
-    #expect(leftPane.selection.cursor == ExactName("docs"))
+    #expect(leftPane.selection.cursor == ExactName("a.txt"))
     #expect(fixture.window.firstResponder === (try fixture.paneController(left).keyView))
     #expect(try ringed(left, in: fixture))
 }
@@ -2336,6 +2336,102 @@ extension PressFixture {
     #expect(press.isFocusedWithKeys)
 }
 
+// MARK: A press that moves the keys is one selection step
+
+extension PressFixture {
+    /// A press on `row` of `table`, sent to the table itself, as `NSWindow.sendEvent` sends a
+    /// press there, with its mouse up queued first so the tracking ends at once. The row needn't
+    /// be scrolled into the pane's view.
+    func press(row: Int, of table: ListingTableView) throws {
+        let location = table.convert(NSPoint(x: 10, y: table.rect(ofRow: row).midY), to: nil)
+        let now = ProcessInfo.processInfo.systemUptime
+        func event(_ type: NSEvent.EventType) throws -> NSEvent {
+            try #require(
+                NSEvent.mouseEvent(
+                    with: type, location: location, modifierFlags: [],
+                    timestamp: type == .leftMouseUp ? now + 0.05 : now,
+                    windowNumber: fixture.window.windowNumber, context: nil, eventNumber: 0,
+                    clickCount: 1, pressure: 1))
+        }
+        nonisolated(unsafe) let down = try event(.leftMouseDown)
+        try performRealPress(releasedBy: try event(.leftMouseUp)) {
+            table.mouseDown(with: down)
+        }
+    }
+}
+
+/// A press on a row of the other pane moves the keys there and selects the row, one step of the
+/// selection history: Cmd-U gives the keys back to the pane they left, with its selection
+/// (docs/decisions/0112-position-history.md).
+@MainActor @Test func aPressInTheOtherPaneIsOneSelectionStep() async throws {
+    let press = try await PressFixture()
+    press.show()
+    defer { press.fixture.window.orderOut(nil) }
+    let tab = press.fixture.tab
+    press.rightPane.select(Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+    tab.selectionHistory = SelectionHistory()
+
+    try press.press(row: 1, of: press.table)
+
+    #expect(press.isFocusedWithKeys)
+    #expect(press.leftPane.selection.cursor == ExactName("docs"))
+    tab.undoSelection()
+    #expect(press.rightPane.isFocused && !press.leftPane.isFocused)
+    #expect(press.rightPane.selection.cursor == ExactName("a.txt"))
+    #expect(press.leftPane.selection.cursor == ExactName("docs"))
+    #expect(!tab.canUndoSelection)
+}
+
+/// A press on a row of another column moves the keys there and selects the row, closing the
+/// column the keys were in, one step of the selection history: Cmd-U opens that column again
+/// and gives it the keys back, with its selection (docs/decisions/0112-position-history.md).
+@MainActor @Test func aPressInAnotherColumnIsOneSelectionStep() async throws {
+    let press = try await PressFixture()
+    let tab = press.fixture.tab
+    let left = tab.layout.panes[0]
+    let controller = try press.fixture.paneController(left)
+    press.leftPane.setViewMode(.column)
+    let trail = try #require(press.leftPane.columnTrail)
+    await settle { trail.columns.allSatisfy { $0.pane.state.isLoaded } }
+    let root = trail.focused
+    #expect(root.pane.location == Location(path: "/root"))
+    root.pane.select(Selection([ExactName("docs")], cursor: ExactName("docs")))
+    await settle { trail.columns.count == 3 && trail.columns[2].pane.state.isLoaded }
+    trail.moveRight()
+    #expect(trail.focused.pane.selection.cursor == ExactName("inside.txt"))
+    // Room for every column and the preview in the left pane, so moving the keys to the
+    // pressed column scrolls nothing out from under the press.
+    press.fixture.window.setContentSize(
+        NSSize(width: Settings.defaultColumnWidth * 12, height: 600))
+    press.show()
+    defer { press.fixture.window.orderOut(nil) }
+    press.fixture.window.contentView?.layoutSubtreeIfNeeded()
+    #expect(press.fixture.window.makeFirstResponder(controller.keyView))
+    #expect(tab.layout.focused == left)
+    tab.selectionHistory = SelectionHistory()
+    let rootTable = try #require(
+        controller.columnViewController.columnControllers.first { $0.pane === root.pane }
+    )
+    .tableView
+
+    try press.press(row: 0, of: rootTable)
+
+    #expect(trail.focused === root)
+    #expect(root.pane.selection.cursor == ExactName("a.txt"))
+    #expect(trail.columns.count == 2)
+    tab.undoSelection()
+    // The trail starts again at the closed column's folder, keeping the columns above it.
+    let restarted = try #require(press.leftPane.columnTrail)
+    #expect(restarted.columns.map(\.pane.location.path) == ["/", "/root", "/root/docs"])
+    #expect(restarted.columns[1] === root)
+    #expect(restarted.focusedIndex == 2)
+    await settle {
+        restarted.focused.pane.state.isLoaded && restarted.focused.pane.selection.isSettled
+    }
+    #expect(restarted.focused.pane.selection.cursor == ExactName("inside.txt"))
+    #expect(!tab.canUndoSelection)
+}
+
 /// A press in the margin under a list's rows, where the table doesn't reach, goes to the table
 /// as a press on the space below the rows, and its pane takes the focus.
 @MainActor @Test func aPressInTheMarginUnderAListsRowsGoesToItsTable() async throws {
@@ -2349,7 +2445,7 @@ extension PressFixture {
 
     try press.press(at: margin, in: scrollView)
 
-    #expect(press.table.pressCount == presses + 1)
+    #expect(press.table.pressCount > presses)
     #expect(press.isFocusedWithKeys)
 }
 

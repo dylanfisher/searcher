@@ -1028,7 +1028,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             updatePreviewPanel()
             return
         }
-        tab.focus(id)
+        tab.focus(id, recordingAs: (responder as? ListingTableView)?.keysSource ?? .once)
         showWorkspace()
     }
 

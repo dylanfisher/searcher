@@ -71,7 +71,9 @@ public enum TilingCommands: CommandSet {
                 }
             }
             + Direction.allCases.map { direction in
-                CommandBinding(command(focus, direction)) { unzoomed($0.tab).focus(direction) }
+                CommandBinding(command(focus, direction)) {
+                    unzoomed($0.tab).focus(direction, isKeyRepeat: $0.isKeyRepeat)
+                }
             }
             + Direction.allCases.map { direction in
                 CommandBinding(command(move, direction)) { unzoomed($0.tab).move(direction) }

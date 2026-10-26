@@ -200,7 +200,10 @@ private func columnsWithDocsSelected(listsDocs: Bool = true) async throws -> (Pa
     #expect(docs.centeringRequest == centering + 1)
     #expect(trail.columns[1].pane.selection.cursor == ExactName("docs"))
     #expect(trail.columns.count == 3)
-    // One step of the selection history.
+    // One step of the selection history with the move of the keys, which Undo Selection gives
+    // back to the column they were in.
     tab.undoSelection()
-    #expect(docs.selection == Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+    #expect(trail.focused === trail.columns[1])
+    #expect(trail.columns[1].pane.selection.cursor == ExactName("docs"))
+    #expect(!tab.canUndoSelection)
 }

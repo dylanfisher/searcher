@@ -598,9 +598,10 @@ private func splitRows() async throws -> (PaneFixture, left: Pane, right: Pane) 
     return (fixture, fixture.pane, right)
 }
 
-/// Steps of both panes of a split are one history: Cmd-U steps back through the focused pane's
-/// and then the other's, which takes the focus, and Shift-Cmd-U forward again, each pane getting
-/// back what it had (docs/decisions/0112-position-history.md).
+/// Steps of both panes of a split are one history: Cmd-U steps back through the focused pane's,
+/// then to the other pane, which takes the focus with the selection it had when the keys left
+/// it, then through its steps, and Shift-Cmd-U forward again, each pane getting back what it had
+/// (docs/decisions/0112-position-history.md).
 @MainActor @Test func commandUStepsThroughBothPanesOfASplitAndFocusesThePaneItRestores()
     async throws
 {
@@ -608,7 +609,8 @@ private func splitRows() async throws -> (PaneFixture, left: Pane, right: Pane) 
     let tab = fixture.tab
     let leftID = try #require(tab.panes.first { $0.value === left }?.key)
     let rightID = tab.layout.focused
-    tab.focus(leftID)
+    tab.focus(leftID, recordingAs: nil)
+    tab.selectionHistory = SelectionHistory()
     left.select(Selection([name(1)], cursor: name(1)))
     left.select(Selection([name(2)], cursor: name(2)))
     tab.focus(rightID)
@@ -620,8 +622,11 @@ private func splitRows() async throws -> (PaneFixture, left: Pane, right: Pane) 
     #expect(right.selection.cursor == name(10))
     try run(commandU, on: right)
     #expect(tab.layout.focused == leftID)
-    #expect(left.selection.cursor == name(1))
+    #expect(left.selection.cursor == name(2))
     #expect(right.selection.cursor == name(10))
+    try run(commandU, on: left)
+    #expect(tab.layout.focused == leftID)
+    #expect(left.selection.cursor == name(1))
     #expect(!tab.canUndoSelection)
 
     try run(shiftCommandU, on: left)
@@ -629,9 +634,53 @@ private func splitRows() async throws -> (PaneFixture, left: Pane, right: Pane) 
     #expect(left.selection.cursor == name(2))
     try run(shiftCommandU, on: left)
     #expect(tab.layout.focused == rightID)
+    #expect(right.selection.cursor == name(10))
+    try run(shiftCommandU, on: right)
+    #expect(tab.layout.focused == rightID)
     #expect(right.selection.cursor == name(11))
     #expect(left.selection.cursor == name(2))
     #expect(!tab.canRedoSelection)
+}
+
+/// A move of the keys to another pane of a split is a step: Cmd-U gives the pane they left the
+/// keys back, with its selection, and Shift-Cmd-U the other pane again. A held focus key is one
+/// step however many panes its repeats cross (docs/decisions/0112-position-history.md).
+@MainActor @Test func commandUAfterMovingToAnotherPaneGivesThePaneTheKeysLeftThemBack()
+    async throws
+{
+    let (fixture, left, _) = try await splitRows()
+    let tab = fixture.tab
+    let leftID = try #require(tab.panes.first { $0.value === left }?.key)
+    let rightID = tab.layout.focused
+    let third = try #require(tab.split(.horizontal, in: Rect(x: 0, y: 0, width: 1800, height: 800)))
+    let thirdID = tab.layout.focused
+    await settle { third.state.isLoaded }
+    tab.selectionHistory = SelectionHistory()
+    third.select(Selection([name(20)], cursor: name(20)))
+    left.select(Selection([name(3)], cursor: name(3)))
+
+    tab.focus(.left)
+    #expect(tab.layout.focused == rightID)
+    tab.focus(.left, isKeyRepeat: true)
+    #expect(tab.layout.focused == leftID)
+
+    tab.undoSelection()
+    #expect(tab.layout.focused == thirdID)
+    #expect(third.selection.cursor == name(20))
+    #expect(left.selection.cursor == name(3))
+    #expect(!tab.canUndoSelection)
+
+    tab.redoSelection()
+    #expect(tab.layout.focused == leftID)
+    #expect(!tab.canRedoSelection)
+
+    tab.focus(thirdID)
+    tab.focus(.left)
+    #expect(tab.layout.focused == rightID)
+    tab.undoSelection()
+    #expect(tab.layout.focused == thirdID)
+    tab.undoSelection()
+    #expect(tab.layout.focused == leftID)
 }
 
 /// A pane that closes takes its steps with it; the other pane's stay.
@@ -694,7 +743,7 @@ private func splitRows() async throws -> (PaneFixture, left: Pane, right: Pane) 
     #expect(!moved.canUndoSelection)
     right.select(Selection([name(12)], cursor: name(12)))
     #expect(moved.canUndoSelection)
-    #expect(!tab.selectionHistory.canUndo())
+    #expect(!tab.selectionHistory.canUndo { $0.pane == rightID })
 }
 
 @MainActor @Test func optionAndControlShiftArrowsMoveTenRowsAndHomeAndEndSelectTheEnds() throws {
