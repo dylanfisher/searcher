@@ -15,4 +15,13 @@ public enum SortColumn: Sendable, CaseIterable {
         case .size, .dateModified: false
         }
     }
+
+    /// The column after this one in the header's order, Name after the last.
+    public var next: SortColumn {
+        let all = Self.allCases
+        guard let index = all.firstIndex(of: self) else {
+            preconditionFailure("\(self) is not in SortColumn.allCases")
+        }
+        return all[(index + 1) % all.count]
+    }
 }

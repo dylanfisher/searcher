@@ -370,6 +370,26 @@ public final class ColumnTrail {
         owner.trailDidChange()
     }
 
+    /// The pane of the column right of the focused one, while it shows the folder selected
+    /// there; nil when nothing is right of it, as after a selection of a file or several rows.
+    public var selectedFolderColumn: Pane? {
+        guard focusedIndex + 1 < columns.count else { return nil }
+        let next = columns[focusedIndex + 1].pane
+        return focused.pane.selection.contains(ExactName(next.location.name)) ? next : nil
+    }
+
+    /// Go to Item's choice of `name` in `pane`'s column: the column takes the keys, as a click
+    /// in it does, and `name` is selected there with its row centered (`Pane.jump(to:)`), one
+    /// step of the column's selection history. Does nothing when the column has closed or no
+    /// longer lists `name` (docs/decisions/0101-go-to-item.md).
+    public func jump(to name: String, inColumnOf pane: Pane) {
+        guard let column = columns.first(where: { $0.pane === pane }),
+            pane.state.listing?.row(named: name) != nil
+        else { return }
+        focus(column)
+        pane.jump(to: name)
+    }
+
     /// Back or Forward to `column`'s folder, shown as it was left: the column takes the keys with
     /// `name` selected, and the column that selection opens, if any, is the last, with nothing
     /// selected in it. A column kept from before keeps its rows, so nothing lists again unless the

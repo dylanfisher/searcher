@@ -20,6 +20,8 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
     /// Closes the palette: on Esc, and before a chosen item runs, so it runs with the keys back
     /// in the window.
     var onClose: @MainActor () -> Void = {}
+    /// Runs after a chosen item ran, once the palette has closed.
+    var didRun: @MainActor (PaletteItem) -> Void = { _ in }
     /// Runs each time the rows show new results, in the same run loop pass, so the UI bench can
     /// time the frame that shows them.
     public var onShow: (@MainActor () -> Void)?
@@ -225,8 +227,10 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
         }
         // Closing can release this controller, so the run uses what it holds now.
         let palette = palette
+        let didRun = didRun
         close()
         palette.run(result)
+        didRun(result.item)
     }
 
     /// Stops the sources' work and closes the palette.

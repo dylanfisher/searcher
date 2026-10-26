@@ -1,7 +1,8 @@
 /// What the panes show and in what order: the hidden files, `.DS_Store`, columns from home and
 /// folders first toggles, which are app-wide `Settings`, as are the toggles of the sidebar's
 /// groups, and the sort keys, which sort the focused pane by a column. A sort key for the column
-/// already sorted by reverses it. Space opens and closes Quick Look on the selection, Cmd-F opens
+/// already sorted by reverses it; Sort by Next Column moves to the next column in the header's
+/// order, and Reverse Sort Direction reverses the column sorted by. Space opens and closes Quick Look on the selection, Cmd-F opens
 /// the pane's filter field, and Cmd-1 and Cmd-3 show the pane as a list or as columns. The
 /// appearance commands make the app light, dark or follow the system.
 public enum ViewCommands: CommandSet {
@@ -26,16 +27,22 @@ public enum ViewCommands: CommandSet {
         id: CommandID("view.toggleFoldersFirst"), title: "Folders First", chords: [])
     public static let sortByName = Command(
         id: CommandID("view.sortByName"), title: "Sort by Name",
-        chords: [KeyChord("1", modifiers: [.control, .option, .command])])
-    public static let sortByKind = Command(
-        id: CommandID("view.sortByKind"), title: "Sort by Kind",
-        chords: [KeyChord("2", modifiers: [.control, .option, .command])])
-    public static let sortByDateModified = Command(
-        id: CommandID("view.sortByDateModified"), title: "Sort by Date Modified",
-        chords: [KeyChord("5", modifiers: [.control, .option, .command])])
+        chords: [KeyChord("1", modifiers: [.control, .option])])
     public static let sortBySize = Command(
         id: CommandID("view.sortBySize"), title: "Sort by Size",
-        chords: [KeyChord("6", modifiers: [.control, .option, .command])])
+        chords: [KeyChord("2", modifiers: [.control, .option])])
+    public static let sortByDateModified = Command(
+        id: CommandID("view.sortByDateModified"), title: "Sort by Date Modified",
+        chords: [KeyChord("3", modifiers: [.control, .option])])
+    public static let sortByKind = Command(
+        id: CommandID("view.sortByKind"), title: "Sort by Kind",
+        chords: [KeyChord("4", modifiers: [.control, .option])])
+    public static let sortByNextColumn = Command(
+        id: CommandID("view.sortByNextColumn"), title: "Sort by Next Column",
+        chords: [KeyChord("p", modifiers: [.option, .command])])
+    public static let reverseSortDirection = Command(
+        id: CommandID("view.reverseSortDirection"), title: "Reverse Sort Direction",
+        chords: [KeyChord("p", modifiers: [.option, .command, .shift])])
     public static let toggleQuickLook = Command(
         id: CommandID("view.toggleQuickLook"), title: "Quick Look", chords: [KeyChord(.space)])
     public static let filter = Command(
@@ -81,9 +88,16 @@ public enum ViewCommands: CommandSet {
                 toggleFoldersFirst, isChecked: { $0.foldersFirst },
                 run: { $0.pane.settings.foldersFirst.toggle() }),
             CommandBinding(sortByName) { sort($0.pane, by: .name) },
-            CommandBinding(sortByKind) { sort($0.pane, by: .kind) },
-            CommandBinding(sortByDateModified) { sort($0.pane, by: .dateModified) },
             CommandBinding(sortBySize) { sort($0.pane, by: .size) },
+            CommandBinding(sortByDateModified) { sort($0.pane, by: .dateModified) },
+            CommandBinding(sortByKind) { sort($0.pane, by: .kind) },
+            CommandBinding(sortByNextColumn) {
+                let next = $0.pane.sortColumn.next
+                $0.pane.setSort(next, ascending: next.firstAscending)
+            },
+            CommandBinding(reverseSortDirection) {
+                $0.pane.setSort($0.pane.sortColumn, ascending: !$0.pane.sortAscending)
+            },
             CommandBinding(toggleQuickLook) { $0.toggleQuickLook() },
             CommandBinding(filter) { $0.showFilter() },
             CommandBinding(

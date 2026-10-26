@@ -30,7 +30,7 @@ private func run(_ command: Command, on pane: Pane) throws {
 private let toggleHidden = KeyChord(".", modifiers: [.command, .shift])
 
 private func sortKey(_ digit: Character) -> KeyChord {
-    KeyChord(.character(digit), modifiers: [.control, .option, .command])
+    KeyChord(.character(digit), modifiers: [.control, .option])
 }
 
 /// A pane at `/view` over `entries`, loaded, with settings stored in `folder`.
@@ -49,8 +49,8 @@ private func viewPane(_ entries: [DirectoryEntry], in folder: TemporaryFolder) a
 @Test(
     arguments: [
         // (key, column, first direction)
-        ("1", SortColumn.name, true), ("2", .kind, true), ("5", .dateModified, false),
-        ("6", .size, false),
+        ("1", SortColumn.name, true), ("2", .size, false), ("3", .dateModified, false),
+        ("4", .kind, true),
     ] as [(Character, SortColumn, Bool)])
 func aSortKeySortsByItsColumnAndTheSameKeyAgainReverses(
     digit: Character, column: SortColumn, firstAscending: Bool
@@ -72,6 +72,37 @@ func aSortKeySortsByItsColumnAndTheSameKeyAgainReverses(
     #expect(pane.sortColumn == column)
     #expect(pane.sortAscending == !firstAscending)
     await settle { pane.state.listing?.ascending == !firstAscending }
+}
+
+/// Opt-Cmd-P sorts by the next column in the header's order, from Kind back to Name, each in
+/// the direction a header click starts it in, and Shift-Opt-Cmd-P reverses the column sorted by.
+@MainActor @Test func optCmdPSortsByTheNextColumnAndShiftReversesTheDirection() async throws {
+    let temp = try TemporaryFolder("ViewCommandsTests")
+    let fixture = PaneFixture(
+        at: "/view", folders: ["/view": [file("a", size: 2), file("b.txt", size: 1)]],
+        settings: storedSettings(in: temp), sortedBy: .name, ascending: false)
+    await settle { fixture.pane.state.isLoaded }
+    let pane = fixture.pane
+    let next = KeyChord("p", modifiers: [.option, .command])
+    let reverse = KeyChord("p", modifiers: [.option, .command, .shift])
+
+    for column in [SortColumn.size, .dateModified, .kind, .name] {
+        try run(next, on: pane)
+        #expect(pane.sortColumn == column)
+        #expect(pane.sortAscending == column.firstAscending)
+        await settle {
+            pane.state.listing?.column == column
+                && pane.state.listing?.ascending == column.firstAscending
+        }
+    }
+
+    try run(reverse, on: pane)
+    #expect(pane.sortColumn == .name)
+    #expect(!pane.sortAscending)
+    await settle { pane.state.listing?.ascending == false }
+    try run(reverse, on: pane)
+    #expect(pane.sortAscending)
+    await settle { pane.state.names == ["a", "b.txt"] }
 }
 
 @MainActor @Test func commandShiftPeriodTogglesHiddenFilesInThePane() async throws {
