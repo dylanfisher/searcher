@@ -39,6 +39,8 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(settings.columnWidth == 286)
     #expect(settings.appearance == .auto)
     #expect(settings.hideDSStore)
+    #expect(settings.columnsStartAtHome)
+    #expect(settings.home == NSHomeDirectory())
 }
 
 @MainActor @Test func aWrongTypedValueIsDiscardedNotCoerced() throws {
@@ -50,6 +52,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     defaults.set(1, forKey: Settings.Key.folderSizes.rawValue)
     defaults.set(7, forKey: Settings.Key.terminalBundleID.rawValue)
     defaults.set(0, forKey: Settings.Key.hideDSStore.rawValue)
+    defaults.set("NO", forKey: Settings.Key.columnsStartAtHome.rawValue)
 
     let settings = Settings(defaults: defaults)
 
@@ -63,6 +66,8 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(defaults.object(forKey: Settings.Key.terminalBundleID.rawValue) == nil)
     #expect(settings.hideDSStore)
     #expect(defaults.object(forKey: Settings.Key.hideDSStore.rawValue) == nil)
+    #expect(settings.columnsStartAtHome)
+    #expect(defaults.object(forKey: Settings.Key.columnsStartAtHome.rawValue) == nil)
 }
 
 /// An appearance that isn't one of the names `Settings.Appearance` has, or isn't a string,
@@ -95,6 +100,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     first.columnWidth = 312
     first.appearance = .dark
     first.hideDSStore = false
+    first.columnsStartAtHome = false
 
     let relaunched = Settings(defaults: try #require(UserDefaults(suiteName: name)))
     #expect(relaunched.showHidden)
@@ -106,6 +112,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(relaunched.columnWidth == 312)
     #expect(relaunched.appearance == .dark)
     #expect(!relaunched.hideDSStore)
+    #expect(!relaunched.columnsStartAtHome)
 }
 
 @MainActor @Test func eachAppearanceSurvivesARelaunch() throws {

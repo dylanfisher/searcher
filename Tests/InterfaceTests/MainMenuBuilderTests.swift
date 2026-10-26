@@ -302,7 +302,8 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     let view = try #require(menu.items.first { $0.title == "View" }?.submenu)
     #expect(
         view.items.map(\.title) == [
-            "as List", "as Columns", "", "Show Sidebar", "Focus Sidebar", "", "Show Hidden Files",
+            "as List", "as Columns", "Columns Start at Home Folder", "", "Show Sidebar",
+            "Focus Sidebar", "", "Show Hidden Files",
             "Always Hide .DS_Store", "Folders First", "", "Sort by Name",
             "Sort by Kind",
             "Sort by Date Modified", "Sort by Size", "", "Calculate All Sizes", "Calculate Sizes",
@@ -366,20 +367,24 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(sortByName.state == .off)
 }
 
-@MainActor @Test func theDSStoreAndAppearanceItemsAreCheckedFromTheSettings() throws {
+@MainActor @Test func theDSStoreHomeAndAppearanceItemsAreCheckedFromTheSettings() throws {
     let folder = try TemporaryFolder("MainMenuBuilderTests")
     let settings = storedSettings(in: folder)
     let menu = try buildMenu(try AppCommands.registry())
     MainMenuBuilder.showChecks(in: menu, settings: settings)
     let dsStore = try #require(allItems(menu).first { $0.title == "Always Hide .DS_Store" })
+    let home = try #require(allItems(menu).first { $0.title == "Columns Start at Home Folder" })
     let appearances = try ["Auto", "Light", "Dark"].map { name in
         try #require(allItems(menu).first { $0.title == "\(name) Appearance" })
     }
     #expect(dsStore.state == .on)
+    #expect(home.state == .on)
     #expect(appearances.map(\.state) == [.on, .off, .off])
 
     settings.hideDSStore = false
     #expect(dsStore.state == .off)
+    settings.columnsStartAtHome = false
+    #expect(home.state == .off)
 
     settings.appearance = .dark
     #expect(appearances.map(\.state) == [.off, .off, .on])

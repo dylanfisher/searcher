@@ -436,7 +436,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         let focusedPane: @MainActor @Sendable () -> Pane = { workspace.selectedTab.focusedPane }
         let visits = folderVisits
         let history: @MainActor () -> FolderHistory = { visits?.history ?? FolderHistory() }
-        let home = NSHomeDirectory()
+        let home = settings.home
         let sources: [any PaletteSource] = [
             WorkspaceSource(list: workspaces) { [weak self] id in self?.sidebar.open(id) },
             FolderSource(

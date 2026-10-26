@@ -218,6 +218,7 @@ public enum MainMenuBuilder {
             title: "View",
             items: [
                 .command(ViewCommands.asList.id), .command(ViewCommands.asColumns.id),
+                .command(ViewCommands.toggleColumnsStartAtHome.id),
                 .separator,
                 // Where Finder puts Hide Sidebar.
                 .command(WorkspaceCommands.toggleSidebar.id),

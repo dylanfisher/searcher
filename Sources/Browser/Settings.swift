@@ -12,6 +12,7 @@ public final class Settings {
     enum Key: String {
         case showHidden
         case hideDSStore
+        case columnsStartAtHome
         case foldersFirst
         case folderSizes
         case terminalBundleID
@@ -83,6 +84,19 @@ public final class Settings {
     public var hideDSStore: Bool {
         didSet { store(hideDSStore, for: .hideDSStore, changed: hideDSStore != oldValue) }
     }
+    /// Whether column view's trail for a folder in `home` starts at `home`, as Finder's does,
+    /// rather than at the root of the folder's volume. On by default
+    /// (0103-column-trail-from-the-root.md).
+    public var columnsStartAtHome: Bool {
+        didSet {
+            store(
+                columnsStartAtHome, for: .columnsStartAtHome,
+                changed: columnsStartAtHome != oldValue)
+        }
+    }
+    /// The user's home folder: the folder `~` names in a typed path, a new window opens at and
+    /// `columnsStartAtHome` starts trails at. It isn't stored.
+    public let home: String
     /// Whether folders come before every other entry in each sort. Off by default.
     public var foldersFirst: Bool {
         didSet { store(foldersFirst, for: .foldersFirst, changed: foldersFirst != oldValue) }
@@ -187,10 +201,13 @@ public final class Settings {
         let handler: @MainActor () -> Void
     }
 
-    public init(defaults: UserDefaults) {
+    /// The settings stored in `defaults`, for the user whose home folder is `home`.
+    public init(defaults: UserDefaults, home: String = NSHomeDirectory()) {
         self.defaults = defaults
+        self.home = home
         showHidden = Self.bool(.showHidden, in: defaults) ?? false
         hideDSStore = Self.bool(.hideDSStore, in: defaults) ?? true
+        columnsStartAtHome = Self.bool(.columnsStartAtHome, in: defaults) ?? true
         foldersFirst = Self.bool(.foldersFirst, in: defaults) ?? false
         folderSizes = Self.bool(.folderSizes, in: defaults) ?? false
         terminalBundleID = Self.string(.terminalBundleID, in: defaults) ?? "com.apple.Terminal"
