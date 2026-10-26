@@ -189,6 +189,14 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
         numberedPress = press
     }
 
+    /// Whether the table takes the keys now by a press of the mouse, on it or anywhere else,
+    /// rather than by a key or a command.
+    var takesKeysByPress: Bool {
+        guard !isTakingKeysByPress else { return true }
+        guard let type = window?.currentEvent?.type else { return false }
+        return [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(type)
+    }
+
     /// How the table taking the keys now goes into the selection history: with the rows of the
     /// press that gives it them, as one step, or as a step of its own.
     var keysSource: SelectionHistory.Source {

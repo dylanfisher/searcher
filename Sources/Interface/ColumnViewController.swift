@@ -292,6 +292,9 @@ final class ColumnViewController: NSViewController {
             // AppKit tells VoiceOver of the table taking the keys.
             self.reportedFocus = controller
             trail.focus(column, recordingAs: table.keysSource)
+            // A column the keys move into by ←, →, Tab or a command shows its selected row, as
+            // in Finder, though it was scrolled away from it; a press leaves it where it is.
+            if !table.takesKeysByPress { controller?.scrollToCursor() }
         }
         addChild(controller)
         columnsView.addSubview(controller.view)
