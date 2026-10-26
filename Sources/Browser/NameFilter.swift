@@ -12,17 +12,22 @@ public struct NameFilter: Sendable, Equatable {
     private let folded: [UInt8]
 
     #if DEBUG
-        /// How many matches have run on the main thread, for tests that check filtering stays off
-        /// it. Debug builds only.
-        static var mainThreadMatches: Int { mainThreadMatchCount.value }
-        private static let mainThreadMatchCount = Counter()
+        /// How many matches of a filter with this text have run on the main thread, for tests that
+        /// check filtering stays off it. Keyed by text, not task-local, so work a pane hops to the
+        /// main queue still counts; a test uses a query of its own, so other tests' matches don't
+        /// land in its count. Debug builds only.
+        static func mainThreadMatches(for text: String) -> Int {
+            mainThreadMatchCounts.value(of: Array(NameSortKey.fold(text).utf8))
+        }
 
-        private final class Counter: @unchecked Sendable {
+        private static let mainThreadMatchCounts = Counts()
+
+        private final class Counts: @unchecked Sendable {
             private let lock = NSLock()
-            private var count = 0
+            private var counts: [[UInt8]: Int] = [:]
 
-            var value: Int { lock.withLock { count } }
-            func increment() { lock.withLock { count += 1 } }
+            func value(of key: [UInt8]) -> Int { lock.withLock { counts[key, default: 0] } }
+            func increment(_ key: [UInt8]) { lock.withLock { counts[key, default: 0] += 1 } }
         }
     #endif
 
@@ -38,7 +43,7 @@ public struct NameFilter: Sendable, Equatable {
     public func matches(foldedName: String) -> Bool {
         guard !folded.isEmpty else { return true }
         #if DEBUG
-            if Thread.isMainThread { Self.mainThreadMatchCount.increment() }
+            if Thread.isMainThread { Self.mainThreadMatchCounts.increment(folded) }
         #endif
         var name = foldedName
         return name.withUTF8 { name in

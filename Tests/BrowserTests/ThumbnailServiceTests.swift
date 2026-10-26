@@ -511,9 +511,9 @@ private func cancellation(of request: Task<CGImage?, any Error>) -> Task<Bool, N
     }
 }
 
-/// Polls `condition` until it holds, failing the test after 5 seconds.
+/// Polls `condition` until it holds, fails the test after `patience`.
 private func bounded(_ condition: @Sendable () -> Bool) async {
-    let deadline = Date(timeIntervalSinceNow: 5)
+    let deadline = Date(timeIntervalSinceNow: patience)
     while !condition() {
         if Date() > deadline {
             Issue.record("timed out waiting")

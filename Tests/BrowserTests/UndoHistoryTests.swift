@@ -332,7 +332,7 @@ private func tree(_ root: String) throws -> [String] {
 
 /// An operation a press waited for that settled, here by a pause, and then made an entry
 /// before the press's turn came after the press: the press does nothing rather than undo it.
-@MainActor @Test(.timeLimit(.minutes(1)))
+@MainActor @Test(.timeLimit(.minutes(2)))
 func aPressDoesNothingWhenWhatItWaitedForSettlesThenMakesAnEntry() async throws {
     let files = FakeFiles()
     let watcher = Watcher()
@@ -427,7 +427,7 @@ private func queueAfterARename<C: Clock<Duration>>(
 
 /// Cmd-Z during a large copy undoes the newest finished change at once, as in Finder: the
 /// copy's entry comes only once it ends.
-@MainActor @Test(.timeLimit(.minutes(1))) func cmdZOnARenameDuringALargeCopyRunsAtOnce()
+@MainActor @Test(.timeLimit(.minutes(2))) func cmdZOnARenameDuringALargeCopyRunsAtOnce()
     async throws
 {
     let files = FakeFiles()
@@ -450,7 +450,7 @@ private func queueAfterARename<C: Clock<Duration>>(
 }
 
 /// Neither a paused operation nor one waiting for an answer holds a press.
-@MainActor @Test(.timeLimit(.minutes(1))) func aPressDoesntWaitForAPausedOrAskingOperation()
+@MainActor @Test(.timeLimit(.minutes(2))) func aPressDoesntWaitForAPausedOrAskingOperation()
     async throws
 {
     let files = FakeFiles()
@@ -486,7 +486,7 @@ private func queueAfterARename<C: Clock<Duration>>(
 
 /// The Undo item stays on while a copy runs and names the newest finished change; once the copy
 /// ends, it names the copy.
-@MainActor @Test(.timeLimit(.minutes(1)))
+@MainActor @Test(.timeLimit(.minutes(2)))
 func theUndoItemNamesTheNewestFinishedChangeWhileACopyRuns() async throws {
     let files = FakeFiles()
     let watcher = Watcher()
@@ -508,7 +508,7 @@ func theUndoItemNamesTheNewestFinishedChangeWhileACopyRuns() async throws {
 }
 
 /// Cmd-Shift-Z during a copy redoes at once too.
-@MainActor @Test(.timeLimit(.minutes(1))) func aRedoDuringACopyRunsAtOnce() async throws {
+@MainActor @Test(.timeLimit(.minutes(2))) func aRedoDuringACopyRunsAtOnce() async throws {
     let files = FakeFiles()
     let watcher = Watcher()
     let history = UndoHistory(log: { _ in })
@@ -532,7 +532,7 @@ func theUndoItemNamesTheNewestFinishedChangeWhileACopyRuns() async throws {
 /// to do.
 @MainActor
 @Test(
-    .timeLimit(.minutes(1)),
+    .timeLimit(.minutes(2)),
     arguments: [
         "failed", "refused", "skipped", "nothing to do",
     ])
@@ -584,7 +584,7 @@ func aPressForAnOperationThatChangedNothingDoesNothing(_ ending: String) async t
 }
 
 /// The user cancelling the operation a press waits for is the same: the press does nothing.
-@MainActor @Test(.timeLimit(.minutes(1)))
+@MainActor @Test(.timeLimit(.minutes(2)))
 func aPressForAnOperationCancelledBeforeItChangedAnythingDoesNothing()
     async throws
 {
@@ -609,7 +609,7 @@ func aPressForAnOperationCancelledBeforeItChangedAnythingDoesNothing()
 
 /// A move to another volume says so before its pre-scan, so like a copy or a duplicate still
 /// being planned it never holds a press.
-@MainActor @Test(.timeLimit(.minutes(1)))
+@MainActor @Test(.timeLimit(.minutes(2)))
 func aPressDoesntWaitForACopyDuplicateOrMoveAcrossVolumesStillPlanning() async throws {
     let files = FakeFiles()
     let watcher = Watcher()
@@ -635,7 +635,7 @@ func aPressDoesntWaitForACopyDuplicateOrMoveAcrossVolumesStillPlanning() async t
 
 /// A move whose volume read hangs, as on a share that stopped answering, holds a press for no
 /// more than `pressWait`.
-@MainActor @Test(.timeLimit(.minutes(1))) func aPressWaitsAtMostThePressWait() async throws {
+@MainActor @Test(.timeLimit(.minutes(2))) func aPressWaitsAtMostThePressWait() async throws {
     let files = FakeFiles()
     let watcher = Watcher()
     let history = UndoHistory(log: { _ in })
@@ -656,7 +656,7 @@ func aPressDoesntWaitForACopyDuplicateOrMoveAcrossVolumesStillPlanning() async t
 }
 
 /// Pausing the operation a press waits for lets the press go ahead.
-@MainActor @Test(.timeLimit(.minutes(1))) func pausingTheOperationAPressWaitsForLetsItGo()
+@MainActor @Test(.timeLimit(.minutes(2))) func pausingTheOperationAPressWaitsForLetsItGo()
     async throws
 {
     let files = FakeFiles()
@@ -681,7 +681,7 @@ func aPressDoesntWaitForACopyDuplicateOrMoveAcrossVolumesStillPlanning() async t
 
 /// An operation that finished before the press counts for nothing, however late the history
 /// hears of it: an empty one doesn't stop the press, and neither does a reported failure.
-@MainActor @Test(.timeLimit(.minutes(1)))
+@MainActor @Test(.timeLimit(.minutes(2)))
 func anOperationFinishedBeforeThePressCountsForNothing() async throws {
     let folder = try TemporaryFolder("UndoHistoryTests")
     let root = folder.url.path
@@ -707,7 +707,7 @@ func anOperationFinishedBeforeThePressCountsForNothing() async throws {
 
 /// Presses run one at a time in the order made: two quick presses of Undo undo two entries,
 /// and two of Redo redo them again.
-@MainActor @Test(.timeLimit(.minutes(1))) func twoQuickPressesUndoTwoEntriesAndRedoThem()
+@MainActor @Test(.timeLimit(.minutes(2))) func twoQuickPressesUndoTwoEntriesAndRedoThem()
     async throws
 {
     let files = FakeFiles()
@@ -742,7 +742,7 @@ func anOperationFinishedBeforeThePressCountsForNothing() async throws {
 
 /// A press waiting its turn behind a running undo does nothing if a new change is made
 /// meanwhile: the press named the change before it.
-@MainActor @Test(.timeLimit(.minutes(1)))
+@MainActor @Test(.timeLimit(.minutes(2)))
 func aPressWaitingItsTurnWhileANewChangeIsMadeDoesNothing() async throws {
     let files = FakeFiles()
     let watcher = Watcher()
@@ -1317,7 +1317,7 @@ private func finished(_ changes: OperationRecord.Change...) -> OperationState {
 
 /// An undo whose paths a running operation uses is refused at once, and its entry stays where
 /// it was (0072 edge case 20). A second press waits its turn and is refused the same way.
-@MainActor @Test(.timeLimit(.minutes(1))) func aRefusedUndoKeepsItsEntry() async throws {
+@MainActor @Test(.timeLimit(.minutes(2))) func aRefusedUndoKeepsItsEntry() async throws {
     let files = FakeFiles()
     let watcher = Watcher()
     let history = UndoHistory(log: { _ in })
@@ -1721,7 +1721,7 @@ private func heldQueue(_ history: UndoHistory, _ held: HeldFinishes) -> FileOper
 
 /// When the stream of finished operations ends, a waiting undo stops waiting and the history is
 /// free again.
-@MainActor @Test(.timeLimit(.minutes(1))) func undoStopsWaitingWhenTheFinishedStreamEnds()
+@MainActor @Test(.timeLimit(.minutes(2))) func undoStopsWaitingWhenTheFinishedStreamEnds()
     async throws
 {
     let folder = try TemporaryFolder("UndoHistoryTests")

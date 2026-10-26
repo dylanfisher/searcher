@@ -285,16 +285,30 @@ private func heldQueue() -> DispatchQueue {
 }
 
 #if DEBUG
-    /// `NameFilter.mainThreadMatches` is one count for the process, so the tests that read it run
-    /// one at a time: the positive control's matches would otherwise land in the other's count.
-    @Suite(.serialized) struct MainThreadMatches {
-        /// The positive control for the test below: a match run on the main thread is counted.
-        @MainActor @Test func mainThreadMatchesCountsMatchesOnTheMainThread() {
-            let before = NameFilter.mainThreadMatches
+    /// `NameFilter.mainThreadMatches(for:)` counts by query text, so each test here uses a query
+    /// no other test types.
+    struct MainThreadMatches {
+        /// The positive controls for the test below: a match run on the main thread is counted,
+        /// whether the main actor or a block handed to the main queue runs it, as a pane's
+        /// finished sorts and patches are.
+        @MainActor @Test func mainThreadMatchesCountsMatchesOnTheMainThread() async {
             for _ in 0..<1_000 {
-                _ = NameFilter("a").matches(foldedName: "abc")
+                _ = NameFilter("zqxactor").matches(foldedName: "zqxactor")
             }
-            #expect(NameFilter.mainThreadMatches - before >= 1_000)
+            #expect(NameFilter.mainThreadMatches(for: "zqxactor") == 1_000)
+
+            await withCheckedContinuation { continuation in
+                DispatchQueue.global().async {
+                    DispatchQueue.main.async {
+                        for _ in 0..<1_000 {
+                            _ = NameFilter("zqxqueue").matches(foldedName: "zqxqueue")
+                        }
+                        continuation.resume()
+                    }
+                }
+            }
+            #expect(NameFilter.mainThreadMatches(for: "zqxqueue") == 1_000)
+            #expect(NameFilter.mainThreadMatches(for: "zqxoff") == 0)
         }
 
         /// Typing a query on 100k entries with every row selected matches every name and resolves
@@ -302,24 +316,24 @@ private func heldQueue() -> DispatchQueue {
         @MainActor @Test func filteringOneHundredThousandEntriesDoesNoPerEntryWorkOnTheMainThread()
             async
         {
-            let entries = (0..<100_000).map { file(String(format: "n%06d.txt", $0)) }
+            let entries = (0..<100_000).map { file(String(format: "zqx%06d.txt", $0)) }
+            let queries = ["zqx", "zqx0", "zqx00", "zqx001"]
             let pane = Pane(
                 location: Location(path: "/wide"),
                 service: ListingService(lister: StubLister(["/wide": entries])),
                 systemActions: StubSystemActions(), settings: untouchedSettings())
             await settle { pane.state.isLoaded }
             pane.selectAll()
-            let matches = NameFilter.mainThreadMatches
             let work = pane.mainSelectionWork
 
-            for query in ["n", "n0", "n00", "n001"] {
+            for query in queries {
                 pane.setFilter(query)
                 await settle { pane.state.listing?.filter == NameFilter(query) }
             }
             await settle { pane.selection.isSettled }
 
             #expect(pane.state.listing?.count == 1_000)
-            #expect(NameFilter.mainThreadMatches - matches < 100)
+            #expect(queries.map(NameFilter.mainThreadMatches(for:)).reduce(0, +) < 100)
             #expect(pane.mainSelectionWork - work < 100)
         }
     }

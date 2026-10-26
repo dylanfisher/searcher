@@ -70,9 +70,9 @@ private final class StallingLister: Lister, @unchecked Sendable {
         never.wait()
     }
 
-    /// Returns once a read has taken every batch and stalled; false after 5 seconds.
+    /// Returns once a read has taken every batch and stalled; false after `patience`.
     func waitUntilStalled() -> Bool {
-        stalled.wait(timeout: .now() + 5) == .success
+        stalled.wait(timeout: .now() + patience) == .success
     }
 }
 
