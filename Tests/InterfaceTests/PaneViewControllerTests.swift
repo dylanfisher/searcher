@@ -137,21 +137,22 @@ private func downKey(isARepeat: Bool) throws -> NSEvent {
 /// each separate press its own.
 @MainActor @Test func aHeldArrowIsOneSelectionStepAndEachPressItsOwn() async throws {
     let fixture = Fixture()
+    let tab = Tab(pane: fixture.pane)
     await settle { fixture.pane.state.isLoaded }
     fixture.pane.select(Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
 
     fixture.table.keyDown(with: try downKey(isARepeat: false))
     fixture.table.keyDown(with: try downKey(isARepeat: true))
     #expect(fixture.pane.selection.cursor == ExactName("docs"))
-    fixture.pane.undoSelection()
+    tab.undoSelection()
     #expect(fixture.pane.selection.cursor == ExactName("a.txt"))
-    #expect(!fixture.pane.canUndoSelection)
+    #expect(!tab.canUndoSelection)
 
     fixture.table.keyDown(with: try downKey(isARepeat: false))
     fixture.table.keyDown(with: try downKey(isARepeat: false))
-    fixture.pane.undoSelection()
+    tab.undoSelection()
     #expect(fixture.pane.selection.cursor == ExactName("b.txt"))
-    #expect(fixture.pane.canUndoSelection)
+    #expect(tab.canUndoSelection)
 }
 
 @MainActor @Test func cmdDownOpensTheSelectedFolderAndCmdUpGoesBack() async throws {

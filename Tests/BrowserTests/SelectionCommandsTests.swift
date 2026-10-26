@@ -389,7 +389,7 @@ private func isEnabled(_ chord: KeyChord, in fixture: PaneFixture) throws -> Boo
 @MainActor @Test func aHeldDownArrowIsOneStepHoweverLongItRepeats() async throws {
     let fixture = await rows25()
     let clock = ManualClock()
-    fixture.pane.selectionHistory = SelectionHistory(clock: clock)
+    fixture.tab.selectionHistory = SelectionHistory(clock: clock)
     put(fixture, at: 2)
 
     try run(down, in: fixture)
@@ -494,22 +494,36 @@ private func isEnabled(_ chord: KeyChord, in fixture: PaneFixture) throws -> Boo
     #expect(try !isEnabled(commandU, in: fixture))
 }
 
-/// Each folder keeps its own steps, so Cmd-U never navigates: in a folder with none it does
-/// nothing, and back in the first folder it steps through that folder's.
-@MainActor @Test func selectionUndoStaysInTheFolderAndEachFolderKeepsItsSteps() async throws {
+/// `/rows` with files "r00" to "r24", and `/other` with "o1" and "o2", both in `/`; loaded at
+/// `/rows`.
+@MainActor
+private func rowsAndOther() async -> PaneFixture {
     let fixture = PaneFixture(
         at: "/rows",
         folders: [
             "/rows": (0..<25).map { file(String(format: "r%02d", $0)) },
             "/other": [file("o1"), file("o2")],
+            "/": [folder("other"), folder("rows")],
         ])
     await settle { fixture.pane.state.isLoaded }
+    return fixture
+}
+
+/// Going to another folder drops the pane's steps, so Cmd-U never navigates: in the new folder
+/// it does nothing, and back in the first folder its steps are gone too
+/// (docs/decisions/0112-position-history.md).
+@MainActor @Test func goingToAnotherFolderDropsThePanesSteps() async throws {
+    let fixture = await rowsAndOther()
     put(fixture, at: 3)
     put(fixture, at: 5)
+    put(fixture, at: 7)
+    try run(commandU, in: fixture)
+    #expect(try isEnabled(shiftCommandU, in: fixture))
 
     fixture.pane.navigate(to: Location(path: "/other"))
     await settle { fixture.pane.state.isLoaded && fixture.pane.location.path == "/other" }
     #expect(try !isEnabled(commandU, in: fixture))
+    #expect(try !isEnabled(shiftCommandU, in: fixture))
     try run(commandU, in: fixture)
     #expect(fixture.pane.location.path == "/other")
     #expect(fixture.pane.selection == Selection())
@@ -517,12 +531,44 @@ private func isEnabled(_ chord: KeyChord, in fixture: PaneFixture) throws -> Boo
     fixture.pane.goBack()
     await settle { fixture.pane.state.isLoaded && fixture.pane.location.path == "/rows" }
     #expect(fixture.pane.selection.cursor == name(5))
+    #expect(try !isEnabled(commandU, in: fixture))
+    #expect(try !isEnabled(shiftCommandU, in: fixture))
+}
+
+/// Listing the folder the pane is in again is no navigation: its steps stay.
+@MainActor @Test func goingToTheFolderThePaneIsInKeepsItsSteps() async throws {
+    let fixture = await rowsAndOther()
+    put(fixture, at: 3)
+    put(fixture, at: 5)
+
+    fixture.pane.navigate(to: Location(path: "/rows"))
+    await settle { fixture.pane.state.isLoaded }
+
     try run(commandU, in: fixture)
     await settle { fixture.pane.selection.isSettled }
     #expect(fixture.pane.selection == Selection([name(3)], cursor: name(3)))
 }
 
-@MainActor @Test func eachPaneHasItsOwnSelectionHistory() async throws {
+@MainActor @Test(arguments: [ViewMode.column, .list])
+func switchingTheViewModeDropsThePanesSteps(_ mode: ViewMode) async throws {
+    let fixture = await rowsAndOther()
+    if mode == .list {
+        fixture.pane.setViewMode(.column)
+        await settle { fixture.pane.commandPane.state.isLoaded }
+    }
+    let shown = fixture.pane.commandPane
+    shown.select(Selection([name(3)], cursor: name(3)))
+    shown.select(Selection([name(5)], cursor: name(5)))
+    #expect(fixture.tab.canUndoSelection)
+
+    fixture.pane.setViewMode(mode)
+    await settle { fixture.pane.commandPane.state.isLoaded }
+
+    #expect(fixture.pane.commandPane.selection.cursor == name(5))
+    #expect(!fixture.tab.canUndoSelection)
+}
+
+@MainActor @Test func eachTabHasItsOwnSelectionHistory() async throws {
     let first = await rows25()
     let second = await rows25()
     put(first, at: 3)
@@ -530,6 +576,125 @@ private func isEnabled(_ chord: KeyChord, in fixture: PaneFixture) throws -> Boo
 
     #expect(try isEnabled(commandU, in: first))
     #expect(try !isEnabled(commandU, in: second))
+}
+
+/// Runs the command bound to `chord` with `pane` the one keys act on.
+@MainActor
+private func run(_ chord: KeyChord, on pane: Pane) throws {
+    let registry = try AppCommands.registry()
+    let command = try #require(registry.command(for: chord), "nothing is bound to \(chord)")
+    let binding = try #require(AppCommands.bindings.first { $0.command == command })
+    binding.run(CommandContext(pane: pane))
+}
+
+/// A split of `rowsAndOther()`'s pane: the pane on the left, unfocused, and its copy on the right,
+/// focused, both at `/rows` with nothing selected.
+@MainActor
+private func splitRows() async throws -> (PaneFixture, left: Pane, right: Pane) {
+    let fixture = await rowsAndOther()
+    let tab = fixture.tab
+    let right = try #require(tab.split(.horizontal, in: Rect(x: 0, y: 0, width: 1200, height: 800)))
+    await settle { right.state.isLoaded }
+    return (fixture, fixture.pane, right)
+}
+
+/// Steps of both panes of a split are one history: Cmd-U steps back through the focused pane's
+/// and then the other's, which takes the focus, and Shift-Cmd-U forward again, each pane getting
+/// back what it had (docs/decisions/0112-position-history.md).
+@MainActor @Test func commandUStepsThroughBothPanesOfASplitAndFocusesThePaneItRestores()
+    async throws
+{
+    let (fixture, left, right) = try await splitRows()
+    let tab = fixture.tab
+    let leftID = try #require(tab.panes.first { $0.value === left }?.key)
+    let rightID = tab.layout.focused
+    tab.focus(leftID)
+    left.select(Selection([name(1)], cursor: name(1)))
+    left.select(Selection([name(2)], cursor: name(2)))
+    tab.focus(rightID)
+    right.select(Selection([name(10)], cursor: name(10)))
+    right.select(Selection([name(11)], cursor: name(11)))
+
+    try run(commandU, on: right)
+    #expect(tab.layout.focused == rightID)
+    #expect(right.selection.cursor == name(10))
+    try run(commandU, on: right)
+    #expect(tab.layout.focused == leftID)
+    #expect(left.selection.cursor == name(1))
+    #expect(right.selection.cursor == name(10))
+    #expect(!tab.canUndoSelection)
+
+    try run(shiftCommandU, on: left)
+    #expect(tab.layout.focused == leftID)
+    #expect(left.selection.cursor == name(2))
+    try run(shiftCommandU, on: left)
+    #expect(tab.layout.focused == rightID)
+    #expect(right.selection.cursor == name(11))
+    #expect(left.selection.cursor == name(2))
+    #expect(!tab.canRedoSelection)
+}
+
+/// A pane that closes takes its steps with it; the other pane's stay.
+@MainActor @Test func closingAPaneDropsItsStepsAndKeepsTheOthers() async throws {
+    let (fixture, left, right) = try await splitRows()
+    let tab = fixture.tab
+    let leftID = try #require(tab.panes.first { $0.value === left }?.key)
+    let rightID = tab.layout.focused
+    tab.focus(leftID)
+    left.select(Selection([name(1)], cursor: name(1)))
+    left.select(Selection([name(2)], cursor: name(2)))
+    tab.focus(rightID)
+    right.select(Selection([name(10)], cursor: name(10)))
+    right.select(Selection([name(11)], cursor: name(11)))
+
+    #expect(tab.closePane() == .pane)
+
+    #expect(!tab.selectionHistory.canUndo { $0.pane == rightID })
+    #expect(tab.layout.focused == leftID)
+    tab.undoSelection()
+    #expect(left.selection.cursor == name(1))
+    #expect(!tab.canUndoSelection)
+}
+
+/// A pane that goes to another folder drops its own steps, which aren't there when it comes
+/// back; the other pane's stay.
+@MainActor @Test func aPaneGoingToAnotherFolderKeepsTheOtherPanesSteps() async throws {
+    let (fixture, left, right) = try await splitRows()
+    let tab = fixture.tab
+    let leftID = try #require(tab.panes.first { $0.value === left }?.key)
+    tab.focus(leftID)
+    left.select(Selection([name(1)], cursor: name(1)))
+    left.select(Selection([name(2)], cursor: name(2)))
+    right.select(Selection([name(10)], cursor: name(10)))
+    right.select(Selection([name(11)], cursor: name(11)))
+
+    right.navigate(to: Location(path: "/other"))
+    right.goBack()
+    await settle { right.location.path == "/rows" && right.state.isLoaded }
+    #expect(right.selection.cursor == name(11))
+
+    tab.undoSelection()
+    #expect(left.selection.cursor == name(1))
+    #expect(!tab.canUndoSelection)
+}
+
+/// A pane moved out to another window leaves its steps behind, dropped, and its changes from
+/// then on are steps of its new tab.
+@MainActor @Test func aPaneMovedToAnotherWindowTakesNoStepsAndLeavesNone() async throws {
+    let (fixture, _, right) = try await splitRows()
+    let tab = fixture.tab
+    let rightID = tab.layout.focused
+    right.select(Selection([name(10)], cursor: name(10)))
+    right.select(Selection([name(11)], cursor: name(11)))
+
+    #expect(tab.removeFocusedPane() == .pane)
+    let moved = Tab(pane: right, id: rightID)
+
+    #expect(!tab.selectionHistory.canUndo { $0.pane == rightID })
+    #expect(!moved.canUndoSelection)
+    right.select(Selection([name(12)], cursor: name(12)))
+    #expect(moved.canUndoSelection)
+    #expect(!tab.selectionHistory.canUndo())
 }
 
 @MainActor @Test func optionAndControlShiftArrowsMoveTenRowsAndHomeAndEndSelectTheEnds() throws {

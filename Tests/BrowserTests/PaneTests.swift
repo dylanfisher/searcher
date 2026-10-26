@@ -8,13 +8,15 @@ import UniformTypeIdentifiers
 
 @testable import Browser
 
-/// A pane over a `GatedLister`. Every call is released unless the test passes `held`. Its
-/// service makes thumbnails with `thumbnails`, or none.
+/// A pane over a `GatedLister`, in a tab of its own. Every call is released unless the test
+/// passes `held`. Its service makes thumbnails with `thumbnails`, or none.
 @MainActor
 struct PaneFixture {
     let pane: Pane
     let lister: GatedLister
     let actions: StubSystemActions
+    /// Holds the pane, as a window's tab does, and keeps its selection history.
+    let tab: Tab
 
     init(
         at path: String, folders: [String: [DirectoryEntry]], held: Bool = false,
@@ -31,6 +33,7 @@ struct PaneFixture {
                 lister: lister, volumeOf: { _ in volume }, thumbnails: thumbnails,
                 recentListings: recentListings),
             systemActions: actions, settings: settings, sortedBy: column, ascending: ascending)
+        tab = Tab(pane: pane)
     }
 
     /// A pane at `/root` with files `a.txt` and `b.txt` and a folder `docs`, already loaded.
@@ -1422,8 +1425,9 @@ private func springPane() async -> PaneFixture {
 {
     let fixture = await springPane()
     let pane = fixture.pane
+    fixture.select("more")
     fixture.select("a.txt", "b.txt")
-    let canUndo = pane.canUndoSelection
+    #expect(fixture.tab.canUndoSelection)
 
     pane.springOpen("docs")
     #expect(pane.location.path == "/root/docs")
@@ -1437,7 +1441,9 @@ private func springPane() async -> PaneFixture {
     await settle { pane.state.isLoaded }
     #expect(fixture.selectedNames == ["a.txt", "b.txt"])
     #expect(pane.selection.cursor == ExactName("b.txt"))
-    #expect(pane.canUndoSelection == canUndo)
+    // The drag's folders are no navigation: the selection steps stay.
+    fixture.tab.undoSelection()
+    #expect(fixture.selectedNames == ["more"])
 }
 
 /// Leaving a folder clears its filter; going back puts it back. Neither the sprung folders nor
@@ -1517,12 +1523,12 @@ private func springPane() async -> PaneFixture {
     trail.columns[2].pane.select(Selection([ExactName("m.txt")], cursor: ExactName("m.txt")))
     trail.moveRight()
     #expect(trail.focusedIndex == 2)
-    let canUndo = first.canUndoSelection
+    let canUndo = fixture.tab.canUndoSelection
 
     first.springOpen("docs")
     await settle { trail.columns.count == 3 && trail.columns[2].pane.state.isLoaded }
     #expect(trail.columns.map(\.pane.location.path) == ["/", "/root", "/root/docs"])
-    #expect(first.canUndoSelection == canUndo)
+    #expect(fixture.tab.canUndoSelection == canUndo)
     trail.columns[2].pane.springOpen("sub")
     #expect(
         trail.columns.map(\.pane.location.path) == ["/", "/root", "/root/docs", "/root/docs/sub"])
@@ -1532,7 +1538,7 @@ private func springPane() async -> PaneFixture {
     #expect(first.selection.cursor == ExactName("more"))
     #expect(trail.columns[2].pane.selection.cursor == ExactName("m.txt"))
     #expect(trail.focusedIndex == 2)
-    #expect(first.canUndoSelection == canUndo)
+    #expect(fixture.tab.canUndoSelection == canUndo)
     #expect(pane.location.path == "/root/more")
 }
 
@@ -1712,7 +1718,7 @@ private func shownWidths(_ pane: Pane) -> [Double] {
 
     #expect(fixture.pane.selection == Selection([ExactName("docs")], cursor: ExactName("docs")))
     #expect(fixture.pane.location == Location(path: "/root"))
-    fixture.pane.undoSelection()
+    fixture.tab.undoSelection()
     #expect(fixture.selectedNames == ["a.txt", "b.txt"])
 }
 
@@ -1734,7 +1740,7 @@ private func shownWidths(_ pane: Pane) -> [Double] {
     #expect(fixture.pane.selection == selection)
     #expect(fixture.pane.centeringRequest == centering)
     #expect(changes == 0)
-    fixture.pane.undoSelection()
+    fixture.tab.undoSelection()
     #expect(fixture.selectedNames == ["a.txt"])
 }
 

@@ -1000,7 +1000,7 @@ func leftOrCommandUpMovesToTheParentsColumnAndDoesNothingAtTheRoot(chord: KeyCho
     #expect(paths(pane) == ["/", "/r", "/r/other"])
     expectKept(selecting: "other")
     #expect(!pane.canGoForward)
-    #expect(!above[1].canUndoSelection)
+    #expect(!fixture.tab.canUndoSelection)
     await trail(pane).rootChecked()
     await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
     await drainMainQueue()
@@ -1299,13 +1299,59 @@ func leftOrCommandUpMovesToTheParentsColumnAndDoesNothingAtTheRoot(chord: KeyCho
     let pane = fixture.pane
     let docs = trail(pane).columns[2].pane
     docs.select(Selection([ExactName("sub")], cursor: ExactName("sub")), recordingAs: nil)
-    #expect(!docs.canUndoSelection)
+    #expect(!fixture.tab.canUndoSelection)
     trail(pane).focus(trail(pane).columns[1])
 
     trail(pane).columns[1].pane.pressSelectedFolder()
 
     #expect(docs.selection.isEmpty)
-    #expect(!docs.canUndoSelection)
+    #expect(!fixture.tab.canUndoSelection)
+}
+
+/// Cmd-U after ← puts back the selection of the column the keys left, which takes them again,
+/// with nothing added to Back; Shift-Cmd-U puts back what it replaced
+/// (docs/decisions/0112-position-history.md).
+@MainActor @Test func commandUAfterLeftPutsBackTheSelectionOfTheColumnTheKeysLeft() async throws {
+    let fixture = await columnPane(at: "/r/docs")
+    let pane = fixture.pane
+    let docs = trail(pane).columns[2]
+    select("x.txt", in: docs)
+    select("sub", in: docs)
+    await settle { paths(pane) == ["/", "/r", "/r/docs", "/r/docs/sub"] }
+    trail(pane).moveLeft()
+    #expect(trail(pane).focusedIndex == 1)
+    let back = pane.history.backEntries.count
+
+    try press(KeyChord("u", modifiers: .command), on: pane)
+
+    #expect(trail(pane).focused === docs)
+    #expect(docs.pane.selection == Selection([ExactName("x.txt")], cursor: ExactName("x.txt")))
+    #expect(paths(pane) == ["/", "/r", "/r/docs"])
+    #expect(pane.history.backEntries.count == back)
+    #expect(pane.location == Location(path: "/r/docs"))
+
+    try press(KeyChord("u", modifiers: [.command, .shift]), on: pane)
+
+    #expect(docs.pane.selection == Selection([ExactName("sub")], cursor: ExactName("sub")))
+    #expect(paths(pane) == ["/", "/r", "/r/docs", "/r/docs/sub"])
+    #expect(pane.history.backEntries.count == back)
+}
+
+/// A restart of the trail, as a navigation makes, drops the pane's steps, columns and all, so
+/// they aren't there when Back starts the trail again where it was.
+@MainActor @Test func aNavigationInColumnViewDropsThePanesSteps() async throws {
+    let fixture = await columnPane(at: "/r/docs")
+    let pane = fixture.pane
+    select("x.txt", in: trail(pane).columns[2])
+    select("sub", in: trail(pane).columns[2])
+    #expect(fixture.tab.canUndoSelection)
+
+    pane.navigate(to: Location(path: "/r/other"))
+    pane.goBack()
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+    #expect(paths(pane).prefix(3) == ["/", "/r", "/r/docs"])
+
+    #expect(!fixture.tab.canUndoSelection)
 }
 
 @MainActor @Test func openOnAFolderInAColumnMovesIntoItsColumn() async throws {
