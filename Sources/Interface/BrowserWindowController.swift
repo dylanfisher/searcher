@@ -71,9 +71,10 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// nothing after that.
     private var isClosed = false
 
-    /// Whether the left mouse button is down, which tells a move by the title bar from one the
-    /// app makes; a test sets it.
-    var isLeftMouseDown: () -> Bool = { NSEvent.pressedMouseButtons & 1 != 0 }
+    /// Whether the event being handled is a drag of the left button, which tells a step of a
+    /// title-bar drag from a move the app makes while a button is down, as a click's does; a
+    /// test sets it.
+    var isDragStep: () -> Bool = { NSApp.currentEvent?.type == .leftMouseDragged }
 
     /// Set when the user starts dragging the window by its title bar.
     private var isDraggingWindow = false
@@ -273,22 +274,24 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// (0057-windows-and-tear-out.md). Zoom, full screen and restoring a frame aren't live
     /// resizes, so they leave the frame alone.
     public func windowDidEndLiveResize(_ notification: Notification) {
+        isDraggingWindow = false
         recordFrame()
     }
 
-    /// The user starts dragging the window by its title bar. AppKit sends this for that drag
-    /// only, not for a move the app makes with `setFrame`.
+    /// The user starts dragging the window by its title bar, which is when AppKit sends this.
+    /// `windowDidMove` checks the drag's own events too.
     public func windowWillMove(_ notification: Notification) {
         isDraggingWindow = true
     }
 
-    /// A move that follows `windowWillMove` while the left button is down is the drag: the
-    /// window's frame after each step is the one a new window opens at, so the last step, made
-    /// before the button comes up, is the one that stays. A move with the button up (a cascade, a
-    /// restore, zoom, full screen, a test) ends the drag's claim and records nothing.
+    /// A move that follows `windowWillMove` and is made while handling a left-button drag event
+    /// is a step of the drag: the window's frame after each step is the one a new window opens
+    /// at, so the last step, made before the button comes up, is the one that stays. Any other
+    /// move (a cascade, a restore, zoom, full screen, a click's, a test) ends the drag's claim
+    /// and records nothing, so the flag a finished drag leaves is cleared by the next move.
     public func windowDidMove(_ notification: Notification) {
         guard isDraggingWindow else { return }
-        guard isLeftMouseDown() else {
+        guard isDragStep() else {
             isDraggingWindow = false
             return
         }
