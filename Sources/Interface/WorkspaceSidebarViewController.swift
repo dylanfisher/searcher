@@ -4,19 +4,19 @@ import UniformTypeIdentifiers
 
 /// A window's sidebar: a source list, as Finder's sidebar is, with three groups. Favorites holds
 /// the app's `Favorites`, Locations the mounted volumes in `SidebarVolumes`, and Workspaces a row
-/// per saved workspace in `WorkspaceList.saved` order; `Settings` says which groups show. A dot marks a workspace whose window is open, as
-/// the Dock marks a running app. The window's own workspace is selected while it is listed, as
-/// Finder's sidebar selects the window's place.
+/// per saved workspace in `WorkspaceList.saved` order; `Settings` says which groups show. A dot
+/// marks a workspace whose window is open, as the Dock marks a running app. The window's own
+/// workspace is selected while it is listed, as Finder's sidebar selects the window's place.
 ///
 /// A click on a favorite or a volume opens it in the window's focused pane, and a click on a
 /// workspace opens it, or focuses its window if open; a volume's eject button, or Eject in its
-/// context menu, ejects it, and an alert says why when that fails; with the keys in the list, the arrow keys move the
-/// selection and Return opens the selected row. Esc gives the keys back (`onEscape`). Files and
-/// folders dropped between the favorites are added there, a favorite dragged within the group
-/// moves, and one dragged out of the sidebar, or removed from its context menu, leaves it. The
-/// rows follow the lists, the mounts and the settings as they change, from any window
-/// (docs/decisions/0086-workspace-sidebar.md, docs/decisions/0107-sidebar-favorites.md,
-/// docs/decisions/0108-sidebar-locations.md).
+/// context menu, ejects it, and an alert says why when that fails; with the keys in the list,
+/// the arrow keys move the selection and Return opens the selected row. Esc gives the keys back
+/// (`onEscape`). Files and folders dropped between the favorites are added there, a favorite
+/// dragged within the group moves, and one dragged out of the sidebar, or removed from its
+/// context menu, leaves it. The rows follow the lists, the mounts and the settings as they
+/// change, from any window (docs/decisions/0086-workspace-sidebar.md,
+/// docs/decisions/0107-sidebar-favorites.md, docs/decisions/0108-sidebar-locations.md).
 @MainActor
 final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataSource,
     NSOutlineViewDelegate
@@ -417,7 +417,8 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     /// The alert saying the volume `name` wasn't ejected, and the system's `reason`.
     static func ejectFailedAlert(name: String, reason: String) -> NSAlert {
         Dialog.alert(
-            message: "The disk “\(name)” wasn’t ejected.", information: reason, buttons: ["OK"])
+            message: "The disk “\(name)” wasn’t ejected.", information: reason,
+            buttons: ["OK"])
     }
 
     // MARK: Data source
