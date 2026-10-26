@@ -133,30 +133,49 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     }
 
     /// A row: its icon, its name, and, for a workspace, the dot when its window is open, or, for
-    /// a volume that can be ejected, the eject button.
+    /// a volume that can be ejected, the eject button. The icon has no tint of its own: the
+    /// source list draws a template icon as Finder's sidebar does, in the label color at rest and
+    /// in the selected row's colors, as it draws the name.
     final class Cell: NSTableCellView {
         let openMark = NSImageView()
-        let ejectButton = NSButton()
+        let ejectButton = HoverButton(look: .glyph)
+        /// The icon's width and height, which follow the row size.
+        var iconSize: [NSLayoutConstraint] = []
 
         /// Whether the dot shows.
         var showsOpen: Bool { !openMark.isHidden }
 
-        /// Whether the icon is Finder's glyph, which takes the accent color as Finder's does, and
-        /// the selected row's text color while that row is emphasized, where the accent would
-        /// vanish on the selection. A file's type icon isn't a template and ignores the tint.
-        var tintsIcon = false {
-            didSet { updateIconTint() }
-        }
-
         override var backgroundStyle: NSView.BackgroundStyle {
-            didSet { updateIconTint() }
+            didSet { ejectButton.isOnEmphasizedSelection = backgroundStyle == .emphasized }
         }
 
-        func updateIconTint() {
-            imageView?.contentTintColor =
-                tintsIcon
-                ? (backgroundStyle == .emphasized
-                    ? .alternateSelectedControlTextColor : .controlAccentColor) : nil
+        /// The table sets it to the row size the system's sidebar icon size gives; AppKit then
+        /// sizes the name's font and the icon's symbols for it.
+        override var rowSizeStyle: NSTableView.RowSizeStyle {
+            didSet {
+                for constraint in iconSize {
+                    constraint.constant = Self.iconSide(rowSizeStyle)
+                }
+            }
+        }
+
+        // AppKit gives the icon its symbols' size as it lays the cell out; the eject glyph
+        // takes the same size.
+        override func layout() {
+            super.layout()
+            if ejectButton.symbolConfiguration != imageView?.symbolConfiguration {
+                ejectButton.symbolConfiguration = imageView?.symbolConfiguration
+            }
+        }
+
+        /// The side of Finder's glyphs for a row size: the sizes the `Sidebar*.icns` files are
+        /// drawn at for the small, medium and large sidebar icon sizes.
+        static func iconSide(_ style: NSTableView.RowSizeStyle) -> CGFloat {
+            switch style {
+            case .small: 16
+            case .large: 24
+            default: 18
+            }
         }
     }
 
@@ -176,6 +195,24 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         }
         /// The context menu for a right-click on a row, or -1 below the rows; nil for none.
         var contextMenu: @MainActor (Int) -> NSMenu? = { _ in nil }
+        /// The event the app is handling; tests replace it.
+        var currentEvent: @MainActor () -> NSEvent? = { NSApp.currentEvent }
+
+        /// A click on the list leaves the keys where they were, as a click in Finder's sidebar
+        /// does, so the selection shows as a list without the keys shows it: the row's icon and
+        /// name in the accent. `NSWindow` asks this before it gives the clicked view the keys.
+        /// Focus Sidebar, Tab and a click on a menu or in another window still give the list
+        /// the keys.
+        override var acceptsFirstResponder: Bool {
+            if let event = currentEvent(),
+                [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type),
+                let window, event.windowNumber == window.windowNumber,
+                visibleRect.contains(convert(event.locationInWindow, from: nil))
+            {
+                return false
+            }
+            return super.acceptsFirstResponder
+        }
 
         override func keyDown(with event: NSEvent) {
             switch KeyChord(event: event) {
@@ -649,7 +686,6 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
             outlineView.makeView(withIdentifier: Self.cellID, owner: nil) as? Cell
             ?? makeCell(Self.cellID)
         cell.imageView?.image = symbol("macwindow", description: "Workspace")
-        cell.tintsIcon = false
         cell.textField?.stringValue = saved.name
         cell.openMark.isHidden = !saved.isOpen
         cell.ejectButton.isHidden = true
@@ -664,7 +700,6 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
             ?? makeCell(Self.favoriteCellID)
         let isMissing = item.state == .missing
         cell.imageView?.image = icon(for: item)
-        cell.tintsIcon = true
         cell.imageView?.alphaValue = isMissing ? 0.4 : 1
         cell.textField?.stringValue = item.name
         cell.textField?.textColor = isMissing ? .tertiaryLabelColor : .labelColor
@@ -681,7 +716,6 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
             outlineView.makeView(withIdentifier: Self.volumeCellID, owner: nil) as? Cell
             ?? makeCell(Self.volumeCellID)
         cell.imageView?.image = icon(for: volume)
-        cell.tintsIcon = true
         cell.textField?.stringValue = volume.name
         cell.openMark.isHidden = true
         cell.ejectButton.isHidden = !volume.canEject
@@ -747,10 +781,8 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         // The cell's label says "open"; the dot alone adds nothing for VoiceOver.
         mark.setAccessibilityElement(false)
         let eject = cell.ejectButton
-        eject.image = symbol("eject", description: "Eject")
-        eject.isBordered = false
-        eject.imagePosition = .imageOnly
-        eject.contentTintColor = .secondaryLabelColor
+        // Finder's eject glyph is the filled one.
+        eject.image = symbol("eject.fill", description: "Eject")
         eject.target = self
         eject.action = #selector(ejectClicked(_:))
         eject.isHidden = true
@@ -759,20 +791,26 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         }
         cell.imageView = icon
         cell.textField = label
-        NSLayoutConstraint.activate([
-            icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
-            icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 18),
-            icon.heightAnchor.constraint(equalToConstant: 18),
-            label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 6),
-            label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-            mark.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 6),
-            mark.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
-            mark.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-            eject.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 4),
-            eject.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4),
-            eject.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-        ])
+        let side = Cell.iconSide(cell.rowSizeStyle)
+        cell.iconSize = [
+            icon.widthAnchor.constraint(equalToConstant: side),
+            icon.heightAnchor.constraint(equalToConstant: side),
+        ]
+        NSLayoutConstraint.activate(
+            cell.iconSize + [
+                icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
+                icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 6),
+                label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                mark.leadingAnchor.constraint(
+                    greaterThanOrEqualTo: label.trailingAnchor, constant: 6),
+                mark.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
+                mark.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                eject.leadingAnchor.constraint(
+                    greaterThanOrEqualTo: label.trailingAnchor, constant: 4),
+                eject.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -2),
+                eject.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            ])
         return cell
     }
 

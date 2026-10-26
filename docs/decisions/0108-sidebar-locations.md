@@ -49,10 +49,15 @@ bus, the startup disk with it, so the startup disk isn't listed. A volume mounte
   `externaldrive.connected.to.line.below`) show until they are read, or if the bundle lacks one.
   A missing glyph falls back silently, as 0107 says. An optical disc shows the removable-disk
   glyph, since nothing in `SidebarVolume` says it is optical media, though the bundle has
-  `SidebarOpticalDisk`. Tinted as 0107's.
+  `SidebarOpticalDisk`. Colored and sized as 0107's.
   The row also has the name, and Finder's eject
   button on each row that can be ejected (`canEject`: a share, a removable or ejectable disk,
-  or one not on an internal bus). Every listed row can be ejected, as in Finder's default
+  or one not on an internal bus). (Amended 2026-10-26, Dylan: "some icons are still different
+  compared to searcher (e.g. eject)" and "eject icon should hover darker color".) The button
+  shows Finder's filled glyph, `eject.fill`, at the size AppKit gives the row's symbols, with
+  no fill under it: tertiary label color at rest, secondary under the mouse, the label color
+  pressed and quaternary while off; on an emphasized row, the selected row's text color at those
+  levels. It is a `HoverButton` with the `.glyph` look ([0110](0110-interaction-states.md)). Every listed row can be ejected, as in Finder's default
   sidebar. A click or Return shows the volume's mount point in the window's focused pane
   (`Pane.navigate`), as a favorite folder's click does.
 - **Eject.** The eject button and the row's context menu item, `Eject “name”` as Finder titles
