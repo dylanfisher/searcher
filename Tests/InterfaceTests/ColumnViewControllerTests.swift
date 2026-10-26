@@ -2062,6 +2062,85 @@ private let gripDrags: [[Double]] = [[-30.37, -60.81, -90.13], [-60.4, -20.77, 4
 
 /// At its minimum width, with a date that wraps, every field of the preview is inside it, each
 /// Information title is whole, and each value has room for a word of a date on a line.
+/// Text in the preview that has the keys gives them back to the focused column when the preview
+/// shows other text or hides, so they never stay in text that changed or is gone: a patch to the
+/// shown file refills it, and the file's removal hides it.
+@MainActor @Test func aRefillOrHideUnderTheKeysGivesTheFocusedColumnTheKeys() async throws {
+    let fixture = await Fixture()
+    await fixture.select("a.txt", inColumn: 0)
+    // On the second display: a field takes the keys through the field editor only in a window
+    // that is shown.
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 800, height: 400), styleMask: [.titled],
+        backing: .buffered, defer: true)
+    window.isReleasedWhenClosed = false
+    defer { window.orderOut(nil) }
+    window.contentView = fixture.controller.view
+    SecondDisplay.orderFront(window)
+    window.contentView?.layoutSubtreeIfNeeded()
+    let view = try #require(fixture.controller.previewView)
+    let table = try #require(fixture.controller.focusedController).tableView
+    let column = fixture.trail.columns[0].pane
+    /// Presses `field`'s text, as a click does, so the field editor takes the keys.
+    func select(_ field: NSTextField) throws {
+        let point = field.convert(NSPoint(x: field.bounds.midX, y: field.bounds.midY), to: nil)
+        let now = ProcessInfo.processInfo.systemUptime
+        func event(_ type: NSEvent.EventType, at time: Double) throws -> NSEvent {
+            try #require(
+                NSEvent.mouseEvent(
+                    with: type, location: point, modifierFlags: [], timestamp: time,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                    clickCount: 1, pressure: 1))
+        }
+        nonisolated(unsafe) let down = try event(.leftMouseDown, at: now)
+        try performRealPress(releasedBy: try event(.leftMouseUp, at: now + 0.05), selectsText: true)
+        {
+            field.mouseDown(with: down)
+        }
+    }
+    try select(view.nameField)
+    #expect(view.textHasKeys)
+
+    column.apply(.patches([.update(file("a.txt", size: 2_000_000))]), at: column.location)
+
+    await settle { view.summaryField.stringValue.hasSuffix(" – 2 MB") }
+    #expect(window.firstResponder === table)
+
+    try select(view.modifiedField)
+    #expect(view.textHasKeys)
+    column.apply(.patches([.remove(name: "a.txt")]), at: column.location)
+
+    await settle { view.isHidden }
+    #expect(window.firstResponder === table)
+}
+
+/// ↑ and ↓ in the preview's text hand their press to the column, and Esc, Tab and Shift-Tab
+/// hand the keys back alone; Shift-↓ and → stay with the text, extending or moving its
+/// selection.
+@MainActor @Test func thePreviewsTextHandsTheColumnOnlyItsWayOut() async throws {
+    let fixture = await Fixture()
+    await fixture.select("a.txt", inColumn: 0)
+    let view = try #require(fixture.controller.previewView)
+    var handed: [String?] = []
+    view.returnKeys = { event in handed.append(event?.charactersIgnoringModifiers) }
+    let editor = NSTextView()
+    func command(_ selector: Selector) -> Bool {
+        view.control(view.nameField, textView: editor, doCommandBy: selector)
+    }
+
+    #expect(command(#selector(NSResponder.moveUp(_:))))
+    #expect(command(#selector(NSResponder.moveDown(_:))))
+    #expect(command(#selector(NSResponder.cancelOperation(_:))))
+    #expect(command(#selector(NSResponder.insertTab(_:))))
+    #expect(command(#selector(NSResponder.insertBacktab(_:))))
+    #expect(!command(#selector(NSResponder.moveDownAndModifySelection(_:))))
+    #expect(!command(#selector(NSResponder.moveRight(_:))))
+
+    let up = String(Character(Unicode.Scalar(UInt16(NSUpArrowFunctionKey))!))
+    let down = String(Character(Unicode.Scalar(UInt16(NSDownArrowFunctionKey))!))
+    #expect(handed == [up, down, nil, nil, nil])
+}
+
 @MainActor @Test func atItsMinimumWidthThePreviewsFieldsAreWhole() async throws {
     let fixture = await Fixture()
     let reader = GatedItemInfoReader([

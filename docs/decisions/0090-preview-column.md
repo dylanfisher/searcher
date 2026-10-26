@@ -71,9 +71,13 @@ listing doesn't make.
   `ColumnPreviewView.smallestImageSide`, 64 points; in a window shorter than that the fields
   scroll, as before. The tags below the rows don't count: they show only once read, and
   counting them would shrink the image and move every row up when a read lands after the
-  hold ([0095](0095-preview-metadata.md)); they scroll instead. It is sized again when the preview's width or height changes and when its
-  file or fields change, so a thumbnail of another aspect, or tags that add a line, resize it
-  in the same layout. The thumbnail is asked for at the size drawn; see
+  hold ([0095](0095-preview-metadata.md)); they scroll instead. It is sized again when the
+  preview's width or height changes and when its file or fields change, so a thumbnail of
+  another aspect, or tags that add a line, resize it in the same layout. The fields' height is
+  added up from each field's own text height and the stack's spacing, not asked of the stack:
+  its fitting size solved its layout again on every frame of a grip's drag, 0.23 ms a call in a
+  debug build against 0.03 ms now, beside about 0.6 ms for the preview's own layout. The
+  thumbnail is asked for at the size drawn; see
   [0102](0102-thumbnails.md).)
 - **Scrolling.** The column view scrolls when the focus, the column count or whether a preview
   shows changes. The focused column's right-hand neighbor, kept in view where it fits, is the
@@ -126,21 +130,37 @@ bar's buttons, the filter field, the rename field, Access Denied's button.
 
 The preview's name, tags and values were selectable wrapping labels. A selectable label takes the
 keys and tracks the mouse itself, so a press on its text would not have reached the pane; they are
-no longer selectable. Finder's preview text is not selectable either, as recalled; Dylan to
-confirm. (Amended 2026-10-25: Dylan confirmed the opposite, "the text in finder's preview is
+no longer selectable, on the belief that Finder's preview text is not selectable either.
+(Corrected 2026-10-25: that belief was wrong. Dylan: "the text in finder's preview is
 selectable - ours should be too". The name, the kind line, the Information values and the tags
 are selectable again, and not editable; the Information titles, the section headers and the
 image aren't. A press on selectable text starts AppKit's text selection, which makes the
 field's editor first responder; that view is inside the pane, so
 `BrowserWindowController.firstResponderDidChange` focuses the pane, as a press anywhere in it
-does. While the text has the keys, arrows move in the text and Cmd-C copies it, as in a text
-field. A press on a row, or on the preview's empty space, the gaps or the bars, gives the
-focused column its keys back, so arrows move the selection again (tested). The container's
-press still reaches nothing that takes presses itself, so a press on a title or the image
-gives the focused column the keys, as before. The tests press the name for real; a synthetic
-press on an Information value never ended, its text tracking waiting on a mouse up the test's
-queue had already given up, so the values and tags are checked as selectable instead.) A press
-on empty space below a table's rows is left to AppKit, which clears the selection in
+does. While the text has the keys, Shift-arrows and → and ← work in the text and Cmd-C copies
+it: the window controller leaves Copy to the text (`keysAreInText`), and the pane's commands,
+Space and Quick Look among them, are off until the keys go back. Ways back, each tested: a
+press on a row, or on the preview's empty space, the gaps or the bars; Esc, Tab and Shift-Tab,
+which give the focused column its keys and leave its selection alone; and ↑ and ↓, which give
+it the keys and move its selection as they would have there (`ColumnPreviewView` handles their
+commands as the fields' delegate and passes the key press on). When the preview hides, or its
+text changes to another file, version or read, while its text has the keys, column view gives
+them back to the focused column first, so they never stay in text that is gone; a thumbnail
+landing changes no text and leaves them. The container's press still reaches nothing that
+takes presses itself, so a press on a title or the image gives the focused column the keys, as
+before.
+
+The tests press every selectable field for real. A press on a value no wider than its text,
+such as "--", first hung the test: `NSTextView.mouseDown` takes the mouse up out of the queue
+before its tracking starts when the press lands in the field's selection, which covers a value
+that narrow, and the tests' mouse up was stamped at time 0, like its down. An up stamped no
+later than its down is not put back, so the tracking waited for another. Swapping
+`nextEvent(matching:until:inMode:dequeue:)` in a scratch test showed the up taken at
+`-[NSTextView mouseDown:]` with the mask for mouse up and drag, then the tracking loop finding
+the queue empty; the same press with the up stamped 50 ms after the down, as a real click's
+always is, ended at once, and a value 17 points wide or more never hit the early take. So it is
+the test harness, not a press Dylan can make, and the tests now stamp the up after the down.) A
+press on empty space below a table's rows is left to AppKit, which clears the selection in
 that table at mouse up, as Finder's columns do ([0077](0077-selection-history.md) relies on it);
 it is not tested, since the test windows are not key (0091) and AppKit selects nothing then. A
 press in the preview's empty space, the gaps or the bars changes no selection (tested).
