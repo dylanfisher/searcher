@@ -71,7 +71,10 @@ other-pane confirm names nothing, and two Cmd-Shift-C presses ask two questions 
   panel stays and says "No operations".
 - **Insets.** Each row sits 9 pt from the panel's sides, `BarInset.horizontal`, shared with the
   path bar so its first folder lines up with the rows' text, and 9 pt above and below (12 and 6
-  until 2026-10-23, when Dylan asked for less across and more up and down).
+  until 2026-10-23, when Dylan asked for less across and more up and down). Rows sit
+  `OperationsViewController.rowGap` (12 pt) apart beyond those insets, and the first has
+  `firstRowTopInset` (10 pt) more above it, so a queue of copies doesn't look squeezed together
+  (2026-10-25).
 - **Size.** The panel is as tall as its rows, up to 200 pt (about three rows), past which they
   scroll; with no rows it is one line saying so. Its height comes from the rows' constraints, so
   it grows and shrinks a row at a time and the panes give up only that room. A progress tick
