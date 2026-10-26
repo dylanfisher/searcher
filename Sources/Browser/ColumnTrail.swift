@@ -561,7 +561,8 @@ public final class ColumnTrail {
         // A closed column can still report a change it was making.
         guard columns.contains(where: { $0 === column }) else { return }
         if selectFirstRowIfWanted(in: column) { return }
-        if waitsForKeysToPause(column) {
+        let waits = restartKeyPause(after: column)
+        if waits {
             hold(column)
         } else {
             follow(column)
@@ -570,12 +571,14 @@ public final class ColumnTrail {
         owner.trailDidChange()
     }
 
-    /// Whether the columns right of `column` wait for the keys to pause before they follow its
-    /// selection: a key-made selection they don't follow yet waits, unless the keys had paused
-    /// before it and the folder it selects shows its kept rows the moment its column is made;
-    /// then waiting would show an empty column for nothing. A new key-made selection starts the
-    /// pause again, so a held key's repeats wait and only its first press can open at once.
-    private func waitsForKeysToPause(_ column: Column) -> Bool {
+    /// Starts the keys' pause again for a new key-made selection in `column`, so a held key's
+    /// repeats wait and only its first press can open at once, and returns whether the columns
+    /// right of `column` wait for the pause before they follow the selection. A key-made
+    /// selection they don't follow yet waits, unless the keys had paused before it and the
+    /// folder it selects shows its kept rows the moment its column is made; then waiting would
+    /// leave the space right of `column` blank for nothing. A selection already waiting doesn't
+    /// start the pause again.
+    private func restartKeyPause(after column: Column) -> Bool {
         let pane = column.pane
         let version = pane.selectionVersion
         guard pane.selectionIsFromKeys, column.followedSelectionVersion != version else {
@@ -979,8 +982,6 @@ public final class ColumnTrail {
         return true
     }
 
-    /// Closes the columns right of `index`. A focused column among them hands the focus to the
-    /// one at `index`.
     /// The entry of the one row `pane` selects in `listing`, when that row is the cursor's: a
     /// folder there opens the next column.
     private static func soleSelectedEntry(in pane: Pane, of listing: Listing) -> DirectoryEntry? {
@@ -990,6 +991,8 @@ public final class ColumnTrail {
         return listing[cursorRow]
     }
 
+    /// Closes the columns right of `index`. A focused column among them hands the focus to the
+    /// one at `index`.
     private func truncate(after index: Int) {
         guard index + 1 < columns.count else { return }
         if focusedIndex > index { focus(index) }
