@@ -2760,34 +2760,100 @@ private func photoPane(
     #expect(trail(pane).preview?.thumbnail == nil)
 }
 
-/// A file in a folder on a share gets no thumbnail, even when the folder's path reads as on `/`,
-/// as one reached through a link does: the folder's volume is the one its load read.
-@MainActor @Test func aFileOnAShareReachedThroughALinkAsksForNoThumbnail() async throws {
+/// A focused pane at `/t` in column mode, on a share as one reached through a link under `/`
+/// is, whose service makes thumbnails with `maker`, reading previews' info with `reader` and
+/// holding them on `clock`. `/t` holds the photos `a.jpg`, `b.jpg` and `c.jpg`.
+@MainActor
+private func sharePhotoPane(
+    maker: GatedThumbnailMaker, reader: GatedItemInfoReader, clock: ManualClock = ManualClock()
+) async -> Pane {
     let share = VolumeIdentity(device: "//nas/share", mountPoint: "/Volumes/nas", kind: .network)
-    let maker = GatedThumbnailMaker()
-    // Answered, so a request that reached the maker would land in the preview.
-    maker.answer("/t/a.jpg", with: testThumbnail(pixels: 256))
-    let lister = GatedLister(["/": .batches([[folder("t")]]), "/t": .batches([[file("a.jpg")]])])
+    let lister = GatedLister([
+        "/": .batches([[folder("t")]]),
+        "/t": .batches([[file("a.jpg"), file("b.jpg"), file("c.jpg")]]),
+    ])
     lister.releaseAll()
     let pane = Pane(
         location: Location(path: "/t"),
         service: ListingService(
-            lister: lister, volumeOf: { _ in share }, thumbnails: ThumbnailService(maker: maker)),
+            lister: lister, volumeOf: { _ in share },
+            // A clock never advanced, so no request is given up.
+            thumbnails: ThumbnailService(maker: maker, clock: ManualClock())),
         systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true)
-    let reader = GatedItemInfoReader(["/t/a.jpg": info(1)])
-    reader.releaseAll()
+    pane.previewHoldClock = clock
     pane.itemInfoReader = reader
     await settle { pane.state.isLoaded }
     pane.setViewMode(.column)
     await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
     #expect(trail(pane).focused.pane.folderVolume == share)
+    return pane
+}
+
+/// The preview of a file on a share shows its thumbnail, as Finder's does, though the share's
+/// rows ask for none. The folder's volume is the one its load read, so `/t` is on the share.
+@MainActor @Test func aFileOnAShareShowsItsThumbnailInThePreview() async throws {
+    let maker = GatedThumbnailMaker()
+    let image = testThumbnail(pixels: 256)
+    maker.answer("/t/a.jpg", with: image)
+    let reader = GatedItemInfoReader(["/t/a.jpg": info(1)])
+    reader.releaseAll()
+    let pane = await sharePhotoPane(maker: maker, reader: reader)
 
     select("a.jpg", in: trail(pane).columns[1])
 
+    await settle { trail(pane).shownPreview?.thumbnail === image }
+    #expect(maker.paths == ["/t/a.jpg"])
+    #expect(maker.calls.allSatisfy { $0.onBlockingCallThread })
+}
+
+/// Moving the selection on through a folder on a share stops the earlier file's thumbnail, so
+/// only the latest file's runs and no backlog of requests reads over the network.
+@MainActor @Test func movingOnThroughAShareStopsTheEarlierThumbnail() async throws {
+    let maker = GatedThumbnailMaker()
+    let reader = GatedItemInfoReader([
+        "/t/a.jpg": info(1), "/t/b.jpg": info(2), "/t/c.jpg": info(3),
+    ])
+    reader.releaseAll()
+    let pane = await sharePhotoPane(maker: maker, reader: reader)
+    let column = trail(pane).columns[1]
+    let thumbnails = try #require(pane.service.thumbnails)
+
+    select("a.jpg", in: column)
+    #expect(await maker.waitForCalls(1))
+    select("b.jpg", in: column)
+    #expect(await maker.waitForCalls(2))
+    select("c.jpg", in: column)
+    #expect(await maker.waitForCalls(3))
+
+    #expect(maker.paths == ["/t/a.jpg", "/t/b.jpg", "/t/c.jpg"])
+    await settle { maker.stopped == ["/t/a.jpg", "/t/b.jpg"] }
+    #expect(thumbnails.calls.waitingCount(on: trail(pane).focused.pane.folderVolume) == 0)
+    let image = testThumbnail(pixels: 256)
+    maker.answer("/t/a.jpg", with: testThumbnail(pixels: 256))
+    maker.answer("/t/c.jpg", with: image)
+    await settle { trail(pane).shownPreview?.thumbnail === image }
+    #expect(trail(pane).shownPreview?.location == Location(path: "/t/c.jpg"))
+    await settle { thumbnails.calls.isIdle }
+}
+
+/// A share that never answers the thumbnail leaves the preview showing the file's icon, with
+/// its info, once the hold passes.
+@MainActor @Test func aThumbnailAShareNeverAnswersLeavesTheIcon() async throws {
+    let maker = GatedThumbnailMaker()
+    let reader = GatedItemInfoReader(["/t/a.jpg": info(1)])
+    reader.releaseAll()
+    let clock = ManualClock()
+    let pane = await sharePhotoPane(maker: maker, reader: reader, clock: clock)
+
+    select("a.jpg", in: trail(pane).columns[1])
+    #expect(await maker.waitForCalls(1))
+    clock.advance(by: ColumnTrail.previewHold)
+
     await settle { trail(pane).shownPreview?.info == .read(info(1)) }
-    for _ in 0..<3 { await drainMainQueue() }
-    #expect(maker.calls.isEmpty)
+    #expect(trail(pane).shownPreview?.location == Location(path: "/t/a.jpg"))
     #expect(trail(pane).shownPreview?.thumbnail == nil)
+    trail(pane).close()
+    await settle { maker.stopped == ["/t/a.jpg"] }
 }
 
 /// A file in rows its volume hasn't answered with, as a slow listing keeps them, gets no

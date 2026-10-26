@@ -719,8 +719,10 @@ public final class ColumnTrail {
     /// unless that is done or running for its entry already. A file of the entry shown keeps
     /// its thumbnail until the new one lands, as its info does. A file that may not show one
     /// (`ThumbnailService.shows`), one in rows its volume hasn't answered with, and one whose
-    /// folder's volume isn't known or is a share, gets none and keeps its type icon. Its request
-    /// waits ahead of rows' for its volume's slot, so the hold isn't spent behind them
+    /// folder's volume isn't known, gets none and keeps its type icon. A file on a share gets
+    /// one, as in Finder's preview, though rows there don't. Its request waits ahead of rows'
+    /// for its volume's slot, so the hold isn't spent behind them, and is cancelled when the
+    /// preview moves on, which on a share stops it and frees the share's slot
     /// (0102-thumbnails.md). It is asked for at `Pane.previewImageSide`; one made smaller is
     /// asked for again once that grows, and `next` keeps it until the larger one lands, or for
     /// good if that one fails; a smaller one kept of the file, such as its row's, shows the
@@ -735,7 +737,7 @@ public final class ColumnTrail {
         cancelThumbnail()
         guard let thumbnails = owner.service.thumbnails,
             ThumbnailService.shows(next.entry, kind: next.kind), pane.state.isAnswered,
-            let volume = pane.folderVolume, ThumbnailService.makes(on: volume)
+            let volume = pane.folderVolume
         else {
             next.thumbnail = nil
             return
@@ -758,7 +760,7 @@ public final class ColumnTrail {
             let thumbnail: CGImage?
             do {
                 thumbnail = try await thumbnails.thumbnail(
-                    at: location.path, entry: entry, side: side, on: volume, first: true)
+                    at: location.path, entry: entry, side: side, on: volume, forPreview: true)
             } catch {
                 // Cancelled before it started: the preview moved on.
                 return

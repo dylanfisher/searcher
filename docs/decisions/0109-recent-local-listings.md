@@ -46,7 +46,9 @@ first update.
   30,000 entries. W2 (100k) isn't kept: its first batch already shows within 7–9 ms (spike S4).
 - **Dropped when the folder is gone.** A load that fails, or finds its volume gone, drops the
   folder and every folder under it. A monitor's patch that removes an entry drops the folder of
-  that name; folders under it go when their own loads fail.
+  that name; folders under it go when their own loads fail. A volume mounting or unmounting
+  (`VolumeEvents`, [0049](0049-volume-events.md)) drops every folder at or under its mount
+  point, so a different volume mounted at the same path never shows the old one's rows.
 - **Bench mode keeps none.** The UI bench's service is made without one, so B2's and B6's cases
   keep timing a real load.
 

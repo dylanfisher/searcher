@@ -108,10 +108,16 @@ discarded and removed. Nothing is stored until a window is first changed by hand
 a live resize, or drags it by the title bar.
 
 The drag is told from a move the app makes (restore, cascade, `fitted`, zoom, full screen,
-tests) by `windowWillMove`, which AppKit sends only when the user starts a drag, and the left
-button: after it, each `windowDidMove` with the button down stores the frame, and the first one
-with it up ends the claim. The last step of a drag is made before the button comes up, so the
-frame stored is where the window was dropped. No event monitor, no timer.
+tests) by `windowWillMove`, which AppKit sends as a drag starts, and the left button: after it, each
+`windowDidMove` with the button down stores the frame, and the first one with it up ends the
+claim. A drag leaves its claim set, since its last step is made before the button comes up, so
+the window's `sendEvent` also ends it at every left mouse down, ahead of the event's handling:
+the mouse down that starts a title-bar drag is handled, and so clears the flag, before
+`windowWillMove` sets it, and a move the app makes after a later click finds it clear. A live
+resize's end ends the claim too. The last step of a drag is the drop, so the frame stored is
+where the window was dropped; macOS's drag-to-edge tiling snaps after the button comes up, so
+the stored frame is the position before the snap. No event monitor, no timer, and nothing that
+reads the current event's type.
 
 A new window without a saved frame opens at the stored frame when no open window has its top
 left there; if one does, it steps down and right by the system's cascade offset
@@ -119,3 +125,6 @@ left there; if one does, it steps down and right by the system's cascade offset
 step from the last one. With no stored frame it centers and cascades from the front window as
 before. `fitted` then keeps it on a display, so a frame stored on a display that is gone opens
 on one that is there. A restored window keeps its saved frame, as before.
+
+The key `newWindowSize` this replaced is removed from the defaults when `Settings` starts, once
+and with no migration: its size is not carried over.

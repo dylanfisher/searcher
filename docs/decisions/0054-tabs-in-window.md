@@ -79,7 +79,8 @@ first responder must never disagree. The workspace tells panes about focus and v
   tab's focused pane only while it is active, so with two windows only the key window's pane
   loads as `.focused` ([0048](0048-pane-load-priority.md)).
 - **The focus ring.** The focused pane gets a 2 pt ring in the keyboard focus color while another
-  pane shows, not with one pane or while zoomed.
+  pane shows, not with one pane or while zoomed. (Amended 2026-10-26: nor while the sidebar has
+  the keys; see [0089](0089-sidebar-key-routing.md).)
 
 ## Alternatives considered
 
