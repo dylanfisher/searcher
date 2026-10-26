@@ -204,9 +204,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             preconditionFailure("Info.plist has no CFBundleName for the app menu")
         }
         do {
-            try MainMenuBuilder.install(
-                in: NSApp, appName: appName, registry: PaneViewController.registry(for: settings),
-                settings: settings)
+            try MainMenuBuilder.install(in: NSApp, appName: appName, settings: settings)
         } catch {
             preconditionFailure("the main menu doesn't match the app's commands: \(error)")
         }

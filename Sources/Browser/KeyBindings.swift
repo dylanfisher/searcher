@@ -33,7 +33,10 @@ public struct KeyBindings: Sendable {
     /// or a chord a default of another command has since taken.
     public struct Dropped: Equatable, Sendable, CustomStringConvertible {
         public enum Reason: Equatable, Sendable {
+            /// The chord is reserved, or fixed to another command (`KeyBindings.fixed`).
             case reserved
+            /// The command's primary is fixed, so the user's chord for it isn't used.
+            case fixed
             /// The user gave the chord to this command, which keeps it.
             case takenBy(CommandID)
         }
@@ -47,6 +50,7 @@ public struct KeyBindings: Sendable {
             let why =
                 switch reason {
                 case .reserved: "it is reserved"
+                case .fixed: "the slot is fixed"
                 case .takenBy(let owner): "the user gave it to \(owner)"
                 }
             return "\(command) loses its \(position.rawValue) chord \(chord): \(why)"
@@ -69,6 +73,9 @@ public struct KeyBindings: Sendable {
     public let overrides: [CommandID: ShortcutOverride]
     /// The chords no command may have.
     public let reserved: Set<KeyChord>
+    /// Chords that are always one command's primary, whatever the overrides say, and no other
+    /// command's chord.
+    public let fixed: [KeyChord: CommandID]
     /// The chords stored data asked for that couldn't be kept, for the caller to log.
     public let dropped: [Dropped]
     private let slots: [CommandID: Chords]
@@ -76,16 +83,19 @@ public struct KeyBindings: Sendable {
     /// Bindings for `commands`, whose `chords` are their defaults. `preset` gives commands with
     /// no default alternate one, which an override of the alternate replaces. An override's
     /// chord wins over a default or preset one: the other command loses its chord. A reserved
-    /// chord is dropped wherever it comes from. Stored data never makes this throw or trap; an
-    /// override for a command not in `commands` is ignored.
+    /// chord is dropped wherever it comes from. A `fixed` chord is its command's primary, which
+    /// overrides don't change, and is dropped from any other command or slot. Stored data never
+    /// makes this throw or trap; an override for a command not in `commands` is ignored.
     ///
     /// Throws if two of `commands` share an ID, or their defaults and `preset` share a chord: a
     /// mistake in the code, not in stored data.
     ///
-    /// - Precondition: no command in `preset` has a default alternate.
+    /// - Precondition: no command in `preset` has a default alternate, and each `fixed` chord is
+    /// its command's default primary.
     public init(
         commands: [Command], preset: [CommandID: KeyChord] = [:],
-        overrides: [CommandID: ShortcutOverride] = [:], reserved: Set<KeyChord> = []
+        overrides: [CommandID: ShortcutOverride] = [:], reserved: Set<KeyChord> = [],
+        fixed: [KeyChord: CommandID] = [:]
     ) throws(CommandRegistry.Conflict) {
         var defaults = CommandRegistry()
         for command in commands {
@@ -115,17 +125,35 @@ public struct KeyBindings: Sendable {
             wanted.append((command, slots))
         }
 
-        // The user's chords claim theirs first, in command order; then the defaults take what
-        // is left.
+        // The fixed chords are taken first; then the user's chords claim theirs, in command
+        // order; then the defaults take what is left.
         var owners: [KeyChord: CommandID] = [:]
         var slots: [CommandID: Chords] = [:]
         var dropped: [Dropped] = []
+        var fixedPrimaries: [CommandID: KeyChord] = [:]
+        for (chord, id) in fixed {
+            guard let command = defaults.command(for: id) else { continue }
+            precondition(
+                command.primary == chord, "\(id)'s default primary isn't its fixed \(chord)")
+            fixedPrimaries[id] = chord
+            owners[chord] = id
+            slots[id, default: Chords()].primary = chord
+        }
         for pass in [true, false] {
             for (command, wantedSlots) in wanted {
                 for position in ShortcutOverride.Position.allCases {
                     guard let slot = wantedSlots[position], slot.isUsers == pass else { continue }
+                    if position == .primary, fixedPrimaries[command.id] != nil {
+                        if slot.isUsers {
+                            dropped.append(
+                                Dropped(
+                                    chord: slot.chord, command: command.id, position: position,
+                                    reason: .fixed))
+                        }
+                        continue
+                    }
                     let reason: Dropped.Reason? =
-                        if reserved.contains(slot.chord) {
+                        if reserved.contains(slot.chord) || fixed[slot.chord] != nil {
                             .reserved
                         } else if let owner = owners[slot.chord] {
                             .takenBy(owner)
@@ -160,6 +188,7 @@ public struct KeyBindings: Sendable {
         self.registry = registry
         self.overrides = overrides
         self.reserved = reserved
+        self.fixed = fixed
         self.dropped = dropped
         self.slots = slots
     }
@@ -175,7 +204,7 @@ public struct KeyBindings: Sendable {
     /// character, is the one stored; every one is checked, so the two spellings of a shifted
     /// punctuation key on another layout count as one key. A chord `id` has in its other slot
     /// moves. A chord another command has is `.taken` unless `replacing`, which removes it from
-    /// that command.
+    /// that command. A reserved or fixed chord, or a fixed primary, is `.reserved`.
     ///
     /// - Precondition: `candidates` isn't empty and `id` is registered.
     public func assign(
@@ -186,7 +215,9 @@ public struct KeyBindings: Sendable {
             preconditionFailure("a key press with no chord can't be assigned")
         }
         precondition(registry.command(for: id) != nil, "\(id) isn't registered")
-        if candidates.contains(where: reserved.contains) {
+        if candidates.contains(where: { reserved.contains($0) || fixed[$0] != nil })
+            || (position == .primary && fixed.values.contains(id))
+        {
             return .reserved
         }
         var overrides = self.overrides

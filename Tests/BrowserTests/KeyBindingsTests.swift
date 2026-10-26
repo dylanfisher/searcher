@@ -193,3 +193,45 @@ private func bindings(
     }
     #expect(current.dropped.isEmpty)
 }
+
+private let cmdC = KeyChord("c", modifiers: .command)
+private let copy = ClipboardCommands.copy
+
+/// Copy's Cmd-C, as the menus fix it.
+private func fixedBindings(_ overrides: [CommandID: ShortcutOverride] = [:]) throws -> KeyBindings {
+    try KeyBindings(commands: AppCommands.commands, overrides: overrides, fixed: [cmdC: copy.id])
+}
+
+/// A fixed chord stays its command's primary: an override of that primary is dropped, and so is
+/// another command's claim to the chord, which leaves the key one meaning.
+@Test func aFixedChordStaysItsCommandsPrimaryAndNoOneElsesChord() throws {
+    let bindings = try fixedBindings([
+        copy.id: ShortcutOverride(primary: .chord(cmdJ), alternate: .chord(cmdShiftK)),
+        goToItem.id: ShortcutOverride(alternate: .chord(cmdC)),
+    ])
+
+    #expect(bindings.chords(of: copy.id) == KeyBindings.Chords(primary: cmdC, alternate: cmdShiftK))
+    #expect(bindings.registry.command(for: cmdC)?.id == copy.id)
+    #expect(bindings.registry.command(for: cmdJ) == nil)
+    #expect(bindings.chords(of: goToItem.id) == KeyBindings.Chords(primary: cmdP))
+    #expect(
+        bindings.dropped == [
+            // In `AppCommands.sets` order.
+            KeyBindings.Dropped(
+                chord: cmdC, command: goToItem.id, position: .alternate, reason: .reserved),
+            KeyBindings.Dropped(chord: cmdJ, command: copy.id, position: .primary, reason: .fixed),
+        ])
+    let removed = try fixedBindings([copy.id: ShortcutOverride(primary: .removed)])
+    #expect(removed.chords(of: copy.id) == KeyBindings.Chords(primary: cmdC))
+}
+
+@Test func assigningAFixedChordOrAFixedPrimaryIsRefused() throws {
+    let bindings = try fixedBindings()
+
+    #expect(bindings.assign([cmdC], to: palette.id, at: .alternate) == .reserved)
+    #expect(bindings.assign([cmdC], to: palette.id, at: .alternate, replacing: true) == .reserved)
+    #expect(bindings.assign([cmdJ], to: copy.id, at: .primary) == .reserved)
+    #expect(
+        bindings.assign([cmdJ], to: copy.id, at: .alternate)
+            == .assigned([copy.id: ShortcutOverride(alternate: .chord(cmdJ))]))
+}
