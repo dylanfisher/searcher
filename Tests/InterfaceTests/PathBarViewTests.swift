@@ -269,3 +269,23 @@ private func pathBar(
         PathBarView.widths(natural: [50, 80, 80, 60], available: 140, minimum: 30, expanding: 2)
             == [30, 30, 50, 30])
 }
+
+/// The focused pane's bar draws its titles in the label color, the others in the secondary
+/// label color; the change moves no segment (docs/decisions/0026-path-bar.md).
+@MainActor @Test func anEmphasizedBarDrawsItsTitlesInTheLabelColorWithoutMovingThem() {
+    let bar = pathBar(showing: "/Users/dylan/Projects")
+    let frames = bar.segments.map(\.frame)
+    #expect(bar.segments.allSatisfy { $0.contentTintColor == .secondaryLabelColor })
+
+    bar.isEmphasized = true
+    bar.layoutSubtreeIfNeeded()
+
+    #expect(bar.segments.allSatisfy { $0.contentTintColor == .labelColor })
+    #expect(bar.segments.map(\.frame) == frames)
+
+    bar.show(Location(path: "/Users/dylan"), rootVolumeName: "Macintosh HD")
+    #expect(bar.segments.allSatisfy { $0.contentTintColor == .labelColor })
+
+    bar.isEmphasized = false
+    #expect(bar.segments.allSatisfy { $0.contentTintColor == .secondaryLabelColor })
+}

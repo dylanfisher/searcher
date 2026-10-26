@@ -46,9 +46,13 @@ public final class Workspace {
     /// window sets it.
     public var isActive = true {
         didSet {
-            if isActive != oldValue { updatePanes() }
+            guard isActive != oldValue else { return }
+            updatePanes()
+            onActiveChange?()
         }
     }
+    /// Runs after `isActive` changes, for the window to mark its focused pane.
+    public var onActiveChange: (@MainActor () -> Void)?
     /// The pane last told it gained the focus, until it is told it lost it.
     private weak var focusedPane: Pane?
     /// Set once every tab moved to another workspace (`removeAllTabs`) or the workspace closed
