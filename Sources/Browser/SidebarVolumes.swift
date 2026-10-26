@@ -15,6 +15,8 @@ public final class SidebarVolumes {
     private let eject: @Sendable (SidebarVolume) throws(SidebarVolume.EjectFailure) -> Void
     /// Counts reads started, so a read that lands after a newer one started is dropped.
     private var readCount = 0
+    /// Counts reads that came back, dropped ones included, so a test can tell one has landed.
+    private(set) var readsLanded = 0
     private var observers: [Observer] = []
 
     private struct Observer {
@@ -52,6 +54,7 @@ public final class SidebarVolumes {
         let read = read
         Task { [weak self] in
             let volumes = await BlockingCallThread.run { read().filter(\.isShown) }
+            self?.readsLanded += 1
             guard let self, self.readCount == count, volumes != self.volumes else { return }
             self.volumes = volumes
             notify()
