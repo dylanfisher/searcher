@@ -68,8 +68,8 @@ bus, the startup disk with it, so the startup disk isn't listed. A volume mounte
   wasn’t ejected because one or more programs may be using it." The panes on the volume list
   their folders again at once and get new monitors, through the did-mount path
   (`VolumeEvents.ejectFailed`).
-- **The whole disk only for its last volume.** A volume on this machine that is the only one
-  mounted from its physical disk, browsable or not, ejects the disk
+- **The whole disk only for its last browsable volume.** A volume on this machine that is the
+  only browsable one mounted from its physical disk ejects the disk
   (`allPartitionsAndEjectDisk`), which detaches a disk image, as Finder's button does. A
   volume's whole disk comes from the device name the mount table gives (`/dev/disk5s2` is on
   `disk5`). Its physical disk comes from the I/O Registry, read in the same pass off the main
@@ -106,9 +106,9 @@ bus, the startup disk with it, so the startup disk isn't listed. A volume mounte
 ## Consequences
 
 Ejecting a volume on a disk with other volumes mounted unmounts it alone, without Finder's
-question; ejecting the last one then ejects the disk. Hidden volumes count: an external disk
+question; ejecting the last one then ejects the disk. Hidden volumes don't count: an external disk
 with macOS installed may have its Preboot or VM volume mounted `MNT_DONTBROWSE`, which the
-sidebar doesn't list, so ejecting its last listed volume unmounts that volume alone and the
-disk stays attached until the hidden ones go, where Finder would eject the disk. A volume on
+sidebar doesn't list, so ejecting its last listed volume ejects the disk and the hidden ones
+go with it, as in Finder. A volume on
 this machine that stops answering holds the next read of the list until it answers. A share mounted twice under one name shows
 the mount point's name, "main 1", where Finder would show the server.

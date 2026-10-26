@@ -20,7 +20,7 @@ public struct SidebarVolume: Equatable, Sendable {
     public let isRemovable: Bool
     public let isEjectable: Bool
     /// Whether ejecting it ejects its whole disk: it is on this machine and no other volume is
-    /// mounted from that physical disk (`isOnlyVolume(_:onItsDiskAmong:physicalDisk:)`).
+    /// mounted and browsable from that physical disk (`isOnlyVolume(_:onItsDiskAmong:physicalDisk:)`).
     public let ejectsDisk: Bool
 
     public init(
@@ -93,8 +93,9 @@ public struct SidebarVolume: Equatable, Sendable {
         }
     }
 
-    /// Whether `volume` is on this machine and the only one of `mounted`, every mounted volume
-    /// browsable or not, on its physical disk. A volume's whole disk comes from its device name
+    /// Whether `volume` is on this machine and the only browsable one of `mounted` on its
+    /// physical disk: the hidden volumes of a disk (`MNT_DONTBROWSE`, as a macOS install's
+    /// Preboot and VM) go with the disk, as in Finder. A volume's whole disk comes from its device name
     /// (`/dev/disk5s2` is on `disk5`), and `physicalDisk` gives the physical disk a whole disk
     /// is on: an APFS container's synthesized disk is on the disk of its physical store, so a
     /// partition of another format beside the container counts.
@@ -104,7 +105,10 @@ public struct SidebarVolume: Equatable, Sendable {
     ) -> Bool {
         guard volume.kind == .local, let disk = wholeDisk(of: volume.device).map(physicalDisk)
         else { return false }
-        return mounted.filter { wholeDisk(of: $0.device).map(physicalDisk) == disk }.count == 1
+        return mounted.filter {
+            $0.isBrowsable && wholeDisk(of: $0.device).map(physicalDisk) == disk
+        }
+        .count == 1
     }
 
     /// The physical disk the whole disk `disk`, such as `disk6`, is on, from the I/O Registry:

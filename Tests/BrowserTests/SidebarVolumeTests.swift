@@ -86,3 +86,17 @@ import Testing
     #expect(alone.unmountOptions == [.withoutUI])
     #expect(last.unmountOptions == [.allPartitionsAndEjectDisk, .withoutUI])
 }
+
+@Test func hiddenVolumesOnADiskGoWithItWhenItsLastBrowsableVolumeEjects() {
+    let data = VolumeIdentity(device: "/dev/disk8s1", mountPoint: "/Volumes/Mac", kind: .local)
+    let preboot = VolumeIdentity(
+        device: "/dev/disk8s2", mountPoint: "/Volumes/Preboot", kind: .local, isBrowsable: false)
+    let hiddenElsewhere = VolumeIdentity(
+        device: "/dev/disk9s1", mountPoint: "/Volumes/VM", kind: .local, isBrowsable: false)
+    let mounted = [data, preboot, hiddenElsewhere]
+
+    #expect(SidebarVolume.isOnlyVolume(data, onItsDiskAmong: mounted) { $0 })
+    // A second browsable volume still keeps the disk.
+    let second = VolumeIdentity(device: "/dev/disk8s3", mountPoint: "/Volumes/Two", kind: .local)
+    #expect(!SidebarVolume.isOnlyVolume(data, onItsDiskAmong: mounted + [second]) { $0 })
+}
