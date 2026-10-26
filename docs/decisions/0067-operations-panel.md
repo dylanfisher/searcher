@@ -111,6 +111,21 @@ other-pane confirm names nothing, and two Cmd-Shift-C presses ask two questions 
   insets were 12 across and 6 up and down.)
 - **Row buttons** are `HoverButton`s, with a hover, pressed, focused and disabled look
   ([0110](0110-interaction-states.md)).
+- **Bars** (2026-10-26, OP.3; Dylan: "use a different style of loading indicator for when
+  multiple operations are waiting to queue, and make sure the progress indicators for those
+  multiple items are synced"). A running operation's bar fills by what it has done; one
+  preparing, with nothing to count yet, moves without filling. An operation waiting, queued for
+  its lane or for an answer to a question, shows its bar dimmed to half and standing still at
+  what it has done so far, empty for one not started, with "Waiting" as the bar's accessibility
+  value. Finder's copy window is the reference: a determinate bar for running items and status
+  text for those not started. A still bar reads as no work going on, where a moving one says
+  work is, and the dimming tells it from a running copy at 0%. Until 2026-10-26 a queued or
+  waiting operation's bar moved as a preparing one does, so three copies to one disk showed
+  three moving bars, two of them doing nothing. Every moving bar in the app moves in step:
+  `IndeterminateBars` counts each bar's repeating Core Animation cycle from one moment, its
+  `epoch`, since each `NSProgressIndicator` otherwise starts its cycle when it is committed and
+  bars started a moment apart move out of step. The indicator keeps a cycle's start when it is
+  stopped, started again or laid out again, so an aligned bar stays aligned.
 - **Size.** The panel is as tall as its rows, up to 200 pt (about three rows), past which they
   scroll; with no rows it is one line saying so. Its height comes from the rows' constraints, so
   it grows and shrinks a row at a time and the panes give up only that room. A progress tick
@@ -146,6 +161,13 @@ other-pane confirm names nothing, and two Cmd-Shift-C presses ask two questions 
 - **Show at once for a big total or a network volume** — rejected: the snapshots carry neither
   rate nor volume kind, a big same-volume copy is a clone that ends at once, and a fast share
   copies a few hundred MB in under a second.
+- **A spinner or a "Waiting" label in place of a waiting row's bar** — rejected: the row would
+  change shape and height when its turn came, and the detail line already says what it waits
+  for.
+- **Restarting every moving bar when another starts** — rejected: the bars already moving would
+  jump back to the start of their cycle each time an operation began preparing.
+- **Drawing our own moving bar from one timer** — rejected: it would no longer look like the
+  system's bar, and `IndeterminateBars` keeps the system's with a single clock.
 - **Failed rows kept only by their window's panel** — rejected: a failure reported with no
   window open, or in a window that then closed, would be lost. `WorkspaceWindows` keeps them.
 

@@ -195,6 +195,78 @@ private func content(of row: OperationRowView, in view: NSView) -> NSRect {
     #expect(row.detailLabel.stringValue == "Preparing…")
 }
 
+/// A queued operation, waiting for its lane, shows a dimmed bar that stands still, not one that
+/// moves or fills like work going on (Dylan, 2026-10-26: "use a different style of loading
+/// indicator for when multiple operations are waiting to queue").
+@MainActor @Test func aQueuedRowShowsAStillDimmedBarAndAWorkingRowAMovingOrFillingOne() throws {
+    let fixture = Fixture()
+    let total = TreeSizeWalker.Total(bytes: 2_000_000, files: 4, isPartial: false)
+
+    fixture.controller.show([
+        snapshot(1, .preparing),
+        snapshot(2, .queued),
+        snapshot(3, .running, copied: CopyProgress(bytes: 500_000, files: 1), total: total),
+    ])
+
+    let preparing = try fixture.row(1).bar
+    #expect(preparing.isIndeterminate)
+    #expect(preparing.alphaValue == 1)
+    #expect(preparing.accessibilityValueDescription() == nil)
+    let queued = try fixture.row(2).bar
+    #expect(!queued.isIndeterminate)
+    #expect(queued.doubleValue == 0)
+    #expect(queued.alphaValue == OperationRowView.waitingAlpha)
+    #expect(queued.accessibilityValueDescription() == "Waiting")
+    let running = try fixture.row(3).bar
+    #expect(!running.isIndeterminate)
+    #expect(running.doubleValue == 0.25)
+    #expect(running.alphaValue == 1)
+    #expect(running.accessibilityValueDescription() == nil)
+
+    fixture.controller.show([
+        snapshot(2, .running, copied: CopyProgress(bytes: 500_000, files: 1), total: total)
+    ])
+    #expect(queued.alphaValue == 1)
+    #expect(queued.accessibilityValueDescription() == nil)
+}
+
+/// The media times the moving cycles in `bar` count from.
+@MainActor
+private func cycleStarts(of bar: NSProgressIndicator) -> [CFTimeInterval] {
+    IndeterminateBars.cycles(of: bar).map { layer, _, animation in
+        layer.convertTime(animation.beginTime, to: nil)
+    }
+}
+
+/// Moving bars started at different moments move in step (Dylan, 2026-10-26: "make sure the
+/// progress indicators for those multiple items are synced"). The panel sits in a window that
+/// is never shown, so each flush commits the animations as a shown one would.
+@MainActor @Test func movingBarsStartedApartShareOneCycle() throws {
+    let fixture = Fixture()
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.borderless],
+        backing: .buffered, defer: false)
+    window.contentView = fixture.controller.view
+
+    fixture.controller.show([snapshot(1, .preparing)])
+    CATransaction.flush()
+    fixture.controller.show([snapshot(1, .preparing), snapshot(2, .preparing)])
+    CATransaction.flush()
+
+    let first = cycleStarts(of: try fixture.row(1).bar)
+    let second = cycleStarts(of: try fixture.row(2).bar)
+    #expect(!first.isEmpty)
+    #expect(first == second)
+    #expect(first.allSatisfy { $0 == IndeterminateBars.epoch })
+
+    // A wider panel lays the bars out again; they keep their cycle.
+    window.setContentSize(NSSize(width: 600, height: 300))
+    window.contentView?.layoutSubtreeIfNeeded()
+    CATransaction.flush()
+    #expect(cycleStarts(of: try fixture.row(1).bar) == first)
+    #expect(cycleStarts(of: try fixture.row(2).bar) == first)
+}
+
 @MainActor @Test func pauseAndCancelSendThoseCallsForThatOperationID() throws {
     let fixture = Fixture()
     fixture.controller.show([snapshot(1, .running), snapshot(2, .running)])

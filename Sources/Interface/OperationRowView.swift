@@ -176,25 +176,23 @@ final class OperationRowView: NSView {
     // MARK: Views
 
     /// A bar that fills by bytes copied, or by items done when nothing is copied; one that moves
-    /// without filling while the operation hasn't started.
+    /// without filling while the operation prepares, in step with every other moving bar; and,
+    /// while it waits for its lane or for an answer, a dimmed bar that stands still at what it
+    /// has done so far.
     private func showBar(_ state: OperationState) {
-        let progress = state.progress
+        let phase = state.phase
+        let isWaiting = Self.isWaiting(phase)
         let fraction: Double? =
-            switch state.phase {
-            case .queued, .preparing, .waitingForAnswer: nil
+            switch phase {
+            case .preparing: nil
             case .done: 1
+            case .queued, .waitingForAnswer: Self.fraction(of: state.progress) ?? 0
             case .running, .paused, .failed, .refused, .cancelled:
-                if let total = progress.total, total.bytes > 0 {
-                    Double(progress.copied.bytes) / Double(total.bytes)
-                } else if let total = progress.total, total.files > 0 {
-                    Double(progress.copied.files) / Double(total.files)
-                } else if progress.itemCount > 0 {
-                    Double(progress.itemsDone) / Double(progress.itemCount)
-                } else {
-                    nil
-                }
+                Self.fraction(of: state.progress)
             }
-        bar.isHidden = state.phase.isFinished
+        bar.isHidden = phase.isFinished
+        bar.alphaValue = isWaiting ? Self.waitingAlpha : 1
+        bar.setAccessibilityValueDescription(isWaiting ? "Waiting" : nil)
         if let fraction {
             bar.stopAnimation(nil)
             bar.isIndeterminate = false
@@ -202,6 +200,31 @@ final class OperationRowView: NSView {
         } else {
             bar.isIndeterminate = true
             bar.startAnimation(nil)
+            IndeterminateBars.align(bar)
+        }
+    }
+
+    /// Whether the operation is waiting, for its lane or for the user, rather than working.
+    static func isWaiting(_ phase: OperationState.Phase) -> Bool {
+        switch phase {
+        case .queued, .waitingForAnswer: true
+        case .preparing, .running, .paused, .done, .failed, .refused, .cancelled: false
+        }
+    }
+
+    /// How dim a waiting operation's bar is, as `PaletteCellView` dims a disabled icon.
+    static let waitingAlpha: CGFloat = 0.5
+
+    /// The part done: by bytes, else by files, else by items; nil with nothing to count.
+    private static func fraction(of progress: OperationState.Progress) -> Double? {
+        if let total = progress.total, total.bytes > 0 {
+            Double(progress.copied.bytes) / Double(total.bytes)
+        } else if let total = progress.total, total.files > 0 {
+            Double(progress.copied.files) / Double(total.files)
+        } else if progress.itemCount > 0 {
+            Double(progress.itemsDone) / Double(progress.itemCount)
+        } else {
+            nil
         }
     }
 
@@ -259,5 +282,48 @@ final class OperationRowView: NSView {
             row.bottomAnchor.constraint(equalTo: bottomAnchor),
             bar.widthAnchor.constraint(equalTo: text.widthAnchor),
         ])
+    }
+}
+
+/// Keeps every moving indeterminate bar in the app in one phase. Each `NSProgressIndicator`
+/// starts its own repeating Core Animation cycle when the animation is committed, so bars started
+/// a moment apart move out of step. `align` counts each repeating animation in a bar's layers
+/// from one moment, `epoch`. The indicator keeps an animation's start when it is stopped and
+/// started again, so an aligned bar stays aligned, and aligning it again changes nothing
+/// (docs/decisions/0067-operations-panel.md).
+@MainActor
+enum IndeterminateBars {
+    /// The media time every bar's cycle counts from.
+    static let epoch = CACurrentMediaTime()
+
+    static func align(_ bar: NSProgressIndicator) {
+        for (layer, key, animation) in cycles(of: bar) {
+            let begin = layer.convertTime(epoch, from: nil)
+            guard animation.beginTime != begin else { continue }
+            guard let aligned = animation.copy() as? CAAnimation else {
+                preconditionFailure("a copy of \(animation) is not an animation")
+            }
+            aligned.beginTime = begin
+            layer.add(aligned, forKey: key)
+        }
+    }
+
+    /// The repeating animations in `bar`'s layers, with the layer and key of each. There are
+    /// none while the bar stands still, or if the system draws a moving bar without one.
+    static func cycles(of bar: NSProgressIndicator) -> [(CALayer, String, CAAnimation)] {
+        var found: [(CALayer, String, CAAnimation)] = []
+        var layers = bar.layer.map { [$0] } ?? []
+        while let layer = layers.popLast() {
+            for key in layer.animationKeys() ?? [] {
+                if let animation = layer.animation(forKey: key),
+                    // Core Animation reads either value as "forever".
+                    animation.repeatCount >= .greatestFiniteMagnitude
+                {
+                    found.append((layer, key, animation))
+                }
+            }
+            layers += layer.sublayers ?? []
+        }
+        return found
     }
 }
