@@ -98,6 +98,9 @@ public enum VolumeEvents {
         for pane in panes(on: mountPoint) {
             pane.volumeDidMount()
         }
+        for volumes in sidebarVolumes.compactMap(\.volumes) {
+            volumes.volumeDidMount(at: mountPoint)
+        }
         readMountsAgain()
     }
 

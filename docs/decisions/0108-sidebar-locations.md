@@ -57,7 +57,10 @@ bus, the startup disk with it, so the startup disk isn't listed. A volume mounte
   use. Then it runs the ejector on a `BlockingCallThread`: `FileManager.unmountVolume` with no
   system UI. The row leaves when the system reports the unmount.
 - **One eject at a time per volume.** While a volume's eject runs, its eject button is off, and
-  another eject of it, from the menu or another window, does nothing.
+  another eject of it, from the menu or another window, does nothing. Once ejected, the volume
+  stays so until a read of the mounts without it lands, so a read that still lists it can't
+  turn the button back on for a volume that is gone; a volume mounted again at its mount point
+  is a new one and can be ejected.
 - **A refused eject.** An alert shows, as a sheet on the sidebar's window: "The disk “name”
   wasn’t ejected." with the system's reason under it, where Finder says "The disk “name”
   wasn’t ejected because one or more programs may be using it." The panes on the volume list
