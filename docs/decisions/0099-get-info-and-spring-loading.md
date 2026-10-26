@@ -28,11 +28,13 @@ validates a drop on every pointer move, on the main thread, from the listing alo
   only and compiles source on each use. The descriptor is built directly and
   `sendEvent(options:timeout:)` runs on any thread. The event is the one AppleScript sends for
   `open information window of item …`: `aevt/odoc` to `com.apple.finder` whose direct object is
-  a list with one specifier per item, the `iwnd` property (from Finder's scripting dictionary) of
-  the item at its file URL. The item is a `cobj` specifier of form `indx` with the URL as its
-  data, as AppleScript sends it; a bare file URL as container gets -1728. One event opens every
-  window; `misc/actv` then brings Finder to the front. A test checks the event's shape without
-  sending it.
+  one specifier, the `iwnd` property (from Finder's scripting dictionary) of the item at its
+  file URL. The item is a `cobj` specifier of form `indx` with the URL as its data, as
+  AppleScript sends it; a bare file URL as container gets -1728. One event per item, each
+  waited for, the first failure reported; `misc/actv` then brings Finder to the front. The
+  direct object is never a list: given a list, Finder opens the items themselves (a folder as a
+  Finder window) and answers with no error, so a send that returns no error isn't proof that
+  the Info window opened. Tests check the events' shape without sending them.
 - **Off the main thread.** `WorkspaceSystemActions.showInfo` sends on a `BlockingCallThread`,
   since the wait can be long (the prompt waits for the user; the reply waits up to
   `finderTimeout`, 30 s), and on a GCD queue or the cooperative pool it would hold a worker.
@@ -104,8 +106,8 @@ validates a drop on every pointer move, on the main thread, from the listing alo
 
 - **`NSAppleScript`** — rejected: main thread only, so a slow Finder or the TCC prompt would
   block the UI.
-- **One event per item** — rejected: a round trip and a possible error per item, where Finder
-  takes a list.
+- **One event with a list of specifiers** — rejected: Finder opens the items, not their Info
+  windows, and reports no error.
 - **`NSSpringLoadingDestination` timing alone** — rejected: it times the whole table, so moving
   from one folder row to the next wouldn't start the delay again.
 - **Spring links after resolving them** — rejected: a `realpath` per hovered row on the main
@@ -117,7 +119,8 @@ validates a drop on every pointer move, on the main thread, from the listing alo
 
 ## Consequences
 
-Get Info on a large selection opens a window per item, as Finder does, with no question first.
+Get Info on a large selection opens a window per item, as Finder does, with no question first,
+at a round trip per item.
 The first Get Info prompts for Automation; after a denial macOS never prompts again, and the
 alert sends the user to System Settings. An ad hoc signature changes with every build, so the
 Automation grant may need renewing after a rebuild, as Full Disk Access does. Whether AppKit
