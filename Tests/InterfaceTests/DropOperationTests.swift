@@ -265,6 +265,23 @@ private final class Fixture {
         ])
 }
 
+/// A drop's operation is tagged with the workspace of the window the list is in, so that
+/// window's operations panel lists it.
+@MainActor @Test func aDropsOperationCarriesTheListsWorkspace() async throws {
+    let fixture = try await Fixture()
+    defer { fixture.stop() }
+    let workspace = UUID()
+    fixture.list.workspaceID = workspace
+    let source = fixture.elsewhere.appending(path: "x.txt")
+    let info = fixture.drag([source])
+
+    #expect(fixture.accept(info, row: try fixture.row("sub"), .on))
+
+    await fixture.settleOperation { !fixture.exists(source) }
+    #expect(!fixture.snapshots.all.isEmpty)
+    #expect(fixture.snapshots.all.allSatisfy { $0.workspace == workspace })
+}
+
 @MainActor @Test func aDropBetweenRowsOrOnAFileTargetsThePanesFolder() async throws {
     let fixture = try await Fixture()
     defer { fixture.stop() }

@@ -1065,11 +1065,3 @@ private final class BrowserWindow: NSWindow {
         return controller
     }
 }
-
-extension NSWindow {
-    /// The ID of the workspace this browser window shows, which tags the file operations queued
-    /// in it (`FileOperationQueue.workspace`); nil for any other window.
-    var workspaceID: UUID? {
-        (windowController as? BrowserWindowController)?.workspace.id
-    }
-}
