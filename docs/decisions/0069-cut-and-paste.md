@@ -33,7 +33,11 @@ and moves run through the app's one queue ([0065](0065-operation-queue.md),
   any copy or move. A copy pasted into its own folder takes Duplicate's names and a move into
   its own folder does nothing, both from the queue.
 - **Selection.** Pasted items are selected once the pane lists them, as Duplicate selects its
-  copies, through `Pane.select(_:whenListedAtSelectionVersion:)`. No name is edited.
+  copies, through `Pane.select(_:whenListedAtSelectionVersion:)`. No name is edited. (Amended
+  2026-10-26, Dylan: "i copy DSC03043.ARW then press or navigate to _test and the file should
+  paste into _test". In column view Paste and Move Items Here put the files in the folder
+  selected alone in the focused column when its column shows, select them in that column, and
+  move the keys there; [0111](0111-column-view-target-folder.md).)
 - **Pasteboard shape.** One `NSPasteboardItem` per file with its `public.file-url`, as Finder
   writes, a folder's ending in a slash. Whether an entry is a folder comes from the listing, so
   building the URLs reads nothing from the disk on the main thread. The names, one per line, as `public.utf8-plain-text` on the first item, so a text

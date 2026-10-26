@@ -79,6 +79,22 @@ private final class Window {
         pane.select(
             Selection(Set(names.map(ExactName.init)), cursor: names.last.map(ExactName.init)))
     }
+
+    /// Switches the window's pane to column mode, selects the folder `name` in its focused
+    /// column, as a click does, and returns the pane of the column that opens for it, listed.
+    func showColumns(selectingFolder name: String) async throws -> Pane {
+        let owner = workspace.selectedTab.focusedPane
+        owner.setViewMode(.column)
+        let trail = try #require(owner.columnTrail)
+        await settle { trail.focused.pane.state.isLoaded }
+        select(name)
+        await settle {
+            trail.columns.count == trail.focusedIndex + 2
+                && trail.columns.last?.pane.location.name == name
+                && trail.columns.last?.pane.state.isLoaded == true
+        }
+        return try #require(trail.columns.last?.pane)
+    }
 }
 
 /// Watches `pane`'s folder and applies what changes there to the pane, as the window does. The
@@ -296,6 +312,51 @@ private let f8 = KeyChord(.function(8))
     #expect(window.pane.selection.cursor == ExactName("untitled folder"))
     #expect(window.pane.state.listing?.row(named: "untitled folder") != nil)
     await settle { window.nameEdits == 1 }
+}
+
+/// In column view, with a folder selected in the focused column and its column shown, New Folder
+/// makes the folder inside it, as Finder's does, selects it there with the keys moved into that
+/// column, and edits its name.
+@MainActor @Test func newFolderInColumnViewMakesTheFolderInTheSelectedFolder() async throws {
+    let folder = try TemporaryFolder("FileCommandsTests")
+    try write("a.txt", in: folder.url.path)
+    try FileManager.default.createDirectory(
+        atPath: folder.url.path + "/_test", withIntermediateDirectories: false)
+    let window = await Window(at: folder.url.path)
+    let inner = try await window.showColumns(selectingFolder: "_test")
+    let monitor = try await watch(inner)
+    defer { monitor.stop() }
+
+    try window.press(newFolder)
+
+    await settle { selectedNames(inner) == ["untitled folder"] }
+    #expect(exists(folder.url.path + "/_test/untitled folder"))
+    #expect(!exists(folder.url.path + "/untitled folder"))
+    #expect(window.pane === inner)
+    #expect(window.nameEdits == 1)
+}
+
+/// The folder is read when New Folder runs: selecting a file while it runs closes the folder's
+/// column, which drops the name waiting there, so nothing is selected or edited.
+@MainActor @Test func aSelectionMadeWhileNewFolderRunsDoesntMoveItsFolder() async throws {
+    let folder = try TemporaryFolder("FileCommandsTests")
+    try write("a.txt", in: folder.url.path)
+    try FileManager.default.createDirectory(
+        atPath: folder.url.path + "/_test", withIntermediateDirectories: false)
+    let window = await Window(at: folder.url.path)
+    _ = try await window.showColumns(selectingFolder: "_test")
+    let trail = try #require(window.tab.focusedPane.columnTrail)
+    let focused = window.pane
+
+    try window.press(newFolder)
+    window.select("a.txt")
+
+    await settle { exists(folder.url.path + "/_test/untitled folder") }
+    #expect(!exists(folder.url.path + "/untitled folder"))
+    #expect(!trail.columns.contains { $0.pane.location.name == "_test" })
+    #expect(window.pane === focused)
+    #expect(selectedNames(focused) == ["a.txt"])
+    #expect(window.nameEdits == 0)
 }
 
 /// New Folder's names wait in the pane with a closure that holds the command's context, which

@@ -14,7 +14,8 @@ public enum FileCommands: CommandSet {
     public static let moveToTrash = Command(
         id: CommandID("file.moveToTrash"), title: "Move to Trash",
         chords: [KeyChord(.delete, modifiers: .command)])
-    /// Makes "untitled folder", or the first free "untitled folder N", in the pane's folder.
+    /// Makes "untitled folder", or the first free "untitled folder N", in the pane's folder, or
+    /// in column view in the folder selected alone in the focused column (`destination(in:)`).
     public static let newFolder = Command(
         id: CommandID("file.newFolder"), title: "New Folder",
         chords: [KeyChord("n", modifiers: [.command, .shift])])
@@ -66,9 +67,10 @@ public enum FileCommands: CommandSet {
                 newFolder, isEnabled: { $0.fileOperations != nil },
                 run: { context in
                     guard let queue = context.fileOperations else { return }
-                    let pane = context.pane
-                    run(.newFolder(in: pane.location.path), selectingIn: pane, queue: queue) {
-                        guard canRename(context), let editName = context.editName else { return }
+                    let pane = destination(in: context)
+                    make(.newFolder(in: pane.location.path), in: pane, queue: queue) {
+                        guard selectedCount(in: pane) == 1, let editName = context.editName
+                        else { return }
                         editName()
                     }
                 }),
@@ -123,6 +125,39 @@ public enum FileCommands: CommandSet {
             pane?.select(
                 names(madeBy: state.record), whenListedAtSelectionVersion: version,
                 then: selected)
+        }
+    }
+
+    /// The pane whose folder New Folder, Paste and Move Items Here put what they make in: in
+    /// column view, the column of the folder selected alone in the focused one, as in Finder;
+    /// otherwise the context's pane. Read when the command runs, so a selection made while the
+    /// operation runs doesn't move it (docs/decisions/0111-column-view-target-folder.md).
+    @MainActor
+    static func destination(in context: CommandContext) -> Pane {
+        guard let trail = context.pane.containingTrail, trail.focused.pane === context.pane else {
+            return context.pane
+        }
+        trail.openHeldColumn()
+        return trail.selectedFolderColumn ?? context.pane
+    }
+
+    /// Queues `operation`, which makes items in `pane`'s folder, and selects them there once the
+    /// pane lists them, as `run` does. A column without the keys then takes them, as Finder
+    /// moves them into the folder it pasted into; then `selected` runs. Nothing runs if the
+    /// operation made nothing, the column's selection changed first or the column closed.
+    @MainActor
+    static func make(
+        _ operation: FileOperation, in pane: Pane, queue: FileOperationQueue,
+        then selected: (@MainActor () -> Void)? = nil
+    ) {
+        run(operation, selectingIn: pane, queue: queue) { [weak pane] in
+            guard let pane else { return }
+            if let trail = pane.containingTrail {
+                // A column the trail closed has no keys to take, and no name field to open.
+                guard let column = trail.columns.first(where: { $0.pane === pane }) else { return }
+                trail.focus(column)
+            }
+            selected?()
         }
     }
 

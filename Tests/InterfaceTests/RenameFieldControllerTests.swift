@@ -344,6 +344,99 @@ private let returnKey = "\r"
     await settle { fixture.selectedNames == ["tune.flac"] }
 }
 
+/// Switches the fixture's pane to column mode and waits for the focused column to list and be
+/// watched, its table with the keys running commands with the fixture's queue. Returns the
+/// focused column's controller.
+@MainActor
+private func showColumns(_ fixture: Fixture) async throws -> ListingViewController {
+    try fixture.press("3", .command)
+    let pane = fixture.pane
+    // Only the focused column matters. The ancestors include the real temporary directory, which
+    // can hold tens of thousands of entries and list for longer than a settle waits.
+    await settle {
+        guard let focused = pane.columnTrail?.focused.pane else { return false }
+        return focused.state.isLoaded && focused.monitor != nil
+    }
+    let column = try #require(fixture.controller.columnViewController.focusedController)
+    #expect(fixture.window.firstResponder === column.tableView)
+    fixture.useQueue(in: column.tableView)
+    return column
+}
+
+/// New Folder opens the field in a column too, and the change that lists the folder, or the
+/// new folder's own column opening, doesn't take the keys back to the table.
+@MainActor @Test func newFolderEntersRenameInTheFocusedColumn() async throws {
+    let fixture = try await Fixture("song.flac")
+    defer { fixture.stop() }
+    let column = try await showColumns(fixture)
+    await fixture.select("song.flac")
+
+    try fixture.press("N", [.command, .shift])
+
+    await settle { fixture.selectedNames == ["untitled folder"] }
+    #expect(column.renameField.isEditing)
+    let trail = try #require(fixture.pane.columnTrail)
+    await settle { trail.columns.last?.pane.location.name == "untitled folder" }
+    await settle { trail.columns.last?.pane.state.isLoaded == true }
+    #expect(column.renameField.isEditing)
+    #expect(column.renameField.field.stringValue == "untitled folder")
+    #expect(try fixture.editor(of: column.renameField).selectedRange.length == 15)
+}
+
+/// With a folder selected in the focused column, New Folder makes the folder in it and opens
+/// the field in that folder's column, which takes the keys, as Finder's column view does.
+@MainActor @Test func newFolderWithAFolderSelectedEntersRenameInThatFoldersColumn()
+    async throws
+{
+    let fixture = try await Fixture("song.flac")
+    defer { fixture.stop() }
+    try FileManager.default.createDirectory(
+        at: fixture.folder.url.appending(path: "_test"), withIntermediateDirectories: false)
+    await settle { fixture.pane.state.listing?.row(named: "_test") != nil }
+    _ = try await showColumns(fixture)
+    let trail = try #require(fixture.pane.columnTrail)
+    await fixture.select("_test")
+    await settle {
+        guard let last = trail.columns.last?.pane else { return false }
+        return last.location.name == "_test" && last.state.isLoaded && last.monitor != nil
+    }
+    let inner = try #require(trail.columns.last?.pane)
+
+    try fixture.press("N", [.command, .shift])
+
+    await settle {
+        fixture.pane.commandPane === inner && fixture.selectedNames == ["untitled folder"]
+    }
+    #expect(fixture.exists("_test/untitled folder"))
+    #expect(!fixture.exists("untitled folder"))
+    let column = try #require(fixture.controller.columnViewController.focusedController)
+    #expect(column.pane === inner)
+    #expect(column.renameField.isEditing)
+    #expect(try fixture.editor(of: column.renameField).selectedRange.length == 15)
+}
+
+/// A switch to the list while a column's name field has the keys gives them to the list's
+/// table: the field keeps the keys only while its column is the focused one shown.
+@MainActor @Test func switchingToTheListWithAColumnsFieldOpenGivesTheListTheKeys() async throws {
+    let fixture = try await Fixture("song.flac")
+    defer { fixture.stop() }
+    let column = try await showColumns(fixture)
+    await fixture.select("song.flac")
+    try fixture.press(returnKey)
+    #expect(column.renameField.isEditing)
+
+    fixture.pane.setViewMode(.list)
+
+    #expect(fixture.pane.viewMode == .list)
+    #expect(fixture.window.firstResponder === fixture.controller.listingViewController.tableView)
+    #expect(!column.renameField.isEditing)
+    #expect(fixture.operationCount == 0)
+
+    fixture.pane.setViewMode(.column)
+    let focused = try #require(fixture.controller.columnViewController.focusedController)
+    #expect(fixture.window.firstResponder === focused.tableView)
+}
+
 @MainActor @Test func returnOnTheUnchangedNameClosesTheFieldWithNothingQueued() async throws {
     let fixture = try await Fixture("song.flac")
     defer { fixture.stop() }

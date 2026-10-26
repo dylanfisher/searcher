@@ -43,7 +43,9 @@ matcher ([0079](0079-fuzzy-match.md)) and the highlighting. Type-to-select
   truncating keeps the whole name in view, which is what the list is searched for.) (Amended
   2026-10-26, Dylan: "cmd+p in column mode should search the current directory and the
   highlighted directory". In column view, when the folder selected in the focused column shows
-  its column to the right, its rows are listed too, after the focused column's, from the
+  its column to the right (`ColumnTrail.selectedFolderColumn`, the rule New Folder and Paste
+  share, [0111](0111-column-view-target-folder.md)), its rows are listed too, after the focused
+  column's, from the
   listing that column already has: still no file-system call, and a column that hasn't listed
   yet adds nothing. A preview, a file or several rows selected, or nothing selected adds
   nothing either, since no column shows right of the focused one. Their detail is the kind

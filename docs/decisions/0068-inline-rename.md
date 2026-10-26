@@ -50,7 +50,11 @@ once the operation ends.
 - **New Folder** edits the new folder's name through the context's `editName`, once the pane
   selects it. `Pane.select(_:whenListedAtSelectionVersion:then:)` runs the closure only when it
   selects the names, so a New Folder that makes nothing, or whose names the user's selection
-  overrides, opens nothing.
+  overrides, opens nothing. (Amended 2026-10-26, Dylan: "creating a new folder should
+  automatically highlight the new folder name". In a column the field closed as it opened: the
+  pane's change that lists the folder handed the keys back to the table. The focused column's
+  field now keeps them, and New Folder into a selected folder opens the field in that folder's
+  column; [0111](0111-column-view-target-folder.md).)
 
 ## Alternatives considered
 

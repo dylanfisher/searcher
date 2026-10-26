@@ -372,11 +372,27 @@ public final class ColumnTrail {
     }
 
     /// The pane of the column right of the focused one, while it shows the folder selected
-    /// there; nil when nothing is right of it, as after a selection of a file or several rows.
+    /// alone there: the folder Go to Item lists after the focused column's rows, and the one
+    /// New Folder, Paste and Move Items Here act in (0111-column-view-target-folder.md). Nil
+    /// when no column is right of it, as after a selection of a file, a link, a package without
+    /// Show Package Contents, or several rows.
     public var selectedFolderColumn: Pane? {
         guard focusedIndex + 1 < columns.count else { return nil }
         let next = columns[focusedIndex + 1].pane
-        return focused.pane.selection.contains(ExactName(next.location.name)) ? next : nil
+        guard case .only(let names) = focused.pane.selection.members,
+            names == [ExactName(next.location.name)]
+        else { return nil }
+        return next
+    }
+
+    /// Opens at once the column a key-made selection in the focused column waits for the keys to
+    /// pause to open (0094-column-open-delay.md), for a command that acts in the selected
+    /// folder: the folder is highlighted, so it is the one the command acts in.
+    func openHeldColumn() {
+        guard focused.held != nil else { return }
+        follow(focused)
+        updatePreview()
+        owner.trailDidChange()
     }
 
     /// Go to Item's choice of `name` in `pane`'s column: the column takes the keys, as a click

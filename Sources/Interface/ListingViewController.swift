@@ -698,7 +698,10 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
 
     /// The context menu for a right-click on `row`, or below the rows at -1. A row outside the
     /// selection is selected first, as Finder does, so the menu acts on the row clicked; a row in
-    /// it keeps the selection.
+    /// it keeps the selection. Below a column's rows the column's selection is cleared, as a
+    /// press there clears it: New Folder and the pastes act in a folder selected in the focused
+    /// column, and the menu acts on the column's own folder
+    /// (docs/decisions/0111-column-view-target-folder.md).
     func contextMenu(forRow row: Int) -> NSMenu {
         var items = ContextMenuBuilder.folderItems
         if let listing, row >= 0, row < listing.count {
@@ -707,6 +710,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
                 pane.select(Selection([name], cursor: name))
             }
             items = ContextMenuBuilder.rowItems
+        } else if pane.containingTrail != nil, !pane.selection.isEmpty {
+            pane.select(Selection())
         }
         do {
             return try ContextMenuBuilder.build(
