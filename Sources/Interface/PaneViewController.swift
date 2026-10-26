@@ -331,8 +331,12 @@ public final class PaneViewController: NSViewController {
         windowLink?.openWith.map { OpenWithMenu.Target(openWith: $0, pane: pane.commandPane) }
     }
 
+    /// Runs command `id`, its file operations tagged with the window's workspace, so the
+    /// window's operations panel lists them.
     private func run(_ id: CommandID, folder: Location? = nil, isKeyRepeat: Bool = false) {
-        binding(for: id).run(context(folder: folder, isKeyRepeat: isKeyRepeat))
+        FileOperationQueue.$workspace.withValue(windowLink?.workspace.id) {
+            binding(for: id).run(context(folder: folder, isKeyRepeat: isKeyRepeat))
+        }
         windowLink?.didRunCommand()
     }
 

@@ -141,6 +141,8 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
         let name: String
         let location: Location
         let queue: FileOperationQueue
+        /// The workspace of the window the field opened in, whose panel lists the rename.
+        let workspace: UUID?
         let id: Int
     }
 
@@ -173,7 +175,9 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
         }
         close()
         editCount += 1
-        let edit = Edit(name: entry.name, location: pane.location, queue: queue, id: editCount)
+        let edit = Edit(
+            name: entry.name, location: pane.location, queue: queue,
+            workspace: table.window?.workspaceID, id: editCount)
         state = .editing(edit)
         field.stringValue = entry.name
         field.isEditable = true
@@ -269,8 +273,9 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
             // The click that moved the keys may have taken the pane to another folder first,
             // which closed the field; `rename` names the entry in the pane's folder.
             guard pane.location == edit.location else { return }
-            let result = await FileCommands.rename(
-                edit.name, to: newName, in: pane, queue: edit.queue)
+            let result = await FileOperationQueue.$workspace.withValue(edit.workspace) {
+                await FileCommands.rename(edit.name, to: newName, in: pane, queue: edit.queue)
+            }
             self?.finish(edit, renamingTo: newName, with: result)
         }
     }
