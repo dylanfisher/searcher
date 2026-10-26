@@ -1,15 +1,20 @@
 import AppKit
 import Browser
+import UniformTypeIdentifiers
 
-/// A window's workspace sidebar: a source list, as Finder's sidebar is, with one group,
-/// Workspaces, holding a row per saved workspace in `WorkspaceList.saved` order. A dot marks a
-/// workspace whose window is open, as the Dock marks a running app. The window's own workspace
-/// is selected while it is listed, as Finder's sidebar selects the window's place.
+/// A window's sidebar: a source list, as Finder's sidebar is, with two groups. Favorites holds
+/// the app's `Favorites`, and Workspaces a row per saved workspace in `WorkspaceList.saved`
+/// order; `Settings` says which groups show. A dot marks a workspace whose window is open, as
+/// the Dock marks a running app. The window's own workspace is selected while it is listed, as
+/// Finder's sidebar selects the window's place.
 ///
-/// A click on a row opens its workspace, or focuses its window if open; with the keys in the
-/// list, the arrow keys move the selection and Return opens the selected row. Esc gives the keys
-/// back (`onEscape`). The rows follow the list as it changes, from any window
-/// (docs/decisions/0086-workspace-sidebar.md).
+/// A click on a favorite opens it in the window's focused pane, and a click on a workspace opens
+/// it, or focuses its window if open; with the keys in the list, the arrow keys move the
+/// selection and Return opens the selected row. Esc gives the keys back (`onEscape`). Files and
+/// folders dropped between the favorites are added there, a favorite dragged within the group
+/// moves, and one dragged out of the sidebar, or removed from its context menu, leaves it. The
+/// rows follow the lists and the settings as they change, from any window
+/// (docs/decisions/0086-workspace-sidebar.md, docs/decisions/0107-sidebar-favorites.md).
 @MainActor
 final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataSource,
     NSOutlineViewDelegate
@@ -20,17 +25,49 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     var open: @MainActor (UUID) -> Void = { id in
         preconditionFailure("this sidebar can't open workspace \(id)")
     }
+    /// Opens the favorite at a path. The window sets it; a sidebar without it traps when a
+    /// favorite is opened.
+    var openFavorite: @MainActor (String) -> Void = { path in
+        preconditionFailure("this sidebar can't open the favorite \(path)")
+    }
     /// Takes the keys back from the list, on Esc.
     var onEscape: @MainActor () -> Void = {}
     private let workspace: Workspace
     private let list: WorkspaceList
-    /// The workspaces the rows show, as last read from the list.
-    private var shown: [WorkspaceList.Saved] = []
+    private let favorites: Favorites
+    private let settings: Settings
+    /// What the rows show, as last read from the lists and the settings.
+    private var shown = Shown(groups: [], favorites: [], saved: [])
+    private var favoriteRows: [FavoriteRow] = []
     private var rows: [Row] = []
-    private let group = Group()
+    private let favoritesGroup = Group(title: "Favorites")
+    private let workspacesGroup = Group(title: "Workspaces")
+    /// The paths of the favorites a drag from this list carries, until it ends.
+    private var draggedFavorites: [String] = []
 
-    /// The group row's item.
-    private final class Group: NSObject {}
+    private struct Shown: Equatable {
+        let groups: [ObjectIdentifier]
+        let favorites: [Favorites.Item]
+        let saved: [WorkspaceList.Saved]
+    }
+
+    /// A group row's item.
+    private final class Group: NSObject {
+        let title: String
+
+        init(title: String) {
+            self.title = title
+        }
+    }
+
+    /// A favorite's row item.
+    private final class FavoriteRow: NSObject {
+        let item: Favorites.Item
+
+        init(_ item: Favorites.Item) {
+            self.item = item
+        }
+    }
 
     /// A saved workspace's row item.
     private final class Row: NSObject {
@@ -41,7 +78,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         }
     }
 
-    /// A saved workspace's row: its icon, its name, and the dot when its window is open.
+    /// A row: its icon, its name, and, for a workspace, the dot when its window is open.
     final class Cell: NSTableCellView {
         let openMark = NSImageView()
 
@@ -63,6 +100,8 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         var passKey: @MainActor (NSEvent) -> Bool = { event in
             preconditionFailure("the sidebar has nowhere to pass \(event)")
         }
+        /// The context menu for a right-click on a row, or -1 below the rows; nil for none.
+        var contextMenu: @MainActor (Int) -> NSMenu? = { _ in nil }
 
         override func keyDown(with event: NSEvent) {
             switch KeyChord(event: event) {
@@ -71,6 +110,10 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
             case let chord? where !Self.isListKey(chord) && passKey(event): break
             default: super.keyDown(with: event)
             }
+        }
+
+        override func menu(for event: NSEvent) -> NSMenu? {
+            contextMenu(row(at: convert(event.locationInWindow, from: nil)))
         }
 
         /// Whether the list keeps `chord`: a plain or Shift-only key other than the function
@@ -91,14 +134,20 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         }
     }
 
-    private static let groupTitle = "Workspaces"
+    /// What a favorite dragged within the sidebars carries: its path.
+    static let favoriteType = NSPasteboard.PasteboardType("com.dylanfisher.searcher.favorite")
+    static let removeTitle = "Remove from Sidebar"
     private static let cellID = NSUserInterfaceItemIdentifier("workspace")
+    private static let favoriteCellID = NSUserInterfaceItemIdentifier("favorite")
     private static let groupCellID = NSUserInterfaceItemIdentifier("group")
 
-    /// A sidebar of `list`'s saved workspaces, in the window of `workspace`.
-    init(workspace: Workspace, list: WorkspaceList) {
+    /// A sidebar of `favorites` and `list`'s saved workspaces, in the window of `workspace`,
+    /// showing the groups `settings` says.
+    init(workspace: Workspace, list: WorkspaceList, favorites: Favorites, settings: Settings) {
         self.workspace = workspace
         self.list = list
+        self.favorites = favorites
+        self.settings = settings
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -121,12 +170,15 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         outlineView.delegate = self
         outlineView.target = self
         outlineView.action = #selector(rowClicked)
-        outlineView.setAccessibilityLabel(Self.groupTitle)
+        outlineView.setAccessibilityLabel("Sidebar")
+        outlineView.registerForDraggedTypes([Self.favoriteType, .fileURL])
+        outlineView.setDraggingSourceOperationMask(.move, forLocal: true)
         outlineView.onReturn = { [weak self] in self?.openSelected() }
         outlineView.onEscape = { [weak self] in
             self?.selectOwnWorkspace()
             self?.onEscape()
         }
+        outlineView.contextMenu = { [weak self] row in self?.contextMenu(forRow: row) }
         let scrollView = NSScrollView()
         scrollView.documentView = outlineView
         scrollView.hasVerticalScroller = true
@@ -134,29 +186,49 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         scrollView.drawsBackground = false
         view = scrollView
         showList()
-        outlineView.expandItem(group)
         selectOwnWorkspace()
         list.observeSaved(for: self) { [weak self] in self?.showList() }
+        favorites.observe(for: self) { [weak self] in self?.showList() }
+        settings.observe(for: self) { [weak self] in self?.showList() }
     }
 
-    /// Shows the list's saved workspaces if they changed. With the keys in the list, the
-    /// selection stays on the workspace it was on; otherwise it goes to the window's own.
+    /// Shows the groups the settings show, with the favorites and saved workspaces, if any of
+    /// them changed. A group that comes back shows expanded. With the keys in the list, the
+    /// selection stays on the row it was on; otherwise it goes to the window's own workspace.
     private func showList() {
-        let saved = list.saved
-        guard saved != shown else { return }
-        let selectedID = (outlineView.item(atRow: outlineView.selectedRow) as? Row)?.saved.id
-        shown = saved
-        rows = saved.map(Row.init)
+        var groups: [Group] = []
+        if settings.showsFavoritesInSidebar { groups.append(favoritesGroup) }
+        if settings.showsWorkspacesInSidebar { groups.append(workspacesGroup) }
+        let now = Shown(
+            groups: groups.map(ObjectIdentifier.init), favorites: favorites.items,
+            saved: list.saved)
+        guard now != shown else { return }
+        let selected = outlineView.item(atRow: outlineView.selectedRow)
+        let selectedID = (selected as? Row)?.saved.id
+        let selectedPath = (selected as? FavoriteRow)?.item.path
+        let added = groups.filter { !shown.groups.contains(ObjectIdentifier($0)) }
+        shown = now
+        favoriteRows = now.favorites.map(FavoriteRow.init)
+        rows = now.saved.map(Row.init)
         outlineView.reloadData()
-        if outlineView.window?.firstResponder === outlineView, let selectedID,
-            select(selectedID)
-        {
-            return
+        for group in added {
+            outlineView.expandItem(group)
+        }
+        if outlineView.window?.firstResponder === outlineView {
+            if let selectedID, select(selectedID) { return }
+            if let selectedPath, selectFavorite(selectedPath) { return }
         }
         selectOwnWorkspace()
     }
 
-    /// Selects the window's own workspace's row, or no row while it isn't saved.
+    /// The groups shown, top to bottom.
+    private var groups: [Group] {
+        shown.groups.compactMap { id in
+            [favoritesGroup, workspacesGroup].first { ObjectIdentifier($0) == id }
+        }
+    }
+
+    /// Selects the window's own workspace's row, or no row while it isn't listed.
     private func selectOwnWorkspace() {
         if !select(workspace.id) {
             outlineView.deselectAll(nil)
@@ -166,34 +238,188 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     /// Selects the row of workspace `id`; false when no row shows it.
     private func select(_ id: UUID) -> Bool {
         guard let row = rows.first(where: { $0.saved.id == id }) else { return false }
-        let index = outlineView.row(forItem: row)
+        return selectRow(of: row)
+    }
+
+    /// Selects the row of the favorite at `path`; false when no row shows it.
+    private func selectFavorite(_ path: String) -> Bool {
+        guard let row = favoriteRows.first(where: { $0.item.path == path }) else { return false }
+        return selectRow(of: row)
+    }
+
+    private func selectRow(of item: Any) -> Bool {
+        let index = outlineView.row(forItem: item)
         guard index >= 0 else { return false }
         outlineView.selectRowIndexes([index], byExtendingSelection: false)
         return true
     }
 
     @objc private func rowClicked() {
-        guard let row = outlineView.item(atRow: outlineView.clickedRow) as? Row else { return }
-        open(row.saved.id)
+        openRow(outlineView.clickedRow)
     }
 
     private func openSelected() {
-        guard let row = outlineView.item(atRow: outlineView.selectedRow) as? Row else { return }
-        open(row.saved.id)
+        openRow(outlineView.selectedRow)
+    }
+
+    private func openRow(_ index: Int) {
+        switch outlineView.item(atRow: index) {
+        case let row as Row: open(row.saved.id)
+        case let row as FavoriteRow: openFavorite(row.item.path)
+        default: break
+        }
+    }
+
+    // MARK: Context menu
+
+    /// The context menu for a right-click on `row`: Remove from Sidebar for a favorite, none for
+    /// any other row.
+    func contextMenu(forRow row: Int) -> NSMenu? {
+        guard let favorite = outlineView.item(atRow: row) as? FavoriteRow else { return nil }
+        let menu = NSMenu()
+        let item = NSMenuItem(
+            title: Self.removeTitle, action: #selector(removeFavorite(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = favorite.item.path
+        menu.addItem(item)
+        return menu
+    }
+
+    @objc private func removeFavorite(_ sender: NSMenuItem) {
+        guard let path = sender.representedObject as? String else {
+            preconditionFailure("Remove from Sidebar has no favorite")
+        }
+        favorites.remove(path)
     }
 
     // MARK: Data source
 
     func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
-        item == nil ? 1 : item is Group ? rows.count : 0
+        switch item {
+        case nil: groups.count
+        case let group as Group: group === favoritesGroup ? favoriteRows.count : rows.count
+        default: 0
+        }
     }
 
     func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
-        item == nil ? group : rows[index]
+        switch item {
+        case nil: groups[index]
+        case let group as Group where group === favoritesGroup: favoriteRows[index]
+        default: rows[index]
+        }
     }
 
     func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
         item is Group
+    }
+
+    // MARK: Drag and drop
+
+    /// A favorite drags as its path, which only a sidebar takes.
+    func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any)
+        -> (any NSPasteboardWriting)?
+    {
+        guard let row = item as? FavoriteRow else { return nil }
+        let writer = NSPasteboardItem()
+        writer.setString(row.item.path, forType: Self.favoriteType)
+        return writer
+    }
+
+    func outlineView(
+        _ outlineView: NSOutlineView, draggingSession session: NSDraggingSession,
+        willBeginAt screenPoint: NSPoint, forItems draggedItems: [Any]
+    ) {
+        // A favorite dropped outside the sidebar leaves it, so it doesn't slide back.
+        session.animatesToStartingPositionsOnCancelOrFail = false
+        beginDrag(of: draggedItems)
+    }
+
+    func outlineView(
+        _ outlineView: NSOutlineView, draggingSession session: NSDraggingSession,
+        endedAt screenPoint: NSPoint, operation: NSDragOperation
+    ) {
+        endDrag(at: screenPoint, operation: operation)
+    }
+
+    /// Keeps the paths of the favorites among `items`, which a drag from the list carries.
+    func beginDrag(of items: [Any]) {
+        draggedFavorites = items.compactMap { ($0 as? FavoriteRow)?.item.path }
+    }
+
+    /// The drag `beginDrag` started ended at `screenPoint`: favorites that nothing took there,
+    /// outside the sidebar, leave it, as Finder's do.
+    func endDrag(at screenPoint: NSPoint, operation: NSDragOperation) {
+        defer { draggedFavorites = [] }
+        guard operation.isEmpty, !isInSidebar(screenPoint) else { return }
+        for path in draggedFavorites {
+            favorites.remove(path)
+        }
+    }
+
+    private func isInSidebar(_ screenPoint: NSPoint) -> Bool {
+        guard let window = view.window else { return false }
+        let point = view.convert(window.convertPoint(fromScreen: screenPoint), from: nil)
+        return view.bounds.contains(point)
+    }
+
+    /// A drop goes between favorites: one on a favorite goes before it, and one on the group's
+    /// row at its end. A favorite moves; files and folders are added, unless every one is a
+    /// favorite already. Nothing drops among the workspaces.
+    func outlineView(
+        _ outlineView: NSOutlineView, validateDrop info: any NSDraggingInfo,
+        proposedItem item: Any?, proposedChildIndex index: Int
+    ) -> NSDragOperation {
+        guard let index = favoritesIndex(item: item, childIndex: index),
+            let operation = dropOperation(info)
+        else { return [] }
+        outlineView.setDropItem(favoritesGroup, dropChildIndex: index)
+        return operation
+    }
+
+    func outlineView(
+        _ outlineView: NSOutlineView, acceptDrop info: any NSDraggingInfo, item: Any?,
+        childIndex index: Int
+    ) -> Bool {
+        guard let index = favoritesIndex(item: item, childIndex: index),
+            dropOperation(info) != nil
+        else { return false }
+        let pasteboard = info.draggingPasteboard
+        if let path = pasteboard.string(forType: Self.favoriteType) {
+            favorites.move(path, to: index)
+        } else {
+            favorites.insert(
+                PasteboardFileClipboard(pasteboard: pasteboard).fileURLs().map(\.path),
+                at: index)
+        }
+        return true
+    }
+
+    /// Where among the favorites a drop proposed on `item` at `childIndex` goes; nil for a drop
+    /// outside the Favorites group.
+    private func favoritesIndex(item: Any?, childIndex: Int) -> Int? {
+        guard groups.contains(where: { $0 === favoritesGroup }) else { return nil }
+        if let group = item as? Group, group === favoritesGroup {
+            return childIndex == NSOutlineViewDropOnItemIndex ? favoriteRows.count : childIndex
+        }
+        if let row = item as? FavoriteRow {
+            return favoriteRows.firstIndex { $0 === row }
+        }
+        return nil
+    }
+
+    /// What the drag does when dropped among the favorites; nil when it adds nothing.
+    private func dropOperation(_ info: any NSDraggingInfo) -> NSDragOperation? {
+        let pasteboard = info.draggingPasteboard
+        if let path = pasteboard.string(forType: Self.favoriteType) {
+            return favorites.contains(path) ? .move : nil
+        }
+        let paths = PasteboardFileClipboard(pasteboard: pasteboard).fileURLs().map(\.path)
+        guard paths.contains(where: { !favorites.contains($0) }) else { return nil }
+        // No file moves or copies: the item is only listed, so the drag shows no badge when
+        // it can.
+        let allowed = info.draggingSourceOperationMask
+        return [.generic, .link, .copy, .move].first { allowed.contains($0) }
     }
 
     // MARK: Delegate
@@ -203,29 +429,77 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     }
 
     func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool {
-        item is Row
+        !(item is Group)
     }
 
     func outlineView(
         _ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any
     ) -> NSView? {
-        guard let row = item as? Row else { return groupCell() }
+        switch item {
+        case let group as Group: return groupCell(group.title)
+        case let row as FavoriteRow: return favoriteCell(row.item)
+        case let row as Row: return workspaceCell(row.saved)
+        default: preconditionFailure("the sidebar has no row for \(item)")
+        }
+    }
+
+    private func workspaceCell(_ saved: WorkspaceList.Saved) -> Cell {
         let cell =
-            outlineView.makeView(withIdentifier: Self.cellID, owner: nil) as? Cell ?? makeCell()
-        let saved = row.saved
+            outlineView.makeView(withIdentifier: Self.cellID, owner: nil) as? Cell
+            ?? makeCell(Self.cellID)
+        cell.imageView?.image = symbol("macwindow", description: "Workspace")
         cell.textField?.stringValue = saved.name
         cell.openMark.isHidden = !saved.isOpen
         cell.setAccessibilityLabel(saved.isOpen ? "\(saved.name), open" : saved.name)
         return cell
     }
 
-    private func groupCell() -> NSView {
-        if let cell = outlineView.makeView(withIdentifier: Self.groupCellID, owner: nil) {
-            return cell
+    /// A favorite's row: its icon and name, greyed while it isn't found.
+    private func favoriteCell(_ item: Favorites.Item) -> Cell {
+        let cell =
+            outlineView.makeView(withIdentifier: Self.favoriteCellID, owner: nil) as? Cell
+            ?? makeCell(Self.favoriteCellID)
+        let isMissing = item.state == .missing
+        cell.imageView?.image = icon(for: item)
+        cell.imageView?.alphaValue = isMissing ? 0.4 : 1
+        cell.textField?.stringValue = item.name
+        cell.textField?.textColor = isMissing ? .tertiaryLabelColor : .labelColor
+        cell.openMark.isHidden = true
+        cell.setAccessibilityLabel(isMissing ? "\(item.name), not found" : item.name)
+        return cell
+    }
+
+    /// Finder's symbol for each of its default favorites, a folder's for any other folder, and
+    /// the type's icon for a file, by its extension, which reads nothing from the disk.
+    private func icon(for item: Favorites.Item) -> NSImage {
+        let home = Location(path: settings.home)
+        let symbols = [
+            "/Applications": "app.dashed",
+            home.child(named: "Desktop").path: "menubar.dock.rectangle",
+            home.child(named: "Documents").path: "doc",
+            home.child(named: "Downloads").path: "arrow.down.circle",
+            home.path: "house",
+        ]
+        if let name = symbols[item.path] {
+            return symbol(name, description: item.name)
         }
+        guard item.state == .file else { return symbol("folder", description: "Folder") }
+        let pathExtension = (item.path as NSString).pathExtension
+        return TypeIconCache.shared.icon(for: UTType(filenameExtension: pathExtension) ?? .data)
+    }
+
+    private func groupCell(_ title: String) -> NSView {
+        let cell =
+            outlineView.makeView(withIdentifier: Self.groupCellID, owner: nil)
+            as? NSTableCellView ?? makeGroupCell()
+        cell.textField?.stringValue = title
+        return cell
+    }
+
+    private func makeGroupCell() -> NSTableCellView {
         let cell = NSTableCellView()
         cell.identifier = Self.groupCellID
-        let label = NSTextField(labelWithString: Self.groupTitle)
+        let label = NSTextField(labelWithString: "")
         add(label, to: cell)
         cell.textField = label
         NSLayoutConstraint.activate([
@@ -236,11 +510,10 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         return cell
     }
 
-    private func makeCell() -> Cell {
+    private func makeCell(_ identifier: NSUserInterfaceItemIdentifier) -> Cell {
         let cell = Cell()
-        cell.identifier = Self.cellID
-        let icon = NSImageView(
-            image: symbol("macwindow", description: "Workspace"))
+        cell.identifier = identifier
+        let icon = NSImageView()
         let label = NSTextField(labelWithString: "")
         label.lineBreakMode = .byTruncatingTail
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -258,6 +531,8 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         NSLayoutConstraint.activate([
             icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
             icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 18),
+            icon.heightAnchor.constraint(equalToConstant: 18),
             label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 6),
             label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
             mark.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 6),

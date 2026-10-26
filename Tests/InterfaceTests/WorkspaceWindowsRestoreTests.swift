@@ -1099,7 +1099,10 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
     try #require(named.window).close()
     let outline = front.sidebar.outlineView
     let row = try #require(
-        (0..<outline.numberOfRows).first { outline.level(forRow: $0) > 0 })
+        (0..<outline.numberOfRows).first { row in
+            (outline.view(atColumn: 0, row: row, makeIfNecessary: true) as? NSTableCellView)?
+                .textField?.stringValue == "Project 1"
+        })
     outline.selectRowIndexes([row], byExtendingSelection: false)
 
     outline.keyDown(with: try keyEvent("\r"))

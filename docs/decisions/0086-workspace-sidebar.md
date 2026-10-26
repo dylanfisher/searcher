@@ -5,6 +5,8 @@
 - **2026-10-24:** Focus Sidebar has Command-0 and gives the keys back when pressed in the
   sidebar, and opening a saved workspace whose window is open loads its snapshot into it; see
   [0088](0088-workspace-snapshots.md).
+- **2026-10-25:** A Favorites group sits above Workspaces, and settings hide either group; see
+  [0107](0107-sidebar-favorites.md).
 
 ## Context
 
@@ -98,3 +100,13 @@ The sidebar keeps the arrows, Return, Esc, Tab, Shift-Tab, the page keys and typ
 A chord with Command, Control or Option, or a function key, that a pane command takes now runs
 on the window's focused pane, and every command's menu item but Quick Look works, with the keys
 left in the sidebar ([0089](0089-sidebar-key-routing.md)).
+
+## Amendment: Favorites and group toggles (2026-10-25)
+
+The list has two groups: Favorites, above, and Workspaces. `Settings.showsFavoritesInSidebar`
+and `showsWorkspacesInSidebar` say which show, and a hidden group has no rows. The rows follow
+the favorites and the settings as they follow the saved workspaces, reloading only when what
+they show differs. Selection is still the window's own workspace; a clicked favorite stays
+selected until the rows reload or Esc. The list's VoiceOver label is "Sidebar". The rest is in
+[0107](0107-sidebar-favorites.md). The Decision's "one group row, Workspaces" describes the
+sidebar as first built.

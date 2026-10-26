@@ -1,5 +1,6 @@
 /// What the panes show and in what order: the hidden files, `.DS_Store`, columns from home and
-/// folders first toggles, which are app-wide `Settings`, and the sort keys, which sort the
+/// folders first toggles, which are app-wide `Settings`, as are the toggles of the sidebar's
+/// groups, and the sort keys, which sort the
 /// focused pane by a column. A sort key for the column already sorted by reverses it. Space
 /// opens and closes Quick Look on the selection, Cmd-F opens the pane's filter field, and Cmd-1
 /// and Cmd-3 show the pane as a list or as columns. The appearance commands make the app light,
@@ -12,6 +13,12 @@ public enum ViewCommands: CommandSet {
         id: CommandID("view.toggleHideDSStore"), title: "Always Hide .DS_Store", chords: [])
     public static let toggleColumnsStartAtHome = Command(
         id: CommandID("view.toggleColumnsStartAtHome"), title: "Columns Start at Home Folder",
+        chords: [])
+    public static let toggleSidebarFavorites = Command(
+        id: CommandID("view.toggleSidebarFavorites"), title: "Show Favorites in Sidebar",
+        chords: [])
+    public static let toggleSidebarWorkspaces = Command(
+        id: CommandID("view.toggleSidebarWorkspaces"), title: "Show Workspaces in Sidebar",
         chords: [])
     public static let toggleFoldersFirst = Command(
         id: CommandID("view.toggleFoldersFirst"), title: "Folders First", chords: [])
@@ -59,6 +66,12 @@ public enum ViewCommands: CommandSet {
             CommandBinding(
                 toggleColumnsStartAtHome, isChecked: { $0.columnsStartAtHome },
                 run: { $0.pane.settings.columnsStartAtHome.toggle() }),
+            CommandBinding(
+                toggleSidebarFavorites, isChecked: { $0.showsFavoritesInSidebar },
+                run: { $0.pane.settings.showsFavoritesInSidebar.toggle() }),
+            CommandBinding(
+                toggleSidebarWorkspaces, isChecked: { $0.showsWorkspacesInSidebar },
+                run: { $0.pane.settings.showsWorkspacesInSidebar.toggle() }),
             CommandBinding(
                 toggleFoldersFirst, isChecked: { $0.foldersFirst },
                 run: { $0.pane.settings.foldersFirst.toggle() }),
