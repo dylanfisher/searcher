@@ -1393,6 +1393,110 @@ private func allMenuItems(_ menu: NSMenu) -> [NSMenuItem] {
     #expect(trail.columns[1].pane.selection.cursor == ExactName("docs"))
 }
 
+@MainActor @Test func inColumnViewGoToItemAlsoListsTheSelectedFolderAndMovesIntoIt() async throws {
+    let fixture = try await Fixture()
+    let pane = fixture.tab.focusedPane
+    pane.setViewMode(.column)
+    let trail = try #require(pane.columnTrail)
+    await settle { trail.columns.allSatisfy { $0.pane.state.isLoaded } }
+    trail.focused.pane.select(Selection([ExactName("docs")], cursor: ExactName("docs")))
+    await settle { trail.columns.count == 3 && trail.columns[2].pane.state.isLoaded }
+    fixture.controller.showWorkspace()
+    try fixture.press(try keyEvent("p", modifiers: .command))
+    let palette = try #require(fixture.controller.palette)
+    #expect(palette.viewController.field.placeholderString == "Go to Item in root and docs")
+
+    _ = try await typeInPalette("", in: fixture)
+    #expect(try paletteTitles(in: fixture) == ["a.txt", "docs", "inside.txt"])
+    let editor = try await typeInPalette("inside", in: fixture)
+    editor.keyDown(with: try keyEvent("\r"))
+
+    let column = trail.columns[2].pane
+    #expect(trail.focused.pane === column)
+    #expect(
+        column.selection == Selection([ExactName("inside.txt")], cursor: ExactName("inside.txt")))
+    #expect(
+        try fixture.keyTable === fixture.paneController(fixture.tab.layout.focused).keyView)
+}
+
+@MainActor @Test func aFolderChosenInOpenQuicklyOverTheSidebarGivesItsPaneTheKeys() async throws {
+    let fixture = try await Fixture()
+    let (first, _) = try twoPanes(.horizontal, in: fixture)
+    _ = try keysToSidebar(in: fixture)
+    fixture.controller.showPalette()
+
+    let editor = try await typeInPalette("/root/do", in: fixture)
+    await settle { (try? paletteTitles(in: fixture).first) == "/root/docs" }
+    editor.keyDown(with: try keyEvent("\r"))
+
+    let pane = try #require(fixture.tab.panes[first])
+    #expect(pane.location == Location(path: "/root/docs"))
+    #expect(fixture.window.firstResponder === (try fixture.paneController(first).keyView))
+    #expect(try ringed(first, in: fixture))
+}
+
+@MainActor @Test func aRowChosenInGoToItemOverTheSidebarGivesItsPaneTheKeys() async throws {
+    let fixture = try await Fixture()
+    let (first, _) = try twoPanes(.horizontal, in: fixture)
+    _ = try keysToSidebar(in: fixture)
+    fixture.controller.showItemPalette()
+
+    let editor = try await typeInPalette("docs", in: fixture)
+    editor.keyDown(with: try keyEvent("\r"))
+
+    let pane = try #require(fixture.tab.panes[first])
+    #expect(pane.selection == Selection([ExactName("docs")], cursor: ExactName("docs")))
+    #expect(fixture.window.firstResponder === (try fixture.paneController(first).keyView))
+    #expect(try ringed(first, in: fixture))
+}
+
+@MainActor @Test func anOpenQuicklyCommandOverTheSidebarLeavesTheKeysThere() async throws {
+    let fixture = try await Fixture()
+    let outline = try keysToSidebar(in: fixture)
+    fixture.controller.showPalette()
+
+    let editor = try await typeInPalette(ViewCommands.toggleHidden.title, in: fixture)
+    #expect(try paletteTitles(in: fixture).first == ViewCommands.toggleHidden.title)
+    editor.keyDown(with: try keyEvent("\r"))
+
+    #expect(fixture.controller.palette == nil)
+    #expect(fixture.window.firstResponder === outline)
+}
+
+/// With one palette open, the other's chords, as the user's shortcuts give them, close it and
+/// open the other, which gives the keys back where the first would have.
+@MainActor @Test func theOtherPalettesChordSwitchesPalettesAndKeepsWhereTheKeysGoBack()
+    async throws
+{
+    let folder = try TemporaryFolder("BrowserWindowControllerTests")
+    let settings = storedSettings(in: folder)
+    let cmdJ = KeyChord("j", modifiers: .command)
+    settings.shortcuts = [WindowCommands.goToItem.id: ShortcutOverride(alternate: .chord(cmdJ))]
+    let fixture = try await Fixture(settings: settings)
+    let outline = try keysToSidebar(in: fixture)
+    let goToItem = "Go to Item in root"
+    let openQuickly = PaletteViewController.openQuicklyPlaceholder
+    fixture.controller.showPalette()
+
+    for (chord, placeholder) in [
+        (try keyEvent("p", modifiers: .command), goToItem),
+        (try keyEvent("p", modifiers: [.command, .shift]), openQuickly),
+        (try keyEvent("j", modifiers: .command), goToItem),
+        (try keyEvent("k", modifiers: .command), openQuickly),
+    ] {
+        let panel = try #require(fixture.controller.palette?.window)
+        #expect(panel.performKeyEquivalent(with: chord))
+        let palette = try #require(fixture.controller.palette, "\(chord)")
+        #expect(palette.window !== panel)
+        #expect(!panel.isVisible)
+        #expect(palette.viewController.field.placeholderString == placeholder, "\(chord)")
+        #expect(fixture.window.firstResponder === outline)
+    }
+
+    try escapePalette(in: fixture)
+    #expect(fixture.window.firstResponder === outline)
+}
+
 /// Two panes side by side with the right one focused, and a press on the left pane's second row.
 @MainActor
 private struct PressFixture {

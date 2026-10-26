@@ -526,37 +526,56 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             guard case .command(let id) = item.id else { return true }
             return self?.canRunFromPalette(id) ?? false
         }
-        present(controller, closedBy: WindowCommands.showPalette.id, over: window)
+        present(
+            controller, closedBy: WindowCommands.showPalette.id,
+            switchingTo: WindowCommands.goToItem.id, over: window)
     }
 
     /// Shows the palette over the window in Go to Item mode, unless a palette already shows. It
-    /// lists the rows of the focused pane, or of its focused column, as the pane shows them, and
-    /// selects the chosen one there with its row in the middle of the view
-    /// (docs/decisions/0101-go-to-item.md).
+    /// lists the rows of the focused pane, or of its focused column and the folder selected
+    /// there, as the pane shows them, and selects the chosen one there with its row in the middle
+    /// of the view (docs/decisions/0101-go-to-item.md).
     func showItemPalette() {
         guard palette == nil, !isClosed, !workspace.isClosed, let window else { return }
-        let pane = workspace.selectedTab.focusedPane.commandPane
+        let source = EntrySource(pane: workspace.selectedTab.focusedPane)
         let label = "Go to Item"
         let controller = PaletteWindowController(
-            palette: Palette(sources: [EntrySource(pane: pane)]), settings: settings, label: label,
-            placeholder: "\(label) in \(pane.location.name)")
-        present(controller, closedBy: WindowCommands.goToItem.id, over: window)
+            palette: Palette(sources: [source]), settings: settings, label: label,
+            placeholder: "\(label) in \(source.folderNames.joined(separator: " and "))")
+        present(
+            controller, closedBy: WindowCommands.goToItem.id,
+            switchingTo: WindowCommands.showPalette.id, over: window)
     }
 
     /// Shows `controller`'s palette over `window` with the keys in its field. Command `id`'s
     /// chords and Close Pane's close it, those a menu could have as key equivalents: the field
-    /// types a plain one, such as "j" or Esc. As it closes, the keys go back where they were.
+    /// types a plain one, such as "j" or Esc. Command `other`'s chords close it and show the
+    /// other palette, which gives the keys back where this one would have. As it closes, the
+    /// keys go back where they were; a chosen folder or row then gives them to the focused
+    /// pane, where it went (docs/decisions/0087-palette-window.md).
     private func present(
-        _ controller: PaletteWindowController, closedBy id: CommandID, over window: NSWindow
+        _ controller: PaletteWindowController, closedBy id: CommandID,
+        switchingTo other: CommandID, over window: NSWindow
     ) {
         controller.closingChords = { [weak self] in
-            // A closed window's workspace has no focused table to read.
-            guard let self, !isClosed, !workspace.isClosed else { return [] }
-            let registry = focusedTable.registry
-            return Set(
-                [id, TilingCommands.closePane.id].flatMap {
-                    registry.command(for: $0).map(MainMenuBuilder.menuChords) ?? []
-                })
+            self?.menuChords(of: [id, TilingCommands.closePane.id]) ?? []
+        }
+        controller.switchingChords = { [weak self] in self?.menuChords(of: [other]) ?? [] }
+        controller.onSwitchingChord = { [weak self, weak controller] in
+            // Closing gives the keys back, so the other palette finds them where this one did.
+            controller?.close()
+            guard let self else { return }
+            if other == WindowCommands.goToItem.id {
+                showItemPalette()
+            } else {
+                showPalette()
+            }
+        }
+        controller.viewController.didRun = { [weak self] item in
+            switch item.kind {
+            case .folder, .entry: self?.giveKeysBack()
+            case .workspace, .command: break
+            }
         }
         // Where the keys were, to give them back there: a field's editor stands in for the field.
         var keys = window.firstResponder
@@ -572,6 +591,15 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         }
         palette = controller
         controller.show(over: window)
+    }
+
+    /// The chords of `ids` that a menu could have as key equivalents, from the focused table's
+    /// registry, so they follow the user's shortcuts.
+    private func menuChords(of ids: [CommandID]) -> Set<KeyChord> {
+        // A closed window's workspace has no focused table to read.
+        guard !isClosed, !workspace.isClosed else { return [] }
+        let registry = focusedTable.registry
+        return Set(ids.flatMap { registry.command(for: $0).map(MainMenuBuilder.menuChords) ?? [] })
     }
 
     /// Gives the keys back to `responder`, which had them when the palette opened: the focused
