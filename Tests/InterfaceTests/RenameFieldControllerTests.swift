@@ -200,6 +200,23 @@ private let returnKey = "\r"
     #expect(fixture.window.firstResponder === fixture.controller.keyView)
 }
 
+/// The rename the field commits is tagged with the workspace of the window its list is in, so
+/// that window's operations panel lists it.
+@MainActor @Test func aCommittedRenameCarriesTheListsWorkspace() async throws {
+    let fixture = try await Fixture("song.flac")
+    defer { fixture.stop() }
+    let workspace = UUID()
+    fixture.controller.listingViewController.workspaceID = workspace
+    await fixture.select("song.flac")
+    try fixture.press(returnKey)
+
+    try fixture.type("tune")
+    try fixture.send(#selector(NSResponder.insertNewline(_:)))
+
+    await settle { fixture.exists("tune.flac") && !fixture.snapshots.all.isEmpty }
+    #expect(fixture.snapshots.all.allSatisfy { $0.workspace == workspace })
+}
+
 @MainActor @Test func anInvalidNameShowsWhyAndKeepsTheFieldOpen() async throws {
     let fixture = try await Fixture("song.flac")
     defer { fixture.stop() }

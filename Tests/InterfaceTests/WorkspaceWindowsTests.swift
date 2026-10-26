@@ -292,10 +292,15 @@ private func receiver(of item: NSMenuItem, in window: NSWindow) throws -> NSResp
 @MainActor
 private final class SheetLog {
     var presented: [(sheet: NSWindow, over: NSWindow)] = []
+    /// The windows the prompter brought forward for a sheet.
+    var broughtForward: [NSWindow] = []
 
     init(_ windows: WorkspaceWindows) {
         windows.prompter.present = { [unowned self] sheet, window in
             presented.append((sheet, window))
+        }
+        windows.prompter.bringForward = { [unowned self] window in
+            broughtForward.append(window)
         }
         windows.prompter.dismiss = { _ in }
     }
@@ -380,8 +385,9 @@ private final class SheetLog {
     #expect(field.field.frame.midY == table.rect(ofRow: row).midY)
 }
 
-/// A trash of `/root/a.txt` that failed: the snapshot the queue sends once, as it finishes.
-private func failedTrash(_ id: Int) -> FileOperationQueue.Snapshot {
+/// A trash of `/root/a.txt` that failed, queued in the window of `workspace`: the snapshot the
+/// queue sends once, as it finishes.
+private func failedTrash(_ id: Int, in workspace: UUID? = nil) -> FileOperationQueue.Snapshot {
     FileOperationQueue.Snapshot(
         id: FileOperationQueue.ID(id), operation: .trash(["/root/a.txt"]),
         state: OperationState(
@@ -390,7 +396,21 @@ private func failedTrash(_ id: Int) -> FileOperationQueue.Snapshot {
                 itemsDone: 1, itemCount: 1, copied: CopyProgress(bytes: 0, files: 0),
                 total: nil),
             errors: [FileOperationError(reason: .permissionDenied, path: "/root/a.txt", errno: 1)],
-            record: OperationRecord()))
+            record: OperationRecord()),
+        workspace: workspace)
+}
+
+/// A copy of `/root/a.txt` still running, queued in the window of `workspace`.
+private func runningCopy(_ id: Int, in workspace: UUID?) -> FileOperationQueue.Snapshot {
+    FileOperationQueue.Snapshot(
+        id: FileOperationQueue.ID(id), operation: .copy(["/root/a.txt"], into: "/root/docs"),
+        state: OperationState(
+            phase: .running,
+            progress: OperationState.Progress(
+                itemsDone: 0, itemCount: 1, copied: CopyProgress(bytes: 0, files: 0),
+                total: nil),
+            errors: [], record: OperationRecord()),
+        workspace: workspace)
 }
 
 /// A copy of `a.txt` into a folder that has one, which holds on its name question until the
@@ -549,22 +569,115 @@ private func stopEverything(_ windows: WorkspaceWindows) async {
     #expect(!opened.operations.view.isHidden)
 }
 
-@MainActor @Test func clearingAFailedRowInOneWindowClearsItInEvery() async throws {
+/// A cleared row is gone for good: closing its window hands nothing on, and no window opened
+/// later lists it.
+@MainActor @Test func aClearedFailedRowIsGoneFromEveryWindow() async throws {
     let fixture = try await Fixture()
     let first = try #require(fixture.windows.controllers.first)
     let second = try await fixture.open()
-    fixture.windows.operationsChanged([failedTrash(3)])
+    fixture.windows.operationsChanged([failedTrash(3, in: first.workspace.id)])
     fixture.windows.operationsChanged([])
     let id = FileOperationQueue.ID(3)
     let row = try #require(first.operations.row(for: id))
-    #expect(second.operations.row(for: id) != nil)
 
     row.cancelButton.performClick(nil)
 
     #expect(first.operations.row(for: id) == nil)
+    try #require(first.window).close()
     #expect(second.operations.row(for: id) == nil)
     let third = try await fixture.open()
     #expect(third.operations.row(for: id) == nil)
+}
+
+/// An operation is listed only in the window whose key queued it, which shows its panel for
+/// the failure even when another window is the most recently active; a window opened later
+/// lists nothing.
+@MainActor @Test func anOperationIsListedOnlyInTheWindowThatQueuedIt() async throws {
+    let fixture = try await Fixture()
+    let first = try #require(fixture.windows.controllers.first)
+    let second = try await fixture.open()
+    try #require(fixture.windows.list.workspaces.first === second.workspace)
+
+    let menu = try MainMenuBuilder.build(appName: "Searcher", registry: AppCommands.registry())
+    let newFolder = try #require(menuItem(FileCommands.newFolder.id, in: menu))
+
+    // `/root` is only in the stub lister, so making a folder in it fails.
+    #expect(
+        try fixture.keyTable(first).tryToPerform(try #require(newFolder.action), with: newFolder))
+    await settle { !first.operations.view.isHidden }
+
+    let row = try #require(first.operations.row(for: FileOperationQueue.ID(0)))
+    #expect(row.detailLabel.textColor == .systemRed)
+    #expect(second.operations.isEmpty)
+    #expect(second.operations.view.isHidden)
+    let third = try await fixture.open()
+    #expect(third.operations.isEmpty)
+}
+
+@MainActor @Test func aWindowListsItsOwnFailureAndNotAnothers() async throws {
+    let fixture = try await Fixture()
+    let first = try #require(fixture.windows.controllers.first)
+    let second = try await fixture.open()
+
+    fixture.windows.operationsChanged([failedTrash(3, in: first.workspace.id)])
+    fixture.windows.operationsChanged([])
+
+    #expect(first.operations.row(for: FileOperationQueue.ID(3)) != nil)
+    #expect(!first.operations.view.isHidden)
+    #expect(second.operations.row(for: FileOperationQueue.ID(3)) == nil)
+    #expect(second.operations.view.isHidden)
+}
+
+/// Closing a window leaves its operations running; the window then most recently active lists
+/// them, failures included, and shows its panel. With no window left, the next one to open
+/// lists them.
+@MainActor @Test func closingAWindowHandsItsOperationsToTheFrontWindow() async throws {
+    let fixture = try await Fixture()
+    let first = try #require(fixture.windows.controllers.first)
+    let second = try await fixture.open()
+    let closing = try await fixture.open()
+    fixture.windows.list.activate(second.workspace)
+    let (failed, running) = (FileOperationQueue.ID(3), FileOperationQueue.ID(4))
+    fixture.windows.operationsChanged([
+        failedTrash(3, in: closing.workspace.id), runningCopy(4, in: closing.workspace.id),
+    ])
+    #expect(second.operations.isEmpty)
+
+    try #require(closing.window).close()
+
+    #expect(second.operations.row(for: failed) != nil)
+    #expect(second.operations.row(for: running) != nil)
+    #expect(!second.operations.view.isHidden)
+    #expect(first.operations.isEmpty)
+
+    for controller in [first, second] {
+        try #require(controller.window).close()
+    }
+    let reopened = try await fixture.open()
+    #expect(reopened.operations.row(for: failed) != nil)
+    #expect(reopened.operations.row(for: running) != nil)
+}
+
+/// A question about an operation goes on the window that queued it, not the most recently
+/// active one, even before a snapshot has shown the operation.
+@MainActor @Test func aQuestionGoesOnTheWindowOfItsOperation() async throws {
+    let fixture = try await Fixture()
+    let sheets = SheetLog(fixture.windows)
+    let first = try #require(fixture.windows.controllers.first)
+    let second = try await fixture.open()
+    try #require(fixture.windows.list.workspaces.first === second.workspace)
+    let copy = try HeldCopy()
+
+    FileOperationQueue.$workspace.withValue(first.workspace.id) {
+        fixture.windows.fileOperations.submit(copy.operation)
+    }
+    await settle { sheets.presented.count == 1 }
+
+    #expect(sheets.presented.first?.over === first.window)
+    // The window behind is brought forward, so the sheet doesn't wait where no one sees it.
+    #expect(sheets.broughtForward.count == 1)
+    #expect(sheets.broughtForward.first === first.window)
+    await stopEverything(fixture.windows)
 }
 
 @MainActor @Test func twoOtherPaneConfirmsPressedBeforeAnsweringAreQueued() async throws {

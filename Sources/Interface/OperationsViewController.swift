@@ -24,9 +24,9 @@ final class OperationsViewController: NSViewController {
     /// The height of the line saying there are no operations.
     private static let emptyHeight: CGFloat = 32
     /// The gap between one row and the next, beyond the rows' own insets.
-    static let rowGap: CGFloat = 12
+    static let rowGap: CGFloat = 4
     /// The room above the first row, beyond its own inset.
-    static let firstRowTopInset: CGFloat = 10
+    static let firstRowTopInset: CGFloat = 2
 
     /// What the row buttons send for an operation.
     struct Control {

@@ -1087,6 +1087,54 @@ private func cancelAllFinishesAtOnce(_ queue: FileOperationQueue) async -> Bool 
     #expect(unfinished.all == [0])
 }
 
+/// Each way in tags its operation with the window's workspace bound around the call, and the
+/// snapshots carry it; one queued outside any window carries none.
+@Test func anOperationCarriesTheWorkspaceItWasQueuedIn() async throws {
+    let watcher = Watcher()
+    let queue = makeQueue(FakeFiles(releasingAll: true), watcher)
+    let (first, second, third) = (UUID(), UUID(), UUID())
+    let error = FileOperationError(reason: .permissionDenied, path: "/A", errno: EACCES)
+    let reported = FileOperation.receive(name: nil, app: "Mail", into: "/A")
+    let renamed = FileOperation.rename("/A/a", to: "b")
+
+    let submitted = FileOperationQueue.$workspace.withValue(first) { queue.submit(renamed) }
+    let enqueued = await FileOperationQueue.$workspace.withValue(second) {
+        await queue.enqueue(.newFolder(in: "/A"))
+    }
+    await FileOperationQueue.$workspace.withValue(third) {
+        await queue.report(reported, errors: [error])
+    }
+    let untagged = await queue.enqueue(.newFolder(in: "/B"))
+    _ = await submitted.value
+
+    #expect(
+        await watcher.snapshots.wait { sent in
+            let seen = sent.flatMap { $0 }
+            return seen.contains { $0.operation == renamed && $0.workspace == first }
+                && seen.contains { $0.id == enqueued && $0.workspace == second }
+                && seen.contains { $0.operation == reported && $0.workspace == third }
+                && seen.contains { $0.id == untagged && $0.workspace == nil }
+        })
+}
+
+/// The queue names the window an unfinished operation was queued in, for its question's sheet,
+/// and forgets it once the operation finishes.
+@Test func theQueueNamesTheWorkspaceOfAnUnfinishedOperation() async throws {
+    let files = FakeFiles()
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher)
+    let workspace = UUID()
+
+    let id = await FileOperationQueue.$workspace.withValue(workspace) {
+        await enqueue(queue, .copy(["/A/a"], into: "/B"), watcher)
+    }
+
+    #expect(queue.workspace(of: id) == workspace)
+    files.releaseAll()
+    #expect(await watcher.waitUntilFinished(id))
+    #expect(queue.workspace(of: id) == nil)
+}
+
 /// The queue a callback made before it reads, set once it is made.
 private final class QueueBox: @unchecked Sendable {
     // `lock` guards `stored`.

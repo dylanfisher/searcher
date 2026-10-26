@@ -77,6 +77,9 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// Runs the copies and moves that drops make. Without it, and without `mountTable`, the list
     /// takes no drop; its rows still drag out.
     var fileOperations: FileOperationQueue?
+    /// The workspace of the window showing the list, whose operations panel lists what its
+    /// drops and renames queue (`FileOperationQueue.workspace`); nil outside a browser window.
+    var workspaceID: UUID?
     /// Tells a drop whether its items are on the target folder's volume.
     var mountTable: MountTable?
     /// Opens the folder row a drag hovers over; nil opens none. The pane's lists share one.
@@ -565,11 +568,15 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         guard let queue = fileOperations, let drop = drop(info, row: row, dropOperation) else {
             return false
         }
+        // The drop's operations are listed in the window it landed in.
+        let workspace = workspaceID
         switch drop.content {
         case .files(let paths, let operation):
             let operation = operation.fileOperation(paths, into: drop.folder)
             Task { [pane = drop.pane] in
-                _ = await FileCommands.perform(operation, selectingIn: pane, queue: queue)
+                await FileOperationQueue.$workspace.withValue(workspace) {
+                    _ = await FileCommands.perform(operation, selectingIn: pane, queue: queue)
+                }
             }
         case .promises:
             guard
@@ -582,8 +589,10 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             // A drag leaves the app it came from active, so that names the source.
             let app = NSWorkspace.shared.frontmostApplication?.localizedName
             Task { [pane = drop.pane, folder = drop.folder] in
-                await FilePromiseReceiver.receive(
-                    promises, into: folder, from: app, selectingIn: pane, queue: queue)
+                await FileOperationQueue.$workspace.withValue(workspace) {
+                    await FilePromiseReceiver.receive(
+                        promises, into: folder, from: app, selectingIn: pane, queue: queue)
+                }
             }
         case .open(let urls, let application):
             pane.systemActions.open(urls, withApplicationAt: application)

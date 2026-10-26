@@ -3,9 +3,9 @@ import Browser
 
 /// Answers a `FileOperationQueue`'s questions with `Dialog` sheets: `ConflictSheetController`
 /// for a name in use, `ConfirmSheetController` for the other-pane confirm and the
-/// delete-immediately question. One sheet shows at a time, on the window `window` gives,
-/// which is the most recently active one; questions asked meanwhile wait in order, and wait
-/// for a window if none is open.
+/// delete-immediately question. One sheet shows at a time, on the window `window` gives for its
+/// operation: the window that queued it while open, otherwise the most recently active one;
+/// questions asked meanwhile wait in order, and wait for a window if none is open.
 /// Nothing blocks: each question is an awaited call, so other windows keep their keys.
 ///
 /// A question about an operation a snapshot shows finished, cancelled from the panel or failed
@@ -56,11 +56,21 @@ final class OperationPrompter {
     private nonisolated static let droppedResolution = ConflictResolution(
         choice: .skip, appliesToAll: false)
 
-    /// The window a sheet goes on, or nil while none is open.
-    var window: @MainActor () -> NSWindow? = { nil }
+    /// The window the sheet of a question about an operation goes on, or nil while none is
+    /// open. Given nil for the other-pane confirm, which no operation has yet.
+    var window: @MainActor (FileOperationQueue.ID?) -> NSWindow? = { _ in nil }
     /// Shows the first window as a sheet on the second. Tests replace it so nothing is shown.
     var present: @MainActor (NSWindow, NSWindow) -> Void = { sheet, window in
         window.beginSheet(sheet)
+    }
+    /// Brings the window a sheet is about to show on to the front and makes it key, out of the
+    /// Dock if it is minimized, and onto the screen from another Space, as
+    /// `makeKeyAndOrderFront` does. The sheet's window may be behind another, since a question
+    /// goes on its operation's window, and a sheet no one sees would hold every later question.
+    /// Tests replace it so nothing is shown.
+    var bringForward: @MainActor (NSWindow) -> Void = { window in
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        window.makeKeyAndOrderFront(nil)
     }
     /// Takes a sheet off its window. Tests replace it with `present`.
     var dismiss: @MainActor (NSWindow) -> Void = { sheet in sheet.sheetParent?.endSheet(sheet) }
@@ -109,7 +119,8 @@ final class OperationPrompter {
     /// Shows the first waiting question, unless a sheet is up or no window is open. A window
     /// that opens calls it.
     func showNext() {
-        guard shown == nil, !waiting.isEmpty, let window = window() else { return }
+        guard shown == nil, let first = waiting.first, let window = window(first.operation)
+        else { return }
         let question = waiting.removeFirst()
         let sheet: Sheet
         switch question {
@@ -129,11 +140,12 @@ final class OperationPrompter {
         shown = sheet
         shownQuestion = question
         shownOn = window
+        if !window.isKeyWindow { bringForward(window) }
         present(sheet.panel, window)
     }
 
     /// `window` closed: a question shown on it goes back to the front of the line and shows
-    /// on the window that is now the most recently active, if any.
+    /// on the window `window` now gives for it, if any.
     func windowClosed(_ window: NSWindow) {
         guard let question = shownQuestion, shownOn === window else { return }
         close()

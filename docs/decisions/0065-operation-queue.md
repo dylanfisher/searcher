@@ -64,7 +64,9 @@ that didn't happen.
   thread only stores its latest progress, and while anything runs the queue checks it once per
   interval, so `copyfile`'s report every 0.5 ms never calls into the actor. Each operation's
   `onFinish` gets its final state at once, outside the limit. Time comes from an injected
-  `Clock`.
+  `Clock`. Each snapshot carries the workspace whose window queued the operation, read from the
+  task-local `FileOperationQueue.workspace` as it is submitted, so the operations panel lists
+  it in that window ([0067](0067-operations-panel.md), amended 2026-10-26).
 - **Pause.** A paused copy holds in `FileCopier`'s callback; other work holds before its next
   item. A paused operation keeps its lane.
 - **Questions are awaited, not blocking.** The queue asks through `Prompts`, two async calls

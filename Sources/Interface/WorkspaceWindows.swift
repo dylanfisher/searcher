@@ -7,11 +7,13 @@ import os
 /// window's workspace again, and no window for a workspace that left the list. A pane or tab
 /// that moves between windows takes its view controllers with it, so it keeps its table, scroll
 /// position and folder monitor (docs/decisions/0057-windows-and-tear-out.md). Every window runs
-/// its file commands through one `FileOperationQueue`, whose questions show as sheets on the
-/// most recently active window and whose snapshots go to every window's operations panel
-/// (docs/decisions/0067-operations-panel.md). Every window cuts, copies and pastes through one
-/// `CutState`, so a cut in one window pastes as a move in another. Every operation that finishes
-/// goes into one `UndoHistory`, so Undo in any window undoes the last change made in any of them.
+/// its file commands through one `FileOperationQueue`. Each operation is listed in the
+/// operations panel of the window that queued it, and its questions show as sheets there; when
+/// that window closes, the operation keeps running and the most recently active window takes
+/// it over (docs/decisions/0067-operations-panel.md). Every window cuts, copies and pastes
+/// through one `CutState`, so a cut in one window pastes as a move in another. Every operation
+/// that finishes goes into one `UndoHistory`, so Undo in any window undoes the last change made
+/// in any of them.
 ///
 /// It saves every window's workspace and the session to its `WorkspaceStore`, once changes have
 /// stopped for `saveDelay`, and at launch rebuilds the windows the store kept
@@ -90,7 +92,7 @@ public final class WorkspaceWindows {
     private let cache: ListingCache?
     /// The one queue every window's file commands run through.
     let fileOperations: FileOperationQueue
-    /// Asks the queue's questions with sheets on the most recently active window.
+    /// Asks the queue's questions with sheets on the window that lists the operation.
     let prompter: OperationPrompter
     /// The app's clipboard and its cut, shared by every window.
     public let clipboard: CutState
@@ -110,13 +112,18 @@ public final class WorkspaceWindows {
     public let favorites: Favorites
     /// The mounted volumes the sidebar's Locations lists, shared by every window.
     let volumes = SidebarVolumes()
-    /// The unfinished operations in the queue's latest snapshots, for a window that opens while
-    /// operations run.
+    /// The unfinished operations in the queue's latest snapshots, for a window that takes over
+    /// another's operations as it closes.
     private var unfinished: [FileOperationQueue.Snapshot] = []
     /// Operations that finished in trouble and that the user hasn't cleared, in the order they
-    /// finished, so a window that opens later lists them too, even one that opens after a
-    /// failure reported while no window was open.
+    /// finished, so a failure is still listed after its window closed, or when it was reported
+    /// while no window was open.
     private var troubled: [FileOperationQueue.Snapshot] = []
+    /// The workspace whose window lists each operation in `unfinished` and `troubled`: the one
+    /// that queued it while that window is open, and otherwise the window most recently active
+    /// when the operation was first seen or its window closed. An operation with none waits
+    /// for the next window to open.
+    private var owners: [FileOperationQueue.ID: UUID] = [:]
     /// Ends the snapshot stream when the windows go away.
     private nonisolated let snapshotFeed: AsyncStream<[FileOperationQueue.Snapshot]>.Continuation
     /// Ends the stream of finished operations to the undo history when the windows go away.
@@ -162,7 +169,12 @@ public final class WorkspaceWindows {
             onAnyFinish: { finishedFeed.yield($0) })
         undoHistory.follow(finished)
         prompter.queue = fileOperations
-        prompter.window = { [weak self] in self?.frontWindow }
+        prompter.window = { [weak self] id in self?.questionWindow(for: id) }
+        let bringForward = prompter.bringForward
+        // Windows that aren't put on screen aren't brought forward either.
+        prompter.bringForward = { [weak self] window in
+            if self?.showsWindows == true { bringForward(window) }
+        }
         Task { [weak self] in
             for await snapshots in stream {
                 self?.operationsChanged(snapshots)
@@ -848,8 +860,12 @@ public final class WorkspaceWindows {
         controller.onCommand = { [weak self] in self?.showList() }
         controller.onClose = { [weak self] closed in self?.didClose(closed) }
         controller.operations.onClear = { [weak self] id in self?.clearOperation(id) }
-        controller.showOperations(troubled + unfinished)
         controllers.append(controller)
+        // Operations left with no window, as when the last one closed, are this window's.
+        for operation in troubled + unfinished where owners[operation.id] == nil {
+            owners[operation.id] = workspace.id
+        }
+        controller.showOperations(operations(of: controller))
         guard let window = controller.window else {
             preconditionFailure("a browser window controller has no window")
         }
@@ -892,31 +908,72 @@ public final class WorkspaceWindows {
         return nil
     }
 
-    /// The window of the most recently active workspace, where questions go.
-    private var frontWindow: NSWindow? {
+    /// The window of the most recently active workspace, where store problems go.
+    private var frontWindow: NSWindow? { frontController?.window }
+
+    private var frontController: BrowserWindowController? {
         list.workspaces.first.flatMap { workspace in
             controllers.first { $0.workspace === workspace }
-        }?.window
+        }
     }
 
-    /// Shows the queue's snapshots in every window and closes the questions of operations that
-    /// finished.
+    private func controller(of workspace: UUID) -> BrowserWindowController? {
+        controllers.first { $0.workspace.id == workspace }
+    }
+
+    /// Where a question about operation `id` shows: on the window that lists it, or, before a
+    /// snapshot has shown it, the one that queued it; otherwise, and for the other-pane
+    /// confirm, which has no operation yet, on the most recently active window.
+    private func questionWindow(for id: FileOperationQueue.ID?) -> NSWindow? {
+        let workspace = id.flatMap { owners[$0] ?? fileOperations.workspace(of: $0) }
+        return (workspace.flatMap(controller(of:)) ?? frontController)?.window
+    }
+
+    /// The unfinished and troubled operations `controller`'s window lists.
+    private func operations(of controller: BrowserWindowController)
+        -> [FileOperationQueue.Snapshot]
+    {
+        (troubled + unfinished).filter { owners[$0.id] == controller.workspace.id }
+    }
+
+    /// Shows each window the queue's snapshots of its own operations, and closes the questions
+    /// of operations that finished.
     func operationsChanged(_ snapshots: [FileOperationQueue.Snapshot]) {
+        for snapshot in snapshots where owners[snapshot.id] == nil {
+            let queuedIn = snapshot.workspace.flatMap(controller(of:))
+            owners[snapshot.id] = (queuedIn ?? frontController)?.workspace.id
+        }
         unfinished = snapshots.filter { !$0.state.phase.isFinished }
         troubled += snapshots.filter {
             $0.state.phase.isFinished && OperationRowView.isTrouble($0.state.phase)
         }
         for controller in controllers {
-            controller.showOperations(snapshots)
+            controller.showOperations(
+                snapshots.filter { owners[$0.id] == controller.workspace.id })
         }
+        let listed = Set((troubled + unfinished).map(\.id))
+        owners = owners.filter { listed.contains($0.key) }
         prompter.operationsChanged(snapshots)
     }
 
-    /// The user cleared the finished row of `id` in one window: it goes from every window.
+    /// The user cleared the finished row of `id`: it goes for good.
     private func clearOperation(_ id: FileOperationQueue.ID) {
         troubled.removeAll { $0.id == id }
-        for controller in controllers {
-            controller.operations.clear(id)
+        if let owner = owners.removeValue(forKey: id) {
+            controller(of: owner)?.operations.clear(id)
+        }
+    }
+
+    /// The window of `workspace` closed: its operations keep running, and the most recently
+    /// active window lists them and its failures from now on, or the next window to open
+    /// when none is left.
+    private func handOverOperations(of workspace: UUID) {
+        let heir = frontController
+        for (id, owner) in owners where owner == workspace {
+            owners[id] = heir?.workspace.id
+        }
+        if let heir {
+            heir.showOperations(operations(of: heir))
         }
     }
 
@@ -925,6 +982,7 @@ public final class WorkspaceWindows {
     private func didClose(_ controller: BrowserWindowController) {
         controllers.removeAll { $0 === controller }
         list.windowClosed(controller.workspace)
+        handOverOperations(of: controller.workspace.id)
         forgetWindow(controller.workspace.id)
         snapshotFramesShown[controller.workspace.id] = nil
         unsaved.remove(ObjectIdentifier(controller.workspace))

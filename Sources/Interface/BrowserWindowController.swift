@@ -5,8 +5,8 @@ import Quartz
 /// One browser window, showing one workspace: a strip of its tabs over the selected tab's panes,
 /// placed by the tab's layout, one `PaneViewController` per pane. Each window owns its own panes,
 /// like a Finder window, and is titled after the focused pane's folder. Under the panes, the
-/// operations panel lists the file operations; Operations shows or hides it, and it shows itself
-/// in the most recently active window when one runs past a second. With
+/// operations panel lists the file operations queued in the window; Operations shows or hides
+/// it, and it shows itself when one of them runs past a second or fails. With
 /// `Settings.hideEmptyOperationsPanel` on, a panel that showed itself hides once its last row
 /// leaves; one the user opened stays until the user closes it
 /// (docs/decisions/0067-operations-panel.md). Left of all that, the sidebar lists the favorites,
@@ -607,9 +607,10 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     }
 
     /// An operation ran past `OperationsViewController.attentionDelay` or finished in trouble.
-    /// Only the most recently active window shows its panel for it; every window lists it.
+    /// Only its own window lists it, so that window shows its panel, whether or not it is the
+    /// most recently active.
     private func operationNeedsAttention() {
-        guard !isClosed, workspaces.workspaces.first === workspace else { return }
+        guard !isClosed else { return }
         setOperationsShown(true)
     }
 
