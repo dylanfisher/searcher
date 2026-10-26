@@ -226,13 +226,14 @@ public final class PaneViewController: NSViewController {
         pathBar.onOpenInNewTab = { [weak self] folder in self?.openInNewTab(folder) }
         filterBar.isHidden = true
         filterBar.onChange = { [weak pane] text in pane?.commandPane.setFilter(text) }
+        // ↑ and ↓ are the field's own keys, as Tab is: they move the row whatever chords the
+        // user gave Select Next and Previous Row, or gave ↑ and ↓ to
+        // (docs/decisions/0106-primary-and-alternate-shortcuts.md).
         filterBar.onArrow = { [weak self] chord in
-            guard let table = self?.keyListing.tableView,
-                let command = self?.registry.command(for: chord)
-            else {
-                preconditionFailure("no command is bound to \(chord) for the filter field")
-            }
-            table.run(command.id)
+            guard let table = self?.keyListing.tableView else { return }
+            table.run(
+                chord.key == .up
+                    ? SelectionCommands.selectPrevious.id : SelectionCommands.selectNext.id)
         }
         // Tab in the field does what it does in the list: with two panes or more, the other
         // pane takes the keys.
