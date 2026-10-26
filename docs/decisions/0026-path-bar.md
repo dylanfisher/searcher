@@ -45,7 +45,7 @@ name can't ride in the listing itself.
   expanding one segment could move the next under a still mouse, AppKit then reported the mouse
   over that one, it expanded, and the first came back. Each segment still truncated after layout
   has its full name as a tooltip, and the others have none (added 2026-10-23, M4.23).
-- **Inset.** The row starts 9 points from the bar's sides, `BarInset.horizontal`, which the
+- **Inset.** The row starts 9 points from the bar's sides, `Margin.standard`, which the
   operations panel's rows share, so the first folder lines up with their text (2026-10-23; it
   was 6 points).
 - **Layout.** The list and the bar are pinned with constraints, the bar 28 points tall along the

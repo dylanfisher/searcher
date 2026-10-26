@@ -150,11 +150,11 @@ final class PathBarView: NSView {
         let natural = segments.map { ceil($0.intrinsicContentSize.width) }
         let widths = Self.widths(
             natural: natural,
-            available: bounds.width - 2 * BarInset.horizontal
+            available: bounds.width - 2 * Margin.standard
                 - separatorSizes.map(\.width).reduce(0, +),
             minimum: Self.minimumSegmentWidth, expanding: expanding)
         var minXs: [CGFloat] = []
-        var x = BarInset.horizontal
+        var x = Margin.standard
         for index in segments.indices {
             if index > 0 {
                 x += separatorSizes[index - 1].width

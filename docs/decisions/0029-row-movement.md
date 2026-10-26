@@ -96,12 +96,31 @@ name about 32 ms, and a click selecting half the rows 32–51 ms.
   was checked against the table and moves nothing. `allowsMultipleSelection` stays on, for clicks and for showing the pane's ranges.
 - **Page.** A page is `Pane.visibleRowCount` rows, the whole rows that fit below the column
   header. `ListingViewController.viewDidLayout` sets it, subtracting the header's overlap with
-  the clip view, since the rows scroll under the header. A pane too short for one row moves one.
+  the clip view, since the rows scroll under the header, and the two margins below. A pane too
+  short for one row moves one.
 - **Scrolling.** When the cursor moves without a reload, the view scrolls its row into view in
   the same pass, so the frame that shows the new selection shows the row. After a reload it
   scrolls to the cursor a pass later ([0025](0025-sort-off-main.md)), and only when the reload
   shows a new folder or a new sort. A patch that shifts the selected rows leaves the view where
   the user scrolled it. Cmd-A keeps the cursor, so it doesn't scroll.
+- **Margins** (Amended 2026-10-26, Dylan: "add that same margin … to apply top and bottom
+  margin around all list and column items, so the first and last item always have space
+  between it and window edge, and to make a little room for horizontal scroll bars on the
+  bottom"). In list view and in each column, the first row sits `Margin.standard` (9 pt, the
+  operations panel's and path bar's side margin) below the top, under the list's column
+  header, and the last row the same 9 pt above the bottom, when scrolled to either end; until
+  then the rows touched both edges. The clip view's `contentInsets` hold the margins, set by
+  `ListingViewController` with `automaticallyAdjustsContentInsets` off: top is the header's
+  height plus the margin, bottom the margin. So the rows still scroll under both margins, and
+  AppKit keeps a row clear of them in `scrollRowToVisible` (the keys, type-to-select) and in
+  `NSClipView.constrainBoundsRect` (the end of a jump's centering, the rubber band). Centering
+  ([0101](0101-go-to-item.md)) is unchanged: the margins are equal, so the middle of the rows
+  on screen is the same point. The table, the full-width selection and the scrollers are laid
+  out as before; the horizontal scroller now draws over the bottom margin, not over the last
+  row. The table covers only the room between the insets, so `ListingClipView`, the list's and
+  each column's clip view, sends a press in a margin to the table, where it lands below the
+  rows, and is registered for the table's dragged types and passes a drag over a margin on to
+  it, so a drop there goes into the folder shown.
 - **Clicks.** `tableViewSelectionDidChange` reports a selection the table made itself to the pane:
   the selected rows as members, the clicked row as the cursor (or, with no click, the row the
   table selected last), and the anchor on the cursor. A Shift-click, read from the current event's
@@ -164,6 +183,13 @@ name about 32 ms, and a click selecting half the rows 32–51 ms.
   the set, so the cost isn't in the size of the change; with full width neither costs anything.
 - **Keep naming a click's rows on the main thread.** Rejected: 13–15 ms for half of 100k rows,
   plus a comparison of the old and new name sets in `Pane.set`.
+- **The margins as the scroll view's `contentInsets`** (2026-10-26). Rejected: the scroll view
+  insets the column header and the scrollers by them too, so the header moved down 9 pt and
+  the horizontal scroller sat 9 pt up, over the last row again. `scrollerInsets` can push the
+  scrollers back, but not the header.
+- **The margins from the inset table style**, which pads the rows inside the table, so a press
+  or drop there needs no help. Rejected: its selection costs 13–15 ms (see above), and it
+  insets the selection from the sides.
 
 ## Consequences
 
