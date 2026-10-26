@@ -322,6 +322,22 @@ private func isBold(_ title: NSAttributedString, at offset: Int) -> Bool {
     #expect(panel.collectionBehavior.contains(.fullScreenAuxiliary))
 }
 
+/// A click anywhere in a row, its margins at each end included, selects it instead of dragging
+/// the panel.
+@MainActor @Test func aClickAnywhereInARowTakesTheClickInsteadOfDraggingThePanel() async throws {
+    let fixture = Fixture()
+    try await fixture.type("")
+    let table = fixture.controller.tableView
+    table.layoutSubtreeIfNeeded()
+    let rect = table.rect(ofRow: 0)
+
+    for x in [rect.minX + 2, rect.midX, rect.maxX - 2] {
+        let point = NSPoint(x: x, y: rect.midY)
+        let hit = try #require(table.hitTest(table.convert(point, to: table.superview)))
+        #expect(hit.mouseDownCanMoveWindow == false, "x \(x) hit \(type(of: hit))")
+    }
+}
+
 @MainActor
 private var paletteSize: NSSize {
     NSSize(width: PaletteViewController.width, height: PaletteViewController.height)
@@ -464,6 +480,57 @@ private func paletteShown(with settings: Settings) throws -> PaletteWindowContro
     #expect((edge.layer?.borderWidth ?? 0) > 0)
     #expect((edge.layer?.borderColor?.alpha ?? 0) > 0)
     #expect(edge.hitTest(NSPoint(x: 1, y: 1)) == nil)
+}
+
+/// The palette's results for items titled `titles`.
+@MainActor
+private func ranked(_ titles: [String]) async -> [Palette.Result] {
+    let palette = Palette(sources: [
+        FixedSource(
+            items: titles.map {
+                PaletteItem(id: .folder(path: "/Users/me/\($0)"), title: $0) {}
+            })
+    ])
+    palette.setQuery("")
+    await settle { palette.results.count == titles.count }
+    return palette.results
+}
+
+/// A scroller narrows the column; a title that just fit then wraps, and its row grows to hold it.
+@MainActor @Test func aRowIsMeasuredAgainWhenTheColumnNarrows() async throws {
+    let probe = Fixture(folders: [])
+    let width = try #require(probe.controller.tableView.tableColumns.first).width
+    let narrowed = width - 60
+    let titles = (1...30).map { Array(repeating: "word", count: $0).joined(separator: " ") }
+    let results = await ranked(titles)
+    let fits = results.filter {
+        PaletteCellView.height(of: $0, width: width) == PaletteCellView.rowHeight
+    }
+    // The longest title that fits, which the narrower column can't hold on one line.
+    let title = try #require(fits.map(\.item.title).max { $0.count < $1.count })
+    let longest = try #require(results.first { $0.item.title == title })
+    #expect(PaletteCellView.height(of: longest, width: narrowed) > PaletteCellView.rowHeight)
+
+    let fixture = Fixture(folders: [title])
+    try await fixture.type("")
+    let table = fixture.controller.tableView
+    let row = try fixture.row(titled: title)
+    table.layoutSubtreeIfNeeded()
+    #expect(table.rect(ofRow: row).height == PaletteCellView.rowHeight)
+
+    try #require(table.tableColumns.first).width = narrowed
+    table.layoutSubtreeIfNeeded()
+
+    #expect(table.rect(ofRow: row).height > PaletteCellView.rowHeight)
+}
+
+/// Measuring a row takes its title and widths, not its icon.
+@MainActor @Test func measuringARowDoesNotLookUpItsIcon() async throws {
+    let result = try #require(await ranked(["Downloads"]).first)
+
+    _ = PaletteCellView.height(of: result, width: 600)
+
+    #expect(PaletteCellView.sizer.icon.image == nil)
 }
 
 /// A name too long for one line wraps; its row grows to hold the lines, with room between them

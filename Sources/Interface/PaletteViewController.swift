@@ -28,6 +28,8 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
     /// The query whose results the rows show; nil before the first results.
     public private(set) var shownQuery: String?
     private var results: [Palette.Result] = []
+    /// The column width the rows' heights were last measured at.
+    private var measuredWidth: CGFloat = 0
 
     /// What the field's editor is asked to do for a key with no binding, such as Cmd-T.
     private static let noop = Selector(("noop:"))
@@ -320,7 +322,17 @@ public final class PaletteViewController: NSViewController, NSTextFieldDelegate,
         guard let column = tableView.tableColumns.first else {
             preconditionFailure("the palette's table has no column")
         }
+        measuredWidth = column.width
         return PaletteCellView.height(of: results[row], width: column.width)
+    }
+
+    /// The column narrows when a scroller appears and widens when it goes, which wraps a title
+    /// that fit or frees one that wrapped, so the rows are measured again.
+    public func tableViewColumnDidResize(_ notification: Notification) {
+        guard let column = tableView.tableColumns.first, column.width != measuredWidth else {
+            return
+        }
+        tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<results.count))
     }
 
     public func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
@@ -372,6 +384,9 @@ final class PaletteEdgeView: NSView {
 /// as Spotlight's selected row is.
 @MainActor
 private final class PaletteRowView: NSTableRowView {
+    /// The rows keep their clicks, margins included; the panel's background is what drags.
+    override var mouseDownCanMoveWindow: Bool { false }
+
     override var isEmphasized: Bool {
         get { true }
         set {}
