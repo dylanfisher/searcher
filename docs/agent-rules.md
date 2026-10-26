@@ -8,9 +8,11 @@ AGENTS.md first; these rules add to it.
 1. Start with `git reset --hard m1-base`, or rebase onto it, and confirm the sha you're on.
 2. Write the test first and see it fail, then make it pass. New behavior needs a test that fails
    without the change.
-3. Iterate with `./scripts/test --changed`. Run `SEARCHER_RETEST=1 SEARCHER_GENTLE=1
-   ./scripts/check` once, at the end, after `./scripts/format`, on the tree you commit. Never
-   call `swift build` or `swift test` directly (0092-native-build-system.md).
+3. Iterate with `./scripts/test --changed`. At the end, rebase onto `m1-base`, run
+   `./scripts/format` and `./scripts/arch`, then `./scripts/test --changed m1-base` on the tree
+   you commit. Don't run `./scripts/check`: the orchestrator runs it at merge, and several full
+   test runs at once load the machine until timing tests fail. Never call `swift build` or
+   `swift test` directly (0092-native-build-system.md).
 4. No new dependencies. No file-system I/O on the main thread. No TODOs. Don't edit
    `Sources/Bench/Budget.swift`.
 5. Use only the decision-record number the orchestrator gave you.
@@ -33,9 +35,7 @@ AGENTS.md first; these rules add to it.
 1. Reset your worktree to the builder's sha and confirm it. Write no product code and commit
    nothing.
 2. Run `./scripts/test --changed <base>`, where `<base>` is the commit the step sits on. The
-   builder already ran the full gate on the same tree, and the orchestrator runs it again at
-   merge, so a third full run adds nothing. Run the full gate only when the builder's report
-   shows its test step was skipped.
+   orchestrator runs the full gate at merge. Don't run it.
 3. A test that waits on real time is a finding. Say whether it can fail under load and what would
    make it deterministic; the fix goes in before merge, not after it flakes.
 4. Report PASS or FAIL. For each finding give file:line, the problem, a concrete failure scenario,
@@ -54,3 +54,8 @@ AGENTS.md first; these rules add to it.
    change the design, or ask the user. A third FAIL shelves the step on a `shelved/` branch.
 5. Merge by cherry-picking onto `m1-base`, then run `SEARCHER_GENTLE=1 ./scripts/check`. A flaky
    test that fails a merge gate gets its own hunt for the cause, not a rerun and a shrug.
+6. When two briefs touch the same idea, name in each what the other adds, and tell the later one
+   to reuse it: "PL.1 adds `ColumnTrail.selectedFolderColumn`; build on it". Two builders
+   working blind each define it, and one fails review for it.
+7. Never run a load reproduction (a CPU hog for a flake hunt) while a merge gate runs. Flake hunts
+   and merges take turns.
