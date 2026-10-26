@@ -28,7 +28,9 @@ the load through `ListingService`, the off-main sort and filter ([0025](0025-sor
   type-to-select, the sort keys, Quick Look, Copy Path and the filter act on the focused column
   with no change to their commands. A column's pane sends the commands that move between
   folders to its trail: Open on a folder moves into its column, as → does; Go to parent
-  (Cmd-↑) is ←; Back and Forward, and their enabled state, are the owner's. A column's pane
+  (Cmd-↑) is ← (amended 2026-10-25: except in a first column at the home folder, where it goes
+  up; see [0103](0103-column-trail-from-the-root.md)); Back and Forward, and their enabled
+  state, are the owner's. A column's pane
   never navigates or goes to a folder itself, and traps if asked.
 - **The trail follows selections.** Each change a column's pane reports goes to the trail,
   which keeps the column to its right on the folder selected in it: one selected folder, found
