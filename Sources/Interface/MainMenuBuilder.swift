@@ -224,6 +224,7 @@ public enum MainMenuBuilder {
                 .command(WorkspaceCommands.toggleSidebar.id),
                 .command(WorkspaceCommands.focusSidebar.id),
                 .command(ViewCommands.toggleSidebarFavorites.id),
+                .command(ViewCommands.toggleSidebarLocations.id),
                 .command(ViewCommands.toggleSidebarWorkspaces.id),
                 .separator,
                 .command(ViewCommands.toggleHidden.id),

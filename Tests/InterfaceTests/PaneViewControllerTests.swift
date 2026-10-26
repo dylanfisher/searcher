@@ -393,7 +393,7 @@ private final class VolumeName: @unchecked Sendable {
         location: Location(path: "/root"),
         service: ListingService(lister: StubLister(Fixture.folders)) { "Test Disk" },
         systemActions: StubSystemActions(), settings: settings,
-        favorites: Favorites(settings: settings))
+        favorites: Favorites(settings: settings), volumes: StubSidebarVolumes().list())
     let controller = window.paneViewController
     await settle { controller.pane.state.isLoaded }
     window.window?.contentView?.layoutSubtreeIfNeeded()

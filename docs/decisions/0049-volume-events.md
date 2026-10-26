@@ -2,6 +2,8 @@
 
 - **Date:** 2026-10-22
 - **Status:** accepted
+- **2026-10-25:** The sidebar's volume list reads the mounts again on each event too, and its
+  eject runs will-unmount before it asks the system; see [0108](0108-sidebar-locations.md).
 
 ## Context
 

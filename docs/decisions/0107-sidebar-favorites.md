@@ -2,6 +2,8 @@
 
 - **Date:** 2026-10-25
 - **Status:** accepted
+- **2026-10-25:** The Locations group and its toggle came with
+  [0108](0108-sidebar-locations.md).
 
 ## Context
 

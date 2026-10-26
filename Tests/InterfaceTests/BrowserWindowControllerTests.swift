@@ -20,7 +20,7 @@ private struct Fixture {
             location: Location(path: "/root"),
             service: ListingService(lister: StubLister(Self.folders)) { "Test Disk" },
             systemActions: StubSystemActions(), settings: settings,
-            favorites: Favorites(settings: settings))
+            favorites: Favorites(settings: settings), volumes: StubSidebarVolumes().list())
         window = try #require(controller.window)
         window.contentView?.layoutSubtreeIfNeeded()
         let workspace = controller.workspace
@@ -681,7 +681,7 @@ private func usKey(
             lister: StubLister(["/big": names.map { file($0) }, "/": [folder("big")]])
         ) { "Test Disk" },
         systemActions: StubSystemActions(), settings: settings,
-        favorites: Favorites(settings: settings))
+        favorites: Favorites(settings: settings), volumes: StubSidebarVolumes().list())
     let window = try #require(controller.window)
     window.contentView?.layoutSubtreeIfNeeded()
     let tab = controller.workspace.selectedTab
@@ -947,6 +947,7 @@ private func sidebarKey() throws -> NSEvent {
     let settings = untouchedSettings()
     let controller = BrowserWindowController(
         workspace: workspace, workspaces: list, favorites: Favorites(settings: settings),
+        volumes: StubSidebarVolumes().list(),
         settings: settings)
 
     #expect(controller.showsSidebar)
@@ -2014,4 +2015,13 @@ extension PressFixture {
     #expect(press.fixture.window.firstResponder === controller.keyView)
     #expect(
         controller.listingViewController.tableView.window?.firstResponder === controller.keyView)
+}
+
+@MainActor @Test func aVolumeOpenedFromTheSidebarShowsInTheFocusedPane() async throws {
+    let fixture = try await Fixture()
+
+    fixture.controller.sidebar.openVolume("/root/docs")
+
+    #expect(fixture.tab.focusedPane.location.path == "/root/docs")
+    await settle { fixture.tab.focusedPane.state.isLoaded }
 }

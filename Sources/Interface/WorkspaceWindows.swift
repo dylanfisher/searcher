@@ -108,6 +108,8 @@ public final class WorkspaceWindows {
     /// The sidebar's favorites, shared by every window. The app has them looked for again as it
     /// becomes active.
     public let favorites: Favorites
+    /// The mounted volumes the sidebar's Locations lists, shared by every window.
+    let volumes = SidebarVolumes()
     /// The unfinished operations in the queue's latest snapshots, for a window that opens while
     /// operations run.
     private var unfinished: [FileOperationQueue.Snapshot] = []
@@ -830,7 +832,8 @@ public final class WorkspaceWindows {
             controllers.first { $0.workspace === other }
         }?.window
         let controller = BrowserWindowController(
-            workspace: workspace, workspaces: list, favorites: favorites, settings: settings,
+            workspace: workspace, workspaces: list, favorites: favorites, volumes: volumes,
+            settings: settings,
             fileOperations: fileOperations,
             clipboard: clipboard, mountTable: mountTable, undoHistory: undoHistory,
             openWith: openWith, folderVisits: folderVisits,
