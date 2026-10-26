@@ -19,6 +19,8 @@ final class ColumnScrollView: NSScrollView {
         contentView = clip
         hasHorizontalScroller = false
         horizontalScrollElasticity = .none
+        // Bounces even when its rows fit, as Finder's columns do; the columns' view doesn't.
+        verticalScrollElasticity = .allowed
     }
 
     @available(*, unavailable)
