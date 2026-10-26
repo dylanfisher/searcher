@@ -22,6 +22,9 @@ public final class Settings {
         case appearance
         case palettePlace
         case newWindowSize
+        case favorites
+        case showsFavoritesInSidebar
+        case showsWorkspacesInSidebar
     }
 
     /// Where the palette's panel sits on a screen, as Spotlight remembers where it was dragged
@@ -175,6 +178,37 @@ public final class Settings {
         }
     }
 
+    /// The sidebar's Favorites, top to bottom, every path distinct by
+    /// `Favorite.areDistinct(_:)`; Finder's defaults (`Favorite.defaults(home:)`) until the list
+    /// is first changed. Only `Favorites` changes it (docs/decisions/0107-sidebar-favorites.md).
+    ///
+    /// - Precondition: no path is in it twice.
+    public var favorites: [Favorite] {
+        didSet {
+            precondition(
+                Favorite.areDistinct(favorites.map(\.path)), "a favorite is listed twice")
+            store(favorites.map(\.stored), for: .favorites, changed: favorites != oldValue)
+        }
+    }
+
+    /// Whether the sidebar shows its Favorites group. On by default.
+    public var showsFavoritesInSidebar: Bool {
+        didSet {
+            store(
+                showsFavoritesInSidebar, for: .showsFavoritesInSidebar,
+                changed: showsFavoritesInSidebar != oldValue)
+        }
+    }
+
+    /// Whether the sidebar shows its Workspaces group. On by default.
+    public var showsWorkspacesInSidebar: Bool {
+        didSet {
+            store(
+                showsWorkspacesInSidebar, for: .showsWorkspacesInSidebar,
+                changed: showsWorkspacesInSidebar != oldValue)
+        }
+    }
+
     /// Where the palette's panel opens, on the screen of the window that opens it; nil for its
     /// own place, centered near the top. Dragging the panel sets it. No pane follows it, so a
     /// change notifies no one.
@@ -253,6 +287,9 @@ public final class Settings {
         appearance = Self.appearance(in: defaults) ?? .auto
         palettePlace = Self.palettePlace(in: defaults)
         newWindowSize = Self.windowSize(in: defaults) ?? Self.defaultWindowSize
+        favorites = Self.favorites(in: defaults) ?? Favorite.defaults(home: home)
+        showsFavoritesInSidebar = Self.bool(.showsFavoritesInSidebar, in: defaults) ?? true
+        showsWorkspacesInSidebar = Self.bool(.showsWorkspacesInSidebar, in: defaults) ?? true
     }
 
     /// Runs `handler` after each change of a setting, for as long as `owner` exists.
@@ -335,6 +372,22 @@ public final class Settings {
             isWindowSize(size)
         {
             return size
+        }
+        defaults.removeObject(forKey: key)
+        return nil
+    }
+
+    /// The favorites stored under their key: a list of `Favorite`s in their stored shape, no path
+    /// twice. Nil when there is none, or when it or any item in it has another shape, and the
+    /// whole list is removed: one item's shape can't be trusted apart from the list's.
+    private static func favorites(in defaults: UserDefaults) -> [Favorite]? {
+        let key = Key.favorites.rawValue
+        guard let value = defaults.object(forKey: key) else { return nil }
+        if let list = value as? [Any] {
+            let favorites = list.compactMap(Favorite.init(stored:))
+            if favorites.count == list.count, Favorite.areDistinct(favorites.map(\.path)) {
+                return favorites
+            }
         }
         defaults.removeObject(forKey: key)
         return nil
