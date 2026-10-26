@@ -544,15 +544,19 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     }
 
     /// Shows `controller`'s palette over `window` with the keys in its field. Command `id`'s
-    /// chords and Close Pane's close it; as it closes, the keys go back where they were.
+    /// chords and Close Pane's close it, those a menu could have as key equivalents: the field
+    /// types a plain one, such as "j" or Esc. As it closes, the keys go back where they were.
     private func present(
         _ controller: PaletteWindowController, closedBy id: CommandID, over window: NSWindow
     ) {
-        let registry = focusedTable.registry
-        controller.closingChords = Set(
-            [id, TilingCommands.closePane.id].flatMap {
-                registry.command(for: $0)?.chords ?? []
-            })
+        controller.closingChords = { [weak self] in
+            guard let self else { return [] }
+            let registry = focusedTable.registry
+            return Set(
+                [id, TilingCommands.closePane.id].flatMap {
+                    registry.command(for: $0).map(MainMenuBuilder.menuChords) ?? []
+                })
+        }
         // Where the keys were, to give them back there: a field's editor stands in for the field.
         var keys = window.firstResponder
         if let editor = keys as? NSTextView, editor.isFieldEditor,

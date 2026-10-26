@@ -139,8 +139,9 @@ public final class PaneViewController: NSViewController {
         (shortcuts: [CommandID: ShortcutOverride], commanderFKeys: Bool, registry: CommandRegistry)?
 
     /// The app's commands with the chords `settings` gives them: the Commander F-key preset
-    /// while it is on and the user's shortcuts (`AppCommands.keyBindings(settings:reserved:)`),
-    /// with `MainMenuBuilder.reservedChords` kept for the menus. Made again only when those
+    /// while it is on and the user's shortcuts (`AppCommands.keyBindings(settings:reserved:fixed:)`),
+    /// with `MainMenuBuilder.reservedChords` kept for the menus and the Edit items' chords
+    /// (`MainMenuBuilder.fixedChords`) kept for their commands. Made again only when those
     /// settings change, never per key; the menus use the same one.
     public static func registry(for settings: Settings) -> CommandRegistry {
         if let made = madeRegistry, made.shortcuts == settings.shortcuts,
@@ -151,7 +152,8 @@ public final class PaneViewController: NSViewController {
         let bindings: KeyBindings
         do {
             bindings = try AppCommands.keyBindings(
-                settings: settings, reserved: MainMenuBuilder.reservedChords)
+                settings: settings, reserved: MainMenuBuilder.reservedChords,
+                fixed: MainMenuBuilder.fixedChords)
         } catch {
             preconditionFailure("the app's commands clash: \(error)")
         }

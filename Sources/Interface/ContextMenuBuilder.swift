@@ -99,7 +99,7 @@ enum ContextMenuBuilder {
                     keyEquivalent: "")
                 menuItem.representedObject = id
                 menuItem.target = target
-                if let chord = command.chords.first, chord.canBeKeyEquivalent {
+                if let chord = MainMenuBuilder.menuChords(of: command).first {
                     MainMenuBuilder.set(chord, on: menuItem)
                 }
                 if let symbol = symbols[id] {

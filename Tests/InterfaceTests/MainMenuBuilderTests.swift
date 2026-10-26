@@ -855,13 +855,18 @@ private func usKey(
 
 // MARK: Primary and alternate chords
 
+/// The bindings the app makes from `overrides`.
+@MainActor
+private func bindings(_ overrides: [CommandID: ShortcutOverride]) throws -> KeyBindings {
+    try KeyBindings(
+        commands: AppCommands.commands, overrides: overrides,
+        reserved: MainMenuBuilder.reservedChords, fixed: MainMenuBuilder.fixedChords)
+}
+
 /// The registry the app makes from `overrides`.
 @MainActor
 private func registry(_ overrides: [CommandID: ShortcutOverride]) throws -> CommandRegistry {
-    try KeyBindings(
-        commands: AppCommands.commands, overrides: overrides,
-        reserved: MainMenuBuilder.reservedChords
-    ).registry
+    try bindings(overrides).registry
 }
 
 /// The visible item and the hidden one that run command `id`.
@@ -966,20 +971,31 @@ private func expectKey(_ chord: KeyChord?, on item: NSMenuItem, _ comment: Comme
     #expect(copies[1].allowsKeyEquivalentWhenHidden)
 }
 
-/// Edit ▸ Copy runs Copy by its ID on its fixed Cmd-C: after Copy's Cmd-C is removed or moved,
-/// and after another command is given Cmd-C, whose item then shows no Cmd-C of its own.
-@MainActor @Test func editCopyRunsCopyWhateverChordsTheUserGaveIt() throws {
+/// Edit ▸ Copy runs Copy by its ID on its fixed Cmd-C. Stored data that removes or moves Copy's
+/// Cmd-C, or gives Cmd-C to another command, is dropped, so Cmd-C has one meaning in the menus
+/// and in the table's keys.
+@MainActor @Test func cmdCStaysCopysWhateverTheStoredShortcutsSay() throws {
     let cmdC = KeyChord("c", modifiers: .command)
-    let cases: [[CommandID: ShortcutOverride]] = [
-        [ClipboardCommands.copy.id: ShortcutOverride(primary: .removed)],
-        [
-            ClipboardCommands.copy.id: ShortcutOverride(
-                primary: .chord(KeyChord("y", modifiers: .command)))
-        ],
-        [WindowCommands.goToItem.id: ShortcutOverride(primary: .chord(cmdC))],
+    let cmdY = KeyChord("y", modifiers: .command)
+    // Each case's overrides, and the command and reason of each chord they lose.
+    let cases: [([CommandID: ShortcutOverride], [CommandID], [KeyBindings.Dropped.Reason])] = [
+        ([ClipboardCommands.copy.id: ShortcutOverride(primary: .removed)], [], []),
+        (
+            [ClipboardCommands.copy.id: ShortcutOverride(primary: .chord(cmdY))],
+            [ClipboardCommands.copy.id], [.fixed]
+        ),
+        (
+            [WindowCommands.goToItem.id: ShortcutOverride(primary: .chord(cmdC))],
+            [WindowCommands.goToItem.id], [.reserved]
+        ),
     ]
-    for overrides in cases {
-        let registry = try registry(overrides)
+    for (overrides, losers, reasons) in cases {
+        let bindings = try bindings(overrides)
+        #expect(bindings.dropped.map(\.command) == losers, "\(overrides)")
+        #expect(bindings.dropped.map(\.reason) == reasons, "\(overrides)")
+        let registry = bindings.registry
+        #expect(registry.command(for: cmdC)?.id == ClipboardCommands.copy.id, "\(overrides)")
+        #expect(registry.command(for: cmdY) == nil, "\(overrides)")
         let menu = try buildMenu(registry)
         let edit = try #require(menu.items.first { $0.title == "Edit" }?.submenu)
         let copy = try #require(
@@ -998,8 +1014,12 @@ private func expectKey(_ chord: KeyChord?, on item: NSMenuItem, _ comment: Comme
         #expect(onCmdC == [copy], "\(overrides)")
         #expect(table.validateMenuItem(copy), "\(overrides)")
         table.copy(copy)
+        // With Copy's item off, the key falls to the table, which runs Copy too, not another
+        // command.
+        table.canRunCommand = { _ in false }
+        table.keyDown(with: try keyEvent("c", modifiers: .command))
 
-        #expect(log.ids == [ClipboardCommands.copy.id], "\(overrides)")
+        #expect(log.ids == [ClipboardCommands.copy.id, ClipboardCommands.copy.id], "\(overrides)")
     }
 }
 
