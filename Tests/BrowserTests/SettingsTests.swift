@@ -41,6 +41,9 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(settings.hideDSStore)
     #expect(settings.columnsStartAtHome)
     #expect(settings.home == NSHomeDirectory())
+    #expect(settings.favorites == Favorite.defaults(home: NSHomeDirectory()))
+    #expect(settings.showsFavoritesInSidebar)
+    #expect(settings.showsWorkspacesInSidebar)
 }
 
 @MainActor @Test func aWrongTypedValueIsDiscardedNotCoerced() throws {
@@ -53,6 +56,8 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     defaults.set(7, forKey: Settings.Key.terminalBundleID.rawValue)
     defaults.set(0, forKey: Settings.Key.hideDSStore.rawValue)
     defaults.set("NO", forKey: Settings.Key.columnsStartAtHome.rawValue)
+    defaults.set(0, forKey: Settings.Key.showsFavoritesInSidebar.rawValue)
+    defaults.set("NO", forKey: Settings.Key.showsWorkspacesInSidebar.rawValue)
 
     let settings = Settings(defaults: defaults)
 
@@ -68,6 +73,45 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(defaults.object(forKey: Settings.Key.hideDSStore.rawValue) == nil)
     #expect(settings.columnsStartAtHome)
     #expect(defaults.object(forKey: Settings.Key.columnsStartAtHome.rawValue) == nil)
+    #expect(settings.showsFavoritesInSidebar)
+    #expect(defaults.object(forKey: Settings.Key.showsFavoritesInSidebar.rawValue) == nil)
+    #expect(settings.showsWorkspacesInSidebar)
+    #expect(defaults.object(forKey: Settings.Key.showsWorkspacesInSidebar.rawValue) == nil)
+}
+
+/// A favorites list of any other shape, or with any one item of another shape or a path twice,
+/// is removed whole and reads as the defaults.
+@MainActor @Test func favoritesOfAnotherShapeAreDiscardedWhole() throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let key = Settings.Key.favorites.rawValue
+    let good: [String: Any] = ["path": "/a", "bookmark": Data([1])]
+    let malformed: [Any] = [
+        "/a", 1, ["path": "/a"], [good, "/b"], [good, ["path": "b"]],
+        [good, ["path": "/b", "bookmark": "x"]], [good, ["path": "/b", "name": "b"]],
+        [good, ["path": "/A"]], [["bookmark": Data([1])]],
+    ]
+    for stored in malformed {
+        let defaults = temporarySuite(in: folder.url.path)
+        defaults.set(stored, forKey: key)
+
+        let settings = Settings(defaults: defaults, home: "/Users/u")
+
+        #expect(settings.favorites == Favorite.defaults(home: "/Users/u"), "\(stored)")
+        #expect(defaults.object(forKey: key) == nil, "\(stored)")
+    }
+}
+
+@MainActor @Test func favoritesSurviveARelaunchWithAndWithoutBookmarks() throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let name = folder.url.appending(path: "preferences").path
+    let favorites = [
+        Favorite(path: "/b", bookmark: Data([1, 2])), Favorite(path: "/a"),
+    ]
+    Settings(defaults: try #require(UserDefaults(suiteName: name))).favorites = favorites
+
+    let relaunched = Settings(defaults: try #require(UserDefaults(suiteName: name)))
+
+    #expect(relaunched.favorites == favorites)
 }
 
 /// An appearance that isn't one of the names `Settings.Appearance` has, or isn't a string,
@@ -101,6 +145,8 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     first.appearance = .dark
     first.hideDSStore = false
     first.columnsStartAtHome = false
+    first.showsFavoritesInSidebar = false
+    first.showsWorkspacesInSidebar = false
 
     let relaunched = Settings(defaults: try #require(UserDefaults(suiteName: name)))
     #expect(relaunched.showHidden)
@@ -113,6 +159,8 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(relaunched.appearance == .dark)
     #expect(!relaunched.hideDSStore)
     #expect(!relaunched.columnsStartAtHome)
+    #expect(!relaunched.showsFavoritesInSidebar)
+    #expect(!relaunched.showsWorkspacesInSidebar)
 }
 
 @MainActor @Test func eachAppearanceSurvivesARelaunch() throws {
