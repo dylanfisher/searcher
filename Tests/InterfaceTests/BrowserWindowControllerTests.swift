@@ -19,7 +19,8 @@ private struct Fixture {
         controller = BrowserWindowController(
             location: Location(path: "/root"),
             service: ListingService(lister: StubLister(Self.folders)) { "Test Disk" },
-            systemActions: StubSystemActions(), settings: settings)
+            systemActions: StubSystemActions(), settings: settings,
+            favorites: Favorites(settings: settings))
         window = try #require(controller.window)
         window.contentView?.layoutSubtreeIfNeeded()
         let workspace = controller.workspace
@@ -673,12 +674,14 @@ private func usKey(
 
 @MainActor @Test func splitOpensOnTheSameSelectionAndScrollPosition() async throws {
     let names = (0..<300).map { "file\(1000 + $0).txt" }
+    let settings = untouchedSettings()
     let controller = BrowserWindowController(
         location: Location(path: "/big"),
         service: ListingService(
             lister: StubLister(["/big": names.map { file($0) }, "/": [folder("big")]])
         ) { "Test Disk" },
-        systemActions: StubSystemActions(), settings: untouchedSettings())
+        systemActions: StubSystemActions(), settings: settings,
+        favorites: Favorites(settings: settings))
     let window = try #require(controller.window)
     window.contentView?.layoutSubtreeIfNeeded()
     let tab = controller.workspace.selectedTab

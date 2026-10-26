@@ -174,7 +174,7 @@ final class UIBench {
         let controller = BrowserWindowController(
             location: Location(path: root.folder.path), service: service,
             systemActions: systemActions, settings: settings,
-            fileOperations: fileOperations)
+            favorites: Favorites(settings: settings), fileOperations: fileOperations)
         self.controller = controller
         controller.paneViewController.onShow = { [weak self] in self?.paneShown() }
         let window = try requireWindow()

@@ -388,10 +388,12 @@ private final class VolumeName: @unchecked Sendable {
 }
 
 @MainActor @Test func inAWindowTheListEndsWhereThePathBarStarts() async throws {
+    let settings = untouchedSettings()
     let window = BrowserWindowController(
         location: Location(path: "/root"),
         service: ListingService(lister: StubLister(Fixture.folders)) { "Test Disk" },
-        systemActions: StubSystemActions(), settings: untouchedSettings())
+        systemActions: StubSystemActions(), settings: settings,
+        favorites: Favorites(settings: settings))
     let controller = window.paneViewController
     await settle { controller.pane.state.isLoaded }
     window.window?.contentView?.layoutSubtreeIfNeeded()
