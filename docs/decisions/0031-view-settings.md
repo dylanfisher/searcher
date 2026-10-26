@@ -47,7 +47,21 @@ thread apply as they do to a sort change ([0025](0025-sort-off-main.md),
 - **Sort keys.** Ctrl-Opt-Cmd-1, 2, 5 and 6 sort the focused pane by Name, Kind, Date
   Modified and Size. A column starts in the direction a header click does (`SortColumn`
   `firstAscending`: Size and Date Modified largest and newest first), and the key of the column
-  already sorted by reverses it.
+  already sorted by reverses it. (Amended 2026-10-26, Dylan: "change sort shortcuts to use
+  ctrl+option 1/2/3/4. add additional shortcut cmd+option+p to toggle sort by the next column
+  (if sorted by name, then it goes to size, then date, then kind, etc). also add a
+  cmd+option+shift+p shortcut to toggle the sort direction for the current column". The keys
+  are Ctrl-Opt-1, 2, 3 and 4 for Name, Size, Date Modified and Kind, the order of the
+  `SortColumn` cases and of the list's headers, and the View menu lists them in that order.
+  The key of the column already sorted by still reverses it, as a click on the sorted header
+  does. Sort by Next Column, Opt-Cmd-P, moves to `SortColumn.next`, Name after Kind, starting
+  in the column's `firstAscending` direction; Reverse Sort Direction, Shift-Opt-Cmd-P, reverses
+  the column sorted by. Both go through `Pane.setSort`, as the keys do, so they sort the
+  focused column in column view and sort off the main thread
+  ([0025](0025-sort-off-main.md)). Finder's Opt-Cmd-P shows its path bar; no command here had
+  it. As defaults they can be changed in Settings
+  ([0106](0106-primary-and-alternate-shortcuts.md)); a stored shortcut that names one of the
+  new chords keeps it, and the default loses it.)
 - **Cmd-Shift-.** AppKit applies Shift to punctuation, and where "." sits depends on the
   layout. On a US keyboard the period key with Shift types ">"; on a French AZERTY one, "." is
   Shift on the ";" key. A shifted punctuation key therefore has two candidate chords

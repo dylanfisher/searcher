@@ -304,9 +304,9 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
             "Focus Sidebar", "Show Favorites in Sidebar", "Show Locations in Sidebar",
             "Show Workspaces in Sidebar", "",
             "Show Hidden Files",
-            "Always Hide .DS_Store", "Folders First", "", "Sort by Name",
-            "Sort by Kind",
-            "Sort by Date Modified", "Sort by Size", "", "Calculate All Sizes", "Calculate Sizes",
+            "Always Hide .DS_Store", "Folders First", "", "Sort by Name", "Sort by Size",
+            "Sort by Date Modified", "Sort by Kind", "Sort by Next Column",
+            "Reverse Sort Direction", "", "Calculate All Sizes", "Calculate Sizes",
             "", "Appearance",
         ])
     let appearance = try #require(view.items.last?.submenu)
@@ -325,7 +325,9 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
                 with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0,
                 windowNumber: 0, context: nil, characters: ">", charactersIgnoringModifiers: ">",
                 isARepeat: false, keyCode: 47)),
-        try keyEvent("6", modifiers: [.control, .option, .command]),
+        try keyEvent("2", characters: "™", modifiers: [.control, .option]),
+        try keyEvent("p", characters: "π", modifiers: [.option, .command]),
+        try keyEvent("P", characters: "∏", modifiers: [.option, .command, .shift]),
         try keyEvent("s", modifiers: [.option, .command]),
         try keyEvent("s", modifiers: [.control, .command]),
     ]
@@ -337,6 +339,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(
         log.ids == [
             ViewCommands.toggleHidden.id, ViewCommands.sortBySize.id,
+            ViewCommands.sortByNextColumn.id, ViewCommands.reverseSortDirection.id,
             SizeCommands.calculateSizes.id, WorkspaceCommands.toggleSidebar.id,
         ])
 }
