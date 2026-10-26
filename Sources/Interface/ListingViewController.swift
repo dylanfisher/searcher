@@ -271,8 +271,15 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// views the table has. `reloadData` drops them and lays out a new screen of rows: on W2 in a
     /// release build that made the pass that lands a patch take about 23 ms, most of it in the
     /// next layout and drawing.
+    ///
+    /// Fewer rows leave row views past the new last row, which the table fades out over the
+    /// current animation duration. Finder removes a row at once, so the count changes in a group
+    /// of no duration and they go in the same pass.
     private func refreshRows() {
-        tableView.noteNumberOfRowsChanged()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            tableView.noteNumberOfRowsChanged()
+        }
         guard let listing else { return }
         tableView.enumerateAvailableRowViews { rowView, row in
             guard row < listing.count else { return }

@@ -69,7 +69,13 @@ name about 32 ms, and a click selecting half the rows 32–51 ms.
   and lays out and draws a new screen of rows. In a release build on 100k rows, the main
   thread's pass that lands a patch went from about 23 ms to 1.5 ms. A new folder still reloads.
   This replaces the one `reloadData` per listing that [0006](0006-concurrency-shape.md) describes
-  for a folder already on screen.
+  for a folder already on screen. (Amended 2026-10-26, Dylan: "when deleting an item, use
+  finder style delete (ours does a fade out, i want it to look/feel like normal finder)". When
+  the count drops, `NSTableView` fades out the row views past the new last row over the
+  current `NSAnimationContext` duration. The count now changes in a group of zero duration, so
+  those row views go in the same pass, as Finder removes a row: for a trash, a move out,
+  another app's change and a filter that hides rows. The selection a trash moves to the next
+  row is set in that pass too.)
 - **Moves.** A plain move puts the cursor on the target row and selects it alone, collapsing a
   multi-row selection. An extending move keeps the anchor and changes the range from the anchor to
   the cursor, as `NSTableView` and Finder do. Rows the old range covered and the new one doesn't
