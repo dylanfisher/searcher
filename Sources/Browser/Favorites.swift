@@ -25,7 +25,7 @@ public final class Favorites {
     /// What each favorite was last found to be, by path; a path not in it is `.unknown`.
     private var states: [String: Favorite.State] = [:]
     /// The paths `refresh` is looking for now, so a second refresh doesn't look again meanwhile.
-    private var resolving: Set<String> = []
+    private(set) var resolving: Set<String> = []
     /// Counts the opens, so only the latest one acts once its item is found.
     private var openRequest = 0
     private var observers: [Observer] = []
