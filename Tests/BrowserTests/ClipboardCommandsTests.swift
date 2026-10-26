@@ -80,6 +80,22 @@ private final class Window {
         pane.select(
             Selection(Set(names.map(ExactName.init)), cursor: names.last.map(ExactName.init)))
     }
+
+    /// Switches the window's pane to column mode, selects the folder `name` in its focused
+    /// column, as a click does, and returns the pane of the column that opens for it, listed.
+    func showColumns(selectingFolder name: String) async throws -> Pane {
+        let owner = workspace.selectedTab.focusedPane
+        owner.setViewMode(.column)
+        let trail = try #require(owner.columnTrail)
+        await settle { trail.focused.pane.state.isLoaded }
+        select(name)
+        await settle {
+            trail.columns.count == trail.focusedIndex + 2
+                && trail.columns.last?.pane.location.name == name
+                && trail.columns.last?.pane.state.isLoaded == true
+        }
+        return try #require(trail.columns.last?.pane)
+    }
 }
 
 /// Watches `pane`'s folder and applies what changes there to the pane, as the window does.
@@ -385,6 +401,145 @@ private func names(in folder: String) throws -> Set<String> {
     await settle { selectedNames(to.pane) == ["a.txt", "b.txt"] }
     try await Task.sleep(for: settleTime)
     #expect(to.nameEdits == 0)
+}
+
+// MARK: Column view
+
+/// In column view, with a folder selected in the focused column and its column shown, Paste puts
+/// the files in that folder, as Finder's does, and selects them there, the keys moving into its
+/// column.
+@MainActor @Test func pasteInColumnViewPutsTheFilesInTheSelectedFolder() async throws {
+    let source = try TemporaryFolder("ClipboardCommandsTests")
+    let destination = try TemporaryFolder("ClipboardCommandsTests")
+    try write("a.txt", in: source.url.path)
+    try write("z.txt", in: destination.url.path)
+    try FileManager.default.createDirectory(
+        atPath: destination.url.path + "/_test", withIntermediateDirectories: false)
+    let from = await Window(at: source.url.path)
+    let to = await Window(at: destination.url.path, clipboard: from.clipboard)
+    let inner = try await to.showColumns(selectingFolder: "_test")
+    let monitor = try await watch(inner)
+    defer { monitor.stop() }
+    from.select("a.txt")
+
+    try from.press(copy)
+    try to.press(paste)
+
+    await settle { selectedNames(inner) == ["a.txt"] }
+    #expect(exists(destination.url.path + "/_test/a.txt"))
+    #expect(!exists(destination.url.path + "/a.txt"))
+    #expect(to.pane === inner)
+}
+
+@MainActor @Test func moveHereInColumnViewMovesTheFilesIntoTheSelectedFolder() async throws {
+    let source = try TemporaryFolder("ClipboardCommandsTests")
+    let destination = try TemporaryFolder("ClipboardCommandsTests")
+    try write("a.txt", in: source.url.path)
+    try FileManager.default.createDirectory(
+        atPath: destination.url.path + "/_test", withIntermediateDirectories: false)
+    let from = await Window(at: source.url.path)
+    let to = await Window(at: destination.url.path, clipboard: from.clipboard)
+    let inner = try await to.showColumns(selectingFolder: "_test")
+    let monitor = try await watch(inner)
+    defer { monitor.stop() }
+    from.select("a.txt")
+
+    try from.press(copy)
+    try to.press(moveHere)
+
+    await settle { selectedNames(inner) == ["a.txt"] }
+    #expect(exists(destination.url.path + "/_test/a.txt"))
+    #expect(!exists(source.url.path + "/a.txt"))
+    #expect(to.pane === inner)
+}
+
+/// A folder the keys just selected opens its column only once they pause; a paste before then
+/// still goes into it, opening its column at once.
+@MainActor @Test func pasteRightAfterKeysSelectAFolderPutsTheFilesInIt() async throws {
+    let source = try TemporaryFolder("ClipboardCommandsTests")
+    let destination = try TemporaryFolder("ClipboardCommandsTests")
+    try write("a.txt", in: source.url.path)
+    try write("z.txt", in: destination.url.path)
+    try FileManager.default.createDirectory(
+        atPath: destination.url.path + "/_test", withIntermediateDirectories: false)
+    let from = await Window(at: source.url.path)
+    let to = await Window(at: destination.url.path, clipboard: from.clipboard)
+    _ = try await to.showColumns(selectingFolder: "_test")
+    let trail = try #require(to.workspace.selectedTab.focusedPane.columnTrail)
+    let focused = to.pane
+    let listing = try #require(focused.state.listing)
+    let folderRow = try #require(listing.row(named: "_test"))
+    let fileRow = try #require(listing.row(named: "z.txt"))
+    to.select("z.txt")
+    await settle { trail.columns.count == trail.focusedIndex + 1 }
+    from.select("a.txt")
+    try from.press(copy)
+
+    focused.moveSelection(by: folderRow - fileRow)
+    #expect(focused.selection.cursor == ExactName("_test"))
+    #expect(trail.columns.count == trail.focusedIndex + 1)
+    try to.press(paste)
+
+    await settle { exists(destination.url.path + "/_test/a.txt") }
+    #expect(!exists(destination.url.path + "/a.txt"))
+    #expect(trail.columns.last?.pane.location.name == "_test")
+}
+
+/// With a file selected, or several rows, Paste puts the files in the focused column's folder.
+@MainActor @Test func pasteInColumnViewWithAFileOrSeveralRowsSelectedUsesTheFocusedFolder()
+    async throws
+{
+    let source = try TemporaryFolder("ClipboardCommandsTests")
+    let destination = try TemporaryFolder("ClipboardCommandsTests")
+    try write("a.txt", "b.txt", in: source.url.path)
+    try write("z.txt", in: destination.url.path)
+    try FileManager.default.createDirectory(
+        atPath: destination.url.path + "/_test", withIntermediateDirectories: false)
+    let from = await Window(at: source.url.path)
+    let to = await Window(at: destination.url.path, clipboard: from.clipboard)
+    _ = try await to.showColumns(selectingFolder: "_test")
+    let focused = to.pane
+    from.select("a.txt")
+    try from.press(copy)
+
+    to.select("z.txt")
+    try to.press(paste)
+    await settle { exists(destination.url.path + "/a.txt") }
+    from.select("b.txt")
+    try from.press(copy)
+    to.select("_test", "z.txt")
+    try to.press(paste)
+    await settle { exists(destination.url.path + "/b.txt") }
+
+    #expect(try names(in: destination.url.path + "/_test").isEmpty)
+    #expect(to.pane === focused)
+}
+
+/// The folder is read when Paste runs: selecting a file while the copy runs closes the folder's
+/// column, which drops the names waiting there, so nothing is selected and the keys stay.
+@MainActor @Test func aSelectionMadeWhileAPasteRunsDoesntMoveItsFolder() async throws {
+    let source = try TemporaryFolder("ClipboardCommandsTests")
+    let destination = try TemporaryFolder("ClipboardCommandsTests")
+    try write("a.txt", in: source.url.path)
+    try write("z.txt", in: destination.url.path)
+    try FileManager.default.createDirectory(
+        atPath: destination.url.path + "/_test", withIntermediateDirectories: false)
+    let from = await Window(at: source.url.path)
+    let to = await Window(at: destination.url.path, clipboard: from.clipboard)
+    _ = try await to.showColumns(selectingFolder: "_test")
+    let trail = try #require(to.workspace.selectedTab.focusedPane.columnTrail)
+    let focused = to.pane
+    from.select("a.txt")
+    try from.press(copy)
+
+    try to.press(paste)
+    to.select("z.txt")
+
+    await settle { exists(destination.url.path + "/_test/a.txt") }
+    #expect(!exists(destination.url.path + "/a.txt"))
+    #expect(!trail.columns.contains { $0.pane.location.name == "_test" })
+    #expect(to.pane === focused)
+    #expect(selectedNames(focused) == ["z.txt"])
 }
 
 // MARK: Enabled

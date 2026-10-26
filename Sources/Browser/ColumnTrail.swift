@@ -463,6 +463,26 @@ public final class ColumnTrail {
         moveRight(selectingFirstRow: false, recordsStep: stepsToColumn(at: index))
     }
 
+    /// The column of the folder selected alone in `pane`'s column, where Paste, Move Items Here
+    /// and New Folder put what they make, as Finder's column view does
+    /// (0111-column-view-target-folder.md). A selection waiting for the keys to pause opens its
+    /// column at once, as a command opens it. Nil when `pane` isn't one of this trail's columns
+    /// or its selection opens no column: several rows, none, a file, a link or a package.
+    func selectedFolderColumn(of pane: Pane) -> Column? {
+        guard let index = index(of: pane) else { return nil }
+        if columns[index].held != nil {
+            follow(columns[index])
+            updatePreview()
+            owner.trailDidChange()
+        }
+        let entries = pane.selectedEntries
+        guard index + 1 < columns.count, entries.count == 1, let entry = entries.first,
+            entry.type == .directory
+        else { return nil }
+        let next = columns[index + 1]
+        return next.pane.location == pane.location.child(named: entry.name) ? next : nil
+    }
+
     /// Moves the keys to the column at `index` for a command that goes on into the column right
     /// of it, so the two moves are one step: the one from the column that has the keys, recorded
     /// here. Returns whether the move right still has to record its own, which is when the

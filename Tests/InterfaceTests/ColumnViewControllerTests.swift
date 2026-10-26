@@ -121,6 +121,22 @@ private struct Fixture {
     #expect(fixture.tables[0] === first)
 }
 
+/// The folder menu acts on the column's folder, so a right-click below a column's rows clears
+/// the folder selected there, which New Folder and Paste would otherwise act in, and its column
+/// closes. A right-click on a row keeps the rows menu.
+@MainActor @Test func aRightClickBelowAColumnsRowsClearsItsSelection() async throws {
+    let fixture = await Fixture()
+    await fixture.select("docs", inColumn: 0)
+    let first = fixture.controller.columnControllers[0]
+    first.tableView.registry = try AppCommands.registry()
+
+    let menu = first.contextMenu(forRow: -1)
+
+    #expect(menu.items.contains { $0.representedObject as? CommandID == FileCommands.newFolder.id })
+    #expect(fixture.trail.columns[0].pane.selection.isEmpty)
+    #expect(fixture.tables.count == 1)
+}
+
 @MainActor @Test func theColumnsBounceSidewaysEvenWhenTheyFit() async throws {
     let fixture = await Fixture(width: Settings.defaultColumnWidth * 4)
     await fixture.openThreeColumns()
