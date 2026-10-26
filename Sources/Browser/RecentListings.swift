@@ -1,12 +1,13 @@
 import Base
 import Foundation
 
-/// The listings panes last showed of folders on local volumes, in memory only, so a pane or
+/// The listings panes last showed of folders, local or on a share, in memory only, so a pane or
 /// column that comes back to one shows its rows in the same main-actor turn that moves it, as
 /// cached rows, while the folder is listed again. Holds at most `folderCap` folders and
 /// `entryCap` entries; past either, the least recently used folders go. A folder with more than
-/// `entryCap` entries isn't kept. A volume mounting or unmounting drops the folders at or under
-/// its mount point (`VolumeEvents`), since another volume there holds other folders. See docs/decisions/0109-recent-local-listings.md.
+/// `entryCap` entries isn't kept. A volume about to unmount or eject, mounting or unmounting
+/// drops the folders at or under its mount point (`VolumeEvents`), since another volume there
+/// holds other folders. See docs/decisions/0109-recent-local-listings.md.
 @MainActor
 public final class RecentListings {
     /// A kept listing and when it was listed.

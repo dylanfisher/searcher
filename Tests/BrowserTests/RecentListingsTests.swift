@@ -263,13 +263,47 @@ private func sharePane(at path: String, recent: RecentListings, mounts: ShareMou
         systemActions: StubSystemActions(), settings: untouchedSettings())
 }
 
-@MainActor @Test func aFolderOnANetworkVolumeIsNotKept() async {
+@MainActor @Test func aRevisitedShareFolderShowsItsRowsInTheMovesTurn() async {
     let recent = RecentListings()
-    let pane = sharePane(at: "/net/share/music", recent: recent, mounts: ShareMounts())
-
+    let pane = Pane(
+        location: Location(path: "/net/share/music"),
+        service: ListingService(
+            lister: StubLister([
+                "/net/share/music": [folder("live"), file("a")], "/net/share/music/live": [],
+            ]),
+            volumeOf: { path throws(ListingError) in try ShareMounts().volume(of: path) },
+            recentListings: recent),
+        systemActions: StubSystemActions(), settings: untouchedSettings())
+    await settle { pane.state.isLoaded }
+    pane.navigate(to: Location(path: "/net/share/music/live"))
     await settle { pane.state.isLoaded }
 
-    #expect(recent.count == 0)
+    pane.goBack()
+
+    // The service has no `ListingCache`: the rows can only come from the kept listing.
+    #expect(pane.state.isCachedRefreshing)
+    #expect(pane.state.names == ["a", "live"])
+    await settle { pane.state.isLoaded }
+}
+
+@MainActor @Test func ejectingOrUnmountingAShareDropsItsFolders() async {
+    let mountPoint = "/Volumes/RecentListingsTestsShare"
+    let one = await listing(["a"])
+    let leaves: [@MainActor (String) -> Void] = [
+        { VolumeEvents.willEject(at: $0) }, { VolumeEvents.willUnmount(at: $0) },
+    ]
+    for leave in leaves {
+        let recent = RecentListings()
+        for path in [mountPoint, mountPoint + "/sub", "/elsewhere"] {
+            recent.keep(one, listedAt: testDate, at: path)
+        }
+
+        leave(mountPoint)
+
+        #expect(recent.listing(at: mountPoint) == nil)
+        #expect(recent.listing(at: mountPoint + "/sub") == nil)
+        #expect(recent.listing(at: "/elsewhere") != nil)
+    }
 }
 
 @MainActor @Test func aLoadThatFindsItsVolumeGoneDropsTheFolder() async {

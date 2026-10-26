@@ -47,11 +47,13 @@ public enum VolumeEvents {
     /// The volume at `mountPoint` is about to unmount: running loads on it stop, since a folder
     /// a load has open can keep the volume from unmounting. So do folder size walks on it, those
     /// of panes above it too, such as a pane at `/Volumes` walking a share mounted there, and
-    /// file operations that read or write on it, which fail.
+    /// file operations that read or write on it, which fail. Recent listings of its folders are
+    /// dropped, so a pane that opens one before the unmount lands doesn't show its rows.
     public static func willUnmount(at mountPoint: String) {
         for pane in panes(on: mountPoint) {
             pane.volumeWillUnmount()
         }
+        dropRecentListings(under: mountPoint)
         for queue in queues.all {
             Task { await queue.volumeWillUnmount(at: mountPoint) }
         }
@@ -62,11 +64,13 @@ public enum VolumeEvents {
     /// stop their loads and monitors, and size walks on it stop, so the app holds none of its
     /// folders open. File operations go on: one that has files open makes the system refuse the
     /// eject as busy, as Finder refuses to eject a disk in use
-    /// (docs/decisions/0108-sidebar-locations.md).
+    /// (docs/decisions/0108-sidebar-locations.md). Recent listings of its folders are dropped,
+    /// as at will-unmount.
     static func willEject(at mountPoint: String) {
         for pane in panes(on: mountPoint) {
             pane.volumeWillEject()
         }
+        dropRecentListings(under: mountPoint)
         cancelSizeWalks(under: mountPoint)
     }
 

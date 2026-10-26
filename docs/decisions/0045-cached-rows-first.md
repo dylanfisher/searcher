@@ -60,7 +60,8 @@ link opens were written for loads that either answer or fail. Columns are panes
   cached rows for the path, if none came yet; otherwise `failed` as before.
 - **Local folders.** A revisited local folder shows the rows a pane last showed of it, from
   memory, before its load starts, in the `cachedRefreshing` state
-  ([0109](0109-recent-local-listings.md)).
+  ([0109](0109-recent-local-listings.md)). (Amended 2026-10-26: a revisited share folder does
+  too, so the cached update that follows is ignored, since the pane has rows.)
 - **Columns.** A column keeps the columns to its right while the cursor's entry is missing from
   rows that aren't a complete listing: a first batch or cached rows, slow, offline or not.
 - **Go to folder and link opens move on fresh rows only.** Cached rows don't say whether the
