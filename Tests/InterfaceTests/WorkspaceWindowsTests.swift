@@ -736,8 +736,20 @@ private func stopEverything(_ windows: WorkspaceWindows) async {
     #expect(fixture.settings.newWindowSize == CGSize(width: 800, height: 450))
 }
 
+@MainActor @Test func aLiveResizeToAnEmptyContentAreaLeavesTheSizeAlone() async throws {
+    let fixture = try await Fixture()
+    let first = try #require(fixture.windows.controllers.first)
+    let window = try #require(first.window)
+    window.setContentSize(NSSize(width: 800, height: 0))
+
+    first.windowDidEndLiveResize(Notification(name: NSWindow.didEndLiveResizeNotification))
+
+    #expect(fixture.settings.newWindowSize == Settings.defaultWindowSize)
+}
+
 @MainActor @Test func aNewWindowOpensAtTheSizeSetByHand() async throws {
     let fixture = try await Fixture()
+    fixture.windows.screens = { [CGRect(x: 0, y: 0, width: 5000, height: 3000)] }
     let first = try #require(fixture.windows.controllers.first)
     try #require(first.window).setContentSize(NSSize(width: 820, height: 480))
     first.windowDidEndLiveResize(Notification(name: NSWindow.didEndLiveResizeNotification))

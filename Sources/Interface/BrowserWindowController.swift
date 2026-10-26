@@ -134,7 +134,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         // their items in the Window menu.
         NSWindow.allowsAutomaticWindowTabbing = false
         let window = BrowserWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
+            contentRect: NSRect(origin: .zero, size: settings.newWindowSize),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
@@ -250,7 +250,10 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// resizes, so they leave the size alone.
     public func windowDidEndLiveResize(_ notification: Notification) {
         guard let window, !isClosed, !window.styleMask.contains(.fullScreen) else { return }
-        settings.newWindowSize = window.contentRect(forFrameRect: window.frame).size
+        // The window has no minimum size, so a drag can leave it with an empty content area.
+        let size = window.contentRect(forFrameRect: window.frame).size
+        guard Settings.isWindowSize(size) else { return }
+        settings.newWindowSize = size
     }
 
     // MARK: Key window
