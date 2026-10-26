@@ -99,9 +99,7 @@ enum ContextMenuBuilder {
                     keyEquivalent: "")
                 menuItem.representedObject = id
                 menuItem.target = target
-                if let chord = command.chords.first,
-                    !chord.modifiers.isDisjoint(with: [.command, .control, .option])
-                {
+                if let chord = command.chords.first, chord.canBeKeyEquivalent {
                     MainMenuBuilder.set(chord, on: menuItem)
                 }
                 if let symbol = symbols[id] {

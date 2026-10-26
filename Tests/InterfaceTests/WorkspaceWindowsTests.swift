@@ -91,7 +91,7 @@ private func menuItem(_ id: CommandID, in menu: NSMenu) -> NSMenuItem? {
 @MainActor
 private func menuItems(_ id: CommandID, in menu: NSMenu) -> [NSMenuItem] {
     menu.items.flatMap { item in
-        (item.representedObject as? CommandID == id ? [item] : [])
+        (item.representedObject as? CommandID == id && !item.isHidden ? [item] : [])
             + (item.submenu.map { menuItems(id, in: $0) } ?? [])
     }
 }

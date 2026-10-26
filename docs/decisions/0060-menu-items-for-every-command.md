@@ -64,3 +64,19 @@ A new command fails the test until it is placed in a menu. Items for commands th
 table stay off while the keys are in the filter field, the path bar or the tab strip, as before
 ([0054](0054-tabs-in-window.md)). Ctrl-Opt-Shift-arrow reaches the app only while no system
 shortcut takes it; Mission Control's Ctrl-arrows have no Option or Shift.
+
+## Amendment: the rule follows the chord; hidden alternate items (2026-10-26)
+
+The user can now give a command any chord ([0106](0106-primary-and-alternate-shortcuts.md)), so
+whether an item has a key equivalent can't be fixed per item. `commandWithoutKey` is gone, and
+the rule is on the chord: `KeyChord.canBeKeyEquivalent` is true for a chord with Command,
+Control or Option, or an F-key, and only such a chord becomes a key equivalent. Space, Tab,
+Return, the plain arrows and a plain letter the user records still reach their commands from the
+table's `keyDown`. The Selection submenu stays keyless whatever its chords (`showsChords`), for
+the reasons above. `eachCommandItemsKeyEquivalentIsItsCommandsFirstChord` checks the visible
+items.
+
+Each command's item shows the first chord a key equivalent may have, and a hidden item beside it
+(`isHidden`, `allowsKeyEquivalentWhenHidden`) with the same action and command ID has the second.
+`everyRegisteredCommandHasAMenuItem` counts only visible items, and Edit's six items count for
+the commands they run (`StandardAction.command`), not for a chord.

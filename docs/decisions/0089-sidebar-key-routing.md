@@ -81,3 +81,12 @@ A Command, Control or Option chord that a pane command takes never reaches the o
 the others still do. With the
 keys in the path bar or the tab strip under Full Keyboard Access, every command's menu item now
 works, where 0054 left only the window commands on.
+
+## Amendment: alternates work in text fields (2026-10-26)
+
+A command's second chord used to reach it only through `keyDown`, so in a text field, where only
+the menu's key equivalents reach the window commands, Cmd-Shift-P did nothing. Each command's
+second chord is now a hidden menu item with the same action and command ID
+([0106](0106-primary-and-alternate-shortcuts.md)). It goes through the same `runMenuCommand:`
+and `validateMenuItem` as the visible item, so in a text field it works exactly when the visible
+item does: for the window and tab commands. Nothing changed in the window controller's routing.

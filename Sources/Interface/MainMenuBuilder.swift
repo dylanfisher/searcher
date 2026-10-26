@@ -1,28 +1,41 @@
 import AppKit
 import Browser
 
+/// What App ▸ Settings… sends up the responder chain. The responder that shows the Settings
+/// window answers it; while none does, AppKit turns the item off.
+@MainActor @objc public protocol SettingsShowing {
+    func showSettings(_ sender: Any?)
+}
+
 /// Builds the menu bar, the only place main menus are built. An item either runs a registered
-/// command, with the command's first chord as its key equivalent unless a text field needs that
-/// key, or sends one of AppKit's own actions (Quit, Copy, Minimize) to the first responder that
-/// implements it. Every key equivalent is spelled as a `KeyChord`. Every registered command has
-/// an item (docs/decisions/0060-menu-items-for-every-command.md).
+/// command or sends one of AppKit's own actions (Quit, Copy, Minimize) to the first responder
+/// that implements it. Every key equivalent is spelled as a `KeyChord`. Every registered command
+/// has an item (docs/decisions/0060-menu-items-for-every-command.md).
+///
+/// A command's item shows its first chord as its key equivalent, and a hidden item beside it
+/// with the same action has the second, so the menu bar takes both chords, from text fields
+/// too. A chord a text field types (`KeyChord.canBeKeyEquivalent`) is left off both; it reaches
+/// the command from the table's `keyDown`
+/// (docs/decisions/0106-primary-and-alternate-shortcuts.md).
 @MainActor
 public enum MainMenuBuilder {
     /// An action AppKit implements, sent up the responder chain with no target.
     struct StandardAction {
         let title: String
         let action: Selector
+        /// The item's key equivalent, whatever chords the user gives `command`, so a text field
+        /// always has Cmd-C and the others.
         let chord: KeyChord?
         /// A text-editing action. A command may share its chord: in a text field the field editor
         /// takes the key, and elsewhere the key runs the command.
         var isTextEditing = false
+        /// The command the table runs for the action. Its chords other than `chord` go on a
+        /// hidden item beside this one, which sends the same action.
+        var command: CommandID?
     }
 
     enum Item {
         case command(CommandID)
-        /// A command's item with no key equivalent, for a key a text field must still get: the
-        /// menu would take it before the field did. The key reaches the command from the table.
-        case commandWithoutKey(CommandID)
         case standard(StandardAction)
         case submenu(Menu)
         /// The Open With submenu for the selection of the table with the keys.
@@ -35,6 +48,33 @@ public enum MainMenuBuilder {
         let items: [Item]
         /// The system adds this menu's items, so the bar keeps it with none of ours.
         var isFilledBySystem = false
+        /// Whether the items show their commands' chords. The row keys' items don't, whatever
+        /// the chords: text fields move by Opt- and Ctrl-Shift-arrows too.
+        var showsChords = true
+    }
+
+    /// A command's item, or the hidden item beside an Edit item, whose key equivalent follows the
+    /// registry: `showChords` sets it.
+    final class CommandItem: NSMenuItem {
+        /// The command whose chords the item shows.
+        let command: CommandID
+        /// Which of the command's `menuChords` the item shows: 0 for the first, 1 for the second.
+        let position: Int
+        let showsChords: Bool
+
+        init(
+            title: String, action: Selector, command: CommandID, position: Int, showsChords: Bool
+        ) {
+            self.command = command
+            self.position = position
+            self.showsChords = showsChords
+            super.init(title: title, action: action, keyEquivalent: "")
+        }
+
+        @available(*, unavailable)
+        required init(coder: NSCoder) {
+            preconditionFailure("menu items aren't decoded")
+        }
     }
 
     /// Why the menus couldn't be built from the registry.
@@ -56,49 +96,59 @@ public enum MainMenuBuilder {
 
     static let selectAll = StandardAction(
         title: "Select All", action: #selector(NSResponder.selectAll(_:)),
-        chord: KeyChord("a", modifiers: .command), isTextEditing: true)
+        chord: KeyChord("a", modifiers: .command), isTextEditing: true,
+        command: SelectionCommands.selectAll.id)
 
     static let undo = StandardAction(
         title: "Undo", action: #selector(ListingTableView.undo(_:)),
-        chord: KeyChord("z", modifiers: .command),
-        isTextEditing: true)
+        chord: KeyChord("z", modifiers: .command), isTextEditing: true,
+        command: UndoCommands.undo.id)
     static let redo = StandardAction(
         title: "Redo", action: #selector(ListingTableView.redo(_:)),
-        chord: KeyChord("z", modifiers: [.command, .shift]), isTextEditing: true)
+        chord: KeyChord("z", modifiers: [.command, .shift]), isTextEditing: true,
+        command: UndoCommands.redo.id)
 
     static let cut = StandardAction(
         title: "Cut", action: #selector(NSText.cut(_:)), chord: KeyChord("x", modifiers: .command),
-        isTextEditing: true)
+        isTextEditing: true, command: ClipboardCommands.cut.id)
     static let copy = StandardAction(
         title: "Copy", action: #selector(NSText.copy(_:)),
-        chord: KeyChord("c", modifiers: .command), isTextEditing: true)
+        chord: KeyChord("c", modifiers: .command), isTextEditing: true,
+        command: ClipboardCommands.copy.id)
     static let paste = StandardAction(
         title: "Paste", action: #selector(NSText.paste(_:)),
-        chord: KeyChord("v", modifiers: .command), isTextEditing: true)
+        chord: KeyChord("v", modifiers: .command), isTextEditing: true,
+        command: ClipboardCommands.paste.id)
 
-    /// The text-editing actions the table answers by running the command on the action's chord,
-    /// so a text field with the keys still undoes, cuts, copies, pastes and selects its text
+    /// The text-editing actions the table answers by running the action's command, so a text
+    /// field with the keys still undoes, cuts, copies, pastes and selects its text
     /// (docs/decisions/0068-inline-rename.md).
     static let actionsRunningCommands = [undo, redo, cut, copy, paste, selectAll]
 
+    /// The Edit items' own chords, which no other item shows: the Edit item would take the key
+    /// first in a text field, and two items on one key leave which one runs to AppKit.
+    private static let editChords = Set(actionsRunningCommands.compactMap(\.chord))
+
     /// The row keys, which all reach the table from `keyDown`: a key equivalent would take
-    /// ↑, ↓, Shift-, Opt- and Ctrl-Shift-arrows, the page keys, Home and End from text fields.
+    /// ↑, ↓, Shift-, Opt- and Ctrl-Shift-arrows, the page keys, Home and End from text fields,
+    /// and every row key repeat would go through the menu bar's key equivalents first.
     static let selectionMenu = Menu(
         title: "Selection",
         items: [
-            .commandWithoutKey(SelectionCommands.selectNext.id),
-            .commandWithoutKey(SelectionCommands.selectPrevious.id),
-            .commandWithoutKey(SelectionCommands.selectFirst.id),
-            .commandWithoutKey(SelectionCommands.selectLast.id),
+            .command(SelectionCommands.selectNext.id),
+            .command(SelectionCommands.selectPrevious.id),
+            .command(SelectionCommands.selectFirst.id),
+            .command(SelectionCommands.selectLast.id),
             .separator,
-            .commandWithoutKey(SelectionCommands.tenRowsDown.id),
-            .commandWithoutKey(SelectionCommands.tenRowsUp.id),
-            .commandWithoutKey(SelectionCommands.pageDown.id),
-            .commandWithoutKey(SelectionCommands.pageUp.id),
+            .command(SelectionCommands.tenRowsDown.id),
+            .command(SelectionCommands.tenRowsUp.id),
+            .command(SelectionCommands.pageDown.id),
+            .command(SelectionCommands.pageUp.id),
             .separator,
-            .commandWithoutKey(SelectionCommands.extendDown.id),
-            .commandWithoutKey(SelectionCommands.extendUp.id),
-        ])
+            .command(SelectionCommands.extendDown.id),
+            .command(SelectionCommands.extendUp.id),
+        ],
+        showsChords: false)
 
     static let windowMenu = Menu(
         title: "Window",
@@ -117,8 +167,7 @@ public enum MainMenuBuilder {
             counts(TilingCommands.columnsTitle, TilingCommands.columns),
             counts(TilingCommands.rowsTitle, TilingCommands.rows),
             .separator,
-            // Tab is its key.
-            .commandWithoutKey(DualPaneCommands.focusOtherPane.id),
+            .command(DualPaneCommands.focusOtherPane.id),
             directions(TilingCommands.focusTitle, TilingCommands.focus),
             directions(TilingCommands.moveTitle, TilingCommands.move),
             directions(TilingCommands.resizeTitle, TilingCommands.resize),
@@ -175,16 +224,14 @@ public enum MainMenuBuilder {
                 .command(WindowCommands.closeTab.id),
                 .separator,
                 .command(SystemCommands.getInfo.id),
-                // Return is its key.
-                .commandWithoutKey(FileCommands.rename.id),
+                .command(FileCommands.rename.id),
                 .command(FileCommands.duplicate.id),
                 .command(FileCommands.copyToOtherPane.id),
                 .command(FileCommands.moveToOtherPane.id),
                 .separator,
                 .openWith,
                 .command(NavigationCommands.showPackageContents.id),
-                // Space is its key.
-                .commandWithoutKey(ViewCommands.toggleQuickLook.id),
+                .command(ViewCommands.toggleQuickLook.id),
                 .command(SystemCommands.revealInFinder.id),
                 .command(SystemCommands.openTerminal.id),
                 .separator,
@@ -222,9 +269,8 @@ public enum MainMenuBuilder {
                 .command(DualPaneCommands.openInOtherPane.id),
                 .command(NavigationCommands.goToParent.id),
                 .separator,
-                // → and ← are their keys, in column view.
-                .commandWithoutKey(ColumnCommands.intoFolder.id),
-                .commandWithoutKey(ColumnCommands.toParent.id),
+                .command(ColumnCommands.intoFolder.id),
+                .command(ColumnCommands.toParent.id),
                 .separator,
                 .command(DualPaneCommands.sameFolderInOtherPane.id),
                 .command(NavigationCommands.goToFolder.id),
@@ -272,12 +318,18 @@ public enum MainMenuBuilder {
     /// the Help menu as its help menu, and the app menu's Services as its services menu, which
     /// lists the services that take the list's selection
     /// (`ListingViewController.serviceSendTypes`).
-    /// Items for commands that toggle a setting show its state from `settings`.
-    public static func install(
-        in app: NSApplication, appName: String, registry: CommandRegistry, settings: Settings
-    ) throws(BuildError) {
-        let bar = try build(appName: appName, registry: registry)
+    /// Items for commands that toggle a setting show its state from `settings`, and every
+    /// command's items show the chords `settings` gives it (`PaneViewController.registry(for:)`),
+    /// now and after each change.
+    public static func install(in app: NSApplication, appName: String, settings: Settings)
+        throws(BuildError)
+    {
+        let bar = try build(appName: appName, registry: PaneViewController.registry(for: settings))
         showChecks(in: bar, settings: settings)
+        settings.observe(for: bar) { [weak bar, weak settings] in
+            guard let bar, let settings else { return }
+            showChords(in: bar, registry: PaneViewController.registry(for: settings))
+        }
         app.mainMenu = bar
         app.windowsMenu = submenu(titled: windowMenu.title, in: bar)
         app.helpMenu = submenu(titled: helpMenu.title, in: bar)
@@ -295,6 +347,7 @@ public enum MainMenuBuilder {
             guard menu.isFilledBySystem || barItem.submenu?.numberOfItems ?? 0 > 0 else { continue }
             bar.addItem(barItem)
         }
+        showChords(in: bar, registry: registry)
         return bar
     }
 
@@ -311,7 +364,9 @@ public enum MainMenuBuilder {
     {
         let submenu = NSMenu(title: menu.title)
         for item in menu.items {
-            submenu.addItem(try menuItem(item, in: menu, registry: registry))
+            for menuItem in try menuItems(item, in: menu, registry: registry) {
+                submenu.addItem(menuItem)
+            }
         }
         let item = NSMenuItem(title: menu.title, action: nil, keyEquivalent: "")
         item.submenu = submenu
@@ -384,6 +439,12 @@ public enum MainMenuBuilder {
                         action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
                         chord: nil)),
                 .separator,
+                // Fixed, so the user can always get back to the window that sets the keys.
+                .standard(
+                    StandardAction(
+                        title: "Settings…", action: #selector(SettingsShowing.showSettings(_:)),
+                        chord: KeyChord(",", modifiers: .command))),
+                .separator,
                 .submenu(servicesMenu),
                 .separator,
                 .standard(
@@ -403,31 +464,34 @@ public enum MainMenuBuilder {
             ])
     }
 
-    private static func menuItem(_ item: Item, in menu: Menu, registry: CommandRegistry)
-        throws(BuildError) -> NSMenuItem
+    /// The items for `item`: one, or for a command, its item and the hidden one beside it.
+    private static func menuItems(_ item: Item, in menu: Menu, registry: CommandRegistry)
+        throws(BuildError) -> [NSMenuItem]
     {
         switch item {
         case .separator:
-            return .separator()
+            return [.separator()]
         case .submenu(let submenu):
-            return try submenuItem(submenu, registry: registry)
+            return [try submenuItem(submenu, registry: registry)]
         case .openWith:
-            return OpenWithMenu(target: {
-                (NSApplication.shared.keyWindow?.firstResponder as? ListingTableView)?.openWith()
-            }).item
-        case .command(let id), .commandWithoutKey(let id):
+            return [
+                OpenWithMenu(target: {
+                    (NSApplication.shared.keyWindow?.firstResponder as? ListingTableView)?
+                        .openWith()
+                }).item
+            ]
+        case .command(let id):
             guard let command = registry.command(for: id) else {
                 throw .unregistered(id, menu: menu.title)
             }
-            // The menu shows one chord. The others reach the command through the pane's keys.
-            let menuItem = NSMenuItem(
-                title: command.title, action: #selector(ListingTableView.runMenuCommand(_:)),
-                keyEquivalent: "")
-            menuItem.representedObject = id
-            if case .command = item {
-                command.chords.first.map { set($0, on: menuItem) }
+            return (0..<2).map { position in
+                let menuItem = CommandItem(
+                    title: command.title, action: #selector(ListingTableView.runMenuCommand(_:)),
+                    command: id, position: position, showsChords: menu.showsChords)
+                menuItem.representedObject = id
+                if position > 0 { hide(menuItem) }
+                return menuItem
             }
-            return menuItem
         case .standard(let standard):
             let menuItem = NSMenuItem(
                 title: standard.title, action: standard.action, keyEquivalent: "")
@@ -437,7 +501,46 @@ public enum MainMenuBuilder {
                 }
                 set(chord, on: menuItem)
             }
-            return menuItem
+            guard let id = standard.command else { return [menuItem] }
+            guard registry.command(for: id) != nil else {
+                throw .unregistered(id, menu: menu.title)
+            }
+            let alternate = CommandItem(
+                title: standard.title, action: standard.action, command: id, position: 0,
+                showsChords: menu.showsChords)
+            hide(alternate)
+            return [menuItem, alternate]
+        }
+    }
+
+    /// Hides `item`, whose key equivalent still runs it, through the same validation and action
+    /// as the item it sits beside.
+    private static func hide(_ item: NSMenuItem) {
+        item.isHidden = true
+        item.allowsKeyEquivalentWhenHidden = true
+    }
+
+    /// The chords command `id`'s items show, in the registry's order: those a key equivalent
+    /// may have, other than the Edit items' own.
+    private static func menuChords(of id: CommandID, in registry: CommandRegistry) -> [KeyChord] {
+        guard let command = registry.command(for: id) else {
+            preconditionFailure("the menus run \(id), which the registry doesn't have")
+        }
+        return command.chords.filter { $0.canBeKeyEquivalent && !editChords.contains($0) }
+    }
+
+    /// Gives each command's items in `bar` the key equivalents `registry` gives the command: its
+    /// item the first chord, and the hidden item beside it the second. An Edit item keeps its
+    /// own chord, and its hidden item gets the command's first other chord.
+    static func showChords(in bar: NSMenu, registry: CommandRegistry) {
+        for case let item as CommandItem in allItems(in: bar) {
+            let chords = item.showsChords ? menuChords(of: item.command, in: registry) : []
+            if chords.indices.contains(item.position) {
+                set(chords[item.position], on: item)
+            } else {
+                item.keyEquivalent = ""
+                item.keyEquivalentModifierMask = []
+            }
         }
     }
 
