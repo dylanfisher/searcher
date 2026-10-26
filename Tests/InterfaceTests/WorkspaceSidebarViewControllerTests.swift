@@ -682,3 +682,23 @@ private let share = SidebarVolume(mountPoint: "/Volumes/main", name: "main", kin
     #expect(fixture.outline.selectedRow == (try fixture.row(of: "USB")))
     #expect(fixture.openedVolumes.isEmpty)
 }
+
+@MainActor @Test func aVolumesEjectButtonIsOffWhileItsEjectRunsAndARepeatIsIgnored()
+    async throws
+{
+    let fixture = try Fixture()
+    await fixture.mount([usb])
+    fixture.mounts.holdEjects()
+
+    try #require(fixture.volumeCells.first).ejectButton.performClick(nil)
+    await settle { (try? fixture.volumeCells.first?.ejectButton.isEnabled) == false }
+    let menu = try #require(fixture.sidebar.contextMenu(forRow: try fixture.row(of: "USB")))
+    let item = try #require(menu.items.first)
+    _ = (item.target as? NSObject)?.perform(item.action, with: item)
+    #expect(fixture.mounts.ejects.count == 1)
+
+    fixture.mounts.releaseEjects()
+    await settle { (try? fixture.volumeCells.first?.ejectButton.isEnabled) == true }
+    #expect(fixture.mounts.ejects.count == 1)
+    #expect(fixture.alerts.isEmpty)
+}

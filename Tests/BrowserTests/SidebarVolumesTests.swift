@@ -113,3 +113,24 @@ private func disk(_ mountPoint: String) -> SidebarVolume {
     #expect(await lister.waitForCalls(2))
     #expect(!pane.state.isOffline)
 }
+
+@MainActor @Test func aSecondEjectOfAVolumeBeingEjectedIsIgnored() async throws {
+    let mountPoint = uniqueMountPoint()
+    let stub = StubSidebarVolumes([disk(mountPoint)])
+    stub.holdEjects()
+    let volumes = stub.list()
+    await settle { !volumes.volumes.isEmpty }
+    var changes = 0
+    volumes.observe(for: stub) { changes += 1 }
+    let first = Task { try await volumes.eject(disk(mountPoint)) }
+    await settle { stub.ejects.count == 1 }
+    #expect(volumes.ejecting == [mountPoint])
+
+    try await volumes.eject(disk(mountPoint))
+
+    #expect(stub.ejects.count == 1)
+    stub.releaseEjects()
+    try await first.value
+    #expect(volumes.ejecting.isEmpty)
+    #expect(changes == 2)
+}

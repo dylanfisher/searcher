@@ -54,19 +54,20 @@ bus, the startup disk with it, so the startup disk isn't listed. A volume mounte
   folders open (0049), since the system's will-unmount notification may come only once the
   unmount is under way. File operations go on: a copy with files open on the volume makes the
   system refuse the eject as busy, and the alert shows, as Finder refuses to eject a disk in
-  use. Then it
-  runs the ejector on a `BlockingCallThread`: `FileManager.unmountVolume` with no system UI.
+  use. Then it runs the ejector on a `BlockingCallThread`: `FileManager.unmountVolume` with no
+  system UI. The row leaves when the system reports the unmount.
+- **One eject at a time per volume.** While a volume's eject runs, its eject button is off, and
+  another eject of it, from the menu or another window, does nothing.
+- **A refused eject.** An alert shows, as a sheet on the sidebar's window: "The disk “name”
+  wasn’t ejected." with the system's reason under it, where Finder says "The disk “name”
+  wasn’t ejected because one or more programs may be using it." The panes on the volume list
+  their folders again at once and get new monitors, through the did-mount path
+  (`VolumeEvents.ejectFailed`).
 - **The whole disk only for its last volume.** A volume on this machine that is the only one
   mounted from its whole disk, browsable or not, ejects the disk (`allPartitionsAndEjectDisk`),
   which detaches a disk image, as Finder's button does. The whole disk comes from the device
   name the mount table already gives (`/dev/disk5s2` is on `disk5`), with no read. A volume
-  that shares its disk with another mounted volume is unmounted alone, and so is a share. The
-  row leaves when the system reports the
-  unmount. A failure shows an alert, as a sheet on the sidebar's window: "The disk “name”
-  wasn’t ejected." with the system's reason under it, where Finder says "The disk “name”
-  wasn’t ejected because one or more programs may be using it." On any failure the panes on
-  the volume list their folders again at once and get new monitors, through the did-mount path
-  (`VolumeEvents.ejectFailed`).
+  that shares its disk with another mounted volume is unmounted alone, and so is a share.
 - **Toggle.** `Settings.showsLocationsInSidebar`, on by default, stored and discarded as
   0107's group toggles are, with View ▸ Show Locations in Sidebar between the other two.
 - **Keys.** 0089's routing is unchanged: group rows can't be selected, so the arrows move from

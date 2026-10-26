@@ -9,6 +9,8 @@ import Foundation
 public final class SidebarVolumes {
     /// The volumes listed, in the mount table's order.
     public private(set) var volumes: [SidebarVolume] = []
+    /// The mount points of the volumes being ejected now.
+    public private(set) var ejecting: Set<String> = []
     private let read: @Sendable () -> [SidebarVolume]
     private let eject: @Sendable (SidebarVolume) throws(SidebarVolume.EjectFailure) -> Void
     /// Counts reads started, so a read that lands after a newer one started is dropped.
@@ -37,7 +39,8 @@ public final class SidebarVolumes {
         refresh()
     }
 
-    /// Runs `handler` after each change of `volumes`, for as long as `owner` exists.
+    /// Runs `handler` after each change of `volumes` or `ejecting`, for as long as `owner`
+    /// exists.
     public func observe(for owner: AnyObject, _ handler: @escaping @MainActor () -> Void) {
         observers.append(Observer(owner: owner, handler: handler))
     }
@@ -51,29 +54,43 @@ public final class SidebarVolumes {
             let volumes = await BlockingCallThread.run { read().filter(\.isShown) }
             guard let self, self.readCount == count, volumes != self.volumes else { return }
             self.volumes = volumes
-            observers.removeAll { $0.owner == nil }
-            for observer in observers {
-                observer.handler()
-            }
+            notify()
+        }
+    }
+
+    private func notify() {
+        observers.removeAll { $0.owner == nil }
+        for observer in observers {
+            observer.handler()
         }
     }
 
     /// Ejects `volume`, off the main thread. The loads, size walks and monitors of panes on it
     /// stop first (`VolumeEvents.willEject`), so a folder the app has open doesn't keep it
     /// mounted; file operations go on. When the system refuses, those panes list again and are
-    /// watched again. The row leaves when the system reports the unmount.
+    /// watched again. The row leaves when the system reports the unmount. A volume already
+    /// being ejected is left to that eject: this one returns at once.
     ///
     /// - Throws: Why the system didn't eject it.
     public func eject(_ volume: SidebarVolume) async throws(SidebarVolume.EjectFailure) {
+        guard ejecting.insert(volume.mountPoint).inserted else { return }
+        notify()
         VolumeEvents.willEject(at: volume.mountPoint)
         let eject = eject
+        let failure: SidebarVolume.EjectFailure?
         do throws(SidebarVolume.EjectFailure) {
             try await BlockingCallThread.run { () throws(SidebarVolume.EjectFailure) in
                 try eject(volume)
             }
+            failure = nil
         } catch {
+            failure = error
+        }
+        ejecting.remove(volume.mountPoint)
+        notify()
+        if let failure {
             VolumeEvents.ejectFailed(at: volume.mountPoint)
-            throw error
+            throw failure
         }
     }
 }

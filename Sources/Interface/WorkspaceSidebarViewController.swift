@@ -54,7 +54,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     private let volumes: SidebarVolumes
     private let settings: Settings
     /// What the rows show, as last read from the lists and the settings.
-    private var shown = Shown(groups: [], favorites: [], volumes: [], saved: [])
+    private var shown = Shown(groups: [], favorites: [], volumes: [], ejecting: [], saved: [])
     private var favoriteRows: [FavoriteRow] = []
     private var volumeRows: [VolumeRow] = []
     private var rows: [Row] = []
@@ -91,6 +91,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         let groups: [ObjectIdentifier]
         let favorites: [Favorites.Item]
         let volumes: [SidebarVolume]
+        let ejecting: Set<String>
         let saved: [WorkspaceList.Saved]
     }
 
@@ -270,7 +271,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         if settings.showsWorkspacesInSidebar { groups.append(workspacesGroup) }
         let now = Shown(
             groups: groups.map(ObjectIdentifier.init), favorites: favorites.items,
-            volumes: volumes.volumes, saved: list.saved)
+            volumes: volumes.volumes, ejecting: volumes.ejecting, saved: list.saved)
         guard now != shown else { return }
         let selected = outlineView.item(atRow: outlineView.selectedRow)
         let selectedID = (selected as? Row)?.saved.id
@@ -632,7 +633,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     }
 
     /// A volume's row: a symbol for a disk or a share, its name, and the eject button when it
-    /// can be ejected. The symbol needs no read of the volume.
+    /// can be ejected, off while an eject of it runs. The symbol needs no read of the volume.
     private func volumeCell(_ volume: SidebarVolume) -> Cell {
         let cell =
             outlineView.makeView(withIdentifier: Self.volumeCellID, owner: nil) as? Cell
@@ -644,6 +645,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         cell.textField?.stringValue = volume.name
         cell.openMark.isHidden = true
         cell.ejectButton.isHidden = !volume.canEject
+        cell.ejectButton.isEnabled = !shown.ejecting.contains(volume.mountPoint)
         cell.setAccessibilityLabel(volume.name)
         return cell
     }
