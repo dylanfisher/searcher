@@ -9,7 +9,8 @@ import Testing
     let cost = ThumbnailCache.entryBytes + image.bytesPerRow * image.height
     let cache = ThumbnailCache(mostBytes: 2 * cost)
     func key(_ name: String) -> ThumbnailCache.Key {
-        ThumbnailCache.Key(path: "/p/\(name)", modified: testDate, size: 1, pixels: 32)
+        ThumbnailCache.Key(
+            path: "/p/\(name)", modified: testDate, size: 1, framed: true, pixels: 32)
     }
     cache.store(image, for: key("a"))
     cache.store(image, for: key("b"))
@@ -25,18 +26,20 @@ import Testing
 }
 
 /// The largest kept size of a file version below the one asked for, as the preview shows while
-/// its own is made: not a larger one, not another version's, not a file's "none", not one
-/// dropped.
+/// its own is made: not a larger one, not another version's, not one framed otherwise, not a
+/// file's "none", not one dropped.
 @Test func theLargestSmallerThumbnailIsOfTheSameVersionAndStillKept() {
     let small = testThumbnail(pixels: 32)
     let medium = testThumbnail(pixels: 64)
     let cache = ThumbnailCache(mostBytes: 1 << 20)
-    func key(_ pixels: Int, modified: Date = testDate) -> ThumbnailCache.Key {
-        ThumbnailCache.Key(path: "/p/a.jpg", modified: modified, size: 1, pixels: pixels)
+    func key(_ pixels: Int, modified: Date = testDate, framed: Bool = false) -> ThumbnailCache.Key {
+        ThumbnailCache.Key(
+            path: "/p/a.jpg", modified: modified, size: 1, framed: framed, pixels: pixels)
     }
     cache.store(small, for: key(32))
     cache.store(medium, for: key(64))
     cache.store(nil, for: key(128))
+    cache.store(testThumbnail(pixels: 32), for: key(512, framed: true))
     cache.store(testThumbnail(pixels: 32), for: key(16, modified: testDate.addingTimeInterval(1)))
 
     #expect(cache.largestSmaller(than: key(1024)) === medium)

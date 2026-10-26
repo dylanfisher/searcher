@@ -34,7 +34,9 @@ A probe on this Mac (local APFS, generated 2000×1500 JPEGs, `QLThumbnailGenerat
 ## Decision
 
 - **Source: Quick Look.** `QuickLookThumbnailer` (Base) asks `QLThumbnailGenerator` for the
-  `.thumbnail` representation with `iconMode`, at `ThumbnailService.scale` (2). It uses the
+  `.thumbnail` representation with `iconMode`, at `ThumbnailService.scale` (2). (Amended
+  2026-10-26: the column preview's is asked for without `iconMode`, the image alone, and kept
+  apart from rows'; see [0090](0090-preview-column.md).) It uses the
   system's thumbnail cache, so a file Finder has shown costs about 1 ms. A file Quick Look has no
   thumbnail for keeps its type icon. `ThumbnailMaking` is its protocol, so tests hold requests
   with `GatedThumbnailMaker`.
@@ -149,7 +151,8 @@ A probe on this Mac (local APFS, generated 2000×1500 JPEGs, `QLThumbnailGenerat
   kept, such as its row's, never shows its type icon in the preview: the trail shows the
   largest smaller one kept of that version (`ThumbnailService.cachedSmaller`, from a per-file
   index of the sizes the cache holds, so nothing walks the cache), scaled up, until the
-  preview's own lands, and keeps it if that one fails. That shown thumbnail also ends the
+  preview's own lands, and keeps it if that one fails. (Amended 2026-10-26: only a smaller preview
+  thumbnail, not a row's, which is framed; see [0090](0090-preview-column.md).) That shown thumbnail also ends the
   hold's wait for one, so the file shows as soon as its info is read.)
 - **The CV.12 hold waits for the thumbnail too.** A newly previewed file is held until its info
   is read and its thumbnail made, or `previewHold` (100 ms) passes. A local thumbnail, 1–28 ms,
