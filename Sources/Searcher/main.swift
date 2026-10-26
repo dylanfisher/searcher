@@ -161,10 +161,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     /// Another app may have written the clipboard while the user was in it, which ends a cut,
-    /// so the cut rows stop looking dimmed.
+    /// so the cut rows stop looking dimmed; and the sidebar's favorites may have moved, been
+    /// renamed or come back, so they are looked for again.
     func applicationDidBecomeActive(_ notification: Notification) {
         guard bench == nil else { return }
         windows.clipboard.clipboardMayHaveChanged()
+        windows.favorites.refresh()
     }
 
     /// A Dock click with no browser window open opens one. With a window open, even a minimized

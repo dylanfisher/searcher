@@ -9,9 +9,9 @@ import Quartz
 /// in the most recently active window when one runs past a second. With
 /// `Settings.hideEmptyOperationsPanel` on, a panel that showed itself hides once its last row
 /// leaves; one the user opened stays until the user closes it
-/// (docs/decisions/0067-operations-panel.md). Left of all that, the workspace sidebar lists the
-/// saved workspaces while the workspace says it shows; dragging it closed hides it there too
-/// (docs/decisions/0086-workspace-sidebar.md). Open Quickly shows the command palette over the
+/// (docs/decisions/0067-operations-panel.md). Left of all that, the sidebar lists the favorites
+/// and the saved workspaces while the workspace says it shows; dragging it closed hides it there
+/// too (docs/decisions/0086-workspace-sidebar.md, docs/decisions/0107-sidebar-favorites.md). Open Quickly shows the command palette over the
 /// window, and Esc there gives the keys back to the focused pane
 /// (docs/decisions/0087-palette-window.md).
 ///
@@ -69,7 +69,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// Set once the workspace closed with its last tab or the window closed; the window shows
     /// nothing after that.
     private var isClosed = false
-    /// The saved workspaces, left of the panes.
+    /// The favorites and the saved workspaces, left of the panes.
     let sidebar: WorkspaceSidebarViewController
     /// The sidebar's place in the window's split view, collapsed while it is hidden.
     let sidebarItem: NSSplitViewItem
@@ -107,11 +107,12 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         let workspace = Workspace(tab: Tab(pane: pane))
         workspaces.add(workspace)
         self.init(
-            workspace: workspace, workspaces: workspaces, settings: settings,
-            fileOperations: fileOperations)
+            workspace: workspace, workspaces: workspaces, favorites: Favorites(settings: settings),
+            settings: settings, fileOperations: fileOperations)
     }
 
-    /// A window showing `workspace`, one of `workspaces`, under the app's `settings`.
+    /// A window showing `workspace`, one of `workspaces`, under the app's `settings`, with the
+    /// app's `favorites` in its sidebar.
     /// `takePaneController` hands over another
     /// window's view controller for a pane that moved into `workspace`. `fileOperations` runs
     /// the file commands, which are off without it; the clipboard commands are off without
@@ -119,7 +120,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// `undoHistory`, and Open With without `openWith`. The sidebar and the palette open a saved
     /// workspace with `openSavedWorkspace`; the palette lists the folders in `folderVisits`.
     init(
-        workspace: Workspace, workspaces: WorkspaceList, settings: Settings,
+        workspace: Workspace, workspaces: WorkspaceList, favorites: Favorites, settings: Settings,
         fileOperations: FileOperationQueue? = nil, clipboard: CutState? = nil,
         mountTable: MountTable? = nil, undoHistory: UndoHistory? = nil, openWith: OpenWith? = nil,
         folderVisits: FolderVisits? = nil,
@@ -161,7 +162,8 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         let content = NSView()
         panesOverOperations = tabHost.bottomAnchor.constraint(equalTo: operations.view.topAnchor)
         panesToBottom = tabHost.bottomAnchor.constraint(equalTo: content.bottomAnchor)
-        sidebar = WorkspaceSidebarViewController(workspace: workspace, list: workspaces)
+        sidebar = WorkspaceSidebarViewController(
+            workspace: workspace, list: workspaces, favorites: favorites, settings: settings)
         sidebar.open = openSavedWorkspace
         sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
         super.init(window: window)
@@ -192,6 +194,12 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         window.setContentSize(settings.newWindowSize)
         window.center()
         sidebar.onEscape = { [weak self] in self?.giveKeysBack() }
+        sidebar.openFavorite = { [weak self] path in
+            favorites.open(path) { [weak self] in
+                guard let self, !isClosed, !workspace.isClosed else { return nil }
+                return workspace.selectedTab.focusedPane
+            }
+        }
         sidebar.outlineView.passKey = { [weak self] event in
             guard let self, !isClosed, !workspace.isClosed else { return false }
             let table = focusedTable

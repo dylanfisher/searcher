@@ -941,8 +941,10 @@ private func sidebarKey() throws -> NSEvent {
     let list = WorkspaceList()
     list.add(workspace)
 
+    let settings = untouchedSettings()
     let controller = BrowserWindowController(
-        workspace: workspace, workspaces: list, settings: untouchedSettings())
+        workspace: workspace, workspaces: list, favorites: Favorites(settings: settings),
+        settings: settings)
 
     #expect(controller.showsSidebar)
 }

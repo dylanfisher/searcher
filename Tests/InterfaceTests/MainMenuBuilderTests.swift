@@ -303,7 +303,8 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(
         view.items.map(\.title) == [
             "as List", "as Columns", "Columns Start at Home Folder", "", "Show Sidebar",
-            "Focus Sidebar", "", "Show Hidden Files",
+            "Focus Sidebar", "Show Favorites in Sidebar", "Show Workspaces in Sidebar", "",
+            "Show Hidden Files",
             "Always Hide .DS_Store", "Folders First", "", "Sort by Name",
             "Sort by Kind",
             "Sort by Date Modified", "Sort by Size", "", "Calculate All Sizes", "Calculate Sizes",
@@ -385,6 +386,11 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(dsStore.state == .off)
     settings.columnsStartAtHome = false
     #expect(home.state == .off)
+
+    let favorites = try #require(allItems(menu).first { $0.title == "Show Favorites in Sidebar" })
+    #expect(favorites.state == .on)
+    settings.showsFavoritesInSidebar = false
+    #expect(favorites.state == .off)
 
     settings.appearance = .dark
     #expect(appearances.map(\.state) == [.off, .off, .on])
