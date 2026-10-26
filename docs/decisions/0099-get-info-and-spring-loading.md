@@ -30,8 +30,9 @@ validates a drop on every pointer move, on the main thread, from the listing alo
   `open information window of item …`: `aevt/odoc` to `com.apple.finder` whose direct object is
   a list with one specifier per item, the `iwnd` property (from Finder's scripting dictionary) of
   the item at its file URL. The item is a `cobj` specifier of form `indx` with the URL as its
-  data, as AppleScript sends it; a bare file URL as container gets -1728. One event opens every window; `misc/actv` then brings Finder to the
-  front. A test checks the event's shape without sending it.
+  data, as AppleScript sends it; a bare file URL as container gets -1728. One event opens every
+  window; `misc/actv` then brings Finder to the front. A test checks the event's shape without
+  sending it.
 - **Off the main thread.** `WorkspaceSystemActions.showInfo` sends on a `BlockingCallThread`,
   since the wait can be long (the prompt waits for the user; the reply waits up to
   `finderTimeout`, 30 s), and on a GCD queue or the cooperative pool it would hold a worker.
