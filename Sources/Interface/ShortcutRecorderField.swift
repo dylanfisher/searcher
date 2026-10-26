@@ -170,15 +170,22 @@ final class ShortcutRecorderField: NSView {
     /// Swallows the repeats of the key with `keyCode` and its release, until the release or the
     /// next fresh press of any key, which passes.
     private static func swallowRepeatsAndRelease(of keyCode: UInt16) {
-        heldKey = KeyMonitor(matching: [.keyDown, .keyUp]) { event in
-            guard event.type == .keyUp || event.isARepeat else {
-                heldKey = nil
-                return event
-            }
-            guard event.keyCode == keyCode else { return event }
-            if event.type == .keyUp { heldKey = nil }
-            return nil
+        heldKey = KeyMonitor(matching: [.keyDown, .keyUp]) {
+            filterWhileHeld($0, holding: keyCode)
         }
+    }
+
+    /// The held-key monitor's handler, while the key with `keyCode` is held: nil swallows a
+    /// repeat or the release of that key. A fresh press of any key passes and ends the
+    /// swallowing, as the release does; another key's repeats and release pass.
+    static func filterWhileHeld(_ event: NSEvent, holding keyCode: UInt16) -> NSEvent? {
+        guard event.type == .keyUp || event.isARepeat else {
+            heldKey = nil
+            return event
+        }
+        guard event.keyCode == keyCode else { return event }
+        if event.type == .keyUp { heldKey = nil }
+        return nil
     }
 
     // MARK: Ending on every exit

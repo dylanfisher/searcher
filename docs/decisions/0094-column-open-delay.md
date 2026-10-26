@@ -29,7 +29,7 @@ opens the selected folder's column, or shows the file's preview, only once the k
   saves something. When the keys had paused for `openDelay` before it, and it selects one folder
   whose listing `RecentListings` keeps in the arrangement a new column takes
   (`Pane.showsRecentRowsWhenMade`), its column opens at once with those rows, as a click's does,
-  instead of showing an empty column for 120 ms and then a blank one until the load lands. Every
+  instead of leaving the space right of it blank for 120 ms first. Every
   other key-made selection waits as before. Each new key-made selection starts the pause again
   (`Column.keysHavePaused`), so a held key's repeats, which come inside it, always wait: a held
   ↓ through kept folders opens the first press's column and the one it stops on, and none

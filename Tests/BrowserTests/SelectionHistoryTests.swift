@@ -4,6 +4,8 @@ import Testing
 
 @testable import Browser
 
+private let left = PaneID()
+private let right = PaneID()
 private let here = Location(path: "/here")
 private let there = Location(path: "/there")
 
@@ -11,37 +13,74 @@ private func only(_ name: String) -> Selection {
     Selection([ExactName(name)], cursor: ExactName(name))
 }
 
-@Test func undoReturnsTheSelectionBeforeTheChangeAndRedoTheOneAfter() {
+/// `name` selected alone in `folder` of `pane`.
+private func at(_ name: String, in folder: Location = here, of pane: PaneID = left)
+    -> SelectionHistory.Position
+{
+    SelectionHistory.Position(pane: pane, folder: folder, selection: only(name))
+}
+
+extension SelectionHistory {
+    /// Notes a change from `name` selected alone in `folder` of `pane`.
+    fileprivate mutating func record(
+        _ name: String, in folder: Location = here, of pane: PaneID = left,
+        by source: Source = .once
+    ) {
+        record(at(name, in: folder, of: pane), by: source)
+    }
+
+    /// Steps back to the nearest step `restorable` accepts, with `current` selected in that
+    /// step's pane and folder; returns the step.
+    fileprivate mutating func undo(
+        from current: String, where restorable: (Position) -> Bool = { _ in true }
+    ) -> Position? {
+        undo { step in
+            restorable(step) ? (step, replacing: at(current, in: step.folder, of: step.pane)) : nil
+        }
+    }
+
+    /// Steps forward, as `undo(from:where:)` steps back.
+    fileprivate mutating func redo(
+        from current: String, where restorable: (Position) -> Bool = { _ in true }
+    ) -> Position? {
+        redo { step in
+            restorable(step) ? (step, replacing: at(current, in: step.folder, of: step.pane)) : nil
+        }
+    }
+}
+
+@Test func undoReturnsThePositionBeforeTheChangeAndRedoTheOneItReplaced() {
     var history = SelectionHistory(clock: ManualClock())
-    #expect(!history.canUndo(in: here))
+    #expect(!history.canUndo())
 
-    history.record(only("a"), in: here, by: .once)
+    history.record("a")
 
-    #expect(history.canUndo(in: here))
-    #expect(!history.canRedo(in: here))
-    #expect(history.undo(only("b"), in: here) == only("a"))
-    #expect(!history.canUndo(in: here))
-    #expect(history.redo(only("a"), in: here) == only("b"))
-    #expect(history.undo(only("b"), in: here) == only("a"))
+    #expect(history.canUndo())
+    #expect(!history.canRedo())
+    #expect(history.undo(from: "b") == at("a"))
+    #expect(!history.canUndo())
+    #expect(history.redo(from: "a") == at("b"))
+    #expect(history.undo(from: "b") == at("a"))
 }
 
 @Test func aNewChangeEndsTheWayForward() {
     var history = SelectionHistory(clock: ManualClock())
-    history.record(only("a"), in: here, by: .once)
-    _ = history.undo(only("b"), in: here)
-    #expect(history.canRedo(in: here))
+    history.record("a")
+    _ = history.undo(from: "b")
+    #expect(history.canRedo())
 
-    history.record(only("a"), in: here, by: .once)
+    history.record("a")
 
-    #expect(!history.canRedo(in: here))
+    #expect(!history.canRedo())
 }
 
 @Test func nothingSelectedWithNoCursorIsNotAStep() {
     var history = SelectionHistory(clock: ManualClock())
 
-    history.record(Selection(), in: here, by: .once)
+    history.record(
+        SelectionHistory.Position(pane: left, folder: here, selection: Selection()), by: .once)
 
-    #expect(!history.canUndo(in: here))
+    #expect(!history.canUndo())
 }
 
 @Test func aHeldKeysRepeatsJoinItsPressAndEachTapIsAStep() {
@@ -50,147 +89,183 @@ private func only(_ name: String) -> Selection {
     let tap = SelectionHistory.Source.move(by: 1, extending: false, isRepeat: false)
     let repeated = SelectionHistory.Source.move(by: 1, extending: false, isRepeat: true)
 
-    history.record(only("a"), in: here, by: tap)
-    history.record(only("b"), in: here, by: repeated)
+    history.record("a", by: tap)
+    history.record("b", by: repeated)
     clock.advance(by: .seconds(2))
-    history.record(only("c"), in: here, by: repeated)
-    history.record(only("d"), in: here, by: tap)
-    history.record(only("e"), in: here, by: tap)
+    history.record("c", by: repeated)
+    history.record("d", by: tap)
+    history.record("e", by: tap)
 
     for name in ["e", "d", "a"] {
-        #expect(history.undo(only("z"), in: here) == only(name))
+        #expect(history.undo(from: "z") == at(name))
     }
-    #expect(!history.canUndo(in: here))
+    #expect(!history.canUndo())
 }
 
 @Test func aRepeatOfAnotherKeyIsAStep() {
     var history = SelectionHistory(clock: ManualClock())
 
-    history.record(only("a"), in: here, by: .move(by: 1, extending: false, isRepeat: false))
-    history.record(only("b"), in: here, by: .move(by: 1, extending: true, isRepeat: true))
+    history.record("a", by: .move(by: 1, extending: false, isRepeat: false))
+    history.record("b", by: .move(by: 1, extending: true, isRepeat: true))
 
-    #expect(history.undo(only("c"), in: here) == only("b"))
-    #expect(history.undo(only("b"), in: here) == only("a"))
+    #expect(history.undo(from: "c") == at("b"))
+    #expect(history.undo(from: "b") == at("a"))
+}
+
+/// A held key's repeats join its press only in the pane and folder the press was in.
+@Test func aRepeatInAnotherPaneOrFolderIsAStep() {
+    var history = SelectionHistory(clock: ManualClock())
+    let tap = SelectionHistory.Source.move(by: 1, extending: false, isRepeat: false)
+    let repeated = SelectionHistory.Source.move(by: 1, extending: false, isRepeat: true)
+
+    history.record("a", by: tap)
+    history.record("b", of: right, by: repeated)
+    history.record("c", in: there, of: right, by: repeated)
+
+    #expect(history.undo(from: "z") == at("c", in: there, of: right))
+    #expect(history.undo(from: "z") == at("b", of: right))
+    #expect(history.undo(from: "z") == at("a"))
 }
 
 @Test func aTypeToSelectQueryIsOneStepUntilAPause() {
     let clock = ManualClock()
     var history = SelectionHistory(clock: clock)
 
-    history.record(only("a"), in: here, by: .typing)
+    history.record("a", by: .typing)
     clock.advance(by: .milliseconds(400))
-    history.record(only("b"), in: here, by: .typing)
+    history.record("b", by: .typing)
     clock.advance(by: SelectionHistory.queryPause)
-    history.record(only("c"), in: here, by: .typing)
+    history.record("c", by: .typing)
 
-    #expect(history.undo(only("d"), in: here) == only("c"))
-    #expect(history.undo(only("c"), in: here) == only("a"))
+    #expect(history.undo(from: "d") == at("c"))
+    #expect(history.undo(from: "c") == at("a"))
 }
 
 @Test func aPressIsOneStepHoweverLongItPauses() {
     let clock = ManualClock()
     var history = SelectionHistory(clock: clock)
 
-    history.record(only("a"), in: here, by: .press(1))
+    history.record("a", by: .press(1))
     clock.advance(by: .seconds(2))
-    history.record(only("b"), in: here, by: .press(1))
+    history.record("b", by: .press(1))
 
-    #expect(history.undo(only("c"), in: here) == only("a"))
-    #expect(!history.canUndo(in: here))
+    #expect(history.undo(from: "c") == at("a"))
+    #expect(!history.canUndo())
 }
 
 @Test func undoAndRedoSkipStepsThatRestoreNothingAndDropThem() {
     var history = SelectionHistory(clock: ManualClock())
     for name in ["a", "gone", "b", "gone"] {
-        history.record(only(name), in: here, by: .once)
+        history.record(name)
     }
-    let restoring: (Selection) -> Selection? = { $0 == only("gone") ? nil : $0 }
+    let restorable: (SelectionHistory.Position) -> Bool = { $0 != at("gone") }
 
-    #expect(history.canUndo(in: here, restoring: restoring))
-    #expect(history.undo(only("now"), in: here, restoring: restoring) == only("b"))
-    #expect(history.undo(only("b"), in: here, restoring: restoring) == only("a"))
-    #expect(!history.canUndo(in: here))
-    #expect(history.redo(only("a"), in: here, restoring: restoring) == only("b"))
-    #expect(history.redo(only("b"), in: here, restoring: restoring) == only("now"))
+    #expect(history.canUndo(where: restorable))
+    #expect(history.undo(from: "now", where: restorable) == at("b"))
+    #expect(history.undo(from: "b", where: restorable) == at("a"))
+    #expect(!history.canUndo())
+    #expect(history.redo(from: "a", where: restorable) == at("b"))
+    #expect(history.redo(from: "b", where: restorable) == at("now"))
 }
 
 @Test func withOnlyStepsThatRestoreNothingThereIsNothingToUndo() {
     var history = SelectionHistory(clock: ManualClock())
-    history.record(only("gone"), in: here, by: .once)
+    history.record("gone")
 
-    #expect(!history.canUndo(in: here, restoring: { _ in nil }))
-    #expect(history.undo(only("now"), in: here, restoring: { _ in nil }) == nil)
+    #expect(!history.canUndo(where: { _ in false }))
+    #expect(history.undo(from: "now", where: { _ in false }) == nil)
 }
 
 @Test func anotherSourceOrAOnceChangeStartsANewStep() {
     var history = SelectionHistory(clock: ManualClock())
 
-    history.record(only("a"), in: here, by: .move(by: 1, extending: false, isRepeat: false))
-    history.record(only("b"), in: here, by: .typing)
-    history.record(only("c"), in: here, by: .press(1))
-    history.record(only("d"), in: here, by: .once)
-    history.record(only("e"), in: here, by: .once)
+    history.record("a", by: .move(by: 1, extending: false, isRepeat: false))
+    history.record("b", by: .typing)
+    history.record("c", by: .press(1))
+    history.record("d", by: .once)
+    history.record("e", by: .once)
 
     for name in ["e", "d", "c", "b", "a"] {
-        #expect(history.undo(only("z"), in: here) == only(name))
+        #expect(history.undo(from: "z") == at(name))
     }
 }
 
 @Test func onePressIsOneStepAndTheNextPressAnother() {
     var history = SelectionHistory(clock: ManualClock())
 
-    history.record(only("a"), in: here, by: .press(1))
-    history.record(only("b"), in: here, by: .press(1))
-    history.record(only("c"), in: here, by: .press(2))
+    history.record("a", by: .press(1))
+    history.record("b", by: .press(1))
+    history.record("c", by: .press(2))
 
-    #expect(history.undo(only("d"), in: here) == only("c"))
-    #expect(history.undo(only("c"), in: here) == only("a"))
+    #expect(history.undo(from: "d") == at("c"))
+    #expect(history.undo(from: "c") == at("a"))
 }
 
 @Test func anUndoEndsTheRun() {
     var history = SelectionHistory(clock: ManualClock())
-    history.record(only("a"), in: here, by: .move(by: 1, extending: false, isRepeat: false))
-    _ = history.undo(only("b"), in: here)
+    history.record("a", by: .move(by: 1, extending: false, isRepeat: false))
+    _ = history.undo(from: "b")
 
-    history.record(only("a"), in: here, by: .move(by: 1, extending: false, isRepeat: true))
+    history.record("a", by: .move(by: 1, extending: false, isRepeat: true))
 
-    #expect(history.undo(only("b"), in: here) == only("a"))
+    #expect(history.undo(from: "b") == at("a"))
 }
 
-@Test func theHistoryKeepsTheNewestLimitSteps() {
+/// Steps of every pane and folder are one history, newest first.
+@Test func stepsOfEveryPaneAndFolderAreOneHistory() {
     var history = SelectionHistory(clock: ManualClock())
+    history.record("a")
+    history.record("x", in: there)
+    history.record("r", of: right)
+
+    #expect(history.undo(from: "s") == at("r", of: right))
+    #expect(history.undo(from: "y") == at("x", in: there))
+    #expect(history.undo(from: "b") == at("a"))
+    #expect(history.redo(from: "a") == at("b"))
+    #expect(history.redo(from: "x") == at("y", in: there))
+    #expect(history.redo(from: "r") == at("s", of: right))
+}
+
+@Test func eachPaneKeepsItsNewestLimitSteps() {
+    var history = SelectionHistory(clock: ManualClock())
+    history.record("r", of: right)
     for step in 0..<(SelectionHistory.limit + 5) {
-        history.record(only("e\(step)"), in: here, by: .once)
+        history.record("e\(step)")
     }
 
-    var undone: [Selection] = []
-    while let selection = history.undo(only("now"), in: here) {
-        undone.append(selection)
+    var undone: [SelectionHistory.Position] = []
+    while let step = history.undo(from: "now") {
+        undone.append(step)
     }
 
-    #expect(undone.count == SelectionHistory.limit)
-    #expect(undone.last == only("e5"))
+    #expect(undone.count == SelectionHistory.limit + 1)
+    #expect(undone[SelectionHistory.limit - 1] == at("e5"))
+    #expect(undone.last == at("r", of: right))
 }
 
-@Test func eachFolderHasItsOwnSteps() {
+@Test func droppingAPanesStepsKeepsTheOthers() {
     var history = SelectionHistory(clock: ManualClock())
-    history.record(only("a"), in: here, by: .once)
+    history.record("a")
+    history.record("r", of: right)
+    history.record("b")
+    _ = history.undo(from: "c")
+    _ = history.undo(from: "s")
 
-    #expect(!history.canUndo(in: there))
-    #expect(history.undo(only("x"), in: there) == nil)
-    history.record(only("x"), in: there, by: .once)
+    history.dropSteps(of: right)
 
-    #expect(history.undo(only("b"), in: here) == only("a"))
-    #expect(history.undo(only("y"), in: there) == only("x"))
+    #expect(history.undo(from: "b") == at("a"))
+    #expect(history.redo(from: "a") == at("b"))
+    #expect(history.redo(from: "b") == at("c"))
+    #expect(!history.canRedo())
 }
 
-@Test func onlyTheMostRecentFoldersKeepTheirSteps() {
+/// A held key's run in a pane whose steps were dropped ends there.
+@Test func droppingAPanesStepsEndsItsRun() {
     var history = SelectionHistory(clock: ManualClock())
-    for folder in 0...SelectionHistory.folderLimit {
-        history.record(only("a"), in: Location(path: "/f\(folder)"), by: .once)
-    }
+    history.record("a", by: .move(by: 1, extending: false, isRepeat: false))
+    history.dropSteps(of: left)
 
-    #expect(!history.canUndo(in: Location(path: "/f0")))
-    #expect(history.canUndo(in: Location(path: "/f1")))
-    #expect(history.canUndo(in: Location(path: "/f\(SelectionHistory.folderLimit)")))
+    history.record("b", by: .move(by: 1, extending: false, isRepeat: true))
+
+    #expect(history.undo(from: "c") == at("b"))
 }

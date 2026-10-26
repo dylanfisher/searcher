@@ -5,7 +5,7 @@ import Testing
 /// the waiting test is cancelled, so `.timeLimit` alone would let a hung press hang the run; on
 /// timeout this records an issue, cancels the task and returns nil.
 public func bounded<T: Sendable>(
-    _ task: Task<T, Never>, seconds: Double = 5, fileID: String = #fileID,
+    _ task: Task<T, Never>, seconds: Double = patience, fileID: String = #fileID,
     filePath: String = #filePath, line: Int = #line, column: Int = #column
 ) async -> T? {
     let first = FirstResult<T>()

@@ -300,6 +300,42 @@ private func press(_ chord: KeyChord, on pane: Pane) throws {
     }
 }
 
+/// Go to Item's choice in a column that closed while the palette was open does nothing: no
+/// column takes the keys and no selection changes.
+@MainActor @Test func goToItemInAClosedColumnDoesNothing() async {
+    let fixture = await columnPane(selecting: "docs")
+    await settle { trail(fixture.pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+    let docs = trail(fixture.pane).columns[2].pane
+    select("a.txt", in: trail(fixture.pane).columns[1])
+    #expect(paths(fixture.pane) == ["/", "/r"])
+
+    trail(fixture.pane).jump(to: "x.txt", inColumnOf: docs)
+
+    #expect(paths(fixture.pane) == ["/", "/r"])
+    #expect(trail(fixture.pane).focusedIndex == 1)
+    #expect(
+        trail(fixture.pane).columns[1].pane.selection
+            == Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+    #expect(docs.selection.isEmpty)
+}
+
+/// Go to Item's choice of a row its column no longer lists does nothing: the focused column
+/// keeps the keys and the column's selection stays.
+@MainActor @Test func goToItemOfAGoneRowDoesNothing() async {
+    let fixture = await columnPane(selecting: "docs")
+    await settle { trail(fixture.pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+    let parent = trail(fixture.pane).columns[1].pane
+    trail(fixture.pane).focus(trail(fixture.pane).columns[2])
+    parent.apply(.patches([.remove(name: "other")]), at: parent.location)
+    await settle { !parent.state.names.contains("other") }
+
+    trail(fixture.pane).jump(to: "other", inColumnOf: parent)
+
+    #expect(paths(fixture.pane) == ["/", "/r", "/r/docs"])
+    #expect(trail(fixture.pane).focusedIndex == 2)
+    #expect(parent.selection == Selection([ExactName("docs")], cursor: ExactName("docs")))
+}
+
 /// The root taken from the path is checked against the mount table off the main thread: a volume
 /// mounted below `/` outside `/Volumes` drops the columns above it.
 @MainActor @Test func aVolumeMountedOutsideVolumesStartsTheTrailAtItsMountPoint() async {
@@ -964,7 +1000,7 @@ func leftOrCommandUpMovesToTheParentsColumnAndDoesNothingAtTheRoot(chord: KeyCho
     #expect(paths(pane) == ["/", "/r", "/r/other"])
     expectKept(selecting: "other")
     #expect(!pane.canGoForward)
-    #expect(!above[1].canUndoSelection)
+    #expect(!fixture.tab.canUndoSelection)
     await trail(pane).rootChecked()
     await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
     await drainMainQueue()
@@ -1263,13 +1299,59 @@ func leftOrCommandUpMovesToTheParentsColumnAndDoesNothingAtTheRoot(chord: KeyCho
     let pane = fixture.pane
     let docs = trail(pane).columns[2].pane
     docs.select(Selection([ExactName("sub")], cursor: ExactName("sub")), recordingAs: nil)
-    #expect(!docs.canUndoSelection)
+    #expect(!fixture.tab.canUndoSelection)
     trail(pane).focus(trail(pane).columns[1])
 
     trail(pane).columns[1].pane.pressSelectedFolder()
 
     #expect(docs.selection.isEmpty)
-    #expect(!docs.canUndoSelection)
+    #expect(!fixture.tab.canUndoSelection)
+}
+
+/// Cmd-U after ← puts back the selection of the column the keys left, which takes them again,
+/// with nothing added to Back; Shift-Cmd-U puts back what it replaced
+/// (docs/decisions/0112-position-history.md).
+@MainActor @Test func commandUAfterLeftPutsBackTheSelectionOfTheColumnTheKeysLeft() async throws {
+    let fixture = await columnPane(at: "/r/docs")
+    let pane = fixture.pane
+    let docs = trail(pane).columns[2]
+    select("x.txt", in: docs)
+    select("sub", in: docs)
+    await settle { paths(pane) == ["/", "/r", "/r/docs", "/r/docs/sub"] }
+    trail(pane).moveLeft()
+    #expect(trail(pane).focusedIndex == 1)
+    let back = pane.history.backEntries.count
+
+    try press(KeyChord("u", modifiers: .command), on: pane)
+
+    #expect(trail(pane).focused === docs)
+    #expect(docs.pane.selection == Selection([ExactName("x.txt")], cursor: ExactName("x.txt")))
+    #expect(paths(pane) == ["/", "/r", "/r/docs"])
+    #expect(pane.history.backEntries.count == back)
+    #expect(pane.location == Location(path: "/r/docs"))
+
+    try press(KeyChord("u", modifiers: [.command, .shift]), on: pane)
+
+    #expect(docs.pane.selection == Selection([ExactName("sub")], cursor: ExactName("sub")))
+    #expect(paths(pane) == ["/", "/r", "/r/docs", "/r/docs/sub"])
+    #expect(pane.history.backEntries.count == back)
+}
+
+/// A restart of the trail, as a navigation makes, drops the pane's steps, columns and all, so
+/// they aren't there when Back starts the trail again where it was.
+@MainActor @Test func aNavigationInColumnViewDropsThePanesSteps() async throws {
+    let fixture = await columnPane(at: "/r/docs")
+    let pane = fixture.pane
+    select("x.txt", in: trail(pane).columns[2])
+    select("sub", in: trail(pane).columns[2])
+    #expect(fixture.tab.canUndoSelection)
+
+    pane.navigate(to: Location(path: "/r/other"))
+    pane.goBack()
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+    #expect(paths(pane).prefix(3) == ["/", "/r", "/r/docs"])
+
+    #expect(!fixture.tab.canUndoSelection)
 }
 
 @MainActor @Test func openOnAFolderInAColumnMovesIntoItsColumn() async throws {
@@ -1805,6 +1887,48 @@ private func keyedPane(
 
     try press(KeyChord(.down), on: pane)
 
+    #expect(paths(pane) == ["/", "/k"])
+    await settle { clock.waitingSleeps == 1 }
+    clock.advance(by: ColumnTrail.openDelay)
+    await settle { paths(pane) == ["/", "/k", "/k/f1"] }
+}
+
+/// A second deliberate press, once the keys have paused after the first, opens its kept folder
+/// at once too: only presses inside the pause wait.
+@MainActor @Test func aSecondPressAfterAPauseOntoAKeptFolderOpensAtOnce() async throws {
+    let clock = ManualClock()
+    let fixture = try await keyedPane(
+        clock: clock, keeping: ["f1", "f2"], volume: ListingService.listerVolume)
+    let pane = fixture.pane
+    try press(KeyChord(.down), on: pane)
+    #expect(paths(pane) == ["/", "/k", "/k/f1"])
+
+    clock.advance(by: ColumnTrail.openDelay)
+    try press(KeyChord(.down), on: pane)
+
+    #expect(paths(pane) == ["/", "/k", "/k/f2"])
+    let opened = try #require(trail(pane).columns.last?.pane)
+    #expect(opened.state.names == ["in", "m.txt", "n.txt"])
+    await drainWaits()
+    #expect(clock.waitingSleeps == 0)
+}
+
+/// A kept folder whose rows are kept in another sort than the column's would make the new
+/// column sort them before it shows any, so the press waits for the pause as with nothing kept.
+@MainActor @Test func aKeptFolderInAnotherArrangementStillWaits() async throws {
+    let clock = ManualClock()
+    let fixture = try await keyedPane(
+        clock: clock, keeping: ["f1"], volume: ListingService.listerVolume)
+    let pane = fixture.pane
+    let first = trail(pane).columns[1].pane
+    first.setSort(.name, ascending: false)
+    await settle { first.state.listing.map(first.isArranged) == true }
+    #expect(first.selection.cursor == ExactName("f0"))
+
+    // Sorted Z to A, `f1` is above `f0`.
+    try press(KeyChord(.up), on: pane)
+
+    #expect(first.selection.cursor == ExactName("f1"))
     #expect(paths(pane) == ["/", "/k"])
     await settle { clock.waitingSleeps == 1 }
     clock.advance(by: ColumnTrail.openDelay)

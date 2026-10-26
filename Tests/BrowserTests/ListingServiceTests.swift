@@ -37,7 +37,7 @@ private final class UpdateLog {
     }
 
     /// Waits until `count` updates have arrived; false if `timeout` passes first.
-    func wait(for count: Int, timeout: TimeInterval = 5) async -> Bool {
+    func wait(for count: Int, timeout: TimeInterval = patience) async -> Bool {
         if updates.count >= count { return true }
         let id = UUID()
         return await withCheckedContinuation { continuation in
@@ -79,9 +79,9 @@ private let sentinelPath = "/sentinel"
 private let holdOutcomes: [String: GatedLister.Outcome] = Dictionary(
     uniqueKeysWithValues: (holdPaths + [sentinelPath]).map { ($0, .batches([])) })
 
-/// Returns once no load holds a slot; fails the test after 5 seconds.
+/// Returns once no load holds a slot; fails the test after `patience`.
 private func waitUntilNoLoadRuns(_ service: ListingService) async {
-    let deadline = Date(timeIntervalSinceNow: 5)
+    let deadline = Date(timeIntervalSinceNow: patience)
     while await service.runningLoadCount() > 0 {
         if Date() > deadline {
             Issue.record("a load still holds a slot")
@@ -634,9 +634,9 @@ private func isFull(_ update: ListingUpdate) -> Bool {
     #expect(await second.updates.isEmpty)
 }
 
-/// Blocks until `clock` has `count` sleeps waiting; false after 5 seconds.
+/// Blocks until `clock` has `count` sleeps waiting; false after `patience`.
 private func waitForSleeps(_ count: Int, on clock: ManualClock) async -> Bool {
-    let deadline = Date(timeIntervalSinceNow: 5)
+    let deadline = Date(timeIntervalSinceNow: patience)
     while clock.waitingSleeps != count {
         if Date() > deadline { return false }
         try? await Task.sleep(for: .milliseconds(2))
@@ -845,7 +845,7 @@ private let musicShare = VolumeIdentity(
     clock.advance(by: LoadTimeouts.slow)
     // The local load waited 3 s too, so a slow update can come before its listing.
     #expect(await log.wait(for: 1))
-    let deadline = Date(timeIntervalSinceNow: 5)
+    let deadline = Date(timeIntervalSinceNow: patience)
     while await !log.updates.contains(where: isFull), Date() < deadline {
         try? await Task.sleep(for: .milliseconds(2))
     }
@@ -1022,7 +1022,7 @@ private struct ProbeLister: Lister {
     _ = load(service, "/local", into: log)
     #expect(await log.wait(for: 2))
 
-    let deadline = Date(timeIntervalSinceNow: 5)
+    let deadline = Date(timeIntervalSinceNow: patience)
     while await cache.folder(at: "/a/x", on: shareA) == nil, Date() < deadline {
         try? await Task.sleep(for: .milliseconds(2))
     }

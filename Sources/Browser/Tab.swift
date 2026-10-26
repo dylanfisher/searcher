@@ -9,10 +9,16 @@
 public final class Tab {
     public let id = TabID()
     public private(set) var layout: Layout {
-        didSet { onChange?() }
+        didSet {
+            changeCount += 1
+            onChange?()
+        }
     }
     public private(set) var panes: [PaneID: Pane] {
-        didSet { watchPanes() }
+        didSet {
+            changeCount += 1
+            watchPanes()
+        }
     }
     /// Runs after an edit that may focus another pane or add one: focus, split, a grid, and
     /// closing a pane. Its workspace sets it, to move the focus of the panes' loads.
@@ -24,6 +30,19 @@ public final class Tab {
     /// Set once `closePane` reported `.tab`, `removeFocusedPane` took the last pane, or `close`
     /// ran.
     public private(set) var isClosed = false
+    /// The selections before each change in the tab's panes, for Undo and Redo Selection. Tests
+    /// replace it with one on a clock they advance.
+    var selectionHistory = SelectionHistory() {
+        didSet { changeCount += 1 }
+    }
+    /// Goes up with every change that can change whether a selection step is left: of the
+    /// layout, the panes or the history, or anything a pane reports, such as its rows, its
+    /// selection or its columns.
+    private var changeCount = 0
+    /// `canUndoSelection` and `canRedoSelection` as last found, at the `changeCount` they were
+    /// found at. Menus ask on every key equivalent, and each answer resolves steps against the
+    /// rows.
+    private var selectionStepsFound = StepsFound(changeCount: -1)
 
     /// A tab of one pane, named `id` in the layout. A pane moved in from another tab keeps its
     /// ID.
@@ -41,11 +60,16 @@ public final class Tab {
         watchPanes()
     }
 
-    /// Has each pane report its changes to the tab. A pane that moves to another tab is watched
-    /// by that one from then on.
+    /// Has each pane report its changes and its selection steps to the tab. A pane that moves to
+    /// another tab is watched by that one from then on.
     private func watchPanes() {
         for pane in panes.values {
-            pane.onTabChange = { [weak self] in self?.onChange?() }
+            pane.holdingTab = self
+            pane.onTabChange = { [weak self] in
+                guard let self else { return }
+                changeCount += 1
+                onChange?()
+            }
         }
     }
 
@@ -107,6 +131,7 @@ public final class Tab {
         }
         for id in change.closed {
             panes.removeValue(forKey: id)?.close()
+            selectionHistory.dropSteps(of: id)
         }
         for id in change.added {
             panes[id] = model.copy(takingFocus: false)
@@ -126,6 +151,7 @@ public final class Tab {
             return .tab
         }
         panes[closed] = nil
+        selectionHistory.dropSteps(of: closed)
         onFocusChange?()
         return .pane
     }
@@ -139,7 +165,8 @@ public final class Tab {
             isClosed = true
             return .tab
         }
-        panes[removed] = nil
+        panes.removeValue(forKey: removed)?.holdingTab = nil
+        selectionHistory.dropSteps(of: removed)
         onFocusChange?()
         return .pane
     }
@@ -192,6 +219,115 @@ public final class Tab {
     public func toggleZoom() {
         checkOpen()
         layout.toggleZoom()
+    }
+
+    // MARK: Selection undo
+
+    /// Whether Undo Selection would change a selection: a step back selects something still
+    /// listed, other than what is selected there now, in a pane of the tab and a folder it shows.
+    public var canUndoSelection: Bool {
+        stepFound(\.back) { selectionHistory.canUndo { restorable($0) != nil } }
+    }
+
+    /// Whether Redo Selection would change a selection, as `canUndoSelection`.
+    public var canRedoSelection: Bool {
+        stepFound(\.forward) { selectionHistory.canRedo { restorable($0) != nil } }
+    }
+
+    /// Puts back the selection before the last change, with its cursor and anchor, leaving out
+    /// entries no longer listed, in the pane and folder it was made in: that pane takes the
+    /// focus, and in column view that column the keys. Skips steps that would select nothing
+    /// listed or what is selected now. Never navigates, and adds nothing to Back
+    /// (docs/decisions/0112-position-history.md).
+    public func undoSelection() {
+        guard let restore = selectionHistory.undo({ restorable($0) }) else { return }
+        apply(restore)
+    }
+
+    /// Puts back what the last Undo Selection stepped back from, skipping as it does.
+    public func redoSelection() {
+        guard let restore = selectionHistory.redo({ restorable($0) }) else { return }
+        apply(restore)
+    }
+
+    /// `pane`, one of the tab's panes or a column of one, is about to change its selection by
+    /// `source`: the selection it has now is a step.
+    func paneWillChangeSelection(_ pane: Pane, by source: SelectionHistory.Source) {
+        selectionHistory.record(
+            SelectionHistory.Position(
+                pane: id(of: pane), folder: pane.location, selection: pane.selection),
+            by: source)
+    }
+
+    /// `pane` is leaving its folder for another, or its view mode for the other, so its steps
+    /// name folders it won't show: they go.
+    func paneDidNavigate(_ pane: Pane) {
+        selectionHistory.dropSteps(of: id(of: pane))
+    }
+
+    /// The ID of `pane`'s leaf: its own, or its trail owner's for a column.
+    private func id(of pane: Pane) -> PaneID {
+        let owner = pane.containingTrail?.owner ?? pane
+        guard let id = panes.first(where: { $0.value === owner })?.key else {
+            preconditionFailure("a pane at \(owner.location.path) reported to a tab without it")
+        }
+        return id
+    }
+
+    /// What restores a step: the leaf, its pane, the pane that shows the step's folder (the pane
+    /// itself, or a column of its trail) and the selection resolved against that one's rows.
+    private struct Restore {
+        let id: PaneID
+        let owner: Pane
+        let shown: Pane
+        let selection: Selection
+    }
+
+    /// What restores `step`, and the position that replaces: the selection in the same pane and
+    /// folder now. Nil when the pane or its column for the folder is gone, or the step would
+    /// change nothing (`Pane.restorable`).
+    private func restorable(_ step: SelectionHistory.Position)
+        -> (Restore, replacing: SelectionHistory.Position)?
+    {
+        guard let owner = panes[step.pane] else { return nil }
+        let shown: Pane
+        if let trail = owner.columnTrail {
+            guard let column = trail.columns.first(where: { $0.pane.location == step.folder })
+            else { return nil }
+            shown = column.pane
+        } else {
+            // A drag's spring-loaded folder shows another folder until the drag ends.
+            guard owner.location == step.folder else { return nil }
+            shown = owner
+        }
+        guard let selection = shown.restorable(step.selection) else { return nil }
+        let replaced = SelectionHistory.Position(
+            pane: step.pane, folder: step.folder, selection: shown.selection)
+        return (Restore(id: step.pane, owner: owner, shown: shown, selection: selection), replaced)
+    }
+
+    private func apply(_ restore: Restore) {
+        if layout.focused != restore.id { focus(restore.id) }
+        restore.shown.restore(restore.selection, in: restore.owner)
+    }
+
+    private struct StepsFound {
+        let changeCount: Int
+        var back: Bool?
+        var forward: Bool?
+    }
+
+    /// The answer kept in `selectionStepsFound` at `side`, or `find`'s, kept.
+    private func stepFound(_ side: WritableKeyPath<StepsFound, Bool?>, _ find: () -> Bool) -> Bool {
+        var found = selectionStepsFound
+        if found.changeCount != changeCount {
+            found = StepsFound(changeCount: changeCount)
+        }
+        if let answer = found[keyPath: side] { return answer }
+        let answer = find()
+        found[keyPath: side] = answer
+        selectionStepsFound = found
+        return answer
     }
 
     private func checkOpen() {

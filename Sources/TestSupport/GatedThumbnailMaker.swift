@@ -84,7 +84,7 @@ public final class GatedThumbnailMaker: ThumbnailMaking, @unchecked Sendable {
     public var paths: [String] { calls.map(\.path) }
 
     /// Suspends until `count` calls have started, and returns false if `timeout` passes first.
-    public nonisolated(nonsending) func waitForCalls(_ count: Int, timeout: TimeInterval = 5)
+    public nonisolated(nonsending) func waitForCalls(_ count: Int, timeout: TimeInterval = patience)
         async -> Bool
     {
         let deadline = Date(timeIntervalSinceNow: timeout)

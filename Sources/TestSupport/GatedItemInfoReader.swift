@@ -70,7 +70,9 @@ public final class GatedItemInfoReader: ItemInfoReading, @unchecked Sendable {
     }
 
     /// Suspends until a call for `path` has started, and returns false if `timeout` passes first.
-    public nonisolated(nonsending) func waitForCall(_ path: String, timeout: TimeInterval = 5) async
+    public nonisolated(nonsending) func waitForCall(
+        _ path: String, timeout: TimeInterval = patience
+    ) async
         -> Bool
     {
         await wait(timeout: timeout) { startedCalls.contains { $0.path == path } }
@@ -78,7 +80,9 @@ public final class GatedItemInfoReader: ItemInfoReading, @unchecked Sendable {
 
     /// Suspends until `count` calls have returned or thrown, and returns false if `timeout`
     /// passes first.
-    public nonisolated(nonsending) func waitForFinished(_ count: Int, timeout: TimeInterval = 5)
+    public nonisolated(nonsending) func waitForFinished(
+        _ count: Int, timeout: TimeInterval = patience
+    )
         async -> Bool
     {
         await wait(timeout: timeout) { finishedCount >= count }

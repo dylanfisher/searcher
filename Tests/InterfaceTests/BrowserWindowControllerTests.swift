@@ -1435,6 +1435,33 @@ private func allMenuItems(_ menu: NSMenu) -> [NSMenuItem] {
     #expect(try ringed(first, in: fixture))
 }
 
+/// In column view, going to a folder rebuilds the columns: the keys end in the new focused
+/// column's table, not in a column the move closed.
+@MainActor @Test func aFolderChosenInOpenQuicklyInColumnViewGivesTheNewColumnTheKeys() async throws
+{
+    let fixture = try await Fixture()
+    let pane = fixture.tab.focusedPane
+    pane.setViewMode(.column)
+    let trail = try #require(pane.columnTrail)
+    await settle { trail.columns.allSatisfy { $0.pane.state.isLoaded } }
+    _ = try keysToSidebar(in: fixture)
+    fixture.controller.showPalette()
+
+    let editor = try await typeInPalette("/root/do", in: fixture)
+    await settle { (try? paletteTitles(in: fixture).first) == "/root/docs" }
+    editor.keyDown(with: try keyEvent("\r"))
+    // Going to a folder builds the pane a new trail.
+    await settle {
+        guard let trail = pane.columnTrail else { return false }
+        return trail.focused.pane.location == Location(path: "/root/docs")
+            && trail.columns.allSatisfy { $0.pane.state.isLoaded }
+    }
+
+    let table = try #require(fixture.window.firstResponder as? ListingTableView)
+    #expect(table === (try fixture.paneController(fixture.tab.layout.focused).keyView))
+    #expect(table.window === fixture.window)
+}
+
 @MainActor @Test func aRowChosenInGoToItemOverTheSidebarGivesItsPaneTheKeys() async throws {
     let fixture = try await Fixture()
     let (first, _) = try twoPanes(.horizontal, in: fixture)
@@ -2015,6 +2042,26 @@ func aFocusPaneChordFromTheSidebarGivesThePaneItFocusesTheKeys(_ direction: Dire
     #expect(fixture.tab.layout.focused == right)
     #expect(fixture.window.firstResponder === (try fixture.paneController(right).keyView))
     #expect(try ringed(right, in: fixture))
+}
+
+/// Cmd-U pressed in the sidebar puts back a selection of the other pane, which takes the focus
+/// and the keys (docs/decisions/0112-position-history.md).
+@MainActor @Test func commandUFromTheSidebarGivesThePaneItRestoresTheKeys() async throws {
+    let fixture = try await Fixture()
+    let (left, right) = try twoPanes(.horizontal, in: fixture)
+    let leftPane = try #require(fixture.tab.panes[left])
+    leftPane.select(Selection([ExactName("docs")], cursor: ExactName("docs")))
+    leftPane.select(Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+    #expect(fixture.window.makeFirstResponder(try fixture.paneController(right).keyView))
+    #expect(fixture.tab.layout.focused == right)
+    let outline = try keysToSidebar(in: fixture)
+
+    outline.keyDown(with: try keyEvent("u", modifiers: .command))
+
+    #expect(fixture.tab.layout.focused == left)
+    #expect(leftPane.selection.cursor == ExactName("docs"))
+    #expect(fixture.window.firstResponder === (try fixture.paneController(left).keyView))
+    #expect(try ringed(left, in: fixture))
 }
 
 // MARK: A press anywhere in a pane focuses it

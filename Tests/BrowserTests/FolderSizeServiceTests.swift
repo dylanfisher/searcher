@@ -98,15 +98,17 @@ private final class FakeWalks: @unchecked Sendable {
     var cancelled: [String] { condition.withLock { cancelledPaths } }
     func buffers(_ path: String) -> Int { condition.withLock { buffersRead[path, default: 0] } }
 
-    func waitForStarts(_ count: Int, timeout: TimeInterval = 5) async -> Bool {
+    func waitForStarts(_ count: Int, timeout: TimeInterval = patience) async -> Bool {
         await waitLocked(timeout: timeout) { startedWalks.count >= count }
     }
 
-    func waitForCancelled(_ path: String, timeout: TimeInterval = 5) async -> Bool {
+    func waitForCancelled(_ path: String, timeout: TimeInterval = patience) async -> Bool {
         await waitLocked(timeout: timeout) { cancelledPaths.contains(path) }
     }
 
-    func waitForBuffers(_ path: String, _ count: Int, timeout: TimeInterval = 5) async -> Bool {
+    func waitForBuffers(_ path: String, _ count: Int, timeout: TimeInterval = patience) async
+        -> Bool
+    {
         await waitLocked(timeout: timeout) { buffersRead[path, default: 0] >= count }
     }
 
@@ -207,7 +209,7 @@ private func makeFolder(_ path: String) throws {
     let listed = EventLog<ListingUpdate>()
     listings.load(Location(path: folder.url.path)) { listed.append($0) }
     #expect(
-        await listed.wait(timeout: 10) {
+        await listed.wait {
             $0.contains { if case .full = $0 { true } else { false } }
         })
     #expect(walks.starts.count == 4)
@@ -368,7 +370,7 @@ private func makeFolder(_ path: String) throws {
 
     try makeFile(sub + "/deep/new", size: 50)
 
-    let deadline = Date(timeIntervalSinceNow: 5)
+    let deadline = Date(timeIntervalSinceNow: patience)
     while await cache.size(of: sub, modified: firstModified, on: volume) != nil,
         Date() < deadline
     {
@@ -490,7 +492,7 @@ private func makeFolder(_ path: String) throws {
         #expect(await log.wait { $0.count == index + 1 })
     }
 
-    let deadline = Date(timeIntervalSinceNow: 5)
+    let deadline = Date(timeIntervalSinceNow: patience)
     while await cache.size(of: children[0], modified: firstModified, on: volume) != nil,
         Date() < deadline
     {
@@ -526,7 +528,7 @@ private func makeFolder(_ path: String) throws {
             log.append((folders[index].path, result))
         }
 
-        #expect(await log.wait(timeout: 30) { $0.count == folders.count }, "\(volume.kind)")
+        #expect(await log.wait { $0.count == folders.count }, "\(volume.kind)")
         #expect(reads.all == [parent], "\(volume.kind)")
         #expect(walks.mostAtOnce <= most, "\(volume.kind)")
     }
@@ -600,7 +602,7 @@ private func makeFolder(_ path: String) throws {
     // The four running walks finish and keep their sizes; the waiting one never starts, and
     // the pane that left gets nothing.
     let volume = ListingService.listerVolume
-    let deadline = Date(timeIntervalSinceNow: 5)
+    let deadline = Date(timeIntervalSinceNow: patience)
     for path in walks.starts.map(\.path) {
         while await cache.size(of: path, modified: firstModified, on: volume) == nil,
             Date() < deadline
@@ -764,7 +766,7 @@ private func keep(
 
     request(sizes, shown, pane: PaneID(), into: log)
 
-    #expect(await walks.waitForStarts(5, timeout: 1))
+    #expect(await walks.waitForStarts(5))
     #expect(walks.cancelled == [left[0]])
     walks.release(shown)
     #expect(await log.wait { $0.count == 1 })

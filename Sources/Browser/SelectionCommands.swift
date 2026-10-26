@@ -1,8 +1,8 @@
 /// Row movement and selection: the arrows, Opt- and Ctrl-Shift-arrows (ten rows), Fn-arrows (a
 /// page), Home and End, and Cmd-Opt-↑ and Cmd-Opt-↓, move the cursor and select its row alone, Shift-arrows extend the
 /// selection from the anchor, and Cmd-A selects every row. Type-to-select, which no chord runs,
-/// selects by name. Cmd-U and Shift-Cmd-U step back and forward through the pane's selections in
-/// the folder.
+/// selects by name. Cmd-U and Shift-Cmd-U step back and forward through the selections in the
+/// tab's panes.
 public enum SelectionCommands: CommandSet {
     public static let selectNext = Command(
         id: CommandID("selection.next"), title: "Select Next Row", chords: [KeyChord(.down)])
@@ -39,8 +39,9 @@ public enum SelectionCommands: CommandSet {
         id: CommandID("selection.all"), title: "Select All",
         chords: [KeyChord("a", modifiers: .command)])
 
-    /// Sublime Text's soft undo: the selection before the last change in the folder, not a file
-    /// change (docs/decisions/0077-selection-history.md).
+    /// Sublime Text's soft undo: the selection before the last change in the tab, in the pane
+    /// and folder it was made in, not a file change (docs/decisions/0077-selection-history.md,
+    /// docs/decisions/0112-position-history.md).
     public static let undoSelection = Command(
         id: CommandID("selection.undo"), title: "Undo Selection",
         chords: [KeyChord("u", modifiers: .command)])
@@ -51,11 +52,11 @@ public enum SelectionCommands: CommandSet {
     public static var bindings: [CommandBinding] {
         [
             CommandBinding(
-                undoSelection, isEnabled: { $0.pane.canUndoSelection },
-                run: { $0.pane.undoSelection() }),
+                undoSelection, isEnabled: { $0.pane.tab?.canUndoSelection ?? false },
+                run: { $0.pane.tab?.undoSelection() }),
             CommandBinding(
-                redoSelection, isEnabled: { $0.pane.canRedoSelection },
-                run: { $0.pane.redoSelection() }),
+                redoSelection, isEnabled: { $0.pane.tab?.canRedoSelection ?? false },
+                run: { $0.pane.tab?.redoSelection() }),
             CommandBinding(selectNext) {
                 $0.pane.moveSelection(by: 1, isKeyRepeat: $0.isKeyRepeat)
             },

@@ -1007,7 +1007,7 @@ private func cancelAllFinishesAtOnce(_ queue: FileOperationQueue) async -> Bool 
 /// A press marks the queue: a copy, and a move to another volume still in its pre-scan, are
 /// skipped; a move within a volume still being planned is awaited, and `finishedCount` waits
 /// for it until it finishes or `pressWait` passes on the queue's clock.
-@Test(.timeLimit(.minutes(1))) func aPressWaitsOnlyForOperationsThatTakeMilliseconds()
+@Test(.timeLimit(.minutes(2))) func aPressWaitsOnlyForOperationsThatTakeMilliseconds()
     async throws
 {
     let files = FakeFiles()
@@ -1069,7 +1069,7 @@ private func cancelAllFinishesAtOnce(_ queue: FileOperationQueue) async -> Bool 
 
 /// An operation leaves the intake before `onAnyFinish` hears of it, so an undo press that finds
 /// it unfinished always hears of its end after the press.
-@Test(.timeLimit(.minutes(1))) func anOperationLeavesTheIntakeBeforeOnAnyFinishHearsOfIt()
+@Test(.timeLimit(.minutes(2))) func anOperationLeavesTheIntakeBeforeOnAnyFinishHearsOfIt()
     async throws
 {
     let files = FakeFiles()

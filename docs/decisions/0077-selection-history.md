@@ -1,7 +1,7 @@
 # 0077. Selection undo, the cursor after a trash, and selecting on mouse down
 
 - **Date:** 2026-10-23
-- **Status:** accepted
+- **Status:** Amended by [0112](0112-position-history.md)
 
 ## Context
 
