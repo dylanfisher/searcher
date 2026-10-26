@@ -26,38 +26,6 @@ private func link(_ name: String) -> DirectoryEntry {
 
 private let delay: Duration = .milliseconds(500)
 
-/// A drag's info as AppKit hands it to a destination, over a pasteboard of the test's own, so
-/// no drag session starts and the user's pasteboards are untouched. Counts the times spring
-/// loading was started again for a new row.
-@MainActor
-private final class DraggingInfo: NSObject, @preconcurrency NSDraggingInfo {
-    let draggingPasteboard: NSPasteboard
-    let draggingSourceOperationMask: NSDragOperation = [.copy, .move, .generic, .link]
-    private(set) var resets = 0
-
-    init(pasteboard: NSPasteboard) {
-        draggingPasteboard = pasteboard
-    }
-
-    var draggingDestinationWindow: NSWindow? { nil }
-    var draggingLocation: NSPoint { .zero }
-    var draggedImageLocation: NSPoint { .zero }
-    var draggedImage: NSImage? { nil }
-    var draggingSource: Any? { nil }
-    var draggingSequenceNumber: Int { 1 }
-    func slideDraggedImage(to screenPoint: NSPoint) {}
-    var draggingFormation: NSDraggingFormation = .default
-    var animatesToDestination = false
-    var numberOfValidItemsForDrop = 0
-    func enumerateDraggingItems(
-        options enumOpts: NSDraggingItemEnumerationOptions = [], for view: NSView?,
-        classes classArray: [AnyClass], searchOptions: [NSPasteboard.ReadingOptionKey: Any] = [:],
-        using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void
-    ) {}
-    var springLoadingHighlight: NSSpringLoadingHighlight { .none }
-    func resetSpringLoading() { resets += 1 }
-}
-
 /// A pane at `/r` over the stub lister, in list or column view, shown by a view that is never
 /// put in a window, with lists that take drops and spring on a clock the test advances. The
 /// drag carries `/elsewhere/x.txt`.
@@ -67,7 +35,7 @@ private final class Fixture {
     let clock = ManualClock()
     let loader: SpringLoader
     let pasteboard = NSPasteboard(name: NSPasteboard.Name("searcher-test-\(UUID().uuidString)"))
-    let info: DraggingInfo
+    let info: StubDraggingInfo
     let mouse = Mouse()
     private let listController: ListingViewController?
     private let columnController: ColumnViewController?
@@ -85,7 +53,7 @@ private final class Fixture {
             viewMode: viewMode)
         loader = SpringLoader(
             delay: springDelay, clock: clock, isMouseDown: { [mouse] in mouse.isDown })
-        info = DraggingInfo(pasteboard: pasteboard)
+        info = StubDraggingInfo(pasteboard: pasteboard)
         if viewMode == .column {
             let controller = ColumnViewController(
                 pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init())

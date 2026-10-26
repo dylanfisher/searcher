@@ -223,6 +223,8 @@ public enum MainMenuBuilder {
                 // Where Finder puts Hide Sidebar.
                 .command(WorkspaceCommands.toggleSidebar.id),
                 .command(WorkspaceCommands.focusSidebar.id),
+                .command(ViewCommands.toggleSidebarFavorites.id),
+                .command(ViewCommands.toggleSidebarWorkspaces.id),
                 .separator,
                 .command(ViewCommands.toggleHidden.id),
                 .command(ViewCommands.toggleHideDSStore.id),

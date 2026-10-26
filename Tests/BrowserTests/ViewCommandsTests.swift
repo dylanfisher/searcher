@@ -139,6 +139,23 @@ func aSortKeySortsByItsColumnAndTheSameKeyAgainReverses(
     #expect(!isChecked(pane.settings))
 }
 
+@MainActor @Test func theSidebarGroupTogglesToggleTheirSettings() throws {
+    let pane = PaneFixture(at: "/r", folders: ["/r": []]).pane
+    for (command, setting) in [
+        (ViewCommands.toggleSidebarFavorites, \Settings.showsFavoritesInSidebar),
+        (ViewCommands.toggleSidebarWorkspaces, \Settings.showsWorkspacesInSidebar),
+    ] {
+        let binding = try #require(AppCommands.bindings.first { $0.command == command })
+        let isChecked = try #require(binding.isChecked)
+        #expect(isChecked(pane.settings))
+
+        try run(command, on: pane)
+
+        #expect(!pane.settings[keyPath: setting])
+        #expect(!isChecked(pane.settings))
+    }
+}
+
 /// Select All, type-to-select and the status bar's counts read the rows, so a hidden .DS_Store
 /// is in none of them.
 @MainActor @Test func selectAllAndTypeToSelectSkipAHiddenDSStore() async throws {

@@ -238,7 +238,8 @@ private func choose(_ item: NSMenuItem) throws {
     let workspace = Workspace(tab: Tab(pane: pane))
     workspaces.add(workspace)
     let controller = BrowserWindowController(
-        workspace: workspace, workspaces: workspaces, settings: pane.settings, openWith: cache)
+        workspace: workspace, workspaces: workspaces,
+        favorites: Favorites(settings: pane.settings), settings: pane.settings, openWith: cache)
     let window = try #require(controller.window)
     window.contentView?.layoutSubtreeIfNeeded()
     await settle { pane.state.isLoaded }

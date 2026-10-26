@@ -105,6 +105,9 @@ public final class WorkspaceWindows {
     })
     /// The apps Open With lists for each file type, shared by every window.
     let openWith: OpenWith
+    /// The sidebar's favorites, shared by every window. The app has them looked for again as it
+    /// becomes active.
+    public let favorites: Favorites
     /// The unfinished operations in the queue's latest snapshots, for a window that opens while
     /// operations run.
     private var unfinished: [FileOperationQueue.Snapshot] = []
@@ -130,6 +133,7 @@ public final class WorkspaceWindows {
         self.folderSizes = folderSizes
         self.cache = cache
         folderVisits = FolderVisits(store: store)
+        favorites = Favorites(settings: settings)
         self.clipboard = CutState(clipboard: clipboard)
         let openWithLogger = Logger(category: "openWith")
         openWith = OpenWith(
@@ -826,7 +830,7 @@ public final class WorkspaceWindows {
             controllers.first { $0.workspace === other }
         }?.window
         let controller = BrowserWindowController(
-            workspace: workspace, workspaces: list, settings: settings,
+            workspace: workspace, workspaces: list, favorites: favorites, settings: settings,
             fileOperations: fileOperations,
             clipboard: clipboard, mountTable: mountTable, undoHistory: undoHistory,
             openWith: openWith, folderVisits: folderVisits,
