@@ -37,9 +37,19 @@ other-pane confirm names nothing, and two Cmd-Shift-C presses ask two questions 
   (`WorkspaceList.workspaces.first`). Until 2026-10-26 every question went there. A window
   that isn't key is brought forward first, out of the Dock if minimized and from another Space,
   as `makeKeyAndOrderFront` does: the sheet's window may be behind another, and a sheet no one
-  sees would hold every later question. The next shows when it is answered. With no window open
+  sees would hold every later question. While the app isn't active, the Dock icon also bounces
+  once (`requestUserAttention(.informationalRequest)`), as Finder does; the app is never
+  activated, which would take the keys from the app the user is in. The next shows when it is
+  answered. With no window open
   a question waits, and the next window to open shows it. Each question is an awaited call,
   never a modal loop, so other windows keep their keys while a sheet is up.
+- **A new sheet ignores the keys for a moment** (2026-10-26). For `OperationPrompter.keyHold`
+  (0.5 s) after a question sheet appears, its buttons have no key equivalents and no button has
+  the focus, so Return, Enter, Esc and Space do nothing; clicks answer at once. A question can
+  appear while the user types in another window, and a Return meant for that window would
+  press Replace and overwrite a file. Esc is held too: Stop cancels the whole operation. 0.5 s
+  is less than it takes to read the question, so a deliberate key isn't lost. The default
+  button looks plain until the keys come back.
 - **Closing questions.** A snapshot that shows an operation finished closes its question, shown
   or waiting, and a question asked about an operation already seen finished returns at once. The
   queue drops what either returns. Cancel on the conflict sheet cancels the operation through the
