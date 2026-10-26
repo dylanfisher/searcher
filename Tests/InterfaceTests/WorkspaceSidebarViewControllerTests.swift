@@ -265,42 +265,26 @@ private final class Fixture {
     #expect(fixture.window.unhandledKeys.isEmpty)
 }
 
-/// As Finder's sidebar, the list doesn't take the keys for a press on it, which `NSWindow`
-/// asks before giving the pressed view the keys, so its selection shows as a list without the
-/// keys does. A press elsewhere, as right of the sidebar or on a menu, and a key, as Tab, still
-/// let it take them; Focus Sidebar gives them directly.
-@MainActor @Test func aPressInTheSidebarLeavesTheKeysWhereTheyWere() throws {
+/// The list refuses the keys only while a press on it is being sent, which first ends text
+/// editing; a press elsewhere in the window is sent as it is, and the list takes the keys again
+/// once the press is over, as for Focus Sidebar, Tab or VoiceOver.
+@MainActor @Test func theListRefusesTheKeysOnlyWhileAPressOnItIsSent() throws {
     let fixture = try Fixture()
-    let window = fixture.window.windowNumber
-    func press(at point: NSPoint, inWindow number: Int) throws -> NSEvent {
-        try #require(
-            NSEvent.mouseEvent(
-                with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 0,
-                windowNumber: number, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
-    }
-    let onARow = fixture.outline.convert(
-        NSPoint(x: 20, y: fixture.outline.rect(ofRow: try fixture.row(of: "Alpha")).midY),
-        to: nil)
     let outline = fixture.sidebar.outlineView
+    var endedEditing = 0
+    outline.takeKeysFromText = { endedEditing += 1 }
+    let onARow = outline.convert(
+        NSPoint(x: 20, y: outline.rect(ofRow: try fixture.row(of: "Alpha")).midY), to: nil)
+    var accepted: [Bool] = []
 
-    for type in [NSEvent.EventType.leftMouseDown, .rightMouseDown, .otherMouseDown] {
-        nonisolated(unsafe) let event = try #require(
-            NSEvent.mouseEvent(
-                with: type, location: onARow, modifierFlags: [], timestamp: 0,
-                windowNumber: window, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
-        outline.currentEvent = { event }
-        #expect(!outline.acceptsFirstResponder, "\(type)")
+    outline.sendMouseDown(atWindowPoint: onARow) { accepted.append(outline.acceptsFirstResponder) }
+    outline.sendMouseDown(atWindowPoint: NSPoint(x: 320, y: 20)) {
+        accepted.append(outline.acceptsFirstResponder)
     }
 
-    // Right of the sidebar, in a menu's window, a key, and no event.
-    for event in [
-        try press(at: NSPoint(x: 320, y: 20), inWindow: window),
-        try press(at: onARow, inWindow: window + 1), try keyEvent("\t"), nil,
-    ] {
-        nonisolated(unsafe) let event = event
-        outline.currentEvent = { event }
-        #expect(outline.acceptsFirstResponder, "\(String(describing: event))")
-    }
+    #expect(accepted == [false, true])
+    #expect(endedEditing == 1)
+    #expect(outline.acceptsFirstResponder)
     #expect(fixture.window.makeFirstResponder(outline))
 }
 

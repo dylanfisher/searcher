@@ -46,7 +46,12 @@ once the operation ends.
     the same reason, as a first responder set mid-hand-off is replaced by the view clicked.
   - **A click that also changes folder** closes the field before the rename starts; the rename is
     then dropped rather than run in the new folder, since `FileCommands.rename` names the entry
-    in the pane's folder.
+    in the pane's folder. (Amended 2026-10-26, from SB.4's review: a click in the sidebar
+    renamed nothing once the sidebar stopped taking the keys, where Finder commits.) A press
+    on the sidebar gives the keys from the field to the pane's list at the mouse down, and
+    opens its row a turn of the main actor later, so the rename starts first and lands even
+    when the row takes the pane to another folder
+    ([0107](0107-sidebar-favorites.md)).
 - **New Folder** edits the new folder's name through the context's `editName`, once the pane
   selects it. `Pane.select(_:whenListedAtSelectionVersion:then:)` runs the closure only when it
   selects the names, so a New Folder that makes nothing, or whose names the user's selection

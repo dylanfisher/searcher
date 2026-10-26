@@ -241,6 +241,10 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         window.didChangeFirstResponder = { [weak self] in self?.firstResponderDidChange() }
         window.willSendMouseDown = { [weak self] in self?.isDraggingWindow = false }
         window.takeKey = { [weak self] event in self?.runControlTab(event) ?? false }
+        window.sidebarList = sidebar.outlineView
+        sidebar.outlineView.takeKeysFromText = { [weak self] in
+            if self?.window?.firstResponder is NSText { self?.giveKeysBack() }
+        }
         window.delegate = self
         showWorkspace()
         window.initialFirstResponder = paneViewController.keyView
@@ -1046,10 +1050,21 @@ private final class BrowserWindow: NSWindow {
     /// Runs before a left mouse down is handled, so the one that starts a title-bar drag comes
     /// ahead of the `windowWillMove` it causes.
     var willSendMouseDown: @MainActor () -> Void = {}
+    /// The sidebar's list, which a mouse down on it is sent through, so the list leaves the keys
+    /// where they were (`SidebarOutlineView.sendMouseDown`).
+    weak var sidebarList: WorkspaceSidebarViewController.SidebarOutlineView?
 
     override func sendEvent(_ event: NSEvent) {
         if event.type == .leftMouseDown { willSendMouseDown() }
         if event.type == .keyDown, takeKey(event) { return }
+        if [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type),
+            let sidebarList
+        {
+            sidebarList.sendMouseDown(atWindowPoint: event.locationInWindow) {
+                super.sendEvent(event)
+            }
+            return
+        }
         super.sendEvent(event)
     }
 
