@@ -86,27 +86,41 @@ private func snapshot(
     #expect(row.bar.doubleValue == 0.75)
 }
 
-@MainActor @Test func rowsKeepAGapBetweenThemAndTheFirstKeepsATopInset() throws {
+/// The rect of what `row` shows, its labels, bar and buttons, in `view`'s coordinates: their
+/// alignment rects, the edges stack views line up, without a text field's inset.
+@MainActor
+private func content(of row: OperationRowView, in view: NSView) -> NSRect {
+    let parts: [NSView] = [
+        row.titleLabel, row.bar, row.detailLabel, row.pauseButton, row.cancelButton,
+    ]
+    return parts.map { part in
+        view.convert(part.alignmentRect(forFrame: part.frame), from: part.superview)
+    }.reduce(NSRect.null) { $0.union($1) }
+}
+
+/// The panel's top margin, the gaps between rows and the bottom margin all match the rows' side
+/// margin (Dylan, 2026-10-26: "update so top and bottom margins, and gaps between multiple
+/// operations, match the left margin").
+@MainActor @Test func rowsSitTheSideMarginFromThePanelsTopAndBottomAndFromEachOther() throws {
     let fixture = Fixture()
     let container = host(fixture, width: 400)
 
     fixture.controller.show([snapshot(1, .running), snapshot(2, .running)])
     container.layoutSubtreeIfNeeded()
 
-    let first = try fixture.row(1)
-    let second = try fixture.row(2)
-    let (upper, lower) = first.frame.minY < second.frame.minY ? (first, second) : (second, first)
-    #expect(lower.frame.minY - upper.frame.maxY == OperationsViewController.rowGap)
-    let document = try #require(first.enclosingScrollView?.documentView)
-    let topEdge = document.convert(first.frame, from: first.superview).minY
-    #expect(topEdge == OperationsViewController.firstRowTopInset)
-}
-
-/// The rows' own 9 pt insets already part them, so the gap and the first row's extra room are
-/// small: rows read apart, not loose (Dylan, 2026-10-26).
-@MainActor @Test func theGapBetweenRowsAndAboveTheFirstIsSmall() {
-    #expect(OperationsViewController.rowGap == 4)
-    #expect(OperationsViewController.firstRowTopInset == 2)
+    let scroll = try #require(try fixture.row(1).enclosingScrollView)
+    let document = try #require(scroll.documentView)
+    let first = content(of: try fixture.row(1), in: document)
+    let second = content(of: try fixture.row(2), in: document)
+    let (upper, lower) = first.minY < second.minY ? (first, second) : (second, first)
+    let row = try fixture.row(1)
+    let left = content(of: row, in: row).minX
+    #expect(left == Margin.standard)
+    #expect(upper.minY == Margin.standard)
+    #expect(lower.minY - upper.maxY == Margin.standard)
+    #expect(document.bounds.maxY - lower.maxY == Margin.standard)
+    // The scroll view shows the whole document, so the margins are what the panel shows.
+    #expect(scroll.frame.height == document.frame.height)
 }
 
 /// Each row button fills a rounded shape under the mouse, a darker one while pressed, and none
@@ -318,13 +332,13 @@ private func host(_ fixture: Fixture, width: CGFloat) -> NSView {
     let rowHeight = try fixture.row(1).frame.height
     let oneRow = panel.frame.height
     #expect(rowHeight > 0)
-    // The separator and the first row's top inset over the rows, and nothing under the last row.
-    let above = OperationsViewController.firstRowTopInset
-    #expect(oneRow > rowHeight + above && oneRow <= rowHeight + above + 2)
+    // The separator and the margin over the row, and the margin under it.
+    let margins = 2 * Margin.standard
+    #expect(oneRow > rowHeight + margins && oneRow <= rowHeight + margins + 2)
 
     fixture.controller.show([snapshot(1, .running), snapshot(2, .running)])
     container.layoutSubtreeIfNeeded()
-    #expect(panel.frame.height == oneRow + rowHeight + OperationsViewController.rowGap)
+    #expect(panel.frame.height == oneRow + rowHeight + Margin.standard)
 
     fixture.controller.show((1...20).map { snapshot($0, .running) })
     container.layoutSubtreeIfNeeded()
