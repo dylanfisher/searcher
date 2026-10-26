@@ -77,6 +77,9 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// Runs the copies and moves that drops make. Without it, and without `mountTable`, the list
     /// takes no drop; its rows still drag out.
     var fileOperations: FileOperationQueue?
+    /// The workspace of the window showing the list, whose operations panel lists what its
+    /// drops and renames queue (`FileOperationQueue.workspace`); nil outside a browser window.
+    var workspaceID: UUID?
     /// Tells a drop whether its items are on the target folder's volume.
     var mountTable: MountTable?
     /// Opens the folder row a drag hovers over; nil opens none. The pane's lists share one.
@@ -566,7 +569,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             return false
         }
         // The drop's operations are listed in the window it landed in.
-        let workspace = tableView.window?.workspaceID
+        let workspace = workspaceID
         switch drop.content {
         case .files(let paths, let operation):
             let operation = operation.fileOperation(paths, into: drop.folder)

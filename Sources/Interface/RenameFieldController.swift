@@ -177,7 +177,7 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
         editCount += 1
         let edit = Edit(
             name: entry.name, location: pane.location, queue: queue,
-            workspace: table.window?.workspaceID, id: editCount)
+            workspace: list.workspaceID, id: editCount)
         state = .editing(edit)
         field.stringValue = entry.name
         field.isEditable = true

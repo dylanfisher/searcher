@@ -85,6 +85,8 @@ public final class PaneViewController: NSViewController {
             columnViewController.clipboard = windowLink?.clipboard
             listingViewController.fileOperations = windowLink?.fileOperations
             columnViewController.fileOperations = windowLink?.fileOperations
+            listingViewController.workspaceID = windowLink?.workspace.id
+            columnViewController.workspaceID = windowLink?.workspace.id
             listingViewController.mountTable = windowLink?.mountTable
             columnViewController.mountTable = windowLink?.mountTable
         }

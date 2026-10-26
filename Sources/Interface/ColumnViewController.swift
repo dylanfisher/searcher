@@ -47,6 +47,14 @@ final class ColumnViewController: NSViewController {
             }
         }
     }
+    /// The workspace of the window every column's drops and renames are queued in.
+    var workspaceID: UUID? {
+        didSet {
+            for controller in columnControllers {
+                controller.workspaceID = workspaceID
+            }
+        }
+    }
     /// Tells every column's drops which volume each item is on.
     var mountTable: MountTable? {
         didSet {
@@ -271,6 +279,7 @@ final class ColumnViewController: NSViewController {
             showsNamesOnly: true)
         controller.clipboard = clipboard
         controller.fileOperations = fileOperations
+        controller.workspaceID = workspaceID
         controller.mountTable = mountTable
         controller.springLoader = springLoader
         prepareTable(table)
