@@ -18,11 +18,14 @@ public struct SidebarVolume: Equatable, Sendable {
     public let isInternal: Bool?
     public let isRemovable: Bool
     public let isEjectable: Bool
+    /// Whether ejecting it ejects its whole disk: it is on this machine and no other volume is
+    /// mounted from that disk (`isOnlyVolume(_:onItsDiskAmong:)`).
+    public let ejectsDisk: Bool
 
     public init(
         mountPoint: String, name: String, kind: VolumeKind, isBrowsable: Bool = true,
         isRootFileSystem: Bool = false, isInternal: Bool? = nil, isRemovable: Bool = false,
-        isEjectable: Bool = false
+        isEjectable: Bool = false, ejectsDisk: Bool = false
     ) {
         self.mountPoint = mountPoint
         self.name = name
@@ -32,6 +35,7 @@ public struct SidebarVolume: Equatable, Sendable {
         self.isInternal = isInternal
         self.isRemovable = isRemovable
         self.isEjectable = isEjectable
+        self.ejectsDisk = ejectsDisk
     }
 
     /// Whether the volume can be ejected or unmounted from the sidebar, as Finder's eject button
@@ -54,7 +58,8 @@ public struct SidebarVolume: Equatable, Sendable {
     /// stopped answering would hold the read. Traps unless it runs on a `BlockingCallThread`.
     public static func mounted() -> [SidebarVolume] {
         BlockingCallThread.requireCurrent()
-        return VolumeIdentity.mounted().compactMap { volume in
+        let mounted = VolumeIdentity.mounted()
+        return mounted.compactMap { volume in
             let name = VolumeIdentity.name(mountedAt: volume.mountPoint)
             guard volume.kind == .local, volume.isBrowsable else {
                 return SidebarVolume(
@@ -66,8 +71,9 @@ public struct SidebarVolume: Equatable, Sendable {
                 .volumeLocalizedNameKey, .volumeIsRootFileSystemKey, .volumeIsInternalKey,
                 .volumeIsRemovableKey, .volumeIsEjectableKey,
             ]
-            // A volume unmounted since the table was read can't be asked; the unmount's own
-            // event reads the table again.
+            // A volume that doesn't answer was unmounted after the table was read: the table and
+            // the unmount race. It is left out rather than listed with made-up details, and the
+            // unmount's own event reads the table again without it.
             guard let values = try? url.resourceValues(forKeys: keys) else { return nil }
             return SidebarVolume(
                 mountPoint: volume.mountPoint, name: values.volumeLocalizedName ?? name,
@@ -75,8 +81,37 @@ public struct SidebarVolume: Equatable, Sendable {
                 isRootFileSystem: values.volumeIsRootFileSystem ?? (volume.mountPoint == "/"),
                 isInternal: values.volumeIsInternal,
                 isRemovable: values.volumeIsRemovable ?? false,
-                isEjectable: values.volumeIsEjectable ?? false)
+                isEjectable: values.volumeIsEjectable ?? false,
+                ejectsDisk: isOnlyVolume(volume, onItsDiskAmong: mounted))
         }
+    }
+
+    /// Whether `volume` is on this machine and the only one of `mounted`, every mounted volume
+    /// browsable or not, on its whole disk: `/dev/disk5s2` is on `disk5`. It goes by the device
+    /// names alone, with no read. An APFS volume is on its container's synthesized disk, so a
+    /// volume of another kind on the same physical disk isn't counted.
+    static func isOnlyVolume(_ volume: VolumeIdentity, onItsDiskAmong mounted: [VolumeIdentity])
+        -> Bool
+    {
+        guard volume.kind == .local, let disk = wholeDisk(of: volume.device) else { return false }
+        return mounted.filter { wholeDisk(of: $0.device) == disk }.count == 1
+    }
+
+    /// The whole disk a device such as `/dev/disk5s2` is a slice of, `disk5`; nil for a device
+    /// that isn't a disk.
+    static func wholeDisk(of device: String) -> String? {
+        let prefix = "/dev/disk"
+        guard device.hasPrefix(prefix) else { return nil }
+        let number = device.dropFirst(prefix.count).prefix { $0.isASCII && $0.isNumber }
+        return number.isEmpty ? nil : "disk\(number)"
+    }
+
+    /// How the volume is unmounted: with its whole disk ejected when it is the disk's only
+    /// mounted volume, which detaches a disk image, as Finder's eject button does; on its own
+    /// otherwise, leaving the disk's other volumes mounted, where Finder would first ask about
+    /// them. The system shows no UI of its own either way.
+    public var unmountOptions: FileManager.UnmountOptions {
+        ejectsDisk ? [.allPartitionsAndEjectDisk, .withoutUI] : [.withoutUI]
     }
 
     /// Why an eject failed, as the system says it.
@@ -88,18 +123,15 @@ public struct SidebarVolume: Equatable, Sendable {
         }
     }
 
-    /// Unmounts the volume and, for a disk on this machine, ejects its disk with every volume
-    /// on it, as Finder's eject button does; a disk image is detached. It asks with no UI of
-    /// the system's, and waits for the answer, so it traps unless it runs on a
-    /// `BlockingCallThread`.
+    /// Unmounts the volume as `unmountOptions` says, and waits for the answer, so it traps
+    /// unless it runs on a `BlockingCallThread`.
     public static func eject(_ volume: SidebarVolume) throws(EjectFailure) {
         BlockingCallThread.requireCurrent()
-        let options: FileManager.UnmountOptions =
-            volume.kind == .local ? [.allPartitionsAndEjectDisk, .withoutUI] : [.withoutUI]
         let done = DispatchSemaphore(value: 0)
         let answer = Answer()
         FileManager.default.unmountVolume(
-            at: URL(fileURLWithPath: volume.mountPoint, isDirectory: true), options: options
+            at: URL(fileURLWithPath: volume.mountPoint, isDirectory: true),
+            options: volume.unmountOptions
         ) { error in
             answer.failure = error.map { EjectFailure(reason: $0.localizedDescription) }
             done.signal()
