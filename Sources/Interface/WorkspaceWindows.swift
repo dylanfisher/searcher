@@ -619,6 +619,13 @@ public final class WorkspaceWindows {
         }
     }
 
+    /// Returns once the save wait running now has saved and the store has what it handed over,
+    /// for tests.
+    func finishSaving() async {
+        await saveWait?.value
+        await saving?.value
+    }
+
     /// Has the window's moves, resizes and key changes saved, and its workspace's changes.
     private func watch(_ controller: BrowserWindowController) {
         let workspace = controller.workspace

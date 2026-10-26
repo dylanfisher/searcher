@@ -389,9 +389,7 @@ private final class SavingFixture {
     await settle { pane.stateVersion != version && pane.state.isLoaded }
     await fixture.waitForSaveWait()
     fixture.clock.advance(by: fixture.windows.saveDelay)
-    let clock = fixture.clock
-    #expect(await waitUntil { clock.waitingSleeps == 0 })
-    try await Task.sleep(for: .milliseconds(100))
+    await fixture.windows.finishSaving()
 
     let unsaved = await fixture.handed()
     #expect(unsaved.isEmpty, "\(unsaved)")
