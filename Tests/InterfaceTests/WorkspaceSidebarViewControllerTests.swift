@@ -288,6 +288,35 @@ private final class Fixture {
     #expect(fixture.window.makeFirstResponder(outline))
 }
 
+/// A hidden sidebar, as a collapsed one is, takes no press: the window sends it on as it is.
+@MainActor @Test func aHiddenSidebarIsNotHit() throws {
+    let fixture = try Fixture()
+    let outline = fixture.sidebar.outlineView
+    let onARow = outline.convert(
+        NSPoint(x: 20, y: outline.rect(ofRow: try fixture.row(of: "Alpha")).midY), to: nil)
+    #expect(outline.isHit(atWindowPoint: onARow))
+
+    fixture.sidebar.view.isHidden = true
+
+    #expect(!outline.isHit(atWindowPoint: onARow))
+}
+
+/// A clicked row opens a turn later, as it is listed then: a favorite removed in that turn
+/// opens nothing.
+@MainActor @Test func aClickedRowOpensATurnLaterUnlessItLeftTheList() async throws {
+    let fixture = try Fixture()
+
+    fixture.sidebar.openClicked(row: try fixture.row(of: "Documents"))
+    #expect(fixture.openedFavorites.isEmpty)
+    await Task {}.value
+    #expect(fixture.openedFavorites == ["/Users/u/Documents"])
+
+    fixture.sidebar.openClicked(row: try fixture.row(of: "Desktop"))
+    fixture.favorites.remove("/Users/u/Desktop")
+    await Task {}.value
+    #expect(fixture.openedFavorites == ["/Users/u/Documents"])
+}
+
 @MainActor @Test func aRenameInTheModelUpdatesTheRow() throws {
     let fixture = try Fixture()
 
