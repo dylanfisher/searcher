@@ -127,8 +127,11 @@ private func controller(
     model.search = "go to item"
     #expect(model.sections.flatMap(\.rows).map(\.id) == [goToItem.id])
 
+    // The symbols match as text, so ⌥⇧⌘P contains them too.
     model.search = "⇧⌘P"
-    #expect(model.sections.flatMap(\.rows).map(\.id) == [palette.id])
+    #expect(
+        Set(model.sections.flatMap(\.rows).map(\.id))
+            == [palette.id, ViewCommands.reverseSortDirection.id])
 
     model.search = "no command is called this"
     #expect(model.sections.isEmpty)

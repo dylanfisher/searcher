@@ -871,9 +871,20 @@ func leftOrCommandUpMovesToTheParentsColumnAndDoesNothingAtTheRoot(chord: KeyCho
     try press(KeyChord(.right), on: pane)
 
     // Sort by Name again reverses the focused column only.
-    try press(KeyChord("1", modifiers: [.control, .option, .command]), on: pane)
+    try press(KeyChord("1", modifiers: [.control, .option]), on: pane)
     await settle { trail(pane).columns[2].pane.state.names == ["x.txt", "sub"] }
     #expect(trail(pane).columns[1].pane.sortAscending)
+    // So do Reverse Sort Direction and Sort by Next Column.
+    try press(KeyChord("p", modifiers: [.option, .command, .shift]), on: pane)
+    await settle { trail(pane).columns[2].pane.state.names == ["sub", "x.txt"] }
+    try press(KeyChord("p", modifiers: [.option, .command]), on: pane)
+    await settle { trail(pane).columns[2].pane.sortColumn == .size }
+    #expect(trail(pane).columns[1].pane.sortColumn == .name)
+    #expect(trail(pane).columns[1].pane.sortAscending)
+    try press(KeyChord("1", modifiers: [.control, .option]), on: pane)
+    await settle { trail(pane).columns[2].pane.state.names == ["sub", "x.txt"] }
+    try press(KeyChord("1", modifiers: [.control, .option]), on: pane)
+    await settle { trail(pane).columns[2].pane.state.names == ["x.txt", "sub"] }
 
     try press(KeyChord(".", modifiers: [.command, .shift]), on: pane)
     await settle { trail(pane).columns[2].pane.state.names == ["x.txt", "sub", ".hidden"] }
@@ -1270,7 +1281,7 @@ func leftOrCommandUpMovesToTheParentsColumnAndDoesNothingAtTheRoot(chord: KeyCho
     let pane = fixture.pane
     pane.navigate(to: Location(path: "/r/other"))
     await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
-    try press(KeyChord("6", modifiers: [.control, .option, .command]), on: pane)
+    try press(KeyChord("2", modifiers: [.control, .option]), on: pane)
     #expect(trail(pane).focused.pane.sortColumn == .size)
 
     try press(KeyChord("[", modifiers: .command), on: pane)

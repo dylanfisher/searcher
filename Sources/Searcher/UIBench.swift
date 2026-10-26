@@ -1630,10 +1630,8 @@ final class UIBench {
         /// Shift applies to the character: a US keyboard types ">".
         static let commandShiftPeriod = Key(
             characters: ">", keyCode: 47, flags: [.command, .shift])
-        static let sortBySize = Key(
-            characters: "6", keyCode: 22, flags: [.control, .option, .command])
-        static let sortByName = Key(
-            characters: "1", keyCode: 18, flags: [.control, .option, .command])
+        static let sortBySize = Key(characters: "2", keyCode: 19, flags: [.control, .option])
+        static let sortByName = Key(characters: "1", keyCode: 18, flags: [.control, .option])
         static let commandF = Key(characters: "f", keyCode: 3, flags: .command)
         /// Shift applies to the letter.
         static let splitRight = Key(characters: "T", keyCode: 17, flags: [.command, .shift])

@@ -113,6 +113,7 @@ the load through `ListingService`, the off-main sort and filter ([0025](0025-sor
 - **Keys.** → and ← are commands in `ColumnCommands`; in list mode they do nothing. Cmd-1 and
   Cmd-3 are `ViewCommands.asList` and `asColumns`. Neither chord is used elsewhere in the key
   table: the sort keys are Ctrl-Opt-Cmd-1 and 2, and split resizing is Ctrl-Cmd-arrows.
+  (Amended 2026-10-26: the sort keys are Ctrl-Opt-1 to 4 ([0031](0031-view-settings.md)).)
 
 ## Alternatives considered
 
