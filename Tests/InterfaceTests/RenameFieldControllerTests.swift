@@ -415,6 +415,28 @@ private func showColumns(_ fixture: Fixture) async throws -> ListingViewControll
     #expect(try fixture.editor(of: column.renameField).selectedRange.length == 15)
 }
 
+/// A switch to the list while a column's name field has the keys gives them to the list's
+/// table: the field keeps the keys only while its column is the focused one shown.
+@MainActor @Test func switchingToTheListWithAColumnsFieldOpenGivesTheListTheKeys() async throws {
+    let fixture = try await Fixture("song.flac")
+    defer { fixture.stop() }
+    let column = try await showColumns(fixture)
+    await fixture.select("song.flac")
+    try fixture.press(returnKey)
+    #expect(column.renameField.isEditing)
+
+    fixture.pane.setViewMode(.list)
+
+    #expect(fixture.pane.viewMode == .list)
+    #expect(fixture.window.firstResponder === fixture.controller.listingViewController.tableView)
+    #expect(!column.renameField.isEditing)
+    #expect(fixture.operationCount == 0)
+
+    fixture.pane.setViewMode(.column)
+    let focused = try #require(fixture.controller.columnViewController.focusedController)
+    #expect(fixture.window.firstResponder === focused.tableView)
+}
+
 @MainActor @Test func returnOnTheUnchangedNameClosesTheFieldWithNothingQueued() async throws {
     let fixture = try await Fixture("song.flac")
     defer { fixture.stop() }

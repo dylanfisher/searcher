@@ -27,15 +27,22 @@ way. The volume doesn't matter: a share's slower listing only delays the same ch
 
 ## Decision
 
-- **The destination.** `FileCommands.destination(in:)`: in column view, when the focused
-  column has exactly one row selected, that row is a folder, and the column right of it shows
-  that folder, New Folder, Paste and Move Items Here act in that column's folder. Otherwise they
-  act in the focused column's folder as before: several rows, none, a file, a link (its
-  column needs a read to tell) and a package, a file here ([0093](0093-packages-are-files.md)),
-  even when Show Package Contents opened its column. List view is unchanged.
+- **The destination.** `ColumnTrail.selectedFolderColumn`, one rule for this and for the
+  folder Go to Item lists after the focused column's rows: the column right of the focused one,
+  while the focused column has that column's folder selected alone. So New Folder, Paste and
+  Move Items Here act in a folder whose column is shown, including a package Show Package
+  Contents opened, which shows as a folder while it stays selected
+  ([0093](0093-packages-are-files.md)). Otherwise they act in the focused column's folder as
+  before: several rows, none, a file, or a package with no column. List view is unchanged.
+- **Links.** Finder opens a link to a folder as that folder in column view and acts in it. The
+  trail shows no column for a link (telling a link to a folder from one to a file takes a read,
+  [0090](0090-preview-column.md)), so a selected link, to a folder or not, leaves the focused
+  column's folder as the destination. When the trail gets columns for links, the same rule
+  covers them.
 - **A selection waiting for the keys to pause** ([0094](0094-column-open-delay.md)) opens its
-  column at once when one of these commands runs (`ColumnTrail.selectedFolderColumn(of:)`), as
-  → and Open do, so ⌘V right after ↓ onto a folder pastes into it.
+  column at once when one of these commands runs (`ColumnTrail.openHeldColumn`, called by
+  `FileCommands.destination(in:)` only), as → and Open do, so ⌘V right after ↓ onto a folder
+  pastes into it. Go to Item doesn't open it.
 - **Fixed when the command runs.** The folder's path goes into the queued operation
   ([0065](0065-operation-queue.md)); a later selection doesn't move it. Undo New Folder, Undo
   Copy and an undone move act on the paths in the operation's record
