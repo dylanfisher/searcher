@@ -32,7 +32,15 @@ matcher ([0079](0079-fuzzy-match.md)) and the highlighting. Type-to-select
   beside it, and its row shows the type's icon, as the list does. The listing is a snapshot: a
   row that arrives while the palette is open isn't listed, and choosing one that has left the
   rows since does nothing: the selection, the scroll and the selection history stay as they
-  were.
+  were. (Amended 2026-10-25, Dylan: "multi line names in cmd p are hard to read, too tight
+  leading etc". A name too long for one line wraps, in both palettes, and its row grows to hold
+  it: 3 pt between the lines beyond the font's leading, and 7 pt above and below, where the row
+  had stayed 32 pt and the lines overflowed it. A title that fits keeps the 32 pt row. The title
+  wraps at the room the icon, the chord and the detail leave; the detail keeps up to a third of
+  the row beside the first line, so a long name doesn't squeeze its kind to a letter. Each row's
+  height comes from one never-shown cell that measures the title's height for its wrap width
+  without a layout pass, about 1.4 ms for 50 rows in a debug test build. Wrapping rather than
+  truncating keeps the whole name in view, which is what the list is searched for.)
 - **Ranking: the match alone.** Entries are a kind of their own with no kind or frecency bonus,
   so they fall in one bucket and `FuzzyMatcher.best` ranks them by score, then the shorter name,
   then pane order. Frecency counts folders visited, not rows chosen, and a bonus for folders over

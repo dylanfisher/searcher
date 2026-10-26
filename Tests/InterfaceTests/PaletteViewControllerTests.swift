@@ -466,6 +466,41 @@ private func paletteShown(with settings: Settings) throws -> PaletteWindowContro
     #expect(edge.hitTest(NSPoint(x: 1, y: 1)) == nil)
 }
 
+/// A name too long for one line wraps; its row grows to hold the lines, with room between them
+/// and around them, and a row whose title fits keeps its height.
+@MainActor @Test func aLongTitleWrapsInATallerRowWithRoomBetweenAndAroundItsLines() async throws {
+    let long =
+        "Quarterly report for the northern region including every appendix and the revised "
+        + "figures from March, final version two.pdf"
+    let fixture = Fixture(folders: ["Downloads", long])
+    try await fixture.type("")
+    let table = fixture.controller.tableView
+    let short = try fixture.row(titled: "Downloads")
+    let wrapped = try fixture.row(titled: long)
+    table.layoutSubtreeIfNeeded()
+
+    #expect(table.rect(ofRow: short).height == PaletteCellView.rowHeight)
+    let cell = try #require(fixture.cell(at: wrapped))
+    cell.layoutSubtreeIfNeeded()
+    let title = cell.titleField
+    let font = try #require(title.font)
+    let line = (font.ascender - font.descender + font.leading).rounded(.up)
+    let style = try #require(
+        title.attributedStringValue.attribute(.paragraphStyle, at: 0, effectiveRange: nil)
+            as? NSParagraphStyle)
+    #expect(style.lineSpacing >= 3)
+    #expect(title.frame.height >= 2 * line + style.lineSpacing)
+    #expect(title.frame.minY >= PaletteCellView.wrappedPadding - 0.5)
+    #expect(cell.bounds.height - title.frame.maxY >= PaletteCellView.wrappedPadding - 0.5)
+    #expect(table.rect(ofRow: wrapped).height == cell.bounds.height)
+    // A title on one line is as tall as a plain label: the line spacing adds nothing to it.
+    let shortTitle = try #require(fixture.cell(at: short)?.titleField)
+    let unspaced = NSMutableAttributedString(attributedString: shortTitle.attributedStringValue)
+    unspaced.removeAttribute(.paragraphStyle, range: NSRange(location: 0, length: unspaced.length))
+    let plain = NSTextField(labelWithAttributedString: unspaced)
+    #expect(shortTitle.frame.height == plain.intrinsicContentSize.height)
+}
+
 @MainActor @Test func theSearchFieldIsLargerThanTheRows() {
     let controller = PaletteWindowController(
         palette: Palette(sources: []), settings: untouchedSettings())
