@@ -54,18 +54,22 @@ public final class ListingService: Sendable {
     /// Makes the thumbnails rows and the column preview show in place of type icons, for every
     /// pane and column on this service; nil shows type icons only.
     public let thumbnails: ThumbnailService?
+    /// The listings this service's panes last showed of local folders, which a pane coming back
+    /// to one shows at once (0109); nil keeps none.
+    public let recentListings: RecentListings?
 
     /// A service that lists folders on the file system and finds each one's volume with `statfs`.
     /// `rootVolumeName` runs once per load, on the load's thread.
     public convenience init<C: Clock<Duration>>(
         clock: C = ContinuousClock(),
         rootVolumeName: @escaping @Sendable () -> String = { readRootVolumeName() },
-        cache: ListingCache? = nil, thumbnails: ThumbnailService? = nil
+        cache: ListingCache? = nil, thumbnails: ThumbnailService? = nil,
+        recentListings: RecentListings? = nil
     ) {
         self.init(
             lister: DirectoryLister(), clock: clock, rootVolumeName: rootVolumeName,
             volumeOf: VolumeIdentity.init(path:), mountedVolumes: VolumeIdentity.mounted,
-            cache: cache, thumbnails: thumbnails)
+            cache: cache, thumbnails: thumbnails, recentListings: recentListings)
     }
 
     /// A service that lists folders with `lister`. `volumeOf` says which volume a path is on, and
@@ -80,12 +84,14 @@ public final class ListingService: Sendable {
             listerVolume
         },
         mountedVolumes: @escaping @Sendable () -> [VolumeIdentity] = { [] },
-        cache: ListingCache? = nil, thumbnails: ThumbnailService? = nil
+        cache: ListingCache? = nil, thumbnails: ThumbnailService? = nil,
+        recentListings: RecentListings? = nil
     ) {
         self.mountedVolumes = mountedVolumes
         self.lister = lister
         self.cache = cache
         self.thumbnails = thumbnails
+        self.recentListings = recentListings
         startWait = { duration in
             let deadline = clock.now.advanced(by: duration)
             return { try await clock.sleep(until: deadline, tolerance: nil) }

@@ -58,7 +58,10 @@ pass. Tests and bench mode must never read or write the user's Library folders.
 - **`Codable` with default decoding** — rejected: it ignores extra keys, so a file of another
   shape would be read in part.
 - **Cache local volumes too** — rejected: no gain against a warm local listing, and more to
-  keep current.
+  keep current. Overturned for revisits by [0109](0109-recent-local-listings.md): Dylan,
+  2026-10-26, "switching between two directories back and forth in column view still flashes.
+  it should be immediate if we have already visited it". The listing's time wasn't the cost;
+  the blank frames before it landed were.
 - **Write on every save** — rejected: opening a folder of albums one after another would
   rewrite the volume's file each time.
 
