@@ -125,11 +125,19 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
 
     public override func loadView() {
         let scrollView = showsNamesOnly ? ColumnScrollView() : NSScrollView()
+        if !showsNamesOnly {
+            // Drawn as the clip view it replaces.
+            let clip = ListingClipView()
+            clip.drawsBackground = scrollView.contentView.drawsBackground
+            clip.backgroundColor = scrollView.contentView.backgroundColor
+            scrollView.contentView = clip
+        }
         scrollView.documentView = tableView
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = !showsNamesOnly
         scrollView.autohidesScrollers = true
         view = scrollView
+        keepMargins(in: scrollView)
         // A scroll, a resize of the view and a change in the rows' height each change the rows
         // on screen.
         let clip = scrollView.contentView
@@ -142,6 +150,26 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             self, selector: changed, name: NSView.frameDidChangeNotification, object: clip)
         center.addObserver(
             self, selector: changed, name: NSView.frameDidChangeNotification, object: tableView)
+    }
+
+    /// Keeps `Margin.standard` between the rows and the edges at the ends of the list: above the
+    /// first row, under the column header, and below the last, where the horizontal scroller
+    /// shows. The clip view's content insets hold it, so the rows still scroll under both
+    /// margins, AppKit's `scrollRowToVisible` and `constrainBoundsRect` keep a row clear of them,
+    /// and the table, its selection and its scrollers are laid out as before. The scroll view's
+    /// own `contentInsets` would move the header and the scrollers in by the margin too, so the
+    /// clip view takes its insets from here instead of from the scroll view, which would set
+    /// only the header's height. A press or drop in a margin reaches the table through
+    /// `ListingClipView` (docs/decisions/0029-row-movement.md).
+    private func keepMargins(in scrollView: NSScrollView) {
+        let clip = scrollView.contentView
+        let header = tableView.headerView?.frame.height ?? 0
+        clip.automaticallyAdjustsContentInsets = false
+        clip.contentInsets = NSEdgeInsets(
+            top: header + Margin.standard, left: 0, bottom: Margin.standard, right: 0)
+        // The clip keeps the origin it had before the insets; the top of the list is above it.
+        clip.scroll(to: NSPoint(x: 0, y: -clip.contentInsets.top))
+        clip.registerForDraggedTypes(tableView.registeredDraggedTypes)
     }
 
     /// Shows the pane's sort, rows and selection. Reloads the rows, in one reload, only when the
@@ -319,7 +347,9 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         guard let scrollView = view as? NSScrollView, pitch > 0 else {
             preconditionFailure("the list's view is \(view), with rows \(pitch) points apart")
         }
-        let height = scrollView.documentVisibleRect.height - headerOverlap(in: scrollView)
+        let height =
+            scrollView.documentVisibleRect.height - headerOverlap(in: scrollView)
+            - 2 * Margin.standard
         pane.visibleRowCount = max(Int(height / pitch), 0)
         renameField.layout()
     }

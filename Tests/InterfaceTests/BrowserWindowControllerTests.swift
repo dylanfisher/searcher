@@ -2289,6 +2289,23 @@ extension PressFixture {
     #expect(press.isFocusedWithKeys)
 }
 
+/// A press in the margin under a list's rows, where the table doesn't reach, goes to the table
+/// as a press on the space below the rows, and its pane takes the focus.
+@MainActor @Test func aPressInTheMarginUnderAListsRowsGoesToItsTable() async throws {
+    let press = try await PressFixture()
+    press.show()
+    defer { press.fixture.window.orderOut(nil) }
+    let scrollView = try #require(press.table.enclosingScrollView)
+    let margin = NSPoint(x: 20, y: scrollView.contentView.frame.maxY - 2)
+    #expect(press.table.row(at: press.table.convert(margin, from: scrollView)) == -1)
+    let presses = press.table.pressCount
+
+    try press.press(at: margin, in: scrollView)
+
+    #expect(press.table.pressCount == presses + 1)
+    #expect(press.isFocusedWithKeys)
+}
+
 /// Text selected in the preview has the keys; switching the pane to list view moves them to the
 /// list's table, as after any switch of view mode (0046), not into a field editor that is gone.
 @MainActor @Test func switchingToListViewMovesTheKeysFromThePreviewsTextToTheList() async throws {

@@ -48,7 +48,7 @@ final class ColumnScrollView: NSScrollView {
 /// column so the table is exactly as wide as itself whenever either one's frame changes: after a
 /// column resize, a legacy vertical scroller showing, or anything that widens the table's column.
 @MainActor
-private final class ColumnClipView: NSClipView {
+private final class ColumnClipView: ListingClipView {
     /// Set while `fitTable` resizes the column, so the table's frame change that causes doesn't
     /// resize it again.
     private var isFittingTable = false
