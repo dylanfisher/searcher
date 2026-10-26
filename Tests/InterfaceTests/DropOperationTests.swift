@@ -114,37 +114,6 @@ private func twoVolumes() async -> MountTable {
 
 // MARK: Dropping on the list
 
-/// A drag's info as AppKit hands it to a destination, over a pasteboard of the test's own, so
-/// no drag session starts and the user's pasteboards are untouched.
-@MainActor
-private final class DraggingInfo: NSObject, @preconcurrency NSDraggingInfo {
-    let draggingPasteboard: NSPasteboard
-    let draggingSourceOperationMask: NSDragOperation
-
-    init(pasteboard: NSPasteboard, mask: NSDragOperation) {
-        draggingPasteboard = pasteboard
-        draggingSourceOperationMask = mask
-    }
-
-    var draggingDestinationWindow: NSWindow? { nil }
-    var draggingLocation: NSPoint { .zero }
-    var draggedImageLocation: NSPoint { .zero }
-    var draggedImage: NSImage? { nil }
-    var draggingSource: Any? { nil }
-    var draggingSequenceNumber: Int { 1 }
-    func slideDraggedImage(to screenPoint: NSPoint) {}
-    var draggingFormation: NSDraggingFormation = .default
-    var animatesToDestination = false
-    var numberOfValidItemsForDrop = 0
-    func enumerateDraggingItems(
-        options enumOpts: NSDraggingItemEnumerationOptions = [], for view: NSView?,
-        classes classArray: [AnyClass], searchOptions: [NSPasteboard.ReadingOptionKey: Any] = [:],
-        using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void
-    ) {}
-    var springLoadingHighlight: NSSpringLoadingHighlight { .none }
-    func resetSpringLoading() {}
-}
-
 /// A pane over a real temporary folder holding `a.txt` and the folder `sub`, and the packages
 /// `Tool.app` and `Notes.rtfd` when `packages` is true, in a window that is never shown, with a
 /// queue of its own that traps on any question, and a second folder `elsewhere` to drag from.
@@ -216,7 +185,7 @@ private final class Fixture {
     }
 
     /// Puts `urls` on the drag's pasteboard as Finder writes them, and returns its info.
-    func drag(_ urls: [URL], mask: NSDragOperation = noKeys) -> DraggingInfo {
+    func drag(_ urls: [URL], mask: NSDragOperation = noKeys) -> StubDraggingInfo {
         pasteboard.clearContents()
         let items = urls.map { url in
             let item = NSPasteboardItem()
@@ -229,7 +198,7 @@ private final class Fixture {
         #expect(
             PasteboardFileClipboard(pasteboard: pasteboard).fileURLs().map(\.path)
                 == urls.map(\.path))
-        return DraggingInfo(pasteboard: pasteboard, mask: mask)
+        return StubDraggingInfo(pasteboard: pasteboard, mask: mask)
     }
 
     func row(_ name: String) throws -> Int {
@@ -237,13 +206,14 @@ private final class Fixture {
     }
 
     func validate(
-        _ info: DraggingInfo, row: Int, _ operation: NSTableView.DropOperation
+        _ info: StubDraggingInfo, row: Int, _ operation: NSTableView.DropOperation
     ) -> NSDragOperation {
         list.tableView(
             table, validateDrop: info, proposedRow: row, proposedDropOperation: operation)
     }
 
-    func accept(_ info: DraggingInfo, row: Int, _ operation: NSTableView.DropOperation) -> Bool {
+    func accept(_ info: StubDraggingInfo, row: Int, _ operation: NSTableView.DropOperation) -> Bool
+    {
         list.tableView(table, acceptDrop: info, row: row, dropOperation: operation)
     }
 
@@ -463,7 +433,7 @@ private final class PhotoPromiser: NSObject, NSFilePromiseProviderDelegate {
     fixture.pasteboard.clearContents()
     let provider = NSFilePromiseProvider(fileType: "public.jpeg", delegate: promiser)
     #expect(fixture.pasteboard.writeObjects([provider]))
-    let info = DraggingInfo(pasteboard: fixture.pasteboard, mask: noKeys)
+    let info = StubDraggingInfo(pasteboard: fixture.pasteboard, mask: noKeys)
 
     #expect(fixture.validate(info, row: -1, .on) == .copy)
     #expect(fixture.validate(info, row: try fixture.row("sub"), .on) == .copy)
