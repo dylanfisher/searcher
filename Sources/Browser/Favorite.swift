@@ -127,6 +127,9 @@ public struct Favorite: Hashable, Sendable {
                 resolvingBookmarkData: bookmark, options: [.withoutUI, .withoutMounting],
                 relativeTo: nil, bookmarkDataIsStale: &isStale)
         } catch {
+            // The bookmark's item is gone, on a volume that isn't mounted, or the data isn't a
+            // bookmark: the caller looks at the path instead, and an item not there is missing,
+            // which the row shows.
             return nil
         }
         guard !isInTrash(url.path), let state = state(at: url) else { return nil }
@@ -139,8 +142,8 @@ public struct Favorite: Hashable, Sendable {
             state: state)
     }
 
-    /// What is at `url`, following links: a folder, or a file or package; nil for nothing or a
-    /// broken link.
+    /// What is at `url`, following links: a folder, or a file or package; nil for nothing, a
+    /// broken link or a loop of links, which realpath can't resolve.
     private nonisolated static func state(at url: URL) -> State? {
         guard let real = realPath(url.path) else { return nil }
         let target = URL(fileURLWithPath: real, isDirectory: false)
@@ -148,13 +151,17 @@ public struct Favorite: Hashable, Sendable {
         do {
             values = try target.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey])
         } catch {
+            // realpath found the item a moment ago, so it went away or became unreadable since:
+            // either way it can't be opened, which is what missing means, and the row shows it.
             return nil
         }
         return values.isDirectory == true && values.isPackage != true ? .folder : .file
     }
 
-    /// A bookmark of `url`; nil when the system can't make one, and the item keeps its path
-    /// alone until the next resolve tries again.
+    /// A bookmark of `url`; nil when the system can't make one, as for an item that went away
+    /// since it was found. The item then keeps its path alone, which still opens it, and the
+    /// next resolve tries again, so the failure costs only following a move until then and
+    /// isn't reported.
     private nonisolated static func bookmark(of url: URL) -> Data? {
         try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
     }
