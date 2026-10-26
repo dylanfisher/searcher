@@ -48,6 +48,32 @@ public enum VolumeEvents {
         for queue in queues.all {
             Task { await queue.volumeWillUnmount(at: mountPoint) }
         }
+        cancelSizeWalks(under: mountPoint)
+    }
+
+    /// The sidebar is about to ask the system to eject the volume at `mountPoint`: panes on it
+    /// stop their loads and monitors, and size walks on it stop, so the app holds none of its
+    /// folders open. File operations go on: one that has files open makes the system refuse the
+    /// eject as busy, as Finder refuses to eject a disk in use
+    /// (docs/decisions/0108-sidebar-locations.md).
+    static func willEject(at mountPoint: String) {
+        for pane in panes(on: mountPoint) {
+            pane.volumeWillEject()
+        }
+        cancelSizeWalks(under: mountPoint)
+    }
+
+    /// The system refused to eject the volume at `mountPoint`, which stays mounted: panes on it
+    /// list their folders again and are watched again, as after a mount.
+    static func ejectFailed(at mountPoint: String) {
+        for pane in panes(on: mountPoint) {
+            pane.volumeDidMount()
+        }
+    }
+
+    /// Stops the size walks on the volume at `mountPoint`, those of panes above it too, such as a
+    /// pane at `/Volumes` walking a share mounted there.
+    private static func cancelSizeWalks(under mountPoint: String) {
         var services: [ObjectIdentifier: FolderSizeService] = [:]
         for case let service? in panes.map({ $0.pane?.folderSizes }) {
             services[ObjectIdentifier(service)] = service

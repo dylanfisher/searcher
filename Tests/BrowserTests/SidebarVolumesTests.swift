@@ -69,6 +69,7 @@ private func disk(_ mountPoint: String) -> SidebarVolume {
     await #expect(throws: Never.self) { try await volumes.eject(disk(mountPoint)) }
 
     #expect(load?.isCancelled == true)
+    #expect(pane.monitorGeneration == 0)
     #expect(stub.ejects.map(\.mountPoint) == [mountPoint])
     #expect(stub.ejects.map(\.onBlockingThread) == [true])
     // `VolumeEvents` holds panes weakly.
@@ -85,4 +86,30 @@ private func disk(_ mountPoint: String) -> SidebarVolume {
     await #expect(throws: SidebarVolume.EjectFailure(reason: "The volume is in use.")) {
         try await volumes.eject(disk(mountPoint))
     }
+}
+
+@MainActor @Test func aRefusedEjectListsThePanesOnTheVolumeAgainAndWatchesThemAgain() async {
+    let mountPoint = uniqueMountPoint()
+    let folder = mountPoint + "/music"
+    let lister = GatedLister([folder: .blockForever])
+    lister.releaseAll()
+    let pane = Pane(
+        location: Location(path: folder), service: ListingService(lister: lister),
+        systemActions: StubSystemActions(), settings: untouchedSettings())
+    #expect(await lister.waitForCalls(1))
+    let monitor = StubMonitor()
+    pane.monitor = monitor
+    let generation = pane.monitorGeneration
+    let stub = StubSidebarVolumes([disk(mountPoint)])
+    stub.fail(with: "The volume is in use.")
+    let volumes = stub.list()
+
+    await #expect(throws: SidebarVolume.EjectFailure.self) {
+        try await volumes.eject(disk(mountPoint))
+    }
+
+    #expect(monitor.stopCount == 1)
+    #expect(pane.monitorGeneration == generation + 1)
+    #expect(await lister.waitForCalls(2))
+    #expect(!pane.state.isOffline)
 }

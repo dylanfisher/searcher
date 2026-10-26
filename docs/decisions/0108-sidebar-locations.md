@@ -49,9 +49,12 @@ bus, the startup disk with it, so the startup disk isn't listed. A volume mounte
   sidebar. A click or Return shows the volume's mount point in the window's focused pane
   (`Pane.navigate`), as a favorite folder's click does.
 - **Eject.** The eject button and the row's context menu item, `Eject “name”` as Finder titles
-  it, call `SidebarVolumes.eject`. It first calls `VolumeEvents.willUnmount` for the volume, so
-  the app's own loads, size walks and file operations on it stop as at the system's
-  will-unmount (0049), whose notification may come only once the unmount is under way. Then it
+  it, call `SidebarVolumes.eject`. It first calls `VolumeEvents.willEject` for the volume: the
+  loads, size walks and folder monitors of panes on it stop, so the app holds none of its
+  folders open (0049), since the system's will-unmount notification may come only once the
+  unmount is under way. File operations go on: a copy with files open on the volume makes the
+  system refuse the eject as busy, and the alert shows, as Finder refuses to eject a disk in
+  use. Then it
   runs the ejector on a `BlockingCallThread`: `FileManager.unmountVolume` with no system UI.
 - **The whole disk only for its last volume.** A volume on this machine that is the only one
   mounted from its whole disk, browsable or not, ejects the disk (`allPartitionsAndEjectDisk`),
@@ -61,8 +64,9 @@ bus, the startup disk with it, so the startup disk isn't listed. A volume mounte
   row leaves when the system reports the
   unmount. A failure shows an alert, as a sheet on the sidebar's window: "The disk “name”
   wasn’t ejected." with the system's reason under it, where Finder says "The disk “name”
-  wasn’t ejected because one or more programs may be using it." A pane whose load was stopped
-  for an eject that then fails lists again on focus, as 0049 has it.
+  wasn’t ejected because one or more programs may be using it." On any failure the panes on
+  the volume list their folders again at once and get new monitors, through the did-mount path
+  (`VolumeEvents.ejectFailed`).
 - **Toggle.** `Settings.showsLocationsInSidebar`, on by default, stored and discarded as
   0107's group toggles are, with View ▸ Show Locations in Sidebar between the other two.
 - **Keys.** 0089's routing is unchanged: group rows can't be selected, so the arrows move from
@@ -77,6 +81,8 @@ bus, the startup disk with it, so the startup disk isn't listed. A volume mounte
   stopped answering would hold every row.
 - **Wait for the system's will-unmount before stopping loads** — rejected: it may come after
   the unmount has already found a folder open.
+- **Run 0049's will-unmount before asking** — rejected: it fails the volume's file operations,
+  which a refused eject would then have cost for nothing.
 - **Always unmount only the clicked volume** — rejected: a disk image would stay attached and
   a disk wouldn't eject, unlike Finder's button.
 - **Always eject the whole disk** — rejected: it unmounts the disk's other volumes without
