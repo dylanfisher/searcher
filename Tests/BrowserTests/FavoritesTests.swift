@@ -209,3 +209,63 @@ private let defaultPaths = [
             "/Users/u",
         ])
 }
+
+/// Finds each favorite as `.folder` at its path, holding the finds of the paths in `held` until
+/// the test releases them, each on its own thread.
+private final class HeldResolver: @unchecked Sendable {
+    private let gates: [String: DispatchSemaphore]
+
+    init(holding held: [String]) {
+        gates = Dictionary(uniqueKeysWithValues: held.map { ($0, DispatchSemaphore(value: 0)) })
+    }
+
+    func release(_ path: String) {
+        gates[path]?.signal()
+    }
+
+    func resolve(_ favorite: Favorite) -> Favorite.Resolution {
+        gates[favorite.path]?.wait()
+        return Favorite.Resolution(
+            favorite: Favorite(path: favorite.path, bookmark: Data(favorite.path.utf8)),
+            state: .folder)
+    }
+}
+
+@MainActor @Test func onlyTheLatestOpenActsWhenAnEarlierOneIsFoundAfterIt() async throws {
+    let fixture = try Fixture()
+    let resolver = HeldResolver(holding: ["/Users/u/Desktop"])
+    let favorites = Favorites(settings: fixture.settings) { resolver.resolve($0) }
+    let pane = PaneFixture(
+        at: "/r",
+        folders: ["/r": [], "/Users/u/Desktop": [], "/Users/u/Documents": [file("x")]]
+    ).pane
+
+    favorites.open("/Users/u/Desktop") { pane }
+    favorites.open("/Users/u/Documents") { pane }
+    await settle { pane.location.path == "/Users/u/Documents" }
+    resolver.release("/Users/u/Desktop")
+
+    // The held find lands: Desktop is found, but its open was overtaken.
+    await settle { favorites.items[1].state == .folder }
+    #expect(pane.location.path == "/Users/u/Documents")
+}
+
+@MainActor @Test func aListChangedWhileItemsAreLookedForKeepsTheChange() async throws {
+    let fixture = try Fixture()
+    let resolver = HeldResolver(holding: ["/Users/u/Desktop", "/Users/u/Downloads"])
+    let favorites = Favorites(settings: fixture.settings) { resolver.resolve($0) }
+    favorites.refresh()
+    await settle { favorites.resolving == ["/Users/u/Desktop", "/Users/u/Downloads"] }
+
+    favorites.remove("/Users/u/Downloads")
+    favorites.move("/Users/u/Desktop", to: 5)
+    favorites.insert(["/p/new"], at: 0)
+    resolver.release("/Users/u/Downloads")
+    resolver.release("/Users/u/Desktop")
+    await settle { favorites.resolving.isEmpty }
+
+    let paths = ["/p/new", "/Applications", "/Users/u/Documents", "/Users/u", "/Users/u/Desktop"]
+    #expect(favorites.items.map(\.path) == paths)
+    #expect(favorites.items.allSatisfy { $0.state == .folder })
+    #expect(try fixture.relaunched().favorites.map(\.path) == paths)
+}
