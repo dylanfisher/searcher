@@ -1,5 +1,6 @@
 import Base
 import BrowserTestSupport
+import Darwin
 import Foundation
 import TestSupport
 import Testing
@@ -209,4 +210,24 @@ private func listing(_ names: [String]) async -> Listing {
     // The patched rows are what the folder's revisit shows.
     #expect(
         Set(recent.listing(at: "/r")?.listing.entries.map(\.name) ?? []) == ["other", "a.txt"])
+}
+
+@MainActor @Test func aVolumeMountingOrUnmountingDropsTheFoldersOnIt() async {
+    let mountPoint = "/Volumes/RecentListingsTests"
+    let recent = RecentListings()
+    let one = await listing(["a"])
+    for path in [mountPoint, mountPoint + "/sub", "/elsewhere"] {
+        recent.keep(one, listedAt: testDate, at: path)
+    }
+
+    VolumeEvents.didUnmount(at: mountPoint)
+
+    #expect(recent.listing(at: mountPoint) == nil)
+    #expect(recent.listing(at: mountPoint + "/sub") == nil)
+    #expect(recent.listing(at: "/elsewhere") != nil)
+
+    recent.keep(one, listedAt: testDate, at: mountPoint + "/sub")
+    VolumeEvents.didMount(at: mountPoint)
+    #expect(recent.listing(at: mountPoint + "/sub") == nil)
+    #expect(recent.listing(at: "/elsewhere") != nil)
 }
