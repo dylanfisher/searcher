@@ -111,9 +111,19 @@ A probe on this Mac (local APFS, generated 2000×1500 JPEGs, `QLThumbnailGenerat
   slots, cancelled on change, local volumes only, given up after 5 s. A thumbnail landing after
   the hold now replaces a type icon drawn as large, a bigger jump than in the 128-point square,
   and a thumbnail of another aspect than the icon's resizes the image, moving the fields below
-  it. How much longer Quick Look takes to make a 1024-pixel thumbnail the first time than a
-  256-pixel one wasn't measured; if it often passes the 100 ms hold, first previews show their
-  icon before it, which the by-hand check of a photo folder should show.)
+  it. A one-off measure on this Mac (local APFS, a scratch program asking
+  `QLThumbnailGenerator` for `.thumbnail` with `iconMode` at scale 2, as `QuickLookThumbnailer`
+  does, for JPEGs written fresh so nothing was cached: 12 MP 4:3, 2000×1500 and 12 MP portrait,
+  five files each): a file's first 256-pixel thumbnail took 14–17 ms, its first 1024-pixel one
+  35–39 ms (median 35), and either again 1.4–2.7 ms from the cache. So a local photo's preview
+  thumbnail lands well inside the 100 ms hold. These test photos carry no embedded thumbnail;
+  HEIC, RAW and video files and a busy or spinning disk weren't measured, and can take longer.
+  Whatever it takes, a file whose smaller thumbnail is kept, such as its row's, never shows its
+  type icon in the preview: the trail shows the largest smaller one kept of that version
+  (`ThumbnailService.cachedSmaller`, from a per-file index of the sizes the cache holds, so
+  nothing walks the cache), scaled up, until the preview's own lands, and keeps it if that one
+  fails. That shown thumbnail also ends the hold's wait for one, so the file shows as soon as
+  its info is read.)
 - **The CV.12 hold waits for the thumbnail too.** A newly previewed file is held until its info
   is read and its thumbnail made, or `previewHold` (100 ms) passes. A local thumbnail, 1–28 ms,
   lands inside it, so the file shows with its thumbnail from its first frame and no icon flashes

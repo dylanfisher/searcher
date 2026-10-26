@@ -69,6 +69,12 @@ public final class GatedThumbnailMaker: ThumbnailMaking, @unchecked Sendable {
         for done in waiting { done(image) }
     }
 
+    /// Holds the requests for `path` made from now on until `answer` is called again, undoing
+    /// an earlier answer.
+    public func hold(_ path: String) {
+        lock.withLock { answers[path] = nil }
+    }
+
     /// Every call so far, in the order they started.
     public var calls: [Call] {
         lock.withLock { startedCalls }

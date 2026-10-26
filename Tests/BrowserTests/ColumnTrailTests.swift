@@ -2506,7 +2506,8 @@ func rightIntoALoadingFolderThatFailsGivesUpTheWait(code: Int32) async throws {
 /// downloaded.
 @MainActor
 private func photoPane(
-    maker: GatedThumbnailMaker, reader: GatedItemInfoReader, clock: ManualClock
+    maker: GatedThumbnailMaker, reader: GatedItemInfoReader, clock: ManualClock,
+    thumbnails: ThumbnailService? = nil
 ) async -> PaneFixture {
     let notDownloaded = DirectoryEntry(
         name: "d.jpg", type: .regular, size: 9, modified: testDate, isHidden: false,
@@ -2517,7 +2518,7 @@ private func photoPane(
             "/": [folder("t")],
             "/t": [file("a.jpg"), file("b.jpg"), file("c.txt"), notDownloaded],
         ],
-        thumbnails: ThumbnailService(maker: maker))
+        thumbnails: thumbnails ?? ThumbnailService(maker: maker))
     await settle { fixture.pane.state.isLoaded }
     fixture.pane.previewHoldClock = clock
     fixture.pane.itemInfoReader = reader
@@ -2562,6 +2563,35 @@ private func photoPane(
     maker.answer("/t/b.jpg", with: b)
     await settle { trail(pane).shownPreview?.thumbnail === b }
     #expect(trail(pane).shownPreview?.location == Location(path: "/t/b.jpg"))
+}
+
+/// A file whose row's thumbnail is kept shows that one, scaled, while the preview's larger one
+/// is made, so its type icon never shows; the larger one replaces it once made.
+@MainActor @Test func aRowsKeptThumbnailShowsWhileThePreviewsIsMade() async throws {
+    let maker = GatedThumbnailMaker()
+    let thumbnails = ThumbnailService(maker: maker)
+    let small = testThumbnail(pixels: 32)
+    maker.answer("/t/a.jpg", with: small)
+    let disk = VolumeIdentity(device: "/dev/disk3s1", mountPoint: "/", kind: .local)
+    let row = try await thumbnails.thumbnail(
+        at: "/t/a.jpg", entry: file("a.jpg"), side: 16, on: disk)
+    #expect(row === small)
+    maker.hold("/t/a.jpg")
+    let reader = GatedItemInfoReader(["/t/a.jpg": info(1)])
+    reader.releaseAll()
+    let fixture = await photoPane(
+        maker: maker, reader: reader, clock: ManualClock(), thumbnails: thumbnails)
+    let pane = fixture.pane
+
+    select("a.jpg", in: trail(pane).columns[1])
+
+    #expect(trail(pane).preview?.thumbnail === small)
+    await settle { trail(pane).shownPreview?.info == .read(info(1)) }
+    #expect(trail(pane).shownPreview?.thumbnail === small)
+    #expect(await maker.waitForCalls(2))
+    let large = testThumbnail(pixels: 256)
+    maker.answer("/t/a.jpg", with: large)
+    await settle { trail(pane).shownPreview?.thumbnail === large }
 }
 
 /// A thumbnail that takes longer than the hold shows in place of the icon once it lands.

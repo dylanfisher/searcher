@@ -658,8 +658,9 @@ public final class ColumnTrail {
     /// waits ahead of rows' for its volume's slot, so the hold isn't spent behind them
     /// (0102-thumbnails.md). It is asked for at `Pane.previewImageSide`; one made smaller is
     /// asked for again once that grows, and `next` keeps it until the larger one lands, or for
-    /// good if that one fails. With `usingKept` false, a kept thumbnail lands later, as a made
-    /// one does, rather than in `next`.
+    /// good if that one fails; a smaller one kept of the file, such as its row's, shows the
+    /// same way while its own is made. With `usingKept` false, a kept thumbnail lands later, as
+    /// a made one does, rather than in `next`.
     private func updateThumbnail(
         of next: inout ColumnPreview, in pane: Pane, usingKept: Bool = true
     ) {
@@ -682,6 +683,12 @@ public final class ColumnTrail {
             next.thumbnail = kept ?? (grows ? next.thumbnail : nil)
             return
         }
+        // A smaller thumbnail kept of this version, a row's, shows scaled while this one is
+        // made, so the preview never shows the type icon of a file it has a thumbnail of.
+        let smaller =
+            grows ? nil : thumbnails.cachedSmaller(at: location.path, entry: entry, than: side)
+        if let smaller { next.thumbnail = smaller }
+        let keepsOnFailure = grows || smaller != nil
         thumbnailMaking = Task { [weak self] in
             let thumbnail: CGImage?
             do {
@@ -695,7 +702,7 @@ public final class ColumnTrail {
             thumbnailMaking = nil
             if let thumbnail {
                 preview?.thumbnail = thumbnail
-            } else if !grows {
+            } else if !keepsOnFailure {
                 preview?.thumbnail = nil
             }
             releaseHeldPreviewOnceLanded()
