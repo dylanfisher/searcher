@@ -134,3 +134,55 @@ private func disk(_ mountPoint: String) -> SidebarVolume {
     #expect(volumes.ejecting.isEmpty)
     #expect(changes == 2)
 }
+
+/// Holds the first read until `releaseFirst()`, which then lists `first`; every later read lists
+/// `later` at once. Counts the reads started, and whether the first has returned.
+private final class FirstReadGate: @unchecked Sendable {
+    // `lock` guards `reads` and `returnedFirst`.
+    private let lock = NSLock()
+    private var reads = 0
+    private var returnedFirst = false
+    private let gate = DispatchSemaphore(value: 0)
+    let first: [SidebarVolume]
+    let later: [SidebarVolume]
+
+    init(first: [SidebarVolume], later: [SidebarVolume]) {
+        self.first = first
+        self.later = later
+    }
+
+    func read() -> [SidebarVolume] {
+        let isFirst = lock.withLock {
+            reads += 1
+            return reads == 1
+        }
+        guard isFirst else { return later }
+        gate.wait()
+        lock.withLock { returnedFirst = true }
+        return first
+    }
+
+    var readsStarted: Int { lock.withLock { reads } }
+    var firstHasReturned: Bool { lock.withLock { returnedFirst } }
+
+    func releaseFirst() {
+        gate.signal()
+    }
+}
+
+@MainActor @Test func anOlderReadThatLandsAfterANewerOneIsDropped() async {
+    let mountPoint = uniqueMountPoint()
+    let old = disk(mountPoint + "-old")
+    let new = disk(mountPoint + "-new")
+    let gate = FirstReadGate(first: [old], later: [new])
+    let volumes = SidebarVolumes(read: gate.read, eject: { _ in })
+    // The list's own first read is the one held.
+    await settle { gate.readsStarted == 1 }
+
+    VolumeEvents.didMount(at: mountPoint)
+    await settle { volumes.volumes == [new] }
+    gate.releaseFirst()
+    await settle { gate.firstHasReturned && volumes.readsLanded == gate.readsStarted }
+
+    #expect(volumes.volumes == [new])
+}
