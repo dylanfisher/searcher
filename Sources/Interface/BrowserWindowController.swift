@@ -189,7 +189,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         split.splitViewItems = [sidebarItem, NSSplitViewItem(viewController: main)]
         window.contentViewController = split
         // Setting the content view controller sizes the window to it.
-        window.setContentSize(NSSize(width: 900, height: 600))
+        window.setContentSize(settings.newWindowSize)
         window.center()
         sidebar.onEscape = { [weak self] in self?.giveKeysBack() }
         sidebar.outlineView.passKey = { [weak self] event in
@@ -241,6 +241,16 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// The layout view of tab `id`, in the window or not.
     func layoutView(for id: TabID) -> PaneLayoutView? {
         tabViews[id]?.layoutView
+    }
+
+    // MARK: Size
+
+    /// The user finished resizing the window by dragging an edge: new windows open at its size
+    /// (0057-windows-and-tear-out.md). Zoom, full screen and restoring a frame aren't live
+    /// resizes, so they leave the size alone.
+    public func windowDidEndLiveResize(_ notification: Notification) {
+        guard let window, !isClosed, !window.styleMask.contains(.fullScreen) else { return }
+        settings.newWindowSize = window.contentRect(forFrameRect: window.frame).size
     }
 
     // MARK: Key window
