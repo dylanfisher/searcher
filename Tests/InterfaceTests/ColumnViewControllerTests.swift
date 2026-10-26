@@ -576,6 +576,27 @@ extension Fixture {
     #expect(columnsView.frame.width == width)
 }
 
+/// Every column, those opened later and those a new trail makes, queues its drops and renames
+/// in the window's workspace, and a move to another window changes them all.
+@MainActor @Test func everyColumnTakesTheWindowsWorkspace() async throws {
+    let fixture = await Fixture()
+    let first = UUID()
+    fixture.controller.workspaceID = first
+    #expect(fixture.controller.columnControllers.map(\.workspaceID) == [first])
+
+    await fixture.openThreeColumns()
+    #expect(fixture.controller.columnControllers.map(\.workspaceID) == [first, first, first])
+
+    let second = UUID()
+    fixture.controller.workspaceID = second
+    #expect(fixture.controller.columnControllers.map(\.workspaceID) == [second, second, second])
+
+    fixture.pane.navigate(to: Location(path: "/Volumes/r/other"))
+    await settle { fixture.trail.focused.pane.state.isLoaded }
+    #expect(fixture.controller.columnControllers.count == 2)
+    #expect(fixture.controller.columnControllers.allSatisfy { $0.workspaceID == second })
+}
+
 @MainActor @Test func aCutEntryDrawsDimmedInAColumnOpenedAfterTheCut() async throws {
     let pasteboard = NSPasteboard(name: NSPasteboard.Name("searcher-test-\(UUID().uuidString)"))
     defer { pasteboard.releaseGlobally() }
