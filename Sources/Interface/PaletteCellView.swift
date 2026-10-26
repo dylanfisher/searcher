@@ -31,6 +31,9 @@ final class PaletteCellView: NSTableCellView {
     /// The space between the icon, the title, the detail, the chord and the trailing edge.
     private static let spacing: CGFloat = 8
 
+    /// A click on the cell selects its row; it doesn't drag the panel.
+    override var mouseDownCanMoveWindow: Bool { false }
+
     init() {
         super.init(frame: .zero)
         identifier = Self.identifier
@@ -108,14 +111,20 @@ final class PaletteCellView: NSTableCellView {
     /// The height of the row that shows `result` in a cell `width` wide: `rowHeight` for a
     /// title on one line, and a wrapped title's lines with `wrappedPadding` above and below.
     static func height(of result: Palette.Result, width: CGFloat) -> CGFloat {
-        sizer.show(result, isEnabled: true)
+        let item = result.item
+        sizer.titleField.attributedStringValue = title(of: result, color: .labelColor)
+        sizer.detailField.stringValue = item.detail ?? ""
+        sizer.detailField.isHidden = item.detail == nil
+        sizer.chordField.stringValue = item.chord?.symbols ?? ""
+        sizer.chordField.isHidden = item.chord == nil
         sizer.wrapTitle(inCellOfWidth: width)
         let title = sizer.titleField.intrinsicContentSize.height
         return max(rowHeight, (title + 2 * wrappedPadding).rounded(.up))
     }
 
-    /// A cell that is never shown, which measures rows without a layout pass.
-    private static let sizer = PaletteCellView()
+    /// A cell that is never shown, which measures rows without a layout pass. It takes only the
+    /// text a row's height depends on, not its icon, label or colours.
+    static let sizer = PaletteCellView()
 
     /// Wraps the title at the widest it can be in a cell `width` wide: all of it but the icon,
     /// the chord, the detail and the spaces between them. The detail keeps up to a third of the
