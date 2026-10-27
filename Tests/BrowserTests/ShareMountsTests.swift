@@ -47,8 +47,8 @@ private struct Mounting {
     mounting.mounts.set([mountedShare("music"), mountedShare("main")])
     #expect(mounting.mounter.complete(handle, mountPoints: ["/Volumes/main"]))
 
-    #expect(await first.value == .mounted("/Volumes/main"))
-    #expect(await second.value == .mounted("/Volumes/main"))
+    #expect(await bounded(first) == .mounted("/Volumes/main"))
+    #expect(await bounded(second) == .mounted("/Volumes/main"))
     #expect(mounting.mounter.starts.map(\.request) == [main])
     #expect(mounting.mounter.starts.allSatisfy { $0.onBlockingCallThread })
     // The answer waits for a read of the table, which has the new mount.
@@ -60,7 +60,7 @@ private struct Mounting {
     let mounting = await Mounting()
     mounting.mounter.failStarts(with: EACCES)
 
-    #expect(await mounting.ask().value == .failed(EACCES))
+    #expect(await bounded(mounting.ask()) == .failed(EACCES))
     #expect(mounting.shareMounts.askers(of: main) == 0)
     // The next ask starts again.
     mounting.mounter.failStarts(with: nil)
@@ -78,12 +78,29 @@ private struct Mounting {
     await settle { mounting.shareMounts.askers(of: main) == 2 }
 
     first.cancel()
-    #expect(await first.value == .cancelled)
+    #expect(await bounded(first) == .cancelled)
     #expect(mounting.mounter.cancellations.isEmpty)
     second.cancel()
-    #expect(await second.value == .cancelled)
+    #expect(await bounded(second) == .cancelled)
     await settle { mounting.mounter.cancellations == [handle] }
     #expect(mounting.mounter.cancelsOffBlockingThread == 0)
+}
+
+/// A last asker that leaves while NetFS's start hasn't returned its request ID: the mount is
+/// cancelled once it has one.
+@MainActor @Test func aMountLeftBeforeItsStartReturnsIsCancelledOnceItDoes() async throws {
+    let mounting = await Mounting()
+    mounting.mounter.holdStarts()
+    let asking = mounting.ask()
+    let handle = try await mounting.handle()
+
+    asking.cancel()
+    #expect(await bounded(asking) == .cancelled)
+    #expect(mounting.mounter.cancellations.isEmpty)
+    mounting.mounter.releaseStarts()
+
+    await settle { mounting.mounter.cancellations == [handle] }
+    #expect(!mounting.mounter.complete(handle))
 }
 
 @MainActor @Test func aCompletionAfterACancelIsIgnored() async throws {
@@ -91,7 +108,7 @@ private struct Mounting {
     let first = mounting.ask()
     let handle = try await mounting.handle()
     first.cancel()
-    #expect(await first.value == .cancelled)
+    #expect(await bounded(first) == .cancelled)
     await settle { mounting.mounter.cancellations == [handle] }
     let second = mounting.ask()
     let next = try await mounting.handle(ofStart: 2)
@@ -103,7 +120,7 @@ private struct Mounting {
     // Both completions run on the mounter's queue in order, so the late one reaches the mounts
     // first: had it been taken, the second ask would have its failure.
     #expect(mounting.mounter.complete(next, mountPoints: ["/Volumes/main"]))
-    #expect(await second.value == .mounted("/Volumes/main"))
+    #expect(await bounded(second) == .mounted("/Volumes/main"))
 }
 
 /// A share mounted already answers `EEXIST`, maybe with no mount point: its mount point is the
@@ -121,14 +138,14 @@ private struct Mounting {
 
     mounting.mounter.complete(handle, status: EEXIST)
 
-    #expect(await asking.value == .alreadyMounted("/Volumes/main 1"))
+    #expect(await bounded(asking) == .alreadyMounted("/Volumes/main 1"))
 }
 
 @MainActor @Test func alreadyMountedWithNoneInTheTableFails() async throws {
     let mounting = await Mounting()
     let asking = mounting.ask()
     mounting.mounter.complete(try await mounting.handle(), status: EEXIST)
-    #expect(await asking.value == .failed(EEXIST))
+    #expect(await bounded(asking) == .failed(EEXIST))
 }
 
 @MainActor
@@ -145,7 +162,7 @@ func aCompletionAnswersByItsStatus(status: Int32, mountPoints: [String], result:
     let mounting = await Mounting()
     let asking = mounting.ask()
     mounting.mounter.complete(try await mounting.handle(), status: status, mountPoints: mountPoints)
-    #expect(await asking.value == result)
+    #expect(await bounded(asking) == result)
 }
 
 @MainActor @Test func anAskFromACancelledTaskIsCancelledAndStartsNothing() async {
@@ -154,6 +171,6 @@ func aCompletionAnswersByItsStatus(status: Int32, mountPoints: [String], result:
         withUnsafeCurrentTask { $0?.cancel() }
         return await mounting.shareMounts.mount(main)
     }
-    #expect(await asking.value == .cancelled)
+    #expect(await bounded(asking) == .cancelled)
     #expect(mounting.mounter.starts.isEmpty)
 }

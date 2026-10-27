@@ -17,7 +17,7 @@ public final class GatedShareMounter: ShareMounter, @unchecked Sendable {
 
     private typealias Completion = @Sendable (Int32, [String]) -> Void
 
-    // `lock` guards everything below.
+    // `lock` guards the properties from here down to `queue`.
     private let lock = NSLock()
     private var startCalls: [Start] = []
     /// The completions of the mounts not yet ended or cancelled.
@@ -30,6 +30,9 @@ public final class GatedShareMounter: ShareMounter, @unchecked Sendable {
     private var immediateStatus: Int32?
     /// Where completions run, one at a time.
     private let queue = DispatchQueue(label: "GatedShareMounter")
+    // `startGate` guards `startsAreHeld`.
+    private let startGate = NSCondition()
+    private var startsAreHeld = false
 
     public init() {}
 
@@ -42,7 +45,7 @@ public final class GatedShareMounter: ShareMounter, @unchecked Sendable {
         _ request: ShareMountRequest,
         completion: @escaping @Sendable (_ status: Int32, _ mountPoints: [String]) -> Void
     ) -> ShareMountStart {
-        lock.withLock {
+        let started = lock.withLock { () -> ShareMountStart in
             if let status = immediateStatus {
                 startCalls.append(
                     Start(
@@ -59,6 +62,25 @@ public final class GatedShareMounter: ShareMounter, @unchecked Sendable {
                     request: request, handle: handle,
                     onBlockingCallThread: BlockingCallThread.isCurrent))
             return .started(handle)
+        }
+        // Recorded first, so a test sees the start while it is held.
+        startGate.withLock {
+            while startsAreHeld { startGate.wait() }
+        }
+        return started
+    }
+
+    /// Holds every start from now on before it returns, after it is recorded, as a slow
+    /// `NetFSMountURLAsync` would, until `releaseStarts()`.
+    public func holdStarts() {
+        startGate.withLock { startsAreHeld = true }
+    }
+
+    /// Lets the held starts return.
+    public func releaseStarts() {
+        startGate.withLock {
+            startsAreHeld = false
+            startGate.broadcast()
         }
     }
 

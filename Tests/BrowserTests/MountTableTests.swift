@@ -108,14 +108,15 @@ private func loadedTable(_ mounts: StubMounts) async -> MountTable {
     let disk = volume("/Volumes/a")
     mounts.set([root, disk])
 
-    await table.refreshed()
+    #expect(await bounded(Task { await table.refreshed() }) != nil)
 
     #expect(table.volumes == [root, disk])
     // Two at once both return: the first with the second's read, which drops its own.
     mounts.set([root])
-    async let first: Void = table.refreshed()
-    async let second: Void = table.refreshed()
-    _ = await (first, second)
+    let first = Task { await table.refreshed() }
+    let second = Task { await table.refreshed() }
+    #expect(await bounded(first) != nil)
+    #expect(await bounded(second) != nil)
     #expect(table.volumes == [root])
 }
 
