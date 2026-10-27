@@ -4,7 +4,7 @@
 - **Status:** proposed
 - **Amends:** [0108](0108-sidebar-locations.md): "A share is listed by its mount point";
   [0026](0026-path-bar.md): "Which volume", for folders on a share;
-  [0103](0103-column-trail-from-the-root.md): "Which root", for folders on a share.
+  [0103](0103-column-trail-from-the-root.md): the trail's first column, for folders on a share.
 
 ## Context
 
@@ -19,148 +19,186 @@ the column trail, the path bar, history, the saved session, ⌘K, ⌘U
 ([0112](0112-position-history.md)), drops, file commands, Quick Look, tabs and windows all take
 a pane's location to be a folder.
 
+Claims about Finder marked *(unverified)* below weren't checked in Finder; each is checked by
+hand before the step that builds it.
+
 ## Decision
 
 - **Which shares make a server.** A volume belongs to a server when it is a browsable network
   volume mounted directly in `/Volumes`, where the system mounts shares, and its source names a
   host: `//[user@]host[:port]/share` (SMB, AFP), `scheme://[user@]host[:port]/…` (WebDAV) or
-  `host:/path` (NFS). `VolumeIdentity.server` gives it, with no read. The server is the host,
-  compared without case, so shares mounted by different users from one host are one server. Its
-  name is the Bonjour instance name when the host is `<instance>._<service>._tcp.<domain>`, with
-  `\DDD` and `\c` escapes and percent escapes undone ("HAL9000"), and the host as written
-  otherwise ("192.168.1.5"). Any other volume, a share mounted elsewhere or whose source doesn't
-  parse, keeps its own row as 0108 has it.
+  `host:/path` (NFS). `VolumeIdentity.server` gives it, with no read. A server is keyed by its
+  full host as the source writes it, compared without case, so shares mounted by different users
+  from one host are one server. The stored host keeps its spelling; only the comparison folds
+  case. The name shown is the Bonjour instance name when the host is
+  `<instance>._<service>._tcp.<domain>`, with `\DDD`, `\c` and percent escapes undone
+  ("HAL9000"), and the host as written otherwise ("192.168.1.5"). Two keys can show one name:
+  the same instance in two domains, or over SMB and AFP, are two servers both named "HAL9000".
+  Shares mounted outside `/Volumes`, or whose source doesn't parse, keep their own rows as 0108
+  has them (default, Dylan to confirm).
 - **The model: `Location` gets a second case.** `enum Location { case folder(path: String),
   case server(Server) }`, keeping `init(path:)`. `Server` holds the host and gives the name.
-  Every member has a server answer, so most users need nothing: `name` is the server's name,
-  `parent` is nil, `ancestors` is `[self]`, and `child(named:)` is `/Volumes/<name>`, since a
-  server's shares are the folders it has in `/Volumes`. `path` becomes `String?`, nil for a
-  server, so the compiler lists every user of a path, and each one decides there: a user that
-  touches the file system refuses a server or never receives one, and says which. `Location` is
-  a value with no read, as before: the shares a server has now come from its listing, not from
-  the location.
+  `name` is the server's name, `parent` is nil, `ancestors` is `[self]`, and `child(named:)` is
+  `/Volumes/<name>`, since a server's shares are the folders it has in `/Volumes`. `Location`
+  stays a value with no read: a server's shares come from its listing, not from the location.
+- **How a user gets a path.** Two accessors replace `path: String`:
+  - `folderPath: String` traps with "a server has no folder path". The users that never
+    receive a server use it: everything that touches the file system (loads of a folder,
+    `FolderMonitor`, size walks, `ListingCache`, `RecentListings`, `FileOperation`s, Quick Look,
+    Open, rename), and Interface code reached only from a folder pane.
+  - `path: String?`, nil for a server, for the users that must decide: the saved session,
+    `VolumeEvents`, `FolderVisits`, Go to Folder's base and titles. They switch on the case.
+  - No `?? ""` and no silent return on a nil path: a user either traps through `folderPath` or
+    handles `.server` by name.
+  - **One rule for "off at a server":** `Location.isFolder`, false for a server. Every command
+    and drop that is off at a server reads it, and nothing else decides it.
 - **Each user of a location.**
-  - Listing: `ListingService.load` of a server builds its listing from the mount table it already
-    reads off the main thread (`mountedVolumes`, `MNT_NOWAIT`), asking no share: one `.directory`
-    entry per share, named by its mount point's last component as 0108 names a share ("main 1"
-    for a second mount). It takes no volume slot, no stall timers and no cache; it hands `full`
-    at once. A server with no share mounted fails as not connected (`ENOTCONN`).
-  - Pane: no folder monitor, no folder size walks, no recent listing or listing cache.
-    `VolumeEvents` reloads every pane at a server on each mount and unmount, so the rows follow
-    the shares. A pane at a server that is not connected shows "“HAL9000” isn't connected."
-    where a folder's failure shows, and stays there, as a missing folder's pane does
-    ([0080](0080-restore-at-launch.md)); it lists again when a share of it mounts. Panes inside
-    a share that unmounts go offline as [0049](0049-volume-events.md) says.
-  - Rows: a share in a server's listing shows CoreTypes' `GenericSharepoint` icon (read as
-    `CoreTypesIcons` reads sidebar glyphs), Kind "Volume", and `--` for Size and Date Modified.
-    The entries carry the Unix epoch as their date, which no view shows, so a date sort keeps
-    name order.
-  - Commands at a server: New Folder, Paste, Move Items Here, Get Info and every folder command
-    of the pane itself (Open in Terminal, Add to Sidebar) are off, and a drop on the listing's
-    background or on the server's sidebar row is refused, as Finder refuses them: a server has no
-    folder to put an item in. On a share row: Open, Open in Other Pane, Quick Look, Get Info,
-    Copy and a drop onto it act on the share's mount point as on any folder; Move to Trash,
-    Cut, Duplicate and Rename are off, as Finder can't trash or rename a share; the context menu
-    has `Eject “music”`, which ejects that share as the sidebar does. Copy and Move to Other Pane
-    into a pane at a server are off. In column view 0111's rule stands: with a share selected
-    alone in the server's column and its column shown, New Folder and Paste act in the share.
-  - Go to Folder and the palette's paths: a relative path typed at a server starts at
-    `/Volumes`, the folder its shares are in, so `music` goes to `/Volumes/music`.
-  - History, Back and Forward keep server entries as any other; Back to a server selects the
-    share left. ⌘U's positions ([0112](0112-position-history.md)) name a server's column as
-    they name a folder's. Column widths are kept for a server's column by the server.
-  - Window and tab titles show the server's name. A new tab, window or split of a pane at a
-    server shows the server.
-  - ⌘K's folder list ([0087](0087-palette-window.md)) leaves servers out: `FolderVisits`
-    doesn't count a visit to one, and the panes' folders it adds skip them. It lists folders
-    to type the path of; a server is reached from the sidebar, the path bar and Back.
-- **Column view.** The server is a column, its rows the shares. A pane at the server shows that
-  one column; selecting a share opens the share's column right of it. A folder in a share starts
-  its trail at the server: `ColumnTrail.root(of:mountedVolumes:home:)` answers the share's
-  server when the deepest volume holding the path has one, and the trail's columns are the
-  server, then the folders from the share's mount point down (`ColumnTrail.chain(from:to:)`,
-  `[server] + location.ancestors.dropFirst(2)` since a share is always at `/Volumes/<name>`).
-  ← in the server's column does nothing, as at any root.
-- **No column moves after the first frame.** 0103 takes a trail's first root from the path alone
-  and checks it off the main thread; an added server column would move every share's columns
-  after their first frame. So the first root reads the app's `MountTable` (main actor, read at
-  launch and after each mount event, no file-system call on the main thread), which
-  `ListingService` keeps as it keeps `recentListings`, so every pane reaches it. The launch's
-  restore waits for its first read with the session's read ([0081](0081-restored-network-panes.md)).
-  The off-main root check stays and corrects a trail built before a share mounted.
-- **Path bar and Enclosing Folder.** `Pane.ancestors` is the one answer for both: the trail's
-  chain from the server for a folder in a share, `location.ancestors` from `/` otherwise. A
-  share's bar reads "HAL9000 › music › …", as Finder's does; the server segment is titled by its
-  name, and a click on it shows the server with the share selected, a Cmd-click opens it in a
-  new tab (0026). Enclosing Folder goes to the element before the pane's location, so ⌘↑ at a
-  share's root shows the server with the share selected, and at the server does nothing, as
-  Finder has no Network to go up to here. Disks keep 0026's bar from `/`.
-- **Saved session: one shape.** A stored location is a `path` or a `server` (the host as the
-  mount source writes it), never both: `TabState`'s panes, history entries and column widths
-  write `"path"` for a folder exactly as now, so stored folders decode unchanged, and
-  `"server"` for a server. One with both or neither is rejected with the workspace, as other
-  undecodable data is. A server restored while not connected shows the not-connected state.
+
+  | User | At a server | Step |
+  |---|---|---|
+  | `ListingService.load` | Builds the listing from the app's `MountTable` (below), asking no share: one `.directory` entry per share, named by its mount point's last component as 0108 names a share ("main 1" for a second mount). No volume slot, stall timer or cache; hands `full`, or `notConnected` with no share mounted. | 7c |
+  | `Pane` | No folder monitor, size walk, recent listing or cache. Lists again each time the `MountTable` reports a read that changed (below). | 7c |
+  | List and column rows | CoreTypes' `GenericSharepoint` icon (read as `CoreTypesIcons` reads sidebar glyphs), Kind "Volume", `--` for Size and Date Modified *(unverified)*. Entries carry the Unix epoch as their date, which no view shows, so a date sort keeps name order. | 7c |
+  | New Folder, Paste, Move Items Here, Get Info / Open in Terminal / Add to Sidebar of the pane's folder, Copy and Move to Other Pane into it | Off (`isFolder`), as Finder has no folder to put an item in. In column view 0111's rule stands: with a share selected alone and its column shown, New Folder and Paste act in the share. | 7b2 |
+  | Move to Trash, Cut, Duplicate, Rename of a selected share | Off (`isFolder` of the pane's location), as Finder can't trash or rename a share *(unverified)*. Open, Open in Other Pane, Quick Look, Get Info and Copy act on the mount point as on any folder. | 7b2 |
+  | Context menu of a share row | Adds `Eject “music”`, which ejects that share as the sidebar does. | 7c |
+  | Drops | On the listing's background or the server's sidebar row: refused (`isFolder`). On a share row: `DropOperation` gets `pane.location.child(named:)`, the share's mount point, as for any folder row. | 7b2 |
+  | Go to Folder, the palette's paths | A relative path typed at a server starts at `/Volumes`, so `music` goes to `/Volumes/music`. | 7b2 |
+  | `History`, Back, Forward | Server entries as any other; Back to a server selects the share left. | 7b1 |
+  | `SelectionHistory` (⌘U) | Positions name a server's column as a folder's. | 7b1 |
+  | `ColumnWidths` | A server's column width is kept by the server. | 7b1 |
+  | `FolderVisits`, ⌘K | Servers aren't counted (default, Dylan to confirm). `FolderHistory` takes and stores folder paths only, so a server can't enter it; `FolderVisits.visit` skips `.server`, and `FolderSource` skips panes at one. | 7b2 |
+  | Window and tab titles | The server's name. | 7b2 |
+  | New tab, window, split | Shows the server, as the pane did. | 7b1 |
+  | `TabState` | See "Saved session". | 7b2 |
+  | `VolumeEvents` | A pane at a server isn't on any volume; its reloads come from the `MountTable`. | 7c |
+
+- **One source of mount data.** The app has one `MountTable` (main actor, read off the main
+  thread at launch and after each mount event, `MNT_NOWAIT`). `main.swift` makes it and passes it
+  to `ListingService(mounts:)` and to `WorkspaceWindows`, which today makes its own
+  (`WorkspaceWindows.swift:100`); no second `MountTable()` is made, since each one registers with
+  `VolumeEvents`. Panes reach it as `service.mounts`, as they reach `recentListings`. The table
+  gains `volumes`, `server(holding:)`, an `observe(for:_:)` that runs after a read that changed
+  what it lists, and `firstRead()`, which returns once a read has landed. Both the server listing
+  and the trail's server column read it, so they agree. A server pane lists on the table's
+  observer, not on the raw mount event, so it never reads a table older than the event. A
+  service without a table, as a bench makes, traps on a server load. The first read can't hang:
+  `getmntinfo` with `MNT_NOWAIT` asks no volume.
+- **Not connected** is a new `ListingState.notConnected`, used for a server with no share in the
+  table: after all its shares are ejected or unmounted, and for a server restored before its
+  shares mount. The pane shows "“HAL9000” isn't connected." where a folder's failure shows and
+  stays there (default, Dylan to confirm; Finder would list the unmounted shares, which needs
+  network browsing the app doesn't have). It lists again when a read of the table holds one of
+  its shares. Panes inside a share that unmounts go offline as [0049](0049-volume-events.md)
+  says.
+- **Column view.** The server is a column, its rows the shares. A pane at a server shows that
+  one column; selecting a share opens the share's column right of it. A trail carries
+  `serverRoot: Server?`, and when set, a column for the server comes before its first column.
+  `root(of:mountedVolumes:home:)` is unchanged and still returns the share's mount point, so
+  root, depth, folding, the waiting columns and the home rule are untouched; the server column is
+  a prefix. A trail for a folder in a share sets `serverRoot` from `service.mounts` when it is
+  built. A pane at the server itself has a trail of the server column alone, and `root` isn't
+  asked. ← in the server column does nothing, as at any root.
+- **The server column and the first frame.** A trail built while the table is unread, or before
+  the share mounted, has no server column. When a later read gives the share a server, the
+  trail adds the server column on the left: a move of the columns, but only in that window,
+  which the restore closes by waiting for `firstRead()` within its existing 300 ms cap
+  (`cachedRowsLimit`, [0081](0081-restored-network-panes.md)); past the cap the windows show and
+  the column comes when the read lands. A share mounted later than its trail was built adds the
+  column then. A server whose last share goes leaves its column, showing `notConnected`.
+- **Path bar and Enclosing Folder.** `Pane.ancestors` is the one answer for both: for a folder
+  in a share with a server, the server, then the folders from the share's mount point down;
+  otherwise `location.ancestors` from `/`. A share's bar reads "HAL9000 › music › …"
+  *(unverified)*; the server segment is titled by its name, a click shows the server with the
+  share selected, and a Cmd-click opens it in a new tab (0026). Enclosing Folder goes to the
+  element before the pane's location, so ⌘↑ at a share's root shows the server with the share
+  selected *(unverified)*, and at the server does nothing. Disks keep 0026's bar from `/`
+  (default, Dylan to confirm; a volume-rooted bar is a later step).
+- **Saved session: one shape.** A stored location is a `"path"` or a `"server"` (the host as
+  written), never both: `TabState`'s panes, history entries and column widths write `"path"` for
+  a folder exactly as now, so stored folders decode unchanged. A location with both keys or
+  neither rejects the whole workspace, as other undecodable data does. A server restored while
+  not connected shows `notConnected`. Until 7e nothing can put a pane at a server outside
+  tests, so no session holds one before then: 7b2's shape is tested but dormant.
 - **Sidebar.** `SidebarVolumes` lists a row per server where its first share is in the mount
   table's order, and no row for the server's shares. The row has the server's name, the
   `SidebarGenericFile` glyph (with 0108's SF Symbol stand-in until read), and 0108's eject
   button and context menu item, `Eject “HAL9000”`. A click or Return shows the server in the
   focused pane. The row stays selected while the pane goes into a share, as a favorite's row
   does now; the selection is kept across reloads by the server, as a volume row's is by its
-  mount point. 0089's key routing is unchanged.
+  mount point. 0089's key routing is unchanged. The sidebar keeps 0108's own read, which asks
+  local volumes for their names; its server rows and a server listing can differ for the moment
+  between the two reads after an event.
 - **Ejecting a server** runs 0108's eject for each of its shares at once, each with its
   `willEject` and its one-at-a-time rule; the row's button is off while any of them runs. A
-  refused share stays mounted and the others go, as in Finder. One sheet reports the refusals:
+  refused share stays mounted and the others go *(unverified)*. One sheet reports the refusals:
   0108's "The disk “main” wasn’t ejected." for one, "The disks “main” and “music” weren’t
   ejected." for more, with each system reason on its own line under it. The row leaves when its
   last share does.
 - **Accessibility.** The server row reads as its name, with its eject button labeled as a volume
   row's is; the path bar's server segment reads as the server's name; a share row reads as its
-  name with Kind "Volume"; the not-connected message is the pane's failure text, which
-  VoiceOver reads as a folder's failure.
+  name with Kind "Volume"; the not-connected message reads as a folder's failure does.
 
 ## Build steps
 
-Each step lands with its tests; each test fails without the step.
+In order; each step lands with its tests, and each test fails without the step.
 
 1. **SB.7a, servers from the mount table** (Browser). `Server` (host, name, case-free
    equality), `VolumeIdentity.server`. Files: `Sources/Browser/Server.swift`,
-   `VolumeIdentity.swift`; `Tests/BrowserTests/ServerTests.swift`, `VolumeIdentityTests.swift`.
-   Tests: each source form, an IP host, `\032` and `\.` escapes, a share outside `/Volumes`,
-   a local disk and a `MNT_DONTBROWSE` share give no server, two users on one host are one.
-2. **SB.7b, `Location.server`** (Browser, Interface, app; mechanical). The enum, `path: String?`,
-   every user deciding as above, but no way to reach a server yet besides tests: commands off,
-   drops refused, FS users that can't receive one say so, `FolderVisits` skip, titles,
-   `TabState`'s stored shape. Files: `Location.swift` and the users the compiler lists
-   (`rg -l '\bLocation\b' Sources`). Tests: `LocationTests` (name, parent, ancestors, child of
-   a server), `TabStateTests` (round trip of a server pane, history and width; a folder file
-   from before decodes; both or neither keys rejected), `FileCommands`/`ClipboardCommands`
-   tests for each command off at a server.
-3. **SB.7c, a server's listing in list view** (Browser, Interface). `ListingService.load` of a
-   server, no monitor, sizes or cache, `VolumeEvents` reload, not-connected state, share rows'
-   icon, Kind and `--`, the share row's Eject item. Files: `ListingService.swift`, `Pane.swift`,
-   `VolumeEvents.swift`, `ListingViewController.swift`, `EntryCellFormatter.swift`,
-   `TypeIconCache.swift`, `ContextMenuBuilder.swift`. Tests: a stub mount table lists the
-   server's shares and not others; a mount and an unmount event relist; no share gives the
-   not-connected state and a mount brings rows; no monitor or walk starts; the views show the
-   icon, "Volume" and `--`.
-4. **SB.7d, trail and path bar** (Browser, Interface, app). `root` answering a server,
-   `ColumnTrail.chain`, `MountTable` on `ListingService` for the first root, the restore
-   waiting for its read, `Pane.ancestors`, Enclosing Folder, the path bar's server segment,
-   the server's column in column view. Files: `ColumnTrail.swift`, `Pane.swift`,
-   `ListingService.swift`, `MountTable.swift`, `PathBarView.swift`, `PaneViewController.swift`,
-   `ColumnViewController.swift`, `WorkspaceWindows.swift`, `main.swift`. Tests: a share folder's
-   trail starts at the server on its first frame with a read table, and is corrected by the
-   check without one; a pane at the server has one column; ⌘↑ from a share root and at the
-   server; the bar's segments and clicks; Back across server and share.
-5. **SB.7e, the sidebar's server row** (Browser, Interface). Grouping in `SidebarVolumes`,
-   `ejectServer`, the row, its glyph, click, selection kept by server, the refusal sheet.
-   Files: `SidebarVolume.swift`, `SidebarVolumes.swift`, `SidebarIcons.swift`,
+   `VolumeIdentity.swift`; `ServerTests.swift`, `VolumeIdentityTests.swift`. Tests: each source
+   form, an IP host, `\032` and `\.` escapes, one instance in two domains gives two servers with
+   one name, a share outside `/Volumes`, a local disk and a `MNT_DONTBROWSE` share give none, two
+   users on one host are one, a host's spelling is kept.
+2. **SB.7b1, the enum** (every tier, Bench and `UIBench` included; no behavior change). The
+   enum, `folderPath`, `path: String?`, `isFolder`, the server answers of `name`, `parent`,
+   `ancestors` and `child(named:)`; every user the compiler lists moves to `folderPath` or
+   switches on the case. Files: `Location.swift` and `rg -l '\bLocation\b' Sources`. Tests:
+   `LocationTests` for each server answer and `folderPath` of a folder; `HistoryTests` and
+   `SelectionHistoryTests` keep server entries.
+3. **SB.7b2, what a server turns off** (Browser, Interface). `TabState`'s stored shape, the
+   commands and drops off by `isFolder`, Go to Folder's base, `FolderHistory` by folder path and
+   `FolderVisits` skipping servers, titles. Files: `TabState.swift`, `FileCommands.swift`,
+   `ClipboardCommands.swift`, `DualPaneCommands.swift`, `SystemCommands.swift`,
+   `PathInput.swift`, `FolderHistory.swift`, `FolderVisits.swift`, `FolderSource.swift`,
+   `ListingViewController.swift`, `ColumnViewController.swift`, `BrowserWindowController.swift`.
+   Tests: a server pane, history and width round-trip with the host's spelling; a folder file
+   from before decodes; both keys and neither key each reject the whole workspace; each command
+   off at a server and on for a share's column under 0111; a background drop refused; a visit
+   to a server leaves `FolderHistory` unchanged.
+4. **SB.7c, a server's listing** (Browser, Interface, app). The one `MountTable` made in
+   `main.swift` and injected, its `volumes`, `server(holding:)`, `observe` and `firstRead`;
+   `ListingService.load` of a server, `notConnected`, no monitor, sizes or cache, relisting on the
+   table's observer; rows' icon, Kind and `--`; a share row's Eject. Files: `MountTable.swift`,
+   `ListingService.swift`, `ListingState.swift`, `Pane.swift`, `main.swift`,
+   `WorkspaceWindows.swift`, `ListingViewController.swift`, `EntryCellFormatter.swift`,
+   `TypeIconCache.swift`, `ContextMenuBuilder.swift`, `PaneViewController.swift`. Tests: a stub
+   table lists the server's shares and no others; a changed read relists and an unchanged one
+   doesn't; no share gives `notConnected` and a read with one gives rows; no monitor or walk
+   starts; the views show the icon, "Volume" and `--`; Back to a server that has since lost its
+   shares shows `notConnected` without a trap. A share opened from this listing has the 0103
+   trail and the bar from `/` until 7d; a server is reached only from tests and a restored
+   session until 7e.
+5. **SB.7d, trail and path bar** (Browser, Interface). `serverRoot` and the prefix column,
+   adding it when a read gives the share a server, the restore's wait for `firstRead()`,
+   `Pane.ancestors`, Enclosing Folder, the path bar's server segment. Files: `ColumnTrail.swift`,
+   `Pane.swift`, `PathBarView.swift`, `ColumnViewController.swift`, `WorkspaceWindows.swift`.
+   Tests: with the table read, a share folder's trail has the server column on its first frame;
+   unread, it has none and the read adds it; a pane at the server has one column; ⌘↑ from a
+   share root and at the server; the bar's segments and clicks; Back across server and share;
+   ⌘U to a step in the server column after the server lost its shares restores the column,
+   shows `notConnected` and drops the names as 0077 does; Undo of a paste and of a move inside
+   a share, with the server as the first column, acts on the record's paths and leaves the
+   server column as it was.
+6. **SB.7e, the sidebar's server row** (Browser, Interface). Grouping in `SidebarVolumes`,
+   `ejectServer`, the row, its glyph, click, selection kept by server, the refusal sheet. Files:
+   `SidebarVolume.swift`, `SidebarVolumes.swift`, `SidebarIcons.swift`,
    `WorkspaceSidebarViewController.swift`. Tests: two shares give one row at the first share's
    place and no share rows; eject unmounts both with `willEject` for each; one refusal, two
    refusals and their sheet text; the button is off while any runs; a click shows the server;
    the row stays selected after a reload.
 
-SB.7d and SB.7e touch different files after SB.7c and can run at once.
+7d and 7e share no file and can run at once after 7c. If either finds it needs a file of the
+other, 7d goes first.
 
 ## Alternatives considered
 
@@ -172,6 +210,11 @@ SB.7d and SB.7e touch different files after SB.7c and can run at once.
   location, history, positions, widths and stored state would all change type anyway, and the
   file system users would still reach the folder through an optional, so it moves the same
   sites and adds a type.
+- **`root(of:)` returning the server** — rejected: root, depth, folding and the home rule all
+  work on a path; a prefix column leaves them as they are.
+- **A second mount read for the server listing,** `ListingService`'s own `mountedVolumes` —
+  rejected: the listing and the trail's server column could disagree after an event. The
+  0103 root check keeps its own read, since it decides nothing about servers.
 - **Listing a server's unmounted shares,** as Finder does — not done: it needs network browsing
   (`NetFS` or SMB share enumeration), which the app has none of, and a read of the server.
 - **An optional `DirectoryEntry.modified`** for the shares' `--` — rejected: 39 users change for
@@ -179,15 +222,15 @@ SB.7d and SB.7e touch different files after SB.7c and can run at once.
 - **Grouping shares mounted anywhere** — rejected for now: a server's shares then need a lookup
   to find their folders, where `/Volumes/<name>` needs none. The system mounts shares there.
 - **Keeping the path bar at `/` for shares** ("Macintosh HD › Volumes › music") — rejected:
-  Dylan asked for the server as a place in the path bar, and Finder roots a share's bar there.
+  Dylan asked for the server as a place in the path bar.
 
 ## Consequences
 
 A server reaches every place a folder does, and the compiler names each. Shares mounted outside
 `/Volumes` or from a source that doesn't parse keep 0108's rows. One host reached two ways, by
-its Bonjour name and by address, is two servers. The server glyph is always the generic file,
-where Finder picks one from the server's advertised model. A pane at a server whose shares are
-all gone shows it not connected, where Finder would list the unmounted shares. Disks keep 0026's
-path bar from `/`, so a share's bar and a disk's differ. Not yet checked in Finder, and checked
-by hand before SB.7c and SB.7d: a share's path bar segments, ⌘↑ from a share's root, and the
-Kind, Size and Date Modified Finder shows for a server's shares.
+its Bonjour name and by address, is two servers, and one instance in two domains is two rows
+with one name. The server glyph is always the generic file, where Finder picks one from the
+server's advertised model. A pane at a server whose shares are all gone shows it not connected,
+where Finder would list the unmounted shares. Disks keep 0026's path bar from `/`, so a share's
+bar and a disk's differ. A server column can appear left of a trail built before the mount
+table's first read or before its share mounted. ⌘K doesn't list servers.
