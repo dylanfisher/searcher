@@ -13,7 +13,9 @@ public struct StoreProblem: Error, Equatable, Sendable, CustomStringConvertible 
         case widthsDropped
         /// The file isn't in the one stored shape, and deleting it failed too.
         case undeletable
-        /// The file couldn't be written. The one before it, if any, is left as it was.
+        /// The file couldn't be written. The one before it, if any, is left as it was, and the
+        /// store tries the write again: a save's at its next flush, a load's write-back at the
+        /// next load.
         case unwritten
         /// The file of a workspace that is no longer kept, an unnamed one whose window closed or
         /// a deleted one, couldn't be deleted.
@@ -45,7 +47,7 @@ public struct StoreProblem: Error, Equatable, Sendable, CustomStringConvertible 
             "Couldn't read or delete \(file.path), which isn't a saved workspace, session or"
                 + " folder history Searcher can read: \(reason)"
         case .unwritten:
-            "Couldn't save \(file.path), so the last change to it isn't kept: \(reason)"
+            "Couldn't save \(file.path); Searcher tries again later: \(reason)"
         case .unforgotten:
             "Couldn't delete \(file.path), the file of a workspace that is no longer kept:"
                 + " \(reason)"

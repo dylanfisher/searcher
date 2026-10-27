@@ -96,3 +96,25 @@ Saved workspaces now keep a snapshot apart from their window, one JSON file each
 `<application support root>/snapshots/<id>.json`, read and checked as the workspace files are; one
 without a name is deleted and reported. `workspaces/` holds the open windows only, and a window's
 file is deleted when it closes. See [0088](0088-workspace-snapshots.md).
+
+## Amendment: failed writes, durable renames, absolute paths (2026-10-27)
+
+A persistence audit (2026-10-27) found three gaps; the owner's rule is that persistence has no
+edge cases.
+
+- **A failed write stays pending.** `flush()` drops a save from the pending ones only once its
+  write succeeds. A write that fails, or a flush whose folders can't be made, is reported as
+  `unwritten` and kept, so the next flush, after the next save or at quit, writes it again; a
+  newer save or a delete replaces it. Before, the save was dropped before its write, so a full
+  disk lost the change while `WorkspaceWindows` took it as saved. The flush runs on the store's
+  actor with no suspension, so no save can land between the write and the drop.
+- **`AtomicWrite` syncs before the rename.** The temporary file is `fsync`ed, through its file
+  handle, before it is renamed over the old one, so a power loss after the rename can't leave an
+  empty file where the workspace was. `F_FULLFSYNC`, which also empties the drive's own cache,
+  was rejected for its cost on every write. No timed bench writes through `AtomicWrite`: the
+  `restored-session` scenario writes its fixture with `Data.write`, and the listing cache's
+  writes are untimed, after its delay and off the main thread. At quit the sync is inside the
+  shared 2 s deadline; the files are a few kilobytes.
+- **Stored paths are absolute.** A location stored as a path, the pane's, a history entry's or a
+  column width's, that is empty or doesn't start with `/` fails to decode, which discards the
+  workspace and reports it, as `FolderHistory` rejects such a path.

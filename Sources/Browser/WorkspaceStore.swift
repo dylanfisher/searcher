@@ -100,20 +100,26 @@ public actor WorkspaceStore {
     }
 
     /// Deletes the file of saved workspace `id`'s snapshot and drops a save of it not yet
-    /// written, as `delete` does for a window's.
-    public func deleteSnapshot(_ id: UUID) {
+    /// written, as `delete` does for a window's. Returns whether the file is gone; a failure is
+    /// reported as well.
+    @discardableResult
+    public func deleteSnapshot(_ id: UUID) -> Bool {
         pendingSnapshots[id] = nil
-        deleteFile(snapshotURL(for: id))
+        return deleteFile(snapshotURL(for: id))
     }
 
-    private func deleteFile(_ url: URL) {
+    /// Deletes `url`; returns whether it is gone, and reports a failure.
+    @discardableResult
+    private func deleteFile(_ url: URL) -> Bool {
         dispatchPrecondition(condition: .notOnQueue(.main))
         do {
             try FileManager.default.removeItem(at: url)
+            return true
         } catch let error as CocoaError where error.code == .fileNoSuchFile {
-            return
+            return true
         } catch {
             report(StoreProblem(file: url, kind: .unforgotten, reason: "\(error)"))
+            return false
         }
     }
 
@@ -128,7 +134,9 @@ public actor WorkspaceStore {
         }
     }
 
-    /// Writes every save not yet written, at once, as quitting needs.
+    /// Writes every save not yet written, at once, as quitting needs. A save whose write fails
+    /// is reported and stays unwritten, so the next flush, after the next save or at quit,
+    /// writes it again, unless a newer save or a delete replaced it.
     public func flush() {
         dispatchPrecondition(condition: .notOnQueue(.main))
         scheduledWrite?.cancel()
@@ -137,10 +145,6 @@ public actor WorkspaceStore {
         let snapshots = pendingSnapshots
         let session = pendingSession
         let folderHistory = pendingFolderHistory
-        pending = [:]
-        pendingSnapshots = [:]
-        pendingSession = nil
-        pendingFolderHistory = nil
         guard !workspaces.isEmpty || !snapshots.isEmpty || session != nil || folderHistory != nil
         else { return }
         do {
@@ -157,25 +161,31 @@ public actor WorkspaceStore {
             }
             return
         }
-        for (id, workspace) in workspaces {
-            store(workspace, to: url(for: id))
+        // Nothing else runs on the actor during a flush, so a save is dropped from the pending
+        // ones only once it is written, and one that fails waits for the next flush.
+        for (id, workspace) in workspaces where store(workspace, to: url(for: id)) {
+            pending[id] = nil
         }
-        for (id, snapshot) in snapshots {
-            store(snapshot, to: snapshotURL(for: id))
+        for (id, snapshot) in snapshots where store(snapshot, to: snapshotURL(for: id)) {
+            pendingSnapshots[id] = nil
         }
-        if let session {
-            store(session, to: sessionFile)
+        if let session, store(session, to: sessionFile) {
+            pendingSession = nil
         }
-        if let folderHistory {
-            store(folderHistory, to: folderHistoryFile)
+        if let folderHistory, store(folderHistory, to: folderHistoryFile) {
+            pendingFolderHistory = nil
         }
     }
 
-    private func store(_ value: some Encodable, to url: URL) {
+    /// Writes `value` to `url`; reports a failure and returns false.
+    @discardableResult
+    private func store(_ value: some Encodable, to url: URL) -> Bool {
         do {
             try write(Self.encoder.encode(value), url)
+            return true
         } catch {
             report(StoreProblem(file: url, kind: .unwritten, reason: "\(error)"))
+            return false
         }
     }
 
@@ -184,7 +194,8 @@ public actor WorkspaceStore {
     /// workspace's ID, and a snapshot without a name are deleted and reported, and load as
     /// missing. In the workspaces and snapshots folders, an unfinished write left by a crash is
     /// deleted without a report, and other dot-files are left alone. The session is returned as
-    /// saved, even when it names a workspace that didn't load.
+    /// saved, even when it names a workspace that didn't load; with no session file, or one that
+    /// didn't load, it is rebuilt from the window files that loaded.
     public func load() -> Contents {
         dispatchPrecondition(condition: .notOnQueue(.main))
         let workspaces = readWorkspaces(in: folder, at: url(for:))
@@ -201,8 +212,42 @@ public actor WorkspaceStore {
             pendingSession
             ?? read(SessionState.self, from: sessionFile).map {
                 kept($0, at: sessionFile)
-            }
+            } ?? rebuiltSession(of: Array(workspaces.keys))
         return Contents(session: session, workspaces: workspaces, snapshots: loadedSnapshots)
+    }
+
+    /// A session of the windows `ids`, for a load whose session file is missing or didn't load,
+    /// so their files aren't taken for a crash's leftovers: the window whose file was written
+    /// last first, as the key window, and one not yet written before them all. It is saved, so
+    /// the next flush writes it. Nil with no window. See docs/decisions/0080-restore-at-launch.md.
+    private func rebuiltSession(of ids: [UUID]) -> SessionState? {
+        guard !ids.isEmpty else { return nil }
+        let written = Dictionary(
+            uniqueKeysWithValues: ids.map { id in
+                (id, pending[id] == nil ? modified(url(for: id)) : .distantFuture)
+            })
+        let order = ids.sorted { a, b in
+            guard let x = written[a], let y = written[b] else {
+                preconditionFailure("workspace \(a) or \(b) has no write date")
+            }
+            // By ID among equal dates, so the order doesn't depend on the folder's.
+            return x == y ? a.uuidString < b.uuidString : x > y
+        }
+        let session = SessionState(workspaces: order, keyWindow: order[0])
+        saveSession(session)
+        return session
+    }
+
+    /// When the file at `url` was last written. One whose date can't be read, though it was just
+    /// read, counts as the oldest: its window is restored either way, and only its place in the
+    /// order is unknown.
+    private func modified(_ url: URL) -> Date {
+        do {
+            return try url.resourceValues(forKeys: [.contentModificationDateKey])
+                .contentModificationDate ?? .distantPast
+        } catch {
+            return .distantPast
+        }
     }
 
     /// The workspaces in `folder`, each of whose files must be at `url(id)`, as read: not yet
