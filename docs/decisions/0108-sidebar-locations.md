@@ -32,7 +32,18 @@ bus, the startup disk with it, so the startup disk isn't listed. A volume mounte
   so the default sidebar of a Mac with nothing attached is unchanged.
 - **A share is listed by its mount point.** Finder lists a connected server and shows its
   shares inside it; the app can't list a server, so each mounted share is its own row, named by
-  its mount point's last component (`/Volumes/main` is "main").
+  its mount point's last component (`/Volumes/main` is "main"). (Amended 2026-10-26, research
+  for a server row, not built.) With `//dylan@HAL9000._smb._tcp.local/music` and `.../main`
+  mounted, Finder's Locations lists the home folder, then one row, "HAL9000", the Bonjour
+  instance name in the mounts' source, with an eject button that unmounts both shares; the
+  shares get no rows of their own, and a click on the server shows its shares. Its glyph is
+  `SidebarGenericFile`, a blank page: the server advertises `model=Xserve` in its
+  `_device-info._tcp` record, and Finder shows the generic file for it, though the bundle has
+  `SidebarXserve`. The source is in the mount table (`VolumeIdentity.device`,
+  `f_mntfromname`), so grouping shares by server needs no read of a share. Showing a server's
+  shares needs a location that isn't a folder, which `Location`, a path, can't name, and which
+  the listing, the column trail, the path bar, history and the saved session would each have
+  to handle, so the server row waits for its own step.
 - **Read off the main thread, asking no share.** `SidebarVolume.mounted` reads the mount table
   as `MountTable` does, then asks each browsable volume on this machine its localized name and
   whether it is the root, internal, removable or ejectable (URL resource values). A share is
@@ -54,10 +65,17 @@ bus, the startup disk with it, so the startup disk isn't listed. A volume mounte
   button on each row that can be ejected (`canEject`: a share, a removable or ejectable disk,
   or one not on an internal bus). (Amended 2026-10-26, Dylan: "some icons are still different
   compared to searcher (e.g. eject)" and "eject icon should hover darker color".) The button
-  shows Finder's filled glyph, `eject.fill`, at the size AppKit gives the row's symbols, with
-  no fill under it: tertiary label color at rest, secondary under the mouse, the label color
+  shows Finder's filled glyph, `eject.fill`, at the small scale of the size AppKit gives the
+  row's symbols (`Cell.ejectScale`), with no fill under it: tertiary label color at rest, secondary under the mouse, the label color
   pressed and quaternary while off; on an emphasized row, the selected row's text color at those
   levels. It is a `HoverButton` with the `.glyph` look ([0110](0110-interaction-states.md)).
+  (Amended 2026-10-26, Dylan, comparing the two sidebars: Finder's eject glyph is smaller and
+  lighter. This replaces "at the size AppKit gives the row's symbols".) Measured on a 2x
+  screenshot of both sidebars, Finder's glyph is 19 pixels wide and ours was 24, 0.79 of it,
+  which is what the small symbol scale draws: 9.5 points in a medium row, whose 13-point
+  symbols draw it 12 points wide. The color was already Finder's: at rest both glyphs are
+  black at about 28% over their sidebar's background, tertiary label color; ours looked darker
+  for its size and the darker sidebar behind it.
   Every listed row can be ejected, as in Finder's default sidebar. A click or Return shows the
   volume's mount point in the window's focused pane (`Pane.navigate`), as a favorite folder's
   click does.
