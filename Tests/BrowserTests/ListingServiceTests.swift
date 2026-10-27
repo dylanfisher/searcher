@@ -674,6 +674,31 @@ private func waitForSleeps(_ count: Int, on clock: ManualClock) async -> Bool {
     #expect(await second.updates.isEmpty)
 }
 
+/// A load cancelled before a slot frees never reads, so a column closed right after it opened
+/// leaves no call in the lister: the held-key test in `ColumnTrailTests` can't expect one.
+@Test func aLoadCancelledWhileWaitingForASlotNeverReads() async {
+    let held = (0..<ListingService.mostRunningLoads - 1).map { "/folder-\($0)" }
+    var outcomes = [String: GatedLister.Outcome]()
+    for path in held + ["/folder-queued"] { outcomes[path] = .batches([]) }
+    let lister = GatedLister(outcomes)
+    let service = ListingService(lister: lister, clock: ManualClock())
+    for path in held { _ = load(service, path, into: UpdateLog()) }
+    #expect(await lister.waitForCalls(held.count))
+    let queued = load(service, "/folder-queued", into: UpdateLog())
+
+    queued.cancel()
+    lister.releaseAll()
+
+    #expect(await lister.waitForFinished(held.count))
+    // The slots free on the service's queue, which then looks at the waiting loads.
+    var running = await service.runningLoadCount()
+    while running > 0 {
+        await Task.yield()
+        running = await service.runningLoadCount()
+    }
+    #expect(lister.calls.map(\.path).sorted() == held)
+}
+
 @Test func stallReportsReadTheRootVolumeNameOnTheLoadsThread() async {
     let lister = GatedLister(["/a/stuck": .blockForever])
     let clock = ManualClock()
