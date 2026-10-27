@@ -155,16 +155,27 @@ private func waitUntilLoadFinishes(_ service: ListingService, _ lister: GatedLis
     let paths = (0..<4).map { "/visible-\($0)" }
     let lister = GatedLister(Dictionary(uniqueKeysWithValues: paths.map { ($0, .batches([])) }))
     defer { lister.releaseAll() }
-    let service = ListingService(lister: lister, clock: ManualClock())
+    // The loads start as their volumes are read, in no fixed order. The first asked reads its
+    // volume last, so it is the one that waits, as it is on a machine that schedules it last.
+    let firstReads = DispatchSemaphore(value: 0)
+    let service = ListingService(
+        lister: lister, clock: ManualClock(),
+        volumeOf: { path in
+            if path == paths[0] { firstReads.wait() }
+            return ListingService.listerVolume
+        })
     let log = UpdateLog()
     let loads = paths.map { load(service, $0, into: log) }
 
     #expect(await lister.waitForCalls(3))
+    firstReads.signal()
     await settle { loads.allSatisfy { $0.volume != nil } }
     #expect(await service.runningLoadCount() == 3)
+    #expect(!lister.calls.map(\.path).contains(paths[0]))
 
-    lister.release(paths[0])
+    lister.release(lister.calls[0].path)
     #expect(await lister.waitForCalls(4))
+    #expect(lister.calls.map(\.path).last == paths[0])
 }
 
 @Test func aWaitingLoadRaisedToFocusedStartsAtOnce() async {

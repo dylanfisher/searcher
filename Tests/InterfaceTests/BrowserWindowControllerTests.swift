@@ -2169,6 +2169,9 @@ extension PressFixture {
     /// that is shown. Returns the left pane's controller.
     func showPreviewInLeftPane() async throws -> PaneViewController {
         let controller = try fixture.paneController(fixture.tab.layout.panes[0])
+        // The preview shows once its info is read, not once `ColumnTrail.previewHold` of real
+        // time has passed, which a loaded machine can spend before the read lands.
+        leftPane.previewHoldClock = ManualClock()
         leftPane.setViewMode(.column)
         let trail = try #require(leftPane.columnTrail)
         await settle { trail.focused.pane.state.isLoaded }
