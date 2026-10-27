@@ -15,7 +15,7 @@ public final class Pane {
     }
     /// Whether the pane lists again on each change `service.mounts` reads, as it does from the
     /// first time it is at a server.
-    private var observesMounts = false
+    var observesMounts = false
     /// Counts a visit each time the pane moves to a folder, for the palette, once
     /// `countVisits(in:countingThisFolder:)` sets it. Panes made from this one share it. A pane
     /// without one, such as a column's, counts nothing; in column view the pane counts the
@@ -30,7 +30,7 @@ public final class Pane {
         folderVisits = visits
         if countingThisFolder { visits.visit(location) }
     }
-    public private(set) var state = ListingState.loading {
+    public internal(set) var state = ListingState.loading {
         didSet {
             stateVersion += 1
             keepRecentListing()
@@ -53,23 +53,23 @@ public final class Pane {
     /// The selected entries' names, the cursor and the anchor. Names the listing doesn't have are
     /// dropped when a load finishes, not before, so a name set before the rows arrive survives
     /// the partial listing.
-    public private(set) var selection = Selection()
+    public internal(set) var selection = Selection()
     /// Goes up each time the selection changes, other than by being resolved or settled. A load,
     /// patch or sort resolves a copy of the selection off the main thread, and the pane takes that
     /// copy only if this hasn't moved since the copy was made. Otherwise it shows the current
     /// selection provisionally and settles it off the main thread too. Leaving the folder moves
     /// it too, so a command can tell whether the user has changed the selection since it ran.
-    private(set) var selectionVersion = 0
+    var selectionVersion = 0
     /// Whether a row key, Home or End, or type-to-select made the selection, rather than a
     /// click or a command. A column's trail waits for such keys to pause before the columns
     /// right of it follow the selection (0094-column-open-delay.md).
-    private(set) var selectionIsFromKeys = false
+    var selectionIsFromKeys = false
     /// Names to select once the rows list them all, the selection version they were asked for
     /// at, whether hidden entries and `.DS_Store` showed then, and what runs once they are
     /// selected. Dropped once the user selects anything, the pane leaves the folder, the filter
     /// changes or hidden entries or `.DS_Store` show or hide, since a name the filter or the
     /// setting hid would otherwise be selected whenever it showed later.
-    private var namesToSelect:
+    var namesToSelect:
         (
             names: [ExactName], selectionVersion: Int, showsHidden: Bool, hidesDSStore: Bool,
             selected: (@MainActor () -> Void)?
@@ -78,28 +78,28 @@ public final class Pane {
     /// view: its first row is selected once the rows show the whole folder, unless the
     /// selection, the focus or the location changed first. Nil when nothing waits. In column
     /// view the focused column waits instead (`Column.selectsFirstRowAt`).
-    private var selectsFirstRowAt: Int?
+    var selectsFirstRowAt: Int?
     /// A copy of the selection is being settled off the main thread.
-    private var settleIsRunning = false
+    var settleIsRunning = false
     /// Where selections settle. Tests suspend a queue of their own here to hold one unsettled.
     var settleQueue = DispatchQueue.global(qos: .userInitiated)
     #if DEBUG
         /// The per-entry work selection code has done on the main thread, as `Selection.work`
         /// counts it. Debug builds only.
-        private(set) var mainSelectionWork = 0
+        var mainSelectionWork = 0
     #endif
     /// How many whole rows the pane's view shows, set by the view when its size changes. Page Up
     /// and Page Down move this many.
     public var visibleRowCount = 0
     /// Goes up each time `jump(to:)` asks the pane's view to scroll the cursor's row to the
     /// middle, rather than only into view.
-    public private(set) var centeringRequest = 0
+    public internal(set) var centeringRequest = 0
     /// The name of the volume mounted at `/`, from the last listing update; nil until the first.
     public private(set) var rootVolumeName: String?
     /// The name of the volume holding the folder, for the note a slow or offline pane shows:
     /// from the last update that could make it slow or offline, or from the mount point of a
     /// volume that unmounted under it. Nil until one of those.
-    public private(set) var volumeName: String?
+    public internal(set) var volumeName: String?
 
     /// Watching `location`. The pane stops it, and drops it, when it navigates or closes. A
     /// monitor handed to a closed pane, one that finished starting after its column went, is
@@ -113,7 +113,7 @@ public final class Pane {
     }
     /// Goes up when the pane's folder needs a new monitor though its location hasn't changed:
     /// when its volume mounts again. Whoever starts monitors compares it with the location.
-    public private(set) var monitorGeneration = 0
+    public internal(set) var monitorGeneration = 0
     /// Runs after the location, state, sort or selection changes. In column mode it also runs
     /// after any column changes. A column's pane reports to its trail here, so only the trail
     /// sets it.
@@ -122,7 +122,7 @@ public final class Pane {
     /// changed. The view owns `onChange`; the tab sets this.
     var onTabChange: (@MainActor () -> Void)?
 
-    private func reportChange() {
+    func reportChange() {
         onChange?()
         onTabChange?()
     }
@@ -138,14 +138,14 @@ public final class Pane {
     /// mode. Its rows, selection, sort and filter are the ones a key changes.
     public var commandPane: Pane { columnTrail?.focused.pane ?? self }
     /// Closed for good: a column that was truncated or a trail that was dropped.
-    private var isClosed = false
+    var isClosed = false
     /// The share of this server whose mount the pane waits for, by its row's name, and whether
     /// `LoadTimeouts.spinnerDelay` has passed since it started: then its row shows a spinner and
     /// the status says "Connecting to …". Nil while none is waited for
     /// (docs/decisions/0115-server-shares.md).
-    public private(set) var connectingShare: (name: String, isShown: Bool)?
+    public internal(set) var connectingShare: (name: String, isShown: Bool)?
     /// The wait for `connectingShare`'s mount.
-    private var shareMount: Task<Void, Never>?
+    var shareMount: Task<Void, Never>?
     /// Tells the view showing the pane's rows what of a mount the user or the log should hear
     /// of: a failure, for a sheet, or a mount point the table didn't hold, for the log. A pane
     /// mounts only from rows a view shows, so one with no view traps.
@@ -154,7 +154,7 @@ public final class Pane {
             preconditionFailure("no view takes the mount of \(name): \(report)")
         }
     /// The folder's volume was unmounted, so the pane is offline and doesn't list the folder.
-    private var volumeIsGone = false
+    var volumeIsGone = false
 
     /// Lists the pane's folders; the palette lists a typed path through it too.
     public let service: ListingService
@@ -179,7 +179,7 @@ public final class Pane {
     /// they advance.
     var previewHoldClock: any Clock<Duration> = ContinuousClock()
     private(set) var load: ListingLoad?
-    private var loadIsRunning = false
+    var loadIsRunning = false
     /// The volume holding the folder, as its load read it with `statfs`, so a folder reached
     /// through a link onto a share is on the share; nil until a load has read it. A copy made
     /// with its source's rows has its source's, and a pane listing its folder again keeps the
@@ -214,17 +214,17 @@ public final class Pane {
         }
     }
     /// Folder change patches not yet applied, in the order they arrived.
-    private var waitingPatches: [FolderChange.Patch] = []
-    private var patchIsRunning = false
+    var waitingPatches: [FolderChange.Patch] = []
+    var patchIsRunning = false
     /// A change arrived while a load was running; list the folder again when it ends.
-    private var relistAfterLoad = false
+    var relistAfterLoad = false
     /// Sorts started off the main actor: one per sort change over rows, and one per listing that
     /// arrived in another sort than the pane's. Zero while every load is asked for the pane's sort.
     private(set) var sortCount = 0
     /// Sorts started and not yet landed. Patches wait while any runs: each landed patch changes
     /// the state, which would drop the running sort and start another, so a folder that changes
     /// faster than a sort takes would never show the new sort.
-    private var runningSorts = 0
+    var runningSorts = 0
     /// Where patches and size batches run. Tests suspend a queue of their own here to hold one.
     var rowWorkQueue = DispatchQueue.global(qos: .userInitiated)
     /// Where sorts run. Tests suspend a queue of their own here to hold a sort.
@@ -238,7 +238,7 @@ public final class Pane {
     /// `ListingService.readInfo`. Tests hold its reads with a reader of their own.
     var itemInfoReader: any ItemInfoReading = ItemInfoReader()
     /// The folders left, for Back and Forward.
-    private(set) var history = History()
+    var history = History()
     /// The load of a `goToFolder` that hasn't moved the pane yet, and the request it answers.
     private(set) var pendingGo: (load: ListingLoad, request: Int)?
     /// Counts `goToFolder` calls, so an update tells whether its go is still pending.
@@ -494,7 +494,7 @@ public final class Pane {
 
     /// Set while Back, Forward or Undo and Redo Selection move the trail's focus, which is no
     /// step of the history.
-    private var isSteppingHistory = false
+    var isSteppingHistory = false
 
     /// The trail is moving the keys from `column`, one of its columns, to another: the pane
     /// leaves `column`'s folder, so the folder goes into the history with the entry under its
@@ -510,98 +510,11 @@ public final class Pane {
 
     // MARK: - Spring-loaded folders
 
-    /// Opens the folder `name` in this pane's folder for a drag hovering over its row, as
-    /// Finder's spring-loaded folders do: in list mode the pane moves into it, and in a column it
-    /// is selected, so its column opens to the right at once. The first spring of a drag keeps
-    /// where the pane was, for `springBack`. A column's selection here is no step of the
-    /// selection history, since the user didn't choose it, and the folder is no visit for the
-    /// palette: the pane goes back once the drag ends.
-    public func springOpen(_ name: String) {
-        // A row no longer listed springs nothing, and a server's row springs only while its
-        // share is mounted where the row says (0115-server-shares.md).
-        guard let listing = state.listing, let row = listing.row(named: name),
-            let child = childLocation(of: listing[row])
-        else { return }
-        let owner = containingTrail?.owner ?? self
-        owner.isSpringing = true
-        defer { owner.isSpringing = false }
-        if owner.springOrigin == nil {
-            owner.springOrigin = owner.springStart()
-        }
-        let folder = ExactName(name)
-        if containingTrail != nil {
-            set(Selection([folder], cursor: folder), recordingAs: nil)
-        } else {
-            navigate(to: child)
-        }
-        owner.springOrigin?.sprungTo = owner.springFolders
-    }
-
-    /// The drag that sprang folders open has ended, dropped or not: the pane goes back to where
-    /// it was before the first spring, as Finder's window does. It stays when something other
-    /// than the drag has moved it since the last spring: to another folder in list mode, or, in
-    /// column mode, a column the last spring left, or one left of it, to another folder.
-    ///
-    /// In list mode the pane takes back its folder, selection and filter, and the history goes
-    /// back to what it was, so the folders sprung through are no steps of it. In column mode each
-    /// column the trail still has takes back its selection, left to right, and the focus goes
-    /// back to its column. Going back is no visit for the palette either. Does nothing when no
-    /// folder sprang open.
-    public func springBack() {
-        let owner = containingTrail?.owner ?? self
-        guard let origin = owner.springOrigin else { return }
-        owner.springOrigin = nil
-        guard owner.springFolders.starts(with: origin.sprungTo) else { return }
-        owner.isSpringing = true
-        defer { owner.isSpringing = false }
-        guard let trail = owner.columnTrail else {
-            owner.history = origin.history
-            owner.move(to: origin.location, selection: origin.selection)
-            owner.setFilter(origin.filter.text)
-            return
-        }
-        for (index, column) in origin.columns.enumerated() {
-            guard index < trail.columns.count,
-                trail.columns[index].pane.location == column.location
-            else { break }
-            trail.columns[index].pane.set(column.selection, recordingAs: nil)
-        }
-        if origin.focusedIndex < trail.columns.count {
-            trail.focus(trail.columns[origin.focusedIndex])
-        }
-    }
-
     /// Where the pane was when a drag first sprang a folder open, and where the last spring left
     /// it; nil while no drag has.
-    private var springOrigin: SpringOrigin?
+    var springOrigin: SpringOrigin?
     /// Set while a spring or the way back moves the pane, which counts no visit.
-    private var isSpringing = false
-
-    private struct SpringOrigin {
-        let history: History
-        let location: Location
-        let selection: Selection
-        let filter: NameFilter
-        /// In column mode, each column's folder and selection, left to right.
-        let columns: [(location: Location, selection: Selection)]
-        let focusedIndex: Int
-        /// `springFolders` after the last spring. A column the trail opens after it, once the
-        /// sprung folder's column lists, moves nothing.
-        var sprungTo: [Location] = []
-    }
-
-    private func springStart() -> SpringOrigin {
-        let columns = columnTrail?.columns.map { ($0.pane.location, $0.pane.selection) } ?? []
-        return SpringOrigin(
-            history: history, location: location, selection: selection, filter: filter,
-            columns: columns,
-            focusedIndex: columnTrail?.focusedIndex ?? 0)
-    }
-
-    /// The folder shown in list mode, or each column's left to right in column mode.
-    private var springFolders: [Location] {
-        columnTrail?.columns.map(\.pane.location) ?? [location]
-    }
+    var isSpringing = false
 
     // MARK: - View mode
 
@@ -881,7 +794,7 @@ public final class Pane {
 
     /// Moves to `location` without touching the history, with `selection` to be selected once
     /// it is listed. Not `isNavigation` only for Undo and Redo Selection, which keep the steps.
-    private func move(to location: Location, selection: Selection, isNavigation: Bool = true) {
+    func move(to location: Location, selection: Selection, isNavigation: Bool = true) {
         leave(for: location, selection: selection, isNavigation: isNavigation)
         if columnTrail != nil {
             restartTrail()
@@ -1135,107 +1048,6 @@ public final class Pane {
         return selectedEntries.contains { childLocation(of: $0) == nil }
     }
 
-    // MARK: - Mounting
-
-    /// The one selected row when it is a share of this server that isn't mounted and the
-    /// service can mount: Open mounts it. Nil for any other selection
-    /// (docs/decisions/0115-server-shares.md).
-    public var selectedUnmountedShare: DirectoryEntry? {
-        guard case .server = location, service.shareMounts != nil else { return nil }
-        let entries = selectedEntries
-        guard entries.count == 1, entries[0].type == .unmountedShare else { return nil }
-        return entries[0]
-    }
-
-    /// Mounts the selected share that isn't mounted (`selectedUnmountedShare`), as the user of
-    /// the server's first mounted SMB share, unless the pane already waits for its mount. Once
-    /// it is mounted, and the mount table holds its mount point, a list goes into it and a
-    /// column opens its row's column, as a click on it does. A failure is shown with
-    /// `reportShareMount`. A change of the selection, a navigation, a change of view mode,
-    /// Escape (`cancelShareMount`) and closing the pane let go of it; the mount is cancelled
-    /// when no pane waits for it, and if it finishes anyway, its row is mounted and nothing
-    /// moves (docs/decisions/0115-server-shares.md).
-    public func mountSelectedShare() {
-        guard let entry = selectedUnmountedShare, connectingShare?.name != entry.name,
-            case .server(let server) = location, let shareMounts = service.shareMounts,
-            let table = service.mounts
-        else { return }
-        // Nil only when the server's last SMB share went since its rows were listed.
-        guard let request = ShareRequest(server: server, volumes: table.volumes) else {
-            return reportShareMount(entry.name, .noShareToConnectAs(serverName: server.name))
-        }
-        stopShareMount()
-        let name = entry.name
-        let mount = ShareMountRequest(share: request, name: name)
-        let spinnerWait = service.startWait(LoadTimeouts.spinnerDelay)
-        connectingShare = (name, false)
-        shareMount = Task { [weak self] in
-            let spinner = Task { [weak self] in
-                guard await DeadlineWait.reached(spinnerWait), let self, !Task.isCancelled,
-                    connectingShare?.name == name
-                else { return }
-                connectingShare = (name, true)
-                reportChange()
-            }
-            let result = await shareMounts.mount(mount)
-            spinner.cancel()
-            guard let self, !Task.isCancelled else { return }
-            finishShareMount(name, result)
-        }
-        reportChange()
-    }
-
-    /// Lets go of the mount the pane waits for, as Escape does, and returns whether it waited
-    /// for one.
-    @discardableResult
-    public func cancelShareMount() -> Bool {
-        guard shareMount != nil else { return false }
-        stopShareMount()
-        reportChange()
-        return true
-    }
-
-    /// Lets go of the mount the pane waits for, reporting nothing.
-    private func stopShareMount() {
-        shareMount?.cancel()
-        shareMount = nil
-        connectingShare = nil
-    }
-
-    /// Takes how the mount of the share named `name` ended.
-    private func finishShareMount(_ name: String, _ result: ShareMounts.Result) {
-        shareMount = nil
-        connectingShare = nil
-        reportChange()
-        switch result {
-        case .cancelled:
-            return
-        case .failed(let status):
-            reportShareMount(name, .failed(status))
-        case .mounted(let path), .alreadyMounted(let path):
-            goIntoMountPoint(path, of: name)
-        }
-    }
-
-    /// Goes into the share mounted at `path` once the mount table holds it: a list navigates to
-    /// it, and a column at its server selects the row the mount point names, once it is listed,
-    /// which opens its column. A share the table records under another host than this server's
-    /// is no row here, so the trail starts again at it. A mount point the table doesn't hold yet
-    /// is left for its row to show with the next read, and reported for the log.
-    private func goIntoMountPoint(_ path: String, of name: String) {
-        let comparable = FileOperation.comparable(path)
-        guard
-            let volume = service.mounts?.volumes.first(where: {
-                FileOperation.comparable($0.mountPoint) == comparable
-            })
-        else { return reportShareMount(name, .notInTable(mountPoint: path)) }
-        let mountPoint = Location(path: volume.mountPoint)
-        if containingTrail != nil, case .server(let server) = location, volume.server == server {
-            return select([mountPoint.name], whenListedAtSelectionVersion: selectionVersion)
-        }
-        (containingTrail?.owner ?? self).navigate(to: mountPoint)
-    }
-
     // MARK: - Listing
 
     /// Lists the folder again. A load already running will deliver current entries, so it is left
@@ -1310,7 +1122,7 @@ public final class Pane {
 
     /// Patches the listing with every waiting patch, unless a patch or a sort is running; each
     /// starts the next patch when it lands.
-    private func startPatch() {
+    func startPatch() {
         guard !patchIsRunning, runningSorts == 0, !waitingPatches.isEmpty, !sizeBatchIsDue
         else { return }
         guard case .loaded(let listing) = state else {
@@ -1362,7 +1174,7 @@ public final class Pane {
 
     /// Lists the folder for a change: now, or once the running load ends, since that load may
     /// have read past the changed entry before the change happened.
-    private func relist() {
+    func relist() {
         if volumeIsGone { return }
         if loadIsRunning {
             relistAfterLoad = true
@@ -1469,7 +1281,7 @@ public final class Pane {
     /// is fully listed.
     /// When the cursor's entry is hidden, the cursor moves to the row that followed it
     /// (`keepingCursor`); when the filter drops it, to the first row (`keepingFirstRow`).
-    private func startSortIfNeeded() {
+    func startSortIfNeeded() {
         guard let listing = state.listing, !isArranged(listing) else { return }
         sortCount += 1
         runningSorts += 1
@@ -1724,383 +1536,8 @@ public final class Pane {
 
     /// Shows the folder as offline, keeping the rows shown. They are the same listing, so the
     /// selection stays as it is.
-    private func goOffline() {
+    func goOffline() {
         state = .offline(keptRows)
-    }
-
-    // MARK: - Volume events
-
-    /// The volume holding `location` is about to unmount. A running load has the folder open,
-    /// which can keep the volume from unmounting, so it stops; focus lists the folder again if
-    /// the unmount is refused. The monitor stays: it doesn't keep the volume from unmounting.
-    /// In column mode each column stops its own load.
-    func volumeWillUnmount() {
-        // A running walk has a folder open too.
-        cancelSizeWalks()
-        guard columnTrail == nil, !isClosed, loadIsRunning else { return }
-        load?.cancel()
-        loadIsRunning = false
-        relistAfterLoad = false
-    }
-
-    /// The sidebar is about to eject the volume holding `location`: the load and size walks stop,
-    /// as at will-unmount, and so does the monitor, so nothing of the pane's has a folder of the
-    /// volume open. A refused eject lists the folder again and asks for a new monitor through
-    /// `volumeDidMount`. In column mode each column stops its own.
-    func volumeWillEject() {
-        volumeWillUnmount()
-        guard columnTrail == nil, !isClosed else { return }
-        monitor?.stop()
-        monitor = nil
-    }
-
-    /// The volume holding `location` was unmounted. Stops the load, the folder monitor and
-    /// waiting patches, and shows the folder offline with the rows shown. Until the volume
-    /// mounts again or the pane leaves, nothing lists the folder: what is left at the mount
-    /// point isn't it. A pending `goToFolder` is a folder the pane is leaving for, so it goes
-    /// on. In column mode each column goes offline on its own.
-    func volumeDidUnmount(at mountPoint: String) {
-        guard columnTrail == nil, !isClosed else { return }
-        // The volume can't be asked, and may have gone before any update named it.
-        volumeName = VolumeIdentity.name(mountedAt: mountPoint)
-        load?.cancel()
-        loadIsRunning = false
-        relistAfterLoad = false
-        monitor?.stop()
-        monitor = nil
-        waitingPatches = []
-        volumeIsGone = true
-        cancelSizeWalks()
-        goOffline()
-        reportChange()
-    }
-
-    /// A volume mounted at `location` or above it: lists the folder again, and asks for a new
-    /// monitor by moving `monitorGeneration`. A monitor still running watches the folder that
-    /// was there before, so it stops.
-    func volumeDidMount() {
-        guard columnTrail == nil, !isClosed else { return }
-        volumeIsGone = false
-        failedSizes = []
-        monitor?.stop()
-        monitor = nil
-        monitorGeneration += 1
-        reload()
-        reportChange()
-    }
-
-    /// Starts listing again on each change `service.mounts` reads, and each time
-    /// `service.shares` asks, as the app becomes active, once the pane is at a server. A pane at
-    /// a server isn't on any volume, so its shares mounting and unmounting reach it through the
-    /// table, never as a volume event, and it lists after the table has read the change
-    /// (docs/decisions/0114-server-location.md, docs/decisions/0115-server-shares.md).
-    private func observeMountsIfAtServer() {
-        guard !observesMounts, case .server(let server) = location else { return }
-        guard let mounts = service.mounts else {
-            preconditionFailure("a pane at the server \(server.host) has no mount table")
-        }
-        observesMounts = true
-        mounts.observe(for: self) { [weak self] in self?.mountsDidChange() }
-        service.shares?.observe(for: self) { [weak self] in self?.mountsDidChange() }
-    }
-
-    /// The mount table read a change, or the server's shares may have: a pane at a server lists
-    /// its shares again, after a load that is running, which may have read the table before the
-    /// change. A column-mode owner has no rows of its own, and a pane elsewhere has nothing to
-    /// list again.
-    private func mountsDidChange() {
-        guard case .server = location, columnTrail == nil, !isClosed else { return }
-        relist()
-    }
-
-    // MARK: - Selection
-
-    /// Selects what `selection` names, finding its rows in the listing shown. `source` says
-    /// whether the change joins a run of changes in the selection history.
-    public func select(_ selection: Selection, as source: SelectionHistory.Source = .once) {
-        set(
-            onMain { selection.resolved(in: state.listing, after: .sameEntries) },
-            recordingAs: source, byKey: source == .typing)
-    }
-
-    /// Selects what `selection` names, as `select(_:as:)` does, keeping the selection it replaces
-    /// in the selection history as made by `source`, or not at all when it is nil: Back and
-    /// Forward restore a column's selection without a step there.
-    func select(_ selection: Selection, recordingAs source: SelectionHistory.Source?) {
-        set(
-            onMain { selection.resolved(in: state.listing, after: .sameEntries) },
-            recordingAs: source)
-    }
-
-    /// Go to Item's choice: selects the entry named `name` alone with the cursor on it, as a click
-    /// on its row does, so a column's trail follows it at once, and asks the view to scroll its
-    /// row to the middle. A folder is selected, not opened. The change is one step of the
-    /// selection history. A name the rows no longer list, as one deleted while the palette was
-    /// open, changes nothing (docs/decisions/0101-go-to-item.md).
-    public func jump(to name: String) {
-        jump(to: name, recordingAs: .once)
-    }
-
-    /// Go to Item's choice, recording the selection it replaces as made by `source`, or not at
-    /// all when it is nil: the move of the keys into this column was the step.
-    func jump(to name: String, recordingAs source: SelectionHistory.Source?) {
-        guard state.listing?.row(named: name) != nil else { return }
-        let name = ExactName(name)
-        let version = selectionVersion
-        centeringRequest += 1
-        select(Selection([name], cursor: name), recordingAs: source)
-        // Selecting what is selected reports no change, but the row still has to be centered.
-        if selectionVersion == version { reportChange() }
-    }
-
-    /// Selects `rows` of the listing shown, as a click in the table gives them. They are named off
-    /// the main thread. The rows, cursor and anchor already shown change nothing, so the table's
-    /// mouse-up report of what its mouse down reported is no second change.
-    public func select(
-        rows: IndexSet, cursor: ExactName?, anchor: ExactName?,
-        as source: SelectionHistory.Source = .once
-    ) {
-        guard let listing = state.listing else {
-            preconditionFailure("rows \(rows) were selected with no listing shown")
-        }
-        if !selection.isProvisional, cursor == selection.cursor, anchor == selection.anchor,
-            rows == selection.rows(in: listing)
-        {
-            namesToSelect = nil
-            chooseSelectionMadeByKeys()
-            return
-        }
-        set(Selection(rows: rows, in: listing, cursor: cursor, anchor: anchor), recordingAs: source)
-    }
-
-    /// The selected rows of the listing shown. A provisional selection knows only the rows near
-    /// the cursor; a command right after a change that raced a load, patch or sort is rare enough
-    /// to settle it here.
-    var selectedRows: IndexSet {
-        guard let listing = state.listing else { return [] }
-        let selection =
-            selection.isProvisional ? onMain { selection.settled(in: listing) } : selection
-        return selection.rows(in: listing)
-    }
-
-    /// The selected entries in row order.
-    public var selectedEntries: [DirectoryEntry] {
-        guard let listing = state.listing else { return [] }
-        return selectedRows.map { listing[$0] }
-    }
-
-    /// Selects `names`, the cursor on the last, once the rows list them all: at once if they do,
-    /// otherwise when the load or folder change that brings the last of them lands. Does nothing
-    /// if the selection has changed since `selectionVersion` was read, as it does when the user
-    /// selects something else or the pane leaves the folder, before or after this call.
-    /// `selected` runs once they are selected, and never if they aren't.
-    func select(
-        _ names: [String], whenListedAtSelectionVersion version: Int,
-        then selected: (@MainActor () -> Void)? = nil
-    ) {
-        guard version == selectionVersion, !names.isEmpty else { return }
-        namesToSelect = (
-            names.map(ExactName.init), version, settings.showHidden, settings.hideDSStore, selected
-        )
-        selectNamesIfListed()
-    }
-
-    /// Selects `namesToSelect` if the rows list them all and the selection hasn't changed since
-    /// they were asked for.
-    private func selectNamesIfListed() {
-        guard let wanted = namesToSelect else { return }
-        guard wanted.selectionVersion == selectionVersion else {
-            namesToSelect = nil
-            return
-        }
-        guard let listing = state.listing,
-            wanted.names.allSatisfy({ listing.row(named: $0.name) != nil })
-        else { return }
-        namesToSelect = nil
-        select(Selection(Set(wanted.names), cursor: wanted.names.last))
-        wanted.selected?()
-    }
-
-    /// Takes a selection already resolved against the listing shown, keeping the one it replaces
-    /// in the selection history as made by `source`; nil for a step the history itself restores.
-    /// `byKey` says a key made it (`selectionIsFromKeys`).
-    private func set(
-        _ selection: Selection, recordingAs source: SelectionHistory.Source? = .once,
-        byKey: Bool = false
-    ) {
-        // Selecting the rows already selected doesn't move the version, but is still the user's
-        // choice over names a command is waiting to select.
-        namesToSelect = nil
-        guard selection != self.selection else {
-            if !byKey { chooseSelectionMadeByKeys() }
-            return
-        }
-        if let source {
-            tab?.paneWillChangeSelection(self, by: source)
-        }
-        self.selection = selection
-        selectionVersion += 1
-        selectionIsFromKeys = byKey
-        // A mount goes on only while its share stays selected alone.
-        if let name = connectingShare?.name,
-            selection.members != .only([ExactName(name)])
-        {
-            stopShareMount()
-        }
-        startSettlingIfNeeded()
-        reportChange()
-    }
-
-    /// A click or a command chose the selection keys made: it no longer waits for them to pause,
-    /// so the change is reported for a trail to follow at once.
-    private func chooseSelectionMadeByKeys() {
-        guard selectionIsFromKeys else { return }
-        selectionIsFromKeys = false
-        reportChange()
-    }
-
-    /// Settles a copy of an unsettled selection off the main thread, one at a time. The pane
-    /// takes it if neither the selection nor the state changed meanwhile; otherwise it settles
-    /// the selection as it is then. Whatever changed the state resolved the selection, or
-    /// started this again.
-    private func startSettlingIfNeeded() {
-        guard !settleIsRunning, !selection.isSettled, let listing = state.listing else { return }
-        settleIsRunning = true
-        let selection = selection
-        let selectionVersion = selectionVersion
-        let version = stateVersion
-        settleQueue.async { [weak self] in
-            let settled = Self.keepingCursor(
-                of: selection, in: selection.settled(in: listing), listing)
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    self?.finishSettling(settled, from: selectionVersion, state: version)
-                }
-            }
-        }
-    }
-
-    /// `resolved`, `selection` resolved or settled against `listing`, with the cursor moved to
-    /// the row that followed `selection`'s cursor when `listing` hides that entry
-    /// (`Selection.cursorMoved`). A cursor `listing` lacks altogether is left as `resolved` has it.
-    private nonisolated static func keepingCursor(
-        of selection: Selection, in resolved: Selection, _ listing: Listing
-    ) -> Selection {
-        guard let cursor = selection.cursor, resolved.cursorRow(in: listing) == nil,
-            let row = listing.row(nearest: cursor.name)
-        else { return resolved }
-        return resolved.cursorMoved(toRow: row, in: listing)
-    }
-
-    /// `resolved` with the cursor moved to the first row when `listing`, newly filtered, has no
-    /// row for it; that row is selected if nothing else is.
-    private nonisolated static func keepingFirstRow(_ resolved: Selection, _ listing: Listing)
-        -> Selection
-    {
-        guard resolved.cursorRow(in: listing) == nil, listing.count > 0 else { return resolved }
-        return resolved.cursorMoved(toRow: 0, in: listing)
-    }
-
-    private func finishSettling(_ settled: Selection, from selectionVersion: Int, state: Int) {
-        settleIsRunning = false
-        guard selectionVersion == self.selectionVersion, state == stateVersion else {
-            startSettlingIfNeeded()
-            return
-        }
-        selection = settled
-        // Settling moves no version, but a step can now equal the selection, which changes
-        // whether Undo and Redo Selection have a step left: the report tells the tab.
-        reportChange()
-    }
-
-    /// Shows `state`, finding the selection's rows in its listing, which replaced the last one by
-    /// `change`, on the main thread.
-    private func show(_ state: ListingState, after change: Selection.Change) {
-        self.state = state
-        selection = onMain { selection.resolved(in: state.listing, after: change) }
-    }
-
-    /// Shows `state` with `resolved`, the selection at `version` resolved off the main thread
-    /// against its listing, if the selection hasn't changed since. Otherwise shows the current
-    /// selection provisionally, the rows within a page of the cursor, and settles it off the main
-    /// thread.
-    private func show(
-        _ state: ListingState, after change: Selection.Change, resolved: Selection?,
-        from version: Int
-    ) {
-        guard let resolved, version == selectionVersion else {
-            guard let listing = state.listing else {
-                show(state, after: change)
-                return
-            }
-            self.state = state
-            selection = onMain {
-                selection.provisional(in: listing, after: change, radius: max(visibleRowCount, 1))
-            }
-            startSettlingIfNeeded()
-            return
-        }
-        self.state = state
-        selection = resolved
-    }
-
-    /// Runs selection work on the main thread, adding what it does per entry to
-    /// `mainSelectionWork` in a debug build.
-    private func onMain(_ work: () -> Selection) -> Selection {
-        #if DEBUG
-            let count = Selection.WorkCount()
-            defer { mainSelectionWork += count.count }
-            return Selection.$work.withValue(count, operation: work)
-        #else
-            return work()
-        #endif
-    }
-
-    /// Moves the cursor `delta` rows, stopping at the first and last row; see `Selection.moved`.
-    /// A plain move selects the cursor's row alone; an extending one selects from the anchor.
-    /// `isKeyRepeat` says the key is held, so the move joins the key's step in the selection
-    /// history.
-    public func moveSelection(by delta: Int, extending: Bool = false, isKeyRepeat: Bool = false) {
-        guard let listing = state.listing else { return }
-        set(
-            onMain { selection.moved(by: delta, in: listing, extending: extending) },
-            recordingAs: .move(by: delta, extending: extending, isRepeat: isKeyRepeat), byKey: true)
-    }
-
-    /// Moves the cursor `pages` screens of rows, `visibleRowCount` rows each.
-    public func moveSelection(byPages pages: Int, isKeyRepeat: Bool = false) {
-        // A pane squeezed below one row's height still moves a row per page.
-        moveSelection(by: pages * max(visibleRowCount, 1), isKeyRepeat: isKeyRepeat)
-    }
-
-    /// Selects the first row alone. `byKey` says a key asked for it, as Home does; → into a
-    /// column asks without it, so the folder in that row opens its column at once.
-    public func selectFirstRow(byKey: Bool = false) {
-        selectFirstRow(byKey: byKey, recordingAs: .once)
-    }
-
-    /// Selects the first row alone, recording the selection it replaces as made by `source`, or
-    /// not at all when it is nil: → 's selection in the column it moves into is part of its
-    /// step.
-    func selectFirstRow(byKey: Bool, recordingAs source: SelectionHistory.Source?) {
-        guard let listing = state.listing else { return }
-        set(
-            onMain { selection.moved(toRow: 0, in: listing, extending: false) },
-            recordingAs: source, byKey: byKey)
-    }
-
-    /// Selects the last row alone. `byKey` says a key asked for it, as End does.
-    public func selectLastRow(byKey: Bool = false) {
-        guard let listing = state.listing else { return }
-        set(
-            onMain { selection.moved(toRow: listing.count - 1, in: listing, extending: false) },
-            byKey: byKey)
-    }
-
-    /// Selects every row shown, keeping the cursor and anchor where they were.
-    public func selectAll() {
-        guard let listing = state.listing else { return }
-        set(onMain { selection.all(in: listing) })
     }
 
     // MARK: - Selection undo
@@ -2109,57 +1546,6 @@ public final class Pane {
     /// pane is in its trail owner's.
     weak var holdingTab: Tab?
 
-    /// The tab whose selection history the pane's changes go into: its own, or its trail owner's
-    /// for a column. Nil for a pane in no tab, as a bench or a test makes one; Undo and Redo
-    /// Selection are off there.
-    var tab: Tab? { containingTrail?.owner.holdingTab ?? holdingTab }
-
-    /// Selects `selection`, a step resolved against the rows (`restorable`), for Undo or Redo
-    /// Selection, recording nothing; `owner` is this pane, or the pane whose trail this column is
-    /// in. A column without the keys takes them first, adding nothing to Back: Undo Selection
-    /// puts the keys back in a trail the pane never left.
-    func restore(_ selection: Selection, in owner: Pane) {
-        if let trail = owner.columnTrail,
-            let column = trail.columns.first(where: { $0.pane === self })
-        {
-            owner.isSteppingHistory = true
-            defer { owner.isSteppingHistory = false }
-            trail.focus(column, recordingAs: nil)
-        }
-        set(selection, recordingAs: nil)
-    }
-
-    /// Starts the trail again at `location`, a folder of it whose column has closed, as a
-    /// navigation does, keeping the columns above it, with `selection` in its column, recording
-    /// nothing: for Undo and Redo Selection, which put the keys back in a trail the pane never
-    /// left, so nothing goes to Back and the selection steps stay. The selection's names wait
-    /// for the column's rows, as any selection made before them does.
-    func reopenColumn(at location: Location, selecting selection: Selection) {
-        guard columnTrail != nil else { preconditionFailure("reopening a column in list mode") }
-        move(to: location, selection: selection, isNavigation: false)
-        commandPane.select(selection, recordingAs: nil)
-    }
-
-    /// `step` resolved against the rows shown, or nil when it would change nothing: unless it
-    /// `movingKeys` to this pane or column, when it would select nothing listed and has no
-    /// listed cursor, or would select what is selected now. A complete listing drops the names
-    /// it doesn't have. Rows not listed yet, as in a column just opened, can't tell: the step
-    /// is kept by name until they land, and is nil only when it is the selection now. Work per
-    /// entry of the step, on the main thread: a step is restored at once, as a key's move is
-    /// shown.
-    func restorable(_ step: Selection, movingKeys: Bool) -> Selection? {
-        guard let listing = state.listing else {
-            return movingKeys || step != selection ? step : nil
-        }
-        let complete = if case .loaded = state { true } else { false }
-        let restored = onMain { step.resolved(in: listing, after: .loaded(complete: complete)) }
-        if movingKeys { return restored }
-        guard !restored.isEmpty || restored.cursorRow(in: listing) != nil,
-            restored != selection
-        else { return nil }
-        return restored
-    }
-
     // MARK: - The cursor after a trash
 
     /// Set by Move to Trash: which trash it was, the cursor's entry and its path when the trash
@@ -2167,101 +1553,15 @@ public final class Pane {
     /// and before the cursor's run of selected rows, and the selection version then. If the
     /// trashed entries leave the rows before the selection changes otherwise, the cursor goes to
     /// the first of those two still listed (`selectNextIfTrashLanded`).
-    private(set) var cursorAfterTrash:
+    var cursorAfterTrash:
         (
             trash: Int, selectionVersion: Int, cursor: ExactName, cursorPath: String,
             after: ExactName?, before: ExactName?
         )?
     /// Counts the trashes `moveCursorPastSelectionOnceGone` noted.
-    private var trashCount = 0
-
-    /// Notes where the cursor goes once the selection, about to be trashed, leaves the rows: to
-    /// the row after the cursor's run of selected rows in the current sort, or the row before it
-    /// when the run ends the list. Does nothing on the press itself, since the rows go only when
-    /// the trash lands. Returns the trash's number, for `trashDidFinish`.
-    func moveCursorPastSelectionOnceGone() -> Int {
-        trashCount += 1
-        cursorAfterTrash = nil
-        guard let listing = state.listing, let cursor = selection.cursor,
-            let row = selection.cursorRow(in: listing),
-            let run = selectedRows.rangeView.first(where: { $0.contains(row) })
-        else { return trashCount }
-        cursorAfterTrash = (
-            trashCount, selectionVersion, cursor,
-            location.folderChild(named: cursor.name).folderPath,
-            run.upperBound < listing.count ? ExactName(listing[run.upperBound].name) : nil,
-            run.lowerBound > 0 ? ExactName(listing[run.lowerBound - 1].name) : nil
-        )
-        return trashCount
-    }
-
-    /// Trash `trash` ended as `state` says. Unless it trashed or deleted the cursor's entry and
-    /// every other item, the cursor moves nowhere: a trash that failed, partly failed or was
-    /// cancelled at a question leaves nothing waiting for a row that may leave later for another
-    /// reason. A trash that worked keeps waiting, since the folder change it makes usually
-    /// arrives after it ends.
-    func trashDidFinish(_ trash: Int, _ state: OperationState) {
-        guard let pending = cursorAfterTrash, pending.trash == trash else { return }
-        let cursorPath = pending.cursorPath
-        let removedCursor = state.record.changes.contains { change in
-            switch change {
-            case .trashed(let path, _), .deleted(let path): path == cursorPath
-            case .created, .moved, .replaced, .putBack, .uncreated: false
-            }
-        }
-        if state.phase != .done || !removedCursor {
-            cursorAfterTrash = nil
-        }
-    }
-
-    /// Moves the cursor as `moveCursorPastSelectionOnceGone` noted, once the rows shown no longer
-    /// list the trashed cursor's entry and nothing is left selected. A selection changed since
-    /// the trash keeps the cursor where the user put it.
-    private func selectNextIfTrashLanded() {
-        guard let pending = cursorAfterTrash else { return }
-        guard pending.selectionVersion == selectionVersion else {
-            cursorAfterTrash = nil
-            return
-        }
-        guard let listing = state.listing, listing.row(named: pending.cursor.name) == nil,
-            selection.isEmpty
-        else { return }
-        cursorAfterTrash = nil
-        guard
-            let next = [pending.after, pending.before].compactMap({ $0 }).first(where: {
-                listing.row(named: $0.name) != nil
-            })
-        else { return }
-        select(Selection([next], cursor: next))
-    }
-
-    /// Selects the first row once the rows show the whole folder, as
-    /// `navigateSelectingFirstRow(to:)` asked, if the selection hasn't changed since. A first
-    /// batch isn't the whole folder: its first row needn't be the folder's. Rows that arrive
-    /// empty, or a folder that can't be listed, give up the wait.
-    private func selectFirstRowIfWanted() {
-        guard let version = selectsFirstRowAt else { return }
-        switch state {
-        case .denied, .failed, .notConnected:
-            selectsFirstRowAt = nil
-            return
-        case .loading, .partial, .loaded, .cachedRefreshing, .slow, .offline, .serverListed:
-            break
-        }
-        guard version == selectionVersion else {
-            selectsFirstRowAt = nil
-            return
-        }
-        guard state.showsWholeFolder, let listing = state.listing else { return }
-        selectsFirstRowAt = nil
-        guard listing.count > 0, selection.isEmpty else { return }
-        selectFirstRow(byKey: false, recordingAs: nil)
-    }
+    var trashCount = 0
 
     // MARK: - Folder sizes
-
-    /// The least time from one batch of folder sizes reaching the rows to the next.
-    public static let sizeBatchInterval: Duration = .milliseconds(250)
 
     /// Walks the subfolders of a list pane's folder for their sizes while `Settings.folderSizes`
     /// is on, or once when `calculateSizes()` asks. The pane's owner sets it once; a pane without
@@ -2273,378 +1573,44 @@ public final class Pane {
             startSizeScan()
         }
     }
-    /// Whether `calculateSizes()` can run: a list pane at a folder with a size service. A
-    /// server's shares are mount points, and a walk of one would read the whole share
-    /// (docs/decisions/0114-server-location.md).
-    public var canCalculateSizes: Bool {
-        folderSizes != nil && viewMode == .list && location.isFolder
-    }
-    /// Whether folder rows show walked sizes: a list pane with a size service, with the setting
-    /// on or in a folder `calculateSizes()` walked.
-    public var showsFolderSizes: Bool {
-        canCalculateSizes
-            && (settings.folderSizes || calculatedFolders.contains(ExactName(location.folderPath)))
-    }
-    /// Whether a folder row without a size waits for a walk, and shows pending text: the setting
-    /// is on, or the walks `calculateSizes()` asked for haven't all landed. Otherwise it shows no
-    /// size.
-    public var awaitsFolderSizes: Bool {
-        showsFolderSizes
-            && (settings.folderSizes || calculatesSizesOnce || !calculatingSizes.isEmpty)
-    }
-    /// Whether the pane scans its rows now, for walks to ask for and kept sizes to show: it shows
-    /// folder sizes, is in the selected tab, and its volume is mounted. A hidden tab's pane
-    /// mustn't hold a share's one walk while the focused pane waits for sizes.
-    private var walksFolders: Bool {
-        showsFolderSizes && isVisible && !volumeIsGone && !isClosed
-    }
     /// Where the pane waits out `sizeBatchInterval`. Tests pass a clock they advance.
     var sizeBatchClock: any Clock<Duration> = ContinuousClock()
     /// Names the pane's walks to `folderSizes`, which cancels them by it.
-    private let sizeWalkOwner = PaneID()
+    let sizeWalkOwner = PaneID()
     /// The folder's own date each walk was asked for. A folder whose listing shows another date
     /// is walked again.
-    private var requestedSizes: [ExactName: Date] = [:]
+    var requestedSizes: [ExactName: Date] = [:]
     /// The sizes walked for the folder shown. Each new listing of it gets them.
-    private var knownSizes: [ExactName: Listing.FolderSizeUpdate] = [:]
+    var knownSizes: [ExactName: Listing.FolderSizeUpdate] = [:]
     /// Folders whose walk failed. They aren't asked for again until the folder is fully listed
     /// again, so a folder that keeps failing doesn't walk again on every batch.
-    private var failedSizes: Set<ExactName> = []
+    var failedSizes: Set<ExactName> = []
     /// Sizes not yet applied to the rows.
-    private(set) var waitingSizes: [ExactName: Listing.FolderSizeUpdate] = [:]
+    var waitingSizes: [ExactName: Listing.FolderSizeUpdate] = [:]
     /// Goes up whenever the pane's walks are cancelled, so a result of one asked for before is
     /// dropped when it lands.
-    private var sizeGeneration = 0
+    var sizeGeneration = 0
     /// The `sizeGeneration` the last cancel of running walks too moved to, so a scan that lands
     /// after a cancel it missed stops its walks as that cancel would have.
-    private var runningSizeWalksCancelledAt = 0
-    private var sizeScanIsRunning = false
+    var runningSizeWalksCancelledAt = 0
+    var sizeScanIsRunning = false
     /// The rows changed while a scan ran; scan them again when it lands.
-    private var sizeScanIsStale = false
+    var sizeScanIsStale = false
     /// A batch started less than `sizeBatchInterval` ago.
-    private var sizeBatchIsWaiting = false
+    var sizeBatchIsWaiting = false
     /// `Settings.folderSizes` as the pane last followed it.
-    private var sizeSettingSeen = false
+    var sizeSettingSeen = false
     /// The folders, by path, whose subfolders `calculateSizes()` walked with the setting off. A
     /// visit shows the sizes kept for them and walks nothing. Turning the setting off empties it.
-    private var calculatedFolders: Set<ExactName> = []
+    var calculatedFolders: Set<ExactName> = []
     /// `calculateSizes()` asked the next scan to walk the rows with the setting off.
-    private var calculatesSizesOnce = false
+    var calculatesSizesOnce = false
     /// The folders that scan asked for whose walks haven't landed.
-    private var calculatingSizes: Set<ExactName> = []
+    var calculatingSizes: Set<ExactName> = []
     /// The setting changed since the rows were last refreshed: the next batch lands even if no
     /// size changed, so folder rows switch between pending text and no size, and it drops every
     /// size when the setting is off.
-    private var sizeSettingChanged = false
+    var sizeSettingChanged = false
     /// Where scans find the folders to walk and ask for them.
-    private let sizeScanQueue = DispatchQueue.global(qos: .utility)
-
-    /// Drops the kept sizes of the folder and every folder under it, and walks its subfolders
-    /// again once that is done. With the setting off they are walked once, and the folder shows
-    /// sizes from then on without walking again. The sizes shown stay until the new ones arrive.
-    /// When the drop fails, the service logs why and the pane keeps what it has.
-    public func calculateSizes() {
-        guard canCalculateSizes, let folderSizes else { return }
-        let folder = location
-        if !settings.folderSizes { calculatedFolders.insert(ExactName(folder.folderPath)) }
-        Task { [weak self] in
-            guard await folderSizes.recalculateSizes(under: folder.folderPath) else { return }
-            guard let self, self.location == folder, self.showsFolderSizes else { return }
-            self.forgetFolderSizes()
-            self.calculatesSizesOnce = !self.settings.folderSizes
-            // The rows switch to pending text.
-            self.sizeSettingChanged = true
-            self.startSizeScan()
-            self.startSizeBatch()
-        }
-    }
-
-    /// Cancels the pane's walks. The sizes walked stay, and the folders not walked yet are asked
-    /// for again by the next scan. Letting local walks finish, a walk already running on a local
-    /// volume goes on and keeps its size for a later visit, without delivering it here.
-    private func cancelSizeWalks(lettingLocalWalksFinish: Bool = false) {
-        if lettingLocalWalksFinish {
-            folderSizes?.cancelWaitingWalks(for: sizeWalkOwner)
-        } else {
-            folderSizes?.cancelWalks(for: sizeWalkOwner)
-        }
-        sizeGeneration += 1
-        if !lettingLocalWalksFinish { runningSizeWalksCancelledAt = sizeGeneration }
-        requestedSizes = [:]
-        calculatesSizesOnce = false
-        calculatingSizes = []
-    }
-
-    /// Cancels the pane's walks and forgets the sizes of the folder it shows. The service keeps
-    /// the sizes walked, and a later listing of the folder gets them from it.
-    private func forgetFolderSizes(lettingLocalWalksFinish: Bool = false) {
-        cancelSizeWalks(lettingLocalWalksFinish: lettingLocalWalksFinish)
-        knownSizes = [:]
-        failedSizes = []
-        waitingSizes = [:]
-    }
-
-    /// `Settings.folderSizes` changed: turned off, the walks stop and the rows drop their sizes;
-    /// turned on, the folders are walked.
-    private func followSizeSetting() {
-        guard folderSizes != nil, settings.folderSizes != sizeSettingSeen else { return }
-        sizeSettingSeen = settings.folderSizes
-        if !settings.folderSizes {
-            forgetFolderSizes()
-            calculatedFolders = []
-        }
-        sizeSettingChanged = true
-        startSizeScan()
-        startSizeBatch()
-    }
-
-    /// A load that applied known sizes landed after the setting was turned off: the rows drop
-    /// them.
-    private func dropSizesIfOff() {
-        guard !showsFolderSizes else { return }
-        sizeSettingChanged = true
-        startSizeBatch()
-    }
-
-    /// Finds, off the main actor, the folder rows not yet walked at their current date and asks
-    /// for those walks there, while the setting is on or `calculateSizes()` asked, and finds the
-    /// known sizes the rows lack and queues them. Runs after each change of the rows, one scan at
-    /// a time.
-    private func startSizeScan() {
-        guard walksFolders, let folderSizes, let listing = state.listing else { return }
-        guard !sizeScanIsRunning else {
-            sizeScanIsStale = true
-            return
-        }
-        sizeScanIsRunning = true
-        let once = calculatesSizesOnce && !settings.folderSizes
-        let asksForWalks = settings.folderSizes || once
-        let requested = requestedSizes
-        let known = knownSizes
-        let failed = failedSizes
-        let generation = sizeGeneration
-        let folder = location
-        let owner = sizeWalkOwner
-        sizeScanQueue.async { [weak self] in
-            var found: [(name: ExactName, modified: Date)] = []
-            var missing: [ExactName: Listing.FolderSizeUpdate] = [:]
-            for row in 0..<listing.count {
-                let entry = listing[row]
-                guard entry.type.isFolderOnDisk else { continue }
-                let name = ExactName(entry.name)
-                if let update = known[name], update.modified == entry.modified {
-                    if listing.folderSize(atRow: row) != update.value { missing[name] = update }
-                } else if asksForWalks, requested[name] != entry.modified, !failed.contains(name) {
-                    found.append((name, entry.modified))
-                }
-            }
-            let asked = found
-            let walks = folderSizes.requestSizes(
-                of: asked.map { (folder.folderChild(named: $0.name.name).folderPath, $0.modified) },
-                in: folder.folderPath, for: owner
-            ) { index, result in
-                self?.receiveSize(
-                    result, of: asked[index].name, modified: asked[index].modified,
-                    from: generation)
-            }
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    guard let self else {
-                        for walk in walks { walk.cancel() }
-                        return
-                    }
-                    self.finishSizeScan(
-                        asked: asked, walks: walks, missing: missing, once: once,
-                        from: generation)
-                }
-            }
-        }
-    }
-
-    private func finishSizeScan(
-        asked: [(name: ExactName, modified: Date)], walks: [FolderSizeService.Walk],
-        missing: [ExactName: Listing.FolderSizeUpdate], once: Bool, from generation: Int
-    ) {
-        sizeScanIsRunning = false
-        if generation == sizeGeneration, walksFolders {
-            for folder in asked { requestedSizes[folder.name] = folder.modified }
-            if once {
-                // A walk can land before its scan does; those already have their size or failed.
-                calculatingSizes = Set(
-                    asked.filter { knownSizes[$0.name]?.modified != $0.modified }
-                        .map(\.name)
-                ).subtracting(failedSizes)
-                calculatesSizesOnce = false
-                // Rows still without a size switch from pending text once nothing is walked.
-                if calculatingSizes.isEmpty { sizeSettingChanged = true }
-            }
-            waitingSizes.merge(missing) { waiting, _ in waiting }
-            startSizeBatch()
-        } else {
-            // The walks were asked for after the pane cancelled its walks, so that cancel
-            // didn't reach them. One that only left the folder lets local walks finish.
-            let leftOnly = generation != sizeGeneration && runningSizeWalksCancelledAt <= generation
-            for walk in walks {
-                if leftOnly { walk.leave() } else { walk.cancel() }
-            }
-        }
-        if sizeScanIsStale {
-            sizeScanIsStale = false
-            startSizeScan()
-        }
-    }
-
-    private func receiveSize(
-        _ result: Result<FolderSize, ListingError>, of name: ExactName, modified: Date,
-        from generation: Int
-    ) {
-        // A walk the scan asked for can land before the scan does, after a cancel it missed.
-        guard generation == sizeGeneration else { return }
-        calculatingSizes.remove(name)
-        let value: Listing.FolderSizeValue
-        switch result {
-        case .success(let size):
-            value = .size(bytes: size.bytes, isPartial: size.isPartial)
-            knownSizes[name] = Listing.FolderSizeUpdate(modified: modified, value: value)
-        case .failure:
-            value = .failed
-            failedSizes.insert(name)
-            requestedSizes[name] = nil
-        }
-        waitingSizes[name] = Listing.FolderSizeUpdate(modified: modified, value: value)
-        startSizeBatch()
-    }
-
-    /// A batch has sizes to apply, has waited out the interval since the last one, and has rows
-    /// to apply them to. It goes before the next patch, so a folder that keeps changing can't hold
-    /// sizes back.
-    private var sizeBatchIsDue: Bool {
-        !sizeBatchIsWaiting && (!waitingSizes.isEmpty || sizeSettingChanged)
-            && state.listing != nil
-    }
-
-    /// Starts a batch that waited for rows once the pass that changed them, and set the selection
-    /// beside them, ends. Without it a batch due while there were no rows, such as the one that
-    /// drops sizes after the setting went off during a load, would keep patches waiting for good.
-    private func startSizeBatchAfterThisPass() {
-        guard sizeBatchIsDue else { return }
-        DispatchQueue.main.async { [weak self] in
-            MainActor.assumeIsolated { self?.startSizeBatch() }
-        }
-    }
-
-    /// Applies the waiting sizes to a copy of the rows off the main actor, as a patch is applied,
-    /// and resolves the selection there: rows sorted by size move, and the selection follows its
-    /// names. Batches start at most once per `sizeBatchInterval`, and not while a patch, a sort
-    /// or another batch runs; each of those starts the next batch when it lands.
-    private func startSizeBatch() {
-        guard sizeBatchIsDue, !patchIsRunning, runningSorts == 0, let listing = state.listing
-        else { return }
-        let sizes = waitingSizes
-        let settingChanged = sizeSettingChanged
-        let clearing = !showsFolderSizes
-        waitingSizes = [:]
-        sizeSettingChanged = false
-        // Sizes and patches take turns on the rows, so neither lands on rows the other replaced.
-        patchIsRunning = true
-        sizeBatchIsWaiting = true
-        let version = stateVersion
-        let selection = selection
-        let selectionVersion = selectionVersion
-        rowWorkQueue.async { [weak self] in
-            var listing = listing
-            if clearing { listing.clearFolderSizes() }
-            let changed = listing.applyFolderSizes(sizes) || settingChanged
-            let resolved = selection.resolved(in: listing, after: .sameEntries)
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    self?.finishSizeBatch(
-                        changed ? listing : nil, settingChanged: settingChanged, from: version,
-                        resolved: resolved, from: selectionVersion)
-                }
-            }
-        }
-        let clock = sizeBatchClock
-        Task { [weak self] in
-            guard await DeadlineWait.reached({ try await clock.sleep(for: Self.sizeBatchInterval) })
-            else { return }
-            self?.sizeBatchIsWaiting = false
-            self?.startSizeBatch()
-        }
-    }
-
-    /// Shows the rows with the batch's sizes, nil when none changed, unless a load, patch, sort
-    /// or navigation replaced the rows meanwhile. The scan that followed that change queued the
-    /// known sizes the new rows lack.
-    private func finishSizeBatch(
-        _ listing: Listing?, settingChanged: Bool, from version: Int, resolved: Selection,
-        from selectionVersion: Int
-    ) {
-        patchIsRunning = false
-        defer {
-            startPatch()
-            startSizeBatch()
-        }
-        guard version == stateVersion else {
-            sizeSettingChanged = sizeSettingChanged || settingChanged
-            return
-        }
-        guard let listing else { return }
-        show(
-            state.showing(listing), after: .sameEntries, resolved: resolved, from: selectionVersion)
-        startSortIfNeeded()
-        reportChange()
-    }
-
-    /// `update` with `sizes` applied to its listing, on the load's worker, so a folder listed
-    /// again shows the sizes walked for it at once. Folders `sizes` lacks get the sizes
-    /// `folderSizes` keeps in memory, so a folder visited again shows its subfolders' sizes with
-    /// its first rows; the scan that follows asks for each, and the service's own checks decide
-    /// whether it is walked again.
-    private nonisolated static func applying(
-        _ sizes: [ExactName: Listing.FolderSizeUpdate], keptIn folderSizes: FolderSizeService?,
-        under folder: Location, to update: ListingUpdate
-    ) -> ListingUpdate {
-        guard !sizes.isEmpty || folderSizes != nil else { return update }
-        func applied(_ listing: Listing) -> Listing {
-            var listing = listing
-            listing.applyFolderSizes(
-                kept(in: listing, from: folderSizes, under: folder).merging(sizes) { _, known in
-                    known
-                })
-            return listing
-        }
-        switch update {
-        case .cached(let listing, let listedAt, let rootVolumeName):
-            return .cached(applied(listing), listedAt: listedAt, rootVolumeName: rootVolumeName)
-        case .firstBatch(let listing, let rootVolumeName):
-            return .firstBatch(applied(listing), rootVolumeName: rootVolumeName)
-        case .full(let listing, let rootVolumeName):
-            return .full(applied(listing), rootVolumeName: rootVolumeName)
-        case .serverListed(let listing, let notice, let rootVolumeName):
-            return .serverListed(applied(listing), notice, rootVolumeName: rootVolumeName)
-        case .failed, .slow, .gaveUp, .volumeGone, .notConnected:
-            return update
-        }
-    }
-
-    /// The sizes `folderSizes` keeps in memory for the folder rows of `listing`, a listing of
-    /// `folder`, at the dates the rows show.
-    private nonisolated static func kept(
-        in listing: Listing, from folderSizes: FolderSizeService?, under folder: Location
-    ) -> [ExactName: Listing.FolderSizeUpdate] {
-        guard let folderSizes else { return [:] }
-        let folders = (0..<listing.count).map { listing[$0] }.filter { $0.type.isFolderOnDisk }
-        let asked = folders.map {
-            (path: folder.folderChild(named: $0.name).folderPath, modified: $0.modified)
-        }
-        var found: [ExactName: Listing.FolderSizeUpdate] = [:]
-        for (entry, size) in zip(folders, folderSizes.keptSizes(of: asked)) {
-            guard let size else { continue }
-            found[ExactName(entry.name)] = Listing.FolderSizeUpdate(
-                modified: entry.modified,
-                value: .size(bytes: size.bytes, isPartial: size.isPartial))
-        }
-        return found
-    }
+    let sizeScanQueue = DispatchQueue.global(qos: .utility)
 }
