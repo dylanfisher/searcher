@@ -854,7 +854,7 @@ public actor FileOperationQueue {
                         confirmed
                         ? Self.finishReplace(
                             staged, deletesWithoutTrash: true, fileSystem: fileSystem,
-                            identify: identify)
+                            identify: identify, isCancelled: { control.isCancelled })
                         : Self.unstage(staged, fileSystem: fileSystem)
                     return (outcome, Self.identities(after: outcome, identify: identify))
                 }
@@ -885,7 +885,8 @@ public actor FileOperationQueue {
                 entry.record.changes += changes
                 entry.errors.append(error)
                 stops = Self.stopsOperation(error)
-            case .cancelled(let left):
+            case .cancelled(let left, let changes):
+                entry.record.changes += changes
                 leftBehind = left
                 wasCancelled = true
             }
@@ -958,7 +959,9 @@ public actor FileOperationQueue {
         case done([OperationRecord.Change], copied: CopyProgress)
         /// The item failed; `changes` is what it changed before it did.
         case failed(FileOperationError, changes: [OperationRecord.Change])
-        case cancelled(leftBehind: FileOperationError?)
+        /// The item was cancelled; `changes` is what it changed before it was, such as the copy
+        /// a move to another volume made before a cancel kept its source.
+        case cancelled(leftBehind: FileOperationError?, changes: [OperationRecord.Change] = [])
         /// A replace whose original has nowhere to go: its volume has no Trash, and the user
         /// hasn't agreed to delete it. The new item is staged; the original is untouched.
         case needsDelete(StagedReplace)
@@ -1023,7 +1026,7 @@ public actor FileOperationQueue {
     /// `deleteMovedSource` allows. Runs on a `BlockingCallThread`.
     private static func finishReplace(
         _ staged: StagedReplace, deletesWithoutTrash: Bool, fileSystem: FileSystem,
-        identify: Identifier
+        identify: Identifier, isCancelled: () -> Bool
     ) -> ItemOutcome {
         let destination = staged.destination
         /// Fails with `error` after taking the staged item away; `changes` is what stays.
@@ -1082,49 +1085,66 @@ public actor FileOperationQueue {
             guard let before = staged.before else {
                 preconditionFailure("\(staged.source) moved across volumes without a stamp")
             }
-            if let kept = deleteMovedSource(
+            switch deleteMovedSource(
                 staged.source, before: before, copiedTo: destination, fileSystem: fileSystem,
-                identify: identify)
+                identify: identify, isCancelled: isCancelled)
             {
-                return .failed(kept.error, changes: [original] + (kept.copyIsThere ? [copy] : []))
+            case .deleted: break
+            case .kept(let error, let copyIsThere):
+                return .failed(error, changes: [original] + (copyIsThere ? [copy] : []))
+            case .cancelled: return .cancelled(leftBehind: nil, changes: [original, copy])
             }
         }
         return .done([original, placed], copied: staged.copied)
     }
 
+    /// What `deleteMovedSource` did with a source.
+    private enum SourceDelete {
+        case deleted
+        /// Kept for `error`; `copyIsThere` says whether the copy is at the destination.
+        case kept(FileOperationError, copyIsThere: Bool)
+        /// Kept, with the copy there, since a cancel came before the source was checked.
+        case cancelled
+    }
+
     /// Deletes `source`, which a move to another volume copied to `destination`, once the copy
     /// is there and the source is as `before`, its stamp from before the copy, found it: the
-    /// same items, each the same item at the same size and modification time. Otherwise the
-    /// source stays and so does the copy. Returns nil once the source is deleted, or the error
-    /// that kept it and whether the copy is there. Runs on a `BlockingCallThread`.
+    /// same items, each the same item at the same size and modification time. Otherwise, or
+    /// when `isCancelled` says so before the check is done, the source stays and so does the
+    /// copy. Runs on a `BlockingCallThread`.
     private static func deleteMovedSource(
         _ source: String, before: SourceStamp, copiedTo destination: String,
-        fileSystem: FileSystem, identify: Identifier
-    ) -> (error: FileOperationError, copyIsThere: Bool)? {
+        fileSystem: FileSystem, identify: Identifier, isCancelled: () -> Bool
+    ) -> SourceDelete {
         do {
             guard try identify(destination) != nil else {
-                return (
+                return .kept(
                     FileOperationError(reason: .sourceGone, path: destination, errno: ENOENT),
-                    false
-                )
+                    copyIsThere: false)
             }
         } catch {
-            return (error, false)
+            return .kept(error, copyIsThere: false)
         }
         do {
-            // No cancel stops it: a cancel after the copy has finished lets the delete finish.
-            guard try fileSystem.stamp(source, { false }) == before else {
-                return (
-                    FileOperationError(reason: .changedDuringMove, path: source, errno: nil), true
-                )
+            guard let after = try fileSystem.stamp(source, isCancelled) else {
+                return .kept(
+                    FileOperationError(reason: .sourceGone, path: source, errno: ENOENT),
+                    copyIsThere: true)
+            }
+            guard after == before else {
+                return .kept(
+                    FileOperationError(reason: .changedDuringMove, path: source, errno: nil),
+                    copyIsThere: true)
             }
             try fileSystem.deletePermanently(source)
+        } catch is CancellationError {
+            return .cancelled
         } catch let error as FileOperationError {
-            return (error, true)
+            return .kept(error, copyIsThere: true)
         } catch {
-            preconditionFailure("the stamp of \(source) threw \(error) with no cancel")
+            preconditionFailure("the stamp of \(source) threw \(error)")
         }
-        return nil
+        return .deleted
     }
 
     /// The identity of the item at each place `outcome`'s changes left one, read right after
@@ -1136,8 +1156,8 @@ public actor FileOperationQueue {
     {
         let changes: [OperationRecord.Change]
         switch outcome {
-        case .done(let done, _), .failed(_, let done): changes = done
-        case .cancelled, .needsDelete: return ([:], [])
+        case .done(let done, _), .failed(_, let done), .cancelled(_, let done): changes = done
+        case .needsDelete: return ([:], [])
         }
         var identities: [String: OperationRecord.ItemIdentity] = [:]
         var unread: [FileOperationError] = []
@@ -1193,14 +1213,16 @@ public actor FileOperationQueue {
         func finishCrossMove(
             from: String, to: String, before: SourceStamp, copied: CopyProgress
         ) -> ItemOutcome {
-            if let kept = deleteMovedSource(
-                from, before: before, copiedTo: to, fileSystem: fileSystem, identify: identify)
+            let copy = OperationRecord.Change.created(to, from: .copy(of: from))
+            switch deleteMovedSource(
+                from, before: before, copiedTo: to, fileSystem: fileSystem, identify: identify,
+                isCancelled: { control.isCancelled })
             {
-                return .failed(
-                    kept.error,
-                    changes: kept.copyIsThere ? [.created(to, from: .copy(of: from))] : [])
+            case .deleted: return .done([.moved(from: from, to: to)], copied: copied)
+            case .kept(let error, let copyIsThere):
+                return .failed(error, changes: copyIsThere ? [copy] : [])
+            case .cancelled: return .cancelled(leftBehind: nil, changes: [copy])
             }
-            return .done([.moved(from: from, to: to)], copied: copied)
         }
         func destination() -> String {
             guard let destination = item.destination else {
@@ -1272,7 +1294,7 @@ public actor FileOperationQueue {
             guard !control.isCancelled else { return unstage(staged, fileSystem: fileSystem) }
             return finishReplace(
                 staged.with(copied: copied), deletesWithoutTrash: deletesWithoutTrash,
-                fileSystem: fileSystem, identify: identify)
+                fileSystem: fileSystem, identify: identify, isCancelled: { control.isCancelled })
         }
         do {
             switch operation {

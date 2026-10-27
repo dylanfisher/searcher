@@ -473,11 +473,12 @@ public struct OperationPlan: Equatable, Sendable {
     /// `BlockingCallThread`.
     ///
     /// - Throws: `FileOperationError` when the walk can't start or stops on an error, and
-    ///   `CancellationError` once `isCancelled` returns true.
+    ///   `CancellationError` once `isCancelled`, asked first and before each item, returns true.
     static func stamp(_ path: String, isCancelled: () -> Bool) throws
         -> FileOperationQueue.SourceStamp?
     {
         BlockingCallThread.requireCurrent()
+        if isCancelled() { throw CancellationError() }
         var info = stat()
         if lstat(path, &info) != 0 {
             if errno == ENOENT { return nil }
