@@ -89,3 +89,28 @@ import Testing
     #expect(!AtomicWrite.isPartial(".report.json.partial-not-a-uuid"))
     #expect(!AtomicWrite.isPartial("report.json.partial-\(UUID().uuidString)"))
 }
+
+@Test func createWritesANewFile() throws {
+    let folder = try TemporaryFolder("AtomicWriteTests")
+    let file = folder.url.appending(path: "config")
+
+    try AtomicWrite.create(Data("new".utf8), at: file)
+
+    #expect(try String(contentsOf: file, encoding: .utf8) == "new")
+    #expect(try FileManager.default.contentsOfDirectory(atPath: folder.url.path) == ["config"])
+}
+
+/// A create-only write onto a file that is there fails and keeps that file, as when an editor
+/// saved one between a check and the write.
+@Test func createOntoAnExistingFileFailsAndKeepsIt() throws {
+    let folder = try TemporaryFolder("AtomicWriteTests")
+    let file = folder.url.appending(path: "config")
+    try Data("mine".utf8).write(to: file)
+
+    #expect(throws: POSIXError(.EEXIST)) {
+        try AtomicWrite.create(Data("template".utf8), at: file)
+    }
+
+    #expect(try String(contentsOf: file, encoding: .utf8) == "mine")
+    #expect(try FileManager.default.contentsOfDirectory(atPath: folder.url.path) == ["config"])
+}
