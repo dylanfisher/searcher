@@ -3,12 +3,45 @@ import Foundation
 
 /// The sidebar's Locations, app-wide: the mounted volumes Finder's default sidebar lists, read
 /// off the main thread when the list is made and again after each mount and unmount
-/// `VolumeEvents` reports, so every window's sidebar follows them
-/// (docs/decisions/0108-sidebar-locations.md).
+/// `VolumeEvents` reports, so every window's sidebar follows them. A server's shares are listed
+/// as one row for the server (docs/decisions/0108-sidebar-locations.md,
+/// docs/decisions/0114-server-location.md).
 @MainActor
 public final class SidebarVolumes {
     /// The volumes listed, in the mount table's order.
     public private(set) var volumes: [SidebarVolume] = []
+
+    /// A row of Locations: a volume of its own, or a server for the shares it has listed.
+    public enum Row: Equatable, Sendable {
+        case volume(SidebarVolume)
+        /// A server, with its shares in the mount table's order.
+        case server(Server, shares: [SidebarVolume])
+    }
+
+    /// The rows `volumes` gives, in the mount table's order: a row per server where its first
+    /// share is, and none for its shares, and a row for every other volume.
+    public var rows: [Row] {
+        var rows: [Row] = []
+        var serverRows: [Server: Int] = [:]
+        for volume in volumes {
+            guard let server = volume.server else {
+                rows.append(.volume(volume))
+                continue
+            }
+            if let index = serverRows[server], case .server(let first, let shares) = rows[index] {
+                rows[index] = .server(first, shares: shares + [volume])
+            } else {
+                serverRows[server] = rows.count
+                rows.append(.server(server, shares: [volume]))
+            }
+        }
+        return rows
+    }
+
+    /// The listed shares of `server`, in the mount table's order.
+    public func shares(of server: Server) -> [SidebarVolume] {
+        volumes.filter { $0.server == server }
+    }
     /// The mount points of the volumes being ejected now, and of those ejected that a read
     /// still lists or hasn't been made without yet, so a row's eject button doesn't come back
     /// for a volume that is gone.
@@ -19,7 +52,7 @@ public final class SidebarVolumes {
     /// read has landed since.
     private var ejected: Set<String> = []
     private let read: @Sendable () -> [SidebarVolume]
-    private let eject: @Sendable (SidebarVolume) throws(SidebarVolume.EjectFailure) -> Void
+    private let ejector: @Sendable (SidebarVolume) throws(SidebarVolume.EjectFailure) -> Void
     /// Counts reads started, so a read that lands after a newer one started is dropped.
     private var readCount = 0
     /// Counts reads that came back, dropped ones included, so a test can tell one has landed.
@@ -43,7 +76,7 @@ public final class SidebarVolumes {
         eject: @escaping @Sendable (SidebarVolume) throws(SidebarVolume.EjectFailure) -> Void
     ) {
         self.read = read
-        self.eject = eject
+        self.ejector = eject
         VolumeEvents.add(self)
         refresh()
     }
@@ -99,11 +132,11 @@ public final class SidebarVolumes {
         running.insert(volume.mountPoint)
         notify()
         VolumeEvents.willEject(at: volume.mountPoint)
-        let eject = eject
+        let ejector = ejector
         let failure: SidebarVolume.EjectFailure?
         do throws(SidebarVolume.EjectFailure) {
             try await BlockingCallThread.run { () throws(SidebarVolume.EjectFailure) in
-                try eject(volume)
+                try ejector(volume)
             }
             failure = nil
         } catch {
@@ -120,5 +153,31 @@ public final class SidebarVolumes {
             VolumeEvents.ejectFailed(at: volume.mountPoint)
             throw failure
         }
+    }
+
+    /// Ejects every listed share of `server` at once, each as `eject(_:)` ejects a volume: with
+    /// its own `VolumeEvents.willEject` and, when the system refuses it, `ejectFailed`, and left
+    /// alone while an eject of it already runs. Returns once every one has answered.
+    ///
+    /// - Throws: The shares the system didn't eject, each with its reason; the others are gone.
+    public func ejectServer(_ server: Server) async throws(SidebarVolume.ServerEjectFailure) {
+        let shares = shares(of: server)
+        let ejects = shares.map { share in
+            Task { () -> SidebarVolume.EjectFailure? in
+                do throws(SidebarVolume.EjectFailure) {
+                    try await self.eject(share)
+                    return nil
+                } catch {
+                    return error
+                }
+            }
+        }
+        var refusals: [SidebarVolume.ServerEjectFailure.Refusal] = []
+        for (share, eject) in zip(shares, ejects) {
+            if let failure = await eject.value {
+                refusals.append(.init(name: share.name, reason: failure.reason))
+            }
+        }
+        if !refusals.isEmpty { throw SidebarVolume.ServerEjectFailure(refusals: refusals) }
     }
 }

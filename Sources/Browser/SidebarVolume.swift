@@ -17,6 +17,9 @@ public struct SidebarVolume: Equatable, Sendable {
     public let isRootFileSystem: Bool
     /// Whether it is on an internal bus; nil when the system doesn't say, as for a disk image.
     public let isInternal: Bool?
+    /// The server it is a share of (`VolumeIdentity.server`); nil for any other volume, which
+    /// keeps its own row (docs/decisions/0114-server-location.md).
+    public let server: Server?
     public let isRemovable: Bool
     public let isEjectable: Bool
     /// Whether ejecting it ejects its whole disk: it is on this machine and no other volume is
@@ -26,7 +29,7 @@ public struct SidebarVolume: Equatable, Sendable {
     public init(
         mountPoint: String, name: String, kind: VolumeKind, isBrowsable: Bool = true,
         isRootFileSystem: Bool = false, isInternal: Bool? = nil, isRemovable: Bool = false,
-        isEjectable: Bool = false, ejectsDisk: Bool = false
+        isEjectable: Bool = false, ejectsDisk: Bool = false, server: Server? = nil
     ) {
         self.mountPoint = mountPoint
         self.name = name
@@ -37,6 +40,7 @@ public struct SidebarVolume: Equatable, Sendable {
         self.isRemovable = isRemovable
         self.isEjectable = isEjectable
         self.ejectsDisk = ejectsDisk
+        self.server = server
     }
 
     /// Whether the volume can be ejected or unmounted from the sidebar, as Finder's eject button
@@ -70,7 +74,7 @@ public struct SidebarVolume: Equatable, Sendable {
             guard volume.kind == .local, volume.isBrowsable else {
                 return SidebarVolume(
                     mountPoint: volume.mountPoint, name: name, kind: volume.kind,
-                    isBrowsable: volume.isBrowsable)
+                    isBrowsable: volume.isBrowsable, server: volume.server)
             }
             let url = URL(fileURLWithPath: volume.mountPoint, isDirectory: true)
             let keys: Set<URLResourceKey> = [
@@ -164,6 +168,27 @@ public struct SidebarVolume: Equatable, Sendable {
 
         public init(reason: String) {
             self.reason = reason
+        }
+    }
+
+    /// Which of a server's shares weren't ejected, in the shares' order, each with the system's
+    /// reason.
+    public struct ServerEjectFailure: Error, Equatable {
+        public let refusals: [Refusal]
+
+        public struct Refusal: Equatable, Sendable {
+            /// The share's name, as its row would show it.
+            public let name: String
+            public let reason: String
+
+            public init(name: String, reason: String) {
+                self.name = name
+                self.reason = reason
+            }
+        }
+
+        public init(refusals: [Refusal]) {
+            self.refusals = refusals
         }
     }
 

@@ -109,6 +109,12 @@ hand before the step that builds it.
   which only a restore past its cap can show. Paste and Move Items Here decide their folder
   after `destination(in:)` opens a column waiting for the keys, so ⌘V right after an arrow onto
   a share pastes into it, as for a folder.
+- **Decided while building 7e.** `SidebarVolume` carries its `server`, and `SidebarVolumes`
+  keeps `volumes` as the flat list, so a share row's Eject still finds its share there, and
+  gives the grouped `rows` from it. The sidebar's open callback takes a `Location`, a mount
+  point's folder or a server. A share already being ejected is left to that eject, as 0108's
+  rule has it, and isn't counted as refused. Three or more refused shares are listed as
+  "“a”, “b”, and “c”", with the serial comma of US English.
 - **Column view.** The server is a column, its rows the shares. A pane at a server shows that
   one column; selecting a share opens the share's column right of it. A trail carries
   `serverRoot: Server?`, and when set, a column for the server comes before its first column.

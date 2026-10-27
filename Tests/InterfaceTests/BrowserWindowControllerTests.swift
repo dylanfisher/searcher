@@ -2566,8 +2566,42 @@ extension PressFixture {
 @MainActor @Test func aVolumeOpenedFromTheSidebarShowsInTheFocusedPane() async throws {
     let fixture = try await Fixture()
 
-    fixture.controller.sidebar.openVolume("/root/docs")
+    fixture.controller.sidebar.openLocation(Location(path: "/root/docs"))
 
     #expect(fixture.tab.focusedPane.location.path == "/root/docs")
     await settle { fixture.tab.focusedPane.state.isLoaded }
+}
+
+/// A server's sidebar row shows its shares in the focused pane (0114-server-location.md). The
+/// pane is in list view: until SB.7d a column trail has no server column. The share icon is
+/// stubbed, as the share rows' tests stub it.
+@MainActor @Test func aServerOpenedFromTheSidebarShowsItsSharesInTheFocusedPane() async throws {
+    let settings = untouchedSettings()
+    let service = ListingService(
+        lister: StubLister(Fixture.folders),
+        mounts: StubMounts([mountedShare("main"), mountedShare("music")]).table())
+    let pane = Pane(
+        location: Location(path: "/root"), service: service, systemActions: StubSystemActions(),
+        settings: settings, isFocused: true)
+    let controller = BrowserWindowController(
+        workspace: Workspace(tab: Tab(pane: pane)), workspaces: WorkspaceList(),
+        favorites: Favorites(settings: settings), volumes: StubSidebarVolumes().list(),
+        settings: settings,
+        takePaneController: { _, pane in
+            PaneViewController(
+                pane: pane,
+                iconCache: TypeIconCache(makeIcon: { _ in NSImage() }, readIcons: { _ in [:] }),
+                formatter: .init(), tableView: ListingTableView(), monitorsFolders: false)
+        })
+    let window = try #require(controller.window)
+    window.contentView?.layoutSubtreeIfNeeded()
+    await settle { pane.state.isLoaded }
+    #expect(pane.viewMode == .list)
+
+    controller.sidebar.openLocation(.server(testServer))
+
+    #expect(pane.location == .server(testServer))
+    await settle { pane.state.isLoaded }
+    let listing = try #require(pane.state.listing)
+    #expect((0..<listing.count).map { listing[$0].name } == ["main", "music"])
 }

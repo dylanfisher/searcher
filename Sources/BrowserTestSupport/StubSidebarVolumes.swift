@@ -3,9 +3,9 @@ import Browser
 import Foundation
 
 /// The volumes a stub `SidebarVolumes` reads, which a test changes between reads, and the
-/// ejects it was asked for, which succeed until `fail(with:)` and wait while `holdEjects()`
-/// holds them. Records whether each read and
-/// eject ran on a `BlockingCallThread`. Nothing real is read or ejected.
+/// ejects it was asked for, which succeed until `fail(with:)` or `fail(_:with:)` and wait while
+/// `holdEjects()` holds them. Records whether each read and eject ran on a `BlockingCallThread`.
+/// Nothing real is read or ejected.
 public final class StubSidebarVolumes: @unchecked Sendable {
     // `lock` guards everything below it.
     private let lock = NSLock()
@@ -13,6 +13,7 @@ public final class StubSidebarVolumes: @unchecked Sendable {
     private var storedReadThreads: [Bool] = []
     private var storedEjects: [(mountPoint: String, onBlockingThread: Bool)] = []
     private var failure: SidebarVolume.EjectFailure?
+    private var failures: [String: SidebarVolume.EjectFailure] = [:]
     private var holdsEjects = false
     private var heldEjects = 0
     private let ejectGate = DispatchSemaphore(value: 0)
@@ -29,6 +30,11 @@ public final class StubSidebarVolumes: @unchecked Sendable {
     /// Fails every eject from now on with `reason`.
     public func fail(with reason: String) {
         lock.withLock { failure = SidebarVolume.EjectFailure(reason: reason) }
+    }
+
+    /// Fails every eject of the volume mounted at `mountPoint` from now on with `reason`.
+    public func fail(_ mountPoint: String, with reason: String) {
+        lock.withLock { failures[mountPoint] = SidebarVolume.EjectFailure(reason: reason) }
     }
 
     /// Makes every eject from now on wait until `releaseEjects()`.
@@ -73,7 +79,7 @@ public final class StubSidebarVolumes: @unchecked Sendable {
         let (failure, held) = lock.withLock {
             storedEjects.append((volume.mountPoint, BlockingCallThread.isCurrent))
             if holdsEjects { heldEjects += 1 }
-            return (failure, holdsEjects)
+            return (failures[volume.mountPoint] ?? failure, holdsEjects)
         }
         if held { ejectGate.wait() }
         if let failure { throw failure }

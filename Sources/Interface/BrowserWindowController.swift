@@ -218,9 +218,9 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
                 return workspace.selectedTab.focusedPane
             }
         }
-        sidebar.openVolume = { [weak self] path in
+        sidebar.openLocation = { [weak self] location in
             guard let self, !isClosed, !workspace.isClosed else { return }
-            workspace.selectedTab.focusedPane.navigate(to: Location(path: path))
+            workspace.selectedTab.focusedPane.navigate(to: location)
         }
         sidebar.outlineView.passKey = { [weak self] event in
             guard let self, !isClosed, !workspace.isClosed else { return false }
