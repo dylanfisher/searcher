@@ -911,15 +911,14 @@ func leftOrCommandUpMovesToTheParentsColumnAndDoesNothingAtTheRoot(chord: KeyCho
     try press(KeyChord("1", modifiers: [.control, .option]), on: pane)
     await settle { trail(pane).columns[2].pane.state.names == ["x.txt", "sub"] }
     #expect(trail(pane).columns[1].pane.sortAscending)
-    // So do Reverse Sort Direction and Sort by Next Column.
+    // So does Reverse Sort Direction. A column sorts by Name only, so Sort by Next Column and
+    // the other sort keys do nothing.
     try press(KeyChord("p", modifiers: [.option, .command, .shift]), on: pane)
     await settle { trail(pane).columns[2].pane.state.names == ["sub", "x.txt"] }
     try press(KeyChord("p", modifiers: [.option, .command]), on: pane)
-    await settle { trail(pane).columns[2].pane.sortColumn == .size }
-    #expect(trail(pane).columns[1].pane.sortColumn == .name)
+    try press(KeyChord("2", modifiers: [.control, .option]), on: pane)
+    #expect(trail(pane).columns.allSatisfy { $0.pane.sortColumn == .name })
     #expect(trail(pane).columns[1].pane.sortAscending)
-    try press(KeyChord("1", modifiers: [.control, .option]), on: pane)
-    await settle { trail(pane).columns[2].pane.state.names == ["sub", "x.txt"] }
     try press(KeyChord("1", modifiers: [.control, .option]), on: pane)
     await settle { trail(pane).columns[2].pane.state.names == ["x.txt", "sub"] }
 
@@ -1638,21 +1637,28 @@ func commandUTwiceAfterLeftAndDownPutsTheKeysBackOnColumnTwosFile(listsBetween: 
     #expect(changes == 1)
 }
 
-@MainActor @Test func backToAFolderWithNoColumnKeepsTheFocusedColumnsSort() async throws {
+/// A navigation keeps the columns both trails show, each in its own sort; the columns it makes
+/// open by Name ascending, whatever the focused column sorted by.
+@MainActor @Test func backToAFolderWithNoColumnOpensItByNameAndKeepsTheKeptColumnsSorts()
+    async throws
+{
     let fixture = await columnPane(at: "/r/docs")
     let pane = fixture.pane
+    trail(pane).columns[1].pane.setSort(.name, ascending: false)
     pane.navigate(to: Location(path: "/r/other"))
     await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
-    try press(KeyChord("2", modifiers: [.control, .option]), on: pane)
-    #expect(trail(pane).focused.pane.sortColumn == .size)
+    try press(KeyChord("1", modifiers: [.control, .option]), on: pane)
+    #expect(trail(pane).focused.pane.location == Location(path: "/r/other"))
+    #expect(!trail(pane).focused.pane.sortAscending)
 
     try press(KeyChord("[", modifiers: .command), on: pane)
 
     #expect(paths(pane) == ["/", "/r", "/r/docs"])
-    #expect(trail(pane).focused.pane.sortColumn == .size)
-    #expect(trail(pane).focused.pane.load?.column == .size)
-    // The columns kept above it take the sort too.
-    #expect(trail(pane).columns.allSatisfy { $0.pane.sortColumn == .size })
+    #expect(trail(pane).focused.pane.sortColumn == .name)
+    #expect(trail(pane).focused.pane.sortAscending)
+    #expect(trail(pane).focused.pane.load?.ascending == true)
+    #expect(trail(pane).columns[0].pane.sortAscending)
+    #expect(!trail(pane).columns[1].pane.sortAscending)
 }
 
 @MainActor @Test func thePaneHoldsNoRowsInColumnModeAndSortsNothingOnAToggle() async throws {
@@ -2157,20 +2163,25 @@ private func keyedPane(
     #expect(clock.waitingSleeps == 0)
 }
 
-/// A kept folder whose rows are kept in another sort than the column's would make the new
-/// column sort them before it shows any, so the press waits for the pause as with nothing kept.
+/// A kept folder whose rows are kept in another sort than Name ascending, which a column opens
+/// in, would make the new column sort them before it shows any, so the press waits for the
+/// pause as with nothing kept.
 @MainActor @Test func aKeptFolderInAnotherArrangementStillWaits() async throws {
     let clock = ManualClock()
     let fixture = try await keyedPane(
-        clock: clock, keeping: ["f1"], volume: ListingService.listerVolume)
+        clock: clock, keeping: [], volume: ListingService.listerVolume)
     let pane = fixture.pane
     let first = trail(pane).columns[1].pane
-    first.setSort(.name, ascending: false)
-    await settle { first.state.listing.map(first.isArranged) == true }
-    #expect(first.selection.cursor == ExactName("f0"))
+    // `f1`'s column sorted Z to A keeps its rows in that sort once it closes.
+    try click("f1", in: first)
+    await settle { trail(pane).columns.last?.pane.state.isLoaded == true }
+    let f1 = try #require(trail(pane).columns.last?.pane)
+    f1.setSort(.name, ascending: false)
+    await settle { f1.state.listing.map(f1.isArranged) == true }
+    try click("f0", in: first)
+    await settle { trail(pane).columns.last?.pane.state.isLoaded == true }
 
-    // Sorted Z to A, `f1` is above `f0`.
-    try press(KeyChord(.up), on: pane)
+    try press(KeyChord(.down), on: pane)
 
     #expect(first.selection.cursor == ExactName("f1"))
     #expect(paths(pane) == ["/", "/k"])

@@ -19,7 +19,8 @@ location follows the focused column ([0041](0041-column-model.md)).
   remove the pane in the same call. The rest (focus, move, resize, divider drag, equalize, zoom)
   keep the set of leaves and pass straight through.
 - **Split** makes the new pane at the focused pane's location and view mode, in the sort of the
-  pane keys act on, with the focused pane's service, settings and system actions. In column mode
+  pane keys act on (amended 2026-10-26: in the focused pane's list sort; its columns open by
+  Name ascending, see [0041](0041-column-model.md)), with the focused pane's service, settings and system actions. In column mode
   the location is the focused column's folder, so the new pane's trail starts there with one
   column. `Pane.init` takes the view mode, so a column-mode pane starts with its trail and never
   starts a list load of its own. Load priority isn't touched; M3.4 owns it.

@@ -61,7 +61,16 @@ thread apply as they do to a sort change ([0025](0025-sort-off-main.md),
   ([0025](0025-sort-off-main.md)). Finder's Opt-Cmd-P shows its path bar; no command here had
   it. As defaults they can be changed in Settings
   ([0106](0106-primary-and-alternate-shortcuts.md)); a stored shortcut that names one of the
-  new chords keeps it, and the default loses it.)
+  new chords keeps it, and the default loses it.) (Amended 2026-10-26, Dylan: "column view
+  should always default to order name ascending unless you change the order for that particular
+  column. column and other views should only ever be sortable by the information visible (in
+  column view that's only name), in list view that's any of the headers present": a view sorts
+  only by a column it shows. A column of column view shows names only, so there Sort by Size,
+  Date Modified and Kind and Sort by Next Column do nothing and their View menu items are off;
+  Sort by Name and Reverse Sort Direction sort the focused column as before. A list shows all
+  four headers, none of which can be hidden, so every key works there. The View menu checks the
+  item of the column the focused pane, or the focused column, sorts by. See
+  [0041](0041-column-model.md) for the sort a column opens in.)
 - **Cmd-Shift-.** AppKit applies Shift to punctuation, and where "." sits depends on the
   layout. On a US keyboard the period key with Shift types ">"; on a French AZERTY one, "." is
   Shift on the ";" key. A shifted punctuation key therefore has two candidate chords

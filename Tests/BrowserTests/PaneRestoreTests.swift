@@ -113,6 +113,30 @@ private func restored(
     pane.close()
 }
 
+/// The saved sort is the list's: a restored column pane's columns open by Name ascending, and the
+/// list comes back in the saved sort. Its state saves that sort, not a column's.
+@MainActor @Test func restoredColumnPaneSortsItsColumnsByNameAndKeepsTheListsSort() async throws {
+    let lister = GatedLister([
+        "/": .batches([[folder("r")]]),
+        "/r": .batches([[folder("docs"), file("a.txt")]]),
+    ])
+    lister.releaseAll()
+    let pane = restored(
+        saved("/r", viewMode: .column, sortedBy: .size, ascending: false), lister: lister)
+    let tab = Tab(pane: pane)
+    let trail = try #require(pane.columnTrail)
+    await settle { trail.columns.allSatisfy { $0.pane.state.isLoaded } }
+
+    #expect(trail.columns.allSatisfy { $0.pane.sortColumn == .name && $0.pane.sortAscending })
+    trail.focused.pane.setSort(.name, ascending: false)
+    let state = try #require(tab.state.panes[tab.layout.focused])
+    #expect(state.sortColumn == .size && !state.sortAscending)
+
+    pane.setViewMode(.list)
+    #expect(pane.sortColumn == .size && !pane.sortAscending)
+    tab.close()
+}
+
 @MainActor @Test func restoredTabHasTheSavedLayoutAndAPaneForEachLeaf() throws {
     var layout = Layout()
     let first = layout.focused

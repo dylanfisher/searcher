@@ -729,6 +729,98 @@ private final class WindowFixture {
     #expect(asList.state == .off && asColumns.state == .on)
 }
 
+/// A View menu item for `command`, as `MainMenuBuilder` makes one.
+@MainActor
+private func menuItem(_ command: Command) -> NSMenuItem {
+    let item = NSMenuItem(
+        title: command.title, action: #selector(ListingTableView.runMenuCommand(_:)),
+        keyEquivalent: "")
+    item.representedObject = command.id
+    return item
+}
+
+/// Ctrl-Opt-1 on `docs`'s column sorts it Z to A; the column it opens starts A to Z.
+@MainActor @Test func aColumnOpenedFromAReversedColumnSortsByNameAscending() async throws {
+    let setup = await WindowFixture()
+    try setup.press("3", .command)
+    await setup.waitForColumns()
+    let root = try #require(setup.pane.columnTrail?.focused.pane)
+    let table = try #require(setup.controller.columnViewController.focusedController?.tableView)
+
+    try setup.press("1", [.control, .option])
+    await settle { rowNames(table) == ["docs", "b.txt", "a.txt"] }
+    try setup.press(NSDownArrowFunctionKey)
+    #expect(root.selection.cursor == ExactName("docs"))
+    await settle { setup.pane.columnTrail?.columns.count == 3 }
+    await setup.waitForColumns()
+    try setup.press(NSRightArrowFunctionKey)
+
+    let docs = try #require(setup.pane.columnTrail?.focused.pane)
+    #expect(docs.location == Location(path: "/root/docs"))
+    #expect(docs.sortColumn == .name && docs.sortAscending)
+    #expect(!root.sortAscending)
+}
+
+/// A column shows names only, so it sorts by Name only: the other sort keys and Sort by Next
+/// Column do nothing there and their items are off. The list sorts by any of its headers.
+@MainActor @Test func columnsSortByNameOnlyAndTheListByEveryHeader() async throws {
+    let setup = await WindowFixture()
+    let name = menuItem(ViewCommands.sortByName)
+    let reverse = menuItem(ViewCommands.reverseSortDirection)
+    let others = [
+        ViewCommands.sortBySize, ViewCommands.sortByDateModified, ViewCommands.sortByKind,
+        ViewCommands.sortByNextColumn,
+    ].map(menuItem)
+    for item in [name, reverse] + others {
+        #expect(setup.keyTable.validateMenuItem(item), "\(item.title)")
+    }
+    #expect(name.state == .on && others[0].state == .off)
+
+    try setup.press("3", .command)
+    await setup.waitForColumns()
+    let column = try #require(setup.pane.columnTrail?.focused.pane)
+    for key in ["2", "3", "4"] { try setup.press(key, [.control, .option]) }
+    try setup.press("p", [.option, .command])
+
+    #expect(column.sortColumn == .name && column.sortAscending)
+    #expect(setup.keyTable.validateMenuItem(name))
+    #expect(setup.keyTable.validateMenuItem(reverse))
+    for item in others {
+        #expect(!setup.keyTable.validateMenuItem(item), "\(item.title)")
+    }
+    #expect(name.state == .on)
+    try setup.press("p", [.option, .command, .shift])
+    #expect(column.sortColumn == .name && !column.sortAscending)
+
+    try setup.press("1", .command)
+    await settle { setup.pane.state.isLoaded }
+    try setup.press("2", [.control, .option])
+    #expect(setup.pane.sortColumn == .size)
+    for item in [name] + others {
+        #expect(setup.keyTable.validateMenuItem(item), "\(item.title)")
+    }
+    #expect(others[0].state == .on && name.state == .off)
+}
+
+/// The list keeps its own sort while the pane shows columns, whatever the columns sort by.
+@MainActor @Test func theListsSortSurvivesAVisitToColumnView() async throws {
+    let setup = await WindowFixture()
+    try setup.press("2", [.control, .option])
+    #expect(setup.pane.sortColumn == .size && !setup.pane.sortAscending)
+
+    try setup.press("3", .command)
+    await setup.waitForColumns()
+    let trail = try #require(setup.pane.columnTrail)
+    #expect(trail.columns.allSatisfy { $0.pane.sortColumn == .name && $0.pane.sortAscending })
+    try setup.press("1", [.control, .option])
+    #expect(!trail.focused.pane.sortAscending)
+    try setup.press("1", .command)
+    await settle { setup.pane.state.isLoaded }
+
+    #expect(setup.pane.sortColumn == .size && !setup.pane.sortAscending)
+    #expect(setup.pane.state.listing?.column == .size)
+}
+
 @MainActor @Test func aFileCreatedInAColumnsFolderShowsUpInThatColumn() async throws {
     let folder = try TemporaryFolder("PaneViewControllerTests")
     let url = folder.url
