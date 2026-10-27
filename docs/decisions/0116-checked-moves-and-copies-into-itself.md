@@ -44,11 +44,16 @@ undo has no edge cases.
   copy and leaves the source as it is. A copy that is gone fails the item with `sourceGone` on
   the destination and records nothing. The copy isn't undone in either case. The operations
   panel says "“path” changed while it was copied, so it was kept, and the copy may be older."
+  A source someone else deleted during the copy fails with `sourceGone` on the source's path
+  instead, and its copy stays, recorded the same way.
 - **Every copy-then-delete.** The plain move, the replace (stamp before staging, compare after
   the staged item is in place and the staging folder is gone), and an undo's move back across
   volumes all go through `deleteMovedSource`.
-- **Cancel.** A cancel stops the first stamp, and the item ends cancelled with nothing written.
-  The second stamp ignores a cancel, as 0065 lets a finished copy's delete finish.
+- **Cancel.** A cancel stops either stamp. During the first, the item ends cancelled with
+  nothing written. During the second, the source and the copy both stay, and the operation ends
+  cancelled with the copy recorded as made, so undo trashes it; a cancel after a large folder's
+  copy then doesn't wait for a full walk and a delete. Once the second stamp matches, the delete
+  runs to its end, as 0065 lets a finished copy's delete finish.
 - **Into itself by identity.** After the path check, `OperationPlan.make` asks
   `OperationPlan.source(holding:among:)`: `realpath` resolves the destination folder, the folder
   and each folder above it up to `/` is `lstat`ed, and a source is refused with
@@ -81,7 +86,12 @@ A move to another volume walks each source twice more, before and after its copy
 thread: one `lstat` per item for a file, an `fts` walk for a folder, so a 100,000-item folder
 costs two extra walks besides the copy. A stalled share blocks the walk as it blocks the copy.
 A change that keeps an item's size and restores its modification time, made in place, isn't
-seen. A folder's `.DS_Store` rewritten by Finder while the folder is copied keeps the folder.
+seen. A write made between the second stamp and the end of `deletePermanently`'s walk is still
+lost; closing that window would take a lock on the source, and macOS has none that every app
+and every volume honors. On a slow share each stamp is a serial walk, one `lstat` per item, so moving a
+100,000-item folder adds up to 200,000 round trips to the copy's own; how many the SMB client
+answers from its cache is *(unverified)*. A folder's `.DS_Store` rewritten by Finder while the
+folder is copied keeps the folder.
 The copy-exists check finds an item at the destination, not a complete copy; `FileCopier`
 returning without an error is what says the copy is complete. Whether Finder checks a source
 before deleting it is *(unverified)*. That materializing a dataless iCloud file for a copy

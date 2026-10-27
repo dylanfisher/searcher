@@ -40,6 +40,8 @@ final class FakeFiles: @unchecked Sendable {
     private var identityFailures: [String: FileOperationError] = [:]
     private var lost: Set<String> = []
     private var changedByCopy: Set<String> = []
+    private var deletedByCopy: Set<String> = []
+    private var deleted: Set<String> = []
     /// How many times each path has changed, which its stamp reads.
     private var versions: [String: Int64] = [:]
 
@@ -149,6 +151,12 @@ final class FakeFiles: @unchecked Sendable {
     /// would, so its stamp differs from the one read before the copy.
     func changeDuringCopy(of source: String) {
         condition.withLock { _ = changedByCopy.insert(source) }
+    }
+
+    /// The copy of `source` deletes it as the copy finishes, as another app would, so its
+    /// stamp finds nothing there.
+    func deleteDuringCopy(of source: String) {
+        condition.withLock { _ = deletedByCopy.insert(source) }
     }
 
     /// Takes away an item `place` put at `path`.
@@ -280,8 +288,12 @@ final class FakeFiles: @unchecked Sendable {
                     return identity ?? Self.identity
                 }
             },
-            stamp: { path, _ in
-                let version = self.condition.withLock { self.versions[path] ?? 0 }
+            stamp: { path, isCancelled in
+                if isCancelled() { throw CancellationError() }
+                let (version, isDeleted) = self.condition.withLock {
+                    (self.versions[path] ?? 0, self.deleted.contains(path))
+                }
+                if isDeleted { return nil }
                 return FileOperationQueue.SourceStamp(items: [
                     path: .read(device: 1, inode: 1, type: 0, size: 10, modified: version)
                 ])
@@ -317,6 +329,7 @@ final class FakeFiles: @unchecked Sendable {
         events.append("copied \(source) to \(destination)")
         condition.withLock {
             if changedByCopy.contains(source) { versions[source, default: 0] += 1 }
+            if deletedByCopy.contains(source) { deleted.insert(source) }
         }
         return CopyProgress(bytes: 10, files: 1)
     }
@@ -626,6 +639,43 @@ func pause() async throws {
     let state = try #require(watcher.state(of: id))
     #expect(state.errors == [FileOperationError(reason: .sourceGone, path: "/A/a", errno: ENOENT)])
     #expect(state.record.changes.isEmpty)
+}
+
+/// A source someone else deleted while it was copied is reported gone, not changed, and its
+/// copy stays.
+@Test func aCrossVolumeMoveReportsASourceDeletedWhileItWasCopiedAsGone() async throws {
+    let files = FakeFiles(releasingAll: true)
+    files.deleteDuringCopy(of: "/S/a")
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher)
+
+    let id = await enqueue(queue, .move(["/S/a"], into: "/A"), watcher)
+
+    #expect(await watcher.waitUntilFinished(id))
+    #expect(!files.events.all.contains { $0.hasPrefix("delete") })
+    let state = try #require(watcher.state(of: id))
+    #expect(state.errors == [FileOperationError(reason: .sourceGone, path: "/S/a", errno: ENOENT)])
+    #expect(state.record.changes == [.created("/A/a", from: .copy(of: "/S/a"))])
+}
+
+/// A cancel that arrives as the copy returns stops the check of the source, so neither the
+/// source nor the copy is deleted, and the copy is recorded as made, for an undo to trash.
+@Test func aCancelAsACrossVolumeMovesCopyReturnsKeepsTheSourceAndTheCopy() async throws {
+    let files = FakeFiles()
+    files.finishDespiteCancel(of: "/S/a")
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher)
+
+    let id = await enqueue(queue, .move(["/S/a"], into: "/A"), watcher)
+    #expect(await files.events.wait { $0.contains("copy /S/a") })
+    await queue.cancel(id)
+
+    #expect(await watcher.waitUntilFinished(id))
+    #expect(files.events.all.contains("copied /S/a to /A/a"))
+    #expect(!files.events.all.contains { $0.hasPrefix("delete") })
+    let state = try #require(watcher.state(of: id))
+    #expect(state.phase == .cancelled(leftBehind: nil))
+    #expect(state.record.changes == [.created("/A/a", from: .copy(of: "/S/a"))])
 }
 
 @Test func aVolumeErrorStopsTheItemsLeftAfterIt() async throws {
