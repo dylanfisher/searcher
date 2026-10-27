@@ -406,6 +406,165 @@ private func editJSON(_ data: Data, _ edit: (inout [String: Any]) throws -> Void
     }
 }
 
+// MARK: Servers
+
+/// The server at `host`.
+private func server(_ host: String) throws -> Location {
+    .server(try #require(Server(host: host)))
+}
+
+/// A one-pane tab at the server `Hal9000._SMB._tcp.Local`, spelled so, with a server and a
+/// folder in its history and widths, one server an IPv6 address.
+private func serverTab() throws -> TabState {
+    let layout = Layout()
+    let hal = try server("Hal9000._SMB._tcp.Local")
+    let ipv6 = try server("fe80::1%en0")
+    var widths = ColumnWidths()
+    widths.set(260, of: ipv6)
+    widths.set(312, of: Location(path: "/Volumes/music"))
+    widths.set(200, of: hal)
+    return TabState(
+        layout: layout,
+        panes: [
+            layout.focused: TabState.PaneState(
+                location: hal, viewMode: .column,
+                history: History(
+                    back: [
+                        History.Entry(location: ipv6, selected: ExactName("export")),
+                        History.Entry(location: Location(path: "/Volumes/music"), selected: nil),
+                    ],
+                    forward: [History.Entry(location: ipv6, selected: nil)]),
+                selection: [ExactName("music")], cursor: ExactName("music"), sortColumn: .name,
+                sortAscending: true, columnWidths: widths)
+        ])
+}
+
+@Test func aServerPaneItsHistoryAndItsWidthsRoundTripWithTheHostsSpelling() async throws {
+    let folder = try TemporaryFolder("WorkspaceStoreTests")
+    let saved = try workspace(tabs: [serverTab(), onePaneTab()])
+    let problems = EventLog<StoreProblem>()
+    let writer = store(folder, problems: problems)
+    await writer.save(saved)
+    await writer.flush()
+
+    let loaded = await store(folder, problems: problems).load()
+
+    #expect(loaded.workspaces == [saved.id: saved])
+    #expect(problems.all.isEmpty)
+    let pane = try #require(loaded.workspaces[saved.id]?.tabs[0].panes.values.first)
+    guard case .server(let hal) = pane.location else {
+        Issue.record("the pane isn't at a server: \(pane.location)")
+        return
+    }
+    #expect(hal.host == "Hal9000._SMB._tcp.Local")
+    #expect(hal.name == "Hal9000")
+    let back = pane.history.backEntries.map(\.location)
+    #expect(back == [try server("fe80::1%en0"), Location(path: "/Volumes/music")])
+    #expect(pane.columnWidths.folders == (try serverTab()).panes.values.first?.columnWidths.folders)
+    let text = try String(decoding: Data(contentsOf: file(of: saved.id, in: folder)), as: UTF8.self)
+    #expect(text.contains(#""server":"Hal9000._SMB._tcp.Local""#))
+    #expect(text.contains(#""server":"fe80::1%en0""#))
+}
+
+/// A folder stores only its `path`, as before servers, so a file an older build wrote is the
+/// same shape and loads unchanged.
+@Test func aFolderStoresOnlyItsPathAsBeforeServers() async throws {
+    let folder = try TemporaryFolder("WorkspaceStoreTests")
+    let saved = try workspace(tabs: [columnTab(someColumnWidths()), fourPaneTab()])
+    let writer = store(folder)
+    await writer.save(saved)
+    await writer.flush()
+
+    let text = try String(
+        decoding: Data(contentsOf: file(of: saved.id, in: folder)), as: UTF8.self)
+    #expect(!text.contains("server"))
+    #expect(text.contains(#""path":"\/Volumes\/music\/library""#))
+    let problems = EventLog<StoreProblem>()
+    #expect(await store(folder, problems: problems).load().workspaces == [saved.id: saved])
+    #expect(problems.all.isEmpty)
+}
+
+@Test func aPaneWithBothAPathAndAServerDiscardsTheWorkspace() async throws {
+    try await expectDiscarded { data in
+        try editJSON(data) { object in
+            var tabs = try #require(object["tabs"] as? [[String: Any]])
+            var panes = try #require(tabs[0]["panes"] as? [[String: Any]])
+            panes[0]["server"] = "nas.local"
+            tabs[0]["panes"] = panes
+            object["tabs"] = tabs
+        }
+    }
+}
+
+@Test func aPaneWithNeitherAPathNorAServerDiscardsTheWorkspace() async throws {
+    try await expectDiscarded { data in
+        try editJSON(data) { object in
+            var tabs = try #require(object["tabs"] as? [[String: Any]])
+            var panes = try #require(tabs[0]["panes"] as? [[String: Any]])
+            panes[0]["path"] = nil
+            tabs[0]["panes"] = panes
+            object["tabs"] = tabs
+        }
+    }
+}
+
+/// The JSON of a workspace whose first pane is at a server, with a history and widths, changed
+/// by `edit` of that pane, decoded without the store's comparison, which would catch a key the
+/// decode ignored.
+private func decodeServerWorkspace(editingPane edit: (inout [String: Any]) throws -> Void)
+    throws -> WorkspaceState
+{
+    let data = try JSONEncoder().encode(try workspace(tabs: [serverTab()]))
+    let edited = try editJSON(data) { object in
+        var tabs = try #require(object["tabs"] as? [[String: Any]])
+        var panes = try #require(tabs[0]["panes"] as? [[String: Any]])
+        try edit(&panes[0])
+        tabs[0]["panes"] = panes
+        object["tabs"] = tabs
+    }
+    return try JSONDecoder().decode(WorkspaceState.self, from: edited)
+}
+
+/// Each stored location, the pane's, a history entry's and a column width's, with both keys or
+/// neither, throws, which rejects the whole workspace.
+@Test(arguments: ["pane", "back", "forward", "width"], [true, false])
+func aLocationWithBothKeysOrNeitherFailsToDecode(place: String, both: Bool) throws {
+    _ = try decodeServerWorkspace(editingPane: { _ in })
+    func damage(_ location: inout [String: Any]) {
+        if both {
+            location["path"] = "/Volumes/music"
+            location["server"] = "nas.local"
+        } else {
+            location["path"] = nil
+            location["server"] = nil
+        }
+    }
+    #expect(throws: DecodingError.self) {
+        try decodeServerWorkspace { pane in
+            switch place {
+            case "pane":
+                damage(&pane)
+            case "width":
+                var widths = try #require(pane["columnWidths"] as? [String: Any])
+                var folders = try #require(widths["folders"] as? [[String: Any]])
+                damage(&folders[0])
+                widths["folders"] = folders
+                pane["columnWidths"] = widths
+            default:
+                var entries = try #require(pane[place] as? [[String: Any]])
+                damage(&entries[0])
+                pane[place] = entries
+            }
+        }
+    }
+}
+
+@Test func aStoredServerWhoseNameDoesntDecodeFailsToDecode() throws {
+    #expect(throws: DecodingError.self) {
+        try decodeServerWorkspace { $0["server"] = "Bad%ZZ._smb._tcp.local" }
+    }
+}
+
 // MARK: Column widths
 
 /// Widths set for two folders, the later one first in the trail, and for the preview.

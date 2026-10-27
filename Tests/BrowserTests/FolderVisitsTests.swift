@@ -49,6 +49,20 @@ private func count(_ path: String, in visits: FolderVisits) -> Int {
     #expect(count("/root", in: visits) == 2)
 }
 
+/// ⌘K doesn't list servers, so a visit to one leaves the history as it was
+/// (0114-server-location.md).
+@MainActor @Test func aVisitToAServerLeavesTheHistoryUnchanged() async throws {
+    let fixture = await PaneFixture.atServer()
+    let visits = FolderVisits(store: nil, now: { now })
+    visits.visit(Location(path: "/a"))
+    let before = visits.history
+
+    fixture.pane.countVisits(in: visits)
+    visits.visit(.server(PaneFixture.server))
+
+    #expect(visits.history == before)
+}
+
 @MainActor @Test func aPaneInColumnViewCountsTheFolderOfEachColumnItOpens() async throws {
     let fixture = await PaneFixture.loaded()
     let visits = FolderVisits(store: nil, now: { now })
@@ -74,8 +88,8 @@ private func count(_ path: String, in visits: FolderVisits) -> Int {
     let folder = try TemporaryFolder()
     let store = WorkspaceStore(roots: roots(folder), report: { _ in })
     var stored = FolderHistory()
-    stored.visit(Location(path: "/a"), at: now)
-    stored.visit(Location(path: "/b"), at: now)
+    stored.visit("/a", at: now)
+    stored.visit("/b", at: now)
     let visits = FolderVisits(store: store, now: { now })
 
     visits.visit(Location(path: "/a"))

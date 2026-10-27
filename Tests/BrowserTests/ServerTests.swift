@@ -90,3 +90,26 @@ func anyOtherHostIsNamedAsWritten(source: String, name: String) throws {
         Server(mountSource: "//dylan@HAL9000._smb._tcp.local/music")
             == Server(mountSource: "//guest@HAL9000._smb._tcp.local/main"))
 }
+
+@Test(arguments: [
+    "//dylan@HAL9000._smb._tcp.local/music", "//user@[fe80::1%en0]/share",
+    "//user@[2001:db8::1]:445/share", "nas.local:/export/home",
+    "//d@Dylan\\032Fisher\\226\\128\\153s\\032Mac._smb._tcp.local/s",
+])
+func aServerMadeFromItsHostIsTheServerOfItsSource(source: String) throws {
+    let server = try #require(Server(mountSource: source))
+    let again = try #require(Server(host: server.host))
+    #expect(again.host == server.host)
+    #expect(again.name == server.name)
+}
+
+@Test func aHostKeepsItsSpellingAndIsNamedByItsInstance() throws {
+    let server = try #require(Server(host: "Hal9000._SMB._tcp.Local"))
+    #expect(server.host == "Hal9000._SMB._tcp.Local")
+    #expect(server.name == "Hal9000")
+}
+
+@Test(arguments: ["", "Bad%ZZ._smb._tcp.local", "Big\\256._smb._tcp.local"])
+func aHostThatNamesNoServerHasNone(host: String) {
+    #expect(Server(host: host) == nil)
+}

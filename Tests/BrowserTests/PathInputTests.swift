@@ -22,6 +22,21 @@ private func expand(_ text: String) -> String? {
     #expect(expand(".") == "/Users/me/projects/app")
 }
 
+/// A server's shares are its folders in `/Volumes`, so a path typed at one starts there
+/// (0114-server-location.md).
+@Test func relativePathsAtAServerExpandAgainstVolumes() throws {
+    let server = Location.server(try #require(Server(host: "HAL9000._smb._tcp.local")))
+    func expand(_ text: String) -> String? {
+        PathInput.location(for: text, in: server, home: home)?.path
+    }
+
+    #expect(expand("music") == "/Volumes/music")
+    #expect(expand("music/Albums/..") == "/Volumes/music")
+    #expect(expand("..") == "/")
+    #expect(expand("~/Downloads") == "/Users/me/Downloads")
+    #expect(expand("/tmp") == "/tmp")
+}
+
 @Test func absolutePathsAreTidiedButKept() {
     #expect(expand("/tmp") == "/tmp")
     #expect(expand("/usr//local/./bin/") == "/usr/local/bin")
