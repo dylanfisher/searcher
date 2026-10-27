@@ -33,9 +33,10 @@ public final class ListingLoad: @unchecked Sendable {
     @MainActor private var cachedLookupEnded = false
     @MainActor private var cachedLookupWaiters: [CheckedContinuation<Void, Never>] = []
 
-    // `lock` guards `cancelled`, `storedVolume` and `storedPriority`.
+    // `lock` guards `cancelled`, `cancelHandlers`, `storedVolume` and `storedPriority`.
     private let lock = NSLock()
     private var cancelled = false
+    private var cancelHandlers: [@Sendable () -> Void] = []
     private var storedVolume: VolumeIdentity?
     private var storedPriority: Priority
 
@@ -60,13 +61,28 @@ public final class ListingLoad: @unchecked Sendable {
     /// Stops the load: a waiting load never starts, a running one stops at its next batch, and an
     /// update already on its way to the main actor is dropped there.
     public func cancel() {
-        lock.withLock { cancelled = true }
+        let handlers = lock.withLock {
+            cancelled = true
+            defer { cancelHandlers = [] }
+            return cancelHandlers
+        }
+        for handler in handlers { handler() }
         // Its slow and give-up timers stop with it, whether it ran, waits or is being placed.
         stall.finish {}
         // A cancelled load hands nothing more, so `cachedRowsHanded()` has nothing to wait for.
         DispatchQueue.main.async {
             MainActor.assumeIsolated { self.endCachedLookup() }
         }
+    }
+
+    /// Runs `handler` when the load is cancelled, at once if it has been, so work the load
+    /// waits on can stop with it.
+    func whenCancelled(_ handler: @escaping @Sendable () -> Void) {
+        let isCancelled = lock.withLock {
+            if !cancelled { cancelHandlers.append(handler) }
+            return cancelled
+        }
+        if isCancelled { handler() }
     }
 
     public var isCancelled: Bool {

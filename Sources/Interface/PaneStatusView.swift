@@ -2,8 +2,9 @@ import AppKit
 import Browser
 
 /// The end of a pane's path bar: a small spinner while the folder's listing is in flight, and a
-/// one-line note with the age of the rows shown while the folder is slow or offline, or, once it
-/// is listed, how many entries with unreadable names it leaves out.
+/// one-line note: the age of the rows shown while the folder is slow or offline; else why a
+/// server's rows may not be all its shares; else, once a folder is listed, how many entries with
+/// unreadable names it leaves out.
 ///
 /// The spinner waits `LoadTimeouts.spinnerDelay` on the injected clock, so a folder that lists
 /// quickly never flashes one. The note's age is reckoned from the injected date and written again
@@ -34,14 +35,22 @@ final class PaneStatusView: NSView {
     private var ageRefresh: Task<Void, Never>?
     /// The listing date `ageRefresh` was timed from.
     private var refreshedListedAt: Date?
-    /// The slow or offline state the note shows and the volume it names; nil for no note.
+    /// The slow, offline or server state the note shows and the volume or server it names; nil
+    /// for no note.
     private var shown: (state: ListingState, volumeName: String)?
     /// How many entries a loaded folder's listing left out for unreadable names; 0 in any other
-    /// state.
+    /// state, and at a server, whose rows are its shares.
     private var unreadableNames = 0
-    /// Whether the note last announced said offline rather than slow, and the volume it named;
-    /// nil since the note went away. A pane that stays slow or offline is announced once.
-    private var announced: (isOffline: Bool, volumeName: String)?
+    /// What the note last announced said, and the volume or server it named; nil since the note
+    /// went away. A pane that stays slow or offline, or keeps its notice, is announced once.
+    private var announced: (headline: Headline, volumeName: String)?
+
+    /// What a note says, but its age.
+    private enum Headline: Equatable {
+        case slow
+        case offline
+        case notice(ServerNotice)
+    }
 
     init<C: Clock<Duration>>(
         clock: C = ContinuousClock(), now: @escaping @MainActor () -> Date = { Date() }
@@ -82,7 +91,8 @@ final class PaneStatusView: NSView {
 
     /// Shows the spinner and note for `state` of the folder at `location`. A state that stays in
     /// flight from one call to the next keeps its spinner wait. `volumeName` names the volume
-    /// holding the folder, and a slow or offline state must have one.
+    /// holding the folder, and a slow or offline state must have one. A server's notice names
+    /// the server at `location`.
     func show(_ state: ListingState, location: Location, volumeName: String?) {
         spinner.setAccessibilityLabel(PaneStatusText.spinnerLabel(location.name))
         showSpinner(Self.isInFlight(state))
@@ -92,12 +102,19 @@ final class PaneStatusView: NSView {
                 preconditionFailure("a pane in \(state) has no volume name")
             }
             shown = (state, volumeName)
+        case .serverListed:
+            shown = (state, location.name)
         case .loading, .partial, .loaded, .cachedRefreshing, .denied, .failed, .notConnected:
             shown = nil
         }
-        // Only a full listing knows how many names it left out.
+        // Only a full listing of a folder knows how many names it left out; a server's rows are
+        // its shares, never read from a folder.
         unreadableNames =
-            if case .loaded(let listing) = state { listing.unreadableNameCount } else { 0 }
+            if case .loaded(let listing) = state, location.isFolder {
+                listing.unreadableNameCount
+            } else {
+                0
+            }
         showNote()
         announceNote()
     }
@@ -109,8 +126,15 @@ final class PaneStatusView: NSView {
             announced = nil
             return
         }
-        let isOffline = if case .offline = shown.state { true } else { false }
-        let headline = (isOffline: isOffline, volumeName: shown.volumeName)
+        let said: Headline =
+            switch shown.state {
+            case .offline: .offline
+            case .serverListed(_, let notice): .notice(notice)
+            case .loading, .partial, .loaded, .cachedRefreshing, .slow, .denied, .failed,
+                .notConnected:
+                .slow
+            }
+        let headline = (headline: said, volumeName: shown.volumeName)
         guard announced.map({ $0 != headline }) ?? true else { return }
         announced = headline
         postAccessibility(
@@ -127,7 +151,7 @@ final class PaneStatusView: NSView {
     static func isInFlight(_ state: ListingState) -> Bool {
         switch state {
         case .loading, .partial, .cachedRefreshing, .slow: true
-        case .loaded, .offline, .denied, .failed, .notConnected: false
+        case .loaded, .offline, .denied, .failed, .notConnected, .serverListed: false
         }
     }
 
@@ -156,6 +180,8 @@ final class PaneStatusView: NSView {
     }
 
     private func showNote() {
+        // In order: slow or offline, then a server's notice, both from `shown`, which holds one
+        // state; then a listed folder's unreadable names, which a server never has.
         let line =
             shown.flatMap { text.note(for: $0.state, volumeName: $0.volumeName, now: now()) }
             ?? PaneStatusText.unreadableNamesNote(unreadableNames)

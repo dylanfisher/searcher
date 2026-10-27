@@ -69,10 +69,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             let cache = ListingCache(store: store)
             self.cache = cache
             // The app's one mount table: the service lists servers from it, and the windows'
-            // drops read it (docs/decisions/0114-server-location.md).
+            // drops read it (docs/decisions/0114-server-location.md). A server's listing adds
+            // the shares it offers that aren't mounted (docs/decisions/0115-server-shares.md).
             service = ListingService(
                 cache: cache, thumbnails: ThumbnailService(), recentListings: RecentListings(),
-                mounts: MountTable())
+                mounts: MountTable(), shares: ServerShares())
             let sizeLogger = Logger(category: "sizes")
             let dropLogger = Logger(category: "folderSizes")
             folderSizes = FolderSizeService(
@@ -167,19 +168,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     /// Promised files still on their way when the app quits leave their hidden drop folders;
-    /// those are removed now.
+    /// those are removed now. A server's share list still running is ended, so its process
+    /// doesn't outlive the app (docs/decisions/0115-server-shares.md).
     func applicationWillTerminate(_ notification: Notification) {
         guard bench == nil else { return }
         windows.removeDropFoldersBeforeQuit()
+        service.shares?.stop()
     }
 
     /// Another app may have written the clipboard while the user was in it, which ends a cut,
-    /// so the cut rows stop looking dimmed; and the sidebar's favorites may have moved, been
-    /// renamed or come back, so they are looked for again.
+    /// so the cut rows stop looking dimmed; the sidebar's favorites may have moved, been
+    /// renamed or come back, so they are looked for again; and a server may offer a share it
+    /// didn't, so panes at a server list it again, past the share list's cached time.
     func applicationDidBecomeActive(_ notification: Notification) {
         guard bench == nil else { return }
         windows.clipboard.clipboardMayHaveChanged()
         windows.favorites.refresh()
+        service.shares?.relistServers()
     }
 
     /// A Dock click with no browser window open opens one. With a window open, even a minimized

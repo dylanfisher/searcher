@@ -57,11 +57,14 @@ public enum DualPaneCommands: CommandSet {
     }
 
     /// The type of `pane`'s one selected entry when it is a folder or a link; nil for any other
-    /// selection, a package among them.
+    /// selection, a package among them, and for a server's row with no location
+    /// (`Pane.selectsUnmountedShare`).
     @MainActor
     private static func selectedFolderOrLink(in pane: Pane) -> DirectoryEntry.FileType? {
         let rows = pane.selectedRows
-        guard rows.count == 1, let row = rows.first, let listing = pane.state.listing else {
+        guard rows.count == 1, let row = rows.first, let listing = pane.state.listing,
+            !pane.selectsUnmountedShare
+        else {
             return nil
         }
         let type = listing[row].type

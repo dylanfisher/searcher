@@ -13,7 +13,7 @@ public protocol ShareEnumerator: Sendable {
 public protocol ShareEnumeration: Sendable {
     /// Blocks until the run has ended, and returns the disk shares it listed. Called once, on a
     /// `BlockingCallThread`.
-    func wait() -> Result<[String], ShareListError>
+    func wait() -> Result<ShareList, ShareListError>
     /// Ends the run early, after which `wait` returns soon. Safe from any thread, any number of
     /// times.
     func terminate()
@@ -175,7 +175,7 @@ final class SmbutilRun: ShareEnumeration, @unchecked Sendable {
         }
     }
 
-    func wait() -> Result<[String], ShareListError> {
+    func wait() -> Result<ShareList, ShareListError> {
         BlockingCallThread.requireCurrent()
         exitedSignal.wait()
         drainedSignal.wait()

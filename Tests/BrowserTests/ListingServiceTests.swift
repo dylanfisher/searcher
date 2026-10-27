@@ -544,7 +544,7 @@ private func permutations<Element>(_ elements: [Element]) -> [[Element]] {
             .failed(_, let rootVolumeName, _), .slow(let rootVolumeName, _),
             .gaveUp(let rootVolumeName, _),
             .cached(_, _, let rootVolumeName), .volumeGone(_, let rootVolumeName, _),
-            .notConnected(let rootVolumeName):
+            .notConnected(let rootVolumeName), .serverListed(_, _, let rootVolumeName):
             rootVolumeName
         }
     }
@@ -707,7 +707,7 @@ private func volumeName(_ update: ListingUpdate) -> String? {
     case .slow(_, let volumeName), .gaveUp(_, let volumeName), .failed(_, _, let volumeName),
         .volumeGone(_, _, let volumeName):
         volumeName
-    case .cached, .firstBatch, .full, .notConnected: nil
+    case .cached, .firstBatch, .full, .notConnected, .serverListed: nil
     }
 }
 

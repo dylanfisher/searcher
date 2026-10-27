@@ -29,7 +29,7 @@ final class QuickLookController: NSObject, @preconcurrency QLPreviewPanelDataSou
         let listing: Listing?
         let rows: IndexSet
         /// At a server, each row's mount point as the mount table had it when the items were
-        /// taken; the rows whose share wasn't mounted where they say aren't in `rows`
+        /// taken; a selection with a row whose share wasn't mounted where it says has no `rows`
         /// (docs/decisions/0115-server-shares.md). Empty in a folder.
         let mountPoints: [Int: Location]
 
@@ -95,11 +95,12 @@ final class QuickLookController: NSObject, @preconcurrency QLPreviewPanelDataSou
         self.table = table
     }
 
-    /// Closes the panel if it's open; otherwise opens it, or beeps when nothing is selected.
+    /// Closes the panel if it's open; otherwise opens it, or beeps when nothing is selected or
+    /// the selection holds a server's row with no location (`Pane.selectsUnmountedShare`).
     func toggle() {
         if isPanelOpen() {
             closePanel()
-        } else if pane.selection.isEmpty {
+        } else if pane.selection.isEmpty || pane.selectsUnmountedShare {
             table.beep()
         } else {
             openPanel()
@@ -158,7 +159,8 @@ final class QuickLookController: NSObject, @preconcurrency QLPreviewPanelDataSou
         var mountPoints: [Int: Location] = [:]
         if case .server = pane.location, let listing {
             for row in rows { mountPoints[row] = pane.childLocation(of: listing[row]) }
-            rows = IndexSet(mountPoints.keys)
+            // A selection with a row that has no location shows none of it.
+            rows = mountPoints.count == rows.count ? IndexSet(mountPoints.keys) : []
         }
         let new = Items(
             location: pane.location, listing: listing, rows: rows, mountPoints: mountPoints)

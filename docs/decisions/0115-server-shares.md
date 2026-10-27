@@ -69,6 +69,15 @@ before the step that builds it, and the list is under "For Dylan to check".
 - **Which names.** Only type `Disk` and no name ending in `$`: this drops `IPC$`, printers and
   administrative shares. Finder's 7 items for the 8 listed confirm `IPC$` is dropped; whether it
   hides a disk share such as `C$` is *(unverified)*. A mounted share is listed whatever its name.
+  *(8c)* The server chooses the names, so `ShareNames.isUsable` leaves out a name that isn't
+  one path component (empty, `.`, `..`, or with a `/`), or that holds a control character or a
+  text-direction mark, override or isolate (U+061C, U+200E–F, U+202A–E, U+2066–9). The parse
+  counts what it leaves out in `ShareList.unusableCount`, the listing applies the same rule to
+  what any enumerator hands it, and the rest are listed with the notice "Some shares on
+  “HAL9000” have names that can't be shown." A newline can't reach a name: it splits the row,
+  and the output is `unparsable`. `MountTable.mountPoint(ofRow:in:)` gives nil for such a name,
+  so no row reaches `folderChild(named:)` with one. Mounted rows are named by their mount
+  points, which the system made, and aren't filtered.
 - **Parsing is strict and not by column.** The header line must start with `Share` and contain
   `Type` and `Comments`; the next line is dashes only; rows follow to the blank line; the
   trailer is `<n> share(s) listed` and `n` must equal the row count. A row's name is everything
@@ -100,6 +109,7 @@ before the step that builds it, and the list is under "For Dylan to check".
   identity, `ListingCacheStore` stores it with each volume, so a volume read back from its file
   equals the mounted one it was saved for. A server with shares of two
   protocols gets the SMB enumeration, no protocol notice, and its other shares stay as mounted.
+  *(8c)* A file system none of these is named in the notice by its `f_fstypename`.
 - **Where it runs.** Under [0038](0038-slow-volumes.md): the subprocess is started and waited on
   from `BlockingCallThread`s, `requireCurrent` checked first. `ServerShares` holds, per
   `ShareRequest`, one enumeration in flight; a second asker joins it. Time comes from the
@@ -123,13 +133,21 @@ before the step that builds it, and the list is under "For Dylan to check".
   starts no process. A load, a table change and the app becoming active all ask with the same
   call, so none of them has a rule of its own. Nothing polls and nothing is written to disk. A
   share added on the server shows at the first ask past 30 s. Finder updates a server's list live
-  *(unverified)*.
+  *(unverified)*. *(8c)* The app becoming active calls `ServerShares.relistServers()`, which
+  panes at a server observe as they observe the mount table. `forget` lets a run in flight for
+  that server answer its askers and keeps nothing it returns: ending it would leave a pane's
+  load with no last update. `stop()` runs from `applicationWillTerminate`.
 - **The listing.** `ListingService.loadServer` takes `mounts.volumes` of that server and the
   enumerated names, and lists one row per mounted share as 0114 has it (named by the mount
   point's last component, so "main 1" stays "main 1" and `/Volumes/<name>` is its mount point),
   plus one row per enumerated name no mounted share of the server has, matched by the key
   above. Several mounts of one share stay several rows and no unmounted row is added for it:
   Eject and open use the row's own mount. A mounted share the server didn't list stays.
+  *(8c)* A listed name that is already a row's name, a share mounted at another share's
+  folder name, adds no row, since `Listing` needs its names unique. `ListingService(shares:)`
+  is optional: a service without it lists a server's mounted shares only, as the tests of the
+  mount table alone make it; the app always passes one. A load asks `ServerShares` from a task
+  that `ListingLoad.whenCancelled` cancels, so leaving the server lets go of the run.
 - **The rows are typed so a wrong path is unreachable.** Naming rows by the share would let an
   unmounted "main" of HAL9000 resolve to `/Volumes/main`, which may be another server's mounted
   "main", and a drop would copy into it. So: `DirectoryEntry.FileType` gains `unmountedShare`
@@ -154,6 +172,11 @@ before the step that builds it, and the list is under "For Dylan to check".
   Paste and Move Items Here with one selected alone in column view act on 0111's destination:
   an unmounted share has no column, so it is the focused column's folder, the server, where
   they are off. Open is off until the mounting step. The context menu is Open, disabled.
+  *(8c)* `selectsUnmountedShare` is true for any server row with no location, so a folder row
+  whose share was ejected, or whose `/Volumes/<name>` another server now holds, counts too
+  until the server lists again. `ClipboardCommands.selectedURLs(in:)` gives nil for such a
+  selection rather than leave the row out, as `FileCommands` does, so Copy can't empty the
+  clipboard and no command acts on part of a selection.
 - **Notice and state.** Rows and a reason together need a state that carries both.
   `ListingState` gains `serverListed(Listing, ServerNotice)` and `ListingUpdate` the matching
   `serverListed(Listing, ServerNotice, rootVolumeName:)`; `ServerNotice` is `couldntList(

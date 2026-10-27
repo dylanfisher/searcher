@@ -1,8 +1,9 @@
 import Browser
 import Foundation
 
-/// The words of a pane's status: the spinner's label and the note shown while a folder is slow or
-/// offline, such as "music is offline. Listed 5 minutes ago." The only copy of them.
+/// The words of a pane's status: the spinner's label, the note shown while a folder is slow or
+/// offline, such as "music is offline. Listed 5 minutes ago.", and the note under a server's
+/// rows that says why they may not be all its shares. The only copy of them.
 @MainActor
 struct PaneStatusText {
     /// The note's sentences are English, so its age is too, whatever the system's language.
@@ -26,11 +27,13 @@ struct PaneStatusText {
     }
 
     /// The note for `state` at `now`, or nil for a state that needs none. `volumeName` names the
-    /// volume that stopped answering.
+    /// volume that stopped answering, or for a server's notice the server.
     func note(for state: ListingState, volumeName: String, now: Date) -> String? {
         let kept: ListingState.KeptRows?
         let headline: String
         switch state {
+        case .serverListed(_, let notice):
+            return Self.note(for: notice, serverName: volumeName)
         case .slow(let rows):
             kept = rows
             headline = "\(volumeName) is slow to answer."
@@ -52,6 +55,35 @@ struct PaneStatusText {
         case 0: nil
         case 1: "1 item with an unreadable name isn't shown."
         default: "\(count) items with unreadable names aren't shown."
+        }
+    }
+
+    /// The note under the rows of the server `serverName` that says why they may not be all its
+    /// shares (docs/decisions/0115-server-shares.md).
+    static func note(for notice: ServerNotice, serverName: String) -> String {
+        switch notice {
+        case .couldntList(let error):
+            let reason =
+                switch error {
+                case .rejected: "The server rejected the password."
+                case .unreachable: "The server isn't answering."
+                case .failed(let line): line
+                case .unparsable, .toolMissing: "The server's reply wasn't understood."
+                }
+            return "Couldn't list the shares on “\(serverName)”: \(reason)"
+        case .onlyMounted(let shareProtocol):
+            let name =
+                switch shareProtocol {
+                case .afp: "AFP"
+                case .nfs: "NFS"
+                case .webdav: "WebDAV"
+                case .other(let fsType): fsType
+                }
+            return "Only mounted shares are listed for \(name) servers."
+        case .unmatchedMounts:
+            return "Couldn't match the shares mounted from “\(serverName)”."
+        case .unusableNames:
+            return "Some shares on “\(serverName)” have names that can't be shown."
         }
     }
 

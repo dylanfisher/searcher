@@ -62,9 +62,11 @@ public final class MountTable {
     /// The mount point of `server`'s row `name`, `/Volumes/<name>` as its listing names it, when
     /// the last read has `server`'s share mounted there. Nil when it has none there: the share
     /// was ejected, another server's share or a disk holds that folder now, or no read has
-    /// landed. Nil is "not mounted", never a path to guess
+    /// landed, and for a name that isn't one usable path component (`ShareNames.isUsable`),
+    /// which a server could list. Nil is "not mounted", never a path to guess
     /// (docs/decisions/0115-server-shares.md).
     public func mountPoint(ofRow name: String, in server: Server) -> Location? {
+        guard ShareNames.isUsable(name) else { return nil }
         let mountPoint = Server.sharesFolder.folderChild(named: name)
         let isServers = volumes.contains {
             $0.mountPoint == mountPoint.folderPath && $0.server == server

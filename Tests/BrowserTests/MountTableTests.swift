@@ -168,3 +168,18 @@ private func share(_ name: String) -> VolumeIdentity {
     await settle { runs == 1 }
     #expect(table.volumes.last?.fsType == VolumeIdentity.smbFSType)
 }
+
+/// A server chooses its shares' names. A row named so that it isn't one path component has no
+/// mount point, and asking for one doesn't trap (docs/decisions/0115-server-shares.md).
+@MainActor @Test func aRowNameThatIsntOnePathComponentHasNoMountPoint() async {
+    let server = Server(host: "HAL9000._smb._tcp.local")!
+    let share = VolumeIdentity(
+        device: "//dylan@HAL9000._smb._tcp.local/main", mountPoint: "/Volumes/main",
+        kind: .network, fsType: VolumeIdentity.smbFSType)
+    let table = await loadedTable(StubMounts([volume("/"), share]))
+
+    #expect(table.mountPoint(ofRow: "main", in: server) == Location(path: "/Volumes/main"))
+    for name in ["a/b", "main/", "/", "", ".", "..", "main\u{0}", "ma\u{202E}in"] {
+        #expect(table.mountPoint(ofRow: name, in: server) == nil, "\(name.debugDescription)")
+    }
+}

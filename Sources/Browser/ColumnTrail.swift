@@ -758,7 +758,7 @@ public final class ColumnTrail {
         case .denied, .failed, .notConnected:
             column.selectsFirstRowAt = nil
             return false
-        case .loading, .partial, .loaded, .cachedRefreshing, .slow, .offline:
+        case .loading, .partial, .loaded, .cachedRefreshing, .slow, .offline, .serverListed:
             break
         }
         guard version == pane.selectionVersion else {
@@ -1081,9 +1081,9 @@ public final class ColumnTrail {
     /// Makes the columns right of `column` match its selection: the selected folder's column
     /// next, or nothing. While the selection can't tell yet, because the cursor's entry isn't in
     /// rows that aren't a complete listing (a first batch or cached rows, slow or offline or
-    /// not), the columns stay. Without `opening` it only drops the columns that don't match,
-    /// for a selection that waits for the keys to pause. Returns whether it opened a column, or
-    /// would have.
+    /// not) of a folder, the columns stay; a server's rows can always tell. Without `opening` it
+    /// only drops the columns that don't match, for a selection that waits for the keys to
+    /// pause. Returns whether it opened a column, or would have.
     @discardableResult
     private func follow(_ column: Column, opening: Bool = true) -> Bool {
         if opening {
@@ -1103,7 +1103,11 @@ public final class ColumnTrail {
         column.keepsNextColumnAt = nil
         guard let listing = pane.state.listing else { return false }
         let cursorRow = pane.selection.cursorRow(in: listing)
-        if cursorRow == nil, !pane.state.showsCompleteListing { return false }
+        // A server's rows are its shares as the mount table has them, so a mounted share whose
+        // row went is gone even when the rows aren't a complete listing (0115-server-shares.md).
+        if cursorRow == nil, !pane.state.showsCompleteListing, pane.location.isFolder {
+            return false
+        }
         var folder: Location?
         var package: Location?
         if let entry = Self.soleSelectedEntry(in: pane, of: listing) {

@@ -814,7 +814,8 @@ public final class Pane {
         // A stalled read hasn't said whether the folder is there, so the pane stays.
         switch update {
         case .slow, .gaveUp: return
-        case .cached, .firstBatch, .full, .failed, .volumeGone, .notConnected: break
+        case .cached, .firstBatch, .full, .failed, .volumeGone, .notConnected, .serverListed:
+            break
         }
         if case .cached = update {
             pendingGoCached = (update, resolved)
@@ -969,7 +970,7 @@ public final class Pane {
             where error.reason == .notFound || error.reason == .notADirectory:
                 linkCheck = nil
                 return
-            case .firstBatch, .full, .failed, .volumeGone, .notConnected:
+            case .firstBatch, .full, .failed, .volumeGone, .notConnected, .serverListed:
                 break
             }
             linkCheck?.cancel()
@@ -1105,6 +1106,15 @@ public final class Pane {
             }
             return mounts.mountPoint(ofRow: entry.name, in: server)
         }
+    }
+
+    /// Whether the selection holds a row of a server with no location (`childLocation(of:)`):
+    /// a share that isn't mounted, or one no longer mounted where its row says. Every command
+    /// that acts on the selected items is off for the whole selection then, read from here, and
+    /// a drop, drag or spring on such a row is refused (docs/decisions/0115-server-shares.md).
+    public var selectsUnmountedShare: Bool {
+        guard case .server = location else { return false }
+        return selectedEntries.contains { childLocation(of: $0) == nil }
     }
 
     // MARK: - Listing
@@ -1465,7 +1475,7 @@ public final class Pane {
         switch update {
         case .cached(let listing, _, _), .firstBatch(let listing, _):
             selection.resolved(in: listing, after: .loaded(complete: false))
-        case .full(let listing, _):
+        case .full(let listing, _), .serverListed(let listing, _, _):
             selection.resolved(in: listing, after: .loaded(complete: true))
         case .failed, .slow, .gaveUp, .volumeGone, .notConnected:
             nil
@@ -1494,7 +1504,7 @@ public final class Pane {
                 case .slow: .slow(kept)
                 case .offline: .offline(kept)
                 case .loading, .partial, .loaded, .cachedRefreshing, .denied, .failed,
-                    .notConnected:
+                    .notConnected, .serverListed:
                     .cachedRefreshing(listing, listedAt: listedAt)
                 }
             show(shown, after: .loaded(complete: false), resolved: resolved, from: selectionVersion)
@@ -1548,6 +1558,13 @@ public final class Pane {
             self.rootVolumeName = rootVolumeName
             loadIsRunning = false
             show(.notConnected, after: .loaded(complete: true))
+        case .serverListed(let listing, let notice, let rootVolumeName):
+            self.rootVolumeName = rootVolumeName
+            loadIsRunning = false
+            loadedAt = Date()
+            show(
+                .serverListed(listing, notice), after: .loaded(complete: true),
+                resolved: resolved, from: selectionVersion)
         }
         selectNamesIfListed()
         selectNextIfTrashLanded()
@@ -1571,6 +1588,9 @@ public final class Pane {
             ListingState.KeptRows(listing: listing, listedAt: nil, isComplete: false)
         case .cachedRefreshing(let listing, let listedAt):
             ListingState.KeptRows(listing: listing, listedAt: listedAt, isComplete: false)
+        // A server's rows that may not be all its shares.
+        case .serverListed(let listing, _):
+            ListingState.KeptRows(listing: listing, listedAt: loadedAt, isComplete: false)
         case .slow(let kept), .offline(let kept): kept
         case .loading, .denied, .failed, .notConnected: nil
         }
@@ -1643,10 +1663,11 @@ public final class Pane {
         reportChange()
     }
 
-    /// Starts listing again on each change `service.mounts` reads, once the pane is at a
-    /// server. A pane at a server isn't on any volume, so its shares mounting and unmounting
-    /// reach it through the table, never as a volume event, and it lists after the table has
-    /// read the change (docs/decisions/0114-server-location.md).
+    /// Starts listing again on each change `service.mounts` reads, and each time
+    /// `service.shares` asks, as the app becomes active, once the pane is at a server. A pane at
+    /// a server isn't on any volume, so its shares mounting and unmounting reach it through the
+    /// table, never as a volume event, and it lists after the table has read the change
+    /// (docs/decisions/0114-server-location.md, docs/decisions/0115-server-shares.md).
     private func observeMountsIfAtServer() {
         guard !observesMounts, case .server(let server) = location else { return }
         guard let mounts = service.mounts else {
@@ -1654,11 +1675,13 @@ public final class Pane {
         }
         observesMounts = true
         mounts.observe(for: self) { [weak self] in self?.mountsDidChange() }
+        service.shares?.observe(for: self) { [weak self] in self?.mountsDidChange() }
     }
 
-    /// The mount table read a change: a pane at a server lists its shares again, after a load
-    /// that is running, which may have read the table before the change. A column-mode owner
-    /// has no rows of its own, and a pane elsewhere has nothing to list again.
+    /// The mount table read a change, or the server's shares may have: a pane at a server lists
+    /// its shares again, after a load that is running, which may have read the table before the
+    /// change. A column-mode owner has no rows of its own, and a pane elsewhere has nothing to
+    /// list again.
     private func mountsDidChange() {
         guard case .server = location, columnTrail == nil, !isClosed else { return }
         relist()
@@ -2090,7 +2113,7 @@ public final class Pane {
         case .denied, .failed, .notConnected:
             selectsFirstRowAt = nil
             return
-        case .loading, .partial, .loaded, .cachedRefreshing, .slow, .offline:
+        case .loading, .partial, .loaded, .cachedRefreshing, .slow, .offline, .serverListed:
             break
         }
         guard version == selectionVersion else {
@@ -2469,6 +2492,8 @@ public final class Pane {
             return .firstBatch(applied(listing), rootVolumeName: rootVolumeName)
         case .full(let listing, let rootVolumeName):
             return .full(applied(listing), rootVolumeName: rootVolumeName)
+        case .serverListed(let listing, let notice, let rootVolumeName):
+            return .serverListed(applied(listing), notice, rootVolumeName: rootVolumeName)
         case .failed, .slow, .gaveUp, .volumeGone, .notConnected:
             return update
         }

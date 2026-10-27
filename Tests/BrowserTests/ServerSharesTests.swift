@@ -1,4 +1,5 @@
 import BrowserTestSupport
+import Foundation
 import TestSupport
 import Testing
 
@@ -6,12 +7,12 @@ import Testing
 
 private let dylans = ShareRequest(server: testServer, user: "dylan")
 private let guests = ShareRequest(server: testServer, user: "guest")
-private let names = ["docker", "main", "music"]
+private let names: ShareList = ["docker", "main", "music"]
 
 /// An ask of `shares` for `request`, running until the test reads its value.
 @MainActor
 private func ask(_ shares: ServerShares, _ request: ShareRequest = dylans)
-    -> Task<Result<[String], ShareListError>?, Never>
+    -> Task<Result<ShareList, ShareListError>?, Never>
 {
     Task { await shares.names(for: request) }
 }
@@ -21,7 +22,7 @@ private func ask(_ shares: ServerShares, _ request: ShareRequest = dylans)
 @MainActor
 private func answered(
     _ shares: ServerShares, _ enumerator: GatedShareEnumerator,
-    _ result: Result<[String], ShareListError>, request: ShareRequest = dylans
+    _ result: Result<ShareList, ShareListError>, request: ShareRequest = dylans
 ) async {
     let starts = enumerator.starts.count
     let asking = ask(shares, request)
@@ -74,7 +75,7 @@ private func answered(
     await settle { enumerator.terminations == 1 }
 
     // A cancelled run leaves nothing cached, so the next ask runs again.
-    #expect(shares.cachedNames(for: dylans) == nil)
+    #expect(shares.cachedNames(for: dylans)?.names == nil)
     await answered(shares, enumerator, .success(names))
     #expect(enumerator.starts.count == 2)
 }
@@ -92,7 +93,7 @@ private func answered(
     clock.advance(by: .milliseconds(1))
     await answered(shares, enumerator, .success(["main"]))
     #expect(enumerator.starts.count == 2)
-    #expect(shares.cachedNames(for: dylans) == ["main"])
+    #expect(shares.cachedNames(for: dylans)?.names == ["main"])
 }
 
 @MainActor @Test func aFailureIsKeptFor10Seconds() async {
@@ -140,8 +141,8 @@ private func answered(
     let shares = ServerShares(enumerator: enumerator, clock: clock)
     await answered(shares, enumerator, .success(names))
     clock.advance(by: .seconds(3600))
-    #expect(shares.cachedNames(for: dylans) == names)
-    #expect(shares.cachedNames(for: guests) == nil)
+    #expect(shares.cachedNames(for: dylans)?.names == names.names)
+    #expect(shares.cachedNames(for: guests)?.names == nil)
 }
 
 @MainActor @Test func forgettingAServerDropsTheEntriesOfEveryUser() async {
@@ -153,9 +154,9 @@ private func answered(
     await answered(shares, enumerator, .success(["photos"]), request: other)
 
     shares.forget(Server(host: testServerHost.uppercased())!)
-    #expect(shares.cachedNames(for: dylans) == nil)
-    #expect(shares.cachedNames(for: guests) == nil)
-    #expect(shares.cachedNames(for: other) == ["photos"])
+    #expect(shares.cachedNames(for: dylans)?.names == nil)
+    #expect(shares.cachedNames(for: guests)?.names == nil)
+    #expect(shares.cachedNames(for: other)?.names == ["photos"])
     await answered(shares, enumerator, .success(names), request: dylans)
     #expect(enumerator.starts.count == 4)
 }
@@ -171,4 +172,45 @@ private func answered(
     #expect(await dylan.value == nil)
     #expect(await guest.value == nil)
     await settle { enumerator.terminations == 2 }
+}
+
+/// A run in flight when its server is forgotten answers its askers, and keeps nothing: the
+/// server lost its shares while it ran (docs/decisions/0115-server-shares.md).
+@MainActor @Test func aRunInFlightWhenItsServerIsForgottenKeepsNothing() async {
+    let enumerator = GatedShareEnumerator()
+    let shares = ServerShares(enumerator: enumerator, clock: ManualClock())
+    let asking = ask(shares)
+    #expect(await enumerator.waitForStarts(1))
+
+    shares.forget(testServer)
+    enumerator.answer(dylans, with: .success(names))
+
+    #expect(await asking.value == .success(names))
+    #expect(shares.cachedNames(for: dylans) == nil)
+    await answered(shares, enumerator, .success(names))
+    #expect(enumerator.starts.count == 2)
+}
+
+@MainActor @Test func cachedNamesSayWhenTheyWereListed() async throws {
+    let enumerator = GatedShareEnumerator()
+    let shares = ServerShares(enumerator: enumerator, clock: ManualClock())
+    let before = Date()
+    await answered(shares, enumerator, .success(names))
+
+    let cached = try #require(shares.cachedNames(for: dylans))
+    #expect(cached.names == names.names)
+    #expect(cached.listedAt >= before)
+}
+
+@MainActor @Test func relistingServersRunsEachObserverWhileItsOwnerLives() {
+    let shares = ServerShares(enumerator: GatedShareEnumerator(), clock: ManualClock())
+    var runs = 0
+    var owner: NSObject? = NSObject()
+    shares.observe(for: owner!) { runs += 1 }
+
+    shares.relistServers()
+    #expect(runs == 1)
+    owner = nil
+    shares.relistServers()
+    #expect(runs == 1)
 }

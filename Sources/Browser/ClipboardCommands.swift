@@ -34,16 +34,18 @@ public enum ClipboardCommands: CommandSet {
             CommandBinding(
                 copy, isEnabled: { canTakeSelection($0) },
                 run: { context in
-                    guard canTakeSelection(context), let clipboard = context.clipboard else {
-                        return
-                    }
-                    clipboard.copy(selectedURLs(in: context.pane))
+                    guard canTakeSelection(context), let clipboard = context.clipboard,
+                        let urls = selectedURLs(in: context.pane)
+                    else { return }
+                    clipboard.copy(urls)
                 }),
             CommandBinding(
                 cut, isEnabled: { canCut($0) },
                 run: { context in
-                    guard canCut(context), let clipboard = context.clipboard else { return }
-                    clipboard.cut(selectedURLs(in: context.pane))
+                    guard canCut(context), let clipboard = context.clipboard,
+                        let urls = selectedURLs(in: context.pane)
+                    else { return }
+                    clipboard.cut(urls)
                 }),
             CommandBinding(
                 paste, isEnabled: { canPaste($0) },
@@ -79,11 +81,17 @@ public enum ClipboardCommands: CommandSet {
 
     /// The selected entries' file URLs. Each says whether it is a folder, from the listing, so
     /// building it reads nothing from the disk; a folder's ends in a slash, as Finder writes it.
-    /// The list's services take these too. A server's row whose share isn't mounted where the
-    /// row says has none, and is left out (docs/decisions/0115-server-shares.md).
+    /// The list's services take these too. Nil when one is a server's row whose share isn't
+    /// mounted where the row says, so what asks refuses the selection rather than act on part
+    /// of it, as `FileCommands` does (docs/decisions/0115-server-shares.md).
     @MainActor
-    public static func selectedURLs(in pane: Pane) -> [URL] {
-        pane.selectedEntries.compactMap { fileURL(of: $0, in: pane) }
+    public static func selectedURLs(in pane: Pane) -> [URL]? {
+        var urls: [URL] = []
+        for entry in pane.selectedEntries {
+            guard let url = fileURL(of: entry, in: pane) else { return nil }
+            urls.append(url)
+        }
+        return urls
     }
 
     /// The file URL of `entry`, one of `pane`'s rows, built as `selectedURLs` builds each one;
@@ -99,13 +107,15 @@ public enum ClipboardCommands: CommandSet {
         URL(fileURLWithPath: location.folderPath, isDirectory: entry.type.isFolderOnDisk)
     }
 
-    /// Whether Copy and Cut can run: there is a clipboard and a selection.
+    /// Whether Copy and Cut can run: there is a clipboard and a selection, and each selected
+    /// row has a location (`Pane.selectsUnmountedShare`).
     @MainActor
     private static func canTakeSelection(_ context: CommandContext) -> Bool {
         guard context.clipboard != nil, let listing = context.pane.state.listing else {
             return false
         }
         return !context.pane.selection.rows(in: listing).isEmpty
+            && !context.pane.selectsUnmountedShare
     }
 
     /// Whether Cut can run: Copy can, and the pane is at a folder. A server's shares can't be

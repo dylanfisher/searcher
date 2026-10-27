@@ -52,6 +52,11 @@ enum ContextMenuBuilder {
         .command(FileCommands.moveToTrash.id),
     ]
 
+    /// For a right-click on a row when the selection holds a server's share that isn't mounted:
+    /// Open, which is off until the share can be mounted, and nothing else, since nothing acts
+    /// on such a share (docs/decisions/0115-server-shares.md).
+    static let unmountedShareItems: [Item] = [.command(NavigationCommands.open.id)]
+
     /// For a right-click below the rows: what acts on the folder shown.
     static let folderItems: [Item] = [
         .command(FileCommands.newFolder.id),
