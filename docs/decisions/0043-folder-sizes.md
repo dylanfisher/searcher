@@ -181,10 +181,10 @@ Calculate All Sizes is a view option, off by default, and folders show "--".
   gives utility I/O tier 1, the tier `IOPOL_STANDARD` names, where `IOPOL_THROTTLE` is tier 3.
   Measured on macOS 26 (Darwin 25.6): setting the policy also takes away the thread's QoS, so
   `qos_class_self()` reads unspecified and the base priority goes from utility's 20 to the
-  default 31; `pthread_set_qos_class_self_np` then fails with `EPERM`. The walk thread reads its
-  base priority before setting the policy and puts it back with `pthread_setschedparam`, so walks
-  keep utility's CPU priority. A test reads both on the walk thread. The four-walk and one-per-share
-  caps are unchanged.
+  default 31; `pthread_set_qos_class_self_np` then fails with `EPERM`. The walk thread is put back
+  at utility's priority, 20, with `pthread_setschedparam`, so walks keep utility's CPU priority;
+  the amendment of 2026-10-27 below says why that number isn't read from the thread. A test reads
+  both on the walk thread. The four-walk and one-per-share caps are unchanged.
 
 Rejected: **walks at background QoS** — xnu gives it I/O tier 2, not 3, its CPU priority is 4,
 it runs only on efficiency cores and Low Power Mode defers it further, so a walk on screen would
@@ -205,3 +205,43 @@ reads go over the network and are paced by its one-walk cap as before.
 Calculate Sizes was on Control-Command-S. The sidebar takes that chord, as Finder's does
 ([0086](0086-workspace-sidebar.md)), so Calculate Sizes is on Option-Command-S. No other command
 uses it and it is not a system-wide macOS shortcut.
+
+## Amendment: a walk's priority comes from its QoS, not a live reading (2026-10-27)
+
+`throttleDiskReads()` read the thread's priority with `thread_info(THREAD_EXTENDED_INFO)` before
+setting the policy and put that number back. That number is the kernel's live one: while a thread
+of higher QoS waits on a lock the walk thread holds, the kernel raises the holder to the waiter's
+priority, and `pth_priority`, `pth_curpri` and `THREAD_SCHED_TIMESHARE_INFO`'s `base_priority` all
+read the raised value. A read during a raise put the walk back at 31 for good, the outcome the
+function exists to prevent. Two tests read the same number and failed under load when a lock they
+held was contended.
+
+Measured on macOS 26 (Darwin 25.6), a utility thread holding an `os_unfair_lock` that a
+user-initiated thread waits on, in a C harness:
+
+- `thread_info` live priority: 31 while held, 20 on a fresh utility thread.
+- `qos_class_self()` and `pthread_get_qos_class_np`: utility, relative priority 0, raised or not.
+- `pthread_getschedparam`: 31 on a fresh utility thread whatever its QoS, since it reports what
+  was last set with `pthread_setschedparam`, or the default; it is not the QoS's priority.
+- `thread_policy_get(THREAD_PRECEDENCE_POLICY)`: 0 on a QoS thread; it only shows a priority set
+  with `pthread_setschedparam`, relative to the task's 31.
+- Putting back the live reading taken while held: 200 of 200 runs left the thread at 31 after the
+  lock was let go. Putting back 20: 0 of 200.
+
+No API reports the priority a QoS class asks for apart from the live one, so
+`throttleDiskReads()` checks that the thread's requested QoS is utility with relative priority 0
+and sets `FolderSizeService.utilityPriority`, 20, xnu's `BASEPRI_UTILITY` from its
+`thread_qos_policy_params` table. The 20 was measured on macOS 26 only. The tests check the walk
+asks for that constant, so they wouldn't notice a macOS that gives utility another priority;
+measure it again on a new major release. It traps on any other QoS rather than guess a number for
+it: walks are its only caller. The tests read the priority the thread set, with
+`pthread_getschedparam`, and one holds a lock a user-initiated thread waits on until the live
+priority shows the raise, then throttles and checks the thread asked for 20. If the raise doesn't
+show within five seconds the test records a warning, not a failure, and still checks the 20.
+
+Rejected: **a table of every QoS class's priority** — the relative priority is scaled into the gap
+below each class, and the task's QoS ceiling changes the result: in the process the harness ran
+in, user-initiated threads read 31, and setting 37 after the throttle raised one above what it
+had. **`min(20, live)`** — it would follow a ceiling below utility, but a raise during that
+ceiling defeats it, and no such ceiling was seen. **Allowing a tolerance in the tests** (the
+earlier fix) — a raise spans the whole gap to 31.
