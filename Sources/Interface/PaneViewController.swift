@@ -68,8 +68,8 @@ public final class PaneViewController: NSViewController {
         /// The app's mount table, for drops; nil where there is none, and the lists take no
         /// drop then.
         let mountTable: MountTable?
-        /// The sidebar's volumes, which a server's share row ejects through from its context
-        /// menu.
+        /// The sidebar's volumes, which a volume's row ejects through from its eject button and
+        /// its context menu.
         let volumes: SidebarVolumes
         /// The app's undo history, for Undo and Redo; nil where there is none.
         let undoHistory: UndoHistory?

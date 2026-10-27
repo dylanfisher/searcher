@@ -107,9 +107,25 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     var workspaceID: UUID?
     /// Tells a drop whether its items are on the target folder's volume.
     var mountTable: MountTable?
-    /// The sidebar's volumes, which a server's share row ejects through from its context menu;
-    /// nil adds no Eject.
-    var volumes: SidebarVolumes?
+    /// The sidebar's volumes. A row whose item is one the sidebar can eject shows the eject
+    /// button and has Eject in its context menu, which eject it through them; nil shows neither
+    /// (docs/decisions/0118-row-eject-buttons.md).
+    var volumes: SidebarVolumes? {
+        didSet {
+            guard volumes !== oldValue else { return }
+            volumes?.observe(for: self) { [weak self] in self?.volumesDidChange() }
+            volumesDidChange()
+        }
+    }
+    /// The volumes the sidebar can eject, by mount point, read from `volumes` at each change of
+    /// it, so a row finds its volume with one lookup.
+    private var ejectableVolumes: [String: SidebarVolume] = [:]
+    /// The folders that hold an ejectable volume's mount point, so a folder holding none, as
+    /// most do, makes no path for its rows.
+    private var ejectableParents: Set<String> = []
+    /// The mount points of the volumes being ejected, whose buttons are off
+    /// (`SidebarVolumes.ejecting`).
+    private var ejectingMountPoints: Set<String> = []
     /// Shows an alert about the list's window: as a sheet on it, or app-modal while the list
     /// has no window. Tests replace it.
     lazy var showAlert: @MainActor (NSAlert) -> Void = { [weak self] alert in
@@ -641,14 +657,15 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// column, and the menu acts on the column's own folder
     /// (docs/decisions/0111-column-view-target-folder.md).
     ///
-    /// A server's share row adds `Eject “music”`, which ejects that share as the sidebar does,
-    /// when the sidebar's volumes list it as one that can be ejected
-    /// (docs/decisions/0114-server-location.md). A selection holding a share that isn't
+    /// A row whose item is a volume the sidebar can eject, a server's mounted share or a volume
+    /// in /Volumes, adds `Eject “music”`, which ejects it as the row's eject button does
+    /// (docs/decisions/0114-server-location.md, docs/decisions/0118-row-eject-buttons.md). A
+    /// selection holding a share that isn't
     /// mounted, or one no longer mounted where its row says, has Open alone, off
     /// (docs/decisions/0115-server-shares.md).
     func contextMenu(forRow row: Int) -> NSMenu {
         var items = ContextMenuBuilder.folderItems
-        var share: SidebarVolume?
+        var ejectable: SidebarVolume?
         if let listing, row >= 0, row < listing.count {
             let name = ExactName(listing[row].name)
             if !pane.selection.contains(name) {
@@ -657,7 +674,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             items =
                 pane.selectsUnmountedShare
                 ? ContextMenuBuilder.unmountedShareItems : ContextMenuBuilder.rowItems
-            if showsShares { share = ejectableShare(listing[row]) }
+            ejectable = ejectableVolume(listing[row])
         } else if pane.containingTrail != nil, !pane.selection.isEmpty {
             pane.select(Selection())
         }
@@ -670,33 +687,107 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         } catch {
             preconditionFailure("\(error)")
         }
-        if let share {
+        if let ejectable {
             menu.addItem(.separator())
             menu.addItem(
                 ContextMenuBuilder.ejectItem(
-                    named: share.name, mountPoint: share.mountPoint, target: self,
-                    action: #selector(ejectShare(_:))))
+                    named: ejectable.name, mountPoint: ejectable.mountPoint, target: self,
+                    action: #selector(ejectFromMenu(_:))))
         }
         return menu
     }
 
-    /// The sidebar's volume mounted at the server's share `row`, if the mount table has the
-    /// server's share there (`Pane.childLocation(of:)`) and the sidebar lists it as one that can
-    /// be ejected. The sidebar reads the mounts itself, so for a moment after a mount event it
-    /// may not list a share the server's rows show, and the row has no Eject until it does.
-    private func ejectableShare(_ row: DirectoryEntry) -> SidebarVolume? {
+    /// The sidebar's volume that `row` stands for (`Pane.childLocation(of:)`), if the sidebar
+    /// lists it as one that can be ejected: at a server, a share the mount table has where the
+    /// row says; in a folder, a volume mounted at the row's path. The sidebar reads the mounts
+    /// itself, so for a moment after a mount event it may not list a volume the rows show, and
+    /// the row has no eject until it does. A folder that holds no ejectable volume's mount point
+    /// returns at once, so the rows of other folders cost one set lookup.
+    private func ejectableVolume(_ row: DirectoryEntry) -> SidebarVolume? {
+        guard !ejectableVolumes.isEmpty else { return nil }
+        if let path = pane.location.path, !ejectableParents.contains(path) { return nil }
         guard let mountPoint = pane.childLocation(of: row)?.folderPath else { return nil }
-        return volumes?.volumes.first { $0.mountPoint == mountPoint && $0.canEject }
+        return ejectableVolumes[mountPoint]
     }
 
-    @objc private func ejectShare(_ sender: NSMenuItem) {
-        guard let mountPoint = sender.representedObject as? String else {
-            preconditionFailure("Eject has no share")
+    /// The sidebar's volumes or their ejects changed: reads which can be ejected, and shows or
+    /// hides the eject buttons of the rows on screen.
+    private func volumesDidChange() {
+        let ejectable = volumes?.volumes.filter(\.canEject) ?? []
+        ejectableVolumes = Dictionary(ejectable.map { ($0.mountPoint, $0) }) { first, _ in first }
+        ejectableParents = Set(ejectable.map { parentPath(of: $0.mountPoint) })
+        ejectingMountPoints = volumes?.ejecting ?? []
+        guard isViewLoaded, let listing else { return }
+        let index = tableView.column(withIdentifier: SortColumn.name.identifier)
+        guard index >= 0 else { return }
+        tableView.enumerateAvailableRowViews { rowView, row in
+            guard row < listing.count,
+                let cell = rowView.view(atColumn: index) as? NSTableCellView
+            else { return }
+            showEjectButton(for: listing[row], in: cell)
+            ListingCellLayout.fitBadgeAndName(in: cell, chevronRoom: chevronRoom)
         }
-        // A share that left the list meanwhile is left alone, as the sidebar leaves it.
-        guard let volumes,
-            let volume = volumes.volumes.first(where: { $0.mountPoint == mountPoint })
-        else { return }
+        renameField.layout()
+    }
+
+    /// Shows the eject button in `cell`, the Name cell of `entry`'s row, when `entry` is a volume
+    /// the sidebar can eject, off while its eject runs; hides it otherwise. The button is made
+    /// the first time the cell shows one. The caller fits the name to it.
+    private func showEjectButton(for entry: DirectoryEntry, in cell: NSTableCellView) {
+        guard let volume = ejectableVolume(entry) else {
+            ListingCellLayout.shownEjectButton(in: cell)?.isHidden = true
+            return
+        }
+        guard let cell = cell as? ListingNameCellView else {
+            preconditionFailure("the name cell can't show an eject button: \(cell)")
+        }
+        let button = cell.ejectButton ?? makeEjectButton(in: cell)
+        button.isHidden = false
+        button.isEnabled = !ejectingMountPoints.contains(volume.mountPoint)
+    }
+
+    /// The sidebar's eject button, at the size the sidebar's medium rows draw it, whose symbols
+    /// have the name's font size, added to `cell`.
+    private func makeEjectButton(in cell: ListingNameCellView) -> HoverButton {
+        let button = WorkspaceSidebarViewController.Cell.makeEjectButton()
+        button.symbolConfiguration = Self.ejectSymbolConfiguration
+        button.target = self
+        button.action = #selector(ejectClicked(_:))
+        ListingCellLayout.addEjectButton(button, to: cell)
+        return button
+    }
+
+    /// The eject glyph's size: the sidebar's scale (`Cell.ejectScale`) of a symbol at the name's
+    /// font size.
+    private static let ejectSymbolConfiguration = NSImage.SymbolConfiguration(
+        pointSize: nameFont.pointSize, weight: .regular
+    ).applying(WorkspaceSidebarViewController.Cell.ejectScale)
+
+    /// Ejects the volume of the row whose eject button was clicked. The press goes to the
+    /// button, not the table, so the selection stays as it was.
+    @objc private func ejectClicked(_ sender: NSButton) {
+        let row = tableView.row(for: sender)
+        guard let listing, row >= 0, row < listing.count else {
+            preconditionFailure("an eject button sits outside the rows")
+        }
+        // A volume that left the list meanwhile is left alone, as the sidebar leaves it.
+        guard let volume = ejectableVolume(listing[row]) else { return }
+        eject(volume)
+    }
+
+    @objc private func ejectFromMenu(_ sender: NSMenuItem) {
+        guard let mountPoint = sender.representedObject as? String else {
+            preconditionFailure("Eject has no volume")
+        }
+        // A volume that left the list meanwhile is left alone, as the sidebar leaves it.
+        guard let volume = ejectableVolumes[mountPoint] else { return }
+        eject(volume)
+    }
+
+    /// Ejects `volume` through the sidebar's volumes, off the main thread, and shows why when
+    /// the system refuses, as the sidebar's alert does.
+    private func eject(_ volume: SidebarVolume) {
+        guard let volumes else { preconditionFailure("an eject with no sidebar volumes") }
         Task { [weak self] in
             do throws(SidebarVolume.EjectFailure) {
                 try await volumes.eject(volume)
@@ -779,6 +870,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
                 : keptThumbnail(row: row, in: listing).map(NSImage.init(thumbnail:))
                     ?? iconCache.icon(for: listing.kind(atRow: row).type)
             showFolderChevron(Self.showsChevron(listing[row]), in: cell)
+            showEjectButton(for: listing[row], in: cell)
             showConnectingSpinner(listing[row].name == shownConnecting, in: cell)
             showNotDownloadedBadge(listing[row].isDataless, in: cell)
             cell.textField?.isHidden = listing[row].name == coveredName
@@ -962,7 +1054,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         let end = ListingCellLayout.nameEnd(
             cellWidth: cell.width,
             chevronRoom: showsNamesOnly && Self.showsChevron(entry) ? chevronRoom : nil,
-            badge: entry.isDataless)
+            badge: entry.isDataless, eject: ejectableVolume(entry) != nil)
         let nameX = ListingCellLayout.nameX
         let labelHeight = ListingCellLayout.labelHeight
         return NSRect(

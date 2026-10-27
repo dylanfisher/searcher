@@ -208,6 +208,38 @@ func aMountedShareAndTheTwoTheServerListsAreThreeRowsOneEjecting(_ viewMode: Vie
     #expect(window.note == nil)
 }
 
+/// The mounted share's row has the eject button, as Finder's column has it on music alone, and
+/// it ejects the share through the sidebar's volumes; the unmounted shares have none
+/// (docs/decisions/0118-row-eject-buttons.md).
+@MainActor @Test(arguments: [ViewMode.list, .column])
+func aServersMountedShareRowHasTheEjectButtonAndItsUnmountedOnesNone(_ viewMode: ViewMode)
+    async throws
+{
+    let world = await World([mountedShare("music")])
+    let stub = StubSidebarVolumes([
+        SidebarVolume(mountPoint: "/Volumes/music", name: "music", kind: .network)
+    ])
+    let volumes = stub.list()
+    await settle { volumes.volumes.count == 1 }
+    let window = try Window(world, viewMode: viewMode, volumes: volumes)
+    await world.answer(.success(["docker", "main", "music"]))
+    let list = try await window.shows(["docker", "main", "music"])
+    window.select(["docker"])
+    stub.holdEjects()
+
+    #expect(try list.shownEjectButton(atRow: 0) == nil)
+    #expect(try list.shownEjectButton(atRow: 1) == nil)
+    let eject = try #require(try list.shownEjectButton(atRow: 2))
+    #expect(eject.isEnabled)
+    eject.performClick(nil)
+
+    await settle { stub.ejects.count == 1 }
+    #expect(stub.ejects.map(\.mountPoint) == ["/Volumes/music"])
+    await settle { (try? list.shownEjectButton(atRow: 2)?.isEnabled) == false }
+    #expect(window.serverPane.selection.cursor == ExactName("docker"))
+    stub.releaseEjects()
+}
+
 @MainActor @Test func aShareMountedLaterIsOneMountedRow() async throws {
     let world = await World([mountedShare("music")])
     let window = try Window(world)
