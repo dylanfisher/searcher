@@ -92,7 +92,23 @@ Recursive search and Spotlight are a separate feature (M5b.3) and stay out.
   of the sidebar ([0089](0089-sidebar-key-routing.md)). A command or a saved workspace still
   gives the keys back to whatever had them; a command that moves them itself, such as Focus
   Other Pane or Filter, still does. Go to Item's rows do the same as folders
-  ([0101](0101-go-to-item.md)).)
+  ([0101](0101-go-to-item.md)).) (Amended 2026-10-26, Dylan: "cmd k into a directory should
+  auto select first item in directory you land on". A chosen folder, visited, shown by a pane or
+  from a typed path, opens with its first row selected alone, the cursor on it
+  (`Pane.navigateSelectingFirstRow(to:)`): the first row as the pane shows the folder, in its
+  sort with hidden entries as the setting has them; in column view the first row of the
+  folder's column, the last, which then shows the folder or preview right of it as any
+  selection does. The rows are often still loading as the keys come back, so the row is
+  selected once they are the whole folder: kept recent or cached rows at once, otherwise the
+  full listing, not a first batch, whose first row needn't be the folder's. This is the wait →
+  has for a column that hasn't listed ([0046](0046-column-view.md)), and it gives up the
+  same way: a selection made, the pane losing the keys or another navigation before the rows
+  land; an empty folder or one that can't be listed selects nothing. Going to the folder the
+  pane already shows keeps its selection, and selects the first row only if nothing is
+  selected. The keys are in the pane, so ↓ and Return act on that row at once. Go to Item's
+  choice still selects the chosen row (0101), and the sidebar, Back and Forward and Go to
+  Folder… still select nothing new. Finder's Go to Folder selects nothing in a folder it goes
+  into, so the sheet, which has its own path (`Pane.goToFolder`), stays as it was.)
 - **Folder visits.** `FolderVisits`, one per app, counts a visit each time a pane's location
   changes (navigation, Back and Forward, column view following its focused column) and once for
   each new pane: a new window, tab or split. A restored pane counts only where it goes next: it

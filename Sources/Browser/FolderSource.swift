@@ -2,9 +2,9 @@ import Foundation
 
 /// Visited folders as palette items, the most frecent first, then the folders open panes show
 /// that were never visited, in window, tab and layout order. Each title is the folder's path
-/// with the home folder written `~`. Choosing one shows it in the focused pane. A sync source:
-/// it reads the history and the panes on every key, and makes items again only when they
-/// changed.
+/// with the home folder written `~`. Choosing one shows it in the focused pane, its first row
+/// selected once listed (`Pane.navigateSelectingFirstRow(to:)`). A sync source: it reads the
+/// history and the panes on every key, and makes items again only when they changed.
 @MainActor
 public final class FolderSource: PaletteSource {
     private let history: @MainActor () -> FolderHistory
@@ -57,7 +57,7 @@ public final class FolderSource: PaletteSource {
             PaletteItem(
                 id: .folder(path: location.path), title: Self.title(of: location, home: home),
                 frecency: history.frecency(of: location, at: now)
-            ) { focusedPane().navigate(to: location) }
+            ) { focusedPane().navigateSelectingFirstRow(to: location) }
         }
         made = (history, panes, items)
         deliver(items)

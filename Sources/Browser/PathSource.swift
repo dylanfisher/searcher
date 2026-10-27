@@ -4,11 +4,11 @@ import Foundation
 /// For a query that starts with `/` or `~` and holds a `/`, the folders in the typed parent: the
 /// text up to the last `/`, expanded by `PathInput`. They are listed through `ListingService`,
 /// off the main actor, and matched by the name typed after that `/`. Each title is the typed
-/// parent followed by the folder's name, and choosing one shows it in the focused pane. A folder
-/// whose name starts with a dot is listed only once the typed name does too; one hidden by its
-/// flag, such as `~/Library`, is always listed, as Finder's Go to Folder completes it. A
-/// streaming source: the parent is listed once while the typed name changes, and the folders
-/// found so far are handed over on every key.
+/// parent followed by the folder's name, and choosing one shows it in the focused pane, its first
+/// row selected once listed. A folder whose name starts with a dot is listed only once the typed
+/// name does too; one hidden by its flag, such as `~/Library`, is always listed, as Finder's Go
+/// to Folder completes it. A streaming source: the parent is listed once while the typed name
+/// changes, and the folders found so far are handed over on every key.
 @MainActor
 public final class PathSource: PaletteSource {
     private let service: ListingService
@@ -97,7 +97,7 @@ public final class PathSource: PaletteSource {
             let item = PaletteItem(
                 id: .folder(path: folder.path), title: typed + name,
                 frecency: history.frecency(of: folder, at: now), matchOffset: typed.utf8.count
-            ) { focusedPane().navigate(to: folder) }
+            ) { focusedPane().navigateSelectingFirstRow(to: folder) }
             made[name] = item
             storedMadeCount += 1
             return item
