@@ -54,7 +54,7 @@ private final class World {
     }
 
     /// Answers the share list's run once it has started its `count`th.
-    func answer(_ result: Result<[String], ShareListError>, start count: Int = 1) async {
+    func answer(_ result: Result<ShareList, ShareListError>, start count: Int = 1) async {
         #expect(await enumerator.waitForStarts(count))
         enumerator.answer(dylans, with: result)
     }
@@ -308,6 +308,21 @@ func aListThatFailsShowsTheMountedRowsAndWhy(_ error: ShareListError, _ reason: 
     await settle { window.note != nil }
     #expect(window.note == "Couldn't match the shares mounted from “HAL9000”.")
     #expect(world.enumerator.starts.isEmpty)
+}
+
+/// A server chooses its shares' names: one no row can have is left out, whether the list left
+/// it out or not, and the notice says so (docs/decisions/0115-server-shares.md).
+@MainActor @Test func sharesWhoseNamesCantBeRowsAreLeftOutWithANotice() async throws {
+    let world = await World([mountedShare("music")])
+    let window = try Window(world)
+    await world.answer(
+        .success(ShareList(names: ["main", "a/b", "..", "x\u{202E}y", "music"], unusableCount: 1)))
+
+    _ = try await window.shows(["main", "music"])
+
+    #expect(window.pane.state.isServerListed)
+    await settle { window.note != nil }
+    #expect(window.note == "Some shares on “HAL9000” have names that can't be shown.")
 }
 
 // MARK: Showing and refreshing

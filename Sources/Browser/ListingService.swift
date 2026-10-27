@@ -234,7 +234,7 @@ public final class ListingService: Sendable {
                     mounted, notice: .unmatchedMounts, rootVolumeName, to: load)
             }
             if let cached = shares.cachedNames(for: request) {
-                let rows = mounted.adding(cached.names)
+                let rows = mounted.adding(cached.names.filter(ShareNames.isUsable))
                 await BlockingCallThread.run {
                     self.hand(
                         .cached(
@@ -251,8 +251,12 @@ public final class ListingService: Sendable {
             case nil:
                 // The load was cancelled, or the app is quitting.
                 return
-            case .success(let names)?:
-                await self.handLast(mounted.adding(names), notice: nil, rootVolumeName, to: load)
+            case .success(let list)?:
+                let usable = list.names.filter(ShareNames.isUsable)
+                let unusable = list.unusableCount + list.names.count - usable.count
+                await self.handLast(
+                    mounted.adding(usable), notice: unusable > 0 ? .unusableNames : nil,
+                    rootVolumeName, to: load)
             case .failure(let error)?:
                 await self.handLast(
                     mounted, notice: .couldntList(error), rootVolumeName, to: load)
