@@ -83,6 +83,13 @@ public struct FolderHistory: Codable, Equatable, Sendable {
         folders[least.key] = nil
     }
 
+    /// Drops the folder at `path`, as one found missing is, so the palette doesn't list it. A
+    /// visit after counts it from 1. Returns whether the history had it.
+    @discardableResult
+    public mutating func forget(_ path: String) -> Bool {
+        folders.removeValue(forKey: path) != nil
+    }
+
     /// The visit count times 4 when the last visit was within the hour, 2 within the day, 1/2
     /// within the week and 1/4 before; 0 for a folder never visited. `path` is the folder's.
     public func frecency(of path: String, at now: Date) -> Double {
