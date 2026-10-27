@@ -804,7 +804,7 @@ final class ColumnViewController: NSViewController {
             // With no rows kept the note has no age, so the date isn't read.
             return statusText.note(for: pane.state, volumeName: volumeName, now: Date())
         case .loading, .partial, .loaded, .cachedRefreshing, .slow, .offline, .denied, .failed,
-            .notConnected:
+            .notConnected, .serverListed:
             return nil
         }
     }

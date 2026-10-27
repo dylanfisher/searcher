@@ -27,21 +27,21 @@ public enum SystemCommands: CommandSet {
             CommandBinding(
                 copyPath, isEnabled: { hasItems(in: $0.pane) },
                 run: { context in
-                    guard hasItems(in: context.pane) else { return }
-                    let paths = selectedURLs(in: context.pane).map(\.path)
+                    guard let urls = items(in: context.pane) else { return }
+                    let paths = urls.map(\.path)
                     context.pane.systemActions.copyToPasteboard(paths.joined(separator: "\n"))
                 }),
             CommandBinding(
                 revealInFinder, isEnabled: { hasItems(in: $0.pane) },
                 run: { context in
-                    guard hasItems(in: context.pane) else { return }
-                    context.pane.systemActions.revealInFinder(selectedURLs(in: context.pane))
+                    guard let urls = items(in: context.pane) else { return }
+                    context.pane.systemActions.revealInFinder(urls)
                 }),
             CommandBinding(
                 getInfo, isEnabled: { hasItems(in: $0.pane) },
                 run: { context in
-                    guard hasItems(in: context.pane) else { return }
-                    context.pane.systemActions.showInfo(selectedURLs(in: context.pane))
+                    guard let urls = items(in: context.pane) else { return }
+                    context.pane.systemActions.showInfo(urls)
                 }),
             CommandBinding(
                 openTerminal, isEnabled: { $0.pane.location.isFolder },
@@ -55,21 +55,23 @@ public enum SystemCommands: CommandSet {
     }
 
     /// Whether Copy Path, Reveal in Finder and Get Info have something to act on: the pane's
-    /// folder, or at a server, which has no folder, a selected share mounted where its row says
-    /// (0114-server-location.md, 0115-server-shares.md).
+    /// folder, or at a server, which has no folder, selected shares each mounted where its row
+    /// says (0114-server-location.md, 0115-server-shares.md). A folder's rows always have
+    /// their URLs, so they aren't built to tell.
     @MainActor
     private static func hasItems(in pane: Pane) -> Bool {
-        pane.location.isFolder || !ClipboardCommands.selectedURLs(in: pane).isEmpty
+        pane.location.isFolder || items(in: pane) != nil
     }
 
     /// The selected entries' URLs in display order, or the folder's when nothing is selected or
-    /// the folder has no rows yet. Built from the names, with no file-system call.
-    ///
-    /// - Precondition: `hasItems(in: pane)`.
+    /// the folder has no rows yet. Nil at a server with nothing selected, and when a selected
+    /// row has no location (`ClipboardCommands.selectedURLs`), so the command acts on none of
+    /// it. Built from the names, with no file-system call.
     @MainActor
-    private static func selectedURLs(in pane: Pane) -> [URL] {
-        let urls = ClipboardCommands.selectedURLs(in: pane)
-        return urls.isEmpty ? [folderURL(of: pane)] : urls
+    private static func items(in pane: Pane) -> [URL]? {
+        guard let urls = ClipboardCommands.selectedURLs(in: pane) else { return nil }
+        guard urls.isEmpty else { return urls }
+        return pane.location.isFolder ? [folderURL(of: pane)] : nil
     }
 
     @MainActor

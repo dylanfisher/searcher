@@ -86,7 +86,7 @@ extension BenchCase {
             systemActions: NoSystemActions(), settings: settings)
         await waitUntil(pane) {
             switch $0.state {
-            case .loaded, .offline, .denied, .failed, .notConnected: true
+            case .loaded, .offline, .denied, .failed, .notConnected, .serverListed: true
             case .loading, .partial, .cachedRefreshing, .slow: false
             }
         }

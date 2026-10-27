@@ -147,16 +147,17 @@ public final class OpenWith {
     }
 
     /// The types of the entries selected in `pane`, from their kinds, so finding them reads no
-    /// file. Empty when nothing is selected.
+    /// file. Empty when nothing is selected, and when a selected row has no location
+    /// (`Pane.selectsUnmountedShare`), which turns Open With off.
     public static func types(in pane: Pane) -> Set<UTType> {
-        guard let listing = pane.state.listing else { return [] }
+        guard let listing = pane.state.listing, !pane.selectsUnmountedShare else { return [] }
         return Set(pane.selectedRows.map { listing.kind(atRow: $0).type })
     }
 
     /// Opens the entries selected in `pane` in the app at `application`.
     public static func open(selectionOf pane: Pane, withApplicationAt application: URL) {
-        pane.systemActions.open(
-            ClipboardCommands.selectedURLs(in: pane), withApplicationAt: application)
+        guard let urls = ClipboardCommands.selectedURLs(in: pane) else { return }
+        pane.systemActions.open(urls, withApplicationAt: application)
     }
 
     /// Opens the App Store's search for the file extensions of the types selected in `pane`, as

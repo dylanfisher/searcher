@@ -21,6 +21,9 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
 {
     /// What VoiceOver reads last in the row label of an entry whose contents aren't on this Mac.
     static let notDownloadedLabel = "Not downloaded"
+    /// What VoiceOver reads last in the row label of a server's share that isn't mounted
+    /// (docs/decisions/0115-server-shares.md).
+    static let notMountedLabel = "not mounted"
     /// The name cell's badge view, shown only for an entry that isn't downloaded.
     static let notDownloadedBadgeIdentifier = NSUserInterfaceItemIdentifier("notDownloadedBadge")
     /// The name cell's chevron view in column view, shown only for a folder.
@@ -426,13 +429,14 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
 
     /// Offers the selection to services that take files or text and return nothing, such as
     /// New Terminal at Folder. AppKit asks this when it shows the Services menu or a context
-    /// menu, so it reads only whether anything is selected.
+    /// menu, so it reads only whether anything is selected, and at a server whether each
+    /// selected row has a location (`Pane.selectsUnmountedShare`).
     public override func validRequestor(
         forSendType sendType: NSPasteboard.PasteboardType?,
         returnType: NSPasteboard.PasteboardType?
     ) -> Any? {
         if returnType == nil, let sendType, Self.serviceSendTypes.contains(sendType),
-            pane.state.listing != nil, !pane.selection.isEmpty
+            pane.state.listing != nil, !pane.selection.isEmpty, !pane.selectsUnmountedShare
         {
             return self
         }
@@ -753,7 +757,9 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     ///
     /// A server's share row adds `Eject “music”`, which ejects that share as the sidebar does,
     /// when the sidebar's volumes list it as one that can be ejected
-    /// (docs/decisions/0114-server-location.md).
+    /// (docs/decisions/0114-server-location.md). A selection holding a share that isn't
+    /// mounted, or one no longer mounted where its row says, has Open alone, off
+    /// (docs/decisions/0115-server-shares.md).
     func contextMenu(forRow row: Int) -> NSMenu {
         var items = ContextMenuBuilder.folderItems
         var share: SidebarVolume?
@@ -762,16 +768,19 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             if !pane.selection.contains(name) {
                 pane.select(Selection([name], cursor: name))
             }
-            items = ContextMenuBuilder.rowItems
+            items =
+                pane.selectsUnmountedShare
+                ? ContextMenuBuilder.unmountedShareItems : ContextMenuBuilder.rowItems
             if showsShares { share = ejectableShare(listing[row]) }
         } else if pane.containingTrail != nil, !pane.selection.isEmpty {
             pane.select(Selection())
         }
         let menu: NSMenu
         do {
+            // Share… is in the menu only while each selected row has its URL.
             menu = try ContextMenuBuilder.build(
                 items, registry: tableView.registry, target: tableView,
-                selection: ClipboardCommands.selectedURLs(in: pane))
+                selection: ClipboardCommands.selectedURLs(in: pane) ?? [])
         } catch {
             preconditionFailure("\(error)")
         }
@@ -850,7 +859,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
                 ? iconCache.shareIcon { [weak self] in self?.shareIconDidLoad() }
                 : keptThumbnail(row: row, in: listing).map(NSImage.init(thumbnail:))
                     ?? iconCache.icon(for: listing.kind(atRow: row).type)
-            showFolderChevron(listing[row].type == .directory, in: cell)
+            showFolderChevron(Self.showsChevron(listing[row]), in: cell)
             showNotDownloadedBadge(listing[row].isDataless, in: cell)
             cell.textField?.isHidden = listing[row].name == coveredName
         }
@@ -1012,8 +1021,9 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             return text
         }
         var parts = [text(.name), text(.kind)]
-        // A share has no size or date to read.
+        // A share has no size or date to read; one that isn't mounted says so.
         if showsShares {
+            if entry.type == .unmountedShare { parts.append(Self.notMountedLabel) }
             rowView.setAccessibilityLabel(parts.joined(separator: ", "))
             return
         }
@@ -1057,9 +1067,15 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         fitName(in: cell)
     }
 
-    /// Shows or hides a column name cell's chevron: shown for a folder, not for a file, a package
-    /// or a link, whose target the listing doesn't hold. A list's cell has none. The name is
-    /// fitted after, by `showNotDownloadedBadge`.
+    /// Whether `entry`'s row shows a chevron in column view: a folder's, and a share's that isn't
+    /// mounted, as Finder draws one on every share (docs/decisions/0115-server-shares.md); not a
+    /// file's, a package's or a link's, whose target the listing doesn't hold.
+    private static func showsChevron(_ entry: DirectoryEntry) -> Bool {
+        entry.type == .directory || entry.type == .unmountedShare
+    }
+
+    /// Shows or hides a column name cell's chevron, as `showsChevron` says. A list's cell has
+    /// none. The name is fitted after, by `showNotDownloadedBadge`.
     private func showFolderChevron(_ shown: Bool, in cell: NSTableCellView) {
         guard let chevron = Self.chevron(in: cell) else { return }
         chevron.isHidden = !shown
@@ -1167,7 +1183,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         let entry = listing[row]
         let end = Self.nameEnd(
             cellWidth: cell.width,
-            chevronRoom: showsNamesOnly && entry.type == .directory ? chevronRoom : nil,
+            chevronRoom: showsNamesOnly && Self.showsChevron(entry) ? chevronRoom : nil,
             badge: entry.isDataless)
         return NSRect(
             x: cell.minX + Self.nameX, y: cell.minY + (cell.height - Self.labelHeight) / 2,
@@ -1306,12 +1322,14 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
 extension ListingViewController: @preconcurrency NSServicesMenuRequestor {
     /// Writes the selection for a service in the shape Copy writes it
     /// (docs/decisions/0069-cut-and-paste.md). Writes nothing and returns false with nothing
-    /// selected.
+    /// selected, and with a server's row selected that has no location
+    /// (docs/decisions/0115-server-shares.md).
     public func writeSelection(
         to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]
     ) -> Bool {
-        let urls = ClipboardCommands.selectedURLs(in: pane)
-        guard !urls.isEmpty else { return false }
+        guard let urls = ClipboardCommands.selectedURLs(in: pane), !urls.isEmpty else {
+            return false
+        }
         PasteboardFileClipboard(pasteboard: pboard).write(urls)
         return true
     }

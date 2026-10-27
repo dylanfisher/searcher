@@ -42,11 +42,16 @@ public enum ListingState: Sendable {
     /// again when a read of the table holds one of its shares
     /// (docs/decisions/0114-server-location.md).
     case notConnected
+    /// A server's rows, its mounted shares and those it listed that aren't mounted, with why
+    /// they may not be all it offers. Shown as `loaded` rows are, but not a complete listing: a
+    /// share the server didn't list may be there (docs/decisions/0115-server-shares.md).
+    case serverListed(Listing, ServerNotice)
 
     /// The rows to show, if any have arrived.
     public var listing: Listing? {
         switch self {
-        case .partial(let listing), .loaded(let listing), .cachedRefreshing(let listing, _):
+        case .partial(let listing), .loaded(let listing), .cachedRefreshing(let listing, _),
+            .serverListed(let listing, _):
             listing
         case .slow(let kept), .offline(let kept): kept?.listing
         case .loading, .denied, .failed, .notConnected: nil
@@ -59,7 +64,7 @@ public enum ListingState: Sendable {
         switch self {
         case .cachedRefreshing(_, let listedAt): listedAt
         case .slow(let kept), .offline(let kept): kept?.listedAt
-        case .loading, .partial, .loaded, .denied, .failed, .notConnected: nil
+        case .loading, .partial, .loaded, .denied, .failed, .notConnected, .serverListed: nil
         }
     }
 
@@ -81,7 +86,9 @@ public enum ListingState: Sendable {
         switch self {
         case .loaded: true
         case .slow(let kept), .offline(let kept): kept?.isComplete ?? false
-        case .loading, .partial, .cachedRefreshing, .denied, .failed, .notConnected: false
+        case .loading, .partial, .cachedRefreshing, .denied, .failed, .notConnected,
+            .serverListed:
+            false
         }
     }
 
@@ -89,7 +96,7 @@ public enum ListingState: Sendable {
     /// listing or cached rows, kept or not, but not a first batch.
     var showsWholeFolder: Bool {
         switch self {
-        case .loaded, .cachedRefreshing: true
+        case .loaded, .cachedRefreshing, .serverListed: true
         case .slow(let kept), .offline(let kept):
             kept.map { $0.isComplete || $0.listedAt != nil } ?? false
         case .loading, .partial, .denied, .failed, .notConnected: false
@@ -101,7 +108,7 @@ public enum ListingState: Sendable {
     /// volume that hasn't answered since, and a read there can wait on a share that is gone.
     public var isAnswered: Bool {
         switch self {
-        case .partial, .loaded: true
+        case .partial, .loaded, .serverListed: true
         case .loading, .cachedRefreshing, .slow, .offline, .denied, .failed, .notConnected: false
         }
     }
@@ -112,6 +119,7 @@ public enum ListingState: Sendable {
         case .partial: .partial(listing)
         case .loaded: .loaded(listing)
         case .cachedRefreshing(_, let listedAt): .cachedRefreshing(listing, listedAt: listedAt)
+        case .serverListed(_, let notice): .serverListed(listing, notice)
         case .slow(let kept?): .slow(kept.showing(listing))
         case .offline(let kept?): .offline(kept.showing(listing))
         case .loading, .slow(nil), .offline(nil), .denied, .failed, .notConnected:

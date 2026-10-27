@@ -61,6 +61,10 @@ public final class ListingService: Sendable {
     /// on; nil for a service that lists no server, as a bench makes, which traps on a server
     /// load (docs/decisions/0114-server-location.md).
     public let mounts: MountTable?
+    /// The share lists of the servers `mounts` has shares of, which a server's listing adds its
+    /// unmounted shares from; nil lists a server's mounted shares only, as a test of the mount
+    /// table alone makes (docs/decisions/0115-server-shares.md).
+    public let shares: ServerShares?
 
     /// A service that lists folders on the file system and finds each one's volume with `statfs`.
     /// `rootVolumeName` runs once per load, on the load's thread.
@@ -68,12 +72,14 @@ public final class ListingService: Sendable {
         clock: C = ContinuousClock(),
         rootVolumeName: @escaping @Sendable () -> String = { readRootVolumeName() },
         cache: ListingCache? = nil, thumbnails: ThumbnailService? = nil,
-        recentListings: RecentListings? = nil, mounts: MountTable? = nil
+        recentListings: RecentListings? = nil, mounts: MountTable? = nil,
+        shares: ServerShares? = nil
     ) {
         self.init(
             lister: DirectoryLister(), clock: clock, rootVolumeName: rootVolumeName,
             volumeOf: VolumeIdentity.init(path:), mountedVolumes: VolumeIdentity.mounted,
-            cache: cache, thumbnails: thumbnails, recentListings: recentListings, mounts: mounts)
+            cache: cache, thumbnails: thumbnails, recentListings: recentListings, mounts: mounts,
+            shares: shares)
     }
 
     /// A service that lists folders with `lister`. `volumeOf` says which volume a path is on, and
@@ -89,10 +95,12 @@ public final class ListingService: Sendable {
         },
         mountedVolumes: @escaping @Sendable () -> [VolumeIdentity] = { [] },
         cache: ListingCache? = nil, thumbnails: ThumbnailService? = nil,
-        recentListings: RecentListings? = nil, mounts: MountTable? = nil
+        recentListings: RecentListings? = nil, mounts: MountTable? = nil,
+        shares: ServerShares? = nil
     ) {
         self.mountedVolumes = mountedVolumes
         self.mounts = mounts
+        self.shares = shares
         self.lister = lister
         self.cache = cache
         self.thumbnails = thumbnails
@@ -119,8 +127,8 @@ public final class ListingService: Sendable {
     /// `.DS_Store` hidden and names filtered as asked (`Listing`). `onUpdate` runs on the main
     /// actor with a `cached` (a network folder the cache keeps), `firstBatch` (folders that take
     /// more than one read), `slow` and `gaveUp` (a load that stalls) as they happen, then `full`,
-    /// `failed` or `volumeGone`, unless the load is cancelled first. A server's load hands only
-    /// `full` or `notConnected` (`loadServer`).
+    /// `failed` or `volumeGone`, unless the load is cancelled first. A server's load hands
+    /// `cached` and `slow`, then `full`, `serverListed` or `notConnected` (`loadServer`).
     @discardableResult
     public func load(
         _ location: Location, sortedBy column: SortColumn = .name, ascending: Bool = true,
@@ -182,38 +190,91 @@ public final class ListingService: Sendable {
         return load
     }
 
-    /// Lists `server`'s shares from `mounts` once its first read has landed, asking no share:
-    /// one folder entry per share, in the table's order, named by its mount point's last
-    /// component and dated the Unix epoch, which no view shows. A server with no share hands
-    /// `notConnected`. The load takes no slot and has no stall timers or cached rows, since it
-    /// reads nothing that can stall (docs/decisions/0114-server-location.md).
+    /// Lists `server`'s shares once `mounts`' first read has landed: a folder entry for each
+    /// share mounted, in the table's order, named by its mount point's last component, and an
+    /// `unmountedShare` entry for each share `shares` lists that no mounted share of the server
+    /// is, by `ShareNames.key`, all dated the Unix epoch, which no view shows. A server with no
+    /// share hands `notConnected` and its share lists are forgotten. With a list cached, of any
+    /// age, its rows are handed as `cached` first. At `LoadTimeouts.slow` without the list it
+    /// hands `slow`, named by the server. A list that fails, a protocol whose shares can't be
+    /// listed, and a mounted share that can't be matched hand the mounted shares as
+    /// `serverListed`, with why. The load takes no slot and reads nothing that can stall: the
+    /// list runs in `shares` (docs/decisions/0114-server-location.md,
+    /// docs/decisions/0115-server-shares.md).
     private func loadServer(_ server: Server, _ load: ListingLoad) {
         guard let mounts else {
             preconditionFailure("listing the server \(server.host) with no mount table")
         }
         endCachedLookup(of: load)
-        Task { @MainActor in
+        let shares = shares
+        let listing = Task { @MainActor in
             await mounts.firstRead()
             guard !load.isCancelled else { return }
-            let shares = mounts.volumes.filter { $0.server == server }.map(\.name)
+            let volumes = mounts.volumes.filter { $0.server == server }
+            let request = ShareRequest(server: server, volumes: mounts.volumes)
             // The root volume's name is read from the file system, so off the main thread.
-            BlockingCallThread.start {
-                let rootVolumeName = self.rootVolumeName()
-                guard !shares.isEmpty else {
-                    return self.handLast(.notConnected(rootVolumeName: rootVolumeName), to: load)
+            let rootVolumeName = await BlockingCallThread.run { self.rootVolumeName() }
+            guard !volumes.isEmpty else {
+                shares?.forget(server)
+                return await BlockingCallThread.run {
+                    self.handLast(.notConnected(rootVolumeName: rootVolumeName), to: load)
                 }
-                let entries = shares.map { name in
-                    DirectoryEntry(
-                        name: name, type: .directory, size: nil,
-                        modified: Date(timeIntervalSince1970: 0), isHidden: false,
-                        isDataless: false)
-                }
-                let listing = Listing(
-                    entries, column: load.column, ascending: load.ascending,
-                    foldersFirst: load.foldersFirst, showsHidden: load.showsHidden,
-                    hidesDSStore: load.hidesDSStore, filter: load.filter)
-                self.handLast(.full(listing, rootVolumeName: rootVolumeName), to: load)
             }
+            let mounted = ServerRows(volumes)
+            guard let shares else {
+                return await self.handLast(mounted, notice: nil, rootVolumeName, to: load)
+            }
+            let smb = volumes.filter { $0.fsType == VolumeIdentity.smbFSType }
+            guard !smb.isEmpty else {
+                let notice = ServerNotice.onlyMounted(ShareProtocol(fsType: volumes[0].fsType))
+                return await self.handLast(mounted, notice: notice, rootVolumeName, to: load)
+            }
+            guard let request, smb.allSatisfy({ $0.share != nil }) else {
+                return await self.handLast(
+                    mounted, notice: .unmatchedMounts, rootVolumeName, to: load)
+            }
+            if let cached = shares.cachedNames(for: request) {
+                let rows = mounted.adding(cached.names)
+                await BlockingCallThread.run {
+                    self.hand(
+                        .cached(
+                            rows.listing(for: load), listedAt: cached.listedAt,
+                            rootVolumeName: rootVolumeName), to: load)
+                }
+            }
+            let slow = self.startWait(LoadTimeouts.slow)
+            load.stall.setVolumeNames(root: rootVolumeName, folder: server.name)
+            load.stall.restart { generation in
+                [self.stallTimer(slow, reporting: .slow, of: load, generation: generation)]
+            }
+            switch await shares.names(for: request) {
+            case nil:
+                // The load was cancelled, or the app is quitting.
+                return
+            case .success(let names)?:
+                await self.handLast(mounted.adding(names), notice: nil, rootVolumeName, to: load)
+            case .failure(let error)?:
+                await self.handLast(
+                    mounted, notice: .couldntList(error), rootVolumeName, to: load)
+            }
+        }
+        // Leaving the server lets go of the list it waits for, which ends the run when no other
+        // pane waits for it.
+        load.whenCancelled { listing.cancel() }
+    }
+
+    /// Hands `rows`, a server's, as the load's last update, `full` or with `notice`, from a
+    /// `BlockingCallThread`, which sorts them.
+    private func handLast(
+        _ rows: ServerRows, notice: ServerNotice?, _ rootVolumeName: String,
+        to load: ListingLoad
+    ) async {
+        await BlockingCallThread.run {
+            let listing = rows.listing(for: load)
+            self.handLast(
+                notice.map {
+                    .serverListed(listing, $0, rootVolumeName: rootVolumeName)
+                } ?? .full(listing, rootVolumeName: rootVolumeName), to: load)
         }
     }
 
@@ -926,6 +987,52 @@ final class LoadStall: @unchecked Sendable {
             waitingReports = []
             last()
         }
+    }
+}
+
+/// A server's rows: one folder entry per mounted share, named by its mount point's last
+/// component, so two mounts of one share are two rows; then one `unmountedShare` entry per name
+/// the server listed that no mounted share is, by `ShareNames.key`, and no row is named
+/// (docs/decisions/0115-server-shares.md).
+private struct ServerRows: Sendable {
+    private(set) var entries: [DirectoryEntry]
+    /// The keys of the shares mounted and the names of every row, which a listed name matches.
+    private var keys: Set<String>
+    private var names: Set<String>
+
+    /// The rows of `volumes`, the server's mounted shares.
+    init(_ volumes: [VolumeIdentity]) {
+        entries = volumes.map { Self.entry($0.name, type: .directory) }
+        keys = Set(volumes.compactMap(\.share).map(ShareNames.key))
+        names = Set(entries.map(\.name))
+    }
+
+    /// These rows and a row for each of `listed`, the names the server listed, that isn't
+    /// mounted.
+    func adding(_ listed: [String]) -> ServerRows {
+        var rows = self
+        for name in listed where !rows.names.contains(name) {
+            let key = ShareNames.key(name)
+            guard !rows.keys.contains(key) else { continue }
+            rows.keys.insert(key)
+            rows.names.insert(name)
+            rows.entries.append(Self.entry(name, type: .unmountedShare))
+        }
+        return rows
+    }
+
+    /// The rows sorted and filtered as `load` asks.
+    func listing(for load: ListingLoad) -> Listing {
+        Listing(
+            entries, column: load.column, ascending: load.ascending,
+            foldersFirst: load.foldersFirst, showsHidden: load.showsHidden,
+            hidesDSStore: load.hidesDSStore, filter: load.filter)
+    }
+
+    private static func entry(_ name: String, type: DirectoryEntry.FileType) -> DirectoryEntry {
+        DirectoryEntry(
+            name: name, type: type, size: nil, modified: Date(timeIntervalSince1970: 0),
+            isHidden: false, isDataless: false)
     }
 }
 
