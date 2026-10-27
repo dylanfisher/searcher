@@ -854,7 +854,7 @@ extension Fixture {
     try fixture.type("tune")
 
     fixture.clickElsewhere()
-    fixture.pane.navigate(to: fixture.pane.location.child(named: "sub"))
+    fixture.pane.navigate(to: fixture.pane.location.folderChild(named: "sub"))
 
     try await Task.sleep(for: .milliseconds(200))
     #expect(fixture.exists("song.flac"))

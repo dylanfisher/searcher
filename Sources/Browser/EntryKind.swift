@@ -117,6 +117,8 @@ public struct EntryKind: Hashable, Sendable {
                 return .symbolicLink
             case .other:
                 return .item
+            case .unmountedShare:
+                return .volume
             }
         }
 

@@ -13,6 +13,9 @@ public struct DirectoryEntry: Equatable, Sendable {
         case symbolicLink
         /// Devices, sockets and FIFOs.
         case other
+        /// A share a server offers that isn't mounted, so it has no folder: a server's row only,
+        /// never a lister's (docs/decisions/0115-server-shares.md).
+        case unmountedShare
 
         /// Whether it is a folder on disk: a folder or a package. Sizes are walked and file URLs
         /// end in a slash by this; what Open and column view do goes by the case itself.

@@ -15,8 +15,8 @@ import Testing
 }
 
 @Test func childAppendsAName() {
-    #expect(Location(path: "/a").child(named: "b") == Location(path: "/a/b"))
-    #expect(Location(path: "/").child(named: "b") == Location(path: "/b"))
+    #expect(Location(path: "/a").folderChild(named: "b") == Location(path: "/a/b"))
+    #expect(Location(path: "/").folderChild(named: "b") == Location(path: "/b"))
 }
 
 @Test func ancestorsRunFromRootToTheLocation() {
@@ -32,11 +32,11 @@ import Testing
 }
 
 @Test func childRejectsAnEmptyName() async {
-    await #expect(processExitsWith: .failure) { _ = Location(path: "/a").child(named: "") }
+    await #expect(processExitsWith: .failure) { _ = Location(path: "/a").folderChild(named: "") }
 }
 
 @Test func childRejectsANameWithASlash() async {
-    await #expect(processExitsWith: .failure) { _ = Location(path: "/a").child(named: "b/c") }
+    await #expect(processExitsWith: .failure) { _ = Location(path: "/a").folderChild(named: "b/c") }
 }
 
 private let hal = Location.server(Server(mountSource: "//dylan@HAL9000._smb._tcp.local/music")!)
@@ -76,13 +76,11 @@ private let hal = Location.server(Server(mountSource: "//dylan@HAL9000._smb._tcp
     #expect(hal.ancestors == [hal])
 }
 
-@Test func aServersChildIsItsShareInVolumes() {
-    #expect(hal.child(named: "music") == Location(path: "/Volumes/music"))
-}
-
-@Test func aServersChildRejectsANameWithASlash() async {
+// A server's rows go through `Pane.childLocation(of:)`, which asks the mount table: a name alone
+// would take whatever is at /Volumes/<name> for the share (0115-server-shares.md).
+@Test func aServerHasNoFolderChild() async {
     await #expect(processExitsWith: .failure) {
         _ = Location.server(Server(mountSource: "//HAL9000._smb._tcp.local/music")!)
-            .child(named: "a/b")
+            .folderChild(named: "music")
     }
 }

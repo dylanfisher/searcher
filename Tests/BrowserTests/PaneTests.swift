@@ -544,7 +544,7 @@ private func linkTree() async throws -> (Pane, StubSystemActions, TemporaryFolde
     pane.openSelection()
     await settle { pane.location.name == "folder link" && pane.state.isLoaded }
 
-    #expect(pane.location == Location(path: root.url.path).child(named: "folder link"))
+    #expect(pane.location == Location(path: root.url.path).folderChild(named: "folder link"))
     #expect(pane.state.names == ["inside.txt"])
     #expect(actions.openedFiles.isEmpty)
 
@@ -793,7 +793,7 @@ private func holdLinkChecks(of pane: Pane) -> HeldLinkChecks {
     pane.openSelection()
     await settle { pane.location.name == "link to link" && pane.state.isLoaded }
 
-    #expect(pane.location == Location(path: root.url.path).child(named: "link to link"))
+    #expect(pane.location == Location(path: root.url.path).folderChild(named: "link to link"))
     #expect(pane.state.names == ["inside.txt"])
     #expect(actions.openedFiles.isEmpty)
 }
@@ -831,12 +831,12 @@ private func holdLinkChecks(of pane: Pane) -> HeldLinkChecks {
     pane.select(Selection([ExactName("folder link")], cursor: ExactName("folder link")))
 
     pane.openSelection()
-    pane.navigate(to: Location(path: root.url.path).child(named: "folder"))
+    pane.navigate(to: Location(path: root.url.path).folderChild(named: "folder"))
     // The link's listing would land on the main queue by now.
     try await Task.sleep(for: .milliseconds(100))
     await drainMainQueue()
 
-    #expect(pane.location == Location(path: root.url.path).child(named: "folder"))
+    #expect(pane.location == Location(path: root.url.path).folderChild(named: "folder"))
     #expect(actions.openedFiles.isEmpty)
 }
 
@@ -847,14 +847,14 @@ private func holdLinkChecks(of pane: Pane) -> HeldLinkChecks {
     pane.openSelection()
     await settle { pane.location.name == "loop" && pane.state.isFailed }
 
-    #expect(pane.location == Location(path: root.url.path).child(named: "loop"))
+    #expect(pane.location == Location(path: root.url.path).folderChild(named: "loop"))
     #expect(pane.state.error?.code == ELOOP)
     #expect(actions.openedFiles.isEmpty)
 }
 
 @MainActor @Test func openOnALinkThenBackAndForwardDoesNotOpenTheLinkLate() async throws {
     let (pane, actions, root) = try await linkTree()
-    pane.navigate(to: Location(path: root.url.path).child(named: "folder"))
+    pane.navigate(to: Location(path: root.url.path).folderChild(named: "folder"))
     await settle { pane.location.name == "folder" && pane.state.isLoaded }
     pane.goBack()
     await settle { pane.location.path == root.url.path && pane.state.isLoaded }
@@ -1028,7 +1028,7 @@ private func holdLinkChecks(of pane: Pane) -> HeldLinkChecks {
 @MainActor @Test func aChangeForAFolderThePaneLeftIsIgnored() async {
     let fixture = await PaneFixture.loaded()
     let old = fixture.pane.location
-    fixture.pane.navigate(to: old.child(named: "docs"))
+    fixture.pane.navigate(to: old.folderChild(named: "docs"))
     await settle { fixture.pane.state.isLoaded }
     let version = fixture.pane.stateVersion
 

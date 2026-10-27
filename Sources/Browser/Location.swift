@@ -57,17 +57,14 @@ public enum Location: Hashable, Sendable {
             }
     }
 
-    /// The folder named `name` inside this one; for a server, its share of that name in
-    /// `/Volumes`. Builds a path only; it doesn't check that the folder exists.
+    /// The folder named `name` inside this one. Builds a path only; it doesn't check that the
+    /// folder exists. A server's rows go through `Pane.childLocation(of:)`, which asks the mount
+    /// table whose share a row is (docs/decisions/0115-server-shares.md).
     ///
-    /// - Precondition: `name` is one path component: not empty, and without a `/`.
-    public func child(named name: String) -> Location {
+    /// - Precondition: this is a folder, and `name` is one path component: not empty, and
+    ///   without a `/`.
+    public func folderChild(named name: String) -> Location {
         precondition(!name.isEmpty && !name.contains("/"), "\"\(name)\" isn't one path component")
-        switch self {
-        case .folder(let path):
-            return Location(path: (path.hasSuffix("/") ? path : path + "/") + name)
-        case .server:
-            return Server.sharesFolder.child(named: name)
-        }
+        return Location(path: (folderPath.hasSuffix("/") ? folderPath : folderPath + "/") + name)
     }
 }

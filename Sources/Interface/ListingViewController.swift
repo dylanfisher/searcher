@@ -583,7 +583,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             pane.select(Selection([name], cursor: name))
         }
         if entry.type == .directory, currentModifierFlags().contains(.command) {
-            tableView.openInNewTab(pane.location.child(named: entry.name))
+            // A server's row opens only while its share is mounted where the row says.
+            if let folder = pane.childLocation(of: entry) { tableView.openInNewTab(folder) }
             return
         }
         tableView.runCommand(NavigationCommands.open.id)
@@ -596,9 +597,10 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     public func tableView(
         _ tableView: NSTableView, pasteboardWriterForRow row: Int
     ) -> (any NSPasteboardWriting)? {
-        guard let listing, row >= 0, row < listing.count else { return nil }
-        return PasteboardFileClipboard.item(
-            for: ClipboardCommands.fileURL(of: listing[row], in: pane.location))
+        guard let listing, row >= 0, row < listing.count,
+            let url = ClipboardCommands.fileURL(of: listing[row], in: pane)
+        else { return nil }
+        return PasteboardFileClipboard.item(for: url)
     }
 
     /// What a drop does where it is: into the folder of a folder row it is on, to the app of an
@@ -702,11 +704,13 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         if dropOperation == .on, let listing, row >= 0, row < listing.count {
             let kind = listing.kind(atRow: row).type
             if kind == .folder {
-                folder = pane.location.child(named: listing[row].name)
+                // A server's row whose share isn't mounted where it says takes no drop.
+                guard let child = pane.childLocation(of: listing[row]) else { return nil }
+                folder = child
                 target = nil
                 folderRow = listing[row].name
             } else if listing[row].type == .package, kind.conforms(to: .application) {
-                app = pane.location.child(named: listing[row].name)
+                app = pane.location.folderChild(named: listing[row].name)
             }
         }
         // A server has no folder to drop into; a share row is one (0114-server-location.md).
@@ -759,7 +763,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
                 pane.select(Selection([name], cursor: name))
             }
             items = ContextMenuBuilder.rowItems
-            if showsShares { share = ejectableShare(named: name.name) }
+            if showsShares { share = ejectableShare(listing[row]) }
         } else if pane.containingTrail != nil, !pane.selection.isEmpty {
             pane.select(Selection())
         }
@@ -781,11 +785,12 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         return menu
     }
 
-    /// The sidebar's volume mounted at the server's share `name`, if it lists one that can be
-    /// ejected. The sidebar reads the mounts itself, so for a moment after a mount event it
+    /// The sidebar's volume mounted at the server's share `row`, if the mount table has the
+    /// server's share there (`Pane.childLocation(of:)`) and the sidebar lists it as one that can
+    /// be ejected. The sidebar reads the mounts itself, so for a moment after a mount event it
     /// may not list a share the server's rows show, and the row has no Eject until it does.
-    private func ejectableShare(named name: String) -> SidebarVolume? {
-        let mountPoint = pane.location.child(named: name).folderPath
+    private func ejectableShare(_ row: DirectoryEntry) -> SidebarVolume? {
+        guard let mountPoint = pane.childLocation(of: row)?.folderPath else { return nil }
         return volumes?.volumes.first { $0.mountPoint == mountPoint && $0.canEject }
     }
 
@@ -870,7 +875,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         guard let thumbnails = pane.service.thumbnails,
             ThumbnailService.shows(entry, kind: listing.kind(atRow: row)),
             case .some(.some(let image)) = thumbnails.cached(
-                at: pane.location.child(named: entry.name).folderPath, entry: entry,
+                at: pane.location.folderChild(named: entry.name).folderPath, entry: entry,
                 side: Self.iconSize)
         else { return nil }
         return image
@@ -898,7 +903,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
                 guard ThumbnailService.shows(entry, kind: listing.kind(atRow: row)) else {
                     continue
                 }
-                let path = pane.location.child(named: entry.name).folderPath
+                let path = pane.location.folderChild(named: entry.name).folderPath
                 if let request = thumbnailRequests[entry.name], request.path == path,
                     request.entry == entry
                 {

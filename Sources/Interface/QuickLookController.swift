@@ -28,13 +28,27 @@ final class QuickLookController: NSObject, @preconcurrency QLPreviewPanelDataSou
         let location: Location
         let listing: Listing?
         let rows: IndexSet
+        /// At a server, each row's mount point as the mount table had it when the items were
+        /// taken; the rows whose share wasn't mounted where they say aren't in `rows`
+        /// (docs/decisions/0115-server-shares.md). Empty in a folder.
+        let mountPoints: [Int: Location]
 
         var count: Int { rows.count }
 
         func url(at index: Int) -> URL {
             guard let listing else { preconditionFailure("item \(index) of no listing") }
-            let entry = listing[row(at: index)]
-            return ClipboardCommands.fileURL(of: entry, in: location)
+            let row = row(at: index)
+            let entry = listing[row]
+            switch location {
+            case .folder:
+                return ClipboardCommands.fileURL(
+                    of: entry, at: location.folderChild(named: entry.name))
+            case .server:
+                guard let mountPoint = mountPoints[row] else {
+                    preconditionFailure("the share \(entry.name) was taken with no mount point")
+                }
+                return ClipboardCommands.fileURL(of: entry, at: mountPoint)
+            }
         }
 
         /// The `index`th selected row. Walks the ranges, which for Select All is one; the panel
@@ -63,7 +77,8 @@ final class QuickLookController: NSObject, @preconcurrency QLPreviewPanelDataSou
     /// closed.
     private var panel: (any PreviewPanel)?
     private var items = noItems
-    private static let noItems = Items(location: Location(path: "/"), listing: nil, rows: [])
+    private static let noItems = Items(
+        location: Location(path: "/"), listing: nil, rows: [], mountPoints: [:])
     /// The item the panel was last told to show.
     private var shownIndex: Int?
 
@@ -139,9 +154,14 @@ final class QuickLookController: NSObject, @preconcurrency QLPreviewPanelDataSou
     private func refresh(reloading: Bool) {
         guard let panel, !pane.selection.isProvisional else { return }
         let listing = pane.state.listing
+        var rows = listing.map { pane.selection.rows(in: $0) } ?? []
+        var mountPoints: [Int: Location] = [:]
+        if case .server = pane.location, let listing {
+            for row in rows { mountPoints[row] = pane.childLocation(of: listing[row]) }
+            rows = IndexSet(mountPoints.keys)
+        }
         let new = Items(
-            location: pane.location, listing: listing,
-            rows: listing.map { pane.selection.rows(in: $0) } ?? [])
+            location: pane.location, listing: listing, rows: rows, mountPoints: mountPoints)
         let index = new.index(ofRow: listing.flatMap { pane.selection.cursorRow(in: $0) })
         let itemChanged =
             new.location != items.location || new.rows != items.rows
