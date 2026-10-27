@@ -29,8 +29,14 @@ public let testServer = Server(host: testServerHost)!
 /// `testServer`'s host as its shares' sources write it.
 public let testServerHost = "HAL9000._smb._tcp.local"
 
-/// A share of the server at `host` mounted at `/Volumes/<name>`, as the system mounts one.
-public func mountedShare(_ name: String, of host: String = testServerHost) -> VolumeIdentity {
+/// A share of the server at `host` mounted at `/Volumes/<name>` by `user`, or by no user, over
+/// the file system `fsType`, as the system mounts one. `name` and `user` are as the share's source
+/// writes them, percent-encoded.
+public func mountedShare(
+    _ name: String, of host: String = testServerHost, user: String? = "dylan",
+    fsType: String = VolumeIdentity.smbFSType
+) -> VolumeIdentity {
     VolumeIdentity(
-        device: "//dylan@\(host)/\(name)", mountPoint: "/Volumes/\(name)", kind: .network)
+        device: "//\(user.map { "\($0)@" } ?? "")\(host)/\(name)", mountPoint: "/Volumes/\(name)",
+        kind: .network, fsType: fsType)
 }

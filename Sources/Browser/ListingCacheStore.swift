@@ -129,7 +129,8 @@ public actor ListingCacheStore {
             for candidate in candidates {
                 guard let stored = read(candidate.url) else { continue }
                 let volume = VolumeIdentity(
-                    device: stored.device, mountPoint: stored.mountPoint, kind: .network)
+                    device: stored.device, mountPoint: stored.mountPoint, kind: .network,
+                    fsType: stored.fsType)
                 if sizes[volume] == nil {
                     sizes[volume] = stored.sizes.mapValues(\.record)
                 }
@@ -324,12 +325,14 @@ public actor ListingCacheStore {
 private struct StoredVolume: Codable {
     let device: String
     let mountPoint: String
+    /// `VolumeIdentity.fsType`, part of the volume's identity.
+    let fsType: String
     let folders: [String: StoredFolder]
     /// Folder sizes by path. A path needn't have a listing in `folders`, nor the other way round.
     let sizes: [String: StoredSize]
 
     enum CodingKeys: String, CodingKey, CaseIterable {
-        case device, mountPoint, folders, sizes
+        case device, mountPoint, fsType, folders, sizes
     }
 
     init(
@@ -338,6 +341,7 @@ private struct StoredVolume: Codable {
     ) {
         device = volume.device
         mountPoint = volume.mountPoint
+        fsType = volume.fsType
         self.folders = folders.mapValues(StoredFolder.init)
         self.sizes = sizes.mapValues(StoredSize.init)
     }
@@ -347,6 +351,7 @@ private struct StoredVolume: Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         device = try container.decode(String.self, forKey: .device)
         mountPoint = try container.decode(String.self, forKey: .mountPoint)
+        fsType = try container.decode(String.self, forKey: .fsType)
         folders = try container.decode([String: StoredFolder].self, forKey: .folders)
         sizes = try container.decode([String: StoredSize].self, forKey: .sizes)
     }
