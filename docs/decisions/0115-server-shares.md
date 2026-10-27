@@ -220,6 +220,14 @@ before the step that builds it, and the list is under "For Dylan to check".
   dictionaries are `CFMutableDictionary`, which isn't `Sendable`, so they are built inside the
   call, on the thread that makes it, from a `Sendable` request value. A mount is started only for
   a mounted share's server, so a mounted SMB share is always there to take the user from.
+  *(8d)* `URL(string:)` refuses a host holding a `\` (`My\032Mac._smb._tcp.local`), so a Mac
+  named with a space would fail every mount. `ShareRequest.urlAuthority`, which `smbutil`'s
+  target uses too, takes the host from `Server.urlHost`: a Bonjour instance with its escapes
+  undone by the decoder `Server.name` uses, then percent-encoded but for ASCII letters, digits
+  and `-_~` (`Dylan%E2%80%99s%20MacBook%20Pro._smb._tcp.local`); other hosts as written.
+  Whether NetFS and `smbutil` accept the percent-encoded Bonjour host is *(unverified)* and
+  checked by hand. When the server's last SMB share went since its rows were listed, there is
+  no user to mount as: the sheet says "No share of “HAL9000” is mounted to connect as."
 - **The mount state machine.** `ShareMounts` (main actor) keeps one entry per mount key (server,
   user, share key). `ShareMounter` is a protocol shaped like NetFS: `start(request, completion)`
   returns `.failed(status)` for a non-zero immediate return, for which the completion never
@@ -244,6 +252,10 @@ before the step that builds it, and the list is under "For Dylan to check".
     the first of the completion's list, or, when that is empty, the mounted share of this
     server matching the share key in the table's current read; with none found it is a failure
     with `strerror`. Status -128 and a cancel are `cancelled` and show nothing.
+  - *(8d)* NetFS.h defines no `kNetFSAlreadyMounted`, so `EEXIST` alone is `alreadyMounted`. A
+    status 0 with no mount point is looked up in the table the same way, and is a failure with
+    `ENOENT` when the table has none. A failure and a user's cancel answer without a read of
+    the table; only a status that may have mounted reads it.
 - **What a successful mount does.** The pane isn't matched by server: a remount may record a
   different host than the row's. After a result the pane's table is read again
   (`MountTable.refreshed()`, which starts a read and returns once it has landed) and the mount
@@ -254,17 +266,28 @@ before the step that builds it, and the list is under "For Dylan to check".
   selected" exactly while it hasn't been cancelled, and a waiter is cancelled by any change of
   the pane's location (Back, Forward, a path bar click, a new location), by a selection that
   isn't that one row, by Escape, and by the pane closing. So a mount finishing after the user
-  moved on makes a mounted row and nothing else.
+  moved on makes a mounted row and nothing else. *(8d)* In column view a share the table
+  records under another host than the column's server is no row of it, so the trail starts
+  again at the mount point, as list view's navigation does. A change of view mode cancels too.
+  A path bar click can't come while a mount waits: a pane at a server shows one segment, its
+  own, which does nothing on a click. A column still selecting the share after a cancel opens
+  its column if the mount finishes anyway, as any column follows a selected folder.
 - **When a mount starts.** Only where a column would open, so holding ↓ through seven shares
   starts nothing on the six it passes. The delay is `ColumnTrail.openDelay` (120 ms,
   [0094](0094-column-open-delay.md)), not 0111's. In column view: a click on the row follows at
   once and starts the mount; a key-made selection starts it when the keys have paused for
   `openDelay`, which is when `follow` would open its column; → and ⌘↓ start it at once
   (`openHeldColumn`). Before that a selected unmounted share shows nothing extra. In list view:
-  Return, ⌘↓, Open, double-click and → start it; a click or arrow selection only selects.
+  Open (⌘↓, ⌘O, the menu, the context menu) and a double-click start it; Return stays Rename,
+  which a share refuses, and → does nothing; a click or arrow selection only selects.
   Finder's behavior on a plain selection, whether it connects when a share is highlighted in
   column view and how it treats a key stopped on a share, is *(unverified)*. Because a stop of
   the arrow starts a mount, an unmounted share the keys stop on may show a sign-in window.
+  *(8d)* Return and → are left out in list view as for a folder: in this app neither opens a
+  folder in list view, and in Finder Return renames and → expands a row. In column
+  view a selection is mounted only when it is new: rows that change under a selection already
+  followed, and the selection a column is made with (a restored window, Back to a kept server
+  column), mount nothing; → mounts again after a failure.
 - **What a mount shows.** After `LoadTimeouts.spinnerDelay` (150 ms) the row shows a spinner and
   the status bar "Connecting to “main”…". A mount has no give-up time, since a sign-in window
   may be waiting for the user. A result other than `mounted`, `alreadyMounted` and `cancelled`
@@ -344,7 +367,8 @@ nothing yet produces, and 8c, which first shows an unmounted row, ships its refu
    `NetFSShareMounter.swift`, `ShareMounts.swift`, `MountTable.swift`, `Pane.swift`,
    `ColumnTrail.swift`, `ListingViewController.swift`, `ColumnViewController.swift`,
    `FileCommands.swift`, `PaneViewController.swift`, `ContextMenuBuilder.swift`. Tests, in a
-   window with the fake mounter: Return starts one mount and a second Return joins it; ↓ held
+   window with the fake mounter: Open starts one mount and a second Open joins it, Return starts
+   none; ↓ held
    through seven rows with the clock stopped starts none, and starting one after `openDelay`; a
    click in column view starts it at once, a click in list view does not; success goes into the
    mount point in list view and opens the share's column in column view, and not after Back, a
@@ -408,4 +432,5 @@ live and whether its sidebar row leaves with the last share; the column-view not
 or double-space share name, and whether `LC_ALL=en_US.UTF-8` is what gives UTF-8 names.
 Before 8d: how `f_mntfromname` writes a share with a space, `%`, Unicode, NFD, a domain user and
 a Bonjour host with a space; whether the second share of a session mounts with no prompt;
-`AllowUI` showing the sign-in window when the keychain is empty.
+`AllowUI` showing the sign-in window when the keychain is empty; a mount, and the share list,
+of a Mac whose Bonjour name has a space or an apostrophe, by its percent-encoded host.

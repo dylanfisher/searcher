@@ -26,6 +26,11 @@ struct PaneStatusText {
         "Loading \(folderName)"
     }
 
+    /// The note while the share `name` is being mounted (docs/decisions/0115-server-shares.md).
+    static func connectingNote(_ name: String) -> String {
+        "Connecting to “\(name)”…"
+    }
+
     /// The note for `state` at `now`, or nil for a state that needs none. `volumeName` names the
     /// volume that stopped answering, or for a server's notice the server.
     func note(for state: ListingState, volumeName: String, now: Date) -> String? {
