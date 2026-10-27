@@ -2454,8 +2454,8 @@ extension PressFixture {
 
     try performRealPress(
         releasedBy: try event(.leftMouseUp), pressesButton: true,
-        whileDown: { held = (bar.highlightFill, bar.highlightFrame) }
-    ) { segment.mouseDown(with: down) }
+        whileDown: { held = (bar.highlightFill, bar.highlightFrame) },
+        { segment.mouseDown(with: down) })
 
     let shot = try #require(held)
     #expect(shot.fill == HoverButton.pressedFill)
