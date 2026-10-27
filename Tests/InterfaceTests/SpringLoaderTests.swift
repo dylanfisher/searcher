@@ -228,7 +228,7 @@ private final class Fixture {
     let folder = try TemporaryFolder("SpringLoaderTests")
     let defaults = temporarySuite(in: folder.url.path)
     defaults.set(false, forKey: Settings.springLoadingEnabledKey)
-    let settings = Settings(defaults: defaults)
+    let settings = Settings(defaults: defaults, log: unexpectedSettingsLog)
     let fixture = await Fixture(springDelay: { settings.springLoadingDelay })
     let table = try #require(fixture.lists.first?.tableView)
 

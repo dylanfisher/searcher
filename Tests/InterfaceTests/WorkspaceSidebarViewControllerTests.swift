@@ -34,7 +34,8 @@ private final class StubResolver: @unchecked Sendable {
 private final class Fixture {
     let list = WorkspaceList()
     let settings = Settings(
-        defaults: temporarySuite(in: FileManager.default.temporaryDirectory.path), home: "/Users/u")
+        defaults: temporarySuite(in: FileManager.default.temporaryDirectory.path), home: "/Users/u",
+        log: unexpectedSettingsLog)
     let resolver = StubResolver()
     let favorites: Favorites
     var openedFavorites: [String] = []

@@ -162,7 +162,8 @@ final class UIBench {
         if options.scenario == nil, options.keyPresses > 0 {
             fileOperations = makeQueue()
         }
-        let settings = Settings(defaults: defaults)
+        let settings = Settings(
+            defaults: defaults, log: { Logger(category: "settings").error("\($0)") })
         if options.scenario == .restoredSession {
             return try await restoreSession(
                 in: root, settings: settings, systemActions: systemActions)

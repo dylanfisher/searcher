@@ -95,7 +95,8 @@ extension BenchCase {
         let start = ContinuousClock.now
         let pane = Pane(
             location: Location(path: cachedPath), service: service,
-            systemActions: NoSystemActions(), settings: Settings(defaults: defaults))
+            systemActions: NoSystemActions(),
+            settings: Settings(defaults: defaults, log: printError))
         await waitUntil(pane) { pane in
             if case .cachedRefreshing = pane.state { true } else { false }
         }

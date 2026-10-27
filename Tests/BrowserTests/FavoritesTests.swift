@@ -44,7 +44,8 @@ private struct Fixture {
         folder = try TemporaryFolder("FavoritesTests")
         suite = folder.url.appending(path: "preferences").path
         settings = Settings(
-            defaults: try #require(UserDefaults(suiteName: suite)), home: "/Users/u")
+            defaults: try #require(UserDefaults(suiteName: suite)), home: "/Users/u",
+            log: unexpectedSettingsLog)
         let resolver = resolver
         favorites = Favorites(settings: settings) { resolver.resolve($0) }
     }
@@ -53,7 +54,9 @@ private struct Fixture {
 
     /// The settings as a relaunch reads them.
     func relaunched() throws -> Settings {
-        Settings(defaults: try #require(UserDefaults(suiteName: suite)), home: "/Users/u")
+        Settings(
+            defaults: try #require(UserDefaults(suiteName: suite)), home: "/Users/u",
+            log: unexpectedSettingsLog)
     }
 }
 
