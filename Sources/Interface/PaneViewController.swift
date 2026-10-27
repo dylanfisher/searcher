@@ -668,7 +668,7 @@ public final class PaneViewController: NSViewController {
             } catch {
                 logger.error(
                     """
-                    can't watch \(location.path, privacy: .public): \
+                    can't watch \(location.folderPath, privacy: .public): \
                     \(String(describing: error), privacy: .public)
                     """
                 )

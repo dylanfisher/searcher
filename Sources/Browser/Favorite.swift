@@ -23,7 +23,7 @@ public struct Favorite: Hashable, Sendable {
     /// The favorites the sidebar starts with, Finder's that the app has: Applications, Desktop,
     /// Documents, Downloads and the home folder `home`.
     public static func defaults(home: String) -> [Favorite] {
-        let inHome = { (name: String) in Location(path: home).child(named: name).path }
+        let inHome = { (name: String) in Location(path: home).child(named: name).folderPath }
         return [
             "/Applications", inHome("Desktop"), inHome("Documents"), inHome("Downloads"), home,
         ].map { Favorite(path: $0) }

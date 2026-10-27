@@ -111,7 +111,7 @@ public struct TabState: Codable, Equatable, Sendable {
         let selected: String?
 
         init(_ entry: History.Entry) {
-            path = entry.location.path
+            path = entry.location.folderPath
             selected = entry.selected?.name
         }
 
@@ -138,7 +138,7 @@ public struct TabState: Codable, Equatable, Sendable {
                 case .kind: .kind
                 }
             return StoredPane(
-                id: id, path: pane.location.path, viewMode: viewMode,
+                id: id, path: pane.location.folderPath, viewMode: viewMode,
                 back: pane.history.backEntries.map(StoredEntry.init),
                 forward: pane.history.forwardEntries.map(StoredEntry.init),
                 selection: pane.selection.map(\.name).sorted {
@@ -150,7 +150,7 @@ public struct TabState: Codable, Equatable, Sendable {
                     ? nil
                     : StoredColumnWidths(
                         folders: pane.columnWidths.folders.map {
-                            StoredFolderWidth(path: $0.location.path, width: $0.width)
+                            StoredFolderWidth(path: $0.location.folderPath, width: $0.width)
                         },
                         preview: pane.columnWidths.preview))
         }

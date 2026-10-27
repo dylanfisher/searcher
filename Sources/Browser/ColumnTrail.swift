@@ -117,7 +117,8 @@ public final class ColumnTrail {
         home = Self.home(in: owner.settings)
         let root = Self.root(of: location, mountedVolumes: [], home: home)
         let chain = Array(location.ancestors.drop { $0 != root })
-        precondition(!chain.isEmpty, "the root \(root.path) isn't above \(location.path)")
+        precondition(
+            !chain.isEmpty, "the root \(root.folderPath) isn't above \(location.folderPath)")
         let keepsFocused = kept.count == chain.count
         // The kept panes' changes reach the trail before it has columns, so none is followed
         // until the trail is whole.
@@ -223,7 +224,7 @@ public final class ColumnTrail {
     nonisolated static func root(
         of location: Location, mountedVolumes: [VolumeIdentity], home: Location?
     ) -> Location {
-        let components = pathComponents(location.path)
+        let components = pathComponents(location.folderPath)
         let folded = folded(location)
         /// The number of components of `folder` when `location` is it or inside it.
         func depth(of folder: Location) -> Int? {
@@ -376,7 +377,7 @@ public final class ColumnTrail {
 
     /// `location`'s components as `root(of:mountedVolumes:home:)` compares them.
     private nonisolated static func folded(_ location: Location) -> [String] {
-        pathComponents(location.path).map { FileOperation.comparable(String($0)) }
+        pathComponents(location.folderPath).map { FileOperation.comparable(String($0)) }
     }
 
     /// Moves the keys to `column`, as a click in it does, without selecting anything; the move is
@@ -780,7 +781,7 @@ public final class ColumnTrail {
     private func startInfoRead(of location: Location, entry: DirectoryEntry) {
         let service = owner.service
         let reader = owner.itemInfoReader
-        let path = location.path
+        let path = location.folderPath
         readEntry = entry
         infoRead = Task { [weak self] in
             let info: ItemInfo?
@@ -831,7 +832,7 @@ public final class ColumnTrail {
         thumbnailSide = side
         if usingKept,
             let kept = thumbnails.cached(
-                at: location.path, entry: entry, side: side, forPreview: true)
+                at: location.folderPath, entry: entry, side: side, forPreview: true)
         {
             next.thumbnail = kept ?? (grows ? next.thumbnail : nil)
             return
@@ -840,14 +841,15 @@ public final class ColumnTrail {
         // scaled while this one is made, so the preview never shows the type icon of a file it
         // has a thumbnail of. A row's, framed, isn't used (0090-preview-column.md).
         let smaller =
-            grows ? nil : thumbnails.cachedSmaller(at: location.path, entry: entry, than: side)
+            grows
+            ? nil : thumbnails.cachedSmaller(at: location.folderPath, entry: entry, than: side)
         if let smaller { next.thumbnail = smaller }
         let keepsOnFailure = grows || smaller != nil
         thumbnailMaking = Task { [weak self] in
             let thumbnail: CGImage?
             do {
                 thumbnail = try await thumbnails.thumbnail(
-                    at: location.path, entry: entry, side: side, on: volume, forPreview: true)
+                    at: location.folderPath, entry: entry, side: side, on: volume, forPreview: true)
             } catch {
                 // Cancelled before it started: the preview moved on.
                 return

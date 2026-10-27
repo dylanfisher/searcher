@@ -122,7 +122,7 @@ public actor ListingCacheStore {
             log("looking in \(folder.path) for the volume of \(path) failed: \(error)")
             return nil
         }
-        for mountPoint in Location(path: path).ancestors.reversed().map(\.path) {
+        for mountPoint in Location(path: path).ancestors.reversed().map(\.folderPath) {
             let prefix = Self.digest(mountPoint) + "-"
             let candidates = files.filter { $0.url.lastPathComponent.hasPrefix(prefix) }
                 .sorted { $0.modified > $1.modified }

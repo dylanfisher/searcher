@@ -70,10 +70,10 @@ public struct FolderHistory: Codable, Equatable, Sendable {
 
     /// Counts a visit to `location` at `date`.
     public mutating func visit(_ location: Location, at date: Date) {
-        let count = (folders[location.path]?.count ?? 0) + 1
-        folders[location.path] = Visits(count: count, last: date)
+        let count = (folders[location.folderPath]?.count ?? 0) + 1
+        folders[location.folderPath] = Visits(count: count, last: date)
         guard folders.count > Self.mostFolders else { return }
-        let others = folders.filter { $0.key != location.path }
+        let others = folders.filter { $0.key != location.folderPath }
         guard
             let least = others.min(by: {
                 Self.frecency(of: $0.value, at: date) < Self.frecency(of: $1.value, at: date)
@@ -85,7 +85,7 @@ public struct FolderHistory: Codable, Equatable, Sendable {
     /// The visit count times 4 when the last visit was within the hour, 2 within the day, 1/2
     /// within the week and 1/4 before; 0 for a folder never visited.
     public func frecency(of location: Location, at now: Date) -> Double {
-        folders[location.path].map { Self.frecency(of: $0, at: now) } ?? 0
+        folders[location.folderPath].map { Self.frecency(of: $0, at: now) } ?? 0
     }
 
     /// Every folder kept, the most frecent first; equal ones by the later last visit, then by
