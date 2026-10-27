@@ -94,13 +94,12 @@ private func systemPane(settings: Settings = untouchedSettings()) async -> PaneF
         ])
 }
 
-/// Finder's Get Info is never off: with nothing selected it shows the folder's Info window.
+/// Finder's Get Info is never off in a folder: with nothing selected it shows the folder's Info
+/// window.
 @MainActor @Test func getInfoWithNothingSelectedAsksForTheFoldersInfo() async throws {
     let fixture = await systemPane()
-    let binding = try #require(
-        AppCommands.bindings.first { $0.command.id == SystemCommands.getInfo.id })
 
-    #expect(binding.isEnabled == nil)
+    #expect(try isEnabled(getInfo, on: fixture.pane))
     try run(getInfo, on: fixture.pane)
 
     #expect(fixture.actions.shownInfo == [[URL(fileURLWithPath: "/sys", isDirectory: true)]])
@@ -184,4 +183,48 @@ private func systemPane(settings: Settings = untouchedSettings()) async -> PaneF
                 URL(fileURLWithPath: "/sys/b", isDirectory: false),
             ]
         ])
+}
+
+// MARK: At a server
+
+@MainActor
+private func isEnabled(_ chord: KeyChord, on pane: Pane) throws -> Bool {
+    let registry = try AppCommands.registry()
+    let command = try #require(registry.command(for: chord), "nothing is bound to \(chord)")
+    let binding = try #require(AppCommands.bindings.first { $0.command == command })
+    return binding.isEnabled?(CommandContext(pane: pane)) ?? true
+}
+
+/// A server has no folder, so with nothing selected there is nothing to act on, and no folder to
+/// open a terminal in (0114-server-location.md).
+@MainActor @Test func atAServerTheFolderCommandsAreOffAndDoNothing() async throws {
+    let fixture = await PaneFixture.atServer()
+
+    for chord in [copyPath, reveal, getInfo, openTerminal] {
+        #expect(try !isEnabled(chord, on: fixture.pane), "\(chord)")
+        try run(chord, on: fixture.pane)
+    }
+
+    #expect(fixture.actions.copiedTexts.isEmpty)
+    #expect(fixture.actions.revealed.isEmpty)
+    #expect(fixture.actions.shownInfo.isEmpty)
+    #expect(fixture.actions.openedInApp.isEmpty)
+}
+
+/// A selected share is a folder in /Volumes, which Get Info and the others act on as on any
+/// folder; Open Terminal Here, of the pane's folder, stays off.
+@MainActor @Test func atAServerTheCommandsActOnTheSelectedShares() async throws {
+    let fixture = await PaneFixture.atServer()
+    fixture.select("music")
+    let music = URL(fileURLWithPath: "/Volumes/music", isDirectory: true)
+
+    for chord in [copyPath, reveal, getInfo] {
+        #expect(try isEnabled(chord, on: fixture.pane), "\(chord)")
+        try run(chord, on: fixture.pane)
+    }
+
+    #expect(fixture.actions.copiedTexts == ["/Volumes/music"])
+    #expect(fixture.actions.revealed == [[music]])
+    #expect(fixture.actions.shownInfo == [[music]])
+    #expect(try !isEnabled(openTerminal, on: fixture.pane))
 }

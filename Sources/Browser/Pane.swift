@@ -305,8 +305,9 @@ public final class Pane {
 
     /// A pane that shows `rows`, a complete listing of `location` in list mode, and lists nothing
     /// until something asks it to; with no rows, it starts listing as above unless `listsNow` is
-    /// false. In column mode the column at `location` selects the selection's cursor.
-    private init(
+    /// false. In column mode the column at `location` selects the selection's cursor. Not
+    /// private, so tests can show a server's rows, which nothing lists yet.
+    init(
         location: Location, service: ListingService, systemActions: any SystemActions,
         settings: Settings, sortedBy column: SortColumn, ascending: Bool, isFocused: Bool,
         selection: Selection, viewMode: ViewMode, rows: Listing?, listsNow: Bool = true

@@ -357,6 +357,39 @@ private func shiftedBracket(_ typed: String, keyCode: UInt16) throws -> NSEvent 
     #expect(fixture.window.title == "docs")
 }
 
+/// A window and a tab at a server are titled by the server's name (0114-server-location.md).
+/// Nothing lists a server yet, so its pane is made with its rows and no monitor.
+@MainActor @Test func aWindowAndATabAtAServerAreTitledByItsName() async throws {
+    let settings = untouchedSettings()
+    let service = ListingService(lister: StubLister(Fixture.folders))
+    let server = try #require(Server(host: "HAL9000._smb._tcp.local"))
+    let rows = await Task.detached { Listing([folder("main"), folder("music")]) }.value
+    let serverPane = Pane(
+        location: .server(server), service: service, systemActions: StubSystemActions(),
+        settings: settings, sortedBy: .name, ascending: true, isFocused: true,
+        selection: Selection(), viewMode: .list, rows: rows)
+    let folderPane = Pane(
+        location: Location(path: "/root"), service: service, systemActions: StubSystemActions(),
+        settings: settings)
+    let workspace = Workspace(
+        id: UUID(), name: nil, tabs: [Tab(pane: serverPane), Tab(pane: folderPane)],
+        selectedTab: 0, showsSidebar: false)
+    let controller = BrowserWindowController(
+        workspace: workspace, workspaces: WorkspaceList(), favorites: Favorites(settings: settings),
+        volumes: StubSidebarVolumes().list(), settings: settings,
+        takePaneController: { _, pane in
+            PaneViewController(
+                pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
+                tableView: ListingTableView(), monitorsFolders: false)
+        })
+    let window = try #require(controller.window)
+    window.contentView?.layoutSubtreeIfNeeded()
+    await settle { folderPane.state.isLoaded }
+
+    #expect(window.title == "HAL9000")
+    #expect(controller.tabStrip.tabStripView.titles == ["HAL9000", "root"])
+}
+
 @MainActor @Test func tabInTheTableOrTheFilterFocusesTheOtherPane() async throws {
     let fixture = try await Fixture()
     let left = fixture.tab.layout.focused

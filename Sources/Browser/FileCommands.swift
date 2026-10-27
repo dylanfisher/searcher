@@ -9,7 +9,10 @@ import Foundation
 /// selection changed first (docs/decisions/0066-file-commands.md). New Folder then edits the new
 /// folder's name, as Rename does (docs/decisions/0068-inline-rename.md). Once Move to Trash
 /// lands, the cursor goes to the row after what it trashed, unless the selection changed first
-/// (docs/decisions/0077-selection-history.md).
+/// (docs/decisions/0077-selection-history.md). At a server, which has no folder of its own, New
+/// Folder is off unless a share's column is its target, the selected shares can't be trashed,
+/// duplicated, renamed or moved, and nothing goes into another pane at a server
+/// (docs/decisions/0114-server-location.md).
 public enum FileCommands: CommandSet {
     public static let moveToTrash = Command(
         id: CommandID("file.moveToTrash"), title: "Move to Trash",
@@ -64,10 +67,11 @@ public enum FileCommands: CommandSet {
                     }
                 }),
             CommandBinding(
-                newFolder, isEnabled: { $0.fileOperations != nil },
+                newFolder, isEnabled: { $0.fileOperations != nil && hasDestinationFolder($0) },
                 run: { context in
                     guard let queue = context.fileOperations else { return }
                     let pane = destination(in: context)
+                    guard pane.location.isFolder else { return }
                     make(.newFolder(in: pane.location.folderPath), in: pane, queue: queue) {
                         guard selectedCount(in: pane) == 1, let editName = context.editName
                         else { return }
@@ -90,11 +94,11 @@ public enum FileCommands: CommandSet {
                     editName()
                 }),
             CommandBinding(
-                copyToOtherPane, isEnabled: { otherPaneFolder($0) != nil },
-                run: { sendToOtherPane($0) { .copy($0, into: $1) } }),
+                copyToOtherPane, isEnabled: { otherPaneFolder($0, moving: false) != nil },
+                run: { sendToOtherPane($0, moving: false) { .copy($0, into: $1) } }),
             CommandBinding(
-                moveToOtherPane, isEnabled: { otherPaneFolder($0) != nil },
-                run: { sendToOtherPane($0) { .move($0, into: $1) } }),
+                moveToOtherPane, isEnabled: { otherPaneFolder($0, moving: true) != nil },
+                run: { sendToOtherPane($0, moving: true) { .move($0, into: $1) } }),
         ]
     }
 
@@ -142,6 +146,18 @@ public enum FileCommands: CommandSet {
         return trail.selectedFolderColumn ?? context.pane
     }
 
+    /// Whether New Folder, Paste and Move Items Here have a folder to put items in: the pane's
+    /// folder, or in column view a share selected alone at a server, its column shown. A server
+    /// has no folder of its own to put an item in (0114-server-location.md).
+    @MainActor
+    static func hasDestinationFolder(_ context: CommandContext) -> Bool {
+        if context.pane.location.isFolder { return true }
+        guard let trail = context.pane.containingTrail, trail.focused.pane === context.pane else {
+            return false
+        }
+        return trail.selectedFolderColumn != nil
+    }
+
     /// Queues `operation`, which makes items in `pane`'s folder, and selects them there once the
     /// pane lists them, as `run` does. A column without the keys then takes them, as Finder
     /// moves them into the folder it pasted into; then `selected` runs. Nothing runs if the
@@ -181,12 +197,13 @@ public enum FileCommands: CommandSet {
     /// only on yes.
     @MainActor
     private static func sendToOtherPane(
-        _ context: CommandContext, _ operation: ([String], String) -> FileOperation
+        _ context: CommandContext, moving: Bool,
+        _ operation: ([String], String) -> FileOperation
     ) {
-        guard let folder = otherPaneFolder(context), let queue = context.fileOperations else {
-            return
-        }
-        let operation = operation(selectedPaths(in: context.pane), folder.folderPath)
+        guard let folder = otherPaneFolder(context, moving: moving),
+            let queue = context.fileOperations
+        else { return }
+        let operation = operation(selectedPaths(in: context.pane), folder)
         Task {
             guard await queue.prompts.confirm(.otherPane(operation)) else { return }
             queue.submit(operation)
@@ -217,22 +234,33 @@ public enum FileCommands: CommandSet {
 
     /// Whether a command that acts on the selection can run: there is a queue and a selection.
     @MainActor
-    private static func canChangeSelection(_ context: CommandContext) -> Bool {
+    private static func canTakeSelection(_ context: CommandContext) -> Bool {
         context.fileOperations != nil && selectedCount(in: context.pane) > 0
+    }
+
+    /// Whether a command that trashes, duplicates, renames or moves the selection can run: it
+    /// can take the selection, and the pane is at a folder. A server's shares can't be changed
+    /// so (0114-server-location.md).
+    @MainActor
+    private static func canChangeSelection(_ context: CommandContext) -> Bool {
+        context.pane.location.isFolder && canTakeSelection(context)
     }
 
     @MainActor
     private static func canRename(_ context: CommandContext) -> Bool {
-        context.fileOperations != nil && context.editName != nil
-            && selectedCount(in: context.pane) == 1
+        context.pane.location.isFolder && context.fileOperations != nil
+            && context.editName != nil && selectedCount(in: context.pane) == 1
     }
 
-    /// The folder of the selected tab's other pane, when there is one, a queue and a selection.
+    /// The path of the selected tab's other pane's folder, when there is one, a queue and a
+    /// selection, and the selection can move when `moving`. Nil when the other pane is at a
+    /// server, which has no folder to put items in (0114-server-location.md).
     @MainActor
-    private static func otherPaneFolder(_ context: CommandContext) -> Location? {
-        guard canChangeSelection(context), let id = context.tab.layout.otherPane,
-            let other = context.tab.panes[id]
+    private static func otherPaneFolder(_ context: CommandContext, moving: Bool) -> String? {
+        guard moving ? canChangeSelection(context) : canTakeSelection(context),
+            let id = context.tab.layout.otherPane, let other = context.tab.panes[id],
+            other.location.isFolder
         else { return nil }
-        return other.location
+        return other.location.folderPath
     }
 }

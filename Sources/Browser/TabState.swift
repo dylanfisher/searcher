@@ -70,10 +70,13 @@ public struct TabState: Codable, Equatable, Sendable {
         case layout, panes
     }
 
-    /// A pane as stored: the layout's order, so the same tab always encodes the same way.
+    /// A pane as stored: the layout's order, so the same tab always encodes the same way. Its
+    /// location, as each stored location, is a folder's `path` or a server's `server`, never both
+    /// (`location(path:server:codingPath:)`).
     private struct StoredPane: Codable {
         let id: PaneID
-        let path: String
+        let path: String?
+        let server: String?
         let viewMode: StoredViewMode
         let back: [StoredEntry]
         let forward: [StoredEntry]
@@ -94,7 +97,8 @@ public struct TabState: Codable, Equatable, Sendable {
     }
 
     private struct StoredFolderWidth: Codable {
-        let path: String
+        let path: String?
+        let server: String?
         let width: Double
     }
 
@@ -107,16 +111,50 @@ public struct TabState: Codable, Equatable, Sendable {
     }
 
     private struct StoredEntry: Codable {
-        let path: String
+        let path: String?
+        let server: String?
         let selected: String?
 
         init(_ entry: History.Entry) {
-            path = entry.location.folderPath
+            (path, server) = TabState.stored(entry.location)
             selected = entry.selected?.name
         }
 
-        var entry: History.Entry {
-            History.Entry(location: Location(path: path), selected: selected.map(ExactName.init))
+        func entry(codingPath: [any CodingKey]) throws -> History.Entry {
+            History.Entry(
+                location: try TabState.location(path: path, server: server, codingPath: codingPath),
+                selected: selected.map(ExactName.init))
+        }
+    }
+
+    /// `location` as stored: a folder's path, or a server's host as it is written.
+    private static func stored(_ location: Location) -> (path: String?, server: String?) {
+        switch location {
+        case .folder(let path): (path, nil)
+        case .server(let server): (nil, server.host)
+        }
+    }
+
+    /// The location stored as `path` or `server`. Both or neither, or a host that names no
+    /// server, throws, which rejects the whole workspace, as other data it can't decode does.
+    private static func location(path: String?, server: String?, codingPath: [any CodingKey])
+        throws -> Location
+    {
+        func broken(_ reason: String) -> DecodingError {
+            .dataCorrupted(.init(codingPath: codingPath, debugDescription: reason))
+        }
+        switch (path, server) {
+        case (let path?, nil):
+            return Location(path: path)
+        case (nil, let host?):
+            guard let server = Server(host: host) else {
+                throw broken("the stored server \"\(host)\" names no server")
+            }
+            return .server(server)
+        case (.some, .some):
+            throw broken("a location stores both a path and a server")
+        case (nil, nil):
+            throw broken("a location stores neither a path nor a server")
         }
     }
 
@@ -137,8 +175,9 @@ public struct TabState: Codable, Equatable, Sendable {
                 case .dateModified: .dateModified
                 case .kind: .kind
                 }
+            let (path, server) = Self.stored(pane.location)
             return StoredPane(
-                id: id, path: pane.location.folderPath, viewMode: viewMode,
+                id: id, path: path, server: server, viewMode: viewMode,
                 back: pane.history.backEntries.map(StoredEntry.init),
                 forward: pane.history.forwardEntries.map(StoredEntry.init),
                 selection: pane.selection.map(\.name).sorted {
@@ -150,7 +189,8 @@ public struct TabState: Codable, Equatable, Sendable {
                     ? nil
                     : StoredColumnWidths(
                         folders: pane.columnWidths.folders.map {
-                            StoredFolderWidth(path: $0.location.folderPath, width: $0.width)
+                            let (path, server) = Self.stored($0.location)
+                            return StoredFolderWidth(path: path, server: server, width: $0.width)
                         },
                         preview: pane.columnWidths.preview))
         }
@@ -173,10 +213,14 @@ public struct TabState: Codable, Equatable, Sendable {
                     codingPath: decoder.codingPath,
                     debugDescription: "the panes don't match the layout's leaves"))
         }
-        let widths = stored.enumerated().map { index, pane -> ColumnWidths in
+        let codingPath = decoder.codingPath + [CodingKeys.panes]
+        let widths = try stored.enumerated().map { index, pane -> ColumnWidths in
             guard let stored = pane.columnWidths else { return ColumnWidths() }
-            let folders = stored.folders.map {
-                ColumnWidths.Folder(location: Location(path: $0.path), width: $0.width)
+            let folders = try stored.folders.map {
+                ColumnWidths.Folder(
+                    location: try Self.location(
+                        path: $0.path, server: $0.server, codingPath: codingPath),
+                    width: $0.width)
             }
             let problem =
                 folders.isEmpty && stored.preview == nil
@@ -191,7 +235,7 @@ public struct TabState: Codable, Equatable, Sendable {
             return ColumnWidths(folders: folders, preview: stored.preview)
         }
         panes = Dictionary(
-            uniqueKeysWithValues: zip(stored, widths).map { pane, columnWidths in
+            uniqueKeysWithValues: try zip(stored, widths).map { pane, columnWidths in
                 let viewMode: ViewMode =
                     switch pane.viewMode {
                     case .list: .list
@@ -205,11 +249,14 @@ public struct TabState: Codable, Equatable, Sendable {
                     case .kind: .kind
                     }
                 let history = History(
-                    back: pane.back.map(\.entry), forward: pane.forward.map(\.entry))
+                    back: try pane.back.map { try $0.entry(codingPath: codingPath) },
+                    forward: try pane.forward.map { try $0.entry(codingPath: codingPath) })
+                let location = try Self.location(
+                    path: pane.path, server: pane.server, codingPath: codingPath)
                 return (
                     pane.id,
                     PaneState(
-                        location: Location(path: pane.path), viewMode: viewMode, history: history,
+                        location: location, viewMode: viewMode, history: history,
                         selection: Set(pane.selection.map(ExactName.init)),
                         cursor: pane.cursor.map(ExactName.init), sortColumn: sortColumn,
                         sortAscending: pane.sortAscending, columnWidths: columnWidths)

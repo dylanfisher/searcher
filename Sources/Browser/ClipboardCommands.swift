@@ -9,7 +9,8 @@ import Foundation
 /// Items Here always moves. Neither asks first. Pasted items are selected as Duplicate's copies
 /// are, and no name is edited (docs/decisions/0069-cut-and-paste.md). Every command is off
 /// without a clipboard, and the pastes are off without a queue or with no files on the
-/// clipboard.
+/// clipboard. At a server Cut is off, and the pastes are off unless a share's column is their
+/// target (docs/decisions/0114-server-location.md).
 public enum ClipboardCommands: CommandSet {
     public static let copy = Command(
         id: CommandID("clipboard.copy"), title: "Copy",
@@ -39,11 +40,9 @@ public enum ClipboardCommands: CommandSet {
                     clipboard.copy(selectedURLs(in: context.pane))
                 }),
             CommandBinding(
-                cut, isEnabled: { canTakeSelection($0) },
+                cut, isEnabled: { canCut($0) },
                 run: { context in
-                    guard canTakeSelection(context), let clipboard = context.clipboard else {
-                        return
-                    }
+                    guard canCut(context), let clipboard = context.clipboard else { return }
                     clipboard.cut(selectedURLs(in: context.pane))
                 }),
             CommandBinding(
@@ -64,12 +63,13 @@ public enum ClipboardCommands: CommandSet {
         guard canPaste(context), let clipboard = context.clipboard,
             let queue = context.fileOperations
         else { return }
+        let pane = FileCommands.destination(in: context)
+        guard pane.location.isFolder else { return }
         let isCut = clipboard.cutPaths != nil
         let paths = clipboard.clipboard.fileURLs().map(\.path)
         if isCut || alwaysMoving {
             clipboard.clear()
         }
-        let pane = FileCommands.destination(in: context)
         let folder = pane.location.folderPath
         let operation: FileOperation =
             isCut || alwaysMoving ? .move(paths, into: folder) : .copy(paths, into: folder)
@@ -101,12 +101,20 @@ public enum ClipboardCommands: CommandSet {
         return !context.pane.selection.rows(in: listing).isEmpty
     }
 
-    /// Whether a paste can run: there is a clipboard holding files, and a queue.
+    /// Whether Cut can run: Copy can, and the pane is at a folder. A server's shares can't be
+    /// moved (0114-server-location.md).
+    @MainActor
+    private static func canCut(_ context: CommandContext) -> Bool {
+        context.pane.location.isFolder && canTakeSelection(context)
+    }
+
+    /// Whether a paste can run: there is a clipboard holding files, a queue, and a folder to put
+    /// them in (`FileCommands.hasDestinationFolder`).
     @MainActor
     private static func canPaste(_ context: CommandContext) -> Bool {
-        guard let clipboard = context.clipboard, context.fileOperations != nil else {
-            return false
-        }
+        guard let clipboard = context.clipboard, context.fileOperations != nil,
+            FileCommands.hasDestinationFolder(context)
+        else { return false }
         return !clipboard.clipboard.fileURLs().isEmpty
     }
 }

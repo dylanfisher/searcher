@@ -12,8 +12,8 @@ public final class FolderVisits {
     /// Where the history is saved; nil saves nothing.
     private let store: WorkspaceStore?
     private let now: @Sendable () -> Date
-    /// The visits counted before `load`, in order; nil once loaded.
-    private var visitsBeforeLoad: [(location: Location, date: Date)]? = []
+    /// The visits counted before `load`, by folder path, in order; nil once loaded.
+    private var visitsBeforeLoad: [(path: String, date: Date)]? = []
     /// The saves handed to the store, each after the one before it, so an older history never
     /// lands after a newer one.
     private var saving: Task<Void, Never>?
@@ -34,17 +34,23 @@ public final class FolderVisits {
         visitsBeforeLoad = nil
         history = stored
         for visit in visits {
-            history.visit(visit.location, at: visit.date)
+            history.visit(visit.path, at: visit.date)
         }
         if !visits.isEmpty { save() }
     }
 
-    /// Counts a visit to `location` now.
+    /// Counts a visit to `location` now. A server isn't counted, so ⌘K never lists one
+    /// (0114-server-location.md).
     public func visit(_ location: Location) {
+        let path: String
+        switch location {
+        case .folder(let folder): path = folder
+        case .server: return
+        }
         let date = now()
-        history.visit(location, at: date)
+        history.visit(path, at: date)
         guard visitsBeforeLoad == nil else {
-            visitsBeforeLoad?.append((location, date))
+            visitsBeforeLoad?.append((path, date))
             return
         }
         save()
