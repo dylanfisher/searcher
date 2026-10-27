@@ -82,3 +82,68 @@ import Testing
 func aVolumeThatIsNoShareInVolumesHasNoServer(volume: VolumeIdentity) {
     #expect(volume.server == nil)
 }
+
+@Test func aReadGivesTheVolumesFileSystemType() async throws {
+    let (mounted, root) = try await BlockingCallThread.run { () throws(ListingError) in
+        (VolumeIdentity.mounted(), try VolumeIdentity(path: "/"))
+    }
+    #expect(root.fsType == "apfs")
+    #expect(mounted.first { $0.mountPoint == "/" }?.fsType == "apfs")
+}
+
+@Test func volumesThatDifferOnlyInFileSystemTypeDiffer() {
+    let smb = VolumeIdentity(
+        device: "//dylan@nas/music", mountPoint: "/Volumes/music", kind: .network,
+        fsType: VolumeIdentity.smbFSType)
+    let afp = VolumeIdentity(
+        device: "//dylan@nas/music", mountPoint: "/Volumes/music", kind: .network,
+        fsType: "afpfs")
+    #expect(smb != afp)
+    #expect(Set([smb, afp]).count == 2)
+}
+
+private func source(_ device: String) -> VolumeIdentity {
+    VolumeIdentity(
+        device: device, mountPoint: "/Volumes/x", kind: .network,
+        fsType: VolumeIdentity.smbFSType)
+}
+
+@Test(arguments: [
+    ("//dylan@HAL9000._smb._tcp.local/music", "music"),
+    ("//dylan@HAL9000._smb._tcp.local/my%20share", "my share"),
+    ("//dylan@nas/100%25", "100%"),
+    ("//nas/Cafe%CC%81", "Cafe\u{301}"),
+    ("//nas/Cafe\u{301}", "Cafe\u{301}"),
+    ("//nas:445/main", "main"),
+])
+func aSharesNameIsItsSourcesLastComponentDecoded(device: String, share: String) {
+    #expect(source(device).share == share)
+}
+
+@Test func aDecomposedShareNameMatchesItsComposedName() throws {
+    let share = try #require(source("//nas/Cafe%CC%81").share)
+    #expect(share.unicodeScalars.count == 5)
+    #expect(ShareNames.key(share) == ShareNames.key("Caf\u{E9}"))
+}
+
+@Test(arguments: [
+    "//nas/a%2Fb", "//nas/bad%zz", "//nas/%", "/dev/disk3s1", "//nas/", "nas:/export/",
+])
+func aSourceWhoseLastComponentDoesNotDecodeToANameHasNoShare(device: String) {
+    #expect(source(device).share == nil)
+}
+
+@Test(arguments: [
+    ("//dylan@nas/music", "dylan"),
+    ("//DOMAIN;dylan@nas/music", "DOMAIN;dylan"),
+    ("//dyl%40an@nas/music", "dyl@an"),
+    ("//J%C3%BCrgen@nas/music", "Jürgen"),
+])
+func aSourcesUserIsDecoded(device: String, user: String) {
+    #expect(source(device).user == user)
+}
+
+@Test(arguments: ["//nas/music", "/dev/disk3s1"])
+func aSourceThatNamesNoUserHasNone(device: String) {
+    #expect(source(device).user == nil)
+}

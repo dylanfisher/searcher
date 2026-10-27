@@ -56,7 +56,10 @@ before the step that builds it, and the list is under "For Dylan to check".
   from its source, percent-decoded, `DOMAIN;user` kept whole; nil for a source with no user. The
   command is `smbutil view -N //<user>@<host>` with that user percent-encoded for a URL
   (`;` kept) and the host as the source writes it, built with `URLComponents` percent-encoded
-  fields so nothing is encoded twice. It runs with no shell, `LC_ALL=en_US.UTF-8`, and no user
+  fields so nothing is encoded twice. *(8a)* The user is encoded once with `urlUserAllowed` less
+  `:`, which `URLComponents` keeps and `smbutil` reads as the start of a password; the host is
+  appended as written and not passed through `URLComponents`, which would check it as a URL host
+  and a Bonjour name with `\032` isn't one. It runs with no shell, `LC_ALL=en_US.UTF-8`, and no user
   means `//<host>`. A second user's shares on that host are listed as that user sees them: a
   share only the first user can see is not shown unmounted. If the first mount goes and another
   user's remains, the request changes and the cache (below) misses.
@@ -72,7 +75,9 @@ before the step that builds it, and the list is under "For Dylan to check".
   before the first run of two or more spaces followed by a known type token (`Disk`, `Pipe`,
   `Printer`, `Comm`) and a space or the line's end; comments are free text and ignored. A name
   of 48 or more characters (no padding), a name with a single space or a double space, and a
-  Unicode name parse. A name that itself contains two spaces and a type token cannot be told from
+  Unicode name parse. *(8a)* `smbutil`'s format is `%-48s%-8s%s`, which pads by bytes: a name of
+  47 bytes is followed by one space and a longer one by none, so those two splits are also taken
+  for a name of exactly 47 bytes and of 48 or more. A name that itself contains two spaces and a type token cannot be told from
   the columns; it parses wrongly and is accepted as a residual. Output is decoded as UTF-8
   strictly. A missing header, a bad count, a type outside the known set, or invalid UTF-8 throws
   `ShareListError.unparsable`, so a format change shows as a notice and not as a wrong list. The
@@ -91,7 +96,9 @@ before the step that builds it, and the list is under "For Dylan to check".
   and the pane's notice says: "Only mounted shares are listed for AFP servers." Nothing public
   lists AFP shares, `showmount` covers NFSv3 exports only, and a WebDAV URL is one share.
   `VolumeIdentity` gains `fsType` (`f_fstypename`, already in the `statfs` read with
-  `MNT_NOWAIT`) to tell `smbfs` from `afpfs`, `nfs` and `webdav`. A server with shares of two
+  `MNT_NOWAIT`) to tell `smbfs` from `afpfs`, `nfs` and `webdav`. *(8a)* Since it is part of the
+  identity, `ListingCacheStore` stores it with each volume, so a volume read back from its file
+  equals the mounted one it was saved for. A server with shares of two
   protocols gets the SMB enumeration, no protocol notice, and its other shares stay as mounted.
 - **Where it runs.** Under [0038](0038-slow-volumes.md): the subprocess is started and waited on
   from `BlockingCallThread`s, `requireCurrent` checked first. `ServerShares` holds, per

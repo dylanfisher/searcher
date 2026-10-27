@@ -350,6 +350,18 @@ func aFileThatDoesNotDecodeIsDeletedAndLoggedAndMisses(_ damage: StoreDamage) as
     #expect(await reader.volume(holding: "/fake/y") == nil)
 }
 
+@Test func aVolumeFoundInTheStoreIsTheVolumeSavedFileSystemTypeIncluded() async throws {
+    let folder = try TemporaryFolder("ListingCacheStoreTests")
+    let smb = VolumeIdentity(
+        device: "//nas/music", mountPoint: "/fake/music", kind: .network,
+        fsType: VolumeIdentity.smbFSType)
+    let writer = store(folder)
+    await writer.save(["/fake/music/Album": album], for: smb)
+    await writer.flush()
+
+    #expect(await store(folder).volume(holding: "/fake/music/Album")?.volume == smb)
+}
+
 @Test func aFileNotNamedForAVolumeIsDeletedAtTheNextWrite() async throws {
     let folder = try TemporaryFolder("ListingCacheStoreTests")
     let writer = store(folder)
