@@ -126,5 +126,6 @@ step from the last one. With no stored frame it centers and cascades from the fr
 before. `fitted` then keeps it on a display, so a frame stored on a display that is gone opens
 on one that is there. A restored window keeps its saved frame, as before.
 
-The key `newWindowSize` this replaced is removed from the defaults when `Settings` starts, once
-and with no migration: its size is not carried over.
+The key `newWindowSize` this replaced is no longer read, and its size is not carried over. A
+value left under it is not removed either: before the first release, stored data keeps no
+compatibility code (AGENTS.md).
