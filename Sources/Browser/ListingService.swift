@@ -450,9 +450,11 @@ public final class ListingService: Sendable {
         let rootVolumeName = rootVolumeName()
         let read = Read()
         restartSlowTimer(read, for: load)
-        let outcome: Result<Void, any Error>
+        let outcome: Result<Int, any Error>
         do {
-            try lister.list(load.location.folderPath) { batch in
+            let unreadableNames = try lister.listCountingUnreadableNames(
+                load.location.folderPath
+            ) { batch in
                 if load.isCancelled { throw Cancelled() }
                 restartSlowTimer(read, for: load)
                 restartStallTimers(for: load)
@@ -470,14 +472,15 @@ public final class ListingService: Sendable {
                     hand(.firstBatch(first, rootVolumeName: rootVolumeName), to: load)
                 }
             }
-            outcome = .success(())
+            outcome = .success(unreadableNames)
         } catch {
             outcome = .failure(error)
         }
         read.finish()
+        let unreadableNameCount: Int
         switch outcome {
-        case .success:
-            break
+        case .success(let count):
+            unreadableNameCount = count
         case .failure(is Cancelled):
             load.stall.finish {}
             return
@@ -506,7 +509,7 @@ public final class ListingService: Sendable {
                     entries.all, column: load.column, ascending: load.ascending,
                     foldersFirst: load.foldersFirst, showsHidden: load.showsHidden,
                     hidesDSStore: load.hidesDSStore,
-                    filter: load.filter),
+                    filter: load.filter, unreadableNameCount: unreadableNameCount),
                 rootVolumeName: rootVolumeName), to: load)
         if let cache, let volume = load.volume, volume.kind == .network {
             cache.startInsert(

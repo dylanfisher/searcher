@@ -85,6 +85,40 @@ private struct Fixture {
     #expect(fixture.table.accessibilityLabel() == "root")
 }
 
+/// `folders`' entries, where `/root` also holds `unreadable` entries whose names aren't UTF-8,
+/// which a `DirectoryLister` leaves out and counts.
+private struct UnreadableNamesLister: Lister {
+    let folders: StubLister
+    let unreadable: Int
+
+    func list(_ path: String, onBatch: ([DirectoryEntry]) throws -> Void) throws {
+        _ = try listCountingUnreadableNames(path, onBatch: onBatch)
+    }
+
+    func listCountingUnreadableNames(
+        _ path: String, onBatch: ([DirectoryEntry]) throws -> Void
+    ) throws -> Int {
+        try folders.list(path, onBatch: onBatch)
+        return path == "/root" ? unreadable : 0
+    }
+}
+
+@MainActor @Test func aFolderWithUnreadableNamesSaysHowManyItLeavesOut() async throws {
+    let fixture = Fixture(
+        lister: UnreadableNamesLister(folders: StubLister(Fixture.folders), unreadable: 2))
+    await settle { fixture.pane.state.isLoaded }
+
+    #expect(rowNames(fixture.table) == ["a.txt", "b.txt", "docs"])
+    #expect(!fixture.controller.status.note.isHidden)
+    #expect(
+        fixture.controller.status.note.stringValue
+            == "2 items with unreadable names aren't shown.")
+
+    fixture.pane.navigate(to: Location(path: "/root/docs"))
+    await settle { fixture.pane.location.path == "/root/docs" && fixture.pane.state.isLoaded }
+    #expect(fixture.controller.status.note.isHidden)
+}
+
 @MainActor @Test func doubleClickOnAFolderRowOpensIt() async throws {
     let fixture = Fixture()
     await settle { fixture.pane.state.isLoaded }
