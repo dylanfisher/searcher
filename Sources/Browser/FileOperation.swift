@@ -49,14 +49,16 @@ public enum FileOperation: Equatable, Sendable {
     /// (`notTheSameItem`), as after a save that replaced it. The check runs again on the next
     /// try, so a kept entry never acts on another item.
     static func canClear(_ errors: [FileOperationError], undoing record: OperationRecord) -> Bool {
+        // As spelled: the check names a missing item as its step does (`OperationPlan`), and
+        // folding case would take a folder for an item on a volume that tells case apart.
         let items = Set(
             steps(undoing: record).flatMap { [$0.source, $0.destination].compactMap { $0 } }
-                .map(comparable))
+                .map { comparable($0, foldsCase: false) })
         return !errors.isEmpty
             && errors.allSatisfy { error in
                 switch error.reason {
                 case .exists, .notTheSameItem, .unreachable: true
-                case .sourceGone: !items.contains(comparable(error.path))
+                case .sourceGone: !items.contains(comparable(error.path, foldsCase: false))
                 case .noSpace, .permissionDenied, .crossVolume, .noTrash, .invalidName,
                     .changedDuringMove, .other:
                     false
@@ -161,7 +163,14 @@ public enum FileOperation: Equatable, Sendable {
     /// APFS compares names by default, and without trailing slashes. On a case-sensitive volume
     /// two different items can compare equal, which only refuses more.
     public static func comparable(_ path: String) -> String {
-        var path = path.folding(options: .caseInsensitive, locale: nil)
+        comparable(path, foldsCase: true)
+    }
+
+    /// `path` with Unicode normalized and without trailing slashes, and without case when
+    /// `foldsCase`, for a volume that doesn't tell names apart by case. APFS and HFS+ ignore
+    /// normalization whether or not they tell case apart, so it is normalized either way.
+    public static func comparable(_ path: String, foldsCase: Bool) -> String {
+        var path = (foldsCase ? path.folding(options: .caseInsensitive, locale: nil) : path)
             .precomposedStringWithCanonicalMapping
         while path.utf8.count > 1, path.hasSuffix("/") { path.removeLast() }
         return path

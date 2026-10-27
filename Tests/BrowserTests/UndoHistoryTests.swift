@@ -1883,8 +1883,8 @@ private func heldQueue(_ history: UndoHistory, _ held: HeldFinishes) -> FileOper
 // MARK: Large entries
 
 /// What is left of an entry after an undo is each change the undo didn't reverse, in order, with
-/// paths compared without case and with Unicode normalized, and a put back matched by its Trash
-/// URL too.
+/// paths compared as spelled with Unicode normalized, and a put back matched by its Trash URL
+/// too.
 @MainActor @Test func theRemainderIsEveryChangeTheUndoDidntReverseInOrder() {
     let trashed = URL(fileURLWithPath: "/A/.Trashes/501/t")
     let original = URL(fileURLWithPath: "/A/.Trashes/501/r")
@@ -1902,13 +1902,13 @@ private func heldQueue(_ history: UndoHistory, _ held: HeldFinishes) -> FileOper
     // Last first, as an undo runs; the replace's original came back from another Trash URL,
     // and the drop's file didn't come back.
     let done: [OperationRecord.Change] = [
-        .moved(from: "/A/d/Y", to: "/A/y"),
+        .moved(from: "/A/d/y", to: "/A/y"),
         .created("/A/n", from: .newFolder),
         .trashed(from: "/A/p", to: URL(fileURLWithPath: "/A/.Trashes/501/p")),
         .uncreated("/A/r", from: .copy(of: "/S/r"), trashedTo: made),
         .putBack(from: URL(fileURLWithPath: "/A/.Trashes/501/other"), to: "/A/r"),
         .putBack(from: trashed, to: "/A/t"),
-        .moved(from: "/A/d/Caf\u{e9}", to: "/A/X"),
+        .moved(from: "/A/d/Caf\u{e9}", to: "/A/x"),
     ]
 
     #expect(UndoHistory.remainder(of: changes, after: done) == [changes[2], changes[6]])
@@ -1933,6 +1933,211 @@ private func heldQueue(_ history: UndoHistory, _ held: HeldFinishes) -> FileOper
 
     #expect(left == changes.indices.filter { $0 % 3 == 0 }.map { changes[$0] })
     #expect(reads <= 2 * (changes.count + done.count))
+}
+
+// MARK: Case
+
+/// On a volume that tells names apart by case, `Foo` and `foo` are two items, so an undo that
+/// moved one back leaves the other's change to undo. An undo names each path as its entry
+/// does, so no case needs folding to match them.
+@MainActor @Test func theRemainderTellsPathsApartByCase() {
+    let changes: [OperationRecord.Change] = [
+        .moved(from: "/A/Foo", to: "/A/d/Foo"), .moved(from: "/A/foo", to: "/A/d/foo"),
+    ]
+    let done: [OperationRecord.Change] = [.moved(from: "/A/d/foo", to: "/A/foo")]
+
+    #expect(UndoHistory.remainder(of: changes, after: done) == [changes[0]])
+}
+
+/// One move of `Foo` and `foo` into a folder on a volume that tells case apart undoes, each back
+/// to its own place: the check doesn't take one for the other.
+@MainActor @Test func aMoveOfFooAndFooOnACaseSensitiveVolumeUndoesBoth() async throws {
+    let files = FakeFiles()
+    files.tellCaseApart(on: volumeA)
+    let watcher = Watcher()
+    let history = UndoHistory(log: { _ in })
+    let queue = followedQueue(history, fileSystem: files.fileSystem(), watcher: watcher)
+    files.identify("/A/d/Foo", as: .persistent(volume: "fake", inode: 1))
+    files.identify("/A/d/foo", as: .persistent(volume: "fake", inode: 2))
+    #expect(await queue.perform(.move(["/A/Foo", "/A/foo"], into: "/A/d")).phase == .done)
+    await history.catchUp(with: queue)
+    files.place("/A/d/Foo")
+    files.place("/A/d/foo")
+
+    let undone = try await value(of: history.undo(with: queue))
+
+    #expect(undone.errors == [])
+    #expect(undone.phase == .done)
+    #expect(files.events.all.contains("move /A/d/foo to /A/foo"))
+    #expect(files.events.all.contains("move /A/d/Foo to /A/Foo"))
+    #expect(history.redoTitle == "Redo Move 2 Items")
+}
+
+/// On a volume that tells case apart, the undo of a rename from `foo` to `Foo` is refused by
+/// its check while another item holds `foo`, before anything moves.
+@MainActor @Test func aCaseOnlyRenameOnACaseSensitiveVolumeChecksTheOldName() async throws {
+    let files = FakeFiles()
+    files.tellCaseApart(on: volumeA)
+    let watcher = Watcher()
+    let history = UndoHistory(log: { _ in })
+    let queue = followedQueue(history, fileSystem: files.fileSystem(), watcher: watcher)
+    #expect(await queue.perform(.rename("/A/foo", to: "Foo")).phase == .done)
+    await history.catchUp(with: queue)
+    files.place("/A/Foo")
+    files.place("/A/foo")
+
+    let undone = try await value(of: history.undo(with: queue))
+
+    #expect(
+        undone.errors == [FileOperationError(reason: .exists, path: "/A/foo", errno: EEXIST)])
+    #expect(!files.events.all.contains("move /A/Foo to /A/foo"))
+    #expect(history.undoTitle == "Undo Rename")
+}
+
+/// On a volume that doesn't tell case apart, the undo of a rename from `foo` to `Foo` finds the
+/// item itself at `foo`, and runs.
+@MainActor @Test func aCaseOnlyRenameOnACaseInsensitiveVolumeUndoes() async throws {
+    let files = FakeFiles()
+    let watcher = Watcher()
+    let history = UndoHistory(log: { _ in })
+    let queue = followedQueue(history, fileSystem: files.fileSystem(), watcher: watcher)
+    #expect(await queue.perform(.rename("/A/foo", to: "Foo")).phase == .done)
+    await history.catchUp(with: queue)
+    // One item, which such a volume shows at either name.
+    files.place("/A/Foo")
+    files.place("/A/foo")
+
+    let undone = try await value(of: history.undo(with: queue))
+
+    #expect(undone.errors == [])
+    #expect(files.events.all.contains("move /A/Foo to /A/foo"))
+}
+
+/// A missing folder named like an item of the undo in another case is that item on a volume
+/// that doesn't tell case apart, and the check names it as the item: it can't clear, and the
+/// entry is dropped. On one that does, it is another place, which can clear, and the entry is
+/// kept once.
+@MainActor @Test(arguments: [false, true])
+func aMissingFolderNamedLikeAnItemInAnotherCaseIsThatItemOnlyWithoutCase(
+    caseSensitive: Bool
+) async throws {
+    let files = FakeFiles()
+    if caseSensitive { files.tellCaseApart(on: volumeA) }
+    let watcher = Watcher()
+    let history = UndoHistory(log: { _ in })
+    let queue = followedQueue(history, fileSystem: files.fileSystem(), watcher: watcher)
+    files.place("/A/d/X")
+    files.place("/A/d/f")
+    recordEarlier(
+        history, .move(["/A/X", "/A/x/f"], into: "/A/d"),
+        finished(.moved(from: "/A/X", to: "/A/d/X"), .moved(from: "/A/x/f", to: "/A/d/f")))
+
+    let undone = try await value(of: history.undo(with: queue))
+
+    #expect(
+        undone.errors == [
+            FileOperationError(
+                reason: .sourceGone, path: caseSensitive ? "/A/x" : "/A/X", errno: ENOENT)
+        ])
+    #expect(history.undoTitle == (caseSensitive ? "Undo Move 2 Items" : "Undo"))
+}
+
+/// The lines the files' log got.
+private func logged(_ files: FakeFiles) -> [String] {
+    files.events.all.filter { $0.hasPrefix("log ") }
+}
+
+/// Where a volume can't say whether it tells case apart, as a file system that doesn't answer
+/// `_PC_CASE_SENSITIVE`, the check compares names there without case: a case-only rename still
+/// undoes and redoes. The log says so once for the volume, however many checks ask.
+@MainActor @Test func aVolumeWhoseCaseSensitivityCantBeReadComparesWithoutCase() async throws {
+    let files = FakeFiles()
+    files.failCaseSensitivity(of: volumeA, with: ListingError(path: "/A", code: EINVAL))
+    let watcher = Watcher()
+    let history = UndoHistory(log: { _ in })
+    let queue = followedQueue(history, fileSystem: files.fileSystem(), watcher: watcher)
+    #expect(await queue.perform(.rename("/A/foo", to: "Foo")).phase == .done)
+    await history.catchUp(with: queue)
+    // One item, which the volume shows at either name.
+    files.place("/A/Foo")
+    files.place("/A/foo")
+
+    let undone = try await value(of: history.undo(with: queue))
+    let redone = try await value(of: history.redo(with: queue))
+
+    #expect(undone.errors == [])
+    #expect(redone.errors == [])
+    #expect(files.events.all.contains("move /A/Foo to /A/foo"))
+    #expect(files.events.all.contains("move /A/foo to /A/Foo"))
+    #expect(files.events.all.filter { $0 == "case sensitivity of /A" }.count == 2)
+    #expect(logged(files).count == 1)
+    #expect(logged(files).first?.contains("/A") == true)
+}
+
+/// The errors of an undo of one move of `Foo` and `foo` into a folder, on `files` as set up.
+@MainActor private func errorsUndoingFooAndFoo(_ files: FakeFiles) async throws
+    -> [FileOperationError]
+{
+    let history = UndoHistory(log: { _ in })
+    let queue = followedQueue(history, fileSystem: files.fileSystem(), watcher: Watcher())
+    files.identify("/A/d/Foo", as: .persistent(volume: "fake", inode: 1))
+    files.identify("/A/d/foo", as: .persistent(volume: "fake", inode: 2))
+    #expect(await queue.perform(.move(["/A/Foo", "/A/foo"], into: "/A/d")).phase == .done)
+    await history.catchUp(with: queue)
+    files.place("/A/d/Foo")
+    files.place("/A/d/foo")
+    return try await value(of: history.undo(with: queue)).errors
+}
+
+/// `Foo` and `foo` on a volume whose case sensitivity can't be read are checked as on one that
+/// doesn't tell case apart, where they are one item: the read fails once for the whole check,
+/// its failure kept for every later pair, and isn't an error of the undo.
+@MainActor @Test func fooAndFooOnAVolumeWhoseCaseSensitivityCantBeReadAreOneItem() async throws {
+    let insensitive = try await errorsUndoingFooAndFoo(FakeFiles())
+    let files = FakeFiles()
+    files.failCaseSensitivity(of: volumeA, with: ListingError(path: "/A", code: EINVAL))
+
+    let unread = try await errorsUndoingFooAndFoo(files)
+
+    #expect(!insensitive.isEmpty)
+    #expect(unread == insensitive)
+    #expect(files.events.all.filter { $0 == "case sensitivity of /A" }.count == 1)
+    #expect(logged(files).count == 1)
+}
+
+/// The volume of a pair's folder is that of the nearest folder above it that is there when
+/// reading it finds no folder (`ENOENT`, or `ENOTDIR` through a file). Any other error, as
+/// `EACCES`, compares the pair without case, as an unread case sensitivity does, and is logged.
+@MainActor @Test(arguments: [ENOENT, ENOTDIR, EACCES])
+func aPairsVolumeIsReadAboveAFolderThatIsntThere(code: Int32) async throws {
+    let files = FakeFiles()
+    files.tellCaseApart(on: volumeA)
+    // The folder holding the first name that differs, `M` and `m`.
+    files.failVolume(of: "/A/q", with: ListingError(path: "/A/q", code: code))
+    let history = UndoHistory(log: { _ in })
+    let queue = followedQueue(history, fileSystem: files.fileSystem(), watcher: Watcher())
+    recordEarlier(
+        history, .move(["/A/q/m/x"], into: "/A/q/M"),
+        finished(.moved(from: "/A/q/m/x", to: "/A/q/M/x")))
+    // Another item at the old path, on a volume that tells case apart.
+    files.place("/A/q/M/x")
+    files.place("/A/q/m/x")
+
+    let undone = try await value(of: history.undo(with: queue))
+
+    if code == EACCES {
+        #expect(undone.errors == [])
+        #expect(files.events.all.contains("move /A/q/M/x to /A/q/m/x"))
+        #expect(logged(files).count == 1)
+        #expect(logged(files).first?.contains("/A/q") == true)
+    } else {
+        #expect(
+            undone.errors == [
+                FileOperationError(reason: .exists, path: "/A/q/m/x", errno: EEXIST)
+            ])
+        #expect(files.events.all.contains("case sensitivity of /A"))
+        #expect(logged(files).isEmpty)
+    }
 }
 
 /// Items whose folder is gone, as on a drive that isn't mounted, name it once.

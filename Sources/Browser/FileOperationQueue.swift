@@ -1,5 +1,6 @@
 import Base
 import Foundation
+import os
 
 /// Runs file operations off the main actor. Each operation is planned first (`OperationPlan`):
 /// volumes read and copies pre-scanned. Operations that copy, which are copies, duplicates and
@@ -119,6 +120,8 @@ public actor FileOperationQueue {
     /// them.
     struct FileSystem: Sendable {
         var volumeOf: @Sendable (String) throws(ListingError) -> VolumeIdentity
+        /// Whether a volume tells names apart by case.
+        var isCaseSensitive: @Sendable (VolumeIdentity) throws(ListingError) -> Bool
         var measure: @Sendable (String, () -> Bool) throws -> TreeSizeWalker.Total
         var makeCopier: @Sendable () -> any Copier
         var move: @Sendable (String, String) throws(FileOperationError) -> Void
@@ -146,9 +149,13 @@ public actor FileOperationQueue {
         /// The first of the sources given second that the folder given first is or is inside,
         /// judged by the items' identities, or nil when there is none.
         var sourceHolding: @Sendable (String, [String]) throws(FileOperationError) -> String?
+        /// Writes a line to the log, for what goes wrong without failing an operation.
+        var log: @Sendable (String) -> Void
 
         static let real = FileSystem(
-            volumeOf: VolumeIdentity.init(path:), measure: OperationPlan.measure,
+            volumeOf: VolumeIdentity.init(path:),
+            isCaseSensitive: { volume throws(ListingError) in try volume.isCaseSensitive() },
+            measure: OperationPlan.measure,
             makeCopier: { FileCopier() }, move: FileMover.move,
             trash: { path throws(FileOperationError) in try Trasher().trash(path) },
             putBack: Trasher.putBack(_:to:), deletePermanently: Trasher.deletePermanently,
@@ -160,7 +167,8 @@ public actor FileOperationQueue {
                 guard rmdir(path) == 0 else { throw FileOperationError(errno: errno, path: path) }
             },
             makeIdentifier: OperationPlan.identifier, stamp: OperationPlan.stamp,
-            sourceHolding: OperationPlan.source(holding:among:))
+            sourceHolding: OperationPlan.source(holding:among:),
+            log: { message in Logger(category: "file-operations").error("\(message)") })
     }
 
     private let fileSystem: FileSystem
@@ -193,6 +201,9 @@ public actor FileOperationQueue {
     /// Drop folders made and not yet removed.
     private var dropFolders: Set<DropFolder> = []
     private var finished = 0
+    /// The paths whose volume's case sensitivity an undo's check couldn't read, each logged
+    /// once.
+    private var pathsWithUnreadCase: Set<String> = []
 
     /// The longest an undo waits for an operation still being planned or run that it would
     /// otherwise wait for, such as a move whose volume is on a share that stopped answering:
@@ -656,7 +667,8 @@ public actor FileOperationQueue {
         let planned = await BlockingCallThread.run {
             Result {
                 try OperationPlan.make(
-                    for: operation, volumeOf: fileSystem.volumeOf, measure: fileSystem.measure,
+                    for: operation, volumeOf: fileSystem.volumeOf,
+                    isCaseSensitive: fileSystem.isCaseSensitive, measure: fileSystem.measure,
                     inspect: fileSystem.inspect, identify: fileSystem.makeIdentifier(),
                     sourceHolding: fileSystem.sourceHolding, isCancelled: { control.isCancelled },
                     // Known to copy before its pre-scan, which can take minutes.
@@ -676,6 +688,12 @@ public actor FileOperationQueue {
             return
         } catch {
             preconditionFailure("planning \(operation) threw \(error)")
+        }
+        for (path, error) in plan.unreadCaseSensitivity.sorted(by: { $0.key < $1.key })
+        where pathsWithUnreadCase.insert(path).inserted {
+            fileSystem.log(
+                "undo compares names without case at \(path), since whether its volume tells "
+                    + "case apart couldn't be read: \(error)")
         }
         entry.plan = plan
         entry.errors = plan.failures
@@ -1163,7 +1181,8 @@ public actor FileOperationQueue {
     }
 
     /// The identity of the item at each place `outcome`'s changes left one, read right after
-    /// them, for an undo to check against, by comparable path. Runs on a `BlockingCallThread`.
+    /// them, for an undo to check against, by path as `FileOperation.comparable` gives it
+    /// without folding case (`OperationRecord.identities`). Runs on a `BlockingCallThread`.
     /// `unread` holds the error for each place whose identity couldn't be read, or where no
     /// item was found right after the change; the operation can't be undone then.
     private static func identities(after outcome: ItemOutcome, identify: Identifier)
@@ -1181,7 +1200,7 @@ public actor FileOperationQueue {
                 guard let identity = try identify(location) else {
                     throw FileOperationError(reason: .sourceGone, path: location, errno: ENOENT)
                 }
-                identities[FileOperation.comparable(location)] = identity
+                identities[FileOperation.comparable(location, foldsCase: false)] = identity
             } catch {
                 unread.append(error)
             }

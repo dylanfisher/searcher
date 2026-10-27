@@ -23,6 +23,9 @@ final class FakeFiles: @unchecked Sendable {
     let events = EventLog<String>()
     private let condition = NSCondition()
     private var volumes = [volumeA, volumeB, volumeS]
+    private var caseSensitive: Set<VolumeIdentity> = []
+    private var caseSensitivityFailures: [VolumeIdentity: ListingError] = [:]
+    private var volumeFailures: [String: ListingError] = [:]
     private var placed: [String: ConflictRequest.Item] = [:]
     private var hasNoTrash = false
     private var heldScans: Set<String> = []
@@ -137,6 +140,23 @@ final class FakeFiles: @unchecked Sendable {
         condition.withLock { volumes.append(volume) }
     }
 
+    /// Makes `volume` one that tells names apart by case. Placed items are told apart by case
+    /// on every volume, so a test of a volume that doesn't places the other case's path too.
+    func tellCaseApart(on volume: VolumeIdentity) {
+        condition.withLock { _ = caseSensitive.insert(volume) }
+    }
+
+    /// Reading whether `volume` tells case apart throws `error`, as where the file system
+    /// doesn't answer `_PC_CASE_SENSITIVE`.
+    func failCaseSensitivity(of volume: VolumeIdentity, with error: ListingError) {
+        condition.withLock { caseSensitivityFailures[volume] = error }
+    }
+
+    /// Reading the volume of the folder at `path` throws `error`.
+    func failVolume(of path: String, with error: ListingError) {
+        condition.withLock { volumeFailures[path] = error }
+    }
+
     /// Puts an item at `path`, so a copy or move onto it is a conflict.
     func place(_ path: String, isFolder: Bool = false) {
         condition.withLock { placed[path] = Self.item(path, isFolder: isFolder) }
@@ -213,17 +233,26 @@ final class FakeFiles: @unchecked Sendable {
         }
         return FileOperationQueue.FileSystem(
             volumeOf: { path throws(ListingError) in
-                let volumes = self.condition.withLock {
+                let (volumes, failure) = self.condition.withLock {
                     if self.heldVolumes.contains(path) {
                         self.events.append("holding volume \(path)")
                     }
                     while self.heldVolumes.contains(path) { self.condition.wait() }
-                    return self.volumes
+                    return (self.volumes, self.volumeFailures[path])
                 }
+                if let failure { throw failure }
                 for volume in volumes where isPath(path, atOrUnder: volume.mountPoint) {
                     return volume
                 }
                 throw ListingError(path: path, code: ENOENT)
+            },
+            isCaseSensitive: { volume throws(ListingError) in
+                self.events.append("case sensitivity of \(volume.mountPoint)")
+                let (failure, isSensitive) = self.condition.withLock {
+                    (self.caseSensitivityFailures[volume], self.caseSensitive.contains(volume))
+                }
+                if let failure { throw failure }
+                return isSensitive
             },
             measure: { path, _ in
                 self.condition.withLock {
@@ -324,7 +353,8 @@ final class FakeFiles: @unchecked Sendable {
                     path: .read(device: 1, inode: 1, type: 0, size: 10, modified: version)
                 ])
             },
-            sourceHolding: { _, _ throws(FileOperationError) in nil })
+            sourceHolding: { _, _ throws(FileOperationError) in nil },
+            log: { self.events.append("log \($0)") })
     }
 
     /// Runs on the copy's thread.
