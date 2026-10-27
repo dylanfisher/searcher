@@ -26,6 +26,8 @@ public final class MountTable {
     private(set) var readsLanded = 0
     /// The calls of `firstRead()` waiting for a read to land.
     private var firstReadWaiters: [CheckedContinuation<Void, Never>] = []
+    /// The calls of `refreshed()` waiting, each for the read it started.
+    private var refreshWaiters: [(read: Int, continuation: CheckedContinuation<Void, Never>)] = []
     private var observers: [Observer] = []
 
     private struct Observer {
@@ -87,6 +89,14 @@ public final class MountTable {
         observers.append(Observer(owner: owner, handler: handler))
     }
 
+    /// Reads the mount table again, and returns once that read, or a newer one, has landed: after
+    /// a mount, whose mount point the next read has (docs/decisions/0115-server-shares.md).
+    public func refreshed() async {
+        refresh()
+        let count = readCount
+        await withCheckedContinuation { refreshWaiters.append((count, $0)) }
+    }
+
     /// Reads the mount table again, as a volume mounted or unmounted.
     func refresh() {
         readCount += 1
@@ -97,6 +107,9 @@ public final class MountTable {
             self?.readsLanded += 1
             guard let self, self.readCount == count else { return }
             self.land(volumes)
+            let landed = refreshWaiters.filter { $0.read <= count }
+            refreshWaiters.removeAll { $0.read <= count }
+            for waiter in landed { waiter.continuation.resume() }
         }
     }
 

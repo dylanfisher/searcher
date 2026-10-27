@@ -39,7 +39,7 @@ public final class ListingService: Sendable {
     private let mountedVolumes: @Sendable () -> [VolumeIdentity]
     /// Starts a wait of the given length on the service's clock, taking the deadline at once, and
     /// returns the wait.
-    private let startWait: DeadlineWait.Start
+    let startWait: DeadlineWait.Start
     /// Owns `queue`; every change to it runs here, so `load` costs its caller one dispatch.
     private let scheduler = DispatchQueue(label: "ListingService", qos: .userInitiated)
     private let queue = Queue()
@@ -65,6 +65,9 @@ public final class ListingService: Sendable {
     /// unmounted shares from; nil lists a server's mounted shares only, as a test of the mount
     /// table alone makes (docs/decisions/0115-server-shares.md).
     public let shares: ServerShares?
+    /// Mounts a server's shares that aren't mounted, for its panes to open; nil mounts none, and
+    /// Open stays off on such a share (docs/decisions/0115-server-shares.md).
+    public let shareMounts: ShareMounts?
 
     /// A service that lists folders on the file system and finds each one's volume with `statfs`.
     /// `rootVolumeName` runs once per load, on the load's thread.
@@ -73,13 +76,13 @@ public final class ListingService: Sendable {
         rootVolumeName: @escaping @Sendable () -> String = { readRootVolumeName() },
         cache: ListingCache? = nil, thumbnails: ThumbnailService? = nil,
         recentListings: RecentListings? = nil, mounts: MountTable? = nil,
-        shares: ServerShares? = nil
+        shares: ServerShares? = nil, shareMounts: ShareMounts? = nil
     ) {
         self.init(
             lister: DirectoryLister(), clock: clock, rootVolumeName: rootVolumeName,
             volumeOf: VolumeIdentity.init(path:), mountedVolumes: VolumeIdentity.mounted,
             cache: cache, thumbnails: thumbnails, recentListings: recentListings, mounts: mounts,
-            shares: shares)
+            shares: shares, shareMounts: shareMounts)
     }
 
     /// A service that lists folders with `lister`. `volumeOf` says which volume a path is on, and
@@ -96,8 +99,9 @@ public final class ListingService: Sendable {
         mountedVolumes: @escaping @Sendable () -> [VolumeIdentity] = { [] },
         cache: ListingCache? = nil, thumbnails: ThumbnailService? = nil,
         recentListings: RecentListings? = nil, mounts: MountTable? = nil,
-        shares: ServerShares? = nil
+        shares: ServerShares? = nil, shareMounts: ShareMounts? = nil
     ) {
+        self.shareMounts = shareMounts
         self.mountedVolumes = mountedVolumes
         self.mounts = mounts
         self.shares = shares

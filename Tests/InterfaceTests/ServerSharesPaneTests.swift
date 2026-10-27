@@ -10,9 +10,10 @@ import Testing
 
 // A pane at a server lists the shares the server offers: its mounted shares, and a row for each
 // one it lists that isn't mounted, with a notice when the list couldn't be had. A share that
-// isn't mounted takes no drop, drags nothing and turns off every command on the selection
-// (docs/decisions/0115-server-shares.md). Each test goes through the real listing service,
-// panes, views and mount table; the mounts, `smbutil` and the clock are stubs.
+// isn't mounted takes no drop, drags nothing and turns off every command on the selection but
+// Open, which mounts it, selected alone, and goes into it (docs/decisions/0115-server-shares.md).
+// Each test goes through the real listing service, panes, views and mount table; the mounts,
+// `smbutil`, NetFS and the clock are stubs.
 
 /// HAL9000's request for its share list, as the user its shares are mounted by.
 private let dylans = ShareRequest(server: testServer, user: "dylan")
@@ -31,9 +32,11 @@ private let folders: [String: [DirectoryEntry]] = [
 private final class World {
     let clock = ManualClock()
     let enumerator: GatedShareEnumerator
+    let mounter = GatedShareMounter()
     let mounts: StubMounts
     let table: MountTable
     let shares: ServerShares
+    let shareMounts: ShareMounts
     let service: ListingService
 
     init(_ volumes: [VolumeIdentity], startError: ShareListError? = nil) async {
@@ -42,8 +45,10 @@ private final class World {
         table = mounts.table()
         await table.firstRead()
         shares = ServerShares(enumerator: enumerator, clock: clock)
+        shareMounts = ShareMounts(mounter: mounter, table: table)
         service = ListingService(
-            lister: StubLister(folders), clock: clock, mounts: table, shares: shares)
+            lister: StubLister(folders), clock: clock, mounts: table, shares: shares,
+            shareMounts: shareMounts)
     }
 
     /// Reads the table again with `volumes` mounted, and returns once the read has landed.
@@ -446,7 +451,8 @@ private let refusedCommands: [CommandID] = [
 
 /// HAL9000's "main" isn't mounted, and another server's "main" is at /Volumes/main. The row is
 /// no way into the other server's share: a drop on it is refused and copies nothing, it drags
-/// nothing, and every command on a selection holding it is off, in both views.
+/// nothing, and every command on a selection holding it is off but Open on it alone, which
+/// mounts it, in both views.
 @MainActor @Test(arguments: [ViewMode.list, .column])
 func anUnmountedShareBesideAnotherServersShareOfItsNameRefusesEverything(_ viewMode: ViewMode)
     async throws
@@ -492,8 +498,10 @@ func anUnmountedShareBesideAnotherServersShareOfItsNameRefusesEverything(_ viewM
         for row in names.map({ $0 == "main" ? main : music }) {
             #expect(list.tableView(table, pasteboardWriterForRow: row) == nil, "\(names)")
         }
+        // Open mounts a share selected alone (docs/decisions/0115-server-shares.md).
+        let opens = names == ["main"]
         let on = refusedCommands.filter { table.canRunCommand($0) }
-        #expect(on.isEmpty, "\(names): \(on)")
+        #expect(on == (opens ? [NavigationCommands.open.id] : []), "\(names): \(on)")
         // A key runs its command whatever its item says: Copy leaves the clipboard as it was.
         table.runCommand(ClipboardCommands.copy.id)
         #expect(window.clipboard.clipboard.fileURLs().isEmpty)
@@ -508,11 +516,11 @@ func anUnmountedShareBesideAnotherServersShareOfItsNameRefusesEverything(_ viewM
         list.quickLook.toggle()
         #expect(beeps == 1 && !opened)
 
-        // The menu is Open, off.
+        // The menu is Open, on for the share alone.
         let menu = list.contextMenu(forRow: main)
         #expect(menu.items.map(\.title) == ["Open"])
         let open = try #require(menu.items.first)
-        #expect((open.target as? NSMenuItemValidation)?.validateMenuItem(open) == false)
+        #expect((open.target as? NSMenuItemValidation)?.validateMenuItem(open) == opens)
     }
 }
 
@@ -633,4 +641,379 @@ func anUnmountedShareBesideAnotherServersShareOfItsNameRefusesEverything(_ viewM
     await settle { window.serverPane.state.names == ["video"] }
     await settle { trail.columns.count == 1 }
     #expect(trail.columns.map(\.pane.location) == [.server(testServer)])
+}
+
+// MARK: Mounting
+
+private let mainFolder = Location(path: "/Volumes/main")
+
+extension World {
+    /// The handle of the `count`th mount started.
+    fileprivate func mountStarted(_ count: Int = 1) async throws -> ShareMountHandle {
+        #expect(await mounter.waitForStarts(count))
+        return try #require(mounter.starts[count - 1].handle)
+    }
+
+    /// Mounts HAL9000's "main" at /Volumes/main in the stub table, as the kernel would, and ends
+    /// the mount `handle` names with `status` and `mountPoints`.
+    fileprivate func mountMain(
+        _ handle: ShareMountHandle, status: Int32 = 0,
+        mountPoints: [String] = ["/Volumes/main"],
+        as main: VolumeIdentity = mountedShare("main")
+    ) {
+        mounts.set([mountedShare("music"), main])
+        #expect(mounter.complete(handle, status: status, mountPoints: mountPoints))
+    }
+}
+
+/// The alerts a list showed.
+@MainActor
+private final class Alerts {
+    var shown: [(message: String, information: String)] = []
+
+    init(_ list: ListingViewController) {
+        list.showAlert = { [weak self] alert in
+            self?.shown.append((alert.messageText, alert.informativeText))
+        }
+    }
+}
+
+/// A pane at HAL9000, which lists "main", not mounted, and "music", mounted, with the commands'
+/// registry on its rows' table.
+@MainActor
+private func atServer(_ world: World, viewMode: ViewMode = .list) async throws
+    -> (Window, ListingViewController)
+{
+    let window = try Window(world, viewMode: viewMode)
+    // Column view waits out `ColumnTrail.openDelay` on the world's clock.
+    window.pane.columnOpenClock = world.clock
+    // A second window lists the server from the cache.
+    if world.shares.cachedNames(for: dylans) == nil {
+        await world.answer(.success(["main", "music"]))
+    }
+    let list = try await window.shows(["main", "music"])
+    list.tableView.beep = {}
+    return (window, list)
+}
+
+extension Window {
+    /// Selects `name` alone as a click on its row does.
+    fileprivate func click(_ name: String) throws {
+        let listing = try #require(serverPane.state.listing)
+        let row = try #require(listing.row(named: name))
+        let exact = ExactName(name)
+        serverPane.select(rows: IndexSet(integer: row), cursor: exact, anchor: exact)
+    }
+}
+
+/// Return renames, which a share can't be, so it mounts nothing; Open mounts the share selected
+/// alone, and a second Open while it runs starts no other mount. The mount goes into the share.
+@MainActor @Test func openMountsTheShareAndASecondOpenStartsNoOther() async throws {
+    let world = await World([mountedShare("music")])
+    let (window, list) = try await atServer(world)
+    window.select(["main"])
+
+    list.tableView.keyDown(with: try keyEvent("\r"))
+    #expect(window.pane.connectingShare == nil)
+    #expect(list.tableView.canRunCommand(NavigationCommands.open.id))
+    list.tableView.runCommand(NavigationCommands.open.id)
+    let handle = try await world.mountStarted()
+    #expect(window.pane.connectingShare?.name == "main")
+    list.tableView.runCommand(NavigationCommands.open.id)
+
+    #expect(world.mounter.starts.map(\.request) == [ShareMountRequest(share: dylans, name: "main")])
+    #expect(world.mounter.starts[0].request.url == "smb://dylan@HAL9000._smb._tcp.local/main")
+    world.mountMain(handle)
+    await settle { window.pane.location == mainFolder }
+    await settle { window.pane.state.isLoaded }
+    #expect(window.pane.state.names == ["n.txt"])
+    #expect(world.mounter.starts.count == 1)
+    #expect(window.pane.connectingShare == nil)
+}
+
+/// Two panes opening one share wait for one mount, which is cancelled only when the last lets
+/// go of it (docs/decisions/0115-server-shares.md).
+@MainActor @Test func twoPanesShareOneMountCancelledOnlyWithTheLast() async throws {
+    let world = await World([mountedShare("music")])
+    let (first, firstList) = try await atServer(world)
+    let (second, secondList) = try await atServer(world)
+    let escape = try keyEvent("\u{1B}")
+    for (window, list) in [(first, firstList), (second, secondList)] {
+        window.select(["main"])
+        list.tableView.runCommand(NavigationCommands.open.id)
+    }
+    let handle = try await world.mountStarted()
+    let request = ShareMountRequest(share: dylans, name: "main")
+    await settle { world.shareMounts.askers(of: request) == 2 }
+
+    firstList.tableView.keyDown(with: escape)
+    #expect(first.pane.connectingShare == nil)
+    await settle { world.shareMounts.askers(of: request) == 1 }
+    #expect(world.mounter.cancellations.isEmpty)
+
+    secondList.tableView.keyDown(with: escape)
+    await settle { world.mounter.cancellations == [handle] }
+    #expect(world.mounter.starts.count == 1)
+    // NetFS runs no completion after a cancel.
+    #expect(!world.mounter.complete(handle))
+}
+
+/// Holding ↓ through seven shares with the clock stopped mounts none of them; the keys stopping
+/// on one mounts it once `ColumnTrail.openDelay` passes, as its column would open then.
+@MainActor @Test func heldArrowsMountOnlyTheShareTheyStopOn() async throws {
+    let world = await World([mountedShare("music")])
+    let window = try Window(world, viewMode: .column)
+    window.pane.columnOpenClock = world.clock
+    let names = ["a", "b", "c", "d", "e", "f", "g", "music"]
+    await world.answer(.success(ShareList(names: names)))
+    let list = try await window.shows(names)
+    let down = try keyEvent(functionKey(NSDownArrowFunctionKey), modifiers: arrowFlags)
+
+    for _ in 0..<7 { list.tableView.keyDown(with: down) }
+
+    #expect(window.serverPane.selection.cursor == ExactName("g"))
+    #expect(window.serverPane.connectingShare == nil)
+    #expect(world.mounter.starts.isEmpty)
+    world.clock.advance(by: ColumnTrail.openDelay)
+    await settle { window.serverPane.connectingShare?.name == "g" }
+    #expect(await world.mounter.waitForStarts(1))
+    #expect(world.mounter.starts.map(\.request.name) == ["g"])
+}
+
+/// A click mounts a share in column view at once, where its column would open, and only selects
+/// it in list view. → mounts it in column view too, again after a mount that failed.
+@MainActor @Test(arguments: [ViewMode.list, .column])
+func aClickMountsAShareOnlyInColumnView(_ viewMode: ViewMode) async throws {
+    let world = await World([mountedShare("music")])
+    let (window, list) = try await atServer(world, viewMode: viewMode)
+
+    try window.click("main")
+
+    guard viewMode == .column else {
+        #expect(window.pane.connectingShare == nil)
+        #expect(world.mounter.starts.isEmpty)
+        return
+    }
+    #expect(window.serverPane.connectingShare?.name == "main")
+    let alerts = Alerts(list)
+    let handle = try await world.mountStarted()
+    #expect(world.mounter.complete(handle, status: EAUTH))
+    await settle { !alerts.shown.isEmpty }
+    list.tableView.keyDown(
+        with: try keyEvent(functionKey(NSRightArrowFunctionKey), modifiers: arrowFlags))
+    _ = try await world.mountStarted(2)
+}
+
+/// A share mounted from column view opens its column, as a click on a mounted share's row does.
+@MainActor @Test func aShareMountedInColumnViewOpensItsColumn() async throws {
+    let world = await World([mountedShare("music")])
+    let (window, _) = try await atServer(world, viewMode: .column)
+    let trail = try #require(window.pane.columnTrail)
+    try window.click("main")
+    let handle = try await world.mountStarted()
+
+    world.mountMain(handle)
+
+    await settle { trail.columns.count == 2 && trail.columns[1].pane.state.isLoaded }
+    #expect(trail.columns.map(\.pane.location) == [.server(testServer), mainFolder])
+    #expect(window.serverPane.state.types["main"] == .directory)
+    #expect(window.serverPane.connectingShare == nil)
+}
+
+/// What lets go of a mount before it ends: the mount is cancelled, and a share that mounts
+/// anyway, as the kernel may finish it, is a mounted row and nothing moves.
+enum LettingGo: CaseIterable, Sendable {
+    case back, anotherSelection, escape, closingThePane
+}
+
+@MainActor @Test(arguments: LettingGo.allCases)
+func aMountLetGoOfMovesNothingWhenTheShareMounts(_ how: LettingGo) async throws {
+    let world = await World([mountedShare("music")])
+    let (window, list) = try await atServer(world)
+    let music = Location(path: "/Volumes/music")
+    if how == .back {
+        window.pane.navigate(to: music)
+        await settle { window.pane.state.isLoaded }
+        window.pane.navigate(to: .server(testServer))
+        _ = try await window.shows(["main", "music"])
+    }
+    window.select(["main"])
+    list.tableView.runCommand(NavigationCommands.open.id)
+    let handle = try await world.mountStarted()
+
+    switch how {
+    case .back: window.pane.goBack()
+    case .anotherSelection: window.select(["music"])
+    case .escape: list.tableView.keyDown(with: try keyEvent("\u{1B}"))
+    case .closingThePane: window.pane.close()
+    }
+
+    #expect(window.pane.connectingShare == nil)
+    await settle { world.mounter.cancellations == [handle] }
+    #expect(!world.mounter.complete(handle))
+    let stays = window.pane.location
+    #expect(stays == (how == .back ? music : .server(testServer)))
+    await world.remount([mountedShare("music"), mountedShare("main")])
+    if how != .back, how != .closingThePane {
+        await settle { window.pane.state.types["main"] == .directory }
+    }
+    #expect(window.pane.location == stays)
+}
+
+/// Escape in column view lets go of the mount the server's column waits for.
+@MainActor @Test func escapeInColumnViewLetsGoOfTheMount() async throws {
+    let world = await World([mountedShare("music")])
+    let (window, list) = try await atServer(world, viewMode: .column)
+    try window.click("main")
+    let handle = try await world.mountStarted()
+
+    list.tableView.keyDown(with: try keyEvent("\u{1B}"))
+
+    #expect(window.serverPane.connectingShare == nil)
+    await settle { world.mounter.cancellations == [handle] }
+}
+
+/// A mount point the table's read doesn't hold yet moves nothing; the row shows mounted when a
+/// read has it, and still nothing moves.
+@MainActor @Test func aMountPointTheTableDoesntHoldYetMovesNothing() async throws {
+    let world = await World([mountedShare("music")])
+    let (window, list) = try await atServer(world)
+    let alerts = Alerts(list)
+    window.select(["main"])
+    list.tableView.runCommand(NavigationCommands.open.id)
+    let handle = try await world.mountStarted()
+
+    #expect(world.mounter.complete(handle, mountPoints: ["/Volumes/main"]))
+
+    await settle { window.pane.connectingShare == nil }
+    #expect(window.pane.location == .server(testServer))
+    await world.remount([mountedShare("music"), mountedShare("main")])
+    await settle { window.pane.state.types["main"] == .directory }
+    #expect(window.pane.location == .server(testServer))
+    #expect(alerts.shown.isEmpty)
+}
+
+/// NetFS runs no completion after a non-zero return: the mount fails at once, with its sheet.
+@MainActor @Test func aStartThatFailsAtOnceShowsTheSheet() async throws {
+    let world = await World([mountedShare("music")])
+    let (window, list) = try await atServer(world)
+    let alerts = Alerts(list)
+    world.mounter.failStarts(with: EACCES)
+    window.select(["main"])
+
+    list.tableView.runCommand(NavigationCommands.open.id)
+
+    await settle { !alerts.shown.isEmpty }
+    #expect(alerts.shown.map(\.message) == ["The share “main” couldn’t be opened."])
+    #expect(alerts.shown.map(\.information) == ["Permission denied"])
+    #expect(world.mounter.starts.map(\.handle) == [nil])
+    #expect(window.pane.connectingShare == nil)
+    #expect(window.pane.location == .server(testServer))
+}
+
+/// A completion NetFS sends after a cancel, which it never does, answers nobody: not the pane
+/// that opened the share again since.
+@MainActor @Test func aCompletionAfterACancelIsIgnored() async throws {
+    let world = await World([mountedShare("music")])
+    let (window, list) = try await atServer(world)
+    let alerts = Alerts(list)
+    window.select(["main"])
+    list.tableView.runCommand(NavigationCommands.open.id)
+    let first = try await world.mountStarted()
+    list.tableView.keyDown(with: try keyEvent("\u{1B}"))
+    await settle { world.mounter.cancellations == [first] }
+    list.tableView.runCommand(NavigationCommands.open.id)
+    let second = try await world.mountStarted(2)
+
+    world.mounts.set([mountedShare("music"), mountedShare("main")])
+    #expect(world.mounter.complete(first, mountPoints: ["/Volumes/main"], evenIfCancelled: true))
+    #expect(world.mounter.complete(second, status: EACCES))
+
+    await settle { !alerts.shown.isEmpty }
+    #expect(alerts.shown.map(\.information) == ["Permission denied"])
+    #expect(window.pane.location == .server(testServer))
+}
+
+/// A share already mounted answers `EEXIST`, here with no mount point: the table's mount of the
+/// server's share is gone into.
+@MainActor @Test func alreadyMountedWithNoMountPointGoesIntoTheTablesMount() async throws {
+    let world = await World([mountedShare("music")])
+    let (window, list) = try await atServer(world)
+    window.select(["main"])
+    list.tableView.runCommand(NavigationCommands.open.id)
+
+    world.mountMain(try await world.mountStarted(), status: EEXIST, mountPoints: [])
+
+    await settle { window.pane.location == mainFolder }
+}
+
+/// A share the system records under another host than the row's server, as a remount by
+/// address may be, is still gone into, by the mount point in the result.
+@MainActor @Test(arguments: [ViewMode.list, .column])
+func aShareMountedUnderAnotherHostIsStillReached(_ viewMode: ViewMode) async throws {
+    let world = await World([mountedShare("music")])
+    let (window, list) = try await atServer(world, viewMode: viewMode)
+    try window.click("main")
+    if viewMode == .list { list.tableView.runCommand(NavigationCommands.open.id) }
+
+    world.mountMain(try await world.mountStarted(), as: mountedShare("main", of: "192.168.1.5"))
+
+    await settle { window.pane.location == mainFolder }
+}
+
+/// The row's spinner and the status "Connecting to “main”…" show only once the mount has taken
+/// `LoadTimeouts.spinnerDelay`, and go when it ends.
+@MainActor @Test func theSpinnerShowsOnlyAfterTheSpinnerDelay() async throws {
+    let world = await World([mountedShare("music")])
+    let (window, list) = try await atServer(world)
+    let table = list.tableView
+    let name = try #require(table.tableColumns.first { $0.title == "Name" })
+    let row = try #require(window.pane.state.listing?.row(named: "main"))
+    func rowSpinnerShows() throws -> Bool {
+        let cell = try #require(
+            list.tableView(table, viewFor: name, row: row) as? NSTableCellView)
+        return !ListingViewController.connectingSpinner(in: cell).isHidden
+    }
+    window.select(["main"])
+    let sleeps = world.clock.waitingSleeps
+    table.runCommand(NavigationCommands.open.id)
+    let handle = try await world.mountStarted()
+    await settle { world.clock.waitingSleeps > sleeps }
+
+    world.clock.advance(by: LoadTimeouts.spinnerDelay - .milliseconds(1))
+    #expect(window.pane.connectingShare?.isShown == false)
+    #expect(try !rowSpinnerShows())
+    #expect(window.note == nil)
+
+    world.clock.advance(by: .milliseconds(1))
+    await settle { window.note == "Connecting to “main”…" }
+    #expect(try rowSpinnerShows())
+    #expect(!window.paneController.status.spinner.isHidden)
+    #expect(window.paneController.status.spinner.accessibilityLabel() == "Connecting")
+
+    world.mountMain(handle)
+    await settle { window.pane.location == mainFolder && window.note == nil }
+}
+
+/// The sheet says why: the system's text for an `errno`, a short text for a NetFS code, and the
+/// code for one it doesn't know.
+@MainActor
+@Test(arguments: [
+    (EACCES, "Permission denied"),
+    (Int32(-5998), "The server has no shares available to this user."),
+    (Int32(-6600), "Error -6600."),
+])
+func aMountThatFailsShowsWhy(_ status: Int32, _ reason: String) async throws {
+    let world = await World([mountedShare("music")])
+    let (window, list) = try await atServer(world)
+    let alerts = Alerts(list)
+    window.select(["main"])
+    list.tableView.runCommand(NavigationCommands.open.id)
+
+    #expect(world.mounter.complete(try await world.mountStarted(), status: status))
+
+    await settle { !alerts.shown.isEmpty }
+    #expect(alerts.shown.map(\.message) == ["The share “main” couldn’t be opened."])
+    #expect(alerts.shown.map(\.information) == [reason])
+    #expect(window.pane.location == .server(testServer))
 }

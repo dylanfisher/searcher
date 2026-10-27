@@ -1,3 +1,5 @@
+import Foundation
+
 /// Whose list of a server's shares to ask for. A `Server` is its host alone, so two users on one
 /// host are one server, and the list is the one the user sees (docs/decisions/0115-server-shares.md).
 public struct ShareRequest: Hashable, Sendable {
@@ -27,5 +29,24 @@ public struct ShareRequest: Hashable, Sendable {
         case .named(let user): self.init(server: firstServer, user: user)
         case .undecodable: return nil
         }
+    }
+
+    /// `[user@]host`, the part of a URL to the server that `smbutil` and a mount both take: the
+    /// user percent-encoded once for a URL's user part, `;` kept and `:` encoded, which `smbutil`
+    /// reads as the start of a password; the host as its share's source writes it, not passed
+    /// through `URLComponents`, which checks it as a URL host and refuses a Bonjour name's
+    /// `\032`; an IPv6 address in brackets (docs/decisions/0115-server-shares.md).
+    public var urlAuthority: String {
+        var authority = ""
+        if let user {
+            let allowed = CharacterSet.urlUserAllowed.subtracting(CharacterSet(charactersIn: ":"))
+            guard let encoded = user.addingPercentEncoding(withAllowedCharacters: allowed) else {
+                preconditionFailure("the user \(user) has no percent-encoding")
+            }
+            authority = encoded + "@"
+        }
+        let host = server.host
+        // Only an IPv6 address holds a `:` (`Server.init(host:)`); it needs its brackets back.
+        return authority + (host.contains(":") ? "[\(host)]" : host)
     }
 }

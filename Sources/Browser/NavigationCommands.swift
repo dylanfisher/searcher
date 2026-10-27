@@ -24,13 +24,13 @@ public enum NavigationCommands: CommandSet {
 
     public static var bindings: [CommandBinding] {
         [
-            // A share that isn't mounted has nothing to open until it can be mounted, nor does
-            // any selection with one (docs/decisions/0115-server-shares.md). A key runs the
-            // binding whether or not it is enabled, so `run` checks too.
+            // A share that isn't mounted opens by mounting it, selected alone; a selection with
+            // one among others has nothing to open (docs/decisions/0115-server-shares.md). A key
+            // runs the binding whether or not it is enabled, so `run` checks too.
             CommandBinding(
-                open, isEnabled: { !$0.pane.selectsUnmountedShare },
+                open, isEnabled: { canOpen($0.pane) },
                 run: { context in
-                    guard !context.pane.selectsUnmountedShare else { return }
+                    guard canOpen(context.pane) else { return }
                     context.pane.openSelection()
                 }),
             CommandBinding(
@@ -42,5 +42,11 @@ public enum NavigationCommands: CommandSet {
                 forward, isEnabled: { $0.pane.canGoForward }, run: { $0.pane.goForward() }),
             CommandBinding(goToFolder) { $0.askForFolder() },
         ]
+    }
+
+    /// Whether Open acts on `pane`'s selection: each selected row has a location, or the one
+    /// selected is a share that can be mounted.
+    @MainActor private static func canOpen(_ pane: Pane) -> Bool {
+        !pane.selectsUnmountedShare || pane.selectedUnmountedShare != nil
     }
 }

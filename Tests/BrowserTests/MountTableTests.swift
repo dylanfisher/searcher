@@ -99,6 +99,26 @@ private func loadedTable(_ mounts: StubMounts) async -> MountTable {
     await table.firstRead()
 }
 
+/// After a mount the table is read again before the mount point is looked up in it
+/// (docs/decisions/0115-server-shares.md).
+@MainActor @Test func refreshedReturnsOnceAReadOfTheNewMountsHasLanded() async {
+    let root = volume("/")
+    let mounts = StubMounts([root])
+    let table = await loadedTable(mounts)
+    let disk = volume("/Volumes/a")
+    mounts.set([root, disk])
+
+    await table.refreshed()
+
+    #expect(table.volumes == [root, disk])
+    // Two at once both return: the first with the second's read, which drops its own.
+    mounts.set([root])
+    async let first: Void = table.refreshed()
+    async let second: Void = table.refreshed()
+    _ = await (first, second)
+    #expect(table.volumes == [root])
+}
+
 @MainActor @Test func theObserversRunAfterAReadThatChangedTheVolumesOnly() async {
     let mounts = StubMounts([volume("/")])
     let table = await loadedTable(mounts)
