@@ -78,8 +78,8 @@ public final class FolderVisits {
     }
 
     /// Returns once the store has been handed every save so far. The store writes it after its
-    /// delay.
-    func saved() async {
+    /// delay, or at its next flush, which quitting waits for this to make.
+    public func saved() async {
         await saving?.value
     }
 

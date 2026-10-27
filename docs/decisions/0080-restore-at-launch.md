@@ -96,3 +96,24 @@ keeps only the CI run's launches.
 - **Cost.** About a minute more in the bench-ui job: a restored-session launch takes 1 to 3 s,
   as the bench window's launches do ([0022](0022-ui-bench-mode.md)), plus a cold process start.
   The job keeps its 20-minute timeout. Running `--ui` locally costs the same minute more.
+
+## Amendment: a session that didn't load, and the folder history at quit (2026-10-27)
+
+- **A session that didn't load is rebuilt.** Before, a `session.json` that was missing,
+  unreadable or discarded for its shape left `restore` with no session, and it deleted every
+  window file as a crash's leftover: one bad file cost every window. Now `WorkspaceStore.load()`
+  rebuilds the session from the window files that loaded whenever there is no session file or
+  it didn't load: the window whose file was written last first, as the key window, and a window
+  saved but not yet written before them all; equal dates go by ID, so the order doesn't depend
+  on the folder's. The rebuilt session is saved, so the store writes it with its next flush, and
+  `restore` opens every window. A file whose date can't be read, though it was just read, counts
+  as the oldest; its window is restored either way. The discard or read failure is still
+  reported. The same rule covers a crash between a flush's workspace writes and its session
+  write, which used to delete the windows just written.
+  - **Alternatives considered.** Keep the window files and open the home window — rejected: the
+    files would sit unused until a later save deleted them, so the windows would still be lost.
+    Store the window order in each workspace file — rejected: a second copy of the session's one
+    fact.
+- **Quitting waits for the folder history.** `saveBeforeQuit` waits for `FolderVisits` to hand
+  the store its last save before it flushes, so a folder visited just before quitting is in the
+  folder history the quit writes.

@@ -127,8 +127,9 @@ public struct TabState: Codable, Equatable, Sendable {
         }
     }
 
-    /// The location stored as `path` or `server`. Both or neither, or a host that names no
-    /// server, throws, which rejects the whole workspace, as other data it can't decode does.
+    /// The location stored as `path` or `server`. Both or neither, a path that isn't absolute,
+    /// the empty one among them, or a host that names no server, throws, which rejects the whole
+    /// workspace, as other data it can't decode does.
     private static func location(path: String?, server: String?, codingPath: [any CodingKey])
         throws -> Location
     {
@@ -137,6 +138,9 @@ public struct TabState: Codable, Equatable, Sendable {
         }
         switch (path, server) {
         case (let path?, nil):
+            guard path.hasPrefix("/") else {
+                throw broken("the stored path \"\(path)\" isn't absolute")
+            }
             return Location(path: path)
         case (nil, let host?):
             guard let server = Server(host: host) else {

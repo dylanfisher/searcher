@@ -1613,3 +1613,104 @@ private func expectFullReload(
         controller.workspace.select(first.id)
     }
 }
+
+// MARK: Persistence edges
+
+/// A store whose problems go to `problems` instead of failing the test.
+private func reportingStore(_ folder: TemporaryFolder, problems: EventLog<StoreProblem>)
+    -> WorkspaceStore
+{
+    WorkspaceStore(roots: roots(folder), report: { problems.append($0) })
+}
+
+/// A session file that doesn't load leaves every window file to restore, the one written last
+/// in front, and the session is written again.
+@MainActor @Test func aSessionThatDidntLoadRestoresEveryWindowFile() async throws {
+    let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
+    let saving = makeWindows(store: diskStore(folder))
+    let back = saving.open(at: Location(path: "/root")).workspace.id
+    let front = saving.open(at: Location(path: "/root")).workspace.id
+    #expect(await saveAll(saving))
+    let support = roots(folder).applicationSupport
+    // Written the other way round from the window order, so only the dates give the order.
+    for (id, written) in [(back, 2000.0), (front, 1000.0)] {
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: written)],
+            ofItemAtPath: support.appending(path: "workspaces/\(id.uuidString).json").path)
+    }
+    let sessionFile = support.appending(path: "session.json")
+    try Data("{".utf8).write(to: sessionFile)
+
+    let problems = EventLog<StoreProblem>()
+    let store = reportingStore(folder, problems: problems)
+    let restoring = makeWindows(store: store)
+    restoring.holdSavesUntilRestore()
+    let key = await restoring.restore(store.load())
+
+    #expect(restoring.list.workspaces.map(\.id) == [back, front])
+    #expect(restoring.controllers.count == 2)
+    #expect(key?.workspace.id == back)
+    #expect(await saveAll(restoring))
+    let onDisk = await diskStore(folder).load()
+    #expect(Set(onDisk.workspaces.keys) == [back, front])
+    #expect(onDisk.session == SessionState(workspaces: [back, front], keyWindow: back))
+    #expect(problems.all.map(\.kind) == [.discarded])
+    #expect(problems.all.map(\.file) == [sessionFile])
+}
+
+/// A deleted saved workspace whose snapshot file couldn't be deleted stays deleted: the session
+/// lists it, the next launch leaves it out, and that launch deletes the file.
+@MainActor @Test func aSnapshotWhoseDeleteFailedDoesntComeBack() async throws {
+    let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
+    let problems = EventLog<StoreProblem>()
+    let windows = makeWindows(store: reportingStore(folder, problems: problems))
+    let named = try await savedWindow(in: windows)
+    let id = named.workspace.id
+    #expect(await saveAll(windows))
+    let snapshots = roots(folder).applicationSupport.appending(path: "snapshots")
+    let writable: [FileAttributeKey: Any] = [.posixPermissions: 0o755]
+    try FileManager.default.setAttributes(
+        [.posixPermissions: 0o555], ofItemAtPath: snapshots.path)
+    defer {
+        do {
+            try FileManager.default.setAttributes(writable, ofItemAtPath: snapshots.path)
+        } catch {
+            Issue.record("making \(snapshots.path) writable again failed: \(error)")
+        }
+    }
+
+    named.deleteWorkspace()
+    #expect(await saveAll(windows))
+
+    #expect(problems.all.map(\.kind) == [.unforgotten])
+    let onDisk = await diskStore(folder).load()
+    #expect(Array(onDisk.snapshots.keys) == [id])
+    #expect(onDisk.session?.undeletedSnapshots == [id])
+
+    try FileManager.default.setAttributes(writable, ofItemAtPath: snapshots.path)
+    let relaunched = makeWindows(store: diskStore(folder))
+    relaunched.holdSavesUntilRestore()
+    await relaunched.restore(onDisk)
+
+    #expect(relaunched.list.saved.isEmpty)
+    #expect(await saveAll(relaunched))
+    let after = await diskStore(folder).load()
+    #expect(after.snapshots.isEmpty)
+    #expect(after.session?.undeletedSnapshots == [])
+}
+
+/// A folder visit just before quitting is written by the quit's flush. The windows are saved
+/// first, so the quit has nothing of their own to hand the store and flushes at once.
+@MainActor @Test func quitWritesTheFolderHistoryOfTheLastVisit() async throws {
+    let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
+    let windows = makeWindows(store: diskStore(folder))
+    windows.folderVisits.load(FolderHistory())
+    windows.open(at: Location(path: "/root"))
+    #expect(await saveAll(windows))
+
+    windows.folderVisits.visit(Location(path: "/root/docs"))
+    #expect(await saveAll(windows))
+
+    let history = await diskStore(folder).loadFolderHistory()
+    #expect(history.folders.keys.contains("/root/docs"))
+}

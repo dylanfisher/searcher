@@ -245,6 +245,64 @@ private func onePaneTab() -> TabState {
     #expect(files == [url.lastPathComponent])
 }
 
+/// A save whose write fails is reported and kept, and the next flush writes it, with no save in
+/// between to make it.
+@Test func aFailedWriteIsWrittenByTheNextFlush() async throws {
+    let folder = try TemporaryFolder("WorkspaceStoreTests")
+    let problems = EventLog<StoreProblem>()
+    // Empty while the disk is full.
+    let freed = EventLog<Bool>()
+    let writer = store(folder, problems: problems) { data, url in
+        guard !freed.all.isEmpty else { throw CocoaError(.fileWriteOutOfSpace) }
+        try AtomicWrite.write(data, to: url)
+    }
+    let saved = try workspace()
+    let snapshot = try workspace(saved.id, name: "Saved")
+    let session = SessionState(workspaces: [saved.id], keyWindow: saved.id)
+    var history = FolderHistory()
+    history.visit("/Users/d", at: Date(timeIntervalSince1970: 1000))
+    await writer.save(saved)
+    await writer.saveSnapshot(snapshot)
+    await writer.saveSession(session)
+    await writer.saveFolderHistory(history)
+    await writer.flush()
+    #expect(problems.all.map(\.kind) == Array(repeating: .unwritten, count: 4))
+    #expect(await store(folder).load() == .init(session: nil, workspaces: [:], snapshots: [:]))
+
+    freed.append(true)
+    await writer.flush()
+
+    let reader = store(folder)
+    #expect(
+        await reader.load()
+            == .init(
+                session: session, workspaces: [saved.id: saved], snapshots: [saved.id: snapshot]))
+    #expect(await reader.loadFolderHistory() == history)
+    #expect(problems.all.count == 4)
+}
+
+/// Folders that can't be made fail every write, which waits for the next flush as a failed
+/// write does.
+@Test func aSaveWhoseFolderCantBeMadeIsWrittenByTheNextFlush() async throws {
+    let folder = try TemporaryFolder("WorkspaceStoreTests")
+    try FileManager.default.createDirectory(
+        at: roots(folder).applicationSupport, withIntermediateDirectories: true)
+    // A file where the folder goes.
+    try Data().write(to: workspacesFolder(folder))
+    let problems = EventLog<StoreProblem>()
+    let writer = store(folder, problems: problems)
+    let saved = try workspace()
+    await writer.save(saved)
+    await writer.flush()
+    #expect(problems.all.map(\.kind) == [.unwritten])
+
+    try FileManager.default.removeItem(at: workspacesFolder(folder))
+    await writer.flush()
+
+    #expect(await store(folder).load().workspaces == [saved.id: saved])
+    #expect(problems.all.count == 1)
+}
+
 // MARK: Discarding
 
 /// Writes `good` and a second workspace, then replaces the second one's file with `damage` of
@@ -376,12 +434,42 @@ private func editJSON(_ data: Data, _ edit: (inout [String: Any]) throws -> Void
     try editJSON(try Data(contentsOf: url)) { $0["keyWindow"] = UUID().uuidString }.write(to: url)
 
     let problems = EventLog<StoreProblem>()
-    let loaded = await store(folder, problems: problems).load()
-    #expect(loaded.session == nil)
+    let reader = store(folder, problems: problems)
+    let loaded = await reader.load()
+    // Rebuilt from the window files, so they aren't taken for a crash's leftovers.
+    let rebuilt = SessionState(workspaces: [saved.id], keyWindow: saved.id)
+    #expect(loaded.session == rebuilt)
     #expect(loaded.workspaces == [saved.id: saved])
     #expect(problems.all.map(\.file) == [url])
     #expect(problems.all.map(\.kind) == [.discarded])
     #expect(!FileManager.default.fileExists(atPath: url.path))
+    await reader.flush()
+    #expect(await store(folder).load().session == rebuilt)
+}
+
+/// With no session file, the window files make the session: the one written last first, and
+/// one written at the same moment after another by ID.
+@Test func windowFilesWithoutASessionAreRestoredTheLastWrittenFirst() async throws {
+    let folder = try TemporaryFolder("WorkspaceStoreTests")
+    let ids = (0..<3).map { _ in UUID() }
+    let writer = store(folder)
+    for id in ids {
+        await writer.save(try workspace(id))
+    }
+    await writer.flush()
+    let dates = [1000.0, 3000.0, 1000.0]
+    for (id, date) in zip(ids, dates) {
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: date)],
+            ofItemAtPath: file(of: id, in: folder).path)
+    }
+
+    let problems = EventLog<StoreProblem>()
+    let loaded = await store(folder, problems: problems).load()
+
+    let tied = [ids[0], ids[2]].sorted { $0.uuidString < $1.uuidString }
+    #expect(loaded.session == SessionState(workspaces: [ids[1]] + tied, keyWindow: ids[1]))
+    #expect(problems.all.isEmpty)
 }
 
 @Test func storedFilesHaveNoVersionField() async throws {
@@ -533,6 +621,35 @@ func aLocationWithBothKeysOrNeitherFailsToDecode(place: String, both: Bool) thro
             location["path"] = nil
             location["server"] = nil
         }
+    }
+    #expect(throws: DecodingError.self) {
+        try decodeServerWorkspace { pane in
+            switch place {
+            case "pane":
+                damage(&pane)
+            case "width":
+                var widths = try #require(pane["columnWidths"] as? [String: Any])
+                var folders = try #require(widths["folders"] as? [[String: Any]])
+                damage(&folders[0])
+                widths["folders"] = folders
+                pane["columnWidths"] = widths
+            default:
+                var entries = try #require(pane[place] as? [[String: Any]])
+                damage(&entries[0])
+                pane[place] = entries
+            }
+        }
+    }
+}
+
+/// Each stored location, the pane's, a history entry's and a column width's, whose path is
+/// empty or not absolute, throws, which rejects the whole workspace, as `FolderHistory` rejects
+/// such a path.
+@Test(arguments: ["pane", "back", "forward", "width"], ["", "Users/d"])
+func aLocationWhosePathIsntAbsoluteFailsToDecode(place: String, path: String) throws {
+    func damage(_ location: inout [String: Any]) {
+        location["path"] = path
+        location["server"] = nil
     }
     #expect(throws: DecodingError.self) {
         try decodeServerWorkspace { pane in

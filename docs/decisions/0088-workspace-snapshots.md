@@ -99,3 +99,21 @@ Saved workspaces of the build before this change are not carried over: their fil
 files now, so a named one that was open comes back unsaved and a closed one is deleted at the
 first launch as a stray window file. Each reload lists the snapshot's folders again. A drifted
 window's state is lost on reload unless saved first; the edited dot is the only warning.
+
+## Amendment: a snapshot whose delete fails (2026-10-27)
+
+A deleted saved workspace whose snapshot file couldn't be deleted was reported (`unforgotten`)
+and then came back at the next launch, since nothing else records the delete. Now
+`WorkspaceStore.deleteSnapshot` returns whether the file is gone, and `SessionState` keeps
+`undeletedSnapshots`, the IDs of deleted saved workspaces whose files are still there. A failed
+delete adds the ID and saves the session in the same batch, so a failed delete at quit is in the
+session the quit writes. At launch `restore` leaves those snapshots out of the list, deletes their
+files again, and drops an ID once its file is gone; an ID whose file is already gone is dropped
+at once. The key is always written, empty when nothing waits, as the one stored shape has it.
+
+- **Alternatives considered.** Retry the delete at each flush — rejected: the ID is lost at quit
+  and the snapshot comes back. A separate tombstone file — rejected: a second file for what the
+  session, written on every window change, can carry.
+- **Consequences.** A session that didn't load is rebuilt without the list
+  ([0080](0080-restore-at-launch.md)), so a snapshot whose delete failed comes back if its
+  session file is lost as well; both failures are reported.
