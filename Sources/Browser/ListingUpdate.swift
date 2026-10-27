@@ -8,7 +8,8 @@ import Foundation
 /// mount table, or the root volume's name when that is `/`.
 public enum ListingUpdate: Sendable {
     /// The folder's entries as `ListingCache` kept them from a listing at `listedAt`, sorted as
-    /// asked. Sent before the read starts, and only for a folder on a network volume.
+    /// asked. Sent before the read starts, and only for a folder on a network volume, or for a
+    /// server whose share list `ServerShares` keeps.
     case cached(Listing, listedAt: Date, rootVolumeName: String)
     /// The first entries read, sorted, while the rest of a large folder is still being read.
     case firstBatch(Listing, rootVolumeName: String)
@@ -20,7 +21,8 @@ public enum ListingUpdate: Sendable {
     /// The load has read no batch for `LoadTimeouts.giveUp`, counted as for `slow`. It keeps
     /// going, as after `slow`. Sent at most once per load.
     case gaveUp(rootVolumeName: String, volumeName: String)
-    /// Every entry in the folder, sorted. The load's last update.
+    /// Every entry in the folder, sorted. The load's last update. A server's rows, its mounted
+    /// shares and those it listed that aren't mounted, with nothing to say about them.
     case full(Listing, rootVolumeName: String)
     /// The folder couldn't be listed. The load's last update.
     case failed(ListingError, rootVolumeName: String, volumeName: String)
@@ -32,4 +34,8 @@ public enum ListingUpdate: Sendable {
     /// restored pane's server hasn't mounted one yet. The load's last update
     /// (docs/decisions/0114-server-location.md).
     case notConnected(rootVolumeName: String)
+    /// A server's rows, said with `notice`: why they may not be every share it offers. The
+    /// load's last update; a server whose rows need no notice gets `full`
+    /// (docs/decisions/0115-server-shares.md).
+    case serverListed(Listing, ServerNotice, rootVolumeName: String)
 }

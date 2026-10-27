@@ -76,7 +76,7 @@ public final class PathSource: PaletteSource {
             switch update {
             case .cached(let cached, _, _): listing = cached
             case .firstBatch(let batch, _): listing = batch
-            case .full(let full, _): listing = full
+            case .full(let full, _), .serverListed(let full, _, _): listing = full
             case .failed, .volumeGone, .notConnected: return Items()
             case .slow, .gaveUp: return nil
             }

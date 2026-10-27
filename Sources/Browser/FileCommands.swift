@@ -241,10 +241,12 @@ public enum FileCommands: CommandSet {
         return pane.selection.rows(in: listing).count
     }
 
-    /// Whether a command that acts on the selection can run: there is a queue and a selection.
+    /// Whether a command that acts on the selection can run: there is a queue and a selection,
+    /// and each selected row has a location (`Pane.selectsUnmountedShare`).
     @MainActor
     private static func canTakeSelection(_ context: CommandContext) -> Bool {
         context.fileOperations != nil && selectedCount(in: context.pane) > 0
+            && !context.pane.selectsUnmountedShare
     }
 
     /// Whether a command that trashes, duplicates, renames or moves the selection can run: it

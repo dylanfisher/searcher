@@ -758,7 +758,7 @@ public final class ColumnTrail {
         case .denied, .failed, .notConnected:
             column.selectsFirstRowAt = nil
             return false
-        case .loading, .partial, .loaded, .cachedRefreshing, .slow, .offline:
+        case .loading, .partial, .loaded, .cachedRefreshing, .slow, .offline, .serverListed:
             break
         }
         guard version == pane.selectionVersion else {

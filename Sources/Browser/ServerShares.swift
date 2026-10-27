@@ -15,10 +15,19 @@ public final class ServerShares {
     /// mounts change often doesn't start a process per change.
     public static let failureBackoff: Duration = .seconds(10)
 
+    /// Names a request last listed, and when.
+    public struct Cached: Equatable, Sendable {
+        public let names: [String]
+        /// When they were listed, by the system's clock, for the age a pane shows.
+        public let listedAt: Date
+    }
+
     private struct Entry {
         let result: Result<[String], ShareListError>
         /// When it was listed, as `elapsed` gives it.
         let listedAt: Duration
+        /// When it was listed, by the system's clock.
+        let listedDate: Date
     }
 
     /// One run of the enumerator and the askers waiting for it.
@@ -29,6 +38,9 @@ public final class ServerShares {
         /// Whether its askers have been answered or let go, after which nothing it returns is
         /// kept.
         var isOver = false
+        /// Whether its server was forgotten while it ran, so what it returns goes to its askers
+        /// and isn't kept.
+        var isForgotten = false
         var timeout: Task<Void, Never>?
     }
 
@@ -41,6 +53,12 @@ public final class ServerShares {
     private var entries: [ShareRequest: Entry] = [:]
     private var runs: [ShareRequest: Run] = [:]
     private var nextAsker = 0
+    private var observers: [Observer] = []
+
+    private struct Observer {
+        weak var owner: AnyObject?
+        let handler: @MainActor () -> Void
+    }
 
     public init<C: Clock<Duration>>(
         enumerator: any ShareEnumerator = SmbutilShares(), clock: C = ContinuousClock()
@@ -80,17 +98,35 @@ public final class ServerShares {
         }
     }
 
-    /// The names `request` last listed, however long ago; nil when it listed none, or its last
-    /// run failed.
-    public func cachedNames(for request: ShareRequest) -> [String]? {
-        guard case .success(let names) = entries[request]?.result else { return nil }
-        return names
+    /// The names `request` last listed, however long ago, and when; nil when it listed none, or
+    /// its last run failed.
+    public func cachedNames(for request: ShareRequest) -> Cached? {
+        guard let entry = entries[request], case .success(let names) = entry.result else {
+            return nil
+        }
+        return Cached(names: names, listedAt: entry.listedDate)
     }
 
     /// Drops what every user's request of `server` last listed, as when the server has no share
-    /// mounted any more.
+    /// mounted any more. A run of it in flight still answers its askers, and what it returns
+    /// isn't kept.
     public func forget(_ server: Server) {
         entries = entries.filter { $0.key.server != server }
+        for (request, run) in runs where request.server == server { run.isForgotten = true }
+    }
+
+    /// Runs `handler` each time `relistServers()` is called, for as long as `owner` exists.
+    public func observe(for owner: AnyObject, _ handler: @escaping @MainActor () -> Void) {
+        observers.removeAll { $0.owner == nil }
+        observers.append(Observer(owner: owner, handler: handler))
+    }
+
+    /// Tells every pane at a server to list it again, as the app becomes active, since a share
+    /// may have been added on the server. Each asks with `names(for:)`, so only a request whose
+    /// entry is past its time starts a run.
+    public func relistServers() {
+        observers.removeAll { $0.owner == nil }
+        for observer in observers { observer.handler() }
     }
 
     /// Ends every run, and answers each asker with nil. Called as the app quits.
@@ -145,7 +181,9 @@ public final class ServerShares {
         _ run: Run, of request: ShareRequest, with result: Result<[String], ShareListError>
     ) {
         guard !run.isOver else { return }
-        entries[request] = Entry(result: result, listedAt: elapsed())
+        if !run.isForgotten {
+            entries[request] = Entry(result: result, listedAt: elapsed(), listedDate: Date())
+        }
         close(run, of: request)
         for asker in run.askers.values { asker.resume(returning: result) }
         run.askers = [:]

@@ -43,7 +43,7 @@ extension ListingState {
     fileprivate var hasEnded: Bool {
         switch self {
         case .loading, .partial, .cachedRefreshing, .slow: false
-        case .loaded, .offline, .denied, .failed, .notConnected: true
+        case .loaded, .offline, .denied, .failed, .notConnected, .serverListed: true
         }
     }
 }

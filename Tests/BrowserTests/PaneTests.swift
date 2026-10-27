@@ -111,7 +111,9 @@ extension ListingState {
     var error: ListingError? {
         switch self {
         case .denied(let error), .failed(let error): error
-        case .loading, .partial, .loaded, .cachedRefreshing, .slow, .offline, .notConnected: nil
+        case .loading, .partial, .loaded, .cachedRefreshing, .slow, .offline, .notConnected,
+            .serverListed:
+            nil
         }
     }
 
@@ -151,7 +153,7 @@ func drainMainQueue() async {
         switch pane.state {
         case .loading: seen.append("loading")
         case .partial: seen.append("partial")
-        case .loaded: seen.append("loaded")
+        case .loaded, .serverListed: seen.append("loaded")
         case .cachedRefreshing, .slow, .offline: seen.append("kept")
         case .denied, .failed, .notConnected: seen.append("error")
         }

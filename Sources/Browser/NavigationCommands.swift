@@ -24,7 +24,15 @@ public enum NavigationCommands: CommandSet {
 
     public static var bindings: [CommandBinding] {
         [
-            CommandBinding(open) { $0.pane.openSelection() },
+            // A share that isn't mounted has nothing to open until it can be mounted, nor does
+            // any selection with one (docs/decisions/0115-server-shares.md). A key runs the
+            // binding whether or not it is enabled, so `run` checks too.
+            CommandBinding(
+                open, isEnabled: { !$0.pane.selectsUnmountedShare },
+                run: { context in
+                    guard !context.pane.selectsUnmountedShare else { return }
+                    context.pane.openSelection()
+                }),
             CommandBinding(
                 showPackageContents, isEnabled: { $0.pane.selectedPackage != nil },
                 run: { $0.pane.showPackageContents() }),

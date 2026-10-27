@@ -601,8 +601,9 @@ public final class PaneViewController: NSViewController {
             let query = listing.filter == pane.filter ? pane.filter.text : listing.filter.text
             return FilterBarView.noMatchMessage(query)
         // The cached, slow and offline states show their rows; their notes are the status
-        // view's.
-        case .loading, .partial, .loaded, .cachedRefreshing, .slow, .offline, .denied:
+        // view's, and so is a server's notice.
+        case .loading, .partial, .loaded, .cachedRefreshing, .slow, .offline, .denied,
+            .serverListed:
             return nil
         case .failed(let error):
             return pane.state.missingFolder.map(missingMessage) ?? error.description
