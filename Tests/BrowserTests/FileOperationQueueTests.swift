@@ -38,6 +38,10 @@ final class FakeFiles: @unchecked Sendable {
     private var filled: Set<String> = []
     private var identities: [String: OperationRecord.ItemIdentity] = [:]
     private var identityFailures: [String: FileOperationError] = [:]
+    private var lost: Set<String> = []
+    private var changedByCopy: Set<String> = []
+    /// How many times each path has changed, which its stamp reads.
+    private var versions: [String: Int64] = [:]
 
     init(releasingAll: Bool = false) {
         allReleased = releasingAll
@@ -134,6 +138,17 @@ final class FakeFiles: @unchecked Sendable {
     /// The identifier throws `error` at `path`.
     func failIdentity(of path: String, with error: FileOperationError) {
         condition.withLock { identityFailures[path] = error }
+    }
+
+    /// The identifier finds nothing at `path`.
+    func lose(_ path: String) {
+        condition.withLock { _ = lost.insert(path) }
+    }
+
+    /// The copy of `source` changes it as the copy finishes, as a sync tool writing to it
+    /// would, so its stamp differs from the one read before the copy.
+    func changeDuringCopy(of source: String) {
+        condition.withLock { _ = changedByCopy.insert(source) }
     }
 
     /// Takes away an item `place` put at `path`.
@@ -254,13 +269,24 @@ final class FakeFiles: @unchecked Sendable {
             },
             makeIdentifier: {
                 { path throws(FileOperationError) in
-                    let (failure, identity) = self.condition.withLock {
-                        (self.identityFailures[path], self.identities[path])
+                    let (failure, identity, isLost) = self.condition.withLock {
+                        (
+                            self.identityFailures[path], self.identities[path],
+                            self.lost.contains(path)
+                        )
                     }
                     if let failure { throw failure }
+                    if isLost { return nil }
                     return identity ?? Self.identity
                 }
-            })
+            },
+            stamp: { path, _ in
+                let version = self.condition.withLock { self.versions[path] ?? 0 }
+                return FileOperationQueue.SourceStamp(items: [
+                    path: .read(device: 1, inode: 1, type: 0, size: 10, modified: version)
+                ])
+            },
+            sourceHolding: { _, _ throws(FileOperationError) in nil })
     }
 
     /// Runs on the copy's thread.
@@ -289,6 +315,9 @@ final class FakeFiles: @unchecked Sendable {
             throw error
         }
         events.append("copied \(source) to \(destination)")
+        condition.withLock {
+            if changedByCopy.contains(source) { versions[source, default: 0] += 1 }
+        }
         return CopyProgress(bytes: 10, files: 1)
     }
 
@@ -555,6 +584,48 @@ func pause() async throws {
             .moved(from: "/S/a", to: "/A/a"), .moved(from: "/S/c", to: "/A/c"),
         ])
     #expect(state.progress.itemsDone == 3)
+}
+
+/// A source that changed while it was copied to another volume is kept and reported, and its
+/// copy stays, recorded as made, so an undo trashes the copy; the next item moves as usual.
+@Test func aCrossVolumeMoveKeepsASourceThatChangedWhileItWasCopied() async throws {
+    let files = FakeFiles(releasingAll: true)
+    files.changeDuringCopy(of: "/S/a")
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher)
+
+    let id = await enqueue(queue, .move(["/S/a", "/S/b"], into: "/A"), watcher)
+
+    #expect(await watcher.waitUntilFinished(id))
+    #expect(
+        files.events.all.filter { !$0.hasPrefix("inspect") } == [
+            "copy /S/a", "copied /S/a to /A/a",
+            "copy /S/b", "copied /S/b to /A/b", "delete /S/b",
+        ])
+    let state = try #require(watcher.state(of: id))
+    #expect(state.phase == .failed)
+    #expect(
+        state.errors == [FileOperationError(reason: .changedDuringMove, path: "/S/a", errno: nil)])
+    #expect(
+        state.record.changes == [
+            .created("/A/a", from: .copy(of: "/S/a")), .moved(from: "/S/b", to: "/A/b"),
+        ])
+}
+
+/// A copy that is gone by the time its source would be deleted keeps the source.
+@Test func aCrossVolumeMoveKeepsItsSourceWhenItsCopyIsGone() async throws {
+    let files = FakeFiles(releasingAll: true)
+    files.lose("/A/a")
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher)
+
+    let id = await enqueue(queue, .move(["/S/a"], into: "/A"), watcher)
+
+    #expect(await watcher.waitUntilFinished(id))
+    #expect(!files.events.all.contains { $0.hasPrefix("delete") })
+    let state = try #require(watcher.state(of: id))
+    #expect(state.errors == [FileOperationError(reason: .sourceGone, path: "/A/a", errno: ENOENT)])
+    #expect(state.record.changes.isEmpty)
 }
 
 @Test func aVolumeErrorStopsTheItemsLeftAfterIt() async throws {
@@ -1151,4 +1222,167 @@ private final class QueueBox: @unchecked Sendable {
         get { lock.withLock { stored } }
         set { lock.withLock { stored = newValue } }
     }
+}
+
+// MARK: Real files
+
+/// The real copier, then `afterCopy` on the source once each copy returns: a change made as
+/// the copy ends, before the source would be deleted.
+private final class ChangingCopier: FileOperationQueue.Copier, @unchecked Sendable {
+    private let copier = FileCopier()
+    private let afterCopy: @Sendable (String) throws -> Void
+
+    init(afterCopy: @escaping @Sendable (String) throws -> Void) {
+        self.afterCopy = afterCopy
+    }
+
+    func copy(
+        _ source: String, to destination: String, progress: (CopyProgress) -> Void
+    ) throws -> CopyProgress {
+        let copied = try copier.copy(source, to: destination, progress: progress)
+        try afterCopy(source)
+        return copied
+    }
+
+    func pause() { copier.pause() }
+    func resume() { copier.resume() }
+    func cancel() { copier.cancel() }
+}
+
+/// A queue over the real file system, except that paths at or under `other` are on another
+/// volume, so a move there copies and then deletes as one between disks does, and that
+/// `afterCopy` runs on each source its copy returns.
+private func crossVolumeQueue(
+    to other: String, afterCopy: @escaping @Sendable (String) throws -> Void = { _ in }
+) -> FileOperationQueue {
+    var fileSystem = FileOperationQueue.FileSystem.real
+    fileSystem.volumeOf = { path throws(ListingError) in
+        isPath(path, atOrUnder: other) ? volumeB : volumeA
+    }
+    fileSystem.makeCopier = { ChangingCopier(afterCopy: afterCopy) }
+    return FileOperationQueue(
+        fileSystem: fileSystem, prompts: .unexpected, clock: ContinuousClock()
+    ) { _ in }
+}
+
+private func makeFolders(_ paths: String...) throws {
+    for path in paths {
+        try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+    }
+}
+
+private func contents(of path: String) throws -> String {
+    try String(contentsOfFile: path, encoding: .utf8)
+}
+
+@Test func aCrossVolumeMoveOfRealFilesDeletesEachSourceOnceItsCopyIsThere() async throws {
+    let folder = try TemporaryFolder("FileOperationQueueTests")
+    let root = folder.url.path
+    try makeFolders(root + "/src/album/disc 1", root + "/dst")
+    try Data("one".utf8).write(to: URL(fileURLWithPath: root + "/src/album/disc 1/one.txt"))
+    try Data("a".utf8).write(to: URL(fileURLWithPath: root + "/src/a.txt"))
+    let queue = crossVolumeQueue(to: root + "/dst")
+
+    let state = await queue.perform(
+        .move([root + "/src/album", root + "/src/a.txt"], into: root + "/dst"))
+
+    #expect(state.phase == .done)
+    #expect(
+        state.record.changes == [
+            .moved(from: root + "/src/album", to: root + "/dst/album"),
+            .moved(from: root + "/src/a.txt", to: root + "/dst/a.txt"),
+        ])
+    #expect(try FileManager.default.contentsOfDirectory(atPath: root + "/src").isEmpty)
+    #expect(try contents(of: root + "/dst/album/disc 1/one.txt") == "one")
+    #expect(try contents(of: root + "/dst/a.txt") == "a")
+}
+
+/// A file that grew while it was copied is kept with its new bytes, beside the copy of the old.
+@Test func aCrossVolumeMoveOfARealFileThatGrewWhileItWasCopiedKeepsIt() async throws {
+    let folder = try TemporaryFolder("FileOperationQueueTests")
+    let root = folder.url.path
+    try makeFolders(root + "/src", root + "/dst")
+    let source = root + "/src/a.txt"
+    try Data("a".utf8).write(to: URL(fileURLWithPath: source))
+    let queue = crossVolumeQueue(to: root + "/dst") { path in
+        let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(" and more".utf8))
+        try handle.close()
+    }
+
+    let state = await queue.perform(.move([source], into: root + "/dst"))
+
+    #expect(state.phase == .failed)
+    #expect(
+        state.errors == [FileOperationError(reason: .changedDuringMove, path: source, errno: nil)])
+    #expect(state.record.changes == [.created(root + "/dst/a.txt", from: .copy(of: source))])
+    #expect(try contents(of: source) == "a and more")
+    #expect(try contents(of: root + "/dst/a.txt") == "a")
+}
+
+/// A folder is checked item by item: a file deep inside that was rewritten at the same size
+/// while the folder was copied, told apart only by its modification time, keeps the folder.
+@Test func aCrossVolumeMoveKeepsARealFolderAFileInWhichChangedWhileItWasCopied() async throws {
+    let folder = try TemporaryFolder("FileOperationQueueTests")
+    let root = folder.url.path
+    try makeFolders(root + "/src/album/disc 1", root + "/dst")
+    let file = root + "/src/album/disc 1/one.txt"
+    try Data("one".utf8).write(to: URL(fileURLWithPath: file))
+    let queue = crossVolumeQueue(to: root + "/dst") { _ in
+        try Data("ONE".utf8).write(to: URL(fileURLWithPath: file))
+        var times = [
+            timespec(tv_sec: 1_000_000, tv_nsec: 0), timespec(tv_sec: 1_000_000, tv_nsec: 0),
+        ]
+        guard utimensat(AT_FDCWD, file, &times, 0) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+    }
+
+    let state = await queue.perform(.move([root + "/src/album"], into: root + "/dst"))
+
+    #expect(
+        state.errors == [
+            FileOperationError(reason: .changedDuringMove, path: root + "/src/album", errno: nil)
+        ])
+    #expect(try contents(of: file) == "ONE")
+    #expect(try contents(of: root + "/dst/album/disc 1/one.txt") == "one")
+}
+
+/// A destination reached through a symlink into the source is the source's own subfolder: the
+/// copy is refused, as one spelled with the subfolder's own path is, and nothing is written.
+@Test func aCopyIntoASymlinkedSubfolderOfTheSourceIsRefused() async throws {
+    let folder = try TemporaryFolder("FileOperationQueueTests")
+    let root = folder.url.path
+    try makeFolders(root + "/A/sub")
+    try FileManager.default.createSymbolicLink(
+        atPath: root + "/L", withDestinationPath: root + "/A/sub")
+    let queue = FileOperationQueue(prompts: .unexpected) { _ in }
+
+    for operation in [
+        FileOperation.copy([root + "/A"], into: root + "/L"),
+        .move([root + "/A"], into: root + "/L"),
+        .copy([root + "/A"], into: root + "/L/.."),
+    ] {
+        let state = await queue.perform(operation)
+        #expect(state.phase == .refused(.intoItself(source: root + "/A")), "\(operation)")
+    }
+    #expect(try FileManager.default.contentsOfDirectory(atPath: root + "/A/sub").isEmpty)
+}
+
+/// A symlink to a folder beside the source leads out of it, so the copy goes ahead.
+@Test func aCopyIntoASiblingReachedThroughASymlinkRuns() async throws {
+    let folder = try TemporaryFolder("FileOperationQueueTests")
+    let root = folder.url.path
+    try makeFolders(root + "/A/sub", root + "/B")
+    try FileManager.default.createSymbolicLink(
+        atPath: root + "/M", withDestinationPath: root + "/B")
+    let queue = FileOperationQueue(prompts: .unexpected) { _ in }
+
+    let state = await queue.perform(.copy([root + "/A"], into: root + "/M"))
+
+    #expect(state.phase == .done)
+    var isFolder: ObjCBool = false
+    #expect(FileManager.default.fileExists(atPath: root + "/B/A/sub", isDirectory: &isFolder))
+    #expect(isFolder.boolValue)
 }

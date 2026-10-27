@@ -283,6 +283,41 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
     #expect(!files.events.all.contains("copy /A/in/cover.jpg"))
 }
 
+/// A move to another volume that replaces an item keeps a source that changed while it was
+/// copied: the copy is in place, the original in the Trash, and the source where it was.
+@Test func aReplacingCrossVolumeMoveKeepsASourceThatChangedWhileItWasCopied() async throws {
+    let files = FakeFiles(releasingAll: true)
+    files.place("/A/song.flac")
+    files.changeDuringCopy(of: "/S/song.flac")
+    let prompter = Prompter()
+    prompter.answer(replace)
+    let watcher = Watcher()
+    let queue = makeQueue(files, watcher, prompter: prompter)
+
+    let move = await enqueue(queue, .move(["/S/song.flac"], into: "/A"), watcher)
+
+    #expect(await watcher.waitUntilFinished(move))
+    let staging = try stagingFolder(files)
+    #expect(
+        Array(files.events.all.drop { !$0.hasPrefix("make folder") }) == [
+            "make folder \(staging)", "copy /S/song.flac",
+            "copied /S/song.flac to \(staging)/song.flac", "trash /A/song.flac",
+            "move \(staging)/song.flac to /A/song.flac", "delete \(staging)",
+        ])
+    let state = try #require(watcher.state(of: move))
+    #expect(
+        state.errors == [
+            FileOperationError(reason: .changedDuringMove, path: "/S/song.flac", errno: nil)
+        ])
+    #expect(
+        state.record.changes == [
+            .replaced(
+                "/A/song.flac",
+                originalTrashedTo: URL(fileURLWithPath: "/S/.Trashes/501/song.flac")),
+            .created("/A/song.flac", from: .copy(of: "/S/song.flac")),
+        ])
+}
+
 @Test func aFailedMoveIntoPlacePutsTheOriginalBackFromTheTrash() async throws {
     let files = FakeFiles(releasingAll: true)
     files.place("/A/song.flac")
@@ -526,6 +561,7 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
             return path == "/A/new" ? nil : FakeFiles.item(path)
         },
         identify: { _ throws(FileOperationError) in nil },
+        sourceHolding: { _, _ throws(FileOperationError) in nil },
         isCancelled: { false }, copies: {})
 
     #expect(inspected == ["/A/album", "/S/album", "/A/new"])
