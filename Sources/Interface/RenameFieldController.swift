@@ -126,8 +126,7 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
 
     /// The line under the field saying why the name can't be used.
     private lazy var messageView: NSTextField = {
-        let view = NSTextField(wrappingLabelWithString: "")
-        view.textColor = .systemRed
+        let view = Dialog.errorLabel()
         view.drawsBackground = true
         view.backgroundColor = .controlBackgroundColor
         view.isBordered = true
