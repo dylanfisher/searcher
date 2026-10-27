@@ -1968,6 +1968,31 @@ private func emphasizesPath(_ id: PaneID?, in fixture: Fixture) throws -> Bool {
     #expect(try emphasizesPath(left, in: fixture))
 }
 
+/// The focused pane's path bar stays emphasized while the window is main but not key, as under
+/// the palette it opened, and goes unemphasized once it isn't main either, as when another
+/// window or app comes forward (docs/decisions/0026-path-bar.md).
+@MainActor @Test func theFocusedPanesPathBarStaysEmphasizedUnderThePalette() async throws {
+    let fixture = try await Fixture()
+    let focused = fixture.tab.layout.focused
+    fixture.controller.windowDidBecomeMain(
+        Notification(name: NSWindow.didBecomeMainNotification, object: fixture.window))
+    fixture.controller.windowDidBecomeKey(
+        Notification(name: NSWindow.didBecomeKeyNotification, object: fixture.window))
+    #expect(try emphasizesPath(focused, in: fixture))
+
+    // The palette's panel takes the keys and leaves the window main.
+    fixture.controller.showPalette()
+    #expect(fixture.controller.palette != nil)
+    fixture.controller.windowDidResignKey(
+        Notification(name: NSWindow.didResignKeyNotification, object: fixture.window))
+    #expect(try emphasizesPath(focused, in: fixture))
+
+    // Another window becomes key and main.
+    fixture.controller.windowDidResignMain(
+        Notification(name: NSWindow.didResignMainNotification, object: fixture.window))
+    #expect(try emphasizesPath(nil, in: fixture))
+}
+
 /// Splits the window's pane in two along `axis` and returns the first pane and the second, with
 /// the first focused and its table the window's first responder.
 @MainActor
