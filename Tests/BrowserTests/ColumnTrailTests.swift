@@ -2205,12 +2205,15 @@ private func keyedPane(
     // The first press found the keys paused and opened `f1` at once; each repeat came inside
     // the pause and built nothing.
     #expect(paths(pane) == ["/", "/k"])
-    #expect(fixture.lister.calls.dropFirst(callsBefore).map(\.path) == ["/k/f1"])
     await settle { clock.waitingSleeps == 1 }
 
     clock.advance(by: .milliseconds(1))
 
     await settle { paths(pane) == ["/", "/k", "/k/f10"] }
+    // A load's read starts on a thread of its own, so its call is recorded a moment after the
+    // column that asks for it: wait for the last one, then no column in between made a call.
+    #expect(await fixture.lister.waitForCalls(callsBefore + 2))
+    #expect(fixture.lister.calls.dropFirst(callsBefore).map(\.path) == ["/k/f1", "/k/f10"])
 }
 
 @MainActor @Test func cmdOptDownSelectsTheLastRowAndItsColumnOpensOnlyAfterThePause() async throws {
