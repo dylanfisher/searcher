@@ -23,6 +23,7 @@ final class FakeFiles: @unchecked Sendable {
     let events = EventLog<String>()
     private let condition = NSCondition()
     private var volumes = [volumeA, volumeB, volumeS]
+    private var caseSensitive: Set<VolumeIdentity> = []
     private var placed: [String: ConflictRequest.Item] = [:]
     private var hasNoTrash = false
     private var heldScans: Set<String> = []
@@ -137,6 +138,12 @@ final class FakeFiles: @unchecked Sendable {
         condition.withLock { volumes.append(volume) }
     }
 
+    /// Makes `volume` one that tells names apart by case. Placed items are told apart by case
+    /// on every volume, so a test of a volume that doesn't places the other case's path too.
+    func tellCaseApart(on volume: VolumeIdentity) {
+        condition.withLock { _ = caseSensitive.insert(volume) }
+    }
+
     /// Puts an item at `path`, so a copy or move onto it is a conflict.
     func place(_ path: String, isFolder: Bool = false) {
         condition.withLock { placed[path] = Self.item(path, isFolder: isFolder) }
@@ -224,6 +231,10 @@ final class FakeFiles: @unchecked Sendable {
                     return volume
                 }
                 throw ListingError(path: path, code: ENOENT)
+            },
+            isCaseSensitive: { volume throws(ListingError) in
+                self.events.append("case sensitivity of \(volume.mountPoint)")
+                return self.condition.withLock { self.caseSensitive.contains(volume) }
             },
             measure: { path, _ in
                 self.condition.withLock {

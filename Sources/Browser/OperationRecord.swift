@@ -65,7 +65,9 @@ public struct OperationRecord: Equatable, Sendable {
 
     public var changes: [Change]
     /// The identity of the item at each change's `location`, read right after the change, by
-    /// the location as `FileOperation.comparable` gives it.
+    /// the location as `FileOperation.comparable` gives it without folding case: an undo looks
+    /// each up by the path its change names, and on a volume that tells case apart `Foo` and
+    /// `foo` are two items.
     public var identities: [String: ItemIdentity]
     /// Why the identity of an item a change left couldn't be read, or that nothing was there
     /// right after the change. An operation with any can't be undone, since its undo couldn't

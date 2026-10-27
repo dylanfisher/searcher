@@ -328,10 +328,12 @@ public final class UndoHistory {
 
     /// What is left of `changes` once an undo made `done`: each change whose reversal isn't in
     /// `done`, in order. Paths compare as `comparable` gives them, each read once, so a large
-    /// entry takes time in proportion to its size, not to its square.
+    /// entry takes time in proportion to its size, not to its square. An undo names each path
+    /// as the change it reverses does, so case isn't folded: on a volume that tells case apart,
+    /// `Foo` and `foo` are two items, and the main actor can't ask a volume which it is.
     static func remainder(
         of changes: [OperationRecord.Change], after done: [OperationRecord.Change],
-        comparable: (String) -> String = FileOperation.comparable
+        comparable: (String) -> String = { FileOperation.comparable($0, foldsCase: false) }
     ) -> [OperationRecord.Change] {
         let reversals = Set(done.compactMap { Reversal(made: $0, comparable: comparable) })
         return changes.filter { change in

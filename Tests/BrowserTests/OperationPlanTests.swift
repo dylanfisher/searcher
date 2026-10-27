@@ -33,6 +33,7 @@ private final class Reads: @unchecked Sendable {
                 self.lock.withLock { self.volumes.append(path) }
                 return fakeVolume(path)
             },
+            isCaseSensitive: { _ throws(ListingError) in false },
             measure: { path, _ in
                 self.lock.withLock { self.measured.append(path) }
                 if missing.contains(path) {
@@ -74,6 +75,18 @@ func intoItselfIgnoresCaseAndTrailingSlashes(source: String, into folder: String
     #expect(throws: OperationState.Refusal.intoItself(source: source)) {
         try Reads().plan(.copy([source], into: folder))
     }
+}
+
+/// Folding case is for a volume that doesn't tell case apart; Unicode is normalized either way,
+/// as APFS and HFS+ ignore normalization on both kinds.
+@Test func comparablePathsFoldCaseOnlyWhenAsked() {
+    let decomposed = "/L/Cafe\u{301}/Foo/"
+    #expect(FileOperation.comparable(decomposed) == "/l/caf\u{e9}/foo")
+    #expect(FileOperation.comparable(decomposed, foldsCase: true) == "/l/caf\u{e9}/foo")
+    #expect(FileOperation.comparable(decomposed, foldsCase: false) == "/L/Caf\u{e9}/Foo")
+    #expect(
+        FileOperation.comparable("/L/Foo", foldsCase: false)
+            != FileOperation.comparable("/L/foo", foldsCase: false))
 }
 
 @Test func aCopyIntoAFolderNamedLikeTheSourceIsNotIntoItself() throws {

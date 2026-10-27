@@ -69,9 +69,10 @@ public struct OperationPlan: Equatable, Sendable {
     /// with `inspect`, top-level items only, and inspect the source of each that is there. An
     /// undo inspects each step's source, destination and destination folder, reads with
     /// `identify` the identity of each source the record has one for, reads the volumes of its
-    /// moves and of the copies it makes again, and pre-scans what it copies. Nothing else
-    /// reads the file system. Blocks while it reads, so it runs on a
-    /// `BlockingCallThread`.
+    /// moves and of the copies it makes again, and pre-scans what it copies. Where two of its
+    /// paths differ only by case, it reads the volume they are on and, with `isCaseSensitive`,
+    /// whether it tells them apart. Nothing else reads the file system. Blocks while it reads,
+    /// so it runs on a `BlockingCallThread`.
     ///
     /// `copies` is called once the volumes show the operation copies, before any pre-scan, so
     /// an undo pressed meanwhile doesn't wait for it.
@@ -80,6 +81,7 @@ public struct OperationPlan: Equatable, Sendable {
     static func make(
         for operation: FileOperation,
         volumeOf: (String) throws(ListingError) -> VolumeIdentity,
+        isCaseSensitive: (VolumeIdentity) throws(ListingError) -> Bool,
         measure: (String, () -> Bool) throws -> TreeSizeWalker.Total,
         inspect: (String) throws(FileOperationError) -> ConflictRequest.Item?,
         identify: FileOperationQueue.Identifier,
@@ -151,8 +153,8 @@ public struct OperationPlan: Equatable, Sendable {
         case .undo(let record, _, _):
             return try undoing(
                 FileOperation.steps(undoing: record), identities: record.identities,
-                volumeOf: volumeOf, measure: measure, inspect: inspect, identify: identify,
-                isCancelled: isCancelled, copies: copies)
+                volumeOf: volumeOf, isCaseSensitive: isCaseSensitive, measure: measure,
+                inspect: inspect, identify: identify, isCancelled: isCancelled, copies: copies)
         }
     }
 
@@ -235,32 +237,114 @@ public struct OperationPlan: Equatable, Sendable {
     /// undo waits in the lane of the first such destination's volume. A put back is a rename,
     /// so one whose Trash is on another volume than its folder fails (`crossVolume`), and
     /// nothing is changed.
+    ///
+    /// Two paths that differ only by case name one place on a volume that doesn't tell case
+    /// apart, as APFS and HFS+ by default, and two on one that does; the volume is read only
+    /// for such a pair, once per folder and once per volume.
     private static func undoing(
         _ steps: [FileOperation.UndoStep], identities: [String: OperationRecord.ItemIdentity],
         volumeOf: (String) throws(ListingError) -> VolumeIdentity,
+        isCaseSensitive: (VolumeIdentity) throws(ListingError) -> Bool,
         measure: (String, () -> Bool) throws -> TreeSizeWalker.Total,
         inspect: (String) throws(FileOperationError) -> ConflictRequest.Item?,
         identify: FileOperationQueue.Identifier,
         isCancelled: @escaping () -> Bool, copies: () -> Void
     ) throws -> OperationPlan {
-        // Whether a path holds an item once the earlier steps have run, by comparable path.
-        var after: [String: Bool] = [:]
+        var folderVolumes: [String: Result<VolumeIdentity, ListingError>] = [:]
+        func volume(ofFolder folder: String) throws(ListingError) -> VolumeIdentity {
+            let volume =
+                folderVolumes[folder] ?? Result { () throws(ListingError) in try volumeOf(folder) }
+            folderVolumes[folder] = volume
+            return try volume.get()
+        }
+        var caseSensitivity: [VolumeIdentity: Result<Bool, ListingError>] = [:]
+        /// Whether `path` and `other` name one place: spelled alike, or differing only by case
+        /// on a volume that doesn't tell case apart. That is the volume of the folder holding
+        /// the first name that differs or, where that folder is gone, of the nearest folder
+        /// above it that is there.
+        func isSamePlace(_ path: String, _ other: String) throws(FileOperationError) -> Bool {
+            let spelled = FileOperation.comparable(path, foldsCase: false)
+            let otherSpelled = FileOperation.comparable(other, foldsCase: false)
+            if spelled == otherSpelled { return true }
+            guard FileOperation.comparable(path) == FileOperation.comparable(other) else {
+                return false
+            }
+            let names = pathComponents(spelled)
+            let otherNames = pathComponents(otherSpelled)
+            let differing = zip(names, otherNames).prefix { $0 == $1 }.count
+            var folder = join("/", names.prefix(differing).joined(separator: "/"))
+            do throws(ListingError) {
+                var found: VolumeIdentity
+                while true {
+                    do throws(ListingError) {
+                        found = try volume(ofFolder: folder)
+                        break
+                    } catch let error where error.code == ENOENT && parentPath(of: folder) != folder
+                    {
+                        folder = parentPath(of: folder)
+                    }
+                }
+                let sensitive =
+                    caseSensitivity[found]
+                    ?? Result { () throws(ListingError) in try isCaseSensitive(found) }
+                caseSensitivity[found] = sensitive
+                return try !sensitive.get()
+            } catch {
+                throw failure(error)
+            }
+        }
+        // What the earlier steps leave at each path they touch: by comparable path, each
+        // spelling with whether it holds an item, the latest last.
+        var after: [String: [(path: String, isTaken: Bool)]] = [:]
+        func leave(_ path: String, isTaken: Bool) {
+            let spelled = FileOperation.comparable(path, foldsCase: false)
+            after[FileOperation.comparable(path), default: []].removeAll {
+                FileOperation.comparable($0.path, foldsCase: false) == spelled
+            }
+            after[FileOperation.comparable(path), default: []].append((path, isTaken))
+        }
+        /// Whether `path` holds an item once the earlier steps have run, or nil when none
+        /// touched it.
+        func left(at path: String) throws(FileOperationError) -> Bool? {
+            for entry in (after[FileOperation.comparable(path)] ?? []).reversed() {
+                if try isSamePlace(entry.path, path) { return entry.isTaken }
+            }
+            return nil
+        }
         func isTaken(_ path: String) throws(FileOperationError) -> Bool {
-            if let taken = after[FileOperation.comparable(path)] { return taken }
+            if let taken = try left(at: path) { return taken }
             return try inspect(path) != nil
+        }
+        // The steps' paths by comparable path, so a missing folder that is one of them is
+        // named as its step names it.
+        var stepPaths: [String: [String]] = [:]
+        for path in steps.flatMap({ [$0.source, $0.destination].compactMap { $0 } }) {
+            stepPaths[FileOperation.comparable(path), default: []].append(path)
         }
         var failures: [FileOperationError] = []
         // The paths `gone` has named, so each is named once.
         var named: Set<String> = []
         /// Records `path` as gone or, when its folder is gone too, the outermost folder that
         /// is, as a drive that isn't mounted: the history keeps an entry whose folder may come
-        /// back, and drops one whose item left a folder that is still there.
+        /// back, and drops one whose item left a folder that is still there. A folder that is
+        /// one of the steps' items is named as the step names it, which is how
+        /// `FileOperation.canClear` tells it from a folder outside them.
         func gone(_ path: String) throws(FileOperationError) {
             var missing = path
             while true {
                 let folder = parentPath(of: missing)
                 guard folder != missing, try !isTaken(folder) else { break }
                 missing = folder
+            }
+            let spelled = FileOperation.comparable(missing, foldsCase: false)
+            let spellings = stepPaths[FileOperation.comparable(missing)] ?? []
+            if !spellings.contains(where: {
+                FileOperation.comparable($0, foldsCase: false) == spelled
+            }) {
+                for item in spellings where try isSamePlace(item, missing) {
+                    missing = item
+                    break
+                }
             }
             if named.insert(missing).inserted {
                 failures.append(
@@ -272,12 +356,13 @@ public struct OperationPlan: Equatable, Sendable {
             let source = step.source
             do throws(FileOperationError) {
                 if let source {
-                    if let taken = after[FileOperation.comparable(source)] {
+                    if let taken = try left(at: source) {
                         if !taken { try gone(source) }
                     } else if try inspect(source) == nil {
                         try gone(source)
                     } else if !step.readsSource,
-                        let recorded = identities[FileOperation.comparable(source)],
+                        let recorded = identities[
+                            FileOperation.comparable(source, foldsCase: false)],
                         try identify(source) != recorded
                     {
                         // A copy made again copies whatever is at its source now, as a copy
@@ -287,11 +372,11 @@ public struct OperationPlan: Equatable, Sendable {
                     }
                 }
                 if let destination = step.destination {
-                    // A rename that changes only case finds the item itself at its destination.
-                    if source.map(FileOperation.comparable)
-                        != FileOperation.comparable(destination),
-                        try isTaken(destination)
-                    {
+                    // A rename that changes only case, on a volume that doesn't tell case
+                    // apart, finds the item itself at its destination.
+                    var isItself = false
+                    if let source { isItself = try isSamePlace(source, destination) }
+                    if !isItself, try isTaken(destination) {
                         failures.append(
                             FileOperationError(reason: .exists, path: destination, errno: EEXIST))
                     }
@@ -301,23 +386,14 @@ public struct OperationPlan: Equatable, Sendable {
             } catch {
                 failures.append(error)
             }
-            if let source, !step.readsSource {
-                after[FileOperation.comparable(source)] = false
-            }
-            if let destination = step.destination {
-                after[FileOperation.comparable(destination)] = true
-            }
+            if let source, !step.readsSource { leave(source, isTaken: false) }
+            if let destination = step.destination { leave(destination, isTaken: true) }
         }
         guard failures.isEmpty else {
             return OperationPlan(items: [], lane: nil, failures: failures)
         }
-        var folderVolumes: [String: Result<VolumeIdentity, ListingError>] = [:]
         func volume(of path: String) throws(ListingError) -> VolumeIdentity {
-            let folder = parentPath(of: path)
-            let volume =
-                folderVolumes[folder] ?? Result { () throws(ListingError) in try volumeOf(folder) }
-            folderVolumes[folder] = volume
-            return try volume.get()
+            try volume(ofFolder: parentPath(of: path))
         }
         var items: [Item] = []
         var lane: VolumeIdentity?
