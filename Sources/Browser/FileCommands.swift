@@ -1,3 +1,4 @@
+import Base
 import Foundation
 
 /// Changing files: Move to Trash, New Folder, Duplicate, Rename, and Copy and Move to Other
@@ -215,7 +216,7 @@ public enum FileCommands: CommandSet {
         record.changes.compactMap { change in
             switch change {
             case .created(let path, _), .moved(_, let path), .putBack(_, let path):
-                (path as NSString).lastPathComponent
+                lastComponent(of: path)
             case .trashed, .deleted, .replaced, .uncreated: nil
             }
         }
