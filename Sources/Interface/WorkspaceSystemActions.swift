@@ -324,14 +324,14 @@ public final class WorkspaceSystemActions: SystemActions {
                 .cgImage
         } catch {
             Logger(category: "openWith").error(
-                "no icon for \(url.path): \(error.localizedDescription, privacy: .public)"
+                "no icon for \(url.path): \(error.localizedDescription)"
             )
         }
         return icon
     }
 
     private func fail(_ error: any Error) {
-        logger.error("\(error.localizedDescription, privacy: .public)")
+        logger.error("\(error.localizedDescription)")
         presentError(error)
     }
 
