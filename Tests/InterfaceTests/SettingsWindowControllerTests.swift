@@ -14,12 +14,13 @@ private let goToItem = WindowCommands.goToItem
 /// the windows it would have brought forward.
 @MainActor
 private func controller(
-    _ settings: Settings = untouchedSettings()
+    _ settings: Settings = untouchedSettings(), loginItem: StubLoginItem = StubLoginItem()
 ) -> (SettingsWindowController, () -> [NSWindow]) {
-    let controller = SettingsWindowController(settings: settings)
+    let controller = SettingsWindowController(settings: settings, loginItem: loginItem)
     var shown: [NSWindow] = []
     controller.bringForward = { shown.append($0) }
     controller.shortcuts.postAccessibility = { _, _, _ in }
+    controller.general.postAccessibility = { _, _, _ in }
     return (controller, { shown })
 }
 
@@ -92,8 +93,59 @@ private func controller(
     let window = try #require(controller.window)
     #expect(shown().count == 2)
     #expect(shown().allSatisfy { $0 === window })
-    #expect(window.toolbar?.selectedItemIdentifier?.rawValue == "shortcuts")
+    #expect(window.toolbar?.selectedItemIdentifier?.rawValue == "general")
+    #expect(window.title == "General")
     #expect(!window.isVisible)
+}
+
+/// The toolbar switches between General and Shortcuts, each at its own size, the window's top
+/// edge staying put.
+@MainActor @Test func theToolbarSwitchesPanes() throws {
+    let (controller, _) = controller()
+    controller.show()
+    let window = try #require(controller.window)
+    let toolbar = try #require(window.toolbar)
+    #expect(toolbar.items.map(\.itemIdentifier.rawValue) == ["general", "shortcuts"])
+    let general = window.contentViewController
+    let top = window.frame.maxY
+
+    func click(_ item: NSToolbarItem) throws {
+        #expect(NSApp.sendAction(try #require(item.action), to: item.target, from: item))
+    }
+
+    try click(try #require(toolbar.items.last))
+
+    #expect(toolbar.selectedItemIdentifier?.rawValue == "shortcuts")
+    #expect(window.title == "Shortcuts")
+    #expect(window.contentViewController !== general)
+    #expect(window.contentRect(forFrameRect: window.frame).size == SettingsWindowController.size)
+    #expect(window.frame.maxY == top)
+
+    try click(try #require(toolbar.items.first))
+
+    #expect(toolbar.selectedItemIdentifier?.rawValue == "general")
+    #expect(window.contentViewController === general)
+    #expect(
+        window.contentRect(forFrameRect: window.frame).size
+            == SettingsWindowController.generalSize)
+    #expect(window.frame.maxY == top)
+}
+
+/// The Open at login checkbox reads the system's status each time the window shows and each
+/// time the app becomes active, as the user may change it in System Settings meanwhile.
+@MainActor @Test func showingOrActivatingReadsTheLoginItemAgain() {
+    let loginItem = StubLoginItem(.notRegistered)
+    let (controller, _) = controller(loginItem: loginItem)
+    controller.show()
+    #expect(!controller.general.opensAtLogin)
+
+    loginItem.status = .enabled
+    controller.show()
+    #expect(controller.general.opensAtLogin)
+
+    loginItem.status = .notRegistered
+    NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+    #expect(!controller.general.opensAtLogin)
 }
 
 /// Every registered command has one row, under its menu, with the registry's title and chords.
