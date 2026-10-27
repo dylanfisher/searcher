@@ -634,8 +634,7 @@ private final class PressedTableView: ListingTableView {
         let entries = (0..<4_000).map { file(String(format: "e%04d", $0)) }
         let controller = await controller(showing: entries)
         let pane = controller.pane
-        let naming = DispatchQueue(label: "naming")
-        naming.suspend()
+        let naming = heldQueue("naming")
         pane.settleQueue = naming
         let work = pane.mainSelectionWork
 
@@ -664,7 +663,7 @@ private final class PressedTableView: ListingTableView {
 }
 
 @MainActor @Test func cutRowsDrawDimmedUntilTheCutEnds() async throws {
-    let pasteboard = NSPasteboard(name: NSPasteboard.Name("searcher-test-\(UUID().uuidString)"))
+    let pasteboard = testPasteboard()
     defer { pasteboard.releaseGlobally() }
     let clipboard = CutState(clipboard: PasteboardFileClipboard(pasteboard: pasteboard))
     let controller = await controller(showing: [file("a"), file("b")])
@@ -686,7 +685,7 @@ private final class PressedTableView: ListingTableView {
 /// working the folder's cut names out again: with 100k rows cut, each pass over the cut paths
 /// cost the main thread on every patch, sort and size batch.
 @MainActor @Test func patchesDimArrivingCutEntriesWithoutRereadingTheCut() async throws {
-    let pasteboard = NSPasteboard(name: NSPasteboard.Name("searcher-test-\(UUID().uuidString)"))
+    let pasteboard = testPasteboard()
     defer { pasteboard.releaseGlobally() }
     let clipboard = CutState(clipboard: PasteboardFileClipboard(pasteboard: pasteboard))
     let controller = await controller(showing: [file("a"), file("b")])
@@ -719,7 +718,7 @@ private final class PressedTableView: ListingTableView {
 
 /// A pane that moves to another folder dims that folder's cut entries, and only those.
 @MainActor @Test func aPaneThatMovesDimsTheNewFoldersCutEntries() async throws {
-    let pasteboard = NSPasteboard(name: NSPasteboard.Name("searcher-test-\(UUID().uuidString)"))
+    let pasteboard = testPasteboard()
     defer { pasteboard.releaseGlobally() }
     let clipboard = CutState(clipboard: PasteboardFileClipboard(pasteboard: pasteboard))
     let lister = StubLister([:])
@@ -1498,9 +1497,8 @@ private func folderSize(_ name: String, in pane: Pane) -> Listing.FolderSizeValu
     let controller = await sizedController(
         showing: [folder("Music"), file("a")], walks: walks)
     let pane = controller.pane
-    let queue = DispatchQueue(label: "held rows")
+    let queue = heldQueue("held rows")
     pane.rowWorkQueue = queue
-    queue.suspend()
     pane.apply(.patches([.update(file("b"))]), at: pane.location)
 
     walks.release("/folder/Music", bytes: 4_000_000)
@@ -1520,9 +1518,8 @@ private func folderSize(_ name: String, in pane: Pane) -> Listing.FolderSizeValu
     let controller = await sizedController(
         showing: [folder("Music"), file("a")], walks: walks, clock: clock)
     let pane = controller.pane
-    let queue = DispatchQueue(label: "held rows")
+    let queue = heldQueue("held rows")
     pane.rowWorkQueue = queue
-    queue.suspend()
     pane.apply(.patches([.update(file("b"))]), at: pane.location)
     walks.release("/folder/Music", bytes: 4_000_000)
     await settle { !pane.waitingSizes.isEmpty }
