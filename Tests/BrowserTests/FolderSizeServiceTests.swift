@@ -244,13 +244,24 @@ private func makeFile(_ path: String, size: Int) throws {
 }
 
 @Test func throttlingDiskReadsKeepsTheThreadsPriority() async {
+    // The kernel's number for a thread moves a little under load, so the priority after counts as
+    // kept when it is closer to the one before than to the default's: the policy alone puts a
+    // utility thread at the default's, a gap of eleven, and a few points of drift stay inside it.
+    let utilityPriority = await BlockingCallThread.run(qos: .utility) {
+        FolderSizeService.threadPriority()
+    }
+    let defaultPriority = await BlockingCallThread.run(qos: .default) {
+        FolderSizeService.threadPriority()
+    }
+    let drift = (defaultPriority - utilityPriority) / 2
+    #expect(drift > 0)
     for qos in [QualityOfService.utility, .userInitiated] {
         let priorities = await BlockingCallThread.run(qos: qos) {
             let before = FolderSizeService.threadPriority()
             FolderSizeService.throttleDiskReads()
             return (before, FolderSizeService.threadPriority())
         }
-        #expect(priorities.0 == priorities.1)
+        #expect(abs(priorities.1 - priorities.0) < drift)
     }
 }
 
