@@ -2572,36 +2572,95 @@ extension PressFixture {
     await settle { fixture.tab.focusedPane.state.isLoaded }
 }
 
-/// A server's sidebar row shows its shares in the focused pane (0114-server-location.md). The
-/// pane is in list view: until SB.7d a column trail has no server column. The share icon is
-/// stubbed, as the share rows' tests stub it.
-@MainActor @Test func aServerOpenedFromTheSidebarShowsItsSharesInTheFocusedPane() async throws {
+/// A window whose sidebar lists HAL9000 for its shares `main` and `music`, with its one pane at
+/// `/root` in `viewMode`, its rows drawn with the app's own icon cache, which reads the share
+/// icon from CoreTypes (0114-server-location.md).
+@MainActor
+private func serverWindow(viewMode: ViewMode) async throws -> (BrowserWindowController, Pane) {
     let settings = untouchedSettings()
+    let shares = ["main", "music"].map { name in
+        SidebarVolume(
+            mountPoint: "/Volumes/\(name)", name: name, kind: .network, server: testServer)
+    }
+    let volumes = StubSidebarVolumes(shares).list()
     let service = ListingService(
-        lister: StubLister(Fixture.folders),
+        lister: StubLister(
+            Fixture.folders.merging([
+                "/Volumes/main": [file("n.txt")], "/Volumes/music": [file("m.txt")],
+            ]) { $1 }),
         mounts: StubMounts([mountedShare("main"), mountedShare("music")]).table())
-    let pane = Pane(
-        location: Location(path: "/root"), service: service, systemActions: StubSystemActions(),
-        settings: settings, isFocused: true)
     let controller = BrowserWindowController(
-        workspace: Workspace(tab: Tab(pane: pane)), workspaces: WorkspaceList(),
-        favorites: Favorites(settings: settings), volumes: StubSidebarVolumes().list(),
-        settings: settings,
-        takePaneController: { _, pane in
-            PaneViewController(
-                pane: pane,
-                iconCache: TypeIconCache(makeIcon: { _ in NSImage() }, readIcons: { _ in [:] }),
-                formatter: .init(), tableView: ListingTableView(), monitorsFolders: false)
-        })
+        location: Location(path: "/root"), service: service, systemActions: StubSystemActions(),
+        settings: settings, favorites: Favorites(settings: settings), volumes: volumes)
     let window = try #require(controller.window)
     window.contentView?.layoutSubtreeIfNeeded()
-    await settle { pane.state.isLoaded }
-    #expect(pane.viewMode == .list)
+    let pane = controller.workspace.selectedTab.focusedPane
+    pane.setViewMode(viewMode)
+    await settle { listed(pane) && volumes.volumes.count == 2 }
+    return (controller, pane)
+}
 
-    controller.sidebar.openLocation(.server(testServer))
+/// Whether every column of `pane`, or its list, shows its listing.
+@MainActor
+private func listed(_ pane: Pane) -> Bool {
+    guard let trail = pane.columnTrail else { return pane.state.isLoaded }
+    return trail.columns.allSatisfy { $0.pane.state.isLoaded }
+}
 
-    #expect(pane.location == .server(testServer))
-    await settle { pane.state.isLoaded }
+/// The sidebar row showing `name`.
+@MainActor
+private func sidebarRow(_ name: String, in controller: BrowserWindowController) throws -> Int {
+    let outline = controller.sidebar.outlineView
+    return try #require(
+        (0..<outline.numberOfRows).first { row in
+            (outline.view(atColumn: 0, row: row, makeIfNecessary: true) as? NSTableCellView)?
+                .textField?.stringValue == name
+        })
+}
+
+/// A click on a server's sidebar row lists its shares in the focused pane, each with the share
+/// icon read from CoreTypes once the read lands.
+@MainActor @Test func aServerClickedInTheSidebarListsItsSharesWithTheShareIcon() async throws {
+    let (controller, pane) = try await serverWindow(viewMode: .list)
+    let id = controller.workspace.selectedTab.layout.focused
+
+    controller.sidebar.openClicked(row: try sidebarRow("HAL9000", in: controller))
+
+    await settle { pane.location == .server(testServer) && pane.state.isLoaded }
     let listing = try #require(pane.state.listing)
     #expect((0..<listing.count).map { listing[$0].name } == ["main", "music"])
+    let list = try #require(controller.paneViewController(for: id)).listingViewController
+    let table = list.tableView
+    let name = try #require(table.tableColumns.first { $0.title == "Name" })
+    let standIn = TypeIconCache.shared.icon(for: .volume)
+    let icon = {
+        (list.tableView(table, viewFor: name, row: 0) as? NSTableCellView)?.imageView?.image
+    }
+    await settle { icon() != nil && icon() !== standIn }
+    #expect(icon() != nil && icon() !== standIn)
+}
+
+/// In column view a click or Return on a server's sidebar row shows the server's column alone,
+/// its rows the shares.
+@MainActor @Test func aServerOpenedFromTheSidebarInColumnViewShowsItsColumn() async throws {
+    let (controller, pane) = try await serverWindow(viewMode: .column)
+    let row = try sidebarRow("HAL9000", in: controller)
+    let serverColumn = {
+        guard let trail = pane.columnTrail, trail.columns.count == 1 else { return false }
+        let column = trail.columns[0].pane
+        guard column.location == .server(testServer), let listing = column.state.listing
+        else { return false }
+        return (0..<listing.count).map { listing[$0].name } == ["main", "music"]
+    }
+
+    controller.sidebar.openClicked(row: row)
+    await settle { serverColumn() }
+
+    pane.navigate(to: Location(path: "/root"))
+    await settle { listed(pane) && !serverColumn() }
+    let outline = controller.sidebar.outlineView
+    outline.selectRowIndexes([row], byExtendingSelection: false)
+    outline.keyDown(with: try keyEvent("\r"))
+    await settle { serverColumn() }
+    #expect(pane.location == .server(testServer))
 }
