@@ -335,8 +335,12 @@ public final class Settings {
 
     /// Runs `handler` after each change of a setting, for as long as `owner` exists.
     public func observe(for owner: AnyObject, _ handler: @escaping @MainActor () -> Void) {
+        observers.removeAll { $0.owner == nil }
         observers.append(Observer(owner: owner, handler: handler))
     }
+
+    /// How many observers are kept, those whose owner is gone among them. Tests read it.
+    var observerCount: Int { observers.count }
 
     private func store(_ value: Any, for key: Key, changed: Bool) {
         guard changed else { return }

@@ -473,6 +473,20 @@ private let showPalette = WindowCommands.showPalette.id
     #expect(relaunched.shortcuts == shortcuts)
 }
 
+/// Every pane observes the settings; one closed leaves no entry behind once another observes.
+@MainActor @Test func observingSettingsDropsTheObserversWhoseOwnerIsGone() {
+    let settings = untouchedSettings()
+    do {
+        let gone = NSObject()
+        settings.observe(for: gone) {}
+    }
+    let kept = NSObject()
+
+    settings.observe(for: kept) {}
+
+    #expect(settings.observerCount == 1)
+}
+
 @MainActor @Test func changingShortcutsNotifiesObservers() {
     let settings = untouchedSettings()
     var calls = 0

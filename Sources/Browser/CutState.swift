@@ -69,8 +69,12 @@ public final class CutState {
 
     /// Runs `handler` after each change of the cut, for as long as `owner` exists.
     public func observe(for owner: AnyObject, _ handler: @escaping @MainActor () -> Void) {
+        observers.removeAll { $0.owner == nil }
         observers.append(Observer(owner: owner, handler: handler))
     }
+
+    /// How many observers are kept, those whose owner is gone among them. Tests read it.
+    var observerCount: Int { observers.count }
 
     private func set(_ cut: (paths: [String], changeCount: Int)?) {
         let changed = self.cut != nil || cut != nil
