@@ -60,3 +60,40 @@ private func entry(_ path: String, _ selected: String? = nil) -> History.Entry {
     #expect(history.back(from: entry("/Volumes/music")) == atServer)
     #expect(history.forward(from: atServer) == entry("/Volumes/music"))
 }
+
+/// `count` entries, oldest first, at /0, /1 and on.
+private func entries(_ count: Int) -> [History.Entry] {
+    (0..<count).map { entry("/\($0)") }
+}
+
+@Test func leavingPastTheLimitDropsTheOldestFolder() {
+    var history = History()
+    for left in entries(History.limit + 1) { history.leave(left) }
+
+    #expect(history.backEntries == Array(entries(History.limit + 1).dropFirst()))
+}
+
+@Test func steppingKeepsEachWayWithinTheLimit() {
+    // Full both ways, as a restored history can be.
+    var history = History(back: entries(History.limit), forward: entries(History.limit))
+
+    _ = history.back(from: entry("/back"))
+    #expect(history.forwardEntries.count == History.limit)
+    #expect(history.forwardEntries.first == entry("/1"))
+    #expect(history.forwardEntries.last == entry("/back"))
+
+    _ = history.forward(from: entry("/a"))
+    _ = history.forward(from: entry("/b"))
+    #expect(history.backEntries.count == History.limit)
+    #expect(history.backEntries.last == entry("/b"))
+}
+
+/// A saved history longer than the limit keeps the entries nearest the folder each way.
+@Test func aHistoryLongerThanTheLimitKeepsItsNearestEntries() {
+    let long = entries(History.limit + 3)
+
+    let history = History(back: long, forward: long)
+
+    #expect(history.backEntries == Array(long.suffix(History.limit)))
+    #expect(history.forwardEntries == Array(long.suffix(History.limit)))
+}
