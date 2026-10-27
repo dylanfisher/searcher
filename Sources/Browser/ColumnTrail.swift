@@ -85,7 +85,7 @@ public final class ColumnTrail {
     /// (`Settings.columnsStartAtHome`); nil when the trail starts at its volume's root.
     private var home: Location?
 
-    /// A focused column at `location` with `name` selected, and left of it a column for each
+    /// A focused column at `location` with `selection` selected, and left of it a column for each
     /// folder from the trail's root down, each with the next folder selected
     /// (`root(of:mountedVolumes:home:)`), all sorted by Name ascending (`Pane.columnSort`). The
     /// focused column's load is asked first, and the others' once the root is checked, or the
@@ -94,9 +94,9 @@ public final class ColumnTrail {
     /// (0103-column-trail-from-the-root.md). A root that is a share's mount point has its
     /// server's column left of it (`serverRoot`), and a trail at a server is that one column
     /// (docs/decisions/0114-server-location.md).
-    convenience init(owner: Pane, at location: Location, selecting name: ExactName?) {
+    convenience init(owner: Pane, at location: Location, selecting selection: Selection) {
         self.init(
-            owner: owner, at: location, selecting: name, keeping: [], keepingServer: nil)
+            owner: owner, at: location, selecting: selection, keeping: [], keepingServer: nil)
     }
 
     /// The trail `old` starts again at `location` with `name` selected, as a navigation or Back
@@ -132,14 +132,16 @@ public final class ColumnTrail {
         old.columns.removeFirst(shared)
         old.close()
         self.init(
-            owner: owner, at: location, selecting: name, keeping: kept, keepingServer: keptServer)
+            owner: owner, at: location,
+            selecting: name.map { Selection([$0], cursor: $0) } ?? Selection(),
+            keeping: kept, keepingServer: keptServer)
     }
 
     /// A trail at `location` whose leading columns are `kept`, columns of another trail for the
     /// first folders from this one's root down to `location`, whose server column is
     /// `keptServer` when it has one, and whose other columns are made.
     private init(
-        owner: Pane, at location: Location, selecting name: ExactName?, keeping kept: [Column],
+        owner: Pane, at location: Location, selecting selection: Selection, keeping kept: [Column],
         keepingServer keptServer: Column?
     ) {
         self.owner = owner
@@ -149,13 +151,12 @@ public final class ColumnTrail {
             let focused: Column
             if let keptServer {
                 keep(keptServer)
-                keptServer.pane.select(
-                    name.map { Selection([$0], cursor: $0) } ?? Selection(), recordingAs: nil)
+                keptServer.pane.select(selection, recordingAs: nil)
                 focused = keptServer
                 focused.pane.isFocused = owner.isFocused
                 focused.pane.listIfWaiting()
             } else {
-                focused = makeColumn(at: location, selecting: name, isFocused: owner.isFocused)
+                focused = makeColumn(at: location, selecting: selection, isFocused: owner.isFocused)
             }
             columns = [focused]
             if keptServer != nil {
@@ -175,9 +176,9 @@ public final class ColumnTrail {
         for (index, column) in kept.enumerated() {
             keep(column)
             let isAbove = index + 1 < chain.count
-            let selected = isAbove ? ExactName(chain[index + 1].name) : name
+            let next = isAbove ? ExactName(chain[index + 1].name) : nil
             column.pane.select(
-                selected.map { Selection([$0], cursor: $0) } ?? Selection(), recordingAs: nil)
+                next.map { Selection([$0], cursor: $0) } ?? selection, recordingAs: nil)
             if isAbove { column.keepsNextColumnAt = column.pane.selectionVersion }
         }
         let focused: Column
@@ -188,7 +189,7 @@ public final class ColumnTrail {
             // focused column now, it lists at once, before the columns above it.
             focused.pane.listIfWaiting()
         } else {
-            focused = makeColumn(at: location, selecting: name, isFocused: owner.isFocused)
+            focused = makeColumn(at: location, selecting: selection, isFocused: owner.isFocused)
         }
         let made = makeAncestors(
             from: root, to: location, after: min(kept.count, chain.count - 1))
@@ -637,7 +638,8 @@ public final class ColumnTrail {
         follow(columns[index])
         columns.append(
             makeColumn(
-                at: pane.location.folderChild(named: name), selecting: nil, isFocused: false))
+                at: pane.location.folderChild(named: name), selecting: Selection(),
+                isFocused: false))
         updatePreview()
         moveRight(
             selectingFirstRow: false, recordsStep: stepsToColumn(at: index), recordingAs: .once)
@@ -690,14 +692,14 @@ public final class ColumnTrail {
         columns.firstIndex { $0.pane === pane }
     }
 
-    /// A column at `location`, sorted by Name ascending, as every column opens.
+    /// A column at `location` with `selection` to be selected once it's listed, sorted by Name
+    /// ascending, as every column opens.
     private func makeColumn(
-        at location: Location, selecting name: ExactName?, isFocused: Bool
+        at location: Location, selecting selection: Selection, isFocused: Bool
     ) -> Column {
         let pane = Pane(
-            location: location, service: owner.service, systemActions: owner.systemActions,
-            settings: owner.settings, sortedBy: Pane.columnSort.column,
-            ascending: Pane.columnSort.ascending, isFocused: isFocused, selecting: name)
+            columnAt: location, service: owner.service, systemActions: owner.systemActions,
+            settings: owner.settings, isFocused: isFocused, selecting: selection)
         return adopt(pane)
     }
 
@@ -1132,7 +1134,7 @@ public final class ColumnTrail {
         guard let folder else { return mountsShare }
         if opening {
             columns.append(
-                makeColumn(at: folder, selecting: nil, isFocused: false))
+                makeColumn(at: folder, selecting: Selection(), isFocused: false))
         }
         return true
     }

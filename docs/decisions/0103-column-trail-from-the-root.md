@@ -26,7 +26,9 @@ focused folder only ([0041](0041-column-model.md), [0096](0096-column-widths.md)
   built goes through it: Cmd-3, Go to Folder, the sidebar, the palette, Back and Forward, a
   link, a split's copy, a session restore and a workspace load. `TabState` is unchanged: the
   trail above the focused folder is rebuilt from its path, and the columns right of it from the
-  cursor, as before.
+  cursor, as before. (Amended 2026-10-27: a session restore and a workspace load select the
+  whole saved selection in the focused column, with the cursor where it was, so several rows
+  open no column right of it; see [0080](0080-restore-at-launch.md).)
 - **Which root.** `ColumnTrail.root(of:mountedVolumes:)`: the longest mount point in the
   kernel's mount table that holds the path by its text, so a share mounted at
   `/Users/me/mnt/share` starts there. A volume mounted `MNT_DONTBROWSE` is no root, as Finder

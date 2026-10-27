@@ -272,6 +272,20 @@ public final class Pane {
             viewMode: viewMode, rows: nil)
     }
 
+    /// A column's pane at `location`, sorted by Name ascending as every column opens, with
+    /// `selection` to be selected once it's listed, listing it right away, ahead of other panes'
+    /// loads if `isFocused`.
+    convenience init(
+        columnAt location: Location, service: ListingService, systemActions: any SystemActions,
+        settings: Settings, isFocused: Bool, selecting selection: Selection
+    ) {
+        self.init(
+            location: location, service: service, systemActions: systemActions,
+            settings: settings, sortedBy: Self.columnSort.column,
+            ascending: Self.columnSort.ascending, isFocused: isFocused, selection: selection,
+            viewMode: .list, rows: nil)
+    }
+
     /// A column's pane at `location`, sorted by Name ascending as every column opens, with `name`
     /// to be selected once it's listed, that lists nothing until `listIfWaiting()`, a reload or a
     /// change its monitor reports. A trail makes the columns left of the one it is built at with
@@ -297,9 +311,9 @@ public final class Pane {
     /// A pane as `Tab.state` saved it: at its folder, in its view mode and sort, with its Back
     /// and Forward history, listing the folder right away. The saved names are selected as the
     /// rows bring them, and the full listing drops the ones the folder no longer has, as for any
-    /// selection made before its rows arrive. In column mode the column at the folder
-    /// selects the saved cursor. A folder that isn't there shows the missing state
-    /// (`ListingState.missingFolder`).
+    /// selection made before its rows arrive. In column mode the column at the folder selects
+    /// them the same way, with the cursor where it was. A folder that isn't there shows the
+    /// missing state (`ListingState.missingFolder`).
     public convenience init(
         restoring saved: TabState.PaneState, service: ListingService,
         systemActions: any SystemActions, settings: Settings
@@ -328,7 +342,7 @@ public final class Pane {
 
     /// A pane that shows `rows`, a complete listing of `location` in list mode, and lists nothing
     /// until something asks it to; with no rows, it starts listing as above unless `listsNow` is
-    /// false. In column mode the column at `location` selects the selection's cursor.
+    /// false. In column mode the column at `location` selects the selection.
     private init(
         location: Location, service: ListingService, systemActions: any SystemActions,
         settings: Settings, sortedBy column: SortColumn, ascending: Bool, isFocused: Bool,
@@ -351,7 +365,7 @@ public final class Pane {
             }
         case .column:
             self.viewMode = .column
-            columnTrail = ColumnTrail(owner: self, at: location, selecting: selection.cursor)
+            columnTrail = ColumnTrail(owner: self, at: location, selecting: selection)
         }
         settings.observe(for: self) { [weak self] in self?.settingsDidChange() }
         VolumeEvents.add(self)
@@ -539,7 +553,9 @@ public final class Pane {
             // settings change and read by a view that should show the columns instead.
             show(.loading, after: .loaded(complete: true))
             viewMode = .column
-            columnTrail = ColumnTrail(owner: self, at: location, selecting: cursor)
+            columnTrail = ColumnTrail(
+                owner: self, at: location,
+                selecting: cursor.map { Selection([$0], cursor: $0) } ?? Selection())
             reportChange()
         case .list:
             guard let trail = columnTrail else {

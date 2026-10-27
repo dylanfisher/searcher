@@ -100,7 +100,8 @@ private func restored(
         "/p/r/docs": .batches([[file("inside.txt")]]),
     ])
     lister.releaseAll()
-    let pane = restored(saved("/p/r", cursor: "docs", viewMode: .column), lister: lister)
+    let pane = restored(
+        saved("/p/r", selection: ["docs"], cursor: "docs", viewMode: .column), lister: lister)
 
     let trail = try #require(pane.columnTrail)
     await settle { trail.columns.count == 4 && trail.columns.allSatisfy { $0.pane.state.isLoaded } }
@@ -110,6 +111,37 @@ private func restored(
     #expect(trail.columns.map { $0.pane.selection.cursor?.name } == ["p", "r", "docs", nil])
     #expect(trail.focusedIndex == 2)
     #expect(pane.location == Location(path: "/p/r"))
+    pane.close()
+}
+
+/// Every saved name is selected in the focused column, as the list selects them, with the cursor
+/// where it was. Several rows selected open no column to their right.
+@MainActor @Test func restoredColumnPaneSelectsEverySavedNameInTheFocusedColumn() async throws {
+    let lister = GatedLister([
+        "/": .batches([[folder("p")]]),
+        "/p": .batches([[folder("r")]]),
+        "/p/r": .batches([[folder("docs"), file("a.txt"), file("b.txt")]]),
+        "/p/r/docs": .batches([[file("inside.txt")]]),
+    ])
+    lister.releaseAll()
+    let pane = restored(
+        saved(
+            "/p/r", selection: ["docs", "b.txt", "gone.txt"], cursor: "b.txt", viewMode: .column),
+        lister: lister)
+    let tab = Tab(pane: pane)
+
+    let trail = try #require(pane.columnTrail)
+    await settle {
+        trail.columns.allSatisfy { $0.pane.state.isLoaded }
+            && trail.focused.pane.selection.isSettled
+    }
+
+    #expect(trail.columns.map(\.pane.location.path) == ["/", "/p", "/p/r"])
+    #expect(trail.focused.pane.selection.members == .only([ExactName("docs"), ExactName("b.txt")]))
+    #expect(trail.focused.pane.selection.cursor == ExactName("b.txt"))
+    let state = try #require(tab.state.panes[tab.layout.focused])
+    #expect(state.selection == [ExactName("docs"), ExactName("b.txt")])
+    #expect(state.cursor == ExactName("b.txt"))
     pane.close()
 }
 
@@ -445,7 +477,9 @@ private func savedWidths() -> ColumnWidths {
     ])
     lister.releaseAll()
     let pane = restored(
-        saved("/r/docs", cursor: "x.txt", viewMode: .column, columnWidths: savedWidths()),
+        saved(
+            "/r/docs", selection: ["x.txt"], cursor: "x.txt", viewMode: .column,
+            columnWidths: savedWidths()),
         lister: lister)
     let trail = try #require(pane.columnTrail)
     await settle { trail.focused.pane.state.isLoaded && trail.preview != nil }
