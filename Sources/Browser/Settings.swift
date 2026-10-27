@@ -285,8 +285,7 @@ public final class Settings {
     /// default, on and 0.5 s; it isn't removed, since the key isn't the app's.
     public var springLoadingDelay: Duration? {
         let enabled = defaults.object(forKey: Self.springLoadingEnabledKey)
-        if let enabled = enabled as? NSNumber, Self.isBoolean(enabled), !enabled.boolValue
-        {
+        if let enabled = enabled as? NSNumber, Self.isBoolean(enabled), !enabled.boolValue {
             return nil
         }
         let delay = defaults.object(forKey: Self.springLoadingDelayKey)
@@ -378,8 +377,7 @@ public final class Settings {
         _ key: Key, in defaults: UserDefaults, where isValid: (Double) -> Bool
     ) -> Double? {
         guard let value = defaults.object(forKey: key.rawValue) else { return nil }
-        if let number = value as? NSNumber, !isBoolean(number), isValid(number.doubleValue)
-        {
+        if let number = value as? NSNumber, !isBoolean(number), isValid(number.doubleValue) {
             return number.doubleValue
         }
         defaults.removeObject(forKey: key.rawValue)
