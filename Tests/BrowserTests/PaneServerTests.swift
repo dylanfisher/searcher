@@ -141,3 +141,67 @@ import Testing
 
     #expect(cut.cutNames(in: .server(testServer)) == ["music"])
 }
+
+// MARK: A row's location
+
+/// A server's row `name` as an entry: a mounted share's is a folder, as its listing gives it.
+private func share(_ name: String, type: DirectoryEntry.FileType = .directory) -> DirectoryEntry {
+    DirectoryEntry(
+        name: name, type: type, size: nil, modified: Date(timeIntervalSince1970: 0),
+        isHidden: false, isDataless: false)
+}
+
+/// Reads `table` again with `mounts` listing `volumes`, and returns once the read has landed.
+@MainActor
+private func reread(
+    _ table: MountTable, as volumes: [VolumeIdentity], in mounts: StubMounts
+) async {
+    mounts.set(volumes)
+    table.refresh()
+    await settle { table.volumes == volumes }
+}
+
+@MainActor @Test func aFoldersRowIsTheEntryInTheFolder() async {
+    let fixture = await PaneFixture.loaded()
+
+    #expect(fixture.pane.childLocation(of: folder("docs")) == Location(path: "/root/docs"))
+    #expect(fixture.pane.childLocation(of: file("a.txt")) == Location(path: "/root/a.txt"))
+}
+
+@MainActor @Test func aServersMountedRowIsItsSharesMountPoint() async {
+    let fixture = await PaneFixture.atServer()
+
+    #expect(fixture.pane.childLocation(of: share("main")) == Location(path: "/Volumes/main"))
+}
+
+/// Another server's share mounted at /Volumes/main isn't HAL9000's "main".
+@MainActor @Test func aRowWhoseMountPointAnotherServerHoldsHasNoLocation() async throws {
+    let mounts = StubMounts([mountedShare("main"), mountedShare("music")])
+    let fixture = await PaneFixture.atServer(mounts: mounts)
+    let table = try #require(fixture.pane.service.mounts)
+
+    await reread(
+        table, as: [mountedShare("main", of: "192.168.1.5"), mountedShare("music")], in: mounts)
+
+    #expect(fixture.pane.childLocation(of: share("main")) == nil)
+    #expect(fixture.pane.childLocation(of: share("music")) == Location(path: "/Volumes/music"))
+}
+
+@MainActor @Test func aRowWhoseShareWasEjectedHasNoLocation() async throws {
+    let mounts = StubMounts([mountedShare("main"), mountedShare("music")])
+    let fixture = await PaneFixture.atServer(mounts: mounts)
+    let table = try #require(fixture.pane.service.mounts)
+
+    await reread(table, as: [mountedShare("music")], in: mounts)
+
+    #expect(fixture.pane.childLocation(of: share("main")) == nil)
+}
+
+/// An unmounted share has no folder, even while another server's "main" is at /Volumes/main.
+@MainActor @Test func anUnmountedShareHasNoLocation() async {
+    let fixture = await PaneFixture.atServer(
+        mounts: StubMounts([mountedShare("main", of: "192.168.1.5"), mountedShare("music")]))
+
+    #expect(fixture.pane.childLocation(of: share("main", type: .unmountedShare)) == nil)
+    #expect(fixture.pane.childLocation(of: share("video", type: .unmountedShare)) == nil)
+}

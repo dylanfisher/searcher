@@ -163,6 +163,80 @@ private struct Fixture {
     #expect(!fixture.list.contextMenu(forRow: 1).items.contains { $0.title.hasPrefix("Eject") })
 }
 
+/// HAL9000's "main" is ejected and another server's "main" is mounted at /Volumes/main. Until
+/// the server lists again, its row "main" is still shown, and it is no way into the other
+/// server's share: it has no Eject and takes no drop (docs/decisions/0115-server-shares.md).
+/// The checks run in an observer of the table's read, after the pane's, which has only started
+/// the listing that drops the row.
+@MainActor @Test func aRowWhoseMountPointAnotherServerNowHoldsRefusesEjectAndDrops() async throws {
+    let settings = untouchedSettings()
+    let root = VolumeIdentity(device: "/dev/disk3s1", mountPoint: "/", kind: .local)
+    let mounts = StubMounts([root, mountedShare("main"), mountedShare("music")])
+    let table = mounts.table()
+    let pane = Pane(
+        location: .server(testServer), service: ListingService(mounts: table),
+        systemActions: StubSystemActions(), settings: settings, isFocused: true)
+    // The sidebar's own read lists /Volumes/main as a disk it can eject, before and after.
+    let stub = StubSidebarVolumes([
+        SidebarVolume(mountPoint: "/Volumes/main", name: "main", kind: .network),
+        SidebarVolume(mountPoint: "/Volumes/music", name: "music", kind: .network),
+    ])
+    let volumes = stub.list()
+    await settle { volumes.volumes.count == 2 }
+    var paneController: PaneViewController?
+    let controller = BrowserWindowController(
+        workspace: Workspace(tab: Tab(pane: pane)), workspaces: WorkspaceList(),
+        favorites: Favorites(settings: settings), volumes: volumes, settings: settings,
+        fileOperations: FileOperationQueue(prompts: .unexpected) { _ in }, mountTable: table,
+        takePaneController: { _, pane in
+            let made = PaneViewController(
+                pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
+                tableView: ListingTableView(), monitorsFolders: false)
+            paneController = made
+            return made
+        })
+    let window = try #require(controller.window)
+    window.contentView?.layoutSubtreeIfNeeded()
+    let list = try #require(paneController).listingViewController
+    list.tableView.registry = try AppCommands.registry()
+    await settle { pane.state.isLoaded }
+    let pasteboard = NSPasteboard(name: NSPasteboard.Name("searcher-test-\(UUID().uuidString)"))
+    defer { pasteboard.releaseGlobally() }
+    let item = NSPasteboardItem()
+    item.setString(URL(fileURLWithPath: "/Users/someone/a.txt").absoluteString, forType: .fileURL)
+    #expect(pasteboard.writeObjects([item]))
+    let info = StubDraggingInfo(pasteboard: pasteboard, mask: [.copy, .move, .generic, .link])
+    func mainRow() throws -> Int { try #require(pane.state.listing?.row(named: "main")) }
+    func ejects(row: Int) -> Bool {
+        list.contextMenu(forRow: row).items.contains { $0.title == "Eject “main”" }
+    }
+    func validate(row: Int) -> NSDragOperation {
+        list.tableView(
+            list.tableView, validateDrop: info, proposedRow: row, proposedDropOperation: .on)
+    }
+    #expect(ejects(row: try mainRow()))
+    #expect(validate(row: try mainRow()) == .copy)
+
+    var shown: (row: Int?, ejects: Bool, drop: NSDragOperation)?
+    let observer = NSObject()
+    table.observe(for: observer) {
+        guard let row = pane.state.listing?.row(named: "main") else {
+            shown = (nil, false, [])
+            return
+        }
+        shown = (row, ejects(row: row), validate(row: row))
+    }
+    mounts.set([root, mountedShare("main", of: "192.168.1.5"), mountedShare("music")])
+    table.refresh()
+    await settle { shown != nil }
+
+    let after = try #require(shown)
+    #expect(after.row != nil)
+    #expect(!after.ejects)
+    #expect(after.drop == [])
+    withExtendedLifetime(observer) {}
+}
+
 // A window at a server reads the share icon through the shared cache and its default reader. That
 // reader, named by a default argument, once aborted the process ("freed pointer was not the last
 // allocation") when called for rows AppKit made.

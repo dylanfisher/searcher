@@ -59,6 +59,19 @@ public final class MountTable {
         volume(of: path)?.server
     }
 
+    /// The mount point of `server`'s row `name`, `/Volumes/<name>` as its listing names it, when
+    /// the last read has `server`'s share mounted there. Nil when it has none there: the share
+    /// was ejected, another server's share or a disk holds that folder now, or no read has
+    /// landed. Nil is "not mounted", never a path to guess
+    /// (docs/decisions/0115-server-shares.md).
+    public func mountPoint(ofRow name: String, in server: Server) -> Location? {
+        let mountPoint = Server.sharesFolder.folderChild(named: name)
+        let isServers = volumes.contains {
+            $0.mountPoint == mountPoint.folderPath && $0.server == server
+        }
+        return isServers ? mountPoint : nil
+    }
+
     /// Returns once a read has landed, at once if one has. The read can't hang: `getmntinfo`
     /// with `MNT_NOWAIT` asks no volume.
     public func firstRead() async {

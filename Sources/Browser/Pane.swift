@@ -499,6 +499,11 @@ public final class Pane {
     /// selection history, since the user didn't choose it, and the folder is no visit for the
     /// palette: the pane goes back once the drag ends.
     public func springOpen(_ name: String) {
+        // A row no longer listed springs nothing, and a server's row springs only while its
+        // share is mounted where the row says (0115-server-shares.md).
+        guard let listing = state.listing, let row = listing.row(named: name),
+            let child = childLocation(of: listing[row])
+        else { return }
         let owner = containingTrail?.owner ?? self
         owner.isSpringing = true
         defer { owner.isSpringing = false }
@@ -509,7 +514,7 @@ public final class Pane {
         if containingTrail != nil {
             set(Selection([folder], cursor: folder), recordingAs: nil)
         } else {
-            navigate(to: location.child(named: name))
+            navigate(to: child)
         }
         owner.springOrigin?.sprungTo = owner.springFolders
     }
@@ -923,7 +928,7 @@ public final class Pane {
     public func showPackageContents() {
         guard let package = selectedPackage else { return }
         if let trail = containingTrail { return trail.openPackage(named: package.name, from: self) }
-        navigate(to: location.child(named: package.name))
+        navigate(to: location.folderChild(named: package.name))
     }
 
     /// Opens a single selected folder in `other`, which must not be a column. Any other
@@ -944,7 +949,7 @@ public final class Pane {
         precondition(
             entries.count == 1 && entries[0].type == .symbolicLink,
             "openSelectedLink(asFolderIn:) ran without one selected link")
-        let link = location.child(named: entries[0].name)
+        let link = location.folderChild(named: entries[0].name)
         checkLink(
             link, ifPackage: {},
             otherwise: { [weak self] in self?.listLink(link, asFolderIn: other) })
@@ -985,21 +990,24 @@ public final class Pane {
     private func openSelection(foldersIn other: Pane?) {
         let entries = selectedEntries
         if entries.count == 1, entries[0].type == .directory {
-            if let other { return other.navigate(to: location.child(named: entries[0].name)) }
+            // A server's row opens only while its share is mounted where the row says.
+            guard let folder = childLocation(of: entries[0]) else { return }
+            if let other { return other.navigate(to: folder) }
             // A column moves into the folder's column instead, as → does.
             if let trail = containingTrail { return trail.openFolder(from: self) }
-            navigate(to: location.child(named: entries[0].name))
+            navigate(to: folder)
             return
         }
         if entries.count == 1, entries[0].type == .symbolicLink {
             // A link has no column, so a column opens it as the owner would: a link to a folder
             // starts the trail again at the link.
             (other ?? containingTrail?.owner ?? self).openLink(
-                location.child(named: entries[0].name))
+                location.folderChild(named: entries[0].name))
             return
         }
+        // A share that isn't mounted has no file to open.
         for entry in entries where entry.type != .directory {
-            openFile(location.child(named: entry.name))
+            if let file = childLocation(of: entry) { openFile(file) }
         }
     }
 
@@ -1080,6 +1088,25 @@ public final class Pane {
         return [.server(server)] + share
     }
 
+    /// The place `entry`, one of this pane's rows, stands for: in a folder, the entry in it; at
+    /// a server, the share's mount point while the app's mount table has the server's share
+    /// there (`MountTable.mountPoint(ofRow:in:)`). Nil means not mounted: the share was
+    /// ejected, another server's share or a disk is at `/Volumes/<name>`, or the row is an
+    /// `unmountedShare`. What asks refuses then, never guesses. The one way from a row to a
+    /// location (docs/decisions/0115-server-shares.md).
+    public func childLocation(of entry: DirectoryEntry) -> Location? {
+        guard entry.type != .unmountedShare else { return nil }
+        switch location {
+        case .folder:
+            return location.folderChild(named: entry.name)
+        case .server(let server):
+            guard let mounts = service.mounts else {
+                preconditionFailure("a row of the server \(server.host) with no mount table")
+            }
+            return mounts.mountPoint(ofRow: entry.name, in: server)
+        }
+    }
+
     // MARK: - Listing
 
     /// Lists the folder again. A load already running will deliver current entries, so it is left
@@ -1138,7 +1165,7 @@ public final class Pane {
             // the folder itself is dropped: the folders under it fail their own loads, which drops
             // them, and walking every kept path for each removed entry costs the main actor.
             for case .remove(name: let name) in patches {
-                service.recentListings?.drop(location.child(named: name).folderPath)
+                service.recentListings?.drop(location.folderChild(named: name).folderPath)
             }
             waitingPatches += patches
             startPatch()
@@ -1975,14 +2002,15 @@ public final class Pane {
 
     // MARK: - The cursor after a trash
 
-    /// Set by Move to Trash: which trash it was, the cursor's entry, the entries after and before
-    /// the cursor's run of selected rows, and the selection version then. If the trashed entries
-    /// leave the rows before the selection changes otherwise, the cursor goes to the first of
-    /// those two still listed (`selectNextIfTrashLanded`).
+    /// Set by Move to Trash: which trash it was, the cursor's entry and its path when the trash
+    /// started (the pane may be elsewhere, even at a server, when it ends), the entries after
+    /// and before the cursor's run of selected rows, and the selection version then. If the
+    /// trashed entries leave the rows before the selection changes otherwise, the cursor goes to
+    /// the first of those two still listed (`selectNextIfTrashLanded`).
     private(set) var cursorAfterTrash:
         (
-            trash: Int, selectionVersion: Int, cursor: ExactName, after: ExactName?,
-            before: ExactName?
+            trash: Int, selectionVersion: Int, cursor: ExactName, cursorPath: String,
+            after: ExactName?, before: ExactName?
         )?
     /// Counts the trashes `moveCursorPastSelectionOnceGone` noted.
     private var trashCount = 0
@@ -2000,6 +2028,7 @@ public final class Pane {
         else { return trashCount }
         cursorAfterTrash = (
             trashCount, selectionVersion, cursor,
+            location.folderChild(named: cursor.name).folderPath,
             run.upperBound < listing.count ? ExactName(listing[run.upperBound].name) : nil,
             run.lowerBound > 0 ? ExactName(listing[run.lowerBound - 1].name) : nil
         )
@@ -2013,7 +2042,7 @@ public final class Pane {
     /// arrives after it ends.
     func trashDidFinish(_ trash: Int, _ state: OperationState) {
         guard let pending = cursorAfterTrash, pending.trash == trash else { return }
-        let cursorPath = location.child(named: pending.cursor.name).folderPath
+        let cursorPath = pending.cursorPath
         let removedCursor = state.record.changes.contains { change in
             switch change {
             case .trashed(let path, _), .deleted(let path): path == cursorPath
@@ -2251,7 +2280,7 @@ public final class Pane {
             }
             let asked = found
             let walks = folderSizes.requestSizes(
-                of: asked.map { (folder.child(named: $0.name.name).folderPath, $0.modified) },
+                of: asked.map { (folder.folderChild(named: $0.name.name).folderPath, $0.modified) },
                 in: folder.folderPath, for: owner
             ) { index, result in
                 self?.receiveSize(
@@ -2448,7 +2477,7 @@ public final class Pane {
         guard let folderSizes else { return [:] }
         let folders = (0..<listing.count).map { listing[$0] }.filter { $0.type.isFolderOnDisk }
         let asked = folders.map {
-            (path: folder.child(named: $0.name).folderPath, modified: $0.modified)
+            (path: folder.folderChild(named: $0.name).folderPath, modified: $0.modified)
         }
         var found: [ExactName: Listing.FolderSizeUpdate] = [:]
         for (entry, size) in zip(folders, folderSizes.keptSizes(of: asked)) {

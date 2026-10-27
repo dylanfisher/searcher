@@ -79,18 +79,24 @@ public enum ClipboardCommands: CommandSet {
 
     /// The selected entries' file URLs. Each says whether it is a folder, from the listing, so
     /// building it reads nothing from the disk; a folder's ends in a slash, as Finder writes it.
-    /// The list's services take these too.
+    /// The list's services take these too. A server's row whose share isn't mounted where the
+    /// row says has none, and is left out (docs/decisions/0115-server-shares.md).
     @MainActor
     public static func selectedURLs(in pane: Pane) -> [URL] {
-        pane.selectedEntries.map { fileURL(of: $0, in: pane.location) }
+        pane.selectedEntries.compactMap { fileURL(of: $0, in: pane) }
     }
 
-    /// The file URL of `entry` in `folder`, built as `selectedURLs` builds each one. A row
-    /// dragged from a list takes it too.
-    public static func fileURL(of entry: DirectoryEntry, in folder: Location) -> URL {
-        URL(
-            fileURLWithPath: folder.child(named: entry.name).folderPath,
-            isDirectory: entry.type.isFolderOnDisk)
+    /// The file URL of `entry`, one of `pane`'s rows, built as `selectedURLs` builds each one;
+    /// nil when the row has no location (`Pane.childLocation(of:)`). A row dragged from a list
+    /// takes it too.
+    @MainActor
+    public static func fileURL(of entry: DirectoryEntry, in pane: Pane) -> URL? {
+        pane.childLocation(of: entry).map { fileURL(of: entry, at: $0) }
+    }
+
+    /// The file URL of `entry`, whose location is `location`.
+    public static func fileURL(of entry: DirectoryEntry, at location: Location) -> URL {
+        URL(fileURLWithPath: location.folderPath, isDirectory: entry.type.isFolderOnDisk)
     }
 
     /// Whether Copy and Cut can run: there is a clipboard and a selection.

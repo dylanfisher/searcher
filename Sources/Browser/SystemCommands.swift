@@ -55,10 +55,11 @@ public enum SystemCommands: CommandSet {
     }
 
     /// Whether Copy Path, Reveal in Finder and Get Info have something to act on: the pane's
-    /// folder, or at a server, which has no folder, a selection (0114-server-location.md).
+    /// folder, or at a server, which has no folder, a selected share mounted where its row says
+    /// (0114-server-location.md, 0115-server-shares.md).
     @MainActor
     private static func hasItems(in pane: Pane) -> Bool {
-        pane.location.isFolder || !pane.selectedRows.isEmpty
+        pane.location.isFolder || !ClipboardCommands.selectedURLs(in: pane).isEmpty
     }
 
     /// The selected entries' URLs in display order, or the folder's when nothing is selected or

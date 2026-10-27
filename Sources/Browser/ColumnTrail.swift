@@ -632,7 +632,7 @@ public final class ColumnTrail {
         follow(columns[index])
         columns.append(
             makeColumn(
-                at: pane.location.child(named: name), selecting: nil, sortedLike: pane,
+                at: pane.location.folderChild(named: name), selecting: nil, sortedLike: pane,
                 isFocused: false))
         updatePreview()
         moveRight(
@@ -751,9 +751,10 @@ public final class ColumnTrail {
         let keysHadPaused = column.keysHavePaused()
         column.keysHavePaused = Self.startPause(on: owner.columnOpenClock, for: Self.openDelay)
         guard keysHadPaused, let listing = pane.state.listing,
-            let entry = Self.soleSelectedEntry(in: pane, of: listing), entry.type == .directory
+            let entry = Self.soleSelectedEntry(in: pane, of: listing), entry.type == .directory,
+            let folder = pane.childLocation(of: entry)
         else { return true }
-        return !pane.showsRecentRowsWhenMade(at: pane.location.child(named: entry.name))
+        return !pane.showsRecentRowsWhenMade(at: folder)
     }
 
     /// Selects the first row of `column` once it shows the whole folder, when → moved into it
@@ -1081,11 +1082,12 @@ public final class ColumnTrail {
     private func previewed(in pane: Pane) -> ColumnPreview? {
         guard let listing = pane.state.listing, let row = pane.selection.cursorRow(in: listing),
             listing[row].type != .directory, listing[row].type != .symbolicLink,
-            pane.selection.rows(in: listing) == IndexSet(integer: row)
+            pane.selection.rows(in: listing) == IndexSet(integer: row),
+            let location = pane.childLocation(of: listing[row])
         else { return nil }
         let entry = listing[row]
         return ColumnPreview(
-            location: pane.location.child(named: entry.name), entry: entry,
+            location: location, entry: entry,
             kind: listing.kind(atRow: row))
     }
 
@@ -1115,26 +1117,26 @@ public final class ColumnTrail {
         guard let listing = pane.state.listing else { return false }
         let cursorRow = pane.selection.cursorRow(in: listing)
         if cursorRow == nil, !pane.state.showsCompleteListing { return false }
-        var folder: String?
-        var package: String?
+        var folder: Location?
+        var package: Location?
         if let entry = Self.soleSelectedEntry(in: pane, of: listing) {
             switch entry.type {
-            case .directory: folder = entry.name
-            case .package: package = entry.name
-            case .regular, .symbolicLink, .other: break
+            // A server's share row whose share isn't mounted where it says opens no column.
+            case .directory: folder = pane.childLocation(of: entry)
+            case .package: package = pane.location.folderChild(named: entry.name)
+            case .regular, .symbolicLink, .other, .unmountedShare: break
             }
         }
         // A package opens no column, but keeps the one Show Package Contents opened for it.
-        let kept = (folder ?? package).map { pane.location.child(named: $0) }
+        let kept = folder ?? package
         if let kept, index + 1 < columns.count, columns[index + 1].pane.location == kept {
             return false
         }
-        let next = folder.map { pane.location.child(named: $0) }
         truncate(after: index)
-        guard let next else { return false }
+        guard let folder else { return false }
         if opening {
             columns.append(
-                makeColumn(at: next, selecting: nil, sortedLike: pane, isFocused: false))
+                makeColumn(at: folder, selecting: nil, sortedLike: pane, isFocused: false))
         }
         return true
     }

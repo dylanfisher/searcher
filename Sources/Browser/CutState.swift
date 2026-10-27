@@ -45,8 +45,8 @@ public final class CutState {
 
     /// The names of the cut entries in `folder`, while the cut lasts; empty otherwise. Paths
     /// compare exactly, as the pane's names do. A server's entries are its shares' mount points
-    /// in `/Volumes` (`Location.child(named:)`), so a cut of one, made in a pane at `/Volumes`,
-    /// dims its row there too.
+    /// in `/Volumes` (`MountTable.mountPoint(ofRow:in:)`), so a cut of one, made in a pane at
+    /// `/Volumes`, dims its row there too.
     public func cutNames(in folder: Location) -> Set<String> {
         guard let paths = cutPaths else { return [] }
         let parent =

@@ -1285,7 +1285,7 @@ final class UIBench {
         try await waitForColumns(start + 2, in: trail)
         guard trail.columns.count == start + 2,
             trail.columns[start + 1].pane.location
-                == first.location.child(named: listing[count].name)
+                == first.location.folderChild(named: listing[count].name)
         else {
             throw Failure(
                 "↓ onto \(listing[count].name) should open its column alone, but the columns are "
