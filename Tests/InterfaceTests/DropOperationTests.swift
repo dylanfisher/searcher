@@ -457,10 +457,12 @@ private final class PhotoPromiser: NSObject, NSFilePromiseProviderDelegate {
 }
 
 /// A promise that writes `name` into the folder it is called into from another thread, as a
-/// source app does, fails, or never answers.
+/// source app does, fails, or never answers, or that writes nothing and reports another file.
 private final class StubPromise: FilePromiseReceiver.Promise, @unchecked Sendable {
     enum Outcome {
         case writes, fails, hangs
+        /// Reports the file at this URL, or at `name` in the drop folder when nil.
+        case reports(URL?)
     }
 
     let name: String
@@ -478,6 +480,8 @@ private final class StubPromise: FilePromiseReceiver.Promise, @unchecked Sendabl
         switch outcome {
         case .hangs:
             break
+        case .reports(let other):
+            DispatchQueue.global().async { reader(other ?? url, nil) }
         case .fails:
             DispatchQueue.global().async {
                 reader(url, NSError(domain: NSPOSIXErrorDomain, code: Int(EIO)))
@@ -549,6 +553,36 @@ extension Fixture {
         state.errors == [
             FileOperationError(errno: EIO, path: fixture.folder.appending(path: "lost.jpg").path)
         ])
+}
+
+@MainActor @Test func aPromisedFileReportedOutsideTheDropFolderIsLeftWhereItIs() async throws {
+    let fixture = try await Fixture()
+    defer { fixture.stop() }
+    let sub = fixture.folder.appending(path: "sub")
+    for name in ["secret.txt", "other.txt"] {
+        try Data("mine".utf8).write(to: sub.appending(path: name))
+    }
+
+    await FilePromiseReceiver.receive(
+        [
+            StubPromise("photo.jpg"),
+            StubPromise("secret.txt", .reports(sub.appending(path: "secret.txt"))),
+            StubPromise("../sub/other.txt", .reports(nil)),
+        ], into: fixture.folder.path, from: "Photos", selectingIn: fixture.pane,
+        queue: fixture.queue)
+
+    #expect(try fixture.contents(of: fixture.folder) == ["a.txt", "sub", "photo.jpg"])
+    #expect(try fixture.contents(of: sub) == ["secret.txt", "other.txt"])
+    await settle { !fixture.reportedFailures.isEmpty }
+    let (operation, state) = try #require(fixture.reportedFailures.first)
+    #expect(operation == .receive(name: nil, app: "Photos", into: fixture.folder.path))
+    #expect(state.phase == .failed)
+    #expect(
+        state.errors.sorted { $0.path < $1.path }
+            == ["other.txt", "secret.txt"].map {
+                FileOperationError(
+                    reason: .other, path: fixture.folder.appending(path: $0).path, errno: nil)
+            })
 }
 
 @MainActor @Test func aDropIntoAReadOnlyFolderShowsAsAFailedDrop() async throws {

@@ -109,7 +109,25 @@ func aServerMadeFromItsHostIsTheServerOfItsSource(source: String) throws {
     #expect(server.name == "Hal9000")
 }
 
-@Test(arguments: ["", "Bad%ZZ._smb._tcp.local", "Big\\256._smb._tcp.local"])
+@Test(arguments: [
+    "", "Bad%ZZ._smb._tcp.local", "Big\\256._smb._tcp.local",
+    // Anything that would make smbutil's `//host` read as another target than the row shows.
+    "evil.local/share", "evil.local?x", "evil.local#x", "user@evil.local", "evil\\", "evil\\/x",
+    "evil\\@x", "two words", "tab\tbed", "new\nline", "nul\u{0}", "del\u{7F}", "nas:445",
+    "nas:", "[fe80::1]", "fe80::1/64", "fe80::zz", "fe80::1%", "fe80::1%en0/x", "1:2:3",
+    "Bad%2._smb._tcp.local", "50%._smb._tcp.local",
+])
 func aHostThatNamesNoServerHasNone(host: String) {
     #expect(Server(host: host) == nil)
+}
+
+@Test(arguments: [
+    "HAL9000._smb._tcp.local", "nas", "nas-2.example.com", "192.168.1.5", "fe80::1",
+    "fe80::1%en0", "2001:db8::1", "::1", "::ffff:192.168.1.5",
+    "Dylan\\032Fisher\\226\\128\\153s\\032Mac._smb._tcp.local", "My\\.Server._smb._tcp.local",
+    "Back\\\\slash._smb._tcp.local", "A\\(1\\)._smb._tcp.local", "Dylan%27s%20Mac._smb._tcp.local",
+    "Caf%C3%A9._smb._tcp.local", "Café.local", "printer._ipp._tcp",
+])
+func aHostnameAnAddressOrABonjourNameIsAServer(host: String) throws {
+    #expect(try #require(Server(host: host)).host == host)
 }

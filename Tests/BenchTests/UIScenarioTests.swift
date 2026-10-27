@@ -102,7 +102,10 @@ func scenarioOverBudgetFailsNamingEachCase(_ scenario: Scenario) throws {
     let options = UIBenchOptions(
         output: "/o.json", w1: folder, w2: folder, keyPresses: 0, tempPrefix: "p",
         scenario: .restoredNetworkPane, folders: [])
-    #expect(UIBenchOptions(arguments: ["Searcher"] + options.arguments) == options)
+    #expect(
+        UIBenchOptions(
+            arguments: ["Searcher"] + options.arguments,
+            environment: UIBenchOptions.runnerEnvironment) == options)
 }
 
 @Test func scenarioReportsOnlyItsOwnSpans() throws {
@@ -272,7 +275,10 @@ func pathScenarioWithoutAPathFails(_ scenario: Scenario) {
     let options = UIBenchOptions(
         output: "/o.json", w1: "/w1", w2: "/w2", keyPresses: 0, tempPrefix: "p",
         scenario: .palette, folders: [])
-    #expect(UIBenchOptions(arguments: ["Searcher"] + options.arguments) == options)
+    #expect(
+        UIBenchOptions(
+            arguments: ["Searcher"] + options.arguments,
+            environment: UIBenchOptions.runnerEnvironment) == options)
     let report = try UIBenchReport(
         record: try samples(for: .palette, atFraction: 0.5), scenario: .palette)
     #expect(

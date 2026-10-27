@@ -188,11 +188,15 @@ func runUI(
 
 /// Runs the app's executable directly rather than through `open`, so a copy of the app that is
 /// already running, which has the same bundle ID, is left alone and not brought to the front,
-/// and the app's exit status and error output reach the runner.
+/// and the app's exit status and error output reach the runner. The app takes the bench
+/// arguments only with `UIBenchOptions.runnerEnvironment` in its environment.
 private func launchOnce(_ executable: URL, arguments: [String], number: Int) throws {
     let process = Process()
     process.executableURL = executable
     process.arguments = arguments
+    process.environment = ProcessInfo.processInfo.environment.merging(
+        UIBenchOptions.runnerEnvironment
+    ) { _, runner in runner }
     let exited = DispatchSemaphore(value: 0)
     process.terminationHandler = { _ in exited.signal() }
     try process.run()
