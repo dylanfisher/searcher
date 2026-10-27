@@ -1281,9 +1281,10 @@ public final class Pane {
 
     /// Applies a change its monitor reported for `location`. Patches are applied to a copy of the
     /// listing off the main actor, since `Listing.update` must run there; `relist` lists the
-    /// folder again. A change for a folder the pane has left is ignored, since a monitor can
-    /// report once more after it is stopped. In column mode each column applies its own changes
-    /// and the pane has no rows of its own to change, so it ignores them.
+    /// folder again, as do more waiting patches than `FolderChange.patchLimit`. A change for a
+    /// folder the pane has left is ignored, since a monitor can report once more after it is
+    /// stopped. In column mode each column applies its own changes and the pane has no rows of
+    /// its own to change, so it ignores them.
     public func apply(_ change: FolderChange, at location: Location) {
         guard location == self.location, columnTrail == nil, !isClosed else { return }
         switch change {
@@ -1297,6 +1298,12 @@ public final class Pane {
                 service.recentListings?.drop(location.folderChild(named: name).folderPath)
             }
             waitingPatches += patches
+            // Batches that waited behind a running patch or sort count together.
+            guard waitingPatches.count <= FolderChange.patchLimit else {
+                waitingPatches = []
+                relist()
+                return
+            }
             startPatch()
         }
     }
