@@ -1,11 +1,14 @@
 import Base
 import Testing
 
+private let env = UIBenchOptions.runnerEnvironment
+
 @Test func optionsSurviveTheCommandLine() {
     let options = UIBenchOptions(
         output: "/o.json", w1: "/w1", w2: "/w2", keyPresses: 500, tempPrefix: "bench-7",
         scenario: nil, folders: [])
-    #expect(UIBenchOptions(arguments: ["Searcher"] + options.arguments) == options)
+    #expect(
+        UIBenchOptions(arguments: ["Searcher"] + options.arguments, environment: env) == options)
 }
 
 @Test func scenarioAndFoldersSurviveTheCommandLineBeforeOtherArguments() {
@@ -14,7 +17,8 @@ import Testing
         scenario: .cold, folders: ["/nas/a", "/nas/b c"])
     #expect(
         UIBenchOptions(
-            arguments: ["Searcher"] + options.arguments + ["--stall-threshold-ms", "50"])
+            arguments: ["Searcher"] + options.arguments + ["--stall-threshold-ms", "50"],
+            environment: env)
             == options)
 }
 
@@ -22,9 +26,19 @@ import Testing
     let options = UIBenchOptions(
         output: "/o.json", w1: "/w1", w2: "/w2", keyPresses: 500, tempPrefix: "bench-7",
         scenario: nil, folders: [], w8: "/w8", image: "/image mount")
-    #expect(UIBenchOptions(arguments: ["Searcher"] + options.arguments) == options)
+    #expect(
+        UIBenchOptions(arguments: ["Searcher"] + options.arguments, environment: env) == options)
 }
 
 @Test func launchWithoutTheFlagIsNotABench() {
-    #expect(UIBenchOptions(arguments: ["Searcher", "--stall-threshold-ms", "50"]) == nil)
+    #expect(
+        UIBenchOptions(arguments: ["Searcher", "--stall-threshold-ms", "50"], environment: env)
+            == nil)
+}
+
+@Test func benchArgumentsWithoutTheRunnersVariableAreNotABench() {
+    let options = UIBenchOptions(
+        output: "/o.json", w1: "/w1", w2: "/w2", keyPresses: 500, tempPrefix: "bench-7",
+        scenario: nil, folders: [])
+    #expect(UIBenchOptions(arguments: ["Searcher"] + options.arguments, environment: [:]) == nil)
 }

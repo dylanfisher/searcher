@@ -81,12 +81,23 @@ enum FilePromiseReceiver {
             case .file(let url, let error):
                 promised -= 1
                 idle.time = .zero
+                let name = url.lastPathComponent
+                let path = url.path
                 if let error {
-                    let name = url.lastPathComponent
                     failedNames.append(name)
                     errors.append(Self.error(error, path: folder + "/" + name))
+                } else if !isPath(path, atOrUnder: dropFolder.path)
+                    || url.pathComponents.contains("..")
+                {
+                    // Only what the source wrote into the drop folder moves into the target; a
+                    // `..` could climb out of it.
+                    logger.error(
+                        "a drop's source reported \(path) outside \(dropFolder.path); left there")
+                    failedNames.append(name)
+                    errors.append(
+                        FileOperationError(reason: .other, path: folder + "/" + name, errno: nil))
                 } else {
-                    received.append(url.path)
+                    received.append(path)
                 }
             case .idle:
                 promised = 0
@@ -158,7 +169,7 @@ enum FilePromiseReceiver {
         for error in errors {
             let text = String(describing: error)
             logger.error(
-                "a drop into \(folder, privacy: .public) failed: \(text, privacy: .public)")
+                "a drop into \(folder) failed: \(text)")
         }
         let name = names.count == 1 && errors.count == 1 ? names[0] : nil
         await queue.report(.receive(name: name, app: app, into: folder), errors: errors)

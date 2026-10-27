@@ -62,7 +62,7 @@ public final class WorkspaceWindows {
     var restoreClock: any Clock<Duration> = ContinuousClock()
     /// Where a restore reports cached rows that didn't come in time. Tests read it.
     var logFault: (String) -> Void = { message in
-        Logger(category: "workspaces").fault("\(message, privacy: .public)")
+        Logger(category: "workspaces").fault("\(message)")
     }
     /// When the first change not yet saved came, on `saveClock`.
     private var firstUnsaved: Duration?
@@ -104,7 +104,7 @@ public final class WorkspaceWindows {
     public let folderVisits: FolderVisits
     /// The app's undo history, fed every operation as it finishes.
     let undoHistory = UndoHistory(log: { message in
-        Logger(category: "undo").error("\(message, privacy: .public)")
+        Logger(category: "undo").error("\(message)")
     })
     /// The apps Open With lists for each file type, shared by every window.
     let openWith: OpenWith
@@ -246,7 +246,7 @@ public final class WorkspaceWindows {
             let logger = Logger(category: "drop")
             for error in await queue.removePendingDropFolders() {
                 logger.error(
-                    "a drop folder is left at quit: \(String(describing: error), privacy: .public)")
+                    "a drop folder is left at quit: \(String(describing: error))")
             }
             done.signal()
         }
@@ -797,7 +797,7 @@ public final class WorkspaceWindows {
         Task { [weak self] in
             for await problem in problems {
                 Logger(category: "workspaces").error(
-                    "\(problem.description, privacy: .public)")
+                    "\(problem.description)")
                 self?.unshownProblems.append(problem)
                 // Problems reported together, as one load reports them, go in one alert.
                 await Task.yield()

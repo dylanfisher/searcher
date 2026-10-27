@@ -46,6 +46,12 @@ fs_rules=(
   # the call's own arguments, two levels of parentheses deep, looking for the label.
   'url-without-directory|\bURL\(\s*fileURLWithPath:(?!(?:[^()]|\((?:[^()]|\([^()]*\))*\))*?isDirectory:)'
 )
+# A path in the unified log stays private, the logger's default: anyone with the log can read a
+# public one. Only an interpolation whose expression names a path, URL or folder is caught; a
+# message built beforehand is checked by review.
+log_rules=(
+  'public-path-log|\\\((?:[^()\n]|\([^()\n]*\))*?(?:[pP]ath|[uU][rR][lL]|[fF]older|absoluteString)(?:[^()\n]|\([^()\n]*\))*?,\s*privacy:\s*\.public\s*\)'
+)
 
 # hits <pattern> <path...>: each match in the Swift files at or under <path...>,
 # comment lines left out, as file:line:text. A path that doesn't exist fails
@@ -75,7 +81,7 @@ hits() {
 
 failed=0
 
-for rule in "${ui_rules[@]}" "${fs_rules[@]}"; do
+for rule in "${ui_rules[@]}" "${fs_rules[@]}" "${log_rules[@]}"; do
   name=${rule%%|*}
   fixture="scripts/arch-fixtures/$name.swift"
   if [ ! -f "$fixture" ]; then
@@ -88,7 +94,7 @@ for rule in "${ui_rules[@]}" "${fs_rules[@]}"; do
 done
 for fixture in scripts/arch-fixtures/*.swift; do
   name=$(basename "$fixture" .swift)
-  if ! printf '%s\n' "${ui_rules[@]}" "${fs_rules[@]}" | grep -q "^$name|"; then
+  if ! printf '%s\n' "${ui_rules[@]}" "${fs_rules[@]}" "${log_rules[@]}" | grep -q "^$name|"; then
     printf '%s breaks no rule of scripts/arch\n' "$fixture" >&2
     failed=1
   fi
@@ -111,7 +117,8 @@ check 'UI framework imported below the interface tier' 'Sources/Base Sources/Bro
   "${ui_rules[@]}"
 check 'file-system call in Interface or the app' 'Sources/Interface Sources/Searcher' \
   "${fs_rules[@]}"
+check 'path logged as public' 'Sources' "${log_rules[@]}"
 
 [ "$failed" -eq 0 ] || exit 1
 echo "every rule catches its fixture; no UI imports in Base or Browser;" \
-  "no file-system calls in Interface or Searcher"
+  "no file-system calls in Interface or Searcher; no path logged as public"

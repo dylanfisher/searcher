@@ -52,7 +52,9 @@ private func exists(_ pid: pid_t) -> Bool {
         ShareRequest(server: testServer, user: "dyl@an:x/%"),
         "//dyl%40an%3Ax%2F%25@HAL9000._smb._tcp.local"
     ),
-    (ShareRequest(server: Server(host: "HAL\\032 9000")!, user: "dylan"), "//dylan@HAL\\032 9000"),
+    (ShareRequest(server: Server(host: "HAL\\0329000")!, user: "dylan"), "//dylan@HAL\\0329000"),
+    (ShareRequest(server: Server(host: "fe80::1%en0")!, user: "dylan"), "//dylan@[fe80::1%en0]"),
+    (ShareRequest(server: Server(host: "2001:db8::1")!, user: nil), "//[2001:db8::1]"),
 ])
 func theCommandNamesTheUserEncodedOnceAndTheHostAsWritten(request: ShareRequest, url: String) {
     #expect(SmbutilShares.arguments(for: request) == ["view", "-N", url])

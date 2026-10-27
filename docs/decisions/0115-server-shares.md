@@ -59,8 +59,8 @@ before the step that builds it, and the list is under "For Dylan to check".
   fields so nothing is encoded twice. *(8a)* The user is encoded once with `urlUserAllowed` less
   `:`, which `URLComponents` keeps and `smbutil` reads as the start of a password; the host is
   appended as written and not passed through `URLComponents`, which would check it as a URL host
-  and a Bonjour name with `\032` isn't one. It runs with no shell, `LC_ALL=en_US.UTF-8`, and no user
-  means `//<host>`. A second user's shares on that host are listed as that user sees them: a
+  and a Bonjour name with `\032` isn't one; an IPv6 address gets its brackets back (AU.7). It
+  runs with no shell, `LC_ALL=en_US.UTF-8`, and no user means `//<host>`. A second user's shares on that host are listed as that user sees them: a
   share only the first user can see is not shown unmounted. If the first mount goes and another
   user's remains, the request changes and the cache (below) misses.
 - **A server needs a mounted share to be listed,** as 0114 has it. A server with none is

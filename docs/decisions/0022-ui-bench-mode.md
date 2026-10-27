@@ -31,6 +31,10 @@ isn't active.
   in Base, the only tier both the app and the runner import. `--stall-threshold-ms` moved from
   `StallLogging` to `StallWatchdog` for the same reason, and `scripts/dev` gets the flag and its
   value from `scripts/bench --print-stall-arguments`.
+- **Only the runner's launches.** The runner launches the app with `SEARCHER_BENCH_UI=1`
+  (`UIBenchOptions.runnerEnvironment`) in its environment, and the app ignores the bench
+  arguments without it, since they name a file to write, folders to open and a prefix of
+  temporary entries to delete (AU.7).
 - **Background.** A bench launch uses the `.accessory` activation policy, never calls
   `activate`, orders its window in with `orderFrontRegardless` on the second display when there
   is one, and gives the table first responder without making the window key. Synthetic ↓ events
