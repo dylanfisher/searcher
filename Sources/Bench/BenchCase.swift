@@ -9,7 +9,7 @@ struct BenchCase: Sendable {
     /// Every case the runner measures, in run order.
     static let registered: [BenchCase] =
         openFolder + list + viewSettings + filter + listingCache + folderSize + fuzzyMatch
-        + folderEvents + idle
+        + folderEvents + cutNames + idle
 
     let name: String
     /// The budget the p95 is checked against; nil for a case that is only reported.
