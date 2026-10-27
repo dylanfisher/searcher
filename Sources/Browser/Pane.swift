@@ -10,8 +10,12 @@ public final class Pane {
     public private(set) var location: Location {
         didSet {
             if location != oldValue, !isSpringing { folderVisits?.visit(location) }
+            observeMountsIfAtServer()
         }
     }
+    /// Whether the pane lists again on each change `service.mounts` reads, as it does from the
+    /// first time it is at a server.
+    private var observesMounts = false
     /// Counts a visit each time the pane moves to a folder, for the palette, once
     /// `countVisits(in:countingThisFolder:)` sets it. Panes made from this one share it. A pane
     /// without one, such as a column's, counts nothing; in column view the pane counts the
@@ -305,9 +309,8 @@ public final class Pane {
 
     /// A pane that shows `rows`, a complete listing of `location` in list mode, and lists nothing
     /// until something asks it to; with no rows, it starts listing as above unless `listsNow` is
-    /// false. In column mode the column at `location` selects the selection's cursor. Not
-    /// private, so tests can show a server's rows, which nothing lists yet.
-    init(
+    /// false. In column mode the column at `location` selects the selection's cursor.
+    private init(
         location: Location, service: ListingService, systemActions: any SystemActions,
         settings: Settings, sortedBy column: SortColumn, ascending: Bool, isFocused: Bool,
         selection: Selection, viewMode: ViewMode, rows: Listing?, listsNow: Bool = true
@@ -334,6 +337,7 @@ public final class Pane {
         }
         settings.observe(for: self) { [weak self] in self?.settingsDidChange() }
         VolumeEvents.add(self)
+        observeMountsIfAtServer()
     }
 
     /// A pane at `location` in this pane's view mode, sorted as its focused column is, with its
@@ -804,7 +808,7 @@ public final class Pane {
         // A stalled read hasn't said whether the folder is there, so the pane stays.
         switch update {
         case .slow, .gaveUp: return
-        case .cached, .firstBatch, .full, .failed, .volumeGone: break
+        case .cached, .firstBatch, .full, .failed, .volumeGone, .notConnected: break
         }
         if case .cached = update {
             pendingGoCached = (update, resolved)
@@ -960,7 +964,7 @@ public final class Pane {
             where error.reason == .notFound || error.reason == .notADirectory:
                 linkCheck = nil
                 return
-            case .firstBatch, .full, .failed, .volumeGone:
+            case .firstBatch, .full, .failed, .volumeGone, .notConnected:
                 break
             }
             linkCheck?.cancel()
@@ -1069,10 +1073,13 @@ public final class Pane {
     }
 
     /// The pane is the one keys go to. The folder may have changed while another pane was. In
-    /// column mode the focused column takes the focus and lists its folder again.
+    /// column mode the focused column takes the focus and lists its folder again. A server's
+    /// shares can't have changed unseen: its pane lists again on every change the mount table
+    /// reads (`mountsDidChange`), so focus lists nothing.
     public func didGainFocus() {
         isFocused = true
         if let trail = columnTrail { return trail.focused.pane.didGainFocus() }
+        guard location.isFolder else { return }
         reload()
     }
 
@@ -1258,9 +1265,10 @@ public final class Pane {
     /// a column, shows rows in the turn it is made: `service.recentListings` keeps the folder's
     /// listing in that arrangement (`showRecentListing`). A dictionary read on the main actor.
     func showsRecentRowsWhenMade(at location: Location) -> Bool {
-        guard let recent = service.recentListings?.listing(at: location.folderPath) else {
-            return false
-        }
+        // A server keeps none (`showRecentListing`).
+        guard case .folder(let path) = location,
+            let recent = service.recentListings?.listing(at: path)
+        else { return false }
         return isArranged(recent.listing, filteredBy: NameFilter())
     }
 
@@ -1375,9 +1383,12 @@ public final class Pane {
     /// show its rows in the wrong order until a sort landed. The lookup is a dictionary read,
     /// and the selection, a name at most when the pane has just moved, is found in the rows on
     /// the main actor.
+    ///
+    /// A server keeps no recent listing: its load reads only the mount table, so its rows
+    /// arrive with no read to wait on (docs/decisions/0114-server-location.md).
     private func showRecentListing() {
-        guard state.listing == nil,
-            let recent = service.recentListings?.listing(at: location.folderPath),
+        guard state.listing == nil, case .folder(let path) = location,
+            let recent = service.recentListings?.listing(at: path),
             isArranged(recent.listing)
         else { return }
         show(
@@ -1386,12 +1397,13 @@ public final class Pane {
     }
 
     /// Keeps the rows shown in `service.recentListings`, when they are a full listing of the
-    /// folder: a load's, or a patch's or sort's of one.
+    /// folder: a load's, or a patch's or sort's of one. A server's rows aren't kept, as
+    /// `showRecentListing` shows none.
     private func keepRecentListing() {
-        guard case .loaded(let listing) = state, let recent = service.recentListings else {
-            return
-        }
-        recent.keep(listing, listedAt: loadedAt ?? Date(), at: location.folderPath)
+        guard case .loaded(let listing) = state, case .folder(let path) = location,
+            let recent = service.recentListings
+        else { return }
+        recent.keep(listing, listedAt: loadedAt ?? Date(), at: path)
     }
 
     /// `selection` resolved against a load's update, on the load's worker thread; nil for a
@@ -1404,7 +1416,7 @@ public final class Pane {
             selection.resolved(in: listing, after: .loaded(complete: false))
         case .full(let listing, _):
             selection.resolved(in: listing, after: .loaded(complete: true))
-        case .failed, .slow, .gaveUp, .volumeGone:
+        case .failed, .slow, .gaveUp, .volumeGone, .notConnected:
             nil
         }
     }
@@ -1430,7 +1442,8 @@ public final class Pane {
                 switch state {
                 case .slow: .slow(kept)
                 case .offline: .offline(kept)
-                case .loading, .partial, .loaded, .cachedRefreshing, .denied, .failed:
+                case .loading, .partial, .loaded, .cachedRefreshing, .denied, .failed,
+                    .notConnected:
                     .cachedRefreshing(listing, listedAt: listedAt)
                 }
             show(shown, after: .loaded(complete: false), resolved: resolved, from: selectionVersion)
@@ -1480,6 +1493,10 @@ public final class Pane {
             // The load keeps going, and its last update still replaces the offline state.
             if case .offline = state { return }
             goOffline()
+        case .notConnected(let rootVolumeName):
+            self.rootVolumeName = rootVolumeName
+            loadIsRunning = false
+            show(.notConnected, after: .loaded(complete: true))
         }
         selectNamesIfListed()
         selectNextIfTrashLanded()
@@ -1504,7 +1521,7 @@ public final class Pane {
         case .cachedRefreshing(let listing, let listedAt):
             ListingState.KeptRows(listing: listing, listedAt: listedAt, isComplete: false)
         case .slow(let kept), .offline(let kept): kept
-        case .loading, .denied, .failed: nil
+        case .loading, .denied, .failed, .notConnected: nil
         }
     }
 
@@ -1573,6 +1590,27 @@ public final class Pane {
         monitorGeneration += 1
         reload()
         reportChange()
+    }
+
+    /// Starts listing again on each change `service.mounts` reads, once the pane is at a
+    /// server. A pane at a server isn't on any volume, so its shares mounting and unmounting
+    /// reach it through the table, never as a volume event, and it lists after the table has
+    /// read the change (docs/decisions/0114-server-location.md).
+    private func observeMountsIfAtServer() {
+        guard !observesMounts, case .server(let server) = location else { return }
+        guard let mounts = service.mounts else {
+            preconditionFailure("a pane at the server \(server.host) has no mount table")
+        }
+        observesMounts = true
+        mounts.observe(for: self) { [weak self] in self?.mountsDidChange() }
+    }
+
+    /// The mount table read a change: a pane at a server lists its shares again, after a load
+    /// that is running, which may have read the table before the change. A column-mode owner
+    /// has no rows of its own, and a pane elsewhere has nothing to list again.
+    private func mountsDidChange() {
+        guard case .server = location, columnTrail == nil, !isClosed else { return }
+        relist()
     }
 
     // MARK: - Selection
@@ -1996,7 +2034,7 @@ public final class Pane {
     private func selectFirstRowIfWanted() {
         guard let version = selectsFirstRowAt else { return }
         switch state {
-        case .denied, .failed:
+        case .denied, .failed, .notConnected:
             selectsFirstRowAt = nil
             return
         case .loading, .partial, .loaded, .cachedRefreshing, .slow, .offline:
@@ -2027,9 +2065,11 @@ public final class Pane {
             startSizeScan()
         }
     }
-    /// Whether `calculateSizes()` can run: a list pane with a size service.
+    /// Whether `calculateSizes()` can run: a list pane at a folder with a size service. A
+    /// server's shares are mount points, and a walk of one would read the whole share
+    /// (docs/decisions/0114-server-location.md).
     public var canCalculateSizes: Bool {
-        folderSizes != nil && viewMode == .list
+        folderSizes != nil && viewMode == .list && location.isFolder
     }
     /// Whether folder rows show walked sizes: a list pane with a size service, with the setting
     /// on or in a folder `calculateSizes()` walked.
@@ -2376,7 +2416,7 @@ public final class Pane {
             return .firstBatch(applied(listing), rootVolumeName: rootVolumeName)
         case .full(let listing, let rootVolumeName):
             return .full(applied(listing), rootVolumeName: rootVolumeName)
-        case .failed, .slow, .gaveUp, .volumeGone:
+        case .failed, .slow, .gaveUp, .volumeGone, .notConnected:
             return update
         }
     }

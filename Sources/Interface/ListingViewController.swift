@@ -96,6 +96,18 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     var workspaceID: UUID?
     /// Tells a drop whether its items are on the target folder's volume.
     var mountTable: MountTable?
+    /// The sidebar's volumes, which a server's share row ejects through from its context menu;
+    /// nil adds no Eject.
+    var volumes: SidebarVolumes?
+    /// Shows an alert about the list's window: as a sheet on it, or app-modal while the list
+    /// has no window. Tests replace it.
+    lazy var showAlert: @MainActor (NSAlert) -> Void = { [weak self] alert in
+        guard let window = self?.view.window else {
+            alert.runModal()
+            return
+        }
+        alert.beginSheetModal(for: window)
+    }
     /// Opens the folder row a drag hovers over; nil opens none. The pane's lists share one.
     var springLoader: SpringLoader?
     /// The thumbnails being made for rows on screen, by name.
@@ -734,23 +746,65 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// press there clears it: New Folder and the pastes act in a folder selected in the focused
     /// column, and the menu acts on the column's own folder
     /// (docs/decisions/0111-column-view-target-folder.md).
+    ///
+    /// A server's share row adds `Eject “music”`, which ejects that share as the sidebar does,
+    /// when the sidebar's volumes list it as one that can be ejected
+    /// (docs/decisions/0114-server-location.md).
     func contextMenu(forRow row: Int) -> NSMenu {
         var items = ContextMenuBuilder.folderItems
+        var share: SidebarVolume?
         if let listing, row >= 0, row < listing.count {
             let name = ExactName(listing[row].name)
             if !pane.selection.contains(name) {
                 pane.select(Selection([name], cursor: name))
             }
             items = ContextMenuBuilder.rowItems
+            if showsShares { share = ejectableShare(named: name.name) }
         } else if pane.containingTrail != nil, !pane.selection.isEmpty {
             pane.select(Selection())
         }
+        let menu: NSMenu
         do {
-            return try ContextMenuBuilder.build(
+            menu = try ContextMenuBuilder.build(
                 items, registry: tableView.registry, target: tableView,
                 selection: ClipboardCommands.selectedURLs(in: pane))
         } catch {
             preconditionFailure("\(error)")
+        }
+        if let share {
+            menu.addItem(.separator())
+            menu.addItem(
+                ContextMenuBuilder.ejectItem(
+                    named: share.name, mountPoint: share.mountPoint, target: self,
+                    action: #selector(ejectShare(_:))))
+        }
+        return menu
+    }
+
+    /// The sidebar's volume mounted at the server's share `name`, if it lists one that can be
+    /// ejected. The sidebar reads the mounts itself, so for a moment after a mount event it
+    /// may not list a share the server's rows show, and the row has no Eject until it does.
+    private func ejectableShare(named name: String) -> SidebarVolume? {
+        let mountPoint = pane.location.child(named: name).folderPath
+        return volumes?.volumes.first { $0.mountPoint == mountPoint && $0.canEject }
+    }
+
+    @objc private func ejectShare(_ sender: NSMenuItem) {
+        guard let mountPoint = sender.representedObject as? String else {
+            preconditionFailure("Eject has no share")
+        }
+        // A share that left the list meanwhile is left alone, as the sidebar leaves it.
+        guard let volumes,
+            let volume = volumes.volumes.first(where: { $0.mountPoint == mountPoint })
+        else { return }
+        Task { [weak self] in
+            do throws(SidebarVolume.EjectFailure) {
+                try await volumes.eject(volume)
+            } catch {
+                self?.showAlert(
+                    WorkspaceSidebarViewController.ejectFailedAlert(
+                        name: volume.name, reason: error.reason))
+            }
         }
     }
 
@@ -769,14 +823,28 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         return cell
     }
 
+    /// The rows are a server's shares: they show the share icon, Kind "Volume" and no size or
+    /// date (docs/decisions/0114-server-location.md).
+    private var showsShares: Bool {
+        !pane.location.isFolder
+    }
+
+    /// The share icon's read landed: rows on screen that show shares take it.
+    private func shareIconDidLoad() {
+        guard showsShares, listing != nil else { return }
+        refreshRows()
+    }
+
     /// Shows `row` of `listing` in `cell`, a cell of `column`.
     private func configure(
         _ cell: NSTableCellView, column: SortColumn, row: Int, in listing: Listing
     ) {
         if column == .name {
             cell.imageView?.image =
-                keptThumbnail(row: row, in: listing).map(NSImage.init(thumbnail:))
-                ?? iconCache.icon(for: listing.kind(atRow: row).type)
+                showsShares
+                ? iconCache.shareIcon { [weak self] in self?.shareIconDidLoad() }
+                : keptThumbnail(row: row, in: listing).map(NSImage.init(thumbnail:))
+                    ?? iconCache.icon(for: listing.kind(atRow: row).type)
             showFolderChevron(listing[row].type == .directory, in: cell)
             showNotDownloadedBadge(listing[row].isDataless, in: cell)
             cell.textField?.isHidden = listing[row].name == coveredName
@@ -884,6 +952,13 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// What `column`'s cell shows for `row` of `listing`.
     private func text(_ column: SortColumn, row: Int, in listing: Listing) -> String {
         let entry = listing[row]
+        if showsShares {
+            switch column {
+            case .name: return entry.name
+            case .kind: return EntryCellFormatter.shareKind
+            case .size, .dateModified: return EntryCellFormatter.noSize
+            }
+        }
         switch column {
         case .name: return entry.name
         case .size:
@@ -932,6 +1007,11 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             return text
         }
         var parts = [text(.name), text(.kind)]
+        // A share has no size or date to read.
+        if showsShares {
+            rowView.setAccessibilityLabel(parts.joined(separator: ", "))
+            return
+        }
         if entry.size != nil || hasWalkedSize(row, in: listing) {
             parts.append(text(.size))
         }

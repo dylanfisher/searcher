@@ -39,7 +39,8 @@ private struct Fixture {
     init() async throws {
         windows = WorkspaceWindows(
             service: ListingService(lister: lister) { "Test Disk" },
-            systemActions: StubSystemActions(), settings: settings, folderSizes: nil,
+            mountTable: MountTable(), systemActions: StubSystemActions(), settings: settings,
+            folderSizes: nil,
             clipboard: MemoryClipboard(), store: nil)
         windows.showsWindows = false
         try await open()
@@ -778,7 +779,7 @@ private func stopEverything(_ windows: WorkspaceWindows) async {
         try Data(name.utf8).write(to: URL(fileURLWithPath: root + "/" + name))
     }
     let windows = WorkspaceWindows(
-        service: ListingService(), systemActions: StubSystemActions(),
+        service: ListingService(), mountTable: MountTable(), systemActions: StubSystemActions(),
         settings: untouchedSettings(), folderSizes: nil, clipboard: MemoryClipboard(),
         store: nil)
     windows.showsWindows = false
@@ -1062,7 +1063,7 @@ private struct UndoableWindow {
         let root = folder.url.path
         try Data("a".utf8).write(to: URL(fileURLWithPath: root + "/a.txt"))
         windows = WorkspaceWindows(
-            service: ListingService(), systemActions: StubSystemActions(),
+            service: ListingService(), mountTable: MountTable(), systemActions: StubSystemActions(),
             settings: untouchedSettings(), folderSizes: nil, clipboard: MemoryClipboard(),
             store: nil)
         windows.showsWindows = false

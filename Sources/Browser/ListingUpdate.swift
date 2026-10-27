@@ -28,4 +28,8 @@ public enum ListingUpdate: Sendable {
     /// folder may still be there. `volumeName` names that volume by where it was mounted. The
     /// load's last update.
     case volumeGone(ListingError, rootVolumeName: String, volumeName: String)
+    /// The server has no share in the mount table: all of them were ejected or unmounted, or a
+    /// restored pane's server hasn't mounted one yet. The load's last update
+    /// (docs/decisions/0114-server-location.md).
+    case notConnected(rootVolumeName: String)
 }

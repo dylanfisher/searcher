@@ -361,7 +361,8 @@ final class UIBench {
         let pasteboard = NSPasteboard(
             name: NSPasteboard.Name("searcher-bench-\(UUID().uuidString)"))
         let windows = WorkspaceWindows(
-            service: service, systemActions: systemActions, settings: settings, folderSizes: nil,
+            service: service, mountTable: MountTable(), systemActions: systemActions,
+            settings: settings, folderSizes: nil,
             clipboard: PasteboardFileClipboard(pasteboard: pasteboard), store: nil)
         windows.showsWindows = false
         restored = windows
@@ -405,6 +406,8 @@ final class UIBench {
                         returning: .failure(
                             Failure("\(pane.location.folderPath) could not be listed: \(error)")))
                     return true
+                case .notConnected:
+                    preconditionFailure("the bench lists folders, never a server")
                 }
                 timeFrame(from: processStart, in: window, UIBenchRecord.launchSpan, launchInterval)
                 {
@@ -501,6 +504,7 @@ final class UIBench {
                 switch update {
                 case .full, .failed, .volumeGone: continuation.resume(returning: update)
                 case .cached, .firstBatch, .slow, .gaveUp: break
+                case .notConnected: preconditionFailure("the bench lists folders, never a server")
                 }
             }
         }
@@ -551,8 +555,8 @@ final class UIBench {
         let pasteboard = NSPasteboard(
             name: NSPasteboard.Name("searcher-bench-\(UUID().uuidString)"))
         let windows = WorkspaceWindows(
-            service: ListingService(cache: cache), systemActions: systemActions,
-            settings: settings, folderSizes: nil,
+            service: ListingService(cache: cache), mountTable: MountTable(),
+            systemActions: systemActions, settings: settings, folderSizes: nil,
             clipboard: PasteboardFileClipboard(pasteboard: pasteboard), store: nil)
         windows.showsWindows = false
         restored = windows
@@ -568,7 +572,7 @@ final class UIBench {
         switch pane.state {
         case .cachedRefreshing(let rows, _), .loaded(let rows):
             guard rows.count > 0 else { throw Failure("\(path) has no rows to show") }
-        case .loading, .partial, .slow, .offline, .denied, .failed:
+        case .loading, .partial, .slow, .offline, .denied, .failed, .notConnected:
             throw Failure("\(path) was \(pane.state), not its cached rows, as its window was shown")
         }
         // In front of other apps' windows, without activating the app or making it key.
@@ -605,6 +609,8 @@ final class UIBench {
                     continuation.resume(
                         returning: .failure(Failure("\(path) could not be listed: \(error)")))
                     return true
+                case .notConnected:
+                    preconditionFailure("the bench lists folders, never a server")
                 }
                 timeFrame(from: start, in: window, Self.restoredCachedRowsSpan, interval) {
                     continuation.resume(returning: .success($0))
@@ -700,6 +706,8 @@ final class UIBench {
                     continuation.resume(
                         returning: .failure(Failure("\(path) could not be listed: \(error)")))
                     return true
+                case .notConnected:
+                    preconditionFailure("the bench lists folders, never a server")
                 }
                 guard listing.count > 0 else {
                     continuation.resume(
@@ -1187,7 +1195,7 @@ final class UIBench {
                         return true
                     case .loading, .slow:
                         return false
-                    case .cachedRefreshing, .offline, .denied, .failed:
+                    case .cachedRefreshing, .offline, .denied, .failed, .notConnected:
                         continuation.resume(
                             returning: .failure(Failure("W2's load failed: \(pane.state)")))
                         return true
@@ -1954,6 +1962,8 @@ final class UIBench {
                 throw Failure("\(pane.location.folderPath) could not be listed: \(error)")
             case .offline:
                 throw Failure("\(pane.location.folderPath) went offline")
+            case .notConnected:
+                preconditionFailure("the bench lists folders, never a server")
             case .loading, .partial, .cachedRefreshing, .slow: break
             }
             guard ContinuousClock.now < deadline else {
