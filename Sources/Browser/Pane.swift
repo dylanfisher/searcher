@@ -570,6 +570,10 @@ public final class Pane {
     func trailDidChange() {
         guard let trail = columnTrail else { return }
         location = trail.focused.pane.location
+        // Columns have no folder visits; the pane counts the focused column's, so it forgets it.
+        if let missing = trail.focused.pane.forgettableMissingFolder {
+            folderVisits?.forget(missing)
+        }
         reportChange()
     }
 
@@ -1492,6 +1496,7 @@ public final class Pane {
             case .privacyProtected: show(.denied(error), after: .loaded(complete: true))
             case .permissionDenied, .notFound, .notADirectory, .other:
                 show(.failed(error), after: .loaded(complete: true))
+                if let missing = forgettableMissingFolder { folderVisits?.forget(missing) }
             }
         case .volumeGone(_, let rootVolumeName, let volumeName):
             self.rootVolumeName = rootVolumeName
@@ -1534,6 +1539,18 @@ public final class Pane {
             startLoad()
         }
         reportChange()
+    }
+
+    /// The folder of the missing state when ⌘K should forget it, from what the listing reported
+    /// alone: it was deleted or moved, or a file has its name now. Nil while its volume isn't
+    /// mounted, since the folder may come back with it: the listing places a path in `/Volumes`
+    /// on the root volume only then. A volume or share unmounted under the pane shows offline,
+    /// not missing, so its folders stay too (0087-palette-window.md).
+    var forgettableMissingFolder: String? {
+        guard let path = state.missingFolder else { return nil }
+        let onUnmountedVolume =
+            path.hasPrefix(Server.sharesFolder.folderPath + "/") && volumeName == rootVolumeName
+        return onUnmountedVolume ? nil : path
     }
 
     /// The rows shown, as a slow or offline state keeps them.

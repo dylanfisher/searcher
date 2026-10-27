@@ -238,6 +238,25 @@ func aShareThatStopsAnsweringGoesOfflineWithTheCachedRows(code: Int32) async {
     #expect(pane.state.names == ["a"])
 }
 
+/// The folder may come back with its share, so ⌘K keeps it.
+@MainActor @Test func aFolderOnAShareNoLongerMountedStaysInTheFolderHistory() async {
+    let lister = GatedLister([music: .batches([[file("a")]])])
+    lister.releaseAll()
+    let fixture = await OfflineFixture(at: music, lister: lister)
+    let pane = fixture.pane
+    let visits = FolderVisits(store: nil)
+    pane.countVisits(in: visits)
+    await settle { pane.state.isLoaded }
+
+    fixture.mounts.unmount()
+    pane.didLoseFocus()
+    pane.didGainFocus()
+
+    await settle { pane.state.isOffline || pane.state.isFailed }
+    #expect(pane.state.isOffline)
+    #expect(visits.history.folders[music]?.count == 1)
+}
+
 @MainActor @Test func aFolderOnAShareNoLongerMountedOpensOfflineWithItsCachedRows() async {
     let other = "/net/share/other"
     let lister = GatedLister([music: .batches([[file("a")]]), other: .batches([[file("y")]])])

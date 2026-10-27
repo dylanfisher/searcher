@@ -117,7 +117,19 @@ Recursive search and Spotlight are a separate feature (M5b.3) and stay out.
   the panes it makes; panes made from those share it. The stored history is read off the main
   actor beside the session's read and is not waited for: visits counted before it arrives are
   added to it, and nothing is saved until then, so a launch can't write over it. Saves go through
-  `WorkspaceStore.saveFolderHistory`, which delays and writes off the main actor.
+  `WorkspaceStore.saveFolderHistory`, which delays and writes off the main actor. (Amended
+  2026-10-27: a folder found missing is forgotten, so ⌘K doesn't offer it. The 1,000-folder cap
+  dropped only the least frecent, so a deleted folder stayed listed. `FolderVisits.forget`
+  drops it and saves; before the stored history loads, forgets queue with the visits and apply
+  in order, so the stored entry doesn't come back and a folder visited again after it does.
+  A list pane forgets its folder when its load ends in the missing state (ENOENT or ENOTDIR),
+  and in column view the pane forgets the focused column's, since columns count no visits. It
+  reads only what the listing reported, with no read of its own. A folder whose volume isn't
+  mounted stays, since it can come back with the volume: a volume or share unmounted under a
+  pane shows offline, not missing, and a path in `/Volumes` the listing places on the root
+  volume is on one that isn't mounted. A folder chosen from ⌘K that has gone since opens to the
+  missing state and is forgotten then. A pane still at a missing folder still lists it among
+  the open panes' folders.)
 
 ## Alternatives considered
 

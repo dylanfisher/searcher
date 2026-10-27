@@ -76,6 +76,22 @@ private func load(
     #expect(recent.contains(Location(path: "/new")))
 }
 
+@Test func aForgottenFolderLeavesTheHistoryAndAVisitCountsItFromOne() {
+    var history = FolderHistory()
+    history.visit("/gone", at: start)
+    history.visit("/gone", at: start)
+    history.visit("/kept", at: start)
+
+    let hadGone = history.forget("/gone")
+    let hadNever = history.forget("/never")
+
+    #expect(hadGone && !hadNever)
+
+    #expect(history.recent(at: start) == [Location(path: "/kept")])
+    history.visit("/gone", at: start)
+    #expect(history.folders["/gone"]?.count == 1)
+}
+
 @Test func historyRoundTripsThroughTheWorkspaceStoresFolder() async throws {
     let folder = try TemporaryFolder()
     var history = FolderHistory()
