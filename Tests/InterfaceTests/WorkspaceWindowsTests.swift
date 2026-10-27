@@ -1050,6 +1050,42 @@ private func type(_ query: String, in controller: BrowserWindowController) async
     #expect(second.workspace.selectedTab.focusedPane.location == Location(path: "/root/docs"))
 }
 
+@MainActor @Test func thePaletteDoesntListAVisitedFolderFoundDeleted() async throws {
+    let folder = try TemporaryFolder("WorkspaceWindowsTests")
+    let root = folder.url.path
+    let deleted = root + "/Vanished"
+    try FileManager.default.createDirectory(
+        atPath: deleted, withIntermediateDirectories: false)
+    let windows = WorkspaceWindows(
+        service: ListingService(), mountTable: MountTable(), systemActions: StubSystemActions(),
+        settings: untouchedSettings(), folderSizes: nil, clipboard: MemoryClipboard(),
+        store: nil)
+    windows.showsWindows = false
+    let controller = windows.open(at: Location(path: root))
+    try #require(controller.window).contentView?.layoutSubtreeIfNeeded()
+    let pane = controller.workspace.selectedTab.focusedPane
+    defer { pane.monitor?.stop() }
+    await settle { pane.state.isLoaded }
+    pane.navigate(to: Location(path: deleted))
+    await settle { pane.location.folderPath == deleted && pane.state.isLoaded }
+    pane.goBack()
+    await settle { pane.location.folderPath == root && pane.state.isLoaded }
+    #expect(windows.folderVisits.history.folders[deleted]?.count == 1)
+
+    try FileManager.default.removeItem(atPath: deleted)
+    pane.navigate(to: Location(path: deleted))
+    await settle { pane.state.missingFolder == deleted }
+    pane.goBack()
+    await settle { pane.location.folderPath == root && pane.state.isLoaded }
+    try #require(controller.window?.firstResponder as? ListingTableView).keyDown(
+        with: try keyEvent("k", modifiers: .command))
+    try await type("Vanished", in: controller)
+
+    let shown = try #require(controller.palette).viewController.palette.results.map(\.item.id)
+    #expect(!shown.contains(.folder(path: deleted)))
+    #expect(windows.folderVisits.history.folders[deleted] == nil)
+}
+
 @MainActor @Test func thePalettesSavedWorkspaceOpensThroughTheWindows() async throws {
     let fixture = try await Fixture()
     let named = try #require(fixture.windows.controllers.first)
