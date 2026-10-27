@@ -162,3 +162,23 @@ private struct Fixture {
 
     #expect(!fixture.list.contextMenu(forRow: 1).items.contains { $0.title.hasPrefix("Eject") })
 }
+
+// A window at a server reads the share icon through the shared cache and its default reader. That
+// reader, named by a default argument, once aborted the process ("freed pointer was not the last
+// allocation") when called for rows AppKit made.
+@MainActor @Test func aWindowAtAServerReadsTheShareIconFromTheSystem() async throws {
+    let settings = untouchedSettings()
+    let mounts = StubMounts([mountedShare("main"), mountedShare("music")]).table()
+    let controller = BrowserWindowController(
+        location: Location(path: "/root"), service: ListingService(mounts: mounts),
+        systemActions: StubSystemActions(), settings: settings,
+        favorites: Favorites(settings: settings), volumes: StubSidebarVolumes().list())
+    let window = try #require(controller.window)
+    window.contentView?.layoutSubtreeIfNeeded()
+    let pane = controller.workspace.selectedTab.focusedPane
+    pane.navigate(to: .server(testServer))
+    await settle { pane.state.isLoaded }
+    window.contentView?.layoutSubtreeIfNeeded()
+    let cache = TypeIconCache.shared
+    await settle { cache.shareIcon {} !== cache.icon(for: .volume) }
+}
