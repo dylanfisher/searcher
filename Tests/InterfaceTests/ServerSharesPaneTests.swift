@@ -68,6 +68,7 @@ private struct Window {
     let controller: BrowserWindowController
     let paneController: PaneViewController
     let clipboard: CutState
+    let systemActions = StubSystemActions()
 
     init(
         _ world: World, viewMode: ViewMode = .list,
@@ -76,7 +77,7 @@ private struct Window {
         let settings = untouchedSettings()
         pane = Pane(
             location: .server(testServer), service: world.service,
-            systemActions: StubSystemActions(), settings: settings, isFocused: true,
+            systemActions: systemActions, settings: settings, isFocused: true,
             viewMode: viewMode)
         clipboard = CutState(clipboard: MemoryClipboard())
         var made: PaneViewController?
@@ -474,12 +475,23 @@ func anUnmountedShareBesideAnotherServersShareOfItsNameRefusesEverything(_ viewM
         list.tableView(table, validateDrop: info, proposedRow: main, proposedDropOperation: .on)
             == [])
     #expect(!list.tableView(table, acceptDrop: info, row: main, dropOperation: .on))
-    #expect(list.springLoader?.target == nil)
     #expect(list.tableView(table, pasteboardWriterForRow: main) == nil)
+    // A drag hovering over the row springs nothing open.
+    window.select(["main"])
+    window.serverPane.springOpen("main")
+    #expect(window.pane.location == .server(testServer))
+    #expect((window.pane.columnTrail?.columns.count ?? 1) == 1)
+    let music = try #require(window.serverPane.state.listing?.row(named: "music"))
+    window.select(["music"])
+    #expect(list.tableView(table, pasteboardWriterForRow: music) != nil)
 
     for names in [["main"], ["main", "music"]] {
         window.select(names)
         #expect(window.serverPane.selectsUnmountedShare)
+        // A drag of the selection carries none of it, the mounted share included.
+        for row in names.map({ $0 == "main" ? main : music }) {
+            #expect(list.tableView(table, pasteboardWriterForRow: row) == nil, "\(names)")
+        }
         let on = refusedCommands.filter { table.canRunCommand($0) }
         #expect(on.isEmpty, "\(names): \(on)")
         // A key runs its command whatever its item says: Copy leaves the clipboard as it was.
@@ -544,4 +556,81 @@ func anUnmountedShareBesideAnotherServersShareOfItsNameRefusesEverything(_ viewM
         #expect(!result.services, "\(names)")
     }
     withExtendedLifetime(observer) {}
+}
+
+/// In column view a share with no location opens nothing, by a selection, →, Open, ⌘↓,
+/// Return or a spring: no column, no preview, the keys stay in the server's column and the pane
+/// stays at the server. Both a share that isn't mounted and one ejected since the server listed
+/// it, checked in an observer of the table's read before the server lists again.
+@MainActor @Test func inColumnViewAShareWithNoLocationOpensNothing() async throws {
+    let world = await World([mountedShare("music"), mountedShare("video")])
+    let window = try Window(world, viewMode: .column)
+    await world.answer(.success(["main", "music", "video"]))
+    let list = try await window.shows(["main", "music", "video"])
+    let trail = try #require(window.pane.columnTrail)
+    let table = list.tableView
+    table.beep = {}
+    let cmdDown = try keyEvent(
+        functionKey(NSDownArrowFunctionKey), modifiers: [.command, .numericPad, .function])
+    let returnKey = try keyEvent("\r")
+
+    /// What went wrong when `name` was tried, empty when nothing opened.
+    func tryOpening(_ name: String) -> [String] {
+        var wrong: [String] = []
+        func check(_ step: String) {
+            if trail.columns.count != 1 { wrong.append("\(step): \(trail.columns.count) columns") }
+            if trail.focusedIndex != 0 { wrong.append("\(step): focus at \(trail.focusedIndex)") }
+            if trail.shownPreview != nil { wrong.append("\(step): a preview") }
+            if window.pane.location != .server(testServer) { wrong.append("\(step): navigated") }
+        }
+        window.select([name])
+        check("select")
+        trail.moveRight()
+        check("→")
+        table.runCommand(NavigationCommands.open.id)
+        check("Open")
+        table.keyDown(with: cmdDown)
+        check("⌘↓")
+        table.keyDown(with: returnKey)
+        check("Return")
+        window.serverPane.springOpen(name)
+        check("spring")
+        if !window.systemActions.openedFiles.isEmpty { wrong.append("opened a file") }
+        return wrong
+    }
+
+    #expect(window.serverPane.state.types["main"] == .unmountedShare)
+    #expect(tryOpening("main") == [])
+
+    var stale: [String]?
+    let observer = NSObject()
+    world.table.observe(for: observer) {
+        guard window.serverPane.state.types["video"] == .directory else { return }
+        stale = tryOpening("video")
+    }
+    world.mounts.set([mountedShare("music")])
+    world.table.refresh()
+    await settle { stale != nil }
+    #expect(stale == [])
+    withExtendedLifetime(observer) {}
+}
+
+/// A server whose list failed shows its mounted shares as `serverListed`, not a complete
+/// listing. Ejecting the share whose column is open drops its row, and the column with it: a
+/// server's rows are the mount table's, so a row that went is gone.
+@MainActor @Test func ejectingTheShareWhoseColumnIsOpenClosesItsColumn() async throws {
+    let world = await World([mountedShare("music"), mountedShare("video")])
+    let window = try Window(world, viewMode: .column)
+    await world.answer(.failure(.rejected))
+    _ = try await window.shows(["music", "video"])
+    #expect(window.serverPane.state.isServerListed)
+    let trail = try #require(window.pane.columnTrail)
+    window.select(["music"])
+    await settle { trail.columns.count == 2 && trail.columns[1].pane.state.isLoaded }
+
+    await world.remount([mountedShare("video")])
+
+    await settle { window.serverPane.state.names == ["video"] }
+    await settle { trail.columns.count == 1 }
+    #expect(trail.columns.map(\.pane.location) == [.server(testServer)])
 }

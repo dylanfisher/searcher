@@ -242,6 +242,8 @@ public final class ListingService: Sendable {
                             rootVolumeName: rootVolumeName), to: load)
                 }
             }
+            // Left while the root volume's name or the cached rows were on their way: no run.
+            guard !load.isCancelled else { return }
             let slow = self.startWait(LoadTimeouts.slow)
             load.stall.setVolumeNames(root: rootVolumeName, folder: server.name)
             load.stall.restart { generation in

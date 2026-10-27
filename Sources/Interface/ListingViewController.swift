@@ -597,11 +597,14 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     // MARK: Drag and drop
 
     /// A row drags out as its file URL, a folder's ending in a slash, built from the listing
-    /// without reading the disk (docs/decisions/0071-drag-and-drop.md).
+    /// without reading the disk (docs/decisions/0071-drag-and-drop.md). A selected row drags with
+    /// the selection, so none of it drags while the selection holds a server's row with no
+    /// location, rather than part of it (docs/decisions/0115-server-shares.md).
     public func tableView(
         _ tableView: NSTableView, pasteboardWriterForRow row: Int
     ) -> (any NSPasteboardWriting)? {
         guard let listing, row >= 0, row < listing.count,
+            !(pane.selectsUnmountedShare && pane.selection.contains(ExactName(listing[row].name))),
             let url = ClipboardCommands.fileURL(of: listing[row], in: pane)
         else { return nil }
         return PasteboardFileClipboard.item(for: url)

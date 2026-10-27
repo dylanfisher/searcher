@@ -112,7 +112,7 @@ public final class ServerShares {
 
     /// Drops what every user's request of `server` last listed, as when the server has no share
     /// mounted any more. A run of it in flight still answers its askers, and what it returns
-    /// isn't kept.
+    /// isn't kept; an ask made before it ends joins it, and gets its answer uncached.
     public func forget(_ server: Server) {
         entries = entries.filter { $0.key.server != server }
         for (request, run) in runs where request.server == server { run.isForgotten = true }
