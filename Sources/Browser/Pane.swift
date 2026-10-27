@@ -2559,11 +2559,8 @@ public final class Pane {
         }
         let clock = sizeBatchClock
         Task { [weak self] in
-            do {
-                try await clock.sleep(for: Self.sizeBatchInterval)
-            } catch {
-                preconditionFailure("the clock failed a wait with \(error)")
-            }
+            guard await DeadlineWait.reached({ try await clock.sleep(for: Self.sizeBatchInterval) })
+            else { return }
             self?.sizeBatchIsWaiting = false
             self?.startSizeBatch()
         }

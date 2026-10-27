@@ -1,4 +1,5 @@
 import AppKit
+import Base
 import Browser
 
 /// A pane in column view: its trail's columns side by side in a horizontal scroll view, each a
@@ -154,9 +155,7 @@ final class ColumnViewController: NSViewController {
     /// The columns last set as the browser's accessibility children; nil before the first set.
     /// Until a list is set, AppKit gives the view's shown subviews, spinners among them.
     private var browserChildren: [NSView]?
-    /// Starts a wait of the given length on the clock, taking the deadline at once, and returns
-    /// the wait.
-    private let startWait: @MainActor (Duration) -> @Sendable () async throws -> Void
+    private let startWait: DeadlineWait.Start
 
     /// `clock` times each column's spinner delay.
     init<C: Clock<Duration>>(
@@ -166,10 +165,7 @@ final class ColumnViewController: NSViewController {
         self.pane = pane
         self.iconCache = iconCache
         self.formatter = formatter
-        startWait = { duration in
-            let deadline = clock.now.advanced(by: duration)
-            return { try await clock.sleep(until: deadline, tolerance: nil) }
-        }
+        startWait = DeadlineWait.make(on: clock)
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -731,14 +727,7 @@ final class ColumnViewController: NSViewController {
         guard spinner.wait == nil else { return }
         let wait = startWait(LoadTimeouts.spinnerDelay)
         spinner.wait = Task { [weak spinner] in
-            do {
-                try await wait()
-            } catch is CancellationError {
-                return
-            } catch {
-                preconditionFailure("the clock failed a wait with \(error)")
-            }
-            guard let spinner, !Task.isCancelled else { return }
+            guard await DeadlineWait.reached(wait), let spinner, !Task.isCancelled else { return }
             spinner.indicator.isHidden = false
             spinner.indicator.startAnimation(nil)
         }
