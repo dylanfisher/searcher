@@ -69,8 +69,8 @@ final class SidebarIcons {
     private var loading: Task<Void, Never>?
 
     /// `read` gives the bytes of the icon files named; tests replace it.
-    init(read: @escaping @Sendable ([String]) async -> [String: Data] = CoreTypesIcons.read) {
-        self.read = read
+    init(read: (@Sendable ([String]) async -> [String: Data])? = nil) {
+        self.read = read ?? CoreTypesIcons.read
     }
 
     /// The glyph's template image, or nil until `load` ends or when the bundle lacks it.
