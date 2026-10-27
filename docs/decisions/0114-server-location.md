@@ -35,7 +35,7 @@ hand before the step that builds it.
   ("HAL9000"), and the host as written otherwise ("192.168.1.5"). Two keys can show one name:
   the same instance in two domains, or over SMB and AFP, are two servers both named "HAL9000".
   Shares mounted outside `/Volumes`, or whose source doesn't parse, keep their own rows as 0108
-  has them (default, Dylan to confirm).
+  has them (Dylan confirmed 2026-10-26).
 - **The model: `Location` gets a second case.** `enum Location { case folder(path: String),
   case server(Server) }`, keeping `init(path:)`. `Server` holds the host and gives the name.
   `name` is the server's name, `parent` is nil, `ancestors` is `[self]`, and `child(named:)` is
@@ -67,7 +67,7 @@ hand before the step that builds it.
   | `History`, Back, Forward | Server entries as any other; Back to a server selects the share left. | 7b1 |
   | `SelectionHistory` (⌘U) | Positions name a server's column as a folder's. | 7b1 |
   | `ColumnWidths` | A server's column width is kept by the server. | 7b1 |
-  | `FolderVisits`, ⌘K | Servers aren't counted (default, Dylan to confirm). `FolderHistory` takes and stores folder paths only, so a server can't enter it; `FolderVisits.visit` skips `.server`, and `FolderSource` skips panes at one. | 7b2 |
+  | `FolderVisits`, ⌘K | Servers aren't counted (Dylan confirmed 2026-10-26). `FolderHistory` takes and stores folder paths only, so a server can't enter it; `FolderVisits.visit` skips `.server`, and `FolderSource` skips panes at one. | 7b2 |
   | Window and tab titles | The server's name. | 7b2 |
   | New tab, window, split | Shows the server, as the pane did. | 7b1 |
   | `TabState` | See "Saved session". | 7b2 |
@@ -87,7 +87,7 @@ hand before the step that builds it.
 - **Not connected** is a new `ListingState.notConnected`, used for a server with no share in the
   table: after all its shares are ejected or unmounted, and for a server restored before its
   shares mount. The pane shows "“HAL9000” isn't connected." where a folder's failure shows and
-  stays there (default, Dylan to confirm; Finder would list the unmounted shares, which needs
+  stays there (Dylan confirmed 2026-10-26; Finder would list the unmounted shares, which needs
   network browsing the app doesn't have). It lists again when a read of the table holds one of
   its shares. Panes inside a share that unmounts go offline as [0049](0049-volume-events.md)
   says.
@@ -113,7 +113,7 @@ hand before the step that builds it.
   share selected, and a Cmd-click opens it in a new tab (0026). Enclosing Folder goes to the
   element before the pane's location, so ⌘↑ at a share's root shows the server with the share
   selected *(unverified)*, and at the server does nothing. Disks keep 0026's bar from `/`
-  (default, Dylan to confirm; a volume-rooted bar is a later step).
+  (Dylan confirmed 2026-10-26; a volume-rooted bar is a later step).
 - **Saved session: one shape.** A stored location is a `"path"` or a `"server"` (the host as
   written), never both: `TabState`'s panes, history entries and column widths write `"path"` for
   a folder exactly as now, so stored folders decode unchanged. A location with both keys or
