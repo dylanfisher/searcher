@@ -33,9 +33,9 @@ public struct ShareRequest: Hashable, Sendable {
 
     /// `[user@]host`, the part of a URL to the server that `smbutil` and a mount both take: the
     /// user percent-encoded once for a URL's user part, `;` kept and `:` encoded, which `smbutil`
-    /// reads as the start of a password; the host as its share's source writes it, not passed
-    /// through `URLComponents`, which checks it as a URL host and refuses a Bonjour name's
-    /// `\032`; an IPv6 address in brackets (docs/decisions/0115-server-shares.md).
+    /// reads as the start of a password; the host as `Server.urlHost` gives it, a Bonjour
+    /// instance decoded and percent-encoded, which neither `URL(string:)` nor `URLComponents`
+    /// takes with its `\032`; an IPv6 address in brackets (docs/decisions/0115-server-shares.md).
     public var urlAuthority: String {
         var authority = ""
         if let user {
@@ -47,6 +47,6 @@ public struct ShareRequest: Hashable, Sendable {
         }
         let host = server.host
         // Only an IPv6 address holds a `:` (`Server.init(host:)`); it needs its brackets back.
-        return authority + (host.contains(":") ? "[\(host)]" : host)
+        return authority + (host.contains(":") ? "[\(host)]" : server.urlHost)
     }
 }

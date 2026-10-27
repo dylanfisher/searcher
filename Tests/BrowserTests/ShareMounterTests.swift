@@ -29,6 +29,16 @@ private let urlCases: [(share: String, sources: [String], url: String)] = [
     ("main", ["//WORKGROUP;dylan@HAL/music"], "smb://WORKGROUP;dylan@HAL/main"),
     ("main", ["//dyl%40an%3Ax@HAL/music"], "smb://dyl%40an%3Ax@HAL/main"),
     ("main", ["//HAL/music"], "smb://HAL/main"),
+    // A Bonjour instance's escapes are undone and the instance percent-encoded.
+    (
+        "main", [#"//dyl@My\032Mac._smb._tcp.local/music"#],
+        "smb://dyl@My%20Mac._smb._tcp.local/main"
+    ),
+    (
+        "music", [#"//dyl@Dylan\226\128\153s\032MacBook\032Pro._smb._tcp.local/main"#],
+        "smb://dyl@Dylan%E2%80%99s%20MacBook%20Pro._smb._tcp.local/music"
+    ),
+    ("main", [#"//dyl@a\.b._smb._tcp.local/music"#], "smb://dyl@a%2Eb._smb._tcp.local/main"),
     ("main", ["//dylan@[fe80::1%en0]/music"], "smb://dylan@[fe80::1%en0]/main"),
     ("main", ["//dylan@[2001:db8::1]:445/music"], "smb://dylan@[2001:db8::1]/main"),
     (
@@ -44,6 +54,13 @@ func aMountsURLIsBuiltFromTheFirstSharesSource(share: String, sources: [String],
     throws
 {
     #expect(try url(of: share, from: sources) == expected)
+}
+
+/// NetFS takes a `CFURL`: a Mac named with a space or an apostrophe still makes one.
+@Test func aBonjourHostWithASpaceMakesAURL() throws {
+    let url = try url(
+        of: "music", from: [#"//dyl@Dylan\226\128\153s\032MacBook\032Pro._smb._tcp.local/main"#])
+    #expect(URL(string: url)?.host(percentEncoded: false) == "Dylan’s MacBook Pro._smb._tcp.local")
 }
 
 @Test func twoRequestsForOneShareMatchByItsKey() {

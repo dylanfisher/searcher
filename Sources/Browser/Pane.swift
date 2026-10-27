@@ -146,9 +146,13 @@ public final class Pane {
     public private(set) var connectingShare: (name: String, isShown: Bool)?
     /// The wait for `connectingShare`'s mount.
     private var shareMount: Task<Void, Never>?
-    /// Shows that the share named `name` couldn't be mounted, with NetFS's `status`. Set by the
-    /// view showing the pane's rows.
-    public var onShareMountFailure: (@MainActor (_ name: String, _ status: Int32) -> Void)?
+    /// Tells the view showing the pane's rows what of a mount the user or the log should hear
+    /// of: a failure, for a sheet, or a mount point the table didn't hold, for the log. A pane
+    /// mounts only from rows a view shows, so one with no view traps.
+    public var reportShareMount: @MainActor (_ name: String, _ report: ShareMountReport) -> Void =
+        { name, report in
+            preconditionFailure("no view takes the mount of \(name): \(report)")
+        }
     /// The folder's volume was unmounted, so the pane is offline and doesn't list the folder.
     private var volumeIsGone = false
 
@@ -1147,17 +1151,19 @@ public final class Pane {
     /// the server's first mounted SMB share, unless the pane already waits for its mount. Once
     /// it is mounted, and the mount table holds its mount point, a list goes into it and a
     /// column opens its row's column, as a click on it does. A failure is shown with
-    /// `onShareMountFailure`. A change of the selection, a navigation, a change of view mode,
+    /// `reportShareMount`. A change of the selection, a navigation, a change of view mode,
     /// Escape (`cancelShareMount`) and closing the pane let go of it; the mount is cancelled
     /// when no pane waits for it, and if it finishes anyway, its row is mounted and nothing
     /// moves (docs/decisions/0115-server-shares.md).
     public func mountSelectedShare() {
         guard let entry = selectedUnmountedShare, connectingShare?.name != entry.name,
             case .server(let server) = location, let shareMounts = service.shareMounts,
-            let table = service.mounts,
-            // Nil only when the server's last SMB share went since its rows were listed.
-            let request = ShareRequest(server: server, volumes: table.volumes)
+            let table = service.mounts
         else { return }
+        // Nil only when the server's last SMB share went since its rows were listed.
+        guard let request = ShareRequest(server: server, volumes: table.volumes) else {
+            return reportShareMount(entry.name, .noShareToConnectAs(serverName: server.name))
+        }
         stopShareMount()
         let name = entry.name
         let mount = ShareMountRequest(share: request, name: name)
@@ -1205,9 +1211,9 @@ public final class Pane {
         case .cancelled:
             return
         case .failed(let status):
-            onShareMountFailure?(name, status)
+            reportShareMount(name, .failed(status))
         case .mounted(let path), .alreadyMounted(let path):
-            goIntoMountPoint(path)
+            goIntoMountPoint(path, of: name)
         }
     }
 
@@ -1215,14 +1221,14 @@ public final class Pane {
     /// it, and a column at its server selects the row the mount point names, once it is listed,
     /// which opens its column. A share the table records under another host than this server's
     /// is no row here, so the trail starts again at it. A mount point the table doesn't hold yet
-    /// is left for its row to show with the next read.
-    private func goIntoMountPoint(_ path: String) {
+    /// is left for its row to show with the next read, and reported for the log.
+    private func goIntoMountPoint(_ path: String, of name: String) {
         let comparable = FileOperation.comparable(path)
         guard
             let volume = service.mounts?.volumes.first(where: {
                 FileOperation.comparable($0.mountPoint) == comparable
             })
-        else { return }
+        else { return reportShareMount(name, .notInTable(mountPoint: path)) }
         let mountPoint = Location(path: volume.mountPoint)
         if containingTrail != nil, case .server(let server) = location, volume.server == server {
             return select([mountPoint.name], whenListedAtSelectionVersion: selectionVersion)

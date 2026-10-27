@@ -155,3 +155,16 @@ public final class ShareMounts {
         return status == 0 ? .mounted(mountPoint) : .alreadyMounted(mountPoint)
     }
 }
+
+/// What a pane reports of a mount it waited for: a failure, which the view shows in a sheet, or
+/// a mount point the table didn't hold, which it logs (docs/decisions/0115-server-shares.md).
+public enum ShareMountReport: Equatable, Sendable {
+    /// Not mounted, with NetFS's status.
+    case failed(Int32)
+    /// Not started: the server named `serverName` has no SMB share mounted to take the user
+    /// from, as when its last one went since its rows were listed.
+    case noShareToConnectAs(serverName: String)
+    /// Mounted at `mountPoint`, which the table's read after the mount didn't hold, so nothing
+    /// went into it.
+    case notInTable(mountPoint: String)
+}

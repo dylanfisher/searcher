@@ -155,13 +155,37 @@ public struct Server: Hashable, Sendable {
     /// `<instance>._<service>._tcp.<domain>` (or `._udp.`), else `host`. Nil when the instance's
     /// percent, `\DDD` or `\c` escapes don't decode to UTF-8 text.
     private static func name(ofHost host: String) -> String? {
+        guard let label = instanceLabel(ofHost: host) else { return host }
+        guard let instance = label.removingPercentEncoding else { return nil }
+        return unescaped(Substring(instance))
+    }
+
+    /// The instance label of `host`, still escaped, when it has the form
+    /// `<instance>._<service>._tcp.<domain>` (or `._udp.`); nil for any other host.
+    private static func instanceLabel(ofHost host: String) -> Substring? {
         let labels = escapedLabels(host)
         guard labels.count >= 4, labels[1].hasPrefix("_"), labels[1].count > 1,
             labels[2] == "_tcp" || labels[2] == "_udp", !labels[0].isEmpty
-        else { return host }
-        guard let instance = labels[0].removingPercentEncoding else { return nil }
-        return unescaped(Substring(instance))
+        else { return nil }
+        return labels[0]
     }
+
+    /// The host as a URL takes it: a Bonjour instance with its escapes undone, as `name` has
+    /// it, and percent-encoded but for ASCII letters, digits and `-_~`, so a space, a `.` and
+    /// any other character in the instance stay in its label; the service and domain labels,
+    /// and any other host, as written. `URL(string:)` refuses a host holding the `\` of a
+    /// `\032` (docs/decisions/0115-server-shares.md).
+    public var urlHost: String {
+        guard let label = Self.instanceLabel(ofHost: host) else { return host }
+        guard let instance = name.addingPercentEncoding(withAllowedCharacters: Self.instanceAllowed)
+        else { preconditionFailure("the instance \(name) has no percent-encoding") }
+        return instance + host[label.endIndex...]
+    }
+
+    /// What an instance keeps unencoded in a URL's host: RFC 3986's unreserved characters but
+    /// `.`, which would end its label.
+    private static let instanceAllowed = CharacterSet(
+        charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_~")
 
     /// `name` split at the dots a backslash doesn't escape, each label still escaped.
     private static func escapedLabels(_ name: String) -> [Substring] {

@@ -53,6 +53,10 @@ private func exists(_ pid: pid_t) -> Bool {
         "//dyl%40an%3Ax%2F%25@HAL9000._smb._tcp.local"
     ),
     (ShareRequest(server: Server(host: "HAL\\0329000")!, user: "dylan"), "//dylan@HAL\\0329000"),
+    (
+        ShareRequest(server: Server(host: "My\\032Mac._smb._tcp.local")!, user: "dylan"),
+        "//dylan@My%20Mac._smb._tcp.local"
+    ),
     (ShareRequest(server: Server(host: "fe80::1%en0")!, user: "dylan"), "//dylan@[fe80::1%en0]"),
     (ShareRequest(server: Server(host: "2001:db8::1")!, user: nil), "//[2001:db8::1]"),
 ])

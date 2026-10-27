@@ -74,6 +74,8 @@ private struct Window {
     let paneController: PaneViewController
     let clipboard: CutState
     let systemActions = StubSystemActions()
+    /// The list view's table, whose `clickedRow` a test sets for a double-click.
+    let listTable: ClickedRowTableView
 
     init(
         _ world: World, viewMode: ViewMode = .list,
@@ -85,6 +87,8 @@ private struct Window {
             systemActions: systemActions, settings: settings, isFocused: true,
             viewMode: viewMode)
         clipboard = CutState(clipboard: MemoryClipboard())
+        let listTable = ClickedRowTableView()
+        self.listTable = listTable
         var made: PaneViewController?
         controller = BrowserWindowController(
             workspace: Workspace(tab: Tab(pane: pane)), workspaces: WorkspaceList(),
@@ -94,7 +98,7 @@ private struct Window {
             takePaneController: { _, pane in
                 let controller = PaneViewController(
                     pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
-                    tableView: ListingTableView(), monitorsFolders: false)
+                    tableView: listTable, monitorsFolders: false)
                 made = controller
                 return controller
             })
@@ -729,6 +733,49 @@ extension Window {
     #expect(window.pane.state.names == ["n.txt"])
     #expect(world.mounter.starts.count == 1)
     #expect(window.pane.connectingShare == nil)
+}
+
+/// A double-click on the share's row mounts it in list view, as Open does.
+@MainActor @Test func aDoubleClickOnAShareMountsIt() async throws {
+    let world = await World([mountedShare("music")])
+    let (window, list) = try await atServer(world)
+    window.listTable.row = try #require(window.pane.state.listing?.row(named: "main"))
+
+    let action = try #require(list.tableView.doubleAction)
+    #expect(
+        NSApplication.shared.sendAction(action, to: list.tableView.target, from: list.tableView))
+
+    #expect(window.pane.selection.members == .only([ExactName("main")]))
+    #expect(window.pane.connectingShare?.name == "main")
+    world.mountMain(try await world.mountStarted())
+    await settle { window.pane.location == mainFolder }
+}
+
+/// The server's last SMB share went since its rows were listed: there is no user to mount as,
+/// and the sheet says so. Open runs in an observer of the table's read, after the pane's, which
+/// has only started the listing that drops the rows.
+@MainActor @Test func aShareOfAServerWithNoShareLeftToConnectAsShowsWhy() async throws {
+    let world = await World([mountedShare("music")])
+    let (window, list) = try await atServer(world)
+    let alerts = Alerts(list)
+    window.select(["main"])
+    var opened = false
+    let observer = NSObject()
+    world.table.observe(for: observer) {
+        guard world.table.volumes.isEmpty, window.pane.selectedUnmountedShare != nil else {
+            return
+        }
+        list.tableView.runCommand(NavigationCommands.open.id)
+        opened = true
+    }
+
+    world.mounts.set([])
+    world.table.refresh()
+
+    await settle { opened }
+    #expect(alerts.shown.map(\.information) == ["No share of “HAL9000” is mounted to connect as."])
+    #expect(world.mounter.starts.isEmpty)
+    withExtendedLifetime(observer) {}
 }
 
 /// Two panes opening one share wait for one mount, which is cancelled only when the last lets

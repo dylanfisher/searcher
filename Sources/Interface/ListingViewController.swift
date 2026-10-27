@@ -3,6 +3,7 @@ import Base
 import Browser
 import Quartz
 import UniformTypeIdentifiers
+import os
 
 /// A pane's entries in a view-based table: name with its type's icon, and a cloud badge when the
 /// entry isn't downloaded; size, date modified and kind. A header click sorts the pane by that
@@ -487,8 +488,21 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         tableView.contextMenu = { [weak self] row in self?.contextMenu(forRow: row) }
         tableView.pressedSelectedRow = { [weak self] in self?.pane.pressSelectedFolder() }
         tableView.escape = { [weak self] in self?.pane.cancelShareMount() ?? false }
-        pane.onShareMountFailure = { [weak self] name, status in
-            self?.showAlert(Self.mountFailedAlert(name: name, status: status))
+        pane.reportShareMount = { [weak self] name, report in
+            switch report {
+            case .failed(let status):
+                self?.showAlert(
+                    Self.mountFailedAlert(name: name, reason: Self.mountFailureReason(status)))
+            case .noShareToConnectAs(let serverName):
+                self?.showAlert(
+                    Self.mountFailedAlert(
+                        name: name, reason: Self.noShareToConnectAsReason(serverName)))
+            case .notInTable(let mountPoint):
+                // The row shows mounted with the table's next read; nothing went into it.
+                Logger(category: "mounts").notice(
+                    "\(name, privacy: .private) mounted at \(mountPoint, privacy: .private), which the mount table's read after it didn't hold"
+                )
+            }
         }
         let promiseTypes = NSFilePromiseReceiver.readableDraggedTypes.map {
             NSPasteboard.PasteboardType($0)
@@ -842,16 +856,22 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         }
     }
 
-    /// The alert saying the share `name` wasn't mounted, with why: the system's text for an
-    /// `errno` above 0, a short text for the NetFS and NetAuth codes NetFS.h lists, else the
-    /// code (docs/decisions/0115-server-shares.md).
-    static func mountFailedAlert(name: String, status: Int32) -> NSAlert {
+    /// The alert saying the share `name` wasn't mounted, and `reason`
+    /// (docs/decisions/0115-server-shares.md).
+    static func mountFailedAlert(name: String, reason: String) -> NSAlert {
         Dialog.alert(
-            message: "The share “\(name)” couldn’t be opened.",
-            information: mountFailureReason(status), buttons: ["OK"])
+            message: "The share “\(name)” couldn’t be opened.", information: reason,
+            buttons: ["OK"])
     }
 
-    /// Why a mount that ended with `status` failed.
+    /// Why a share of the server `serverName` wasn't mounted when none of its SMB shares is
+    /// mounted to connect as.
+    static func noShareToConnectAsReason(_ serverName: String) -> String {
+        "No share of “\(serverName)” is mounted to connect as."
+    }
+
+    /// Why a mount that ended with `status` failed: the system's text for an `errno` above 0, a
+    /// short text for the NetFS and NetAuth codes NetFS.h lists, else the code.
     static func mountFailureReason(_ status: Int32) -> String {
         if status > 0 { return String(cString: strerror(status)) }
         return switch status {
