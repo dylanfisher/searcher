@@ -8,15 +8,16 @@ import UniformTypeIdentifiers
 /// marks a workspace whose window is open, as the Dock marks a running app. The window's own
 /// workspace is selected while it is listed, as Finder's sidebar selects the window's place.
 ///
-/// A click on a favorite or a volume opens it in the window's focused pane, and a click on a
-/// workspace opens it, or focuses its window if open; a volume's eject button, or Eject in its
-/// context menu, ejects it, and an alert says why when that fails; with the keys in the list,
-/// the arrow keys move the selection and Return opens the selected row. Esc gives the keys back
-/// (`onEscape`). Files and folders dropped between the favorites are added there, a favorite
+/// A click on a favorite, a volume or a server opens it in the window's focused pane, and a click
+/// on a workspace opens it, or focuses its window if open; a volume's or a server's eject button,
+/// or Eject in its context menu, ejects it, and an alert says why when that fails; with the keys
+/// in the list, the arrow keys move the selection and Return opens the selected row. Esc gives
+/// the keys back (`onEscape`). Files and folders dropped between the favorites are added there, a favorite
 /// dragged within the group moves, and one dragged out of the sidebar, or removed from its
 /// context menu, leaves it. The rows follow the lists, the mounts and the settings as they
 /// change, from any window (docs/decisions/0086-workspace-sidebar.md,
-/// docs/decisions/0107-sidebar-favorites.md, docs/decisions/0108-sidebar-locations.md).
+/// docs/decisions/0107-sidebar-favorites.md, docs/decisions/0108-sidebar-locations.md,
+/// docs/decisions/0114-server-location.md).
 @MainActor
 final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataSource,
     NSOutlineViewDelegate
@@ -32,10 +33,10 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     var openFavorite: @MainActor (String) -> Void = { path in
         preconditionFailure("this sidebar can't open the favorite \(path)")
     }
-    /// Shows the volume mounted at a path. The window sets it; a sidebar without it traps when
-    /// a volume is opened.
-    var openVolume: @MainActor (String) -> Void = { path in
-        preconditionFailure("this sidebar can't open the volume at \(path)")
+    /// Shows a volume's mount point or a server. The window sets it; a sidebar without it traps
+    /// when a volume or a server is opened.
+    var openLocation: @MainActor (Location) -> Void = { location in
+        preconditionFailure("this sidebar can't open \(location)")
     }
     /// Shows an alert about the sidebar's window: as a sheet on it, or app-modal while the
     /// sidebar has no window. Tests replace it.
@@ -57,7 +58,8 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     /// What the rows show, as last read from the lists and the settings.
     private var shown = Shown(groups: [], favorites: [], volumes: [], ejecting: [], saved: [])
     private var favoriteRows: [FavoriteRow] = []
-    private var volumeRows: [VolumeRow] = []
+    /// The Locations group's rows: a `VolumeRow` or a `ServerRow` each.
+    private var locationRows: [NSObject] = []
     private var rows: [Row] = []
     private let favoritesGroup = Group(title: "Favorites")
     private let locationsGroup = Group(title: "Locations")
@@ -120,6 +122,17 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
 
         init(_ volume: SidebarVolume) {
             self.volume = volume
+        }
+    }
+
+    /// A server's row item, standing for its shares.
+    private final class ServerRow: NSObject {
+        let server: Server
+        let shares: [SidebarVolume]
+
+        init(_ server: Server, shares: [SidebarVolume]) {
+            self.server = server
+            self.shares = shares
         }
     }
 
@@ -343,6 +356,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
             switch outlineView.item(atRow: row) {
             case let item as FavoriteRow: cell.imageView?.image = icon(for: item.item)
             case let item as VolumeRow: cell.imageView?.image = icon(for: item.volume)
+            case is ServerRow: cell.imageView?.image = serverIcon
             default: break
             }
         }
@@ -367,10 +381,16 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         let selectedID = (selected as? Row)?.saved.id
         let selectedPath = (selected as? FavoriteRow)?.item.path
         let selectedVolume = (selected as? VolumeRow)?.volume.mountPoint
+        let selectedServer = (selected as? ServerRow)?.server
         let added = groups.filter { !shown.groups.contains(ObjectIdentifier($0)) }
         shown = now
         favoriteRows = now.favorites.map(FavoriteRow.init)
-        volumeRows = now.volumes.map(VolumeRow.init)
+        locationRows = volumes.rows.map { row in
+            switch row {
+            case .volume(let volume): VolumeRow(volume)
+            case .server(let server, let shares): ServerRow(server, shares: shares)
+            }
+        }
         rows = now.saved.map(Row.init)
         outlineView.reloadData()
         for group in added {
@@ -380,6 +400,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
             if let selectedID, select(selectedID) { return }
             if let selectedPath, selectFavorite(selectedPath) { return }
             if let selectedVolume, selectVolume(selectedVolume) { return }
+            if let selectedServer, selectServer(selectedServer) { return }
         }
         selectOwnWorkspace()
     }
@@ -412,10 +433,24 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
 
     /// Selects the row of the volume mounted at `mountPoint`; false when no row shows it.
     private func selectVolume(_ mountPoint: String) -> Bool {
-        guard let row = volumeRows.first(where: { $0.volume.mountPoint == mountPoint }) else {
-            return false
-        }
+        guard let row = volumeRow(mountedAt: mountPoint) else { return false }
         return selectRow(of: row)
+    }
+
+    /// Selects the row of `server`; false when no row shows it.
+    private func selectServer(_ server: Server) -> Bool {
+        guard let row = serverRow(server) else { return false }
+        return selectRow(of: row)
+    }
+
+    private func volumeRow(mountedAt mountPoint: String) -> VolumeRow? {
+        locationRows.lazy.compactMap { $0 as? VolumeRow }.first {
+            $0.volume.mountPoint == mountPoint
+        }
+    }
+
+    private func serverRow(_ server: Server) -> ServerRow? {
+        locationRows.lazy.compactMap { $0 as? ServerRow }.first { $0.server == server }
     }
 
     private func selectRow(of item: Any) -> Bool {
@@ -442,15 +477,15 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         }
     }
 
-    /// The row now listed for what `item` showed: the same workspace, favorite path or mount
-    /// point, since a reload makes new row items; nil once it isn't listed.
+    /// The row now listed for what `item` showed: the same workspace, favorite path, mount point
+    /// or server, since a reload makes new row items; nil once it isn't listed.
     private func listed(_ item: Any?) -> Any? {
         let now: Any? =
             switch item {
             case let row as Row: rows.first { $0.saved.id == row.saved.id }
             case let row as FavoriteRow: favoriteRows.first { $0.item.path == row.item.path }
-            case let row as VolumeRow:
-                volumeRows.first { $0.volume.mountPoint == row.volume.mountPoint }
+            case let row as VolumeRow: volumeRow(mountedAt: row.volume.mountPoint)
+            case let row as ServerRow: serverRow(row.server)
             default: nil
             }
         // A row of a group hidden meanwhile isn't listed either.
@@ -466,7 +501,8 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         switch item {
         case let row as Row: open(row.saved.id)
         case let row as FavoriteRow: openFavorite(row.item.path)
-        case let row as VolumeRow: openVolume(row.volume.mountPoint)
+        case let row as VolumeRow: openLocation(Location(path: row.volume.mountPoint))
+        case let row as ServerRow: openLocation(.server(row.server))
         default: break
         }
     }
@@ -474,8 +510,18 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     // MARK: Context menu
 
     /// The context menu for a right-click on `row`: Remove from Sidebar for a favorite, Eject
-    /// for a volume that can be ejected, none for any other row.
+    /// for a volume that can be ejected and for a server, none for any other row.
     func contextMenu(forRow row: Int) -> NSMenu? {
+        if let server = (outlineView.item(atRow: row) as? ServerRow)?.server {
+            let menu = NSMenu()
+            let item = NSMenuItem(
+                title: Self.ejectTitle(server.name), action: #selector(ejectServerFromMenu(_:)),
+                keyEquivalent: "")
+            item.target = self
+            item.representedObject = server
+            menu.addItem(item)
+            return menu
+        }
         if let volume = (outlineView.item(atRow: row) as? VolumeRow)?.volume, volume.canEject {
             let menu = NSMenu()
             let item = NSMenuItem(
@@ -512,11 +558,19 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         eject(mountPoint)
     }
 
-    @objc private func ejectClicked(_ sender: NSButton) {
-        guard let row = outlineView.item(atRow: outlineView.row(for: sender)) as? VolumeRow else {
-            preconditionFailure("an eject button sits outside a volume's row")
+    @objc private func ejectServerFromMenu(_ sender: NSMenuItem) {
+        guard let server = sender.representedObject as? Server else {
+            preconditionFailure("Eject has no server")
         }
-        eject(row.volume.mountPoint)
+        ejectServer(server)
+    }
+
+    @objc private func ejectClicked(_ sender: NSButton) {
+        switch outlineView.item(atRow: outlineView.row(for: sender)) {
+        case let row as VolumeRow: eject(row.volume.mountPoint)
+        case let row as ServerRow: ejectServer(row.server)
+        default: preconditionFailure("an eject button sits outside a volume's or server's row")
+        }
     }
 
     /// Ejects the volume at `mountPoint` off the main thread, and shows why when that fails, as
@@ -534,6 +588,40 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         }
     }
 
+    /// Ejects every share of `server` at once, off the main thread, and shows the shares the
+    /// system refused in one alert. A server that left the list meanwhile is left alone.
+    private func ejectServer(_ server: Server) {
+        guard serverRow(server) != nil else { return }
+        Task { [weak self, volumes] in
+            do throws(SidebarVolume.ServerEjectFailure) {
+                try await volumes.ejectServer(server)
+            } catch {
+                self?.showAlert(Self.ejectFailedAlert(error.refusals))
+            }
+        }
+    }
+
+    /// The alert saying which of a server's shares weren't ejected, with the system's reason for
+    /// each on its own line.
+    static func ejectFailedAlert(_ refusals: [SidebarVolume.ServerEjectFailure.Refusal])
+        -> NSAlert
+    {
+        guard refusals.count > 1 else {
+            guard let refusal = refusals.first else {
+                preconditionFailure("an eject failed with no share refused")
+            }
+            return ejectFailedAlert(name: refusal.name, reason: refusal.reason)
+        }
+        let names = refusals.map { "“\($0.name)”" }
+        let listed =
+            names.count == 2
+            ? "\(names[0]) and \(names[1])"
+            : names.dropLast().joined(separator: ", ") + ", and " + names[names.count - 1]
+        return Dialog.alert(
+            message: "The disks \(listed) weren’t ejected.",
+            information: refusals.map(\.reason).joined(separator: "\n"), buttons: ["OK"])
+    }
+
     /// The alert saying the volume `name` wasn't ejected, and the system's `reason`.
     static func ejectFailedAlert(name: String, reason: String) -> NSAlert {
         Dialog.alert(
@@ -547,7 +635,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         switch item {
         case nil: groups.count
         case let group as Group where group === favoritesGroup: favoriteRows.count
-        case let group as Group where group === locationsGroup: volumeRows.count
+        case let group as Group where group === locationsGroup: locationRows.count
         case is Group: rows.count
         default: 0
         }
@@ -557,7 +645,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         switch item {
         case nil: groups[index]
         case let group as Group where group === favoritesGroup: favoriteRows[index]
-        case let group as Group where group === locationsGroup: volumeRows[index]
+        case let group as Group where group === locationsGroup: locationRows[index]
         default: rows[index]
         }
     }
@@ -718,6 +806,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         case let group as Group: return groupCell(group.title)
         case let row as FavoriteRow: return favoriteCell(row.item)
         case let row as VolumeRow: return volumeCell(row.volume)
+        case let row as ServerRow: return serverCell(row)
         case let row as Row: return workspaceCell(row.saved)
         default: preconditionFailure("the sidebar has no row for \(item)")
         }
@@ -766,6 +855,24 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         return cell
     }
 
+    /// A server's row: the generic file glyph, as Finder shows for a server, its name, and the
+    /// eject button, off while an eject of any of its shares runs. It reads as a volume's row,
+    /// by name.
+    private func serverCell(_ row: ServerRow) -> Cell {
+        let cell =
+            outlineView.makeView(withIdentifier: Self.volumeCellID, owner: nil) as? Cell
+            ?? makeCell(Self.volumeCellID)
+        cell.imageView?.image = serverIcon
+        cell.textField?.stringValue = row.server.name
+        cell.openMark.isHidden = true
+        cell.ejectButton.isHidden = false
+        cell.ejectButton.isEnabled = row.shares.allSatisfy {
+            !shown.ejecting.contains($0.mountPoint)
+        }
+        cell.setAccessibilityLabel(row.server.name)
+        return cell
+    }
+
     /// Finder's glyph for each of its default favorites, the generic folder's for any other
     /// folder, and the type's icon for a file, by its extension, which reads nothing from the
     /// disk.
@@ -780,6 +887,10 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     private func icon(for volume: SidebarVolume) -> NSImage {
         let kind = SidebarIcons.Glyph.forVolume(volume)
         return glyph(kind, description: volume.kind == .network ? "Server" : "Disk")
+    }
+
+    private var serverIcon: NSImage {
+        glyph(.genericFile, description: "Server")
     }
 
     /// Finder's glyph, or its symbol while the glyphs aren't read or the bundle lacks it.

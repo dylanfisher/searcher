@@ -23,6 +23,9 @@ final class SidebarIcons {
         case internalDisk = "SidebarInternalDisk"
         case removableDisk = "SidebarRemovableDisk"
         case server = "SidebarServerDrive"
+        /// A connected server's: Finder shows the blank page for a server whose model it has no
+        /// glyph for (docs/decisions/0114-server-location.md).
+        case genericFile = "SidebarGenericFile"
 
         /// The SF Symbol a row shows until the glyph is read, or when the bundle lacks it.
         var symbol: String {
@@ -34,7 +37,7 @@ final class SidebarIcons {
             case .home: "house"
             case .folder: "folder"
             case .externalDisk, .internalDisk, .removableDisk: "externaldrive"
-            case .server: "externaldrive.connected.to.line.below"
+            case .server, .genericFile: "externaldrive.connected.to.line.below"
             }
         }
 

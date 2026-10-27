@@ -40,7 +40,7 @@ private final class Fixture {
     var openedFavorites: [String] = []
     let mounts = StubSidebarVolumes()
     let volumes: SidebarVolumes
-    var openedVolumes: [String] = []
+    var openedLocations: [Location] = []
     var alerts: [NSAlert] = []
     /// What the sidebar is told about whether a drag that ended was cancelled.
     var dragCancelled = false
@@ -92,7 +92,7 @@ private final class Fixture {
             icons: icons)
         sidebar.open = { [weak self] id in self?.opened.append(id) }
         sidebar.openFavorite = { [weak self] path in self?.openedFavorites.append(path) }
-        sidebar.openVolume = { [weak self] path in self?.openedVolumes.append(path) }
+        sidebar.openLocation = { [weak self] location in self?.openedLocations.append(location) }
         sidebar.showAlert = { [weak self] alert in self?.alerts.append(alert) }
         sidebar.dragWasCancelled = { [weak self] _ in self?.dragCancelled ?? false }
         // The window is never ordered in; the sidebar takes it as shown.
@@ -111,12 +111,12 @@ private final class Fixture {
     }
 
     /// Mounts `volumes` in place of those mounted, as the system reports a mount at a mount point
-    /// no other test uses, and waits for the rows to show them.
+    /// no other test uses, and waits for the list to hold them; the rows follow it at once.
     func mount(_ volumes: [SidebarVolume]) async {
         mounts.set(volumes)
         VolumeEvents.didMount(at: "/sidebar-test-\(UUID().uuidString)")
-        let names = volumes.filter(\.isShown).map(\.name)
-        await settle { (try? self.volumeNames) == names }
+        let shown = volumes.filter(\.isShown)
+        await settle { self.volumes.volumes == shown }
     }
 
     /// Each volume's row's cell, top to bottom.
@@ -839,7 +839,7 @@ private let share = SidebarVolume(mountPoint: "/Volumes/main", name: "main", kin
 
     fixture.outline.keyDown(with: try keyEvent("\r"))
 
-    #expect(fixture.openedVolumes == ["/Volumes/main"])
+    #expect(fixture.openedLocations == [Location(path: "/Volumes/main")])
     #expect(fixture.openedFavorites.isEmpty && fixture.opened.isEmpty)
 }
 
@@ -851,7 +851,7 @@ private let share = SidebarVolume(mountPoint: "/Volumes/main", name: "main", kin
     await settle { fixture.mounts.ejects.count == 1 }
     #expect(fixture.mounts.ejects.map(\.mountPoint) == ["/Volumes/USB"])
     #expect(fixture.mounts.ejects.map(\.onBlockingThread) == [true])
-    #expect(fixture.openedVolumes.isEmpty)
+    #expect(fixture.openedLocations.isEmpty)
 
     fixture.mounts.fail(with: "The volume is in use by another app.")
     try #require(fixture.volumeCells.last).ejectButton.performClick(nil)
@@ -910,7 +910,7 @@ private let share = SidebarVolume(mountPoint: "/Volumes/main", name: "main", kin
     fixture.outline.keyDown(with: up)
     fixture.outline.keyDown(with: up)
     #expect(fixture.outline.selectedRow == (try fixture.row(of: "u")))
-    #expect(fixture.openedVolumes.isEmpty && fixture.openedFavorites.isEmpty)
+    #expect(fixture.openedLocations.isEmpty && fixture.openedFavorites.isEmpty)
     #expect(fixture.mounts.ejects.isEmpty)
 }
 
@@ -928,7 +928,7 @@ private let share = SidebarVolume(mountPoint: "/Volumes/main", name: "main", kin
 
     #expect(passed.count == 1)
     #expect(fixture.outline.selectedRow == (try fixture.row(of: "USB")))
-    #expect(fixture.openedVolumes.isEmpty)
+    #expect(fixture.openedLocations.isEmpty)
 }
 
 @MainActor @Test func aVolumesEjectButtonIsOffWhileItsEjectRunsAndARepeatIsIgnored()
@@ -971,4 +971,134 @@ private let share = SidebarVolume(mountPoint: "/Volumes/main", name: "main", kin
 
     await settle { !fixture.alerts.isEmpty }
     #expect(try fixture.volumeCells.first?.ejectButton.isEnabled == true)
+}
+
+// MARK: Servers
+
+private let halMain = SidebarVolume(
+    mountPoint: "/Volumes/main", name: "main", kind: .network, server: testServer)
+private let halMusic = SidebarVolume(
+    mountPoint: "/Volumes/music", name: "music", kind: .network, server: testServer)
+
+@MainActor @Test func aServersSharesAreOneRowWhereItsFirstShareIsWithFindersGlyph() async throws {
+    let fixture = try Fixture()
+
+    await fixture.mount([usb, halMain, image, halMusic])
+    await fixture.icons.load()
+
+    #expect(try fixture.volumeNames == ["USB", "HAL9000", "Image"])
+    let server = try fixture.volumeCells[1]
+    await settle { server.imageView?.image === fixture.icons.image(.genericFile) }
+    #expect(!server.ejectButton.isHidden && server.ejectButton.isEnabled)
+    #expect(server.accessibilityLabel() == "HAL9000")
+}
+
+@MainActor @Test func aClickOrReturnOnAServerShowsIt() async throws {
+    let fixture = try Fixture()
+    await fixture.mount([usb, halMain, halMusic])
+
+    fixture.sidebar.openClicked(row: try fixture.row(of: "HAL9000"))
+    await settle { !fixture.openedLocations.isEmpty }
+    fixture.outline.selectRowIndexes([try fixture.row(of: "HAL9000")], byExtendingSelection: false)
+    fixture.outline.keyDown(with: try keyEvent("\r"))
+
+    #expect(fixture.openedLocations == [.server(testServer), .server(testServer)])
+}
+
+/// The server's row stays selected while the sidebar has the keys, across a reload that makes
+/// new rows, as a volume's row does by its mount point.
+@MainActor @Test func aSelectedServerRowStaysSelectedAfterAReload() async throws {
+    let fixture = try Fixture()
+    await fixture.mount([usb, halMain, halMusic])
+    #expect(fixture.window.makeFirstResponder(fixture.outline))
+    fixture.outline.selectRowIndexes([try fixture.row(of: "HAL9000")], byExtendingSelection: false)
+
+    await fixture.mount([halMain, image, halMusic])
+
+    #expect(try fixture.volumeNames == ["HAL9000", "Image"])
+    #expect(fixture.outline.selectedRow == (try fixture.row(of: "HAL9000")))
+}
+
+@MainActor @Test func aServersEjectButtonEjectsEveryShareAndIsOffWhileAnyRuns() async throws {
+    let fixture = try Fixture()
+    await fixture.mount([halMain, halMusic])
+    fixture.mounts.holdEjects()
+
+    try #require(fixture.volumeCells.first).ejectButton.performClick(nil)
+
+    await settle { fixture.mounts.ejects.count == 2 }
+    #expect(Set(fixture.mounts.ejects.map(\.mountPoint)) == ["/Volumes/main", "/Volumes/music"])
+    #expect(try fixture.volumeCells.first?.ejectButton.isEnabled == false)
+    fixture.mounts.releaseEjects()
+    // Ejected, the row keeps its button off while a read still lists a share.
+    await fixture.mount([halMusic])
+    #expect(try fixture.volumeCells.first?.ejectButton.isEnabled == false)
+    await fixture.mount([])
+    #expect(try fixture.volumeCells.isEmpty)
+    #expect(fixture.alerts.isEmpty)
+    #expect(fixture.openedLocations.isEmpty)
+}
+
+@MainActor @Test func aServersContextMenuEjectsEveryShare() async throws {
+    let fixture = try Fixture()
+    await fixture.mount([halMain, halMusic])
+
+    let menu = try #require(fixture.sidebar.contextMenu(forRow: try fixture.row(of: "HAL9000")))
+    let item = try #require(menu.items.first)
+    #expect(menu.items.count == 1)
+    #expect(item.title == "Eject “HAL9000”")
+    _ = (item.target as? NSObject)?.perform(item.action, with: item)
+
+    await settle { fixture.mounts.ejects.count == 2 }
+    #expect(fixture.alerts.isEmpty)
+}
+
+@MainActor @Test func oneRefusedShareOfAServerShowsTheDisksAlert() async throws {
+    let fixture = try Fixture()
+    await fixture.mount([halMain, halMusic])
+    fixture.mounts.fail("/Volumes/main", with: "The volume is in use.")
+
+    try #require(fixture.volumeCells.first).ejectButton.performClick(nil)
+
+    await settle { !fixture.alerts.isEmpty }
+    let alert = try #require(fixture.alerts.first)
+    #expect(alert.messageText == "The disk “main” wasn’t ejected.")
+    #expect(alert.informativeText == "The volume is in use.")
+    #expect(fixture.mounts.ejects.count == 2)
+}
+
+@MainActor @Test func twoRefusedSharesOfAServerShowOneAlertWithEachReason() async throws {
+    let fixture = try Fixture()
+    await fixture.mount([halMain, halMusic])
+    fixture.mounts.fail("/Volumes/main", with: "The volume is in use.")
+    fixture.mounts.fail("/Volumes/music", with: "A file is open.")
+
+    try #require(fixture.volumeCells.first).ejectButton.performClick(nil)
+
+    await settle { !fixture.alerts.isEmpty }
+    let alert = try #require(fixture.alerts.first)
+    #expect(alert.messageText == "The disks “main” and “music” weren’t ejected.")
+    #expect(alert.informativeText == "The volume is in use.\nA file is open.")
+    #expect(fixture.alerts.count == 1)
+    #expect(try fixture.volumeCells.first?.ejectButton.isEnabled == true)
+}
+
+@MainActor @Test func threeRefusedSharesAreListedWithCommas() {
+    let alert = WorkspaceSidebarViewController.ejectFailedAlert(
+        ["a", "b", "c"].map { .init(name: $0, reason: "No.") })
+
+    #expect(alert.messageText == "The disks “a”, “b”, and “c” weren’t ejected.")
+    #expect(alert.informativeText == "No.\nNo.\nNo.")
+}
+
+@MainActor @Test func nothingDropsOnAServersRow() async throws {
+    let fixture = try Fixture()
+    await fixture.mount([halMain, halMusic])
+    let server = try fixture.row(of: "HAL9000")
+
+    #expect(
+        fixture.drop(
+            fixture.drag(["/p/new"]), parentRow: server, index: NSOutlineViewDropOnItemIndex
+        ).isEmpty)
+    #expect(!fixture.settings.favorites.map(\.path).contains("/p/new"))
 }
