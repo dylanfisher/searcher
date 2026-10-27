@@ -92,7 +92,7 @@ public final class PathSource: PaletteSource {
         }
 
         private func makeItem(named name: String) -> PaletteItem {
-            let folder = location.child(named: name)
+            let folder = location.folderChild(named: name)
             let focusedPane = focusedPane
             let item = PaletteItem(
                 id: .folder(path: folder.folderPath), title: typed + name,

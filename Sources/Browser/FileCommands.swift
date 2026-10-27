@@ -55,12 +55,12 @@ public enum FileCommands: CommandSet {
             CommandBinding(
                 moveToTrash, isEnabled: { canChangeSelection($0) },
                 run: { context in
-                    guard canChangeSelection(context), let queue = context.fileOperations else {
-                        return
-                    }
                     let pane = context.pane
+                    guard canChangeSelection(context), let queue = context.fileOperations,
+                        let paths = selectedPaths(in: pane)
+                    else { return }
                     let trash = pane.moveCursorPastSelectionOnceGone()
-                    let finished = queue.submit(.trash(selectedPaths(in: pane)))
+                    let finished = queue.submit(.trash(paths))
                     Task { [weak pane] in
                         let state = await finished.value
                         pane?.trashDidFinish(trash, state)
@@ -81,11 +81,11 @@ public enum FileCommands: CommandSet {
             CommandBinding(
                 duplicate, isEnabled: { canChangeSelection($0) },
                 run: { context in
-                    guard canChangeSelection(context), let queue = context.fileOperations else {
-                        return
-                    }
                     let pane = context.pane
-                    run(.duplicate(selectedPaths(in: pane)), selectingIn: pane, queue: queue)
+                    guard canChangeSelection(context), let queue = context.fileOperations,
+                        let paths = selectedPaths(in: pane)
+                    else { return }
+                    run(.duplicate(paths), selectingIn: pane, queue: queue)
                 }),
             CommandBinding(
                 rename, isEnabled: { canRename($0) },
@@ -111,7 +111,7 @@ public enum FileCommands: CommandSet {
     ) async -> OperationState {
         let version = pane.selectionVersion
         let state = await queue.perform(
-            .rename(pane.location.child(named: name).folderPath, to: newName))
+            .rename(pane.location.folderChild(named: name).folderPath, to: newName))
         pane.select(names(madeBy: state.record), whenListedAtSelectionVersion: version)
         return state
     }
@@ -201,9 +201,9 @@ public enum FileCommands: CommandSet {
         _ operation: ([String], String) -> FileOperation
     ) {
         guard let folder = otherPaneFolder(context, moving: moving),
-            let queue = context.fileOperations
+            let queue = context.fileOperations, let paths = selectedPaths(in: context.pane)
         else { return }
-        let operation = operation(selectedPaths(in: context.pane), folder)
+        let operation = operation(paths, folder)
         Task {
             guard await queue.prompts.confirm(.otherPane(operation)) else { return }
             queue.submit(operation)
@@ -221,9 +221,17 @@ public enum FileCommands: CommandSet {
         }
     }
 
+    /// The selected entries' paths; nil when one is a server's row whose share isn't mounted
+    /// where the row says, so a command refuses the selection rather than act on part of it
+    /// (docs/decisions/0115-server-shares.md).
     @MainActor
-    private static func selectedPaths(in pane: Pane) -> [String] {
-        pane.selectedEntries.map { pane.location.child(named: $0.name).folderPath }
+    private static func selectedPaths(in pane: Pane) -> [String]? {
+        var paths: [String] = []
+        for entry in pane.selectedEntries {
+            guard let location = pane.childLocation(of: entry) else { return nil }
+            paths.append(location.folderPath)
+        }
+        return paths
     }
 
     @MainActor

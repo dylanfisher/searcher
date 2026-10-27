@@ -441,6 +441,8 @@ private struct StoredEntry: Codable {
             case .package: .package
             case .symbolicLink: .symbolicLink
             case .other: .other
+            // A server's listing isn't cached (docs/decisions/0114-server-location.md).
+            case .unmountedShare: preconditionFailure("\(entry.name) is a server's row")
             }
         size = entry.size
         modified = entry.modified

@@ -57,6 +57,8 @@ public struct TreeSizeWalker: Sendable {
                     subfolders.append(folder + "/" + entry.name)
                 case .symbolicLink, .other:
                     files += 1
+                case .unmountedShare:
+                    preconditionFailure("the lister gave \(entry.name) a server's type")
                 }
             }
             return subfolders
