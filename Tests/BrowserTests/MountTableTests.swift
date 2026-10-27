@@ -149,3 +149,22 @@ private func share(_ name: String) -> VolumeIdentity {
     await settle { runs == 1 }
     #expect(table.volumes == [volume("/"), share("music")])
 }
+
+@MainActor @Test func aReadThatChangesOnlyAVolumesFileSystemTypeChangesTheTable() async {
+    func music(_ fsType: String) -> VolumeIdentity {
+        VolumeIdentity(
+            device: share("music").device, mountPoint: share("music").mountPoint, kind: .network,
+            fsType: fsType)
+    }
+    let mounts = StubMounts([volume("/"), music("afpfs")])
+    let table = await loadedTable(mounts)
+    final class Owner {}
+    let owner = Owner()
+    var runs = 0
+    table.observe(for: owner) { runs += 1 }
+
+    mounts.set([volume("/"), music(VolumeIdentity.smbFSType)])
+    table.refresh()
+    await settle { runs == 1 }
+    #expect(table.volumes.last?.fsType == VolumeIdentity.smbFSType)
+}
