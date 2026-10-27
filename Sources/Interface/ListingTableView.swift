@@ -36,7 +36,8 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
     /// keys. A column's list closes the columns past the one its folder opens here.
     var pressedSelectedRow: @MainActor () -> Void = {}
     /// Runs for Escape when no command takes it, and returns whether it did something: a list
-    /// at a server lets go of the share it is mounting. Set by the list's controller.
+    /// at a server lets go of the share it is mounting, and a column closes the columns past the
+    /// one its selection opens. Set by the list's controller.
     var escape: @MainActor () -> Bool = { false }
     /// The text typed into this list since the last pause. Tests give it a clock they advance.
     var typeSelect = TypeSelect()

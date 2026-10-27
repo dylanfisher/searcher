@@ -908,10 +908,13 @@ func aMountLetGoOfMovesNothingWhenTheShareMounts(_ how: LettingGo) async throws 
     #expect(window.pane.location == stays)
 }
 
-/// Escape in column view lets go of the mount the server's column waits for.
+/// Escape in column view lets go of the mount the server's column waits for, and does only
+/// that: the share stays selected and no column changes
+/// (docs/decisions/0119-escape-closes-columns.md).
 @MainActor @Test func escapeInColumnViewLetsGoOfTheMount() async throws {
     let world = await World([mountedShare("music")])
     let (window, list) = try await atServer(world, viewMode: .column)
+    let trail = try #require(window.pane.columnTrail)
     try window.click("main")
     let handle = try await world.mountStarted()
 
@@ -919,6 +922,9 @@ func aMountLetGoOfMovesNothingWhenTheShareMounts(_ how: LettingGo) async throws 
 
     #expect(window.serverPane.connectingShare == nil)
     await settle { world.mounter.cancellations == [handle] }
+    #expect(trail.columns.map(\.pane.location) == [.server(testServer)])
+    #expect(window.serverPane.selection.cursor == ExactName("main"))
+    #expect(trail.focusedIndex == 0)
 }
 
 /// A mount point the table's read doesn't hold yet moves nothing; the row shows mounted when a

@@ -1308,6 +1308,73 @@ func leftOrCommandUpMovesToTheParentsColumnAndDoesNothingAtTheRoot(chord: KeyCho
     #expect(!fixture.tab.canUndoSelection)
 }
 
+/// Escape after ← closes the columns past the one the focused column's selection opens, and the
+/// preview of a file selected deeper, and clears that column's selection; the focused column and
+/// those left of it keep their selections and the keys stay. It is no step of Back and moves no
+/// keys, so the pane's location, which the window saves, stays
+/// (docs/decisions/0119-escape-closes-columns.md).
+@MainActor @Test func escapeClosesTheColumnsPastTheOneTheSelectionOpens() async {
+    let fixture = await columnPane(at: "/r/docs/sub")
+    let pane = fixture.pane
+    select("deep.txt", in: trail(pane).columns[3])
+    #expect(trail(pane).preview != nil)
+    trail(pane).moveLeft()
+    trail(pane).moveLeft()
+    let first = trail(pane).columns[1]
+    let docs = trail(pane).columns[2]
+    let back = pane.history.backEntries
+
+    #expect(first.pane.closeColumnsPastNext())
+
+    #expect(paths(pane) == ["/", "/r", "/r/docs"])
+    #expect(trail(pane).columns[2] === docs)
+    #expect(docs.pane.selection.isEmpty)
+    #expect(trail(pane).preview == nil)
+    #expect(trail(pane).focused === first)
+    #expect(first.pane.selection == selection("docs"))
+    #expect(trail(pane).columns[0].pane.selection.cursor == ExactName("r"))
+    #expect(pane.location == Location(path: "/r"))
+    #expect(pane.history.backEntries == back)
+
+    // Nothing is left to close or clear.
+    #expect(!first.pane.closeColumnsPastNext())
+    #expect(paths(pane) == ["/", "/r", "/r/docs"])
+}
+
+/// Escape with no column right of the focused column's own, or only a file's preview, changes
+/// nothing and says so, so the key goes on to `super`.
+@MainActor @Test func escapeWithNoColumnToCloseChangesNothing() async {
+    let fixture = await columnPane(at: "/r/docs")
+    let pane = fixture.pane
+    let docs = trail(pane).columns[2]
+    select("x.txt", in: docs)
+    #expect(trail(pane).preview?.location == Location(path: "/r/docs/x.txt"))
+
+    #expect(!docs.pane.closeColumnsPastNext())
+
+    #expect(paths(pane) == ["/", "/r", "/r/docs"])
+    #expect(docs.pane.selection == selection("x.txt"))
+    #expect(trail(pane).preview?.location == Location(path: "/r/docs/x.txt"))
+}
+
+/// Cmd-U after Escape undoes the ← before it, as without Escape: the column the keys left gets
+/// them back with its selection, and the column that selection opens comes back.
+@MainActor @Test func commandUAfterEscapeGivesTheColumnTheKeysLeftThemBack() async throws {
+    let fixture = await columnPane(at: "/r/docs")
+    let pane = fixture.pane
+    select("sub", in: trail(pane).columns[2])
+    await settle { paths(pane) == ["/", "/r", "/r/docs", "/r/docs/sub"] }
+    trail(pane).moveLeft()
+    #expect(trail(pane).columns[1].pane.closeColumnsPastNext())
+    #expect(paths(pane) == ["/", "/r", "/r/docs"])
+
+    try press(commandU, on: pane)
+
+    #expect(trail(pane).focusedIndex == 2)
+    #expect(trail(pane).focused.pane.selection == selection("sub"))
+    await settle { paths(pane) == ["/", "/r", "/r/docs", "/r/docs/sub"] }
+}
+
 /// ← keeps the column the keys left, with its selection, as a step of its own: Cmd-U gives that
 /// column the keys back with its selection, and the next Cmd-U the selection before it, with
 /// nothing added to Back; Shift-Cmd-U steps forward the same way, back to the column on the
