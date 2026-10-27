@@ -529,18 +529,12 @@ public actor FileOperationQueue {
     /// isn't followed: a link the source wrote moves as a link.
     public func resolved(_ path: String, in dropFolder: DropFolder) async -> String? {
         await BlockingCallThread.run { () -> String? in
-            func resolve(_ path: String) -> String? {
-                guard let resolved = realpath(path, nil) else { return nil }
-                defer { free(resolved) }
-                return String(cString: resolved)
-            }
-            let url = URL(fileURLWithPath: path, isDirectory: false)
-            let name = url.lastPathComponent
-            guard name != ".", name != "..", let folder = resolve(dropFolder.path),
-                let parent = resolve(url.deletingLastPathComponent().path),
+            let name = lastComponent(of: path)
+            guard name != ".", name != "..", let folder = resolvedPath(dropFolder.path),
+                let parent = resolvedPath(parentPath(of: path)),
                 isPath(parent, atOrUnder: folder)
             else { return nil }
-            return parent + "/" + name
+            return join(parent, name)
         }
     }
 
@@ -551,7 +545,7 @@ public actor FileOperationQueue {
         }
         // One left behind holds what couldn't go to the Trash, so a sweep can't remove it.
         for dropFolder in dropFolders {
-            liveFolders.remove((dropFolder.path as NSString).lastPathComponent)
+            liveFolders.remove(lastComponent(of: dropFolder.path))
         }
         return errors
     }
@@ -576,7 +570,7 @@ public actor FileOperationQueue {
             && !liveFolders.contains(name)
         {
             do {
-                try fileSystem.removeEmptyFolder(folder + "/" + name)
+                try fileSystem.removeEmptyFolder(join(folder, name))
             } catch {
                 // Not empty, gone already or not a folder: left as it is.
                 continue
@@ -610,7 +604,7 @@ public actor FileOperationQueue {
     {
         do {
             for name in try fileSystem.listNames(dropFolder.path) {
-                _ = try fileSystem.trash(dropFolder.path + "/" + name)
+                _ = try fileSystem.trash(join(dropFolder.path, name))
             }
             try fileSystem.removeEmptyFolder(dropFolder.path)
             return []
@@ -817,7 +811,7 @@ public actor FileOperationQueue {
             }
         let replacedIn = Set(
             plan.items.indices.filter { entry.choices[$0] == .replace }.compactMap {
-                plan.items[$0].destination.map { ($0 as NSString).deletingLastPathComponent }
+                plan.items[$0].destination.map { parentPath(of: $0) }
             })
         if !replacedIn.isEmpty {
             let fileSystem = fileSystem
@@ -935,9 +929,9 @@ public actor FileOperationQueue {
     /// promised. Matched by the folder's name, which holds a UUID, so a path spelled through
     /// another link to the same folder still matches.
     private func isInDropFolder(_ path: String) -> Bool {
-        let folder = ((path as NSString).deletingLastPathComponent as NSString).lastPathComponent
+        let folder = lastComponent(of: parentPath(of: path))
         return folder.hasPrefix(Self.dropFolderPrefix)
-            && dropFolders.contains { ($0.path as NSString).lastPathComponent == folder }
+            && dropFolders.contains { lastComponent(of: $0.path) == folder }
     }
 
     /// Asks `request` for an operation that is running an item, which may have something
@@ -1005,7 +999,7 @@ public actor FileOperationQueue {
         let copied: CopyProgress
 
         var stagedItem: String {
-            staging + "/" + (destination as NSString).lastPathComponent
+            join(staging, lastComponent(of: destination))
         }
 
         func with(copied: CopyProgress) -> StagedReplace {
@@ -1258,8 +1252,8 @@ public actor FileOperationQueue {
             case nil, .replace: return destination
             case .skip: return nil
             case .keepBoth:
-                let folder = (destination as NSString).deletingLastPathComponent
-                let name = (destination as NSString).lastPathComponent
+                let folder = parentPath(of: destination)
+                let name = lastComponent(of: destination)
                 let isTaken = { (name: String) throws(FileOperationError) -> Bool in
                     try fileSystem.isTaken(name, folder)
                 }
@@ -1269,8 +1263,9 @@ public actor FileOperationQueue {
                     FileOperation.comparable($0.source.path)
                         == FileOperation.comparable($0.existing.path)
                 }
-                return folder + "/"
-                    + (isOntoItself == true
+                return join(
+                    folder,
+                    isOntoItself == true
                         ? try UniqueName.duplicate(of: name, isTaken: isTaken)
                         : try UniqueName.keepingBoth(name, isTaken: isTaken))
             }
@@ -1286,7 +1281,7 @@ public actor FileOperationQueue {
             liveFolders.insert(name)
             defer { liveFolders.remove(name) }
             let staging = try fileSystem.makeFolder(
-                name, (destination as NSString).deletingLastPathComponent)
+                name, parentPath(of: destination))
             let movesWithin = isMove && !item.crossesVolumes
             let staged = StagedReplace(
                 source: source, destination: destination, staging: staging, isMove: isMove,
@@ -1328,11 +1323,11 @@ public actor FileOperationQueue {
                     [.created(destination, from: .copy(of: source))],
                     copied: try copy(to: destination))
             case .duplicate:
-                let parent = (source as NSString).deletingLastPathComponent
-                let name = try UniqueName.duplicate(of: (source as NSString).lastPathComponent) {
+                let parent = parentPath(of: source)
+                let name = try UniqueName.duplicate(of: lastComponent(of: source)) {
                     name throws(FileOperationError) in try fileSystem.isTaken(name, parent)
                 }
-                let destination = parent + "/" + name
+                let destination = join(parent, name)
                 return .done(
                     [.created(destination, from: .copy(of: source))],
                     copied: try copy(to: destination))
@@ -1398,8 +1393,8 @@ public actor FileOperationQueue {
                         [.created(path, from: .copy(of: from))], copied: try copy(to: path))
                 case .make(let path, .newFolder):
                     let made = try fileSystem.makeFolder(
-                        (path as NSString).lastPathComponent,
-                        (path as NSString).deletingLastPathComponent)
+                        lastComponent(of: path),
+                        parentPath(of: path))
                     return .done([.created(made, from: .newFolder)], copied: none)
                 case .make(let path, .drop):
                     preconditionFailure("\(path) is put back from the Trash, not made again")
