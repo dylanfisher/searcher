@@ -50,3 +50,13 @@ private func entry(_ path: String, _ selected: String? = nil) -> History.Entry {
     #expect(history.forward(from: entry("/a")) == nil)
     #expect(!history.canGoForward)
 }
+
+@Test func backAndForwardKeepAServer() {
+    let server = Location.server(Server(mountSource: "//HAL9000._smb._tcp.local/music")!)
+    let atServer = History.Entry(location: server, selected: ExactName("music"))
+    var history = History()
+    history.leave(atServer)
+
+    #expect(history.back(from: entry("/Volumes/music")) == atServer)
+    #expect(history.forward(from: atServer) == entry("/Volumes/music"))
+}

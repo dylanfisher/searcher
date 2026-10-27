@@ -95,7 +95,7 @@ public final class PathSource: PaletteSource {
             let folder = location.child(named: name)
             let focusedPane = focusedPane
             let item = PaletteItem(
-                id: .folder(path: folder.path), title: typed + name,
+                id: .folder(path: folder.folderPath), title: typed + name,
                 frecency: history.frecency(of: folder, at: now), matchOffset: typed.utf8.count
             ) { focusedPane().navigateSelectingFirstRow(to: folder) }
             made[name] = item

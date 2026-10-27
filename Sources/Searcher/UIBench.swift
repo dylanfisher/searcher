@@ -398,12 +398,12 @@ final class UIBench {
                     guard rows.count > 0 else { return false }
                 case .offline:
                     continuation.resume(
-                        returning: .failure(Failure("\(pane.location.path) went offline")))
+                        returning: .failure(Failure("\(pane.location.folderPath) went offline")))
                     return true
                 case .denied(let error), .failed(let error):
                     continuation.resume(
                         returning: .failure(
-                            Failure("\(pane.location.path) could not be listed: \(error)")))
+                            Failure("\(pane.location.folderPath) could not be listed: \(error)")))
                     return true
                 }
                 timeFrame(from: processStart, in: window, UIBenchRecord.launchSpan, launchInterval)
@@ -754,7 +754,7 @@ final class UIBench {
         let pane = try requirePane()
         guard let listing = pane.state.listing, listing.count > count else {
             throw Failure(
-                "\(pane.location.path) has too few entries for \(count) ↓ presses during "
+                "\(pane.location.folderPath) has too few entries for \(count) ↓ presses during "
                     + "the copy")
         }
         let height = try tabBounds().height
@@ -877,7 +877,7 @@ final class UIBench {
         let rows = pane.state.listing?.count ?? 0
         guard rows >= count else {
             throw Failure(
-                "\(pane.location.path) has \(rows) entries, too few for \(count) ↓ presses; "
+                "\(pane.location.folderPath) has \(rows) entries, too few for \(count) ↓ presses; "
                     + "pass a folder with at least \(count)")
         }
         let startRow = pane.state.listing.flatMap { pane.selection.cursorRow(in: $0) }
@@ -994,7 +994,7 @@ final class UIBench {
         for index in 0..<count {
             try requireVisible()
             guard let listing = pane.state.listing, listing.count > 0, case .loaded = pane.state
-            else { throw Failure("\(pane.location.path) isn't loaded for the patch") }
+            else { throw Failure("\(pane.location.folderPath) isn't loaded for the patch") }
             let entry = listing[index % listing.count]
             let changed = DirectoryEntry(
                 name: entry.name, type: entry.type, size: (entry.size ?? 0) + 1,
@@ -1033,7 +1033,7 @@ final class UIBench {
         for index in 0..<count {
             try requireVisible()
             guard let listing = pane.state.listing, listing.count > 0, case .loaded = pane.state
-            else { throw Failure("\(pane.location.path) isn't loaded for the patch") }
+            else { throw Failure("\(pane.location.folderPath) isn't loaded for the patch") }
             let name = "\(listing[0].name)-added-\(index)"
             let added = DirectoryEntry(
                 name: name, type: .regular, size: 0, modified: Date(), isHidden: false,
@@ -1100,7 +1100,7 @@ final class UIBench {
         let pane = try requirePane()
         let window = try requireWindow()
         guard let listing = pane.state.listing, case .loaded = pane.state else {
-            throw Failure("\(pane.location.path) isn't loaded for the patch")
+            throw Failure("\(pane.location.folderPath) isn't loaded for the patch")
         }
         let before = pane.selection.rows(in: listing)
         let start = try cursorRow()
@@ -1221,7 +1221,7 @@ final class UIBench {
             let target = (0..<listing.count).last(where: {
                 listing[$0].name.utf8.allSatisfy { $0 < 0x80 }
             })
-        else { throw Failure("\(pane.location.path) has no row with an ASCII name to type") }
+        else { throw Failure("\(pane.location.folderPath) has no row with an ASCII name to type") }
         let typed = String(listing[target].name.prefix(Self.typeSelectLength))
         let keys = typed.map {
             Key(characters: String($0), keyCode: 0, flags: $0.isUppercase ? .shift : [])
@@ -1232,7 +1232,7 @@ final class UIBench {
             samples += try await press(keys, "type-select key")
             guard let shown = pane.state.listing,
                 let row = TypeSelect.firstRow(startingWith: typed, in: shown)
-            else { throw Failure("no row of \(pane.location.path) starts with \(typed)") }
+            else { throw Failure("no row of \(pane.location.folderPath) starts with \(typed)") }
             try expectCursor(atRow: row, after: "typing \(typed)")
         }
         return samples
@@ -1260,7 +1260,7 @@ final class UIBench {
             (0...count).allSatisfy({ listing[$0].type == .directory })
         else {
             throw Failure(
-                "\(first.location.path) has fewer than \(count + 1) folders, too few for \(count) "
+                "\(first.location.folderPath) has fewer than \(count + 1) folders, too few for \(count) "
                     + "↓ presses through folders; pass a folder with at least \(count + 1)")
         }
         guard window.firstResponder === controller?.paneViewController.keyView else {
@@ -1281,7 +1281,7 @@ final class UIBench {
         else {
             throw Failure(
                 "↓ onto \(listing[count].name) should open its column alone, but the columns are "
-                    + "\(trail.columns.map(\.pane.location.path))")
+                    + "\(trail.columns.map(\.pane.location.folderPath))")
         }
         for _ in 0..<(Self.rowCommandPresses / 2) {
             record.columnRight += try await press([.right], "column key right")
@@ -1577,7 +1577,7 @@ final class UIBench {
         guard trail.columns.count == start + 2 else {
             throw Failure(
                 "↓ onto \(listing[lastFolder].name) should open its column alone, but the columns "
-                    + "are \(trail.columns.map(\.pane.location.path))")
+                    + "are \(trail.columns.map(\.pane.location.folderPath))")
         }
         record.columnWalkKey += try await press([.right], "column walk key")
         guard trail.focusedIndex == start + 1 else {
@@ -1829,7 +1829,7 @@ final class UIBench {
         let window = try requireWindow()
         guard let keyView = controller?.paneViewController.keyView,
             let listing = pane.state.listing, listing.count > 0
-        else { throw Failure("\(pane.location.path) has no rows to filter") }
+        else { throw Failure("\(pane.location.folderPath) has no rows to filter") }
         let query = String(listing[listing.count / 2].name.prefix(Self.filterQueryLength))
         window.sendEvent(try keyEvent(.commandF, in: window))
         guard (window.firstResponder as? NSTextView)?.isFieldEditor == true else {
@@ -1951,13 +1951,13 @@ final class UIBench {
             switch pane.state {
             case .loaded: return
             case .denied(let error), .failed(let error):
-                throw Failure("\(pane.location.path) could not be listed: \(error)")
+                throw Failure("\(pane.location.folderPath) could not be listed: \(error)")
             case .offline:
-                throw Failure("\(pane.location.path) went offline")
+                throw Failure("\(pane.location.folderPath) went offline")
             case .loading, .partial, .cachedRefreshing, .slow: break
             }
             guard ContinuousClock.now < deadline else {
-                throw Failure("\(pane.location.path) did not finish loading in 30 s")
+                throw Failure("\(pane.location.folderPath) did not finish loading in 30 s")
             }
             try await Task.sleep(for: .milliseconds(5))
         }
@@ -1971,7 +1971,7 @@ final class UIBench {
             guard ContinuousClock.now < deadline else {
                 throw Failure(
                     "column view did not reach \(count) columns in 30 s: "
-                        + "\(trail.columns.map(\.pane.location.path))")
+                        + "\(trail.columns.map(\.pane.location.folderPath))")
             }
             try await Task.sleep(for: .milliseconds(5))
         }

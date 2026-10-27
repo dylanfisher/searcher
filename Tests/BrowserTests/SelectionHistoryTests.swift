@@ -316,3 +316,14 @@ extension SelectionHistory {
 
     #expect(history.undo(from: "c") == at("b"))
 }
+
+@Test func aPositionInAServersColumnIsKeptByTheServer() {
+    let server = Location.server(Server(mountSource: "//HAL9000._smb._tcp.local/music")!)
+    let sameServer = Location.server(Server(mountSource: "//guest@hal9000._smb._tcp.local/main")!)
+    var history = SelectionHistory(clock: ManualClock())
+    history.record("music", in: server)
+
+    #expect(
+        history.undo(from: "main", where: { $0.folder == sameServer }) == at("music", in: server))
+    #expect(history.redo(from: "music") == at("main", in: server))
+}

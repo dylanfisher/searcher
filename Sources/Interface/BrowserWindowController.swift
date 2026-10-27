@@ -893,8 +893,8 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         let controller = takePaneController(id, pane) ?? PaneViewController(pane: pane)
         precondition(
             controller.pane === pane,
-            "the view controller handed over for pane \(id) at \(pane.location.path) shows "
-                + "\(controller.pane.location.path)"
+            "the view controller handed over for pane \(id) at \(pane.location) shows "
+                + "\(controller.pane.location)"
         )
         controller.windowLink = PaneViewController.WindowLink(
             workspace: workspace, workspaces: workspaces,

@@ -135,7 +135,13 @@ public enum VolumeEvents {
     }
 
     private static func panes(on mountPoint: String) -> [Pane] {
-        panes.compactMap(\.pane).filter { isPath($0.location.path, atOrUnder: mountPoint) }
+        panes.compactMap(\.pane).filter { pane in
+            switch pane.location {
+            case .folder(let path): isPath(path, atOrUnder: mountPoint)
+            // A pane at a server isn't on any volume (docs/decisions/0114-server-location.md).
+            case .server: false
+            }
+        }
     }
 }
 

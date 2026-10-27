@@ -40,7 +40,7 @@ private func trail(_ pane: Pane) -> ColumnTrail {
 
 @MainActor
 private func paths(_ pane: Pane) -> [String] {
-    trail(pane).columns.map(\.pane.location.path)
+    trail(pane).columns.map(\.pane.location.folderPath)
 }
 
 /// Selects `name` alone in `column`, as a click or a key does.
@@ -212,7 +212,7 @@ private func press(_ chord: KeyChord, on pane: Pane, isKeyRepeat: Bool = false) 
 
 @MainActor @Test func theTrailStartsAtTheRootOfTheFoldersVolume() {
     func root(_ path: String, _ volumes: [VolumeIdentity] = []) -> String {
-        ColumnTrail.root(of: Location(path: path), mountedVolumes: volumes, home: nil).path
+        ColumnTrail.root(of: Location(path: path), mountedVolumes: volumes, home: nil).folderPath
     }
     let startup = VolumeIdentity(device: "/dev/disk3s1", mountPoint: "/", kind: .local)
     let data = VolumeIdentity(
@@ -406,7 +406,7 @@ private func homePane(
     {
         ColumnTrail.root(
             of: Location(path: path), mountedVolumes: volumes, home: home.map(Location.init)
-        ).path
+        ).folderPath
     }
     let share = VolumeIdentity(
         device: "//me@nas.invalid/s", mountPoint: "/Users/me/mnt/s", kind: .network)

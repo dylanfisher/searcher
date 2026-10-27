@@ -70,7 +70,7 @@ public enum ClipboardCommands: CommandSet {
             clipboard.clear()
         }
         let pane = FileCommands.destination(in: context)
-        let folder = pane.location.path
+        let folder = pane.location.folderPath
         let operation: FileOperation =
             isCut || alwaysMoving ? .move(paths, into: folder) : .copy(paths, into: folder)
         FileCommands.make(operation, in: pane, queue: queue)
@@ -88,7 +88,7 @@ public enum ClipboardCommands: CommandSet {
     /// dragged from a list takes it too.
     public static func fileURL(of entry: DirectoryEntry, in folder: Location) -> URL {
         URL(
-            fileURLWithPath: folder.child(named: entry.name).path,
+            fileURLWithPath: folder.child(named: entry.name).folderPath,
             isDirectory: entry.type.isFolderOnDisk)
     }
 

@@ -301,7 +301,7 @@ public final class Tab {
     private func id(of pane: Pane) -> PaneID {
         let owner = pane.containingTrail?.owner ?? pane
         guard let id = panes.first(where: { $0.value === owner })?.key else {
-            preconditionFailure("a pane at \(owner.location.path) reported to a tab without it")
+            preconditionFailure("a pane at \(owner.location) reported to a tab without it")
         }
         return id
     }

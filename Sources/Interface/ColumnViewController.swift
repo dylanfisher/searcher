@@ -73,7 +73,7 @@ final class ColumnViewController: NSViewController {
     }
     /// Starts a folder monitor for a new column's pane. Set before the first column shows.
     var startMonitor: @MainActor (Pane) -> Void = { pane in
-        preconditionFailure("no monitor starter for the column at \(pane.location.path)")
+        preconditionFailure("no monitor starter for the column at \(pane.location)")
     }
     /// Each shown column's `monitorGeneration` when its monitor was started, by its pane. A
     /// column whose generation moves, after its volume mounts again, gets a new monitor.
@@ -709,7 +709,7 @@ final class ColumnViewController: NSViewController {
     /// lands. Moving between in-flight states keeps the wait running.
     private func showSpinner(for pane: Pane) {
         guard let spinner = spinners[ObjectIdentifier(pane)] else {
-            preconditionFailure("the column at \(pane.location.path) has no spinner")
+            preconditionFailure("the column at \(pane.location) has no spinner")
         }
         guard PaneStatusView.isInFlight(pane.state) else {
             spinner.wait?.cancel()
@@ -789,7 +789,7 @@ final class ColumnViewController: NSViewController {
         switch pane.state {
         case .slow(nil), .offline(nil):
             guard let volumeName = pane.volumeName else {
-                preconditionFailure("the column at \(pane.location.path) has no volume name")
+                preconditionFailure("the column at \(pane.location) has no volume name")
             }
             // With no rows kept the note has no age, so the date isn't read.
             return statusText.note(for: pane.state, volumeName: volumeName, now: Date())

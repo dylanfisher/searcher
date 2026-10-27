@@ -49,6 +49,6 @@ public enum SystemCommands: CommandSet {
 
     @MainActor
     private static func folderURL(of pane: Pane) -> URL {
-        URL(fileURLWithPath: pane.location.path, isDirectory: true)
+        URL(fileURLWithPath: pane.location.folderPath, isDirectory: true)
     }
 }
