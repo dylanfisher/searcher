@@ -584,6 +584,13 @@ public final class Pane {
         containingTrail?.showNextColumnAlone(after: self)
     }
 
+    /// Escape in this column: closes the columns past the one its selection opens and clears
+    /// that column's selection (`ColumnTrail.closeColumnsPastNext`). Returns whether there was
+    /// anything to close or clear; false in a pane that isn't a column.
+    public func closeColumnsPastNext() -> Bool {
+        containingTrail?.closeColumnsPastNext(after: self) ?? false
+    }
+
     // MARK: - Column widths
 
     /// The widths this pane's column grips have set, by folder, and the preview's. They stay in

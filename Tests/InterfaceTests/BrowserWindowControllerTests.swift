@@ -15,10 +15,13 @@ private struct Fixture {
     let controller: BrowserWindowController
     let window: NSWindow
 
-    init(settings: Settings = untouchedSettings()) async throws {
+    init(
+        settings: Settings = untouchedSettings(),
+        folders: [String: [DirectoryEntry]] = Self.folders
+    ) async throws {
         controller = BrowserWindowController(
             location: Location(path: "/root"),
-            service: ListingService(lister: StubLister(Self.folders)) { "Test Disk" },
+            service: ListingService(lister: StubLister(folders)) { "Test Disk" },
             systemActions: StubSystemActions(), settings: settings,
             favorites: Favorites(settings: settings), volumes: StubSidebarVolumes().list())
         window = try #require(controller.window)
@@ -2678,4 +2681,83 @@ private func sidebarRow(_ name: String, in controller: BrowserWindowController) 
     outline.keyDown(with: try keyEvent("\r"))
     await settle { serverColumn() }
     #expect(pane.location == .server(testServer))
+}
+
+/// `/root/a/b/c/d`, each folder holding the next, and `d` the file `e.txt`.
+private let nestedFolders: [String: [DirectoryEntry]] = [
+    "/": [folder("root")],
+    "/root": [folder("a")],
+    "/root/a": [folder("b")],
+    "/root/a/b": [folder("c")],
+    "/root/a/b/c": [folder("d")],
+    "/root/a/b/c/d": [file("e.txt")],
+]
+
+/// A window over `nestedFolders` in column view at `/root/a/b/c/d` with `e.txt` selected and
+/// previewed, every column loaded and the last one's table with the keys.
+@MainActor
+private func nestedColumns() async throws -> (Fixture, ColumnTrail) {
+    let fixture = try await Fixture(folders: nestedFolders)
+    let pane = fixture.tab.focusedPane
+    try fixture.press(try keyEvent("3", modifiers: .command))
+    pane.navigate(to: Location(path: "/root/a/b/c/d"), selecting: "e.txt")
+    await settle {
+        guard let trail = pane.columnTrail else { return false }
+        return trail.columns.count == 6 && trail.focusedIndex == 5 && trail.preview != nil
+            && trail.columns.allSatisfy { $0.pane.state.isLoaded }
+    }
+    let trail = try #require(pane.columnTrail)
+    #expect(try fixture.keyTable === columnTable(5, in: fixture))
+    return (fixture, trail)
+}
+
+/// The table of the focused pane's column at `index`.
+@MainActor
+private func columnTable(_ index: Int, in fixture: Fixture) throws -> ListingTableView {
+    let columns = try fixture.paneController(fixture.tab.layout.focused).columnViewController
+    return columns.columnControllers[index].tableView
+}
+
+/// Escape after ← ← in column view closes the columns past the one the focused column's
+/// selection opens, and the preview, and clears that column's selection; the focused column
+/// keeps its selection and the keys (docs/decisions/0119-escape-closes-columns.md).
+@MainActor @Test func escapeAfterLeftArrowsClosesTheColumnsPastTheSelectedFolders() async throws {
+    let (fixture, trail) = try await nestedColumns()
+    let pane = fixture.tab.focusedPane
+    try fixture.press(try arrow(NSLeftArrowFunctionKey, []))
+    try fixture.press(try arrow(NSLeftArrowFunctionKey, []))
+    #expect(trail.focusedIndex == 3)
+    #expect(trail.columns.count == 6)
+    let back = pane.history.backEntries
+
+    try fixture.press(try keyEvent("\u{1B}"))
+
+    #expect(
+        trail.columns.map(\.pane.location.folderPath) == [
+            "/", "/root", "/root/a", "/root/a/b", "/root/a/b/c",
+        ])
+    #expect(trail.columns[4].pane.selection.isEmpty)
+    #expect(trail.preview == nil)
+    #expect(trail.focusedIndex == 3)
+    #expect(trail.focused.pane.selection == Selection([ExactName("c")], cursor: ExactName("c")))
+    #expect(try fixture.keyTable === columnTable(3, in: fixture))
+    #expect(pane.location == Location(path: "/root/a/b"))
+    #expect(pane.history.backEntries == back)
+}
+
+/// Escape in the last column, with only a file's preview right of it, changes nothing.
+@MainActor @Test func escapeInTheLastColumnChangesNothing() async throws {
+    let (fixture, trail) = try await nestedColumns()
+    let table = try fixture.keyTable
+    let preview = trail.preview
+
+    try fixture.press(try keyEvent("\u{1B}"))
+
+    #expect(trail.columns.count == 6)
+    #expect(trail.focusedIndex == 5)
+    #expect(
+        trail.focused.pane.selection
+            == Selection([ExactName("e.txt")], cursor: ExactName("e.txt")))
+    #expect(trail.preview == preview)
+    #expect(try fixture.keyTable === table)
 }

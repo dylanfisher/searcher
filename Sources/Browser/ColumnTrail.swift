@@ -593,6 +593,20 @@ public final class ColumnTrail {
         showNextColumnAlone(after: index)
     }
 
+    /// Escape in `pane`'s column: when columns are open past the one its selection opens, or
+    /// that column has a selection, makes that column the last, with nothing selected in it, as
+    /// a press on the selected row does. `pane`'s column and those left of it keep their
+    /// selections, and the keys stay where they are. Returns false, changing nothing, when there
+    /// is nothing to close or clear, so Escape goes on to `super`
+    /// (docs/decisions/0119-escape-closes-columns.md).
+    func closeColumnsPastNext(after pane: Pane) -> Bool {
+        guard let index = index(of: pane), index + 1 < columns.count,
+            index + 2 < columns.count || !columns[index + 1].pane.selection.isEmpty
+        else { return false }
+        showNextColumnAlone(after: index)
+        return true
+    }
+
     /// Makes the column the selection at `index` opens the last one, clearing its selection. The
     /// clearing is no step of that column's selection history: the press is the step of the
     /// column it was made in (0077-selection-history.md).
