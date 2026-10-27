@@ -44,7 +44,7 @@ final class ColumnPreviewView: NSView {
     static let smallestImageSide = 64.0
     /// The rounding of a thumbnail's corners, as Finder's preview draws a photo: a few points,
     /// with no shadow. A type icon, drawn by its own shape, isn't clipped.
-    static let thumbnailCornerRadius: CGFloat = 5
+    static let thumbnailCornerRadius: CGFloat = 7
 
     /// The longest side the image can be drawn at in a preview `width` by `height` points: the
     /// width inside the insets, or the height inside the margins.

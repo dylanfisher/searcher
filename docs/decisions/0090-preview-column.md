@@ -92,8 +92,8 @@ listing doesn't make.
   smaller kept thumbnail while its own is made only if it is one of its own: a row's framed one,
   shown in its place, would have drawn the frame and shadow and then jumped, so a file with only
   its row's kept now waits for its own like any other, inside the 100 ms hold on local disk.
-  The preview rounds a thumbnail's corners to `ColumnPreviewView.thumbnailCornerRadius`, 5
-  points, with no shadow; the image view is sized to the image's aspect, so the clip falls on
+  The preview rounds a thumbnail's corners to `ColumnPreviewView.thumbnailCornerRadius`, 7
+  points (5 at first; Dylan set 7 in BC.1c), with no shadow; the image view is sized to the image's aspect, so the clip falls on
   its corners. A type icon, Finder's own document shape, isn't clipped.)
 - **Scrolling.** The column view scrolls when the focus, the column count or whether a preview
   shows changes. The focused column's right-hand neighbor, kept in view where it fits, is the
