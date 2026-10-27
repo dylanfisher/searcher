@@ -42,6 +42,7 @@ private final class Reads: @unchecked Sendable {
             },
             inspect: { _ throws(FileOperationError) in nil },
             identify: { _ throws(FileOperationError) in nil },
+            sourceHolding: { _, _ throws(FileOperationError) in nil },
             isCancelled: { false },
             copies: { self.lock.withLock { self.copied.append(self.measured.count) } })
     }

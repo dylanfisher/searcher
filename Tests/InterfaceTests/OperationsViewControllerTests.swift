@@ -321,6 +321,22 @@ private func cycleStarts(of bar: NSProgressIndicator) -> [CFTimeInterval] {
     #expect(fixture.log.calls.isEmpty)
 }
 
+/// A move to another volume that kept a source because it changed says so, naming it.
+@MainActor @Test func aMoveThatKeptAChangedSourceSaysWhyInItsRow() throws {
+    let fixture = Fixture()
+    let changed = FileOperationError(reason: .changedDuringMove, path: "/src/a.mov", errno: nil)
+
+    fixture.controller.show([
+        snapshot(
+            1, .failed, operation: .move(["/src/a.mov"], into: "/dst"), errors: [changed])
+    ])
+
+    #expect(
+        try fixture.row(1).detailLabel.stringValue
+            == "“/src/a.mov” changed while it was copied, so it was kept, and the copy may be "
+            + "older.")
+}
+
 @MainActor @Test func aRefusedOperationSaysWhichPathIsInUse() throws {
     let fixture = Fixture()
 
