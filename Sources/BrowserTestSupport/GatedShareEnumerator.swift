@@ -18,14 +18,14 @@ public final class GatedShareEnumerator: ShareEnumerator, @unchecked Sendable {
         let request: ShareRequest
         unowned let owner: GatedShareEnumerator
         /// Guarded by `owner.condition`.
-        var result: Result<[String], ShareListError>?
+        var result: Result<ShareList, ShareListError>?
 
         init(request: ShareRequest, owner: GatedShareEnumerator) {
             self.request = request
             self.owner = owner
         }
 
-        func wait() -> Result<[String], ShareListError> {
+        func wait() -> Result<ShareList, ShareListError> {
             owner.condition.withLock {
                 while result == nil { owner.condition.wait() }
                 return result!
@@ -79,7 +79,7 @@ public final class GatedShareEnumerator: ShareEnumerator, @unchecked Sendable {
     }
 
     /// Ends every unanswered run of `request` with `result`.
-    public func answer(_ request: ShareRequest, with result: Result<[String], ShareListError>) {
+    public func answer(_ request: ShareRequest, with result: Result<ShareList, ShareListError>) {
         condition.withLock {
             for run in open where run.request == request && run.result == nil {
                 run.result = result

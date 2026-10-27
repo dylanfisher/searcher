@@ -82,6 +82,8 @@ struct PaneStatusText {
             return "Only mounted shares are listed for \(name) servers."
         case .unmatchedMounts:
             return "Couldn't match the shares mounted from “\(serverName)”."
+        case .unusableNames:
+            return "Some shares on “\(serverName)” have names that can't be shown."
         }
     }
 

@@ -7,12 +7,12 @@ import Testing
 
 private let dylans = ShareRequest(server: testServer, user: "dylan")
 private let guests = ShareRequest(server: testServer, user: "guest")
-private let names = ["docker", "main", "music"]
+private let names: ShareList = ["docker", "main", "music"]
 
 /// An ask of `shares` for `request`, running until the test reads its value.
 @MainActor
 private func ask(_ shares: ServerShares, _ request: ShareRequest = dylans)
-    -> Task<Result<[String], ShareListError>?, Never>
+    -> Task<Result<ShareList, ShareListError>?, Never>
 {
     Task { await shares.names(for: request) }
 }
@@ -22,7 +22,7 @@ private func ask(_ shares: ServerShares, _ request: ShareRequest = dylans)
 @MainActor
 private func answered(
     _ shares: ServerShares, _ enumerator: GatedShareEnumerator,
-    _ result: Result<[String], ShareListError>, request: ShareRequest = dylans
+    _ result: Result<ShareList, ShareListError>, request: ShareRequest = dylans
 ) async {
     let starts = enumerator.starts.count
     let asking = ask(shares, request)
@@ -141,7 +141,7 @@ private func answered(
     let shares = ServerShares(enumerator: enumerator, clock: clock)
     await answered(shares, enumerator, .success(names))
     clock.advance(by: .seconds(3600))
-    #expect(shares.cachedNames(for: dylans)?.names == names)
+    #expect(shares.cachedNames(for: dylans)?.names == names.names)
     #expect(shares.cachedNames(for: guests)?.names == nil)
 }
 
@@ -198,7 +198,7 @@ private func answered(
     await answered(shares, enumerator, .success(names))
 
     let cached = try #require(shares.cachedNames(for: dylans))
-    #expect(cached.names == names)
+    #expect(cached.names == names.names)
     #expect(cached.listedAt >= before)
 }
 

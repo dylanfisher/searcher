@@ -25,12 +25,12 @@ private func launch(_ runner: SmbutilShares, _ request: ShareRequest = dylans)
 }
 
 /// What `run` ends with, waited for on a `BlockingCallThread`.
-private func end(of run: SmbutilRun) async -> Result<[String], ShareListError> {
+private func end(of run: SmbutilRun) async -> Result<ShareList, ShareListError> {
     await BlockingCallThread.run { run.wait() }
 }
 
 /// Lists with a script running `body` in place of `smbutil`.
-private func list(running body: String) async throws -> Result<[String], ShareListError> {
+private func list(running body: String) async throws -> Result<ShareList, ShareListError> {
     let folder = try TemporaryFolder("SmbutilSharesTests")
     let run = try await launch(SmbutilShares(executable: try script(body, in: folder)))
     return await end(of: run)

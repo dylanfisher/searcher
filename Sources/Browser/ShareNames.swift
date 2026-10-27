@@ -1,5 +1,22 @@
 import Foundation
 
+/// The disk shares a server listed, in its order, and how many more it listed under names no row
+/// can have (`ShareNames.isUsable`).
+public struct ShareList: Equatable, Sendable, ExpressibleByArrayLiteral {
+    public let names: [String]
+    /// The disk shares left out for their names.
+    public let unusableCount: Int
+
+    public init(names: [String], unusableCount: Int = 0) {
+        self.names = names
+        self.unusableCount = unusableCount
+    }
+
+    public init(arrayLiteral names: String...) {
+        self.init(names: names)
+    }
+}
+
 /// The share names in `smbutil view`'s output, and the key two names are matched by. The parse is
 /// strict, so a change in the tool's format shows as `ShareListError.unparsable` and never as a
 /// wrong list (docs/decisions/0115-server-shares.md).
@@ -10,11 +27,12 @@ public enum ShareNames {
     private static let nameWidth = 48
 
     /// The disk shares `output` lists, in the server's order, without those whose name ends in
-    /// `$`. The output is a header line starting `Share` with `Type` and `Comments`, a line of
+    /// `$`, and without those whose name a row can't have (`isUsable`), which are counted. The
+    /// output is a header line starting `Share` with `Type` and `Comments`, a line of
     /// dashes, one row per share, a blank line and `<n> shares listed`, with `n` the row count.
     /// Throws `unparsable` for output in any other shape, a row of an unknown type, or bytes that
     /// aren't UTF-8.
-    public static func parse(_ output: Data) throws(ShareListError) -> [String] {
+    public static func parse(_ output: Data) throws(ShareListError) -> ShareList {
         guard let text = String(bytes: output, encoding: .utf8) else { throw .unparsable }
         var lines = text.split(separator: "\n", omittingEmptySubsequences: false)[...]
         if lines.last == "" { lines = lines.dropLast() }
@@ -30,8 +48,26 @@ public enum ShareNames {
         if lines.first == "" { lines = lines.dropFirst() }
         guard lines.count == 1, let count = lines.first.flatMap(trailerCount), count == rows.count
         else { throw .unparsable }
-        return rows.filter { $0.type == types[0] && !$0.name.hasSuffix("$") }.map(\.name)
+        let disks = rows.filter { $0.type == types[0] && !$0.name.hasSuffix("$") }.map(\.name)
+        let usable = disks.filter(isUsable)
+        return ShareList(names: usable, unusableCount: disks.count - usable.count)
     }
+
+    /// Whether a share named `name` can be a row: one path component that isn't `.` or `..`,
+    /// with no control character (newlines and NUL among them) and no character that changes
+    /// the direction text is drawn in, which could make a name look like another. A server
+    /// chooses its shares' names, and a name with a `/` would make a path that isn't the share's.
+    public static func isUsable(_ name: String) -> Bool {
+        guard !name.isEmpty, name != ".", name != "..", !name.contains("/") else { return false }
+        return !name.unicodeScalars.contains {
+            $0.properties.generalCategory == .control || bidiControls.contains($0.value)
+        }
+    }
+
+    /// The marks, embeddings, overrides and isolates that change the direction text is drawn in:
+    /// U+061C, U+200E–U+200F, U+202A–U+202E and U+2066–U+2069.
+    private static let bidiControls: Set<UInt32> = Set(
+        [0x061C, 0x200E, 0x200F] + Array(0x202A...0x202E) + Array(0x2066...0x2069))
 
     /// The key a share's name is matched by: its canonical (NFC) form without case, since SMB
     /// share names are case-insensitive and macOS may hand a name decomposed.

@@ -18,12 +18,14 @@ public final class ServerShares {
     /// Names a request last listed, and when.
     public struct Cached: Equatable, Sendable {
         public let names: [String]
+        /// The shares left out of `names` for their names (`ShareNames.isUsable`).
+        public let unusableCount: Int
         /// When they were listed, by the system's clock, for the age a pane shows.
         public let listedAt: Date
     }
 
     private struct Entry {
-        let result: Result<[String], ShareListError>
+        let result: Result<ShareList, ShareListError>
         /// When it was listed, as `elapsed` gives it.
         let listedAt: Duration
         /// When it was listed, by the system's clock.
@@ -32,7 +34,7 @@ public final class ServerShares {
 
     /// One run of the enumerator and the askers waiting for it.
     private final class Run {
-        var askers: [Int: CheckedContinuation<Result<[String], ShareListError>?, Never>] = [:]
+        var askers: [Int: CheckedContinuation<Result<ShareList, ShareListError>?, Never>] = [:]
         /// The enumerator's run, once it has started.
         var enumeration: (any ShareEnumeration)?
         /// Whether its askers have been answered or let go, after which nothing it returns is
@@ -75,7 +77,7 @@ public final class ServerShares {
     /// `request`'s share names, or why they couldn't be listed: from the cache within its time,
     /// else from the run in flight for `request`, started if there is none. Nil when the asking
     /// task was cancelled, or `stop()` was called, before the run ended.
-    public func names(for request: ShareRequest) async -> Result<[String], ShareListError>? {
+    public func names(for request: ShareRequest) async -> Result<ShareList, ShareListError>? {
         if let entry = entries[request] {
             let lifetime =
                 switch entry.result {
@@ -101,10 +103,11 @@ public final class ServerShares {
     /// The names `request` last listed, however long ago, and when; nil when it listed none, or
     /// its last run failed.
     public func cachedNames(for request: ShareRequest) -> Cached? {
-        guard let entry = entries[request], case .success(let names) = entry.result else {
+        guard let entry = entries[request], case .success(let list) = entry.result else {
             return nil
         }
-        return Cached(names: names, listedAt: entry.listedDate)
+        return Cached(
+            names: list.names, unusableCount: list.unusableCount, listedAt: entry.listedDate)
     }
 
     /// Drops what every user's request of `server` last listed, as when the server has no share
@@ -178,7 +181,7 @@ public final class ServerShares {
 
     /// Keeps `result` as `request`'s and answers `run`'s askers with it, unless the run is over.
     private func finish(
-        _ run: Run, of request: ShareRequest, with result: Result<[String], ShareListError>
+        _ run: Run, of request: ShareRequest, with result: Result<ShareList, ShareListError>
     ) {
         guard !run.isOver else { return }
         if !run.isForgotten {

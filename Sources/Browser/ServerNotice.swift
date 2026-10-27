@@ -10,6 +10,9 @@ public enum ServerNotice: Equatable, Sendable {
     /// A mounted share's source has no share name or user that decodes, so the list can't be
     /// matched with the mounted shares and isn't asked for.
     case unmatchedMounts
+    /// The server listed shares under names no row can have (`ShareNames.isUsable`), which
+    /// are left out.
+    case unusableNames
 }
 
 /// The protocol of a server's mounted shares, by the file system the system mounts them with.

@@ -69,6 +69,15 @@ before the step that builds it, and the list is under "For Dylan to check".
 - **Which names.** Only type `Disk` and no name ending in `$`: this drops `IPC$`, printers and
   administrative shares. Finder's 7 items for the 8 listed confirm `IPC$` is dropped; whether it
   hides a disk share such as `C$` is *(unverified)*. A mounted share is listed whatever its name.
+  *(8c)* The server chooses the names, so `ShareNames.isUsable` leaves out a name that isn't
+  one path component (empty, `.`, `..`, or with a `/`), or that holds a control character or a
+  text-direction mark, override or isolate (U+061C, U+200E–F, U+202A–E, U+2066–9). The parse
+  counts what it leaves out in `ShareList.unusableCount`, the listing applies the same rule to
+  what any enumerator hands it, and the rest are listed with the notice "Some shares on
+  “HAL9000” have names that can't be shown." A newline can't reach a name: it splits the row,
+  and the output is `unparsable`. `MountTable.mountPoint(ofRow:in:)` gives nil for such a name,
+  so no row reaches `folderChild(named:)` with one. Mounted rows are named by their mount
+  points, which the system made, and aren't filtered.
 - **Parsing is strict and not by column.** The header line must start with `Share` and contain
   `Type` and `Comments`; the next line is dashes only; rows follow to the blank line; the
   trailer is `<n> share(s) listed` and `n` must equal the row count. A row's name is everything
