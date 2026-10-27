@@ -9,8 +9,7 @@ public enum FolderMaker {
     public static func makeFolder(named name: String, in folder: String) throws(FileOperationError)
         -> String
     {
-        precondition(
-            !Thread.isMainThread, "FolderMaker does file-system I/O; call it off the main thread")
+        preconditionOffMain("FolderMaker")
         let path = join(folder, name)
         if FileNameRule.problem(with: name) != nil {
             throw FileOperationError(reason: .invalidName, path: path, errno: nil)

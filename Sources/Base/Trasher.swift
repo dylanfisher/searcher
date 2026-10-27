@@ -21,8 +21,7 @@ public struct Trasher: Sendable {
     /// deleting it still goes, and carries that ACL in the Trash (`pastDenyDelete`). Blocks the
     /// calling thread; call it off the main thread.
     public func trash(_ path: String) throws(FileOperationError) -> URL {
-        precondition(
-            !Thread.isMainThread, "Trasher does file-system I/O; call it off the main thread")
+        preconditionOffMain("Trasher")
         return try Self.pastDenyDelete(path) { () throws(FileOperationError) in
             do {
                 return try trashCall(URL(fileURLWithPath: path))
@@ -36,8 +35,7 @@ public struct Trasher: Sendable {
     /// that denies deleting it, as `trash` moved it in. Blocks the calling thread; call it off
     /// the main thread.
     public static func putBack(_ url: URL, to path: String) throws(FileOperationError) {
-        precondition(
-            !Thread.isMainThread, "Trasher does file-system I/O; call it off the main thread")
+        preconditionOffMain("Trasher")
         _ = try pastDenyDelete(url.path) { () throws(FileOperationError) in
             try FileMover.move(url.path, to: path)
             return URL(fileURLWithPath: path)
@@ -121,8 +119,7 @@ public struct Trasher: Sendable {
     /// on the source of a move to another volume once its copy is complete. Blocks the calling
     /// thread; call it off the main thread.
     public static func deletePermanently(_ path: String) throws(FileOperationError) {
-        precondition(
-            !Thread.isMainThread, "Trasher does file-system I/O; call it off the main thread")
+        preconditionOffMain("Trasher")
         do {
             try FileManager.default.removeItem(atPath: path)
         } catch {
