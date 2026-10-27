@@ -27,6 +27,10 @@ private final class SuiteRemover {
     }
 
     deinit {
+        // A suite in a `TemporaryFolder` that was released first has nothing left to remove, and
+        // opening it would make cfprefsd create the folder again, empty.
+        let parent = (name as NSString).deletingLastPathComponent
+        guard FileManager.default.fileExists(atPath: parent) else { return }
         UserDefaults(suiteName: name)?.removePersistentDomain(forName: name)
         let file = name + ".plist"
         guard FileManager.default.fileExists(atPath: file) else { return }
