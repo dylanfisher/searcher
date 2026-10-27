@@ -473,6 +473,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             springLoader?.dragExited(pane)
         }
         tableView.dragEnded = { [weak self] in self?.springLoader?.dragEnded() }
+        tableView.selectionShapeChanged = { [weak self] in self?.placeChevrons() }
     }
 
     /// What a drag of rows lets its destination do with them.
@@ -948,15 +949,22 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// row refilled in place, may have shown another entry's badge.
     private func showNotDownloadedBadge(_ shown: Bool, in cell: NSTableCellView) {
         let badge = Self.badge(in: cell)
-        let badgeX = Self.badgeX(cellWidth: cell.bounds.width, chevron: Self.showsChevron(cell))
-        if badge.frame.minX != badgeX {
-            badge.frame.origin.x = badgeX
-        }
         if shown, badge.image == nil {
             badge.image = iconCache.notDownloadedBadge
         }
         badge.isHidden = !shown
-        Self.fitName(in: cell)
+        fitBadgeAndName(in: cell)
+    }
+
+    /// Puts the name cell's badge left of its chevron when it shows one, else at its trailing
+    /// edge, and fits the name to them.
+    private func fitBadgeAndName(in cell: NSTableCellView) {
+        let badge = Self.badge(in: cell)
+        let badgeX = Self.badgeX(cellWidth: cell.bounds.width, chevronRoom: shownChevronRoom(cell))
+        if badge.frame.minX != badgeX {
+            badge.frame.origin.x = badgeX
+        }
+        fitName(in: cell)
     }
 
     /// Shows or hides a column name cell's chevron: shown for a folder, not for a file, a package
@@ -965,27 +973,54 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     private func showFolderChevron(_ shown: Bool, in cell: NSTableCellView) {
         guard let chevron = Self.chevron(in: cell) else { return }
         chevron.isHidden = !shown
+        place(chevron, in: cell)
+    }
+
+    /// Puts a name cell's chevron `chevronRoom` in from the cell's right edge. A reused cell may
+    /// come from before the table's selection changed shape.
+    private func place(_ chevron: NSImageView, in cell: NSTableCellView) {
+        let x = cell.bounds.width - chevronRoom
+        if chevron.frame.minX != x {
+            chevron.frame.origin.x = x
+        }
+    }
+
+    /// Moves the chevrons, badges and names on screen to the table's selection shape, which the
+    /// column view changes when a column becomes, or stops being, its trail's first.
+    private func placeChevrons() {
+        let index = tableView.column(withIdentifier: SortColumn.name.identifier)
+        guard index >= 0 else { return }
+        tableView.enumerateAvailableRowViews { rowView, _ in
+            guard let cell = rowView.view(atColumn: index) as? NSTableCellView,
+                let chevron = Self.chevron(in: cell)
+            else { return }
+            place(chevron, in: cell)
+            fitBadgeAndName(in: cell)
+        }
+        renameField.layout()
     }
 
     private static func chevron(in cell: NSTableCellView) -> NSImageView? {
         (cell as? ColumnNameCellView)?.chevron
     }
 
-    private static func showsChevron(_ cell: NSTableCellView) -> Bool {
-        chevron(in: cell).map { !$0.isHidden } ?? false
+    /// The room the cell's chevron takes when it shows one, else nil.
+    private func shownChevronRoom(_ cell: NSTableCellView) -> Double? {
+        Self.chevron(in: cell).flatMap { $0.isHidden ? nil : chevronRoom }
     }
 
-    /// Where a name cell `cellWidth` wide puts its badge: at its trailing edge, left of the
-    /// chevron when it shows one.
-    private static func badgeX(cellWidth: Double, chevron: Bool) -> Double {
-        cellWidth - 2 - badgeSize - (chevron ? chevronReserve : 0)
+    /// Where a name cell `cellWidth` wide puts its badge: at its trailing edge, left of a
+    /// chevron that takes `chevronRoom`, when it shows one.
+    private static func badgeX(cellWidth: Double, chevronRoom: Double?) -> Double {
+        cellWidth - 2 - badgeSize - (chevronRoom.map { $0 - 2 + badgeGap } ?? 0)
     }
 
     /// Where the name ends in a name cell `cellWidth` wide: before the badge when it shows,
-    /// else before the chevron when it shows, else at the trailing padding.
-    private static func nameEnd(cellWidth: Double, chevron: Bool, badge: Bool) -> Double {
-        if badge { return badgeX(cellWidth: cellWidth, chevron: chevron) - badgeGap }
-        if chevron { return cellWidth - chevronRoom - badgeGap }
+    /// else before a chevron that takes `chevronRoom` when it shows one, else at the trailing
+    /// padding.
+    private static func nameEnd(cellWidth: Double, chevronRoom: Double?, badge: Bool) -> Double {
+        if badge { return badgeX(cellWidth: cellWidth, chevronRoom: chevronRoom) - badgeGap }
+        if let chevronRoom { return cellWidth - chevronRoom - badgeGap }
         return cellWidth - 2
     }
 
@@ -993,13 +1028,13 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// chevron when it shows, else up to the trailing padding. Set outright, since autoresizing
     /// clamps a width at zero in a column narrower than the name and the badge, and widening the
     /// column doesn't give that back.
-    private static func fitName(in cell: NSTableCellView) {
+    private func fitName(in cell: NSTableCellView) {
         guard let textField = cell.textField else {
             preconditionFailure("the name cell has no text field: \(cell.subviews)")
         }
-        let end = nameEnd(
-            cellWidth: cell.bounds.width, chevron: showsChevron(cell),
-            badge: !badge(in: cell).isHidden)
+        let end = Self.nameEnd(
+            cellWidth: cell.bounds.width, chevronRoom: shownChevronRoom(cell),
+            badge: !Self.badge(in: cell).isHidden)
         let width = max(end - textField.frame.minX, 0)
         if textField.frame.width != width {
             textField.frame.size.width = width
@@ -1025,7 +1060,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         let index = tableView.column(withIdentifier: column.identifier)
         tableView.enumerateAvailableRowViews { rowView, _ in
             guard let cell = rowView.view(atColumn: index) as? NSTableCellView else { return }
-            Self.fitName(in: cell)
+            fitName(in: cell)
         }
         renameField.layout()
     }
@@ -1041,7 +1076,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         let cell = tableView.frameOfCell(atColumn: column, row: row)
         let entry = listing[row]
         let end = Self.nameEnd(
-            cellWidth: cell.width, chevron: showsNamesOnly && entry.type == .directory,
+            cellWidth: cell.width,
+            chevronRoom: showsNamesOnly && entry.type == .directory ? chevronRoom : nil,
             badge: entry.isDataless)
         return NSRect(
             x: cell.minX + Self.nameX, y: cell.minY + (cell.height - Self.labelHeight) / 2,
@@ -1079,7 +1115,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             view.frame.width - tableView.tableColumns[0].width + 2 * ListingTableView.cellInset
         // A point over, for the rounding of the field's own width.
         let field = (nameWidth + Self.nameFieldPadding).rounded(.up) + 1
-        let trailing = Self.badgeGap + Self.chevronRoom
+        let trailing = Self.badgeGap + chevronRoom
         return (outside + Self.nameX + field + trailing).rounded(.up)
     }
 
@@ -1093,15 +1129,25 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     private static let badgeGap = 4.0
     /// The chevron's width, its image's (`TypeIconCache.folderChevron`).
     static let chevronWidth = 6.0
-    /// How far past the cell's right edge the chevron's view ends, still inside the row's
-    /// selection: the glyph, which stops 1.5 points short of its image's right edge, then ends
-    /// 4.5 points inside the selection, as Finder's does.
-    private static let chevronOverhang = 2.0
-    /// The room the chevron's view takes inside the cell, from its right edge.
-    private static let chevronRoom = chevronWidth - chevronOverhang
-    /// The room a shown chevron takes from the cell's trailing padding, which a badge keeps clear
-    /// of.
-    private static let chevronReserve = chevronRoom - 2 + badgeGap
+    /// How far past the cell's right edge the chevron's view ends in a table whose selection is
+    /// `shape`. In the rounded band the glyph, which stops 1.5 points short of its image's right
+    /// edge, ends 4.5 points inside the selection, 13.5 from the column's right edge, as
+    /// Finder's does (second-column-rounded.jpg). Finder's trail's first column, whose
+    /// selection runs the whole row, draws it further in, about 15.75 points from the column's
+    /// right edge (first-column-square.jpg): its view ends at the cell's edge, so the glyph ends
+    /// 15.5 points in. A point and a quarter isn't a whole pixel at 2x, where AppKit would
+    /// round the view's frame and the name's width apart.
+    private static func chevronOverhang(_ shape: ListingTableView.SelectionShape) -> Double {
+        switch shape {
+        case .roundedBand: 2
+        case .fullWidth: 0
+        }
+    }
+    /// The room the chevron's view takes inside the cell, from its right edge, for the table's
+    /// selection shape.
+    private var chevronRoom: Double {
+        Self.chevronWidth - Self.chevronOverhang(tableView.selectionShape)
+    }
 
     /// A cell laid out with frames and autoresizing, which costs less per row than constraints.
     private func makeCell(for column: SortColumn) -> NSTableCellView {
@@ -1113,7 +1159,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             let chevron = named.chevron
             chevron.identifier = Self.folderChevronIdentifier
             chevron.frame = NSRect(
-                x: column.width - Self.chevronRoom,
+                x: column.width - chevronRoom,
                 y: (height - Self.badgeSize) / 2, width: Self.chevronWidth,
                 height: Self.badgeSize)
             chevron.autoresizingMask = [.minXMargin, .minYMargin, .maxYMargin]
