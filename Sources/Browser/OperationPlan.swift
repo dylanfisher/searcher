@@ -62,7 +62,8 @@ public struct OperationPlan: Equatable, Sendable {
     }
 
     /// Plans `operation`. A folder copied or moved into itself is refused before anything is
-    /// read, comparing paths as `FileOperation.comparable` gives them. Copies, duplicates and
+    /// read, comparing paths as `FileOperation.comparable` gives them, and then by identity with
+    /// `sourceHolding`, which catches a destination reached through a link. Copies, duplicates and
     /// moves to another volume read the volumes involved with `volumeOf` and pre-scan each item
     /// with `measure`. Copies and moves look for each item's name in the destination folder
     /// with `inspect`, top-level items only, and inspect the source of each that is there. An
@@ -82,6 +83,7 @@ public struct OperationPlan: Equatable, Sendable {
         measure: (String, () -> Bool) throws -> TreeSizeWalker.Total,
         inspect: (String) throws(FileOperationError) -> ConflictRequest.Item?,
         identify: FileOperationQueue.Identifier,
+        sourceHolding: (String, [String]) throws(FileOperationError) -> String?,
         isCancelled: @escaping () -> Bool,
         copies: () -> Void
     ) throws -> OperationPlan {
@@ -90,6 +92,13 @@ public struct OperationPlan: Equatable, Sendable {
             if let source = FileOperation.source(holding: folder, among: sources) {
                 throw OperationState.Refusal.intoItself(source: source)
             }
+            let holder: String?
+            do {
+                holder = try sourceHolding(folder, sources)
+            } catch {
+                return OperationPlan(items: [], lane: nil, failures: [error])
+            }
+            if let holder { throw OperationState.Refusal.intoItself(source: holder) }
             let isMove = if case .move = operation { true } else { false }
             return try transfer(
                 sources, into: folder, isMove: isMove, volumeOf: volumeOf, measure: measure,
@@ -453,6 +462,100 @@ public struct OperationPlan: Equatable, Sendable {
             let uuid = values.volumeSupportsPersistentIDs == true ? values.volumeUUIDString : nil
             lock.withLock { uuids[device] = uuid }
             return uuid
+        }
+    }
+
+    /// The stamp of the item at `path` and, for a folder, of every item under it, read with
+    /// `fts` and keyed by path, or nil when nothing is at `path`. Symlinks aren't followed, and
+    /// a folder another volume is mounted on is read but not entered. An item that can't be
+    /// read, or a folder that can't be listed, is kept with its errno, so the same failure
+    /// twice gives the same stamp. Blocks the calling thread, which must be a
+    /// `BlockingCallThread`.
+    ///
+    /// - Throws: `FileOperationError` when the walk can't start or stops on an error, and
+    ///   `CancellationError` once `isCancelled`, asked first and before each item, returns true.
+    static func stamp(_ path: String, isCancelled: () -> Bool) throws
+        -> FileOperationQueue.SourceStamp?
+    {
+        BlockingCallThread.requireCurrent()
+        if isCancelled() { throw CancellationError() }
+        var info = stat()
+        if lstat(path, &info) != 0 {
+            if errno == ENOENT { return nil }
+            throw FileOperationError(errno: errno, path: path)
+        }
+        guard info.st_mode & S_IFMT == S_IFDIR else {
+            return FileOperationQueue.SourceStamp(items: [path: stamp(of: info)])
+        }
+        guard let root = strdup(path) else { throw FileOperationError(errno: ENOMEM, path: path) }
+        defer { free(root) }
+        var roots: [UnsafeMutablePointer<CChar>?] = [root, nil]
+        guard let tree = fts_open(&roots, FTS_PHYSICAL | FTS_NOCHDIR | FTS_XDEV, nil) else {
+            throw FileOperationError(errno: errno, path: path)
+        }
+        defer { fts_close(tree) }
+        var items: [String: FileOperationQueue.SourceStamp.Item] = [:]
+        while true {
+            if isCancelled() { throw CancellationError() }
+            // `fts_read` returns nil both at the end and on an error; only errno tells them apart.
+            errno = 0
+            guard let entry = fts_read(tree) else {
+                if errno != 0 { throw FileOperationError(errno: errno, path: path) }
+                return FileOperationQueue.SourceStamp(items: items)
+            }
+            let item = entry.pointee
+            switch Int32(item.fts_info) {
+            // A folder is stamped on the way in; this is the way out.
+            case FTS_DP: continue
+            case FTS_DNR, FTS_ERR, FTS_NS:
+                items[String(cString: item.fts_path)] = .unread(errno: item.fts_errno)
+            default: items[String(cString: item.fts_path)] = stamp(of: item.fts_statp.pointee)
+            }
+        }
+    }
+
+    private static func stamp(of info: stat) -> FileOperationQueue.SourceStamp.Item {
+        .read(
+            device: info.st_dev, inode: UInt64(info.st_ino), type: UInt16(info.st_mode & S_IFMT),
+            size: Int64(info.st_size), modified: nanoseconds(info.st_mtimespec))
+    }
+
+    /// The first of `sources` that the folder at `folder` is or is inside, judged by identity:
+    /// the device and inode of the folder and of each folder above it, up to the root, against
+    /// each source's. Catches what `FileOperation.source(holding:among:)` can't see from the
+    /// paths, such as a destination reached through a symlink into a source. A source that is
+    /// a symlink isn't followed, since a copy of it copies the link. A source that can't be
+    /// read is passed over here; its pre-scan fails it. Blocks the calling thread, which must
+    /// be a `BlockingCallThread`.
+    ///
+    /// - Throws: `FileOperationError` when `folder` or a folder above it can't be read.
+    static func source(holding folder: String, among sources: [String])
+        throws(FileOperationError) -> String?
+    {
+        BlockingCallThread.requireCurrent()
+        struct Identity: Hashable {
+            let device: dev_t
+            let inode: ino_t
+        }
+        guard let resolved = realpath(folder, nil) else {
+            throw FileOperationError(errno: errno, path: folder)
+        }
+        var path = String(cString: resolved)
+        free(resolved)
+        var above: Set<Identity> = []
+        while true {
+            var info = stat()
+            guard lstat(path, &info) == 0 else {
+                throw FileOperationError(errno: errno, path: path)
+            }
+            above.insert(Identity(device: info.st_dev, inode: info.st_ino))
+            if path == "/" { break }
+            path = (path as NSString).deletingLastPathComponent
+        }
+        return sources.first { source in
+            var info = stat()
+            guard lstat(source, &info) == 0, info.st_mode & S_IFMT == S_IFDIR else { return false }
+            return above.contains(Identity(device: info.st_dev, inode: info.st_ino))
         }
     }
 

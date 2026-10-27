@@ -1525,6 +1525,54 @@ private func finished(_ changes: OperationRecord.Change...) -> OperationState {
     #expect(files.events.all.filter { $0.hasPrefix("delete") } == ["delete failed /A/x"])
 }
 
+/// A move to another volume that kept its changed source undoes as a copy: the copy goes to
+/// the Trash and the source stays as it is.
+@MainActor @Test func undoingAMoveThatKeptAChangedSourceTrashesTheCopy() async throws {
+    let files = FakeFiles(releasingAll: true)
+    let watcher = Watcher()
+    let history = UndoHistory(log: { _ in })
+    let queue = followedQueue(history, fileSystem: files.fileSystem(), watcher: watcher)
+    files.place("/A/x")
+    files.changeDuringCopy(of: "/A/x")
+
+    let moved = await queue.perform(.move(["/A/x"], into: "/B"))
+    await history.catchUp(with: queue)
+
+    #expect(moved.record.changes == [.created("/B/x", from: .copy(of: "/A/x"))])
+    #expect(history.undoTitle == "Undo Move 1 Item")
+    files.place("/B/x")
+    #expect(try await value(of: history.undo(with: queue)).phase == .done)
+    #expect(files.events.all.contains("trash /B/x"))
+    #expect(!files.events.all.contains { $0.hasPrefix("move /B/x") })
+    #expect(!files.events.all.contains { $0.hasPrefix("delete") })
+}
+
+/// Undoing a move to another volume moves the item back by a copy, and keeps the item where
+/// the move left it when it changed during that copy.
+@MainActor @Test func anUndoThatCopiesBackKeepsAnItemThatChangedWhileItWasCopied() async throws {
+    let files = FakeFiles(releasingAll: true)
+    let watcher = Watcher()
+    let history = UndoHistory(log: { _ in })
+    let queue = followedQueue(history, fileSystem: files.fileSystem(), watcher: watcher)
+    files.place("/A/x")
+
+    let moved = await queue.perform(.move(["/A/x"], into: "/B"))
+    await history.catchUp(with: queue)
+    #expect(moved.record.changes == [.moved(from: "/A/x", to: "/B/x")])
+    files.remove("/A/x")
+    files.place("/B/x")
+    files.changeDuringCopy(of: "/B/x")
+
+    let undone = try await value(of: history.undo(with: queue))
+
+    #expect(
+        undone.errors == [
+            FileOperationError(reason: .changedDuringMove, path: "/B/x", errno: nil)
+        ])
+    #expect(undone.record.changes == [.created("/A/x", from: .copy(of: "/B/x"))])
+    #expect(files.events.all.filter { $0.hasPrefix("delete") } == ["delete /A/x"])
+}
+
 // MARK: Identity of items
 
 /// Another inode at the recorded path, on a volume whose IDs persist, is another item, and the

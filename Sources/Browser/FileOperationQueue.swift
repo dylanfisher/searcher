@@ -101,6 +101,20 @@ public actor FileOperationQueue {
     typealias Identifier =
         @Sendable (String) throws(FileOperationError) -> OperationRecord.ItemIdentity?
 
+    /// Each item at and under a path as `lstat` read it, keyed by its path. A move to another
+    /// volume reads one before its copy and one before it deletes the source, and deletes the
+    /// source only when they match (docs/decisions/0116-checked-moves-and-copies-into-itself.md).
+    struct SourceStamp: Equatable, Sendable {
+        enum Item: Equatable, Sendable {
+            /// Its file system ID, kind, logical size and modification time in nanoseconds.
+            case read(device: Int32, inode: UInt64, type: UInt16, size: Int64, modified: Int64)
+            /// Reading it, or listing it for a folder, failed with this errno.
+            case unread(errno: Int32)
+        }
+
+        let items: [String: Item]
+    }
+
     /// The blocking calls the queue makes, each run on a `BlockingCallThread`. Tests replace
     /// them.
     struct FileSystem: Sendable {
@@ -126,6 +140,12 @@ public actor FileOperationQueue {
         var removeEmptyFolder: @Sendable (String) throws(FileOperationError) -> Void
         /// Makes the identifier for one operation.
         var makeIdentifier: @Sendable () -> Identifier
+        /// The stamp of the item at a path, or nil when nothing is there. The closure is asked
+        /// between items whether to stop; the call throws `CancellationError` when it says so.
+        var stamp: @Sendable (String, () -> Bool) throws -> SourceStamp?
+        /// The first of the sources given second that the folder given first is or is inside,
+        /// judged by the items' identities, or nil when there is none.
+        var sourceHolding: @Sendable (String, [String]) throws(FileOperationError) -> String?
 
         static let real = FileSystem(
             volumeOf: VolumeIdentity.init(path:), measure: OperationPlan.measure,
@@ -139,7 +159,8 @@ public actor FileOperationQueue {
             removeEmptyFolder: { path throws(FileOperationError) in
                 guard rmdir(path) == 0 else { throw FileOperationError(errno: errno, path: path) }
             },
-            makeIdentifier: OperationPlan.identifier)
+            makeIdentifier: OperationPlan.identifier, stamp: OperationPlan.stamp,
+            sourceHolding: OperationPlan.source(holding:among:))
     }
 
     private let fileSystem: FileSystem
@@ -622,7 +643,7 @@ public actor FileOperationQueue {
                 try OperationPlan.make(
                     for: operation, volumeOf: fileSystem.volumeOf, measure: fileSystem.measure,
                     inspect: fileSystem.inspect, identify: fileSystem.makeIdentifier(),
-                    isCancelled: { control.isCancelled },
+                    sourceHolding: fileSystem.sourceHolding, isCancelled: { control.isCancelled },
                     // Known to copy before its pre-scan, which can take minutes.
                     copies: {
                         intake.settle(id)
@@ -807,7 +828,8 @@ public actor FileOperationQueue {
                 let outcome = Self.perform(
                     item, of: operation, choice: choice, deletesWithoutTrash: deletesWithoutTrash,
                     undoStep: undoStep, isFromDrop: isFromDrop, fileSystem: fileSystem,
-                    liveFolders: liveFolders, copier: copier, control: control
+                    identify: identify, liveFolders: liveFolders, copier: copier,
+                    control: control
                 ) { progress in
                     // The ticker reads it; a call into the actor per report would be one every
                     // 0.5 ms at full speed.
@@ -831,7 +853,8 @@ public actor FileOperationQueue {
                     let outcome =
                         confirmed
                         ? Self.finishReplace(
-                            staged, deletesWithoutTrash: true, fileSystem: fileSystem)
+                            staged, deletesWithoutTrash: true, fileSystem: fileSystem,
+                            identify: identify, isCancelled: { control.isCancelled })
                         : Self.unstage(staged, fileSystem: fileSystem)
                     return (outcome, Self.identities(after: outcome, identify: identify))
                 }
@@ -862,7 +885,8 @@ public actor FileOperationQueue {
                 entry.record.changes += changes
                 entry.errors.append(error)
                 stops = Self.stopsOperation(error)
-            case .cancelled(let left):
+            case .cancelled(let left, let changes):
+                entry.record.changes += changes
                 leftBehind = left
                 wasCancelled = true
             }
@@ -935,7 +959,9 @@ public actor FileOperationQueue {
         case done([OperationRecord.Change], copied: CopyProgress)
         /// The item failed; `changes` is what it changed before it did.
         case failed(FileOperationError, changes: [OperationRecord.Change])
-        case cancelled(leftBehind: FileOperationError?)
+        /// The item was cancelled; `changes` is what it changed before it was, such as the copy
+        /// a move to another volume made before a cancel kept its source.
+        case cancelled(leftBehind: FileOperationError?, changes: [OperationRecord.Change] = [])
         /// A replace whose original has nowhere to go: its volume has no Trash, and the user
         /// hasn't agreed to delete it. The new item is staged; the original is untouched.
         case needsDelete(StagedReplace)
@@ -953,6 +979,8 @@ public actor FileOperationQueue {
         let crossesVolumes: Bool
         /// A file a drop promised, moved in from the queue's drop folder.
         let isFromDrop: Bool
+        /// The source's stamp from before its copy, for a move to another volume.
+        let before: SourceStamp?
         let copied: CopyProgress
 
         var stagedItem: String {
@@ -963,7 +991,7 @@ public actor FileOperationQueue {
             StagedReplace(
                 source: source, destination: destination, staging: staging, isMove: isMove,
                 movesWithin: movesWithin, crossesVolumes: crossesVolumes, isFromDrop: isFromDrop,
-                copied: copied)
+                before: before, copied: copied)
         }
     }
 
@@ -994,9 +1022,11 @@ public actor FileOperationQueue {
     /// Finder's Put Back works, or is deleted when `deletesWithoutTrash` and its volume has
     /// no Trash; then the staged item moves to its path with `FileMover.move`, which refuses
     /// to replace anything. If that move fails, the original comes back from the Trash and the
-    /// staged item is taken away. Runs on a `BlockingCallThread`.
+    /// staged item is taken away. A move to another volume then deletes its source as
+    /// `deleteMovedSource` allows. Runs on a `BlockingCallThread`.
     private static func finishReplace(
-        _ staged: StagedReplace, deletesWithoutTrash: Bool, fileSystem: FileSystem
+        _ staged: StagedReplace, deletesWithoutTrash: Bool, fileSystem: FileSystem,
+        identify: Identifier, isCancelled: () -> Bool
     ) -> ItemOutcome {
         let destination = staged.destination
         /// Fails with `error` after taking the staged item away; `changes` is what stays.
@@ -1045,16 +1075,76 @@ public actor FileOperationQueue {
             case (true, false): .moved(from: staged.source, to: destination)
             case (false, _): copy
             }
+        let crossMove = staged.isMove && staged.crossesVolumes
         do {
             try fileSystem.deletePermanently(staged.staging)
-            if staged.isMove, staged.crossesVolumes {
-                try fileSystem.deletePermanently(staged.source)
-            }
         } catch {
-            let kept = staged.isMove && staged.crossesVolumes ? copy : placed
-            return .failed(error, changes: [original, kept])
+            return .failed(error, changes: [original, crossMove ? copy : placed])
+        }
+        if crossMove {
+            guard let before = staged.before else {
+                preconditionFailure("\(staged.source) moved across volumes without a stamp")
+            }
+            switch deleteMovedSource(
+                staged.source, before: before, copiedTo: destination, fileSystem: fileSystem,
+                identify: identify, isCancelled: isCancelled)
+            {
+            case .deleted: break
+            case .kept(let error, let copyIsThere):
+                return .failed(error, changes: [original] + (copyIsThere ? [copy] : []))
+            case .cancelled: return .cancelled(leftBehind: nil, changes: [original, copy])
+            }
         }
         return .done([original, placed], copied: staged.copied)
+    }
+
+    /// What `deleteMovedSource` did with a source.
+    private enum SourceDelete {
+        case deleted
+        /// Kept for `error`; `copyIsThere` says whether the copy is at the destination.
+        case kept(FileOperationError, copyIsThere: Bool)
+        /// Kept, with the copy there, since a cancel came before the source was checked.
+        case cancelled
+    }
+
+    /// Deletes `source`, which a move to another volume copied to `destination`, once the copy
+    /// is there and the source is as `before`, its stamp from before the copy, found it: the
+    /// same items, each the same item at the same size and modification time. Otherwise, or
+    /// when `isCancelled` says so before the check is done, the source stays and so does the
+    /// copy. Runs on a `BlockingCallThread`.
+    private static func deleteMovedSource(
+        _ source: String, before: SourceStamp, copiedTo destination: String,
+        fileSystem: FileSystem, identify: Identifier, isCancelled: () -> Bool
+    ) -> SourceDelete {
+        do {
+            guard try identify(destination) != nil else {
+                return .kept(
+                    FileOperationError(reason: .sourceGone, path: destination, errno: ENOENT),
+                    copyIsThere: false)
+            }
+        } catch {
+            return .kept(error, copyIsThere: false)
+        }
+        do {
+            guard let after = try fileSystem.stamp(source, isCancelled) else {
+                return .kept(
+                    FileOperationError(reason: .sourceGone, path: source, errno: ENOENT),
+                    copyIsThere: true)
+            }
+            guard after == before else {
+                return .kept(
+                    FileOperationError(reason: .changedDuringMove, path: source, errno: nil),
+                    copyIsThere: true)
+            }
+            try fileSystem.deletePermanently(source)
+        } catch is CancellationError {
+            return .cancelled
+        } catch let error as FileOperationError {
+            return .kept(error, copyIsThere: true)
+        } catch {
+            preconditionFailure("the stamp of \(source) threw \(error)")
+        }
+        return .deleted
     }
 
     /// The identity of the item at each place `outcome`'s changes left one, read right after
@@ -1066,8 +1156,8 @@ public actor FileOperationQueue {
     {
         let changes: [OperationRecord.Change]
         switch outcome {
-        case .done(let done, _), .failed(_, let done): changes = done
-        case .cancelled, .needsDelete: return ([:], [])
+        case .done(let done, _), .failed(_, let done), .cancelled(_, let done): changes = done
+        case .needsDelete: return ([:], [])
         }
         var identities: [String: OperationRecord.ItemIdentity] = [:]
         var unread: [FileOperationError] = []
@@ -1098,7 +1188,7 @@ public actor FileOperationQueue {
         _ item: OperationPlan.Item, of operation: FileOperation,
         choice: ConflictResolution.Choice?, deletesWithoutTrash: Bool,
         undoStep: FileOperation.UndoStep?, isFromDrop: Bool, fileSystem: FileSystem,
-        liveFolders: LiveFolders, copier: any Copier, control: Control,
+        identify: Identifier, liveFolders: LiveFolders, copier: any Copier, control: Control,
         progress: @escaping (CopyProgress) -> Void
     ) -> ItemOutcome {
         guard control.waitWhilePaused() else { return .cancelled(leftBehind: nil) }
@@ -1109,6 +1199,29 @@ public actor FileOperationQueue {
                 return try copier.copy(source, to: destination, progress: progress)
             } catch let error as FileOperationError where control.isCancelled {
                 throw LeftBehind(error: error)
+            }
+        }
+        /// The stamp of `path` before a move copies it to another volume; a cancel stops it.
+        func stampBeforeCopy(of path: String) throws -> SourceStamp {
+            guard let stamp = try fileSystem.stamp(path, { control.isCancelled }) else {
+                throw FileOperationError(reason: .sourceGone, path: path, errno: ENOENT)
+            }
+            return stamp
+        }
+        /// The move to another volume that copied `from` to `to` deletes `from` as
+        /// `deleteMovedSource` allows.
+        func finishCrossMove(
+            from: String, to: String, before: SourceStamp, copied: CopyProgress
+        ) -> ItemOutcome {
+            let copy = OperationRecord.Change.created(to, from: .copy(of: from))
+            switch deleteMovedSource(
+                from, before: before, copiedTo: to, fileSystem: fileSystem, identify: identify,
+                isCancelled: { control.isCancelled })
+            {
+            case .deleted: return .done([.moved(from: from, to: to)], copied: copied)
+            case .kept(let error, let copyIsThere):
+                return .failed(error, changes: copyIsThere ? [copy] : [])
+            case .cancelled: return .cancelled(leftBehind: nil, changes: [copy])
             }
         }
         func destination() -> String {
@@ -1145,6 +1258,7 @@ public actor FileOperationQueue {
         /// under its own name: by a copy or, within one volume, a move. A cancel before it is
         /// done takes the staged item away and leaves the original. Then `finishReplace`.
         func replace(_ destination: String, isMove: Bool) throws -> ItemOutcome {
+            let before = isMove && item.crossesVolumes ? try stampBeforeCopy(of: source) : nil
             let name = stagingFolderPrefix + UUID().uuidString
             // Once this returns, the folder is gone or holds the staged item, which keeps a
             // sweep from removing it.
@@ -1156,7 +1270,7 @@ public actor FileOperationQueue {
             let staged = StagedReplace(
                 source: source, destination: destination, staging: staging, isMove: isMove,
                 movesWithin: movesWithin, crossesVolumes: item.crossesVolumes,
-                isFromDrop: isFromDrop, copied: none)
+                isFromDrop: isFromDrop, before: before, copied: none)
             let copied: CopyProgress
             do {
                 if movesWithin {
@@ -1180,7 +1294,7 @@ public actor FileOperationQueue {
             guard !control.isCancelled else { return unstage(staged, fileSystem: fileSystem) }
             return finishReplace(
                 staged.with(copied: copied), deletesWithoutTrash: deletesWithoutTrash,
-                fileSystem: fileSystem)
+                fileSystem: fileSystem, identify: identify, isCancelled: { control.isCancelled })
         }
         do {
             switch operation {
@@ -1216,13 +1330,10 @@ public actor FileOperationQueue {
                         ],
                         copied: CopyProgress(bytes: 0, files: 0))
                 }
-                let copied = try copy(to: destination)
-                do {
-                    try fileSystem.deletePermanently(source)
-                } catch {
-                    return .failed(error, changes: [.created(destination, from: .copy(of: source))])
-                }
-                return .done([.moved(from: source, to: destination)], copied: copied)
+                let before = try stampBeforeCopy(of: source)
+                return finishCrossMove(
+                    from: source, to: destination, before: before,
+                    copied: try copy(to: destination))
             case .rename(_, let name):
                 let destination = destination()
                 if FileNameRule.problem(with: name) != nil {
@@ -1279,13 +1390,9 @@ public actor FileOperationQueue {
                         try fileSystem.move(from, to)
                         return .done([.moved(from: from, to: to)], copied: none)
                     }
-                    let copied = try copy(to: to)
-                    do {
-                        try fileSystem.deletePermanently(from)
-                    } catch {
-                        return .failed(error, changes: [.created(to, from: .copy(of: from))])
-                    }
-                    return .done([.moved(from: from, to: to)], copied: copied)
+                    let before = try stampBeforeCopy(of: from)
+                    return finishCrossMove(
+                        from: from, to: to, before: before, copied: try copy(to: to))
                 }
             }
         } catch is CancellationError {
@@ -1305,8 +1412,7 @@ public actor FileOperationQueue {
         switch error.reason {
         case .noSpace, .unreachable: true
         case .permissionDenied, .sourceGone, .exists, .crossVolume, .noTrash, .invalidName,
-            .notTheSameItem,
-            .other:
+            .notTheSameItem, .changedDuringMove, .other:
             false
         }
     }
