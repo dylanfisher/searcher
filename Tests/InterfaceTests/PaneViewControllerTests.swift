@@ -1055,7 +1055,7 @@ private func menuItem(_ command: Command) -> NSMenuItem {
     let folder = try TemporaryFolder("PaneViewControllerTests")
     let defaults = temporarySuite(in: folder.url.path)
     defaults.set(["view.toggleHidden": ["primary": "cmd+j"]], forKey: "shortcuts")
-    let settings = Settings(defaults: defaults)
+    let settings = Settings(defaults: defaults, log: unexpectedSettingsLog)
     let pane = Pane(
         location: Location(path: "/root"),
         service: ListingService(lister: StubLister(Fixture.folders)),
@@ -1083,7 +1083,7 @@ private func menuItem(_ command: Command) -> NSMenuItem {
     defaults.set(
         ["selection.next": ["primary": ""], "navigation.open": ["alternate": "down"]],
         forKey: "shortcuts")
-    let settings = Settings(defaults: defaults)
+    let settings = Settings(defaults: defaults, log: unexpectedSettingsLog)
     let pane = Pane(
         location: Location(path: "/root"),
         service: ListingService(lister: StubLister(Fixture.folders)),

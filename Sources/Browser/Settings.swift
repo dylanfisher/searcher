@@ -4,8 +4,8 @@ import Foundation
 /// pane applies the same value, and a change reaches every pane. They live in a `UserDefaults`
 /// suite the owner passes in, so tests and the UI bench never touch the user's own.
 ///
-/// A key that is missing reads as the preference's default. A value of the wrong type is removed
-/// and reads as the default too: stored data has one shape, and UserDefaults' own readers would
+/// A key that is missing reads as the preference's default. A value of the wrong type is removed,
+/// logged, and reads as the default too: stored data has one shape, and UserDefaults' own readers would
 /// turn the string "YES" or the number 1 into true, and a number into a string.
 @MainActor
 public final class Settings {
@@ -307,29 +307,37 @@ public final class Settings {
         let handler: @MainActor () -> Void
     }
 
-    /// The settings stored in `defaults`, for the user whose home folder is `home`.
-    public init(defaults: UserDefaults, home: String = NSHomeDirectory()) {
+    /// The settings stored in `defaults`, for the user whose home folder is `home`. `log` gets
+    /// each stored value removed for its shape as the settings are read.
+    public init(
+        defaults: UserDefaults, home: String = NSHomeDirectory(), log: (String) -> Void
+    ) {
         self.defaults = defaults
         self.home = home
-        showHidden = Self.bool(.showHidden, in: defaults) ?? false
-        hideDSStore = Self.bool(.hideDSStore, in: defaults) ?? true
-        columnsStartAtHome = Self.bool(.columnsStartAtHome, in: defaults) ?? true
-        foldersFirst = Self.bool(.foldersFirst, in: defaults) ?? false
-        folderSizes = Self.bool(.folderSizes, in: defaults) ?? false
-        terminalBundleID = Self.string(.terminalBundleID, in: defaults) ?? "com.apple.Terminal"
-        commanderFKeys = Self.bool(.commanderFKeys, in: defaults) ?? false
-        hideEmptyOperationsPanel = Self.bool(.hideEmptyOperationsPanel, in: defaults) ?? true
+        showHidden = Self.bool(.showHidden, in: defaults, log: log) ?? false
+        hideDSStore = Self.bool(.hideDSStore, in: defaults, log: log) ?? true
+        columnsStartAtHome = Self.bool(.columnsStartAtHome, in: defaults, log: log) ?? true
+        foldersFirst = Self.bool(.foldersFirst, in: defaults, log: log) ?? false
+        folderSizes = Self.bool(.folderSizes, in: defaults, log: log) ?? false
+        terminalBundleID =
+            Self.string(.terminalBundleID, in: defaults, log: log) ?? "com.apple.Terminal"
+        commanderFKeys = Self.bool(.commanderFKeys, in: defaults, log: log) ?? false
+        hideEmptyOperationsPanel =
+            Self.bool(.hideEmptyOperationsPanel, in: defaults, log: log) ?? true
         columnWidth =
-            Self.number(.columnWidth, in: defaults, where: Self.isColumnWidth)
+            Self.number(.columnWidth, in: defaults, log: log, where: Self.isColumnWidth)
             ?? Self.defaultColumnWidth
-        appearance = Self.appearance(in: defaults) ?? .auto
-        palettePlace = Self.palettePlace(in: defaults)
-        newWindowFrame = Self.windowFrame(in: defaults)
-        favorites = Self.favorites(in: defaults) ?? Favorite.defaults(home: home)
-        showsFavoritesInSidebar = Self.bool(.showsFavoritesInSidebar, in: defaults) ?? true
-        showsLocationsInSidebar = Self.bool(.showsLocationsInSidebar, in: defaults) ?? true
-        showsWorkspacesInSidebar = Self.bool(.showsWorkspacesInSidebar, in: defaults) ?? true
-        shortcuts = Self.shortcuts(in: defaults)
+        appearance = Self.appearance(in: defaults, log: log) ?? .auto
+        palettePlace = Self.palettePlace(in: defaults, log: log)
+        newWindowFrame = Self.windowFrame(in: defaults, log: log)
+        favorites = Self.favorites(in: defaults, log: log) ?? Favorite.defaults(home: home)
+        showsFavoritesInSidebar =
+            Self.bool(.showsFavoritesInSidebar, in: defaults, log: log) ?? true
+        showsLocationsInSidebar =
+            Self.bool(.showsLocationsInSidebar, in: defaults, log: log) ?? true
+        showsWorkspacesInSidebar =
+            Self.bool(.showsWorkspacesInSidebar, in: defaults, log: log) ?? true
+        shortcuts = Self.shortcuts(in: defaults, log: log)
     }
 
     /// Runs `handler` after each change of a setting, for as long as `owner` exists.
@@ -362,42 +370,47 @@ public final class Settings {
 
     /// The Boolean stored under `key`; nil when there is none or it has another type, which is
     /// removed.
-    private static func bool(_ key: Key, in defaults: UserDefaults) -> Bool? {
+    private static func bool(_ key: Key, in defaults: UserDefaults, log: (String) -> Void) -> Bool?
+    {
         guard let value = defaults.object(forKey: key.rawValue) else { return nil }
         if let number = value as? NSNumber, isBoolean(number) {
             return number.boolValue
         }
-        defaults.removeObject(forKey: key.rawValue)
+        discard(key.rawValue, holding: value, in: defaults, log: log)
         return nil
     }
 
     /// The number stored under `key`; nil when there is none, it has another type, a Boolean
     /// among them, or one `isValid` rejects, which is removed.
     private static func number(
-        _ key: Key, in defaults: UserDefaults, where isValid: (Double) -> Bool
+        _ key: Key, in defaults: UserDefaults, log: (String) -> Void,
+        where isValid: (Double) -> Bool
     ) -> Double? {
         guard let value = defaults.object(forKey: key.rawValue) else { return nil }
         if let number = value as? NSNumber, !isBoolean(number), isValid(number.doubleValue) {
             return number.doubleValue
         }
-        defaults.removeObject(forKey: key.rawValue)
+        discard(key.rawValue, holding: value, in: defaults, log: log)
         return nil
     }
 
     /// The appearance stored under its key; nil when there is none, or it isn't the name of one,
     /// which is removed.
-    private static func appearance(in defaults: UserDefaults) -> Appearance? {
-        guard let name = string(.appearance, in: defaults) else { return nil }
+    private static func appearance(in defaults: UserDefaults, log: (String) -> Void) -> Appearance?
+    {
+        guard let name = string(.appearance, in: defaults, log: log) else { return nil }
         if let appearance = Appearance(rawValue: name) {
             return appearance
         }
-        defaults.removeObject(forKey: Key.appearance.rawValue)
+        discard(Key.appearance.rawValue, holding: name, in: defaults, log: log)
         return nil
     }
 
     /// The palette's place stored under its key, two numbers within 0 and 1; nil when there is
     /// none, or it is anything else, which is removed.
-    private static func palettePlace(in defaults: UserDefaults) -> PalettePlace? {
+    private static func palettePlace(in defaults: UserDefaults, log: (String) -> Void)
+        -> PalettePlace?
+    {
         let key = Key.palettePlace.rawValue
         guard let value = defaults.object(forKey: key) else { return nil }
         if let shares = value as? [Any], shares.count == 2,
@@ -407,13 +420,13 @@ public final class Settings {
         {
             return place
         }
-        defaults.removeObject(forKey: key)
+        discard(key, holding: value, in: defaults, log: log)
         return nil
     }
 
     /// The window frame stored under its key, four numbers `isWindowFrame(_:)` accepts; nil when
     /// there is none, or it is anything else, which is removed.
-    private static func windowFrame(in defaults: UserDefaults) -> CGRect? {
+    private static func windowFrame(in defaults: UserDefaults, log: (String) -> Void) -> CGRect? {
         let key = Key.newWindowFrame.rawValue
         guard let value = defaults.object(forKey: key) else { return nil }
         if let sides = value as? [Any], sides.count == 4 {
@@ -429,14 +442,14 @@ public final class Settings {
                 return frame
             }
         }
-        defaults.removeObject(forKey: key)
+        discard(key, holding: value, in: defaults, log: log)
         return nil
     }
 
     /// The favorites stored under their key: a list of `Favorite`s in their stored shape, no path
     /// twice. Nil when there is none, or when it or any item in it has another shape, and the
     /// whole list is removed: one item's shape can't be trusted apart from the list's.
-    private static func favorites(in defaults: UserDefaults) -> [Favorite]? {
+    private static func favorites(in defaults: UserDefaults, log: (String) -> Void) -> [Favorite]? {
         let key = Key.favorites.rawValue
         guard let value = defaults.object(forKey: key) else { return nil }
         if let list = value as? [Any] {
@@ -445,7 +458,7 @@ public final class Settings {
                 return favorites
             }
         }
-        defaults.removeObject(forKey: key)
+        discard(key, holding: value, in: defaults, log: log)
         return nil
     }
 
@@ -454,7 +467,9 @@ public final class Settings {
     /// shape, and the whole key is removed, as for `favorites`. An entry for an ID no command
     /// has, as after a command is renamed, is a change of the code rather than bad data: only
     /// that entry is removed.
-    private static func shortcuts(in defaults: UserDefaults) -> [CommandID: ShortcutOverride] {
+    private static func shortcuts(in defaults: UserDefaults, log: (String) -> Void) -> [CommandID:
+        ShortcutOverride]
+    {
         let key = Key.shortcuts.rawValue
         guard let value = defaults.object(forKey: key) else { return [:] }
         if let dictionary = value as? [String: Any] {
@@ -469,11 +484,15 @@ public final class Settings {
                     } else {
                         defaults.set(stored(known), forKey: key)
                     }
+                    let dropped = Set(read.keys).subtracting(known.keys).map(\.rawValue).sorted()
+                    log(
+                        "rewrote the setting \(key) without the overrides of \(dropped), which"
+                            + " no command has or which change nothing")
                 }
                 return known
             }
         }
-        defaults.removeObject(forKey: key)
+        discard(key, holding: value, in: defaults, log: log)
         return [:]
     }
 
@@ -510,12 +529,23 @@ public final class Settings {
 
     /// The string stored under `key`; nil when there is none or it has another type, which is
     /// removed.
-    private static func string(_ key: Key, in defaults: UserDefaults) -> String? {
+    private static func string(_ key: Key, in defaults: UserDefaults, log: (String) -> Void)
+        -> String?
+    {
         guard let value = defaults.object(forKey: key.rawValue) else { return nil }
         if let string = value as? String {
             return string
         }
-        defaults.removeObject(forKey: key.rawValue)
+        discard(key.rawValue, holding: value, in: defaults, log: log)
         return nil
+    }
+
+    /// Removes `key`, whose stored `value` has another shape than its setting's, and logs it, so
+    /// a setting that reads as its default never does so unexplained.
+    private static func discard(
+        _ key: String, holding value: Any, in defaults: UserDefaults, log: (String) -> Void
+    ) {
+        defaults.removeObject(forKey: key)
+        log("discarded the setting \(key), which held \(value) of another shape than its own")
     }
 }

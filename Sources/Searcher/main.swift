@@ -15,7 +15,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private let systemActions = WorkspaceSystemActions()
     /// The user's own preferences, made on first use so a bench launch never reads them; the
     /// bench makes its own over a suite of its own.
-    private lazy var settings = Settings(defaults: .standard)
+    private lazy var settings = Settings(
+        defaults: .standard, log: { Logger(category: "settings").error("\($0)") })
     /// The browser windows, made on first use so a bench launch, which opens its own window,
     /// never makes them. They share the service's mount table, the app's one.
     private lazy var windows: WorkspaceWindows = {
