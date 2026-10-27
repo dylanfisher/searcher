@@ -22,6 +22,7 @@ private final class FakeWalks: @unchecked Sendable {
         let path: String
         /// The thread's disk I/O policy, from `getiopolicy_np`.
         let ioPolicy: Int32
+        /// The priority the thread asked for, from `requestedPriority()`.
         let priority: Int32
         let onBlockingCallThread: Bool
     }
@@ -48,7 +49,7 @@ private final class FakeWalks: @unchecked Sendable {
                 Start(
                     path: path,
                     ioPolicy: getiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_THREAD),
-                    priority: FolderSizeService.threadPriority(),
+                    priority: requestedPriority(),
                     onBlockingCallThread: BlockingCallThread.isCurrent))
             running += 1
             mostRunning = max(mostRunning, running)
@@ -224,9 +225,7 @@ private func makeFile(_ path: String, size: Int) throws {
     let utilityIOPolicy = await BlockingCallThread.run(qos: .utility) {
         getiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_THREAD)
     }
-    let defaultPriority = await BlockingCallThread.run(qos: .default) {
-        FolderSizeService.threadPriority()
-    }
+    let defaultPriority = await BlockingCallThread.run(qos: .default) { livePriority() }
 
     request(sizes, folder.url.path, into: log)
 
@@ -239,30 +238,62 @@ private func makeFile(_ path: String, size: Int) throws {
     #expect(start.ioPolicy == IOPOL_THROTTLE)
     #expect(start.onBlockingCallThread)
     // The policy takes the thread's QoS and raises its priority to the default's; a walk is below
-    // that. The kernel's number for a utility thread moves under load, so it isn't compared.
+    // that.
+    #expect(start.priority == FolderSizeService.utilityPriority)
     #expect(start.priority < defaultPriority)
 }
 
-@Test func throttlingDiskReadsKeepsTheThreadsPriority() async {
-    // The kernel's number for a thread moves a little under load, so the priority after counts as
-    // kept when it is closer to the one before than to the default's: the policy alone puts a
-    // utility thread at the default's, a gap of eleven, and a few points of drift stay inside it.
-    let utilityPriority = await BlockingCallThread.run(qos: .utility) {
-        FolderSizeService.threadPriority()
-    }
-    let defaultPriority = await BlockingCallThread.run(qos: .default) {
-        FolderSizeService.threadPriority()
-    }
-    let drift = (defaultPriority - utilityPriority) / 2
-    #expect(drift > 0)
-    for qos in [QualityOfService.utility, .userInitiated] {
-        let priorities = await BlockingCallThread.run(qos: qos) {
-            let before = FolderSizeService.threadPriority()
-            FolderSizeService.throttleDiskReads()
-            return (before, FolderSizeService.threadPriority())
+@Test func throttlingDiskReadsKeepsUtilitysPriorityWhileAHigherThreadWaitsOnIt() async {
+    // While a thread of higher QoS waits on a lock a utility thread holds, the kernel raises the
+    // utility thread's live priority to the waiter's. One read then would put the thread back at
+    // the raised priority for good once the lock is let go.
+    let defaultPriority = await BlockingCallThread.run(qos: .default) { livePriority() }
+    let lock = NSLock()
+    let (raised, requested) = await BlockingCallThread.run(qos: .utility) {
+        lock.lock()
+        BlockingCallThread.start(qos: .userInitiated) {
+            lock.lock()
+            lock.unlock()
         }
-        #expect(abs(priorities.1 - priorities.0) < drift)
+        let deadline = Date(timeIntervalSinceNow: patience)
+        while livePriority() < defaultPriority, Date() < deadline {
+            usleep(1000)
+        }
+        let raised = livePriority()
+        FolderSizeService.throttleDiskReads()
+        let requested = requestedPriority()
+        lock.unlock()
+        return (raised, requested)
     }
+    #expect(raised >= defaultPriority)
+    #expect(requested < defaultPriority)
+}
+
+/// The calling thread's priority as the kernel has it now, from `thread_info`. It is raised while
+/// a thread of higher QoS waits on a lock this one holds.
+private func livePriority() -> Int32 {
+    var info = thread_extended_info()
+    var count = mach_msg_type_number_t(
+        MemoryLayout<thread_extended_info>.size / MemoryLayout<integer_t>.size)
+    let port = mach_thread_self()
+    defer { mach_port_deallocate(mach_task_self_, port) }
+    let status = withUnsafeMutablePointer(to: &info) {
+        $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+            thread_info(port, thread_flavor_t(THREAD_EXTENDED_INFO), $0, &count)
+        }
+    }
+    precondition(status == KERN_SUCCESS, "thread_info failed with \(status)")
+    return info.pth_priority
+}
+
+/// The priority the calling thread last set with `pthread_setschedparam`, which no lock raises.
+/// A thread that never set one reads the default's.
+private func requestedPriority() -> Int32 {
+    var policy: Int32 = 0
+    var parameters = sched_param()
+    let error = pthread_getschedparam(pthread_self(), &policy, &parameters)
+    precondition(error == 0, "pthread_getschedparam failed with \(error)")
+    return parameters.sched_priority
 }
 
 @Test func aShareRunsOneWalkAtATime() async throws {

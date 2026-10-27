@@ -345,34 +345,30 @@ public final class FolderSizeService: Sendable {
     /// Puts the calling thread's disk I/O at the throttled tier, `IOPOL_THROTTLE`, so a walk's
     /// reads wait while other I/O on the disk runs and listings aren't slowed by them. Utility QoS
     /// alone gives a milder tier. Setting a thread's I/O policy takes away its QoS, which leaves
-    /// it at the default CPU priority, above utility's, so the thread then takes back the
-    /// priority it had. Each walk has a thread of its own, so the policy ends with the walk.
-    /// See docs/decisions/0043-folder-sizes.md.
+    /// it at the default CPU priority, above utility's, so the thread is then put at utility's
+    /// priority, `utilityPriority`. The thread's live priority isn't read for it: the kernel
+    /// raises that while a thread of higher QoS waits on a lock this one holds. Each walk has a
+    /// thread of its own, so the policy ends with the walk. See docs/decisions/0043-folder-sizes.md.
     static func throttleDiskReads() {
-        let priority = threadPriority()
+        var qos = QOS_CLASS_UNSPECIFIED
+        var relativePriority: Int32 = 0
+        let qosError = pthread_get_qos_class_np(pthread_self(), &qos, &relativePriority)
+        precondition(qosError == 0, "pthread_get_qos_class_np failed with \(qosError)")
+        precondition(
+            qos == QOS_CLASS_UTILITY && relativePriority == 0,
+            "disk reads are throttled on utility threads; this one is \(qos.rawValue), \(relativePriority)"
+        )
         let status = setiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_THREAD, IOPOL_THROTTLE)
         precondition(status == 0, "setiopolicy_np failed with errno \(errno)")
         var parameters = sched_param()
-        parameters.sched_priority = priority
+        parameters.sched_priority = utilityPriority
         let error = pthread_setschedparam(pthread_self(), SCHED_OTHER, &parameters)
         precondition(error == 0, "pthread_setschedparam failed with \(error)")
     }
 
-    /// The calling thread's base scheduling priority, as the kernel reports it.
-    static func threadPriority() -> Int32 {
-        var info = thread_extended_info()
-        var count = mach_msg_type_number_t(
-            MemoryLayout<thread_extended_info>.size / MemoryLayout<integer_t>.size)
-        let port = mach_thread_self()
-        defer { mach_port_deallocate(mach_task_self_, port) }
-        let status = withUnsafeMutablePointer(to: &info) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                thread_info(port, thread_flavor_t(THREAD_EXTENDED_INFO), $0, &count)
-            }
-        }
-        precondition(status == KERN_SUCCESS, "thread_info failed with \(status)")
-        return info.pth_priority
-    }
+    /// The CPU priority the kernel gives a utility thread, xnu's `BASEPRI_UTILITY`. No API reports
+    /// it apart from the live priority, which a waiting thread can raise.
+    static let utilityPriority: Int32 = 20
 
     /// Hands `result` to the walk's caller on the main actor, unless it is nil or the walk was
     /// cancelled, and frees what the walk held.
