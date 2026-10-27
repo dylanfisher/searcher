@@ -271,6 +271,33 @@ private func names(in folder: String) throws -> Set<String> {
     #expect(window.clipboard.cutNames(in: window.pane.location) == ["a.txt", "docs", "App.app"])
 }
 
+/// A list reads its folder's cut names each time its rows change, every patch and size batch
+/// included, so the names are worked out once per folder and cut: from 100k cut paths, each read
+/// cost the main thread a pass over all of them.
+@MainActor @Test func aFoldersCutNamesAreWorkedOutOncePerCut() {
+    let state = CutState(clipboard: MemoryClipboard())
+    let a = Location(path: "/a")
+    let b = Location(path: "/b")
+    state.cut([
+        URL(fileURLWithPath: "/a/x"), URL(fileURLWithPath: "/a/y"), URL(fileURLWithPath: "/b/z"),
+    ])
+
+    for _ in 0..<5 {
+        #expect(state.cutNames(in: a) == ["x", "y"])
+        #expect(state.cutNames(in: b) == ["z"])
+    }
+    #expect(state.cutNameBuilds == 2)
+
+    state.cut([URL(fileURLWithPath: "/b/w")])
+    #expect(state.cutNames(in: a).isEmpty)
+    #expect(state.cutNames(in: b) == ["w"])
+    state.clear()
+    #expect(state.cutNames(in: b).isEmpty)
+    state.cut([URL(fileURLWithPath: "/b/v")])
+    #expect(state.cutNames(in: b) == ["v"])
+    #expect(state.cutNameBuilds == 5)
+}
+
 @MainActor @Test func cutMarksTheSelectedFilesAsCutUntilTheClipboardChanges() async throws {
     let folder = try TemporaryFolder("ClipboardCommandsTests")
     try write("a.txt", "b.txt", in: folder.url.path)

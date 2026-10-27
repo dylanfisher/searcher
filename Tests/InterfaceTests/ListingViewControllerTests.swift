@@ -682,6 +682,60 @@ private final class PressedTableView: ListingTableView {
     #expect(try alphas() == [1, 1])
 }
 
+/// Patches dim an entry that arrives under a cut path and undim one renamed away from it, without
+/// working the folder's cut names out again: with 100k rows cut, each pass over the cut paths
+/// cost the main thread on every patch, sort and size batch.
+@MainActor @Test func patchesDimArrivingCutEntriesWithoutRereadingTheCut() async throws {
+    let pasteboard = NSPasteboard(name: NSPasteboard.Name("searcher-test-\(UUID().uuidString)"))
+    defer { pasteboard.releaseGlobally() }
+    let clipboard = CutState(clipboard: PasteboardFileClipboard(pasteboard: pasteboard))
+    let controller = await controller(showing: [file("a"), file("b")])
+    controller.clipboard = clipboard
+    let pane = controller.pane
+    func alphas() throws -> [String: CGFloat] {
+        let listing = try #require(controller.listing)
+        return try Dictionary(
+            uniqueKeysWithValues: (0..<listing.count).map { row in
+                (listing[row].name, try cell(controller, row: row, column: 0).alphaValue)
+            })
+    }
+    clipboard.cut([
+        URL(fileURLWithPath: "/folder/a", isDirectory: false),
+        URL(fileURLWithPath: "/folder/new", isDirectory: false),
+    ])
+    #expect(try alphas() == ["a": ListingViewController.cutAlpha, "b": 1])
+    let builds = clipboard.cutNameBuilds
+
+    pane.apply(.patches([.update(file("new"))]), at: pane.location)
+    await settle { controller.listing?.count == 3 }
+    pane.apply(.patches([.remove(name: "a"), .update(file("renamed"))]), at: pane.location)
+    await settle { controller.listing?.row(named: "renamed") != nil }
+    pane.setSort(.name, ascending: false)
+    await settle { controller.listing?.row(named: "renamed") == 0 }
+
+    #expect(try alphas() == ["b": 1, "new": ListingViewController.cutAlpha, "renamed": 1])
+    #expect(clipboard.cutNameBuilds == builds)
+}
+
+/// A pane that moves to another folder dims that folder's cut entries, and only those.
+@MainActor @Test func aPaneThatMovesDimsTheNewFoldersCutEntries() async throws {
+    let pasteboard = NSPasteboard(name: NSPasteboard.Name("searcher-test-\(UUID().uuidString)"))
+    defer { pasteboard.releaseGlobally() }
+    let clipboard = CutState(clipboard: PasteboardFileClipboard(pasteboard: pasteboard))
+    let lister = StubLister([:])
+    lister.set("/other", to: [file("a"), file("c")])
+    let controller = await controller(showing: [file("a"), file("b")], lister: lister)
+    controller.clipboard = clipboard
+    clipboard.cut([URL(fileURLWithPath: "/other/a", isDirectory: false)])
+    #expect(try cell(controller, row: 0, column: 0).alphaValue == 1)
+
+    controller.pane.navigate(to: Location(path: "/other"))
+    await settle { controller.listing?.row(named: "c") != nil }
+
+    #expect(try cell(controller, row: 0, column: 0).alphaValue == ListingViewController.cutAlpha)
+    #expect(try cell(controller, row: 1, column: 0).alphaValue == 1)
+}
+
 @MainActor @Test func aClickThatSelectsMostRowsNamesTheRowsLeftOut() async throws {
     let controller = await controller(
         showing: [file("a"), file("b"), file("c"), file("d"), file("e")])
