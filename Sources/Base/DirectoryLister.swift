@@ -136,9 +136,7 @@ public struct DirectoryLister: Lister {
     /// folder or can't be read: the listing of `path` that a caller makes next reports why.
     /// Blocks on the file system, so call it off the main thread.
     public static func isPackage(followingLinksAt path: String) -> Bool {
-        guard let resolved = realpath(path, nil) else { return false }
-        let target = String(cString: resolved)
-        free(resolved)
+        guard let target = resolvedPath(path) else { return false }
         var info = Darwin.stat()
         guard lstat(target, &info) == 0, info.st_mode & S_IFMT == S_IFDIR,
             let name = target.split(separator: "/").last
