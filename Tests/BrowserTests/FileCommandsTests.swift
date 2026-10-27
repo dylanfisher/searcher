@@ -128,10 +128,6 @@ private func write(_ names: String..., in folder: String) throws {
     }
 }
 
-private func exists(_ path: String) -> Bool {
-    FileManager.default.fileExists(atPath: path)
-}
-
 // MARK: Chords
 
 @Test func eachFileChordInTheKeyTableResolvesToItsCommand() throws {

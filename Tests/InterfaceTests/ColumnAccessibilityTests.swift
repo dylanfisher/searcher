@@ -210,10 +210,7 @@ private final class Fixture {
 /// A click gives the table the keys, and AppKit reports that focus change itself.
 @MainActor @Test func aColumnFocusedByItsTableTakingTheKeysPostsNoSecondFocusChange() async throws {
     let fixture = await Fixture()
-    let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 800, height: 400), styleMask: [.titled],
-        backing: .buffered, defer: true)
-    window.isReleasedWhenClosed = false
+    let window = testWindow(size: NSSize(width: 800, height: 400))
     window.contentView?.addSubview(fixture.controller.view)
 
     #expect(window.makeFirstResponder(fixture.tables[2]))

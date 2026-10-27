@@ -126,10 +126,7 @@ private func pathBar(
     -> NSEvent
 {
     if type == .mouseMoved {
-        return try #require(
-            NSEvent.mouseEvent(
-                with: type, location: point, modifierFlags: [], timestamp: 0, windowNumber: 0,
-                context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
+        return try mouseEvent(type, at: point, in: nil, clickCount: 0, pressure: 0)
     }
     return try #require(
         NSEvent.enterExitEvent(

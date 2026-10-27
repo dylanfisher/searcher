@@ -85,11 +85,6 @@ private func read(_ path: String) throws -> String {
     try String(contentsOfFile: path, encoding: .utf8)
 }
 
-private func exists(_ path: String) -> Bool {
-    var info = stat()
-    return lstat(path, &info) == 0
-}
-
 private func makeFolder(_ path: String) throws {
     try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: false)
 }

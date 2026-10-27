@@ -286,11 +286,7 @@ func commandShiftPeriodRunsShowHiddenFilesWhereverTheLayoutPutsThePeriod(
     typed: String, keyCode: UInt16
 ) throws {
     let recording = RecordingTable(registry: try AppCommands.registry())
-    let event = try #require(
-        NSEvent.keyEvent(
-            with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0,
-            windowNumber: 0, context: nil, characters: typed, charactersIgnoringModifiers: typed,
-            isARepeat: false, keyCode: keyCode))
+    let event = try keyEvent(typed, modifiers: [.command, .shift], keyCode: keyCode)
 
     recording.table.keyDown(with: event)
 

@@ -1,4 +1,5 @@
 import Base
+import BrowserTestSupport
 import Foundation
 import TestSupport
 import Testing
@@ -34,12 +35,6 @@ private let albumSize = FolderSizeCache.Record(
         bytes: 123_456_789, isPartial: true,
         walkedAt: Date(timeIntervalSinceReferenceDate: 780_000_001.25)),
     folderModified: Date(timeIntervalSinceReferenceDate: 779_000_000.5))
-
-private func roots(_ folder: TemporaryFolder) -> StoreRoots {
-    StoreRoots(
-        caches: folder.url.appending(path: "Caches"),
-        applicationSupport: folder.url.appending(path: "Application Support"))
-}
 
 private func store(
     _ folder: TemporaryFolder, log: EventLog<String> = EventLog(), byteCap: Int = 50_000_000,

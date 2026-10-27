@@ -1,4 +1,5 @@
 import Base
+import BrowserTestSupport
 import Foundation
 import TestSupport
 import Testing
@@ -17,9 +18,7 @@ private func store(
     byteCap: Int = ListingCacheStore.defaultByteCap
 ) -> ListingCacheStore {
     ListingCacheStore(
-        roots: StoreRoots(
-            caches: folder.url.appending(path: "Caches"),
-            applicationSupport: folder.url.appending(path: "Application Support")),
+        roots: roots(folder),
         log: { log.append($0) }, byteCap: byteCap, clock: ManualClock())
 }
 

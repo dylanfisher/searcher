@@ -79,11 +79,7 @@ private final class Fixture {
     func press(_ characters: String, keyCode: UInt16 = 0, modifiers: NSEvent.ModifierFlags = [])
         throws
     {
-        let event = try #require(
-            NSEvent.keyEvent(
-                with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
-                windowNumber: 0, context: nil, characters: characters,
-                charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode))
+        let event = try keyEvent(characters, modifiers: modifiers, keyCode: keyCode)
         try editor.keyDown(with: event)
     }
 
@@ -389,10 +385,7 @@ private var paletteSize: NSSize {
 @MainActor
 private func paletteShown(with settings: Settings) throws -> PaletteWindowController {
     let controller = PaletteWindowController(palette: Palette(sources: []), settings: settings)
-    let opener = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.titled],
-        backing: .buffered, defer: true)
-    opener.isReleasedWhenClosed = false
+    let opener = testWindow(size: NSSize(width: 800, height: 600))
     controller.show(over: opener)
     return controller
 }
@@ -439,10 +432,7 @@ private func paletteShown(with settings: Settings) throws -> PaletteWindowContro
 /// (docs/decisions/0091-test-windows-on-second-display.md).
 @MainActor @Test func thePanelShowsOnItsOpenersScreenAsAWindowOfItsOwn() async throws {
     guard NSScreen.screens.count > 1 else { return }
-    let opener = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.titled],
-        backing: .buffered, defer: false)
-    opener.isReleasedWhenClosed = false
+    let opener = testWindow(size: NSSize(width: 800, height: 600), deferred: false)
     SecondDisplay.orderFront(opener)
     defer { opener.orderOut(nil) }
     let screen = try #require(opener.screen)

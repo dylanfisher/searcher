@@ -4,27 +4,6 @@ import Testing
 
 @testable import Interface
 
-/// A key-down event as AppKit builds it for a real key press: `charactersIgnoringModifiers` still
-/// has Shift applied, and arrows and function keys arrive as private-use characters.
-@MainActor
-func keyEvent(
-    _ ignoringModifiers: String, characters: String? = nil, modifiers: NSEvent.ModifierFlags = []
-) throws -> NSEvent {
-    try #require(
-        NSEvent.keyEvent(
-            with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
-            windowNumber: 0, context: nil, characters: characters ?? ignoringModifiers,
-            charactersIgnoringModifiers: ignoringModifiers, isARepeat: false, keyCode: 0))
-}
-
-/// The character NSEvent uses for a function key such as `NSDownArrowFunctionKey`.
-func functionKey(_ code: Int) -> String {
-    String(Character(Unicode.Scalar(UInt32(code))!))
-}
-
-/// Arrow events carry these flags along with the modifiers held.
-let arrowFlags: NSEvent.ModifierFlags = [.numericPad, .function]
-
 @MainActor @Test func cmdDownCmdOAndCmdUpMapToTheRegisteredChords() throws {
     let registry = try AppCommands.registry()
     let cmdDown = try KeyChord(

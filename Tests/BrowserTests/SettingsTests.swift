@@ -1,31 +1,10 @@
 import Base
+import BrowserTestSupport
 import Foundation
 import TestSupport
 import Testing
 
 @testable import Browser
-
-/// Settings for a test that never changes one, over a `temporarySuite` under the temporary
-/// directory, which removes its file with the settings. TestSupport can't build `Settings`, which
-/// is in Browser, so each test target has this and `storedSettings`.
-@MainActor
-func untouchedSettings() -> Settings {
-    Settings(defaults: temporarySuite(in: FileManager.default.temporaryDirectory.path))
-}
-
-/// `untouchedSettings` with folder sizes on, for a test of the walks that setting starts.
-@MainActor
-func sizedSettings() -> Settings {
-    let settings = untouchedSettings()
-    settings.folderSizes = true
-    return settings
-}
-
-/// Settings stored in `folder`, which takes the suite's file with it when the test removes it.
-@MainActor
-func storedSettings(in folder: TemporaryFolder) -> Settings {
-    Settings(defaults: temporarySuite(in: folder.url.path))
-}
 
 @MainActor @Test func aMissingKeyReadsAsTheDefault() {
     let settings = untouchedSettings()

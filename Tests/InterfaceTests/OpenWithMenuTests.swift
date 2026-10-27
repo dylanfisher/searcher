@@ -128,8 +128,7 @@ private func choose(_ item: NSMenuItem) throws {
 
 @MainActor @Test func aMenuOpenedBeforeTheListIsBuiltShowsLoadingThenTheApps() async throws {
     let fixture = await Fixture()
-    let held = DispatchQueue(label: "OpenWithMenuTests.held")
-    held.suspend()
+    let held = heldQueue("OpenWithMenuTests.held")
     fixture.cache.buildQueue = held
     fixture.select("a.txt")
 

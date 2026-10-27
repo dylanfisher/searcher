@@ -119,9 +119,7 @@ func otherFailuresShowTheErrorTextNotTheDeniedView(path: String) async {
 
     // Laid out as a window's content, as in the app; the window is never ordered in. Laid out
     // without a window, the view happened to keep its preferred width even before the fix.
-    let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 900, height: 600), styleMask: [.titled],
-        backing: .buffered, defer: true)
+    let window = testWindow(size: NSSize(width: 900, height: 600))
     window.contentView = controller.view
     window.layoutIfNeeded()
 

@@ -1,12 +1,14 @@
+import Base
 import Browser
 import Foundation
 
 /// The volumes a test's `MountTable` reads, which the test changes between reads. Nothing real
-/// is read.
+/// is read. Records whether each read ran on a `BlockingCallThread`.
 public final class StubMounts: @unchecked Sendable {
-    // `lock` guards `volumes`.
+    // `lock` guards everything below it.
     private let lock = NSLock()
     private var volumes: [VolumeIdentity]
+    private var reads: [Bool] = []
 
     public init(_ volumes: [VolumeIdentity]) {
         self.volumes = volumes
@@ -19,7 +21,17 @@ public final class StubMounts: @unchecked Sendable {
 
     /// A table that reads these volumes.
     @MainActor public func table() -> MountTable {
-        MountTable(read: { self.lock.withLock { self.volumes } })
+        MountTable(read: read)
+    }
+
+    /// For each read so far, whether it ran on a `BlockingCallThread`.
+    public var readsOnBlockingCallThreads: [Bool] { lock.withLock { reads } }
+
+    private func read() -> [VolumeIdentity] {
+        lock.withLock {
+            reads.append(BlockingCallThread.isCurrent)
+            return volumes
+        }
     }
 }
 

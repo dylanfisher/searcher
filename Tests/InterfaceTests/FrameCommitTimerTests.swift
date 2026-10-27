@@ -10,17 +10,11 @@ import Testing
 }
 
 @MainActor @Test func scriptedKeyEventGetsAPositiveIntervalOnce() throws {
-    let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: [.titled],
-        backing: .buffered, defer: false)
+    let window = testWindow(size: NSSize(width: 200, height: 100), deferred: false)
     window.contentView?.needsDisplay = true
-    let event = try #require(
-        NSEvent.keyEvent(
-            with: .keyDown, location: .zero, modifierFlags: [.numericPad, .function],
-            timestamp: FrameCommitTimer.now, windowNumber: window.windowNumber, context: nil,
-            characters: functionKey(NSDownArrowFunctionKey),
-            charactersIgnoringModifiers: functionKey(NSDownArrowFunctionKey), isARepeat: false,
-            keyCode: 125))
+    let event = try keyEvent(
+        functionKey(NSDownArrowFunctionKey), modifiers: arrowFlags, keyCode: 125,
+        windowNumber: window.windowNumber, timestamp: FrameCommitTimer.now)
     var intervals: [Duration] = []
     FrameCommitTimer.time(from: event.timestamp, in: window) { intervals.append($0) }
     #expect(intervals.isEmpty, "reported before the run loop committed a frame")
@@ -35,9 +29,7 @@ import Testing
 }
 
 @MainActor @Test func aPassThatLeavesTheWindowToDrawIsNotTheFrame() {
-    let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: [.titled],
-        backing: .buffered, defer: false)
+    let window = testWindow(size: NSSize(width: 200, height: 100), deferred: false)
     var pass = 0
     // After Core Animation's commit (2,000,000) and before the timer's observer, the first pass
     // leaves the window needing display, as a pass does when AppKit waits for the display's

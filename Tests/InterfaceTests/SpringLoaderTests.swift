@@ -34,7 +34,7 @@ private final class Fixture {
     let pane: Pane
     let clock = ManualClock()
     let loader: SpringLoader
-    let pasteboard = NSPasteboard(name: NSPasteboard.Name("searcher-test-\(UUID().uuidString)"))
+    let pasteboard = testPasteboard()
     let info: StubDraggingInfo
     let mouse = Mouse()
     private let listController: ListingViewController?

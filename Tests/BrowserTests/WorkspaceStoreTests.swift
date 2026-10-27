@@ -1,4 +1,5 @@
 import Base
+import BrowserTestSupport
 import Foundation
 import TestSupport
 import Testing
@@ -6,12 +7,6 @@ import Testing
 @testable import Browser
 
 private let bounds = Rect(x: 0, y: 0, width: 1200, height: 800)
-
-private func roots(_ folder: TemporaryFolder) -> StoreRoots {
-    StoreRoots(
-        caches: folder.url.appending(path: "Caches"),
-        applicationSupport: folder.url.appending(path: "Application Support"))
-}
 
 private func workspacesFolder(_ folder: TemporaryFolder) -> URL {
     roots(folder).applicationSupport.appending(path: "workspaces")
