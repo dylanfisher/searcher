@@ -32,7 +32,7 @@ enum ColdChildren {
         guard children.count >= count else {
             throw TooFewChildren(folder: folder, found: children.count)
         }
-        return children.sorted().prefix(count).map { folder + "/" + $0 }
+        return children.sorted().prefix(count).map { join(folder, $0) }
     }
 
     struct TooFewChildren: Error, CustomStringConvertible {

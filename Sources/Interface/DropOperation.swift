@@ -1,4 +1,5 @@
 import AppKit
+import Base
 import Browser
 
 /// What a drop of files does, by Finder's rules: items on the target folder's volume move and
@@ -28,7 +29,7 @@ enum DropOperation: Equatable {
         else { return nil }
         let target = FileOperation.comparable(folder)
         if sources.allSatisfy({
-            FileOperation.comparable(($0 as NSString).deletingLastPathComponent) == target
+            FileOperation.comparable(parentPath(of: $0)) == target
         }) {
             guard allowed == .copy else { return nil }
             self = .duplicate
