@@ -58,7 +58,7 @@ public enum UniqueName {
     {
         precondition(
             !Thread.isMainThread, "UniqueName does file-system I/O; call it off the main thread")
-        let path = folder + "/" + name
+        let path = join(folder, name)
         var info = stat()
         if lstat(path, &info) == 0 { return true }
         if errno == ENOENT { return false }

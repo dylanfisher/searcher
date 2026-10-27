@@ -163,6 +163,12 @@ func aSubfolderErrorIsHandledByItsCode(code: Int32, expected: TreeSizeWalker.Sub
     #expect(tally.bytes == 705)
 }
 
+@Test func theRootsSubfoldersAreNamedWithOneSlash() {
+    var tally = TreeSizeWalker.Tally()
+
+    #expect(tally.count([folder("Users"), package("App.app")], in: "/") == ["/Users", "/App.app"])
+}
+
 @Test func aSubfolderPastThePathLengthLimitIsSkippedAndPartial() throws {
     let folder = try TemporaryFolder("TreeSizeWalkerTests")
     let root = folder.url.path + "/tree"

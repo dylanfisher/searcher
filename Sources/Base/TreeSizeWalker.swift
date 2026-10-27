@@ -54,7 +54,7 @@ public struct TreeSizeWalker: Sendable {
                 case .directory where entry.isDataless, .package where entry.isDataless:
                     isPartial = true
                 case .directory, .package:
-                    subfolders.append(folder + "/" + entry.name)
+                    subfolders.append(join(folder, entry.name))
                 case .symbolicLink, .other:
                     files += 1
                 case .unmountedShare:
