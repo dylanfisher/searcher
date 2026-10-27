@@ -18,10 +18,14 @@ public struct FileEvent: Equatable, Sendable {
         public static let renamed = Flags(rawValue: 1 << 2)
         public static let modified = Flags(rawValue: 1 << 3)
         /// Events were dropped or coalesced into a folder, so the paths reported aren't all of
-        /// them. The folder has to be read again.
+        /// them. The folder at the event's path has to be read again, with everything under it.
         public static let mustRescan = Flags(rawValue: 1 << 4)
-        /// The watched folder itself was moved, deleted or replaced.
+        /// The watched folder itself, or a folder on the path to it, was moved, deleted or
+        /// replaced. The event's path is the watched path.
         public static let rootChanged = Flags(rawValue: 1 << 5)
+        /// Set with `mustRescan` when the stream or the kernel dropped events: every folder the
+        /// stream watches has to be read again, whatever path the event names.
+        public static let dropped = Flags(rawValue: 1 << 6)
     }
 
     public let path: String
@@ -49,6 +53,7 @@ public struct FileEvent: Equatable, Sendable {
             .mustRescan,
             if: kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagUserDropped
                 | kFSEventStreamEventFlagKernelDropped)
+        add(.dropped, if: kFSEventStreamEventFlagUserDropped | kFSEventStreamEventFlagKernelDropped)
         add(.rootChanged, if: kFSEventStreamEventFlagRootChanged)
         self.init(path: path, flags: flags)
     }

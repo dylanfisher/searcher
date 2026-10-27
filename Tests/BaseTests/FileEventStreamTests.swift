@@ -73,8 +73,8 @@ import Testing
     }
 
     #expect(flags(kFSEventStreamEventFlagMustScanSubDirs) == .mustRescan)
-    #expect(flags(kFSEventStreamEventFlagUserDropped) == .mustRescan)
-    #expect(flags(kFSEventStreamEventFlagKernelDropped) == .mustRescan)
+    #expect(flags(kFSEventStreamEventFlagUserDropped) == [.mustRescan, .dropped])
+    #expect(flags(kFSEventStreamEventFlagKernelDropped) == [.mustRescan, .dropped])
     #expect(flags(kFSEventStreamEventFlagRootChanged) == .rootChanged)
     #expect(flags(kFSEventStreamEventFlagItemCreated) == .created)
     #expect(flags(kFSEventStreamEventFlagItemRemoved) == .removed)

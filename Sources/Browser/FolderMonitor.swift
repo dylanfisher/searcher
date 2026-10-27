@@ -102,12 +102,11 @@ public final class FolderMonitor: FolderMonitoring, @unchecked Sendable {
     /// The change a batch of events means for `folder`, or nil if none of them concerns its
     /// entries. Events name paths at any depth; only direct children matter, since a pane shows
     /// one level. Each named child is read once, as it is now, however many events it had, so a
-    /// create followed by a delete patches as a delete.
-    static func change(for events: [FileEvent], in folder: String) -> FolderChange? {
-        if events.contains(where: { !$0.flags.isDisjoint(with: [.mustRescan, .rootChanged]) }) {
-            return .relist
-        }
+    /// create followed by a delete patches as a delete. `folder` is a resolved path, as FSEvents
+    /// reports them.
+    public static func change(for events: [FileEvent], in folder: String) -> FolderChange? {
         let prefix = folderPrefix(folder)
+        if events.contains(where: { relists($0, prefix: prefix) }) { return .relist }
         var names: [String] = []
         var seen: Set<String> = []
         for event in events where event.path.utf8.starts(with: prefix.utf8) {
@@ -131,6 +130,22 @@ public final class FolderMonitor: FolderMonitoring, @unchecked Sendable {
             }
         }
         return patches.isEmpty ? nil : .patches(patches)
+    }
+
+    /// Whether `event` leaves the listing of the folder whose `folderPrefix` is `prefix` in doubt,
+    /// so it has to be read again. Dropped events and a change on the path to the folder do,
+    /// whatever path they name. A must-rescan event does when it names the folder, one of its
+    /// ancestors, or one of its children, whose own entry may be stale; one deeper can't change
+    /// what the folder lists. See docs/decisions/0020-folder-monitor.md.
+    private static func relists(_ event: FileEvent, prefix: String) -> Bool {
+        if !event.flags.isDisjoint(with: [.dropped, .rootChanged]) { return true }
+        guard event.flags.contains(.mustRescan) else { return false }
+        // Ending in one `/`, so a sibling sharing the folder's name as a prefix doesn't match.
+        let path = folderPrefix(event.path)
+        if prefix.utf8.starts(with: path.utf8) { return true }
+        guard path.utf8.starts(with: prefix.utf8) else { return false }
+        let child = path.utf8.dropFirst(prefix.utf8.count).dropLast()
+        return !child.contains(UInt8(ascii: "/"))
     }
 
     deinit { stop() }
