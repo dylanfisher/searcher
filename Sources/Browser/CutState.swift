@@ -10,6 +10,8 @@ import Foundation
 public final class CutState {
     public let clipboard: any FileClipboard
     private var cut: (paths: [String], changeCount: Int)?
+    /// The cut's names in each folder a list has asked about, by folder path, for this cut only.
+    private var namesByFolder: [String: Set<String>] = [:]
     private var observers: [Observer] = []
 
     private struct Observer {
@@ -28,7 +30,7 @@ public final class CutState {
     }
 
     /// Puts `urls` on the clipboard and marks them cut.
-    func cut(_ urls: [URL]) {
+    public func cut(_ urls: [URL]) {
         clipboard.write(urls)
         set((urls.map(\.path), clipboard.changeCount))
     }
@@ -48,6 +50,10 @@ public final class CutState {
     /// compare exactly, as the pane's names do. A server's entries are its shares' mount points
     /// in `/Volumes` (`MountTable.mountPoint(ofRow:in:)`), so a cut of one, made in a pane at
     /// `/Volumes`, dims its row there too.
+    ///
+    /// A list reads them each time its rows change, every patch and size batch included, so a
+    /// folder's names are worked out once per cut and kept: from a Select All of 100k rows, each
+    /// pass over the paths cost the main thread on every change.
     public func cutNames(in folder: Location) -> Set<String> {
         guard let paths = cutPaths else { return [] }
         let parent =
@@ -55,9 +61,13 @@ public final class CutState {
             case .folder(let path): path
             case .server: Server.sharesFolder.folderPath
             }
-        return Set(
+        if let names = namesByFolder[parent] { return names }
+        cutNameBuilds += 1
+        let names = Set(
             paths.lazy.filter { parentPath(of: $0) == parent }
                 .map { lastComponent(of: $0) })
+        namesByFolder[parent] = names
+        return names
     }
 
     /// Ends a cut whose clipboard has been written since, and tells the observers. The app calls
@@ -74,12 +84,16 @@ public final class CutState {
         observers.append(Observer(owner: owner, handler: handler))
     }
 
+    /// How many times a folder's cut names were worked out from the cut paths. Tests read it.
+    private(set) var cutNameBuilds = 0
+
     /// How many observers are kept, those whose owner is gone among them. Tests read it.
     var observerCount: Int { observers.count }
 
     private func set(_ cut: (paths: [String], changeCount: Int)?) {
         let changed = self.cut != nil || cut != nil
         self.cut = cut
+        namesByFolder = [:]
         guard changed else { return }
         observers.removeAll { $0.owner == nil }
         for observer in observers {
