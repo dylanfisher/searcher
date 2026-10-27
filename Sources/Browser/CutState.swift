@@ -1,3 +1,4 @@
+import Base
 import Foundation
 
 /// The app's file clipboard and what the last Cut put on it: the cut paths and the clipboard's
@@ -55,8 +56,8 @@ public final class CutState {
             case .server: Server.sharesFolder.folderPath
             }
         return Set(
-            paths.lazy.filter { ($0 as NSString).deletingLastPathComponent == parent }
-                .map { ($0 as NSString).lastPathComponent })
+            paths.lazy.filter { parentPath(of: $0) == parent }
+                .map { lastComponent(of: $0) })
     }
 
     /// Ends a cut whose clipboard has been written since, and tells the observers. The app calls
