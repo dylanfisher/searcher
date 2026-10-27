@@ -55,3 +55,10 @@ segment ([0026](0026-path-bar.md)); nothing else in the app had a hover look.
 Controls built before this rule don't all have the four states. They get them when next
 changed, with `HoverButton` where it fits; the sidebar's eject button has them since
 2026-10-26.
+
+## Amendment: the config file's controls (2026-10-27)
+
+The config file's error banner ([0120](0120-config-format.md)) has one control, Open Config
+File, a small bordered push button, and the General pane's Open Config File and Use Config File
+Value buttons are SwiftUI's bordered buttons. AppKit draws all four states for each, so none
+needs `HoverButton`.

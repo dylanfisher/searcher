@@ -210,3 +210,9 @@ key's own depends on the layout ("&" is the 1 key's own on AZERTY, and Shift-7 o
 Browser doesn't know the layout, so it can't reject the typed form. A hand-written
 `cmd+shift+>` runs through the typed candidate on US, but the registry sees it as a chord apart
 from `cmd+shift+.`, so a clash between the two goes unnoticed.
+
+## Amendment: the config file (2026-10-27)
+
+The config file ([0120](0120-config-format.md)) has no shortcut lines yet; M5b.2 adds them, on
+the parser's second step, where 0120 says a key family goes. Until then `Settings.shortcuts`
+is read from `UserDefaults` only.

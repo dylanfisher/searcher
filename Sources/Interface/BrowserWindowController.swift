@@ -60,6 +60,12 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// Ends the panes at the panel while it shows, and at the window's bottom while it doesn't.
     let panesOverOperations: NSLayoutConstraint
     let panesToBottom: NSLayoutConstraint
+    /// Over the tab strip while the config file has an error, hidden otherwise.
+    let configBanner = ConfigErrorBanner()
+    /// Puts the tab strip under the banner while it shows, and at the window's top while it
+    /// doesn't.
+    private let stripUnderBanner: NSLayoutConstraint
+    private let stripToTop: NSLayoutConstraint
     let settings: Settings
     /// `settings.hideEmptyOperationsPanel` as last seen, so another setting's change leaves the
     /// panel alone.
@@ -186,6 +192,8 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         let content = NSView()
         panesOverOperations = tabHost.bottomAnchor.constraint(equalTo: operations.view.topAnchor)
         panesToBottom = tabHost.bottomAnchor.constraint(equalTo: content.bottomAnchor)
+        stripUnderBanner = strip.view.topAnchor.constraint(equalTo: configBanner.bottomAnchor)
+        stripToTop = strip.view.topAnchor.constraint(equalTo: content.topAnchor)
         sidebar = WorkspaceSidebarViewController(
             workspace: workspace, list: workspaces, favorites: favorites, volumes: volumes,
             settings: settings)
@@ -195,6 +203,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         let splitView = layOut(content, in: window)
         wireSidebar(favorites: favorites, splitView: splitView)
         wireCallbacks(window: window)
+        showConfigErrors()
         window.delegate = self
         showWorkspace()
         window.initialFirstResponder = paneViewController.keyView
@@ -225,12 +234,14 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// right of the sidebar in `window`, sized as `settings` says for a new window and centered.
     /// Returns the split view between the sidebar and `content`.
     private func layOut(_ content: NSView, in window: BrowserWindow) -> NSSplitView {
-        for view in [tabStrip.view, tabHost, operations.view] {
+        for view in [configBanner, tabStrip.view, tabHost, operations.view] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
         }
         NSLayoutConstraint.activate([
-            tabStrip.view.topAnchor.constraint(equalTo: content.topAnchor),
+            configBanner.topAnchor.constraint(equalTo: content.topAnchor),
+            configBanner.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            configBanner.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             tabStrip.view.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             tabStrip.view.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             tabStripHeight,
@@ -293,7 +304,15 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     private func wireCallbacks(window: BrowserWindow) {
         operations.onNeedsAttention = { [weak self] in self?.operationNeedsAttention() }
         operations.onEmptied = { [weak self] in self?.hideEmptyOperations() }
-        settings.observe(for: self) { [weak self] in self?.settingsChanged() }
+        configBanner.onOpen = { [weak self] in
+            guard let self else { return }
+            SystemCommands.openConfig(
+                settings: settings, systemActions: workspace.selectedTab.focusedPane.systemActions)
+        }
+        settings.observe(for: self) { [weak self] in
+            self?.settingsChanged()
+            self?.showConfigErrors()
+        }
         tabStrip.didSelectTab = { [weak self] in self?.showWorkspace() }
         window.didChangeFirstResponder = { [weak self] in self?.firstResponderDidChange() }
         workspace.onActiveChange = { [weak self] in self?.markFocusedPane() }
@@ -303,6 +322,14 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         sidebar.outlineView.takeKeysFromText = { [weak self] in
             if self?.window?.firstResponder is NSText { self?.giveKeysBack() }
         }
+    }
+
+    /// Shows the config file's errors in the banner, or hides it while there are none.
+    private func showConfigErrors() {
+        let errors = settings.configErrors
+        configBanner.show(errors, canOpen: settings.configFile != nil)
+        stripToTop.isActive = errors.isEmpty
+        stripUnderBanner.isActive = !errors.isEmpty
     }
 
     /// The controller's window, which `init` makes; a controller never loses it.

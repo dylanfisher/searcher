@@ -7,6 +7,12 @@ import Foundation
 /// A key that is missing reads as the preference's default. A value of the wrong type is removed,
 /// logged, and reads as the default too: stored data has one shape, and UserDefaults' own readers would
 /// turn the string "YES" or the number 1 into true, and a number into a string.
+///
+/// The user's preferences, those in `preferences`, can also be set in the config file
+/// (docs/decisions/0120-config-format.md). Each reads as the value the app stored, then the
+/// file's, then its default: a change made in the app is stored and wins over the file, which
+/// the app never writes. `configOverrides` lists the app's values that differ from the file's,
+/// and `useConfigValue(for:)` removes one.
 @MainActor
 public final class Settings {
     enum Key: String {
@@ -56,9 +62,77 @@ public final class Settings {
         case dark
     }
 
+    /// The preferences a user sets, each with its name in the config file, what it accepts and
+    /// its default: the one list the config file's parser and template are made from. State the
+    /// app keeps by itself, such as the favorites, window frames, the palette's place, and the
+    /// shortcuts, which have a syntax of their own, isn't in it.
+    public nonisolated static let preferences: [Preference] = [
+        Preference(
+            .showHidden, "show-hidden", .bool, default: .bool(false),
+            summary: "Whether panes list hidden files: names that start with a dot, and files"
+                + " with the hidden flag."),
+        Preference(
+            .hideDSStore, "hide-ds-store", .bool, default: .bool(true),
+            summary: "Whether panes leave out .DS_Store files even while hidden files show."),
+        Preference(
+            .foldersFirst, "folders-first", .bool, default: .bool(false),
+            summary: "Whether folders sort before every other item."),
+        Preference(
+            .folderSizes, "folder-sizes", .bool, default: .bool(false),
+            summary: "Whether list view walks each folder for its size, as Finder's Calculate"
+                + " All Sizes does."),
+        Preference(
+            .columnsStartAtHome, "columns-start-at-home", .bool, default: .bool(true),
+            summary: "Whether column view starts a folder in your home folder at your home"
+                + " folder, as Finder does, rather than at the top of its volume."),
+        Preference(
+            .columnWidth, "column-width",
+            .number(
+                isValid: isColumnWidth,
+                described:
+                    "a whole number from \(Int(columnWidths.lowerBound)) to \(Int(columnWidths.upperBound))"
+            ),
+            default: .number(defaultColumnWidth),
+            summary: "The width, in points, of each new column in column view."),
+        Preference(
+            .appearance, "appearance", .choice(Appearance.allCases.map(\.rawValue)),
+            default: .string(Appearance.auto.rawValue),
+            summary: "Light, dark, or auto to follow the system."),
+        Preference(
+            .terminalBundleID, "terminal-bundle-id", .string,
+            default: .string("com.apple.Terminal"),
+            summary: "The bundle ID of the app Open Terminal Here opens a folder in."),
+        Preference(
+            .commanderFKeys, "commander-f-keys", .bool, default: .bool(false),
+            summary: "Whether F5 to F8 copy and move to the other pane, make a folder and move"
+                + " to the Trash, as in Total Commander."),
+        Preference(
+            .hideEmptyOperationsPanel, "hide-empty-operations-panel", .bool,
+            default: .bool(true),
+            summary: "Whether a window's operations panel hides once its operations are done."),
+        Preference(
+            .showsFavoritesInSidebar, "sidebar-favorites", .bool, default: .bool(true),
+            summary: "Whether the sidebar shows Favorites."),
+        Preference(
+            .showsLocationsInSidebar, "sidebar-locations", .bool, default: .bool(true),
+            summary: "Whether the sidebar shows Locations."),
+        Preference(
+            .showsWorkspacesInSidebar, "sidebar-workspaces", .bool, default: .bool(true),
+            summary: "Whether the sidebar shows Workspaces."),
+    ]
+
+    /// `preferences` by key.
+    nonisolated static let preferencesByKey = Dictionary(
+        uniqueKeysWithValues: preferences.map { ($0.key, $0) })
+
+    /// The config file in `home`, where the app reads it.
+    public nonisolated static func userConfigFile(home: String) -> URL {
+        URL(fileURLWithPath: home, isDirectory: true).appending(path: ".config/searcher/config")
+    }
+
     /// The width a new column of column view gets until one is set, and the width an
     /// Option-double-click puts fitted columns back to (0096-column-widths.md).
-    public static let defaultColumnWidth = 286.0
+    public nonisolated static let defaultColumnWidth = 286.0
     /// The widths a column's grip can drag it to (0096-column-widths.md).
     public nonisolated static let columnWidths: ClosedRange<Double> = 100...1000
 
@@ -96,61 +170,55 @@ public final class Settings {
     /// Whether panes list hidden entries: names starting with a dot, and entries with the hidden
     /// flag (`chflags hidden`). Off by default.
     public var showHidden: Bool {
-        didSet { store(showHidden, for: .showHidden, changed: showHidden != oldValue) }
+        get { bool(.showHidden) }
+        set { set(.bool(newValue), for: .showHidden) }
     }
     /// Whether panes leave out entries named exactly `.DS_Store` even while `showHidden` lists
     /// the other hidden entries. On by default (0100-appearance-and-ds-store.md). It hides them
     /// from the rows only: copying, moving or trashing a folder takes its `.DS_Store` along.
     public var hideDSStore: Bool {
-        didSet { store(hideDSStore, for: .hideDSStore, changed: hideDSStore != oldValue) }
+        get { bool(.hideDSStore) }
+        set { set(.bool(newValue), for: .hideDSStore) }
     }
     /// Whether column view's trail for a folder in `home` starts at `home`, as Finder's does,
     /// rather than at the root of the folder's volume. On by default
     /// (0103-column-trail-from-the-root.md).
     public var columnsStartAtHome: Bool {
-        didSet {
-            store(
-                columnsStartAtHome, for: .columnsStartAtHome,
-                changed: columnsStartAtHome != oldValue)
-        }
+        get { bool(.columnsStartAtHome) }
+        set { set(.bool(newValue), for: .columnsStartAtHome) }
     }
     /// The user's home folder: the folder `~` names in a typed path, a new window opens at and
     /// `columnsStartAtHome` starts trails at. It isn't stored.
     public let home: String
     /// Whether folders come before every other entry in each sort. Off by default.
     public var foldersFirst: Bool {
-        didSet { store(foldersFirst, for: .foldersFirst, changed: foldersFirst != oldValue) }
+        get { bool(.foldersFirst) }
+        set { set(.bool(newValue), for: .foldersFirst) }
     }
     /// Whether a pane in list view walks each subfolder for its size and shows it, on local and
     /// network volumes alike: Finder's Calculate All Sizes. Off by default, as in Finder, so
     /// browsing reads no more of the disk than the listings.
     public var folderSizes: Bool {
-        didSet { store(folderSizes, for: .folderSizes, changed: folderSizes != oldValue) }
+        get { bool(.folderSizes) }
+        set { set(.bool(newValue), for: .folderSizes) }
     }
     /// The bundle ID of the app Open Terminal Here opens the pane's folder in. Terminal by default.
     public var terminalBundleID: String {
-        didSet {
-            store(
-                terminalBundleID, for: .terminalBundleID,
-                changed: terminalBundleID != oldValue)
-        }
+        get { string(.terminalBundleID) }
+        set { set(.string(newValue), for: .terminalBundleID) }
     }
     /// Whether the Commander F-key preset is on: F5 to F8 are the default alternates of the file
     /// commands in `FileCommands.commanderFKeys`. Off by default.
     public var commanderFKeys: Bool {
-        didSet {
-            store(commanderFKeys, for: .commanderFKeys, changed: commanderFKeys != oldValue)
-        }
+        get { bool(.commanderFKeys) }
+        set { set(.bool(newValue), for: .commanderFKeys) }
     }
 
     /// Whether a window's operations panel hides once it has no operations left, as Finder shows
     /// none while idle. Off, the panel stays and says "No operations". On by default.
     public var hideEmptyOperationsPanel: Bool {
-        didSet {
-            store(
-                hideEmptyOperationsPanel, for: .hideEmptyOperationsPanel,
-                changed: hideEmptyOperationsPanel != oldValue)
-        }
+        get { bool(.hideEmptyOperationsPanel) }
+        set { set(.bool(newValue), for: .hideEmptyOperationsPanel) }
     }
 
     /// The width, in points, every new column of column view gets, and the preview with them,
@@ -160,19 +228,25 @@ public final class Settings {
     ///
     /// - Precondition: `isColumnWidth(_:)` holds for it.
     public var columnWidth: Double {
-        didSet {
+        get { number(.columnWidth) }
+        set {
             precondition(
-                Self.isColumnWidth(columnWidth),
-                "column width \(columnWidth) is not a whole number within \(Self.columnWidths)")
-            store(columnWidth, for: .columnWidth, changed: columnWidth != oldValue)
+                Self.isColumnWidth(newValue),
+                "column width \(newValue) is not a whole number within \(Self.columnWidths)")
+            set(.number(newValue), for: .columnWidth)
         }
     }
 
     /// Whether the app is light, dark or follows the system. Auto by default.
     public var appearance: Appearance {
-        didSet {
-            store(appearance.rawValue, for: .appearance, changed: appearance != oldValue)
+        get {
+            let name = string(.appearance)
+            guard let appearance = Appearance(rawValue: name) else {
+                preconditionFailure("appearance holds \(name), which no appearance is named")
+            }
+            return appearance
         }
+        set { set(.string(newValue.rawValue), for: .appearance) }
     }
 
     /// The sidebar's Favorites, top to bottom, every path distinct by
@@ -190,29 +264,20 @@ public final class Settings {
 
     /// Whether the sidebar shows its Favorites group. On by default.
     public var showsFavoritesInSidebar: Bool {
-        didSet {
-            store(
-                showsFavoritesInSidebar, for: .showsFavoritesInSidebar,
-                changed: showsFavoritesInSidebar != oldValue)
-        }
+        get { bool(.showsFavoritesInSidebar) }
+        set { set(.bool(newValue), for: .showsFavoritesInSidebar) }
     }
 
     /// Whether the sidebar shows its Locations group. On by default.
     public var showsLocationsInSidebar: Bool {
-        didSet {
-            store(
-                showsLocationsInSidebar, for: .showsLocationsInSidebar,
-                changed: showsLocationsInSidebar != oldValue)
-        }
+        get { bool(.showsLocationsInSidebar) }
+        set { set(.bool(newValue), for: .showsLocationsInSidebar) }
     }
 
     /// Whether the sidebar shows its Workspaces group. On by default.
     public var showsWorkspacesInSidebar: Bool {
-        didSet {
-            store(
-                showsWorkspacesInSidebar, for: .showsWorkspacesInSidebar,
-                changed: showsWorkspacesInSidebar != oldValue)
-        }
+        get { bool(.showsWorkspacesInSidebar) }
+        set { set(.bool(newValue), for: .showsWorkspacesInSidebar) }
     }
 
     /// The user's changes to the commands' chords, by command; empty by default. A command
@@ -307,37 +372,90 @@ public final class Settings {
         let handler: @MainActor () -> Void
     }
 
-    /// The settings stored in `defaults`, for the user whose home folder is `home`. `log` gets
-    /// each stored value removed for its shape as the settings are read.
+    /// The preferences' values the app stored, which win over the file's.
+    private var appValues: [Key: Value] = [:]
+    /// The preferences' values the config file last set without an error, which win over the
+    /// defaults.
+    private var fileValues: [Key: Value] = [:]
+
+    /// The config file, which Open Config File opens; nil for settings that have none, as the
+    /// tests' and the UI bench's, where that command is off.
+    public let configFile: URL?
+
+    /// What is wrong with the config file as last read, which kept it from being applied; empty
+    /// while it applied, or there is none.
+    public private(set) var configErrors: [ConfigError] = []
+
+    /// The settings stored in `defaults`, for the user whose home folder is `home`, with
+    /// `configFile` as the config file Open Config File opens. `log` gets each stored value
+    /// removed for its shape as the settings are read.
     public init(
-        defaults: UserDefaults, home: String = NSHomeDirectory(), log: (String) -> Void
+        defaults: UserDefaults, home: String = NSHomeDirectory(), configFile: URL? = nil,
+        log: (String) -> Void
     ) {
         self.defaults = defaults
         self.home = home
-        showHidden = Self.bool(.showHidden, in: defaults, log: log) ?? false
-        hideDSStore = Self.bool(.hideDSStore, in: defaults, log: log) ?? true
-        columnsStartAtHome = Self.bool(.columnsStartAtHome, in: defaults, log: log) ?? true
-        foldersFirst = Self.bool(.foldersFirst, in: defaults, log: log) ?? false
-        folderSizes = Self.bool(.folderSizes, in: defaults, log: log) ?? false
-        terminalBundleID =
-            Self.string(.terminalBundleID, in: defaults, log: log) ?? "com.apple.Terminal"
-        commanderFKeys = Self.bool(.commanderFKeys, in: defaults, log: log) ?? false
-        hideEmptyOperationsPanel =
-            Self.bool(.hideEmptyOperationsPanel, in: defaults, log: log) ?? true
-        columnWidth =
-            Self.number(.columnWidth, in: defaults, log: log, where: Self.isColumnWidth)
-            ?? Self.defaultColumnWidth
-        appearance = Self.appearance(in: defaults, log: log) ?? .auto
+        self.configFile = configFile
+        for preference in Self.preferences {
+            appValues[preference.key] = Self.stored(preference, in: defaults, log: log)
+        }
         palettePlace = Self.palettePlace(in: defaults, log: log)
         newWindowFrame = Self.windowFrame(in: defaults, log: log)
         favorites = Self.favorites(in: defaults, log: log) ?? Favorite.defaults(home: home)
-        showsFavoritesInSidebar =
-            Self.bool(.showsFavoritesInSidebar, in: defaults, log: log) ?? true
-        showsLocationsInSidebar =
-            Self.bool(.showsLocationsInSidebar, in: defaults, log: log) ?? true
-        showsWorkspacesInSidebar =
-            Self.bool(.showsWorkspacesInSidebar, in: defaults, log: log) ?? true
         shortcuts = Self.shortcuts(in: defaults, log: log)
+    }
+
+    /// Applies what the config file holds: its values, every default when there is no file, or,
+    /// for a file with an error, the errors, which leave the values as they were. Tells the
+    /// observers when a value or the errors changed.
+    public func applyConfig(_ load: ConfigLoad) {
+        let before = (Self.preferences.map { value(of: $0.key) }, configErrors)
+        switch load.outcome {
+        case .missing:
+            fileValues = [:]
+            configErrors = []
+        case .values(let values):
+            fileValues = values
+            configErrors = []
+        case .failed(let errors):
+            configErrors = errors
+        }
+        if before != (Self.preferences.map { value(of: $0.key) }, configErrors) {
+            notifyObservers()
+        }
+    }
+
+    /// Applies `watcher`'s first read of the file before it returns, so windows opened after it
+    /// open with the file's values, then each later read as it comes, until the settings or the
+    /// watcher are gone. The caller keeps the watcher.
+    public func follow(_ watcher: ConfigWatcher) async {
+        applyConfig(await watcher.start())
+        let loads = watcher.loads
+        Task { [weak self] in
+            for await load in loads {
+                guard let self else { return }
+                applyConfig(load)
+            }
+        }
+    }
+
+    /// The preferences whose value set in the app differs from the config file's, in
+    /// `preferences` order.
+    public var configOverrides: [ConfigOverride] {
+        Self.preferences.compactMap { preference in
+            guard let app = appValues[preference.key], let file = fileValues[preference.key],
+                app != file
+            else { return nil }
+            return ConfigOverride(
+                key: preference.key, name: preference.name, appValue: app, fileValue: file)
+        }
+    }
+
+    /// Removes the value the app set for `override`'s preference, so the config file's applies.
+    public func useConfigValue(for override: ConfigOverride) {
+        guard appValues.removeValue(forKey: override.key) != nil else { return }
+        defaults.removeObject(forKey: override.key.rawValue)
+        notifyObservers()
     }
 
     /// Runs `handler` after each change of a setting, for as long as `owner` exists.
@@ -355,6 +473,43 @@ public final class Settings {
         notifyObservers()
     }
 
+    /// The value of preference `key`: the app's, the file's, or the default.
+    private func value(of key: Key) -> Value {
+        guard let preference = Self.preferencesByKey[key] else {
+            preconditionFailure("\(key) isn't a preference")
+        }
+        return appValues[key] ?? fileValues[key] ?? preference.defaultValue
+    }
+
+    private func bool(_ key: Key) -> Bool {
+        guard case .bool(let bool) = value(of: key) else {
+            preconditionFailure("\(key) holds \(value(of: key)), not a Boolean")
+        }
+        return bool
+    }
+
+    private func number(_ key: Key) -> Double {
+        guard case .number(let number) = value(of: key) else {
+            preconditionFailure("\(key) holds \(value(of: key)), not a number")
+        }
+        return number
+    }
+
+    private func string(_ key: Key) -> String {
+        guard case .string(let string) = value(of: key) else {
+            preconditionFailure("\(key) holds \(value(of: key)), not a string")
+        }
+        return string
+    }
+
+    /// Stores `value` as the app's for preference `key` when it changes what the preference
+    /// reads as, and tells the observers.
+    private func set(_ value: Value, for key: Key) {
+        guard value != self.value(of: key) else { return }
+        appValues[key] = value
+        store(value.stored, for: key, changed: true)
+    }
+
     private func notifyObservers() {
         observers.removeAll { $0.owner == nil }
         for observer in observers {
@@ -368,41 +523,24 @@ public final class Settings {
         CFGetTypeID(number) == CFBooleanGetTypeID()
     }
 
-    /// The Boolean stored under `key`; nil when there is none or it has another type, which is
-    /// removed.
-    private static func bool(_ key: Key, in defaults: UserDefaults, log: (String) -> Void) -> Bool?
-    {
-        guard let value = defaults.object(forKey: key.rawValue) else { return nil }
-        if let number = value as? NSNumber, isBoolean(number) {
-            return number.boolValue
+    /// The value stored for `preference`; nil when there is none, or it has another type, a
+    /// Boolean for a number among them, or one the preference doesn't accept, which is removed.
+    private static func stored(
+        _ preference: Preference, in defaults: UserDefaults, log: (String) -> Void
+    ) -> Value? {
+        let key = preference.key.rawValue
+        guard let stored = defaults.object(forKey: key) else { return nil }
+        let value: Value? =
+            switch stored {
+            case let number as NSNumber where isBoolean(number): .bool(number.boolValue)
+            case let number as NSNumber: .number(number.doubleValue)
+            case let string as String: .string(string)
+            default: nil
+            }
+        if let value, preference.accepts(value) {
+            return value
         }
-        discard(key.rawValue, holding: value, in: defaults, log: log)
-        return nil
-    }
-
-    /// The number stored under `key`; nil when there is none, it has another type, a Boolean
-    /// among them, or one `isValid` rejects, which is removed.
-    private static func number(
-        _ key: Key, in defaults: UserDefaults, log: (String) -> Void,
-        where isValid: (Double) -> Bool
-    ) -> Double? {
-        guard let value = defaults.object(forKey: key.rawValue) else { return nil }
-        if let number = value as? NSNumber, !isBoolean(number), isValid(number.doubleValue) {
-            return number.doubleValue
-        }
-        discard(key.rawValue, holding: value, in: defaults, log: log)
-        return nil
-    }
-
-    /// The appearance stored under its key; nil when there is none, or it isn't the name of one,
-    /// which is removed.
-    private static func appearance(in defaults: UserDefaults, log: (String) -> Void) -> Appearance?
-    {
-        guard let name = string(.appearance, in: defaults, log: log) else { return nil }
-        if let appearance = Appearance(rawValue: name) {
-            return appearance
-        }
-        discard(Key.appearance.rawValue, holding: name, in: defaults, log: log)
+        discard(key, holding: stored, in: defaults, log: log)
         return nil
     }
 
@@ -525,19 +663,6 @@ public final class Settings {
         String]]
     {
         Dictionary(uniqueKeysWithValues: shortcuts.map { ($0.key.rawValue, $0.value.stored) })
-    }
-
-    /// The string stored under `key`; nil when there is none or it has another type, which is
-    /// removed.
-    private static func string(_ key: Key, in defaults: UserDefaults, log: (String) -> Void)
-        -> String?
-    {
-        guard let value = defaults.object(forKey: key.rawValue) else { return nil }
-        if let string = value as? String {
-            return string
-        }
-        discard(key.rawValue, holding: value, in: defaults, log: log)
-        return nil
     }
 
     /// Removes `key`, whose stored `value` has another shape than its setting's, and logs it, so

@@ -232,7 +232,8 @@ public enum MainMenuBuilder {
                 }
             }
         }
-        return ([appMenu("")] + menus).compactMap { menu in
+        // The app menu's section is named for the app, as the menu bar names its menu.
+        return ([appMenu("Searcher")] + menus).compactMap { menu in
             let ids = commands(in: menu)
             return ids.isEmpty ? nil : (menu.title, ids)
         }
@@ -487,6 +488,7 @@ public enum MainMenuBuilder {
                     StandardAction(
                         title: "Settings…", action: #selector(SettingsShowing.showSettings(_:)),
                         chord: KeyChord(",", modifiers: .command))),
+                .command(SystemCommands.openConfigFile.id),
                 .separator,
                 .submenu(servicesMenu),
                 .separator,

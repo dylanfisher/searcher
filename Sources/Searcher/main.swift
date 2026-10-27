@@ -13,10 +13,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// Walks the windows' folders for their sizes; nil in a bench launch, which shows none.
     private let folderSizes: FolderSizeService?
     private let systemActions = WorkspaceSystemActions()
-    /// The user's own preferences, made on first use so a bench launch never reads them; the
-    /// bench makes its own over a suite of its own.
+    /// The user's own preferences, with their config file, made on first use so a bench launch
+    /// never reads them; the bench makes its own over a suite of its own, with no config file.
     private lazy var settings = Settings(
-        defaults: .standard, log: { Logger(category: "settings").error("\($0)") })
+        defaults: .standard, configFile: Settings.userConfigFile(home: NSHomeDirectory()),
+        log: { Logger(category: "settings").error("\($0)") })
     /// The browser windows, made on first use so a bench launch, which opens its own window,
     /// never makes them. They share the service's mount table, the app's one.
     private lazy var windows: WorkspaceWindows = {
@@ -31,7 +32,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             cache: cache)
     }()
     /// The one Settings window, made the first time App ▸ Settings… asks for it.
-    private lazy var settingsWindow = SettingsWindowController(settings: settings)
+    private lazy var settingsWindow = SettingsWindowController(
+        settings: settings, systemActions: systemActions)
     private let bench: UIBench?
     /// The windows' workspaces and the session, in the user's application support folder; nil
     /// in a bench launch.
@@ -45,6 +47,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// The store's read of the palette's folder history, started beside the session's; nil in
     /// a bench launch.
     private let folderHistory: Task<FolderHistory, Never>?
+    /// Reads the config file into `settings` and again after each change; nil until launch
+    /// finishes, and in a bench launch.
+    private var configWatcher: ConfigWatcher?
 
     init(bench: UIBench?) {
         self.bench = bench
@@ -160,7 +165,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // Until the restore runs, a quit or a window opened meanwhile saves nothing over the
         // session being read.
         windows.holdSavesUntilRestore()
+        guard let configFile = settings.configFile else {
+            preconditionFailure("the user's settings have no config file")
+        }
+        let configLogger = Logger(category: "config")
+        let config = ConfigWatcher(
+            file: configFile, log: { configLogger.error("\($0)") })
+        configWatcher = config
+        let settings = settings
         Task {
+            // The config file's values first, so the windows open with them. The watcher reads
+            // on its own actor, as the store does, so the main thread waits on no file.
+            await settings.follow(config)
             // The store reads on its own actor, so the main thread waits on no file.
             let contents = await restoring.value
             let window = await windows.restore(contents)?.window ?? openHomeWindow()
@@ -204,14 +220,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         return false
     }
 
-    /// New Window when no window has the keys, as when every window is closed: the menu item
-    /// reaches the app's delegate, which opens a window on the home folder. A window with the
-    /// keys runs the command itself, from its focused pane.
+    /// New Window and Open Config File when no browser window has the keys, as when every
+    /// window is closed or the Settings window has them: the menu item reaches the app's
+    /// delegate, which opens a window on the home folder, or the config file. A browser window
+    /// with the keys runs the command itself, from its focused pane.
     @objc func runMenuCommand(_ sender: NSMenuItem) {
-        guard sender.representedObject as? CommandID == WindowCommands.newWindow.id else {
+        switch sender.representedObject as? CommandID {
+        case WindowCommands.newWindow.id:
+            openHomeWindow()
+        case SystemCommands.openConfigFile.id:
+            SystemCommands.openConfig(settings: settings, systemActions: systemActions)
+        default:
             preconditionFailure("menu item \"\(sender.title)\" reached the app without a window")
         }
-        openHomeWindow()
     }
 
     /// App ▸ Settings… brings the one Settings window to the front, making it the first time.
@@ -221,7 +242,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         guard item.action == #selector(runMenuCommand(_:)) else { return true }
-        return bench == nil && item.representedObject as? CommandID == WindowCommands.newWindow.id
+        let id = item.representedObject as? CommandID
+        return bench == nil
+            && (id == WindowCommands.newWindow.id || id == SystemCommands.openConfigFile.id)
     }
 
     private func installMainMenu() {
