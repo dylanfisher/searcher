@@ -377,7 +377,7 @@ private let homeTree: [String: [DirectoryEntry]] = [
 private func homeSettings(startAtHome: Bool = true) -> Settings {
     let settings = Settings(
         defaults: temporarySuite(in: FileManager.default.temporaryDirectory.path),
-        home: "/Users/me")
+        home: "/Users/me", log: unexpectedSettingsLog)
     settings.columnsStartAtHome = startAtHome
     return settings
 }

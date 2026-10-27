@@ -22,6 +22,10 @@ public final class FolderVisits {
     /// The saves handed to the store, each after the one before it, so an older history never
     /// lands after a newer one.
     private var saving: Task<Void, Never>?
+    /// Awaited by each save before it hands the history over. Tests hold a save here.
+    var beforeHandOver: @MainActor () async -> Void = {}
+    /// Called as `saved` starts to wait. Tests release a held save from here.
+    var willWaitForSaves: @MainActor () -> Void = {}
 
     public init(store: WorkspaceStore?, now: @escaping @Sendable () -> Date = Date.init) {
         self.store = store
@@ -78,8 +82,9 @@ public final class FolderVisits {
     }
 
     /// Returns once the store has been handed every save so far. The store writes it after its
-    /// delay.
-    func saved() async {
+    /// delay, or at its next flush, which quitting waits for this to make.
+    public func saved() async {
+        willWaitForSaves()
         await saving?.value
     }
 
@@ -89,8 +94,10 @@ public final class FolderVisits {
         guard let store else { return }
         let history = history
         let previous = saving
+        let beforeHandOver = beforeHandOver
         saving = Task {
             await previous?.value
+            await beforeHandOver()
             await store.saveFolderHistory(history)
         }
     }

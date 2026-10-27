@@ -78,7 +78,7 @@ extension BenchCase {
         guard let defaults = UserDefaults(suiteName: suiteName) else {
             throw ViewBenchFailed(description: "UserDefaults refused the suite \(suiteName)")
         }
-        let settings = Settings(defaults: defaults)
+        let settings = Settings(defaults: defaults, log: printError)
         // Hiding needs hidden files shown first; nothing observes the settings yet.
         settings.showHidden = change == .hideHidden
         let pane = Pane(

@@ -255,34 +255,48 @@ public actor ListingCacheStore {
 
     /// Deletes every file whose name doesn't have the form `url(for:)` gives, then the least
     /// recently written files until the folder fits `byteCap`, leaving the files of `kept`
-    /// volumes.
+    /// volumes. Each file that can't be deleted, or whose size and date can't be read, is logged
+    /// and the rest are still trimmed; a file whose size can't be read isn't counted.
     private func trim() {
         let keys: [URLResourceKey] = [.fileSizeKey, .contentModificationDateKey]
+        let urls: [URL]
         do {
-            var files = try FileManager.default.contentsOfDirectory(
-                at: folder, includingPropertiesForKeys: keys
-            ).map { url in
+            urls = try FileManager.default.contentsOfDirectory(
+                at: folder, includingPropertiesForKeys: keys)
+        } catch {
+            log("keeping \(folder.path) under \(byteCap) bytes failed: \(error)")
+            return
+        }
+        var files: [(url: URL, size: Int, modified: Date)] = []
+        for url in urls {
+            do {
+                guard Self.isVolumeFileName(url.lastPathComponent) else {
+                    try FileManager.default.removeItem(at: url)
+                    log("discarded \(url.path), whose name isn't a cached listing file's")
+                    continue
+                }
                 let values = try url.resourceValues(forKeys: Set(keys))
                 guard let size = values.fileSize, let modified = values.contentModificationDate
                 else { throw MissingAttributes(path: url.path) }
-                return (url: url, size: size, modified: modified)
+                files.append((url, size, modified))
+            } catch {
+                log("keeping \(folder.path) under \(byteCap) bytes skipped \(url.path): \(error)")
             }
-            for file in files where !Self.isVolumeFileName(file.url.lastPathComponent) {
-                try FileManager.default.removeItem(at: file.url)
-                log("discarded \(file.url.path), whose name isn't a cached listing file's")
-            }
-            files.removeAll { !Self.isVolumeFileName($0.url.lastPathComponent) }
-            files.sort { $0.modified < $1.modified }
-            var total = files.reduce(0) { $0 + $1.size }
-            let keptNames = Set(kept.map { url(for: $0).lastPathComponent })
-            for file in files
-            where total > byteCap && !keptNames.contains(file.url.lastPathComponent) {
+        }
+        files.sort { $0.modified < $1.modified }
+        var total = files.reduce(0) { $0 + $1.size }
+        let keptNames = Set(kept.map { url(for: $0).lastPathComponent })
+        for file in files
+        where total > byteCap && !keptNames.contains(file.url.lastPathComponent) {
+            do {
                 try FileManager.default.removeItem(at: file.url)
                 total -= file.size
                 log("dropped \(file.url.path) to keep cached listings under \(byteCap) bytes")
+            } catch {
+                log(
+                    "dropping \(file.url.path) to keep cached listings under \(byteCap) bytes"
+                        + " failed: \(error)")
             }
-        } catch {
-            log("keeping \(folder.path) under \(byteCap) bytes failed: \(error)")
         }
     }
 

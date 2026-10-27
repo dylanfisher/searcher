@@ -39,7 +39,8 @@ extension BenchCase {
         }
         let pane = Pane(
             location: Location(path: path), service: ListingService(),
-            systemActions: NoSystemActions(), settings: Settings(defaults: defaults))
+            systemActions: NoSystemActions(),
+            settings: Settings(defaults: defaults, log: printError))
         await waitUntil(pane) {
             switch $0.state {
             case .loaded, .offline, .denied, .failed, .notConnected, .serverListed: true

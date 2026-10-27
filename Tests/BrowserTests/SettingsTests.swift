@@ -6,6 +6,16 @@ import Testing
 
 @testable import Browser
 
+/// Settings over `defaults`, and the lines they log as they remove values of another shape.
+@MainActor
+private func settingsLogging(_ defaults: UserDefaults, home: String = NSHomeDirectory())
+    -> (Settings, [String])
+{
+    var lines: [String] = []
+    let settings = Settings(defaults: defaults, home: home, log: { lines.append($0) })
+    return (settings, lines)
+}
+
 @MainActor @Test func aMissingKeyReadsAsTheDefault() {
     let settings = untouchedSettings()
 
@@ -40,8 +50,17 @@ import Testing
     defaults.set("NO", forKey: Settings.Key.showsLocationsInSidebar.rawValue)
     defaults.set("NO", forKey: Settings.Key.showsWorkspacesInSidebar.rawValue)
 
-    let settings = Settings(defaults: defaults)
+    let (settings, logged) = settingsLogging(defaults)
 
+    let keys: [Settings.Key] = [
+        .showHidden, .foldersFirst, .folderSizes, .terminalBundleID, .hideDSStore,
+        .columnsStartAtHome, .showsFavoritesInSidebar, .showsLocationsInSidebar,
+        .showsWorkspacesInSidebar,
+    ]
+    #expect(logged.count == keys.count)
+    for key in keys {
+        #expect(logged.contains { $0.contains("setting \(key.rawValue),") }, "\(key)")
+    }
     #expect(!settings.showHidden)
     #expect(!settings.foldersFirst)
     #expect(!settings.folderSizes)
@@ -77,7 +96,8 @@ import Testing
         let defaults = temporarySuite(in: folder.url.path)
         defaults.set(stored, forKey: key)
 
-        let settings = Settings(defaults: defaults, home: "/Users/u")
+        let (settings, logged) = settingsLogging(defaults, home: "/Users/u")
+        #expect(logged.count == 1 && logged[0].contains(key), "\(stored)")
 
         #expect(settings.favorites == Favorite.defaults(home: "/Users/u"), "\(stored)")
         #expect(defaults.object(forKey: key) == nil, "\(stored)")
@@ -90,9 +110,11 @@ import Testing
     let favorites = [
         Favorite(path: "/b", bookmark: Data([1, 2])), Favorite(path: "/a"),
     ]
-    Settings(defaults: try #require(UserDefaults(suiteName: name))).favorites = favorites
+    Settings(defaults: try #require(UserDefaults(suiteName: name)), log: unexpectedSettingsLog)
+        .favorites = favorites
 
-    let relaunched = Settings(defaults: try #require(UserDefaults(suiteName: name)))
+    let relaunched = Settings(
+        defaults: try #require(UserDefaults(suiteName: name)), log: unexpectedSettingsLog)
 
     #expect(relaunched.favorites == favorites)
 }
@@ -106,7 +128,8 @@ import Testing
         let defaults = temporarySuite(in: folder.url.path)
         defaults.set(stored, forKey: key)
 
-        let settings = Settings(defaults: defaults)
+        let (settings, logged) = settingsLogging(defaults)
+        #expect(logged.count == 1 && logged[0].contains(key), "\(stored)")
 
         #expect(settings.appearance == .auto, "\(stored)")
         #expect(defaults.object(forKey: key) == nil, "\(stored)")
@@ -116,7 +139,8 @@ import Testing
 @MainActor @Test func settingsSurviveARelaunch() throws {
     let folder = try TemporaryFolder("SettingsTests")
     let name = folder.url.appending(path: "preferences").path
-    let first = Settings(defaults: try #require(UserDefaults(suiteName: name)))
+    let first = Settings(
+        defaults: try #require(UserDefaults(suiteName: name)), log: unexpectedSettingsLog)
 
     first.showHidden = true
     first.foldersFirst = true
@@ -132,7 +156,8 @@ import Testing
     first.showsLocationsInSidebar = false
     first.showsWorkspacesInSidebar = false
 
-    let relaunched = Settings(defaults: try #require(UserDefaults(suiteName: name)))
+    let relaunched = Settings(
+        defaults: try #require(UserDefaults(suiteName: name)), log: unexpectedSettingsLog)
     #expect(relaunched.showHidden)
     #expect(relaunched.foldersFirst)
     #expect(relaunched.folderSizes)
@@ -152,9 +177,11 @@ import Testing
     let folder = try TemporaryFolder("SettingsTests")
     for appearance in Settings.Appearance.allCases {
         let name = folder.url.appending(path: "preferences-\(appearance)").path
-        Settings(defaults: try #require(UserDefaults(suiteName: name))).appearance = appearance
+        Settings(defaults: try #require(UserDefaults(suiteName: name)), log: unexpectedSettingsLog)
+            .appearance = appearance
 
-        let relaunched = Settings(defaults: try #require(UserDefaults(suiteName: name)))
+        let relaunched = Settings(
+            defaults: try #require(UserDefaults(suiteName: name)), log: unexpectedSettingsLog)
 
         #expect(relaunched.appearance == appearance)
     }
@@ -172,7 +199,8 @@ import Testing
         let defaults = temporarySuite(in: folder.url.path)
         defaults.set(stored, forKey: key)
 
-        let settings = Settings(defaults: defaults)
+        let (settings, logged) = settingsLogging(defaults)
+        #expect(logged.count == 1 && logged[0].contains(key), "\(stored)")
 
         #expect(settings.columnWidth == Settings.defaultColumnWidth)
         #expect(defaults.object(forKey: key) == nil)
@@ -183,9 +211,11 @@ import Testing
     let folder = try TemporaryFolder("SettingsTests")
     for width in [Settings.columnWidths.lowerBound, Settings.columnWidths.upperBound] {
         let name = folder.url.appending(path: "preferences-\(width)").path
-        Settings(defaults: try #require(UserDefaults(suiteName: name))).columnWidth = width
+        Settings(defaults: try #require(UserDefaults(suiteName: name)), log: unexpectedSettingsLog)
+            .columnWidth = width
 
-        let relaunched = Settings(defaults: try #require(UserDefaults(suiteName: name)))
+        let relaunched = Settings(
+            defaults: try #require(UserDefaults(suiteName: name)), log: unexpectedSettingsLog)
 
         #expect(relaunched.columnWidth == width)
     }
@@ -194,17 +224,19 @@ import Testing
 @MainActor @Test func thePalettesPlaceSurvivesARelaunchAndClearingItRemovesIt() throws {
     let folder = try TemporaryFolder("SettingsTests")
     let name = folder.url.appending(path: "preferences").path
-    let first = Settings(defaults: try #require(UserDefaults(suiteName: name)))
+    let first = Settings(
+        defaults: try #require(UserDefaults(suiteName: name)), log: unexpectedSettingsLog)
     #expect(first.palettePlace == nil)
 
     first.palettePlace = Settings.PalettePlace(x: 0.25, y: 1)
-    let relaunched = Settings(defaults: try #require(UserDefaults(suiteName: name)))
+    let relaunched = Settings(
+        defaults: try #require(UserDefaults(suiteName: name)), log: unexpectedSettingsLog)
     #expect(relaunched.palettePlace == Settings.PalettePlace(x: 0.25, y: 1))
 
     relaunched.palettePlace = nil
     let defaults = try #require(UserDefaults(suiteName: name))
     #expect(defaults.object(forKey: Settings.Key.palettePlace.rawValue) == nil)
-    #expect(Settings(defaults: defaults).palettePlace == nil)
+    #expect(Settings(defaults: defaults, log: unexpectedSettingsLog).palettePlace == nil)
 }
 
 /// Anything but two numbers within 0 and 1 reads as no place, the palette's own, and is removed:
@@ -220,7 +252,8 @@ import Testing
         let defaults = temporarySuite(in: folder.url.path)
         defaults.set(stored, forKey: key)
 
-        let settings = Settings(defaults: defaults)
+        let (settings, logged) = settingsLogging(defaults)
+        #expect(logged.count == 1 && logged[0].contains(key), "\(stored)")
 
         #expect(settings.palettePlace == nil, "\(stored)")
         #expect(defaults.object(forKey: key) == nil, "\(stored)")
@@ -238,18 +271,21 @@ import Testing
 @MainActor @Test func theNewWindowFrameIsUnsetUntilSetAndSurvivesARelaunch() throws {
     let folder = try TemporaryFolder("SettingsTests")
     let name = folder.url.appending(path: "preferences").path
-    let first = Settings(defaults: try #require(UserDefaults(suiteName: name)))
+    let first = Settings(
+        defaults: try #require(UserDefaults(suiteName: name)), log: unexpectedSettingsLog)
     #expect(first.newWindowFrame == nil)
     #expect(first.newWindowSize == CGSize(width: 900, height: 600))
 
     first.newWindowFrame = CGRect(x: -40, y: 120.5, width: 1000, height: 700.5)
 
-    let relaunched = Settings(defaults: try #require(UserDefaults(suiteName: name)))
+    let relaunched = Settings(
+        defaults: try #require(UserDefaults(suiteName: name)), log: unexpectedSettingsLog)
     #expect(relaunched.newWindowFrame == CGRect(x: -40, y: 120.5, width: 1000, height: 700.5))
     #expect(relaunched.newWindowSize == CGSize(width: 1000, height: 700.5))
 
     relaunched.newWindowFrame = nil
-    let cleared = Settings(defaults: try #require(UserDefaults(suiteName: name)))
+    let cleared = Settings(
+        defaults: try #require(UserDefaults(suiteName: name)), log: unexpectedSettingsLog)
     #expect(cleared.newWindowFrame == nil)
 }
 
@@ -265,7 +301,8 @@ import Testing
         let defaults = temporarySuite(in: folder.url.path)
         defaults.set(stored, forKey: key)
 
-        let settings = Settings(defaults: defaults)
+        let (settings, logged) = settingsLogging(defaults)
+        #expect(logged.count == 1 && logged[0].contains(key), "\(stored)")
 
         #expect(settings.newWindowFrame == nil, "\(stored)")
         #expect(defaults.object(forKey: key) == nil, "\(stored)")
@@ -322,7 +359,7 @@ import Testing
         let defaults = temporarySuite(in: folder.url.path)
         defaults.set(enabled, forKey: Settings.springLoadingEnabledKey)
         defaults.set(delay, forKey: Settings.springLoadingDelayKey)
-        return Settings(defaults: defaults).springLoadingDelay
+        return Settings(defaults: defaults, log: unexpectedSettingsLog).springLoadingDelay
     }
 
     #expect(delay(enabled: true, delay: 1.25) == .milliseconds(1250))
@@ -360,7 +397,8 @@ private let showPalette = WindowCommands.showPalette.id
         let defaults = temporarySuite(in: folder.url.path)
         defaults.set(stored, forKey: shortcutsKey)
 
-        let settings = Settings(defaults: defaults)
+        let (settings, logged) = settingsLogging(defaults)
+        #expect(logged.count == 1 && logged[0].contains(shortcutsKey), "\(stored)")
 
         #expect(settings.shortcuts.isEmpty, "\(stored)")
         #expect(defaults.object(forKey: shortcutsKey) == nil, "\(stored)")
@@ -377,7 +415,8 @@ private let showPalette = WindowCommands.showPalette.id
             "window.renamedLongAgo": ["primary": "cmd+j"],
         ], forKey: shortcutsKey)
 
-    let settings = Settings(defaults: defaults)
+    let (settings, logged) = settingsLogging(defaults)
+    #expect(logged.count == 1 && logged[0].contains("window.renamedLongAgo"))
 
     let alternate = KeyChord("o", modifiers: [.command, .shift])
     #expect(settings.shortcuts == [showPalette: ShortcutOverride(alternate: .chord(alternate))])
@@ -391,7 +430,7 @@ private let showPalette = WindowCommands.showPalette.id
     let defaults = temporarySuite(in: folder.url.path)
     defaults.set(["window.showPalette": ["primary": ""]], forKey: shortcutsKey)
 
-    let settings = Settings(defaults: defaults)
+    let settings = Settings(defaults: defaults, log: unexpectedSettingsLog)
 
     #expect(settings.shortcuts == [showPalette: ShortcutOverride(primary: .removed)])
 }
@@ -401,7 +440,7 @@ private let showPalette = WindowCommands.showPalette.id
 @MainActor @Test func anOverrideThatChangesNothingIsNotWritten() throws {
     let folder = try TemporaryFolder("SettingsTests")
     let defaults = temporarySuite(in: folder.url.path)
-    let settings = Settings(defaults: defaults)
+    let settings = Settings(defaults: defaults, log: unexpectedSettingsLog)
 
     settings.shortcuts = [
         showPalette: ShortcutOverride(primary: .chord(KeyChord("k", modifiers: .command))),
@@ -445,9 +484,11 @@ private let showPalette = WindowCommands.showPalette.id
             primary: .removed, alternate: .chord(KeyChord("o", modifiers: [.command, .shift]))),
         NavigationCommands.open.id: ShortcutOverride(primary: .chord(KeyChord(.function(3)))),
     ]
-    Settings(defaults: try #require(UserDefaults(suiteName: name))).shortcuts = shortcuts
+    Settings(defaults: try #require(UserDefaults(suiteName: name)), log: unexpectedSettingsLog)
+        .shortcuts = shortcuts
 
-    let relaunched = Settings(defaults: try #require(UserDefaults(suiteName: name)))
+    let relaunched = Settings(
+        defaults: try #require(UserDefaults(suiteName: name)), log: unexpectedSettingsLog)
 
     #expect(relaunched.shortcuts == shortcuts)
 }

@@ -2254,7 +2254,8 @@ private let gripDrags: [[Double]] = [[-30.37, -60.81, -90.13], [-60.4, -20.77, 4
 {
     let folder = try TemporaryFolder("ColumnViewControllerTests")
     let suite = folder.url.appending(path: "preferences").path
-    let settings = Settings(defaults: try #require(UserDefaults(suiteName: suite)))
+    let settings = Settings(
+        defaults: try #require(UserDefaults(suiteName: suite)), log: unexpectedSettingsLog)
     let fixture = await Fixture(settings: settings)
     await fixture.openThreeColumns()
     await fixture.select("one.flac", inColumn: 2)
@@ -2269,7 +2270,8 @@ private let gripDrags: [[Double]] = [[-30.37, -60.81, -90.13], [-60.4, -20.77, 4
     try expectPacked(fixture)
     #expect(settings.columnWidth == narrow)
     // The default outlives the app.
-    let relaunched = Settings(defaults: try #require(UserDefaults(suiteName: suite)))
+    let relaunched = Settings(
+        defaults: try #require(UserDefaults(suiteName: suite)), log: unexpectedSettingsLog)
     #expect(relaunched.columnWidth == narrow)
 
     // A column opened after it gets the new default too.

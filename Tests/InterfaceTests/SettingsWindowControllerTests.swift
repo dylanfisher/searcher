@@ -237,7 +237,7 @@ private func controller(
 
 @MainActor @Test func resetGivesARowItsDefaultsAndResetAllEveryRow() throws {
     let defaults = temporarySuite(in: FileManager.default.temporaryDirectory.path)
-    let (controller, _) = controller(Settings(defaults: defaults))
+    let (controller, _) = controller(Settings(defaults: defaults, log: unexpectedSettingsLog))
     let model = controller.shortcuts
     let cmdJ = KeyChord("j", modifiers: [.command, .option, .control])
     let cmdL = KeyChord("l", modifiers: [.command, .option, .control])

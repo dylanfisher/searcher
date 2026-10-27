@@ -51,6 +51,10 @@ public final class WorkspaceWindows {
     private var unsavedDeletes: Set<UUID> = []
     /// Saved workspaces deleted since the last save, whose snapshots' files go.
     private var unsavedSnapshotDeletes: Set<UUID> = []
+    /// Deleted saved workspaces whose snapshot files couldn't be deleted. The session keeps
+    /// them, so the next launch leaves them out and deletes their files again
+    /// (docs/decisions/0088-workspace-snapshots.md).
+    private var undeletedSnapshots: Set<UUID> = []
     /// Where showing its snapshot put an open saved workspace's window, by ID, when that may
     /// differ from the snapshot's frame: moved onto a display, or shrunk to fit one. While the
     /// window is still there, its frame reads as the snapshot's.
@@ -286,8 +290,9 @@ public final class WorkspaceWindows {
     /// layouts, folders, view modes, sorts, histories and selections. A session ID with no
     /// workspace is skipped (docs/decisions/0078-workspace-store.md). A window is linked to the
     /// saved workspace whose snapshot has its ID, and named after it; its edited dot shows if it
-    /// differs from the snapshot. Every snapshot is listed as saved, and the window files the
-    /// session doesn't list are deleted. The key window's workspace is made active, so its
+    /// differs from the snapshot. Every snapshot is listed as saved, except those of saved
+    /// workspaces the session lists as deleted, whose files are deleted again; the window files
+    /// the session doesn't list are deleted. The key window's workspace is made active, so its
     /// focused pane's load goes first, and its window is made key when windows are shown.
     /// Returns the key window's controller, or nil when there was nothing to restore. Every pane
     /// lists its folder off the main thread, so a slow or missing one doesn't hold the windows
@@ -298,7 +303,9 @@ public final class WorkspaceWindows {
     @discardableResult
     public func restore(_ contents: WorkspaceStore.Contents) async -> BrowserWindowController? {
         let saved = contents.session?.workspaces.compactMap { contents.workspaces[$0] } ?? []
-        let snapshots = freelyNamed(contents.snapshots, frontFirst: saved.map(\.id))
+        let undeleted = Set(contents.session?.undeletedSnapshots ?? [])
+        let snapshots = freelyNamed(
+            contents.snapshots.filter { !undeleted.contains($0.key) }, frontFirst: saved.map(\.id))
         let restoring = restoredWorkspaces(saved, contents: contents, snapshots: snapshots)
         if let restoring {
             await waitForCachedRows(
@@ -310,9 +317,15 @@ public final class WorkspaceWindows {
         // Runs last: saves the changes noted while saves were held, and the renames and deletes.
         defer { scheduleSave() }
         let open = Set(saved.map(\.id))
-        // Window files of windows a crash closed, or of a session that didn't load.
+        // Window files of windows a crash closed. A session that didn't load was rebuilt from
+        // the window files, so it lists them all.
         for id in contents.workspaces.keys where !open.contains(id) {
             forgetWindow(id)
+        }
+        // A file that is gone needs no other delete, and drops out of the next session saved.
+        for id in undeleted where contents.snapshots[id] != nil {
+            undeletedSnapshots.insert(id)
+            unsavedSnapshotDeletes.insert(id)
         }
         let key = restoring.map { openWindows($0, contents: contents, snapshots: snapshots) }
         // Once the windows are open, so their snapshots are listed open.
@@ -616,16 +629,18 @@ public final class WorkspaceWindows {
         controllers.isEmpty && !awaitsRestore
     }
 
-    /// Saves every change not yet saved and writes the store's saves at once, as the app quits,
-    /// waiting until `deadline` at most. Returns whether the writes finished in time; with no
-    /// store there is nothing to write. Before `restore` runs it saves nothing, so the session
-    /// on disk stays the one the launch was reading.
+    /// Saves every change not yet saved and writes the store's saves at once, the folder
+    /// history's among them, as the app quits, waiting until `deadline` at most. Returns whether
+    /// the writes finished in time; with no store there is nothing to write. Before `restore`
+    /// runs it saves nothing, so the session on disk stays the one the launch was reading.
     public func saveBeforeQuit(by deadline: ContinuousClock.Instant) async -> Bool {
         guard let store else { return true }
         saveChanges()
         let saving = saving
+        let folderVisits = folderVisits
         return await FirstToFinish.run(by: deadline, clock: .continuous) {
             await saving?.value
+            await folderVisits.saved()
             await store.flush()
         }
     }
@@ -734,13 +749,17 @@ public final class WorkspaceWindows {
             of: Array(lastSaved.values) + Array(list.snapshots.values))
         let cache = cache
         let previous = saving
-        saving = Task {
+        saving = Task { [weak self] in
             await previous?.value
             for id in deletes {
                 await store.delete(id)
             }
+            var session = changedSession
             for id in snapshotDeletes {
-                await store.deleteSnapshot(id)
+                let gone = await store.deleteSnapshot(id)
+                if let changed = self?.snapshotFile(of: id, isGone: gone) {
+                    session = changed
+                }
             }
             for state in states {
                 await store.save(state)
@@ -748,8 +767,8 @@ public final class WorkspaceWindows {
             for snapshot in snapshots {
                 await store.saveSnapshot(snapshot)
             }
-            if let changedSession {
-                await store.saveSession(changedSession)
+            if let session {
+                await store.saveSession(session)
             }
             // The folders every stored workspace holds now, computed as the launch computes them.
             if filesChanged {
@@ -758,12 +777,26 @@ public final class WorkspaceWindows {
         }
     }
 
-    /// The windows, most recently active first; the first is the key window.
+    /// The windows, most recently active first; the first is the key window. It lists the
+    /// snapshot files not yet deleted.
     private var currentSession: SessionState {
         let shown = list.workspaces.filter { workspace in
             controllers.contains { $0.workspace === workspace }
         }
-        return SessionState(workspaces: shown.map(\.id), keyWindow: shown.first?.id)
+        return SessionState(
+            workspaces: shown.map(\.id), keyWindow: shown.first?.id,
+            undeletedSnapshots: undeletedSnapshots.sorted { $0.uuidString < $1.uuidString })
+    }
+
+    /// Notes whether the snapshot file of deleted saved workspace `id` is gone. Returns the
+    /// session to save in the same batch when that changes the snapshots it lists, so a failed
+    /// delete at quit is in the session the quit writes.
+    private func snapshotFile(of id: UUID, isGone: Bool) -> SessionState? {
+        let changed =
+            isGone ? undeletedSnapshots.remove(id) != nil : undeletedSnapshots.insert(id).inserted
+        guard changed else { return nil }
+        lastSession = currentSession
+        return lastSession
     }
 
     /// Elapsed time on a clock, and a sleep until an elapsed time, for the save wait.
