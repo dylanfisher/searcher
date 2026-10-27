@@ -187,6 +187,55 @@ private func freshListing(of folder: String) throws -> Listing {
         }
     }
 
+    @Test func aRescanOfTheFolderAnAncestorOrADirectChildRelists() {
+        let folder = "/private/var/w/shown"
+        for path in [folder, folder + "/", "/private/var/w", "/private/var/w/", "/", folder + "/a"]
+        {
+            let event = FileEvent(path: path, flags: .mustRescan)
+            #expect(FolderMonitor.change(for: [event], in: folder) == .relist, "\(path)")
+        }
+    }
+
+    @Test func aRescanDeeperThanTheFolderChildrenIsIgnored() throws {
+        let folder = try TemporaryFolder("FolderMonitorTests")
+        try Data(count: 3).write(to: folder.url.appending(path: "kept"))
+        let deep = [
+            FileEvent(path: folder.url.appending(path: "build/out").path, flags: .mustRescan),
+            FileEvent(path: folder.url.appending(path: "build/out/x").path, flags: .created),
+        ]
+        let kept = FileEvent(path: folder.url.appending(path: "kept").path, flags: .created)
+
+        #expect(FolderMonitor.change(for: deep, in: folder.url.path) == nil)
+        let entry = try DirectoryLister().entry(named: "kept", inDirectory: folder.url.path)
+        #expect(
+            FolderMonitor.change(for: deep + [kept], in: folder.url.path)
+                == .patches([.update(try #require(entry))]))
+    }
+
+    @Test func aRescanOfASiblingOrAnotherTreeIsIgnored() {
+        let folder = "/private/var/w/shown"
+        for path in ["/private/var/w/shown-too", "/private/var/w/other", "/elsewhere/a/b"] {
+            let event = FileEvent(path: path, flags: .mustRescan)
+            #expect(FolderMonitor.change(for: [event], in: folder) == nil, "\(path)")
+        }
+    }
+
+    @Test func droppedEventsRelistWhateverPathTheyName() {
+        let folder = "/private/var/w/shown"
+        for path in ["/", folder, folder + "/build/out", "/elsewhere"] {
+            let event = FileEvent(path: path, flags: [.mustRescan, .dropped])
+            #expect(FolderMonitor.change(for: [event], in: folder) == .relist, "\(path)")
+        }
+    }
+
+    @Test func aRootChangeRelistsWhateverPathItNames() {
+        let folder = "/private/var/w/shown"
+        for path in [folder, "/private/var/w/old-name", folder + "/a/b"] {
+            let event = FileEvent(path: path, flags: .rootChanged)
+            #expect(FolderMonitor.change(for: [event], in: folder) == .relist, "\(path)")
+        }
+    }
+
     @Test func writingAnExistingFileUpdatesItsRow() async throws {
         let folder = try TemporaryFolder("FolderMonitorTests")
         let file = folder.url.appending(path: "grows")
