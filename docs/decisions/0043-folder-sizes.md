@@ -231,14 +231,17 @@ user-initiated thread waits on, in a C harness:
 No API reports the priority a QoS class asks for apart from the live one, so
 `throttleDiskReads()` checks that the thread's requested QoS is utility with relative priority 0
 and sets `FolderSizeService.utilityPriority`, 20, xnu's `BASEPRI_UTILITY` from its
-`thread_qos_policy_params` table. It traps on any other QoS rather than guess a number for it:
-walks are its only caller. The tests read the priority the thread set, with
+`thread_qos_policy_params` table. The 20 was measured on macOS 26 only. The tests check the walk
+asks for that constant, so they wouldn't notice a macOS that gives utility another priority;
+measure it again on a new major release. It traps on any other QoS rather than guess a number for
+it: walks are its only caller. The tests read the priority the thread set, with
 `pthread_getschedparam`, and one holds a lock a user-initiated thread waits on until the live
-priority shows the raise, then throttles and checks the thread asked for 20.
+priority shows the raise, then throttles and checks the thread asked for 20. If the raise doesn't
+show within five seconds the test records a warning, not a failure, and still checks the 20.
 
 Rejected: **a table of every QoS class's priority** — the relative priority is scaled into the gap
 below each class, and the task's QoS ceiling changes the result: in the process the harness ran
 in, user-initiated threads read 31, and setting 37 after the throttle raised one above what it
 had. **`min(20, live)`** — it would follow a ceiling below utility, but a raise during that
-ceiling defeats it, and no such ceiling was seen. **Allowing a
-tolerance in the tests** (the earlier fix) — a raise spans the whole gap to 31.
+ceiling defeats it, and no such ceiling was seen. **Allowing a tolerance in the tests** (the
+earlier fix) — a raise spans the whole gap to 31.
