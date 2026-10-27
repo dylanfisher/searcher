@@ -11,7 +11,7 @@ final class GoToFolderSheet: NSObject, NSTextFieldDelegate {
     let alert = Dialog.alert(message: "Go to the folder:", buttons: ["Go", Dialog.cancel])
     let field = NSTextField(string: "")
     /// Why the last folder typed couldn't be gone to; hidden until then.
-    let messageLabel = NSTextField(wrappingLabelWithString: "")
+    let messageLabel = Dialog.errorLabel()
     /// Runs once the sheet has closed, gone or cancelled.
     var onClose: (@MainActor () -> Void)?
     /// Signals a Return with nothing typed. Tests replace it.
@@ -130,7 +130,6 @@ final class GoToFolderSheet: NSObject, NSTextFieldDelegate {
         field.delegate = self
         field.placeholderString = "~/Downloads"
         field.setAccessibilityLabel("Folder path")
-        messageLabel.textColor = .systemRed
         messageLabel.isHidden = true
         let stack = NSStackView(views: [field, messageLabel])
         stack.orientation = .vertical

@@ -45,7 +45,8 @@ final class OperationRowView: NSView {
         showBar(state)
         guard state.phase != old else { return }
         // A copy sends a snapshot every 100 ms; the buttons change only with the phase.
-        detailLabel.textColor = Self.isTrouble(state.phase) ? .systemRed : .secondaryLabelColor
+        detailLabel.textColor =
+            Self.isTrouble(state.phase) ? Dialog.errorColor : .secondaryLabelColor
         let isPaused = state.phase == .paused
         if old.map({ $0 == .paused }) != isPaused {
             pauseButton.image = symbol(isPaused ? "play.fill" : "pause.fill")

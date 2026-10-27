@@ -12,7 +12,7 @@ final class WorkspaceNameSheet: NSObject, NSTextFieldDelegate {
     let alert: NSAlert
     let field: NSTextField
     /// Why the last name typed was refused; hidden until then.
-    let messageLabel = NSTextField(wrappingLabelWithString: "")
+    let messageLabel = Dialog.errorLabel()
     /// Runs once the sheet has closed, named or cancelled.
     var onClose: (@MainActor () -> Void)?
     /// Signals a Return with no name typed. Tests replace it.
@@ -122,7 +122,6 @@ final class WorkspaceNameSheet: NSObject, NSTextFieldDelegate {
         field.delegate = self
         field.placeholderString = "Project"
         field.setAccessibilityLabel("Workspace name")
-        messageLabel.textColor = .systemRed
         messageLabel.isHidden = true
         let stack = NSStackView(views: [field, messageLabel])
         stack.orientation = .vertical
