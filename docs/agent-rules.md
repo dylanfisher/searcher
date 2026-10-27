@@ -9,7 +9,10 @@ AGENTS.md first; these rules add to it.
 2. Write the test first and see it fail, then make it pass. New behavior needs a test that fails
    without the change.
 3. Iterate with `./scripts/test --changed`. At the end, rebase onto `m1-base`, run
-   `./scripts/format` and `./scripts/arch`, then `./scripts/test --changed m1-base` on the tree
+   `./scripts/format`, `swift format lint --strict --recursive --parallel Package.swift Sources
+   Tests` (the gate's lint step: `format` fixes layout but not lint rules such as
+   `OnlyOneTrailingClosureArgument`, which failed AU.9's merge) and `./scripts/arch`, then
+   `./scripts/test --changed m1-base` on the tree
    you commit. Don't run `./scripts/check`: the orchestrator runs it at merge, and several full
    test runs at once load the machine until timing tests fail. Never call `swift build` or
    `swift test` directly (0092-native-build-system.md).
