@@ -77,3 +77,11 @@ unbounded: one volume with many large folders holds them all in memory. M2.3 pic
 byte bound. Saves made in the two seconds before the app is killed
 are lost unless the app calls `flush()` on quit. Lookups and stores are not wired to
 `ListingService` or `Pane` yet; M2.3 does that and decides when a kept listing is replaced.
+
+## Amendment: one file doesn't stop the trim (2026-10-27)
+
+`trim` handles each file on its own: a file it can't delete, or whose size and date it can't
+read, is logged and skipped, and the least recently written files after it are still deleted
+until the folder fits 50 MB. A file whose size can't be read isn't counted. Before, the first
+such failure ended the trim, so one undeletable file let the folder grow past the cap for good.
+Files whose names aren't a volume file's are deleted before any attributes are read.

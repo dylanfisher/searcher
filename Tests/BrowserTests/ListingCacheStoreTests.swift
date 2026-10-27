@@ -232,6 +232,46 @@ func aFileThatDoesNotDecodeIsDeletedAndLoggedAndMisses(_ damage: StoreDamage) as
     #expect(FileManager.default.fileExists(atPath: writer.url(for: volumes[2]).path))
 }
 
+/// The oldest file can't be deleted: it is logged, and the next oldest go until the folder fits.
+@Test func anUndeletableFileDoesntStopTheByteCap() async throws {
+    let folder = try TemporaryFolder("ListingCacheStoreTests")
+    let volumes = (0..<4).map {
+        VolumeIdentity(device: "//nas/share\($0)", mountPoint: "/fake/share\($0)", kind: .network)
+    }
+    let probe = store(folder)
+    await probe.save(["/a": album], for: volumes[0])
+    await probe.flush()
+    let locked = probe.url(for: volumes[0])
+    let fileSize = try FileManager.default.attributesOfItem(atPath: locked.path)[.size] as! Int
+    try FileManager.default.setAttributes(
+        [.modificationDate: Date(timeIntervalSinceNow: -7200)], ofItemAtPath: locked.path)
+    try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: locked.path)
+    defer {
+        do {
+            try FileManager.default.setAttributes([.immutable: false], ofItemAtPath: locked.path)
+        } catch {
+            Issue.record("unlocking \(locked.path) failed: \(error)")
+        }
+    }
+
+    // Room for two files of this size.
+    let log = EventLog<String>()
+    let writer = store(folder, log: log, byteCap: fileSize * 2 + fileSize / 2)
+    for (index, volume) in volumes.enumerated().dropFirst() {
+        await writer.save(["/a": album], for: volume)
+        await writer.flush()
+        // Each file older than the next whatever the timestamp resolution, all newer than the
+        // locked one.
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSinceNow: Double(index * 60 - 3600))],
+            ofItemAtPath: writer.url(for: volume).path)
+    }
+
+    let exists = volumes.map { FileManager.default.fileExists(atPath: writer.url(for: $0).path) }
+    #expect(exists == [true, false, false, true])
+    #expect(log.all.contains { $0.contains(locked.path) && $0.contains("failed") })
+}
+
 @Test func aLoadSeesASaveNotYetWritten() async throws {
     let folder = try TemporaryFolder("ListingCacheStoreTests")
     let writer = store(folder)
