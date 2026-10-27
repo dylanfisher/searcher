@@ -371,14 +371,12 @@ public final class FirstToFinish: @unchecked Sendable {
             race.start(
                 continuation,
                 deadline: Task {
-                    do {
-                        try await clock.sleep(until: deadline, tolerance: nil)
-                    } catch is CancellationError {
-                        // The work finished first.
-                        return
-                    } catch {
-                        preconditionFailure("the clock failed a wait with \(error)")
-                    }
+                    // Cancelled when the work finished first.
+                    guard
+                        await DeadlineWait.reached({
+                            try await clock.sleep(until: deadline, tolerance: nil)
+                        })
+                    else { return }
                     race.end(with: false)
                 })
         }

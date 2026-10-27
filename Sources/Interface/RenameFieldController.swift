@@ -32,16 +32,6 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
     /// pane lists the folder again, and then for that listing.
     static let patchTimeout: Duration = .seconds(2)
 
-    /// Starts waits on `clock`: each call takes the deadline at once and returns the wait.
-    static func waiter<C: Clock<Duration>>(on clock: C)
-        -> @MainActor (Duration) -> @Sendable () async throws -> Void
-    {
-        { duration in
-            let deadline = clock.now.advanced(by: duration)
-            return { try await clock.sleep(until: deadline, tolerance: nil) }
-        }
-    }
-
     /// Why `FileNameRule` refuses a name, for the line under the field.
     static func message(for problem: FileNameRule.Problem) -> String {
         switch problem {
@@ -144,7 +134,7 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
     private var patchWait: Task<Void, Never>?
     /// Starts a wait of the given length, taking the deadline at once, and returns the wait.
     /// Tests replace it with one on their own clock.
-    var startWait = waiter(on: ContinuousClock())
+    var startWait = DeadlineWait.make(on: ContinuousClock())
     /// Follow the window becoming and ceasing to be key while the field shows.
     private var windowObservers: [NSObjectProtocol] = []
 
@@ -477,13 +467,7 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
         }
         let wait = startWait(Self.patchTimeout)
         patchWait = Task { [weak self] in
-            do {
-                try await wait()
-            } catch is CancellationError {
-                return
-            } catch {
-                preconditionFailure("the clock failed a wait with \(error)")
-            }
+            guard await DeadlineWait.reached(wait) else { return }
             guard let self, case .waitingForRow(let current, _) = self.state,
                 current.id == edit.id
             else { return }

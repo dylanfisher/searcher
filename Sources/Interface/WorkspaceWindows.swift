@@ -1,4 +1,5 @@
 import AppKit
+import Base
 import Browser
 import os
 
@@ -677,14 +678,8 @@ public final class WorkspaceWindows {
         let clock = saveClock
         saveWait = Task { [weak self] in
             while let due = self?.saveDue, clock.now() < due {
-                do {
-                    try await clock.sleep(due)
-                } catch is CancellationError {
-                    // A save before quitting ran first.
-                    return
-                } catch {
-                    preconditionFailure("a sleep failed with \(error)")
-                }
+                // Cancelled when a save before quitting ran first.
+                guard await DeadlineWait.reached({ try await clock.sleep(due) }) else { return }
             }
             self?.saveChanges()
         }

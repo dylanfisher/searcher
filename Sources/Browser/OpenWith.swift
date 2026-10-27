@@ -1,3 +1,4 @@
+import Base
 import CoreGraphics
 import Foundation
 import UniformTypeIdentifiers
@@ -211,10 +212,8 @@ public final class OpenWith {
         let clock = clock
         let interval = refreshInterval
         Task {
-            do {
-                try await clock.sleep(for: interval)
-            } catch {
-                preconditionFailure("the clock failed a wait with \(error)")
+            guard await DeadlineWait.reached({ try await clock.sleep(for: interval) }) else {
+                return
             }
             resting.remove(type)
         }
@@ -240,12 +239,8 @@ public final class OpenWith {
         let wait = iconWait
         await withCheckedContinuation { continuation in
             let timer = Task {
-                do {
-                    try await clock.sleep(for: wait)
-                } catch is CancellationError {
+                guard await DeadlineWait.reached({ try await clock.sleep(for: wait) }) else {
                     return
-                } catch {
-                    preconditionFailure("the clock failed a wait with \(error)")
                 }
                 stopWaiting(id)
             }

@@ -51,7 +51,7 @@ public final class ServerShares {
     private let elapsed: @Sendable () -> Duration
     /// Starts a wait of the given length on the clock, taking the deadline at once, and returns
     /// the wait.
-    private let startWait: @Sendable (Duration) -> @Sendable () async throws -> Void
+    private let startWait: DeadlineWait.Start
     private var entries: [ShareRequest: Entry] = [:]
     private var runs: [ShareRequest: Run] = [:]
     private var nextAsker = 0
@@ -68,10 +68,7 @@ public final class ServerShares {
         self.enumerator = enumerator
         let start = clock.now
         elapsed = { start.duration(to: clock.now) }
-        startWait = { duration in
-            let deadline = clock.now.advanced(by: duration)
-            return { try await clock.sleep(until: deadline, tolerance: nil) }
-        }
+        startWait = DeadlineWait.make(on: clock)
     }
 
     /// `request`'s share names, or why they couldn't be listed: from the cache within its time,
@@ -149,12 +146,8 @@ public final class ServerShares {
         runs[request] = run
         let wait = startWait(LoadTimeouts.giveUp)
         run.timeout = Task { [weak self] in
-            do {
-                try await wait()
-            } catch {
-                // Cancelled: the run ended first.
-                return
-            }
+            // Cancelled when the run ended first.
+            guard await DeadlineWait.reached(wait) else { return }
             guard let self, !run.isOver else { return }
             run.enumeration?.terminate()
             self.finish(run, of: request, with: .failure(.unreachable))

@@ -1,4 +1,5 @@
 import AppKit
+import Base
 import Browser
 
 /// The end of a pane's path bar: a small spinner while the folder's listing is in flight, and a
@@ -28,7 +29,7 @@ final class PaneStatusView: NSView {
     private let now: @MainActor () -> Date
     /// Starts a wait of the given length on the clock, taking the deadline at once, and returns
     /// the wait.
-    private let startWait: @MainActor (Duration) -> @Sendable () async throws -> Void
+    private let startWait: DeadlineWait.Start
     /// Waits out the spinner delay; nil while the state shown isn't in flight.
     private var spinnerWait: Task<Void, Never>?
     /// Writes the note again when its age turns a minute older; nil while it shows no age.
@@ -56,10 +57,7 @@ final class PaneStatusView: NSView {
         clock: C = ContinuousClock(), now: @escaping @MainActor () -> Date = { Date() }
     ) {
         self.now = now
-        startWait = { duration in
-            let deadline = clock.now.advanced(by: duration)
-            return { try await clock.sleep(until: deadline, tolerance: nil) }
-        }
+        startWait = DeadlineWait.make(on: clock)
         super.init(frame: .zero)
         spinner.style = .spinning
         spinner.controlSize = .small
@@ -166,13 +164,7 @@ final class PaneStatusView: NSView {
         guard spinnerWait == nil else { return }
         let wait = startWait(LoadTimeouts.spinnerDelay)
         spinnerWait = Task { [weak self] in
-            do {
-                try await wait()
-            } catch is CancellationError {
-                return
-            } catch {
-                preconditionFailure("the clock failed a wait with \(error)")
-            }
+            guard await DeadlineWait.reached(wait) else { return }
             guard let self, !Task.isCancelled else { return }
             spinner.isHidden = false
             spinner.startAnimation(nil)
@@ -205,13 +197,7 @@ final class PaneStatusView: NSView {
     private func refreshAge(after delay: Duration) {
         let wait = startWait(delay)
         ageRefresh = Task { [weak self] in
-            do {
-                try await wait()
-            } catch is CancellationError {
-                return
-            } catch {
-                preconditionFailure("the clock failed a wait with \(error)")
-            }
+            guard await DeadlineWait.reached(wait) else { return }
             guard let self, !Task.isCancelled else { return }
             ageRefresh = nil
             showNote()

@@ -33,16 +33,13 @@ public struct SmbutilShares: ShareEnumerator {
     private let executable: URL
     /// Starts a wait of the given length on the clock, taking the deadline at once, and returns
     /// the wait.
-    private let startWait: @Sendable (Duration) -> @Sendable () async throws -> Void
+    private let startWait: DeadlineWait.Start
 
     /// A runner of `executable`, `smbutil` unless a test passes a script, that kills a run
     /// `killDelay` after its termination on `clock`.
     public init<C: Clock<Duration>>(executable: URL = tool, clock: C = ContinuousClock()) {
         self.executable = executable
-        startWait = { duration in
-            let deadline = clock.now.advanced(by: duration)
-            return { try await clock.sleep(until: deadline, tolerance: nil) }
-        }
+        startWait = DeadlineWait.make(on: clock)
     }
 
     /// `smbutil`'s arguments for `request`: `view -N //[user@]host`, the user percent-encoded
@@ -103,7 +100,7 @@ public struct SmbutilShares: ShareEnumerator {
 /// signals, not `waitUntilExit`, which runs the run loop.
 final class SmbutilRun: ShareEnumeration, @unchecked Sendable {
     private let process: Process
-    private let startWait: @Sendable (Duration) -> @Sendable () async throws -> Void
+    private let startWait: DeadlineWait.Start
     /// Signalled once the process has exited and been reaped.
     private let exitedSignal = DispatchSemaphore(value: 0)
     /// Signalled once per pipe drained to its end.
@@ -120,7 +117,7 @@ final class SmbutilRun: ShareEnumeration, @unchecked Sendable {
 
     init(
         process: Process,
-        startWait: @escaping @Sendable (Duration) -> @Sendable () async throws -> Void
+        startWait: @escaping DeadlineWait.Start
     ) {
         self.process = process
         self.startWait = startWait
@@ -209,11 +206,7 @@ final class SmbutilRun: ShareEnumeration, @unchecked Sendable {
         guard first else { return }
         let wait = startWait(SmbutilShares.killDelay)
         Task { [self] in
-            do {
-                try await wait()
-            } catch {
-                preconditionFailure("the clock failed a wait with \(error)")
-            }
+            guard await DeadlineWait.reached(wait) else { return }
             lock.withLock {
                 guard !exited else { return }
                 kill(pid, SIGKILL)

@@ -21,7 +21,7 @@ public actor ListingCacheStore {
     private let log: @Sendable (String) -> Void
     private let byteCap: Int
     /// Starts a wait of the given length on the store's clock, taking the deadline at once.
-    private let startWait: @Sendable (Duration) -> @Sendable () async throws -> Void
+    private let startWait: DeadlineWait.Start
     private let write: @Sendable (Data, URL) throws -> Void
     /// Listings not yet written, by volume.
     private var pending: [VolumeIdentity: [String: ListingCache.Folder]] = [:]
@@ -48,10 +48,7 @@ public actor ListingCacheStore {
         folder = roots.caches.appending(path: "listings")
         self.log = log
         self.byteCap = byteCap
-        startWait = { duration in
-            let deadline = clock.now.advanced(by: duration)
-            return { try await clock.sleep(until: deadline, tolerance: nil) }
-        }
+        startWait = DeadlineWait.make(on: clock)
         self.write = write
     }
 
@@ -82,11 +79,7 @@ public actor ListingCacheStore {
         writeScheduled = true
         let wait = startWait(Self.writeDelay)
         Task {
-            do {
-                try await wait()
-            } catch {
-                preconditionFailure("the clock failed a wait with \(error)")
-            }
+            guard await DeadlineWait.reached(wait) else { return }
             flush()
         }
     }

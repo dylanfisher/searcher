@@ -1,4 +1,5 @@
 import AppKit
+import Base
 import Browser
 
 /// Answers a `FileOperationQueue`'s questions with `Dialog` sheets: `ConflictSheetController`
@@ -107,14 +108,11 @@ final class OperationPrompter {
     private var finished: Set<FileOperationQueue.ID> = []
 
     /// Starts a wait of the given length on the clock, taking the deadline at once.
-    private let startWait: @MainActor (Duration) -> @Sendable () async throws -> Void
+    private let startWait: DeadlineWait.Start
 
     /// `clock` times `keyHold`; tests give a manual one.
     init<C: Clock<Duration>>(clock: C = ContinuousClock()) {
-        startWait = { duration in
-            let deadline = clock.now.advanced(by: duration)
-            return { try await clock.sleep(until: deadline, tolerance: nil) }
-        }
+        startWait = DeadlineWait.make(on: clock)
     }
 
     /// Raises `window` with `raise`, and when the app isn't active asks for the user's
@@ -198,11 +196,7 @@ final class OperationPrompter {
         if focused != nil { panel.makeFirstResponder(panel) }
         let wait = startWait(Self.keyHold)
         Task {
-            do {
-                try await wait()
-            } catch {
-                preconditionFailure("the clock failed a wait with \(error)")
-            }
+            guard await DeadlineWait.reached(wait) else { return }
             for (button, key) in held { button.keyEquivalent = key }
             if let focused, panel.firstResponder === panel { panel.makeFirstResponder(focused) }
         }

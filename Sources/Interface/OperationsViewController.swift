@@ -1,4 +1,5 @@
 import AppKit
+import Base
 import Browser
 
 /// The operations panel at the bottom of a browser window: one `OperationRowView` per running
@@ -54,7 +55,7 @@ final class OperationsViewController: NSViewController {
     private let control: Control
     private let formatter = EntryCellFormatter()
     /// Starts a wait of the given length on the clock, taking the deadline at once.
-    private let startWait: @MainActor (Duration) -> @Sendable () async throws -> Void
+    private let startWait: DeadlineWait.Start
     /// The time on the clock since the panel was made.
     private let elapsed: @MainActor () -> Duration
     private let stack = NSStackView()
@@ -76,10 +77,7 @@ final class OperationsViewController: NSViewController {
 
     init<C: Clock<Duration>>(control: Control, clock: C = ContinuousClock()) {
         self.control = control
-        startWait = { duration in
-            let deadline = clock.now.advanced(by: duration)
-            return { try await clock.sleep(until: deadline, tolerance: nil) }
-        }
+        startWait = DeadlineWait.make(on: clock)
         let start = clock.now
         elapsed = { start.duration(to: clock.now) }
         super.init(nibName: nil, bundle: nil)
@@ -252,13 +250,7 @@ final class OperationsViewController: NSViewController {
     private func wait(for id: FileOperationQueue.ID) -> Task<Void, Never> {
         let wait = startWait(Self.attentionDelay)
         return Task { [weak self] in
-            do {
-                try await wait()
-            } catch is CancellationError {
-                return
-            } catch {
-                preconditionFailure("the clock failed a wait with \(error)")
-            }
+            guard await DeadlineWait.reached(wait) else { return }
             guard let self, !Task.isCancelled, waits[id] != nil else { return }
             ask(for: id)
         }
