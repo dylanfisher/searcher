@@ -82,6 +82,24 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
             }
         }
     }
+    /// The shape its rows draw their selection in (`ListingRowView`). A column view gives its
+    /// trail's first column `.fullWidth`, as Finder does, and every other column, like the list,
+    /// keeps `.roundedBand` (0046-column-view.md).
+    var selectionShape = SelectionShape.roundedBand {
+        didSet {
+            guard selectionShape != oldValue else { return }
+            enumerateAvailableRowViews { rowView, _ in rowView.needsDisplay = true }
+        }
+    }
+
+    /// The shapes a row's selection is drawn in.
+    enum SelectionShape {
+        /// A band inset from the row's sides with rounded corners, as the inset style draws it.
+        case roundedBand
+        /// The whole row, square, as the full-width style draws it.
+        case fullWidth
+    }
+
     /// How much further in than AppKit's full-width style puts them the first column's cells
     /// start and the last column's cells end, so a row's content sits inside its selection's
     /// rounded band (`ListingRowView`) with the room Finder leaves there, as the inset style

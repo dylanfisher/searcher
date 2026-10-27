@@ -30,7 +30,16 @@ stacked single-column tables over `NSBrowser`.
   name truncates in its middle before the badge and the chevron, as Finder's does.)
   Everything else (rows, icons, badge, labels, selection, Quick Look, Page Up and Down through
   `visibleRowCount`) is the list's code. Row labels read the cells the table has and format the
-  kind, size and date from the entry for the columns it doesn't.
+  kind, size and date from the entry for the columns it doesn't. (Amended 2026-10-26, RN.3,
+  from Dylan's screenshots of Finder, first-column-square.jpg and second-column-rounded.jpg: the
+  trail's first column draws its selection across the whole row, square, accent while
+  emphasized and grey otherwise; every other column keeps the list's rounded band
+  ([0029](0029-row-movement.md)). It is the trail's first column, not the leftmost one on screen:
+  Finder's band is square in the column its trail starts with, and a rule by scroll position
+  would change a column's look as the view scrolls. The column view sets each table's
+  `selectionShape` from its index every time it shows the trail, so a trail started again
+  from another root gives its new first column the square band. The icon sits 16 pt from the
+  column's left edge in both shots, so the first column's cells keep the same inset.)
 - **The columns bounce sideways always.** The scroll view holding the columns has horizontal
   elasticity `.allowed`, so a swipe sideways overscrolls and springs back even when every column
   fits, as a short column does vertically (2026-10-25). (Amended 2026-10-26, Dylan: "column

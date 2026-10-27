@@ -242,7 +242,10 @@ final class ColumnViewController: NSViewController {
             browserChildren = columnViews
             columnsView.setAccessibilityChildren(columnViews)
         }
-        for controller in columnControllers {
+        for (index, controller) in columnControllers.enumerated() {
+            // Finder's first column selects across its whole width, square; the others draw
+            // the rounded band (0046-column-view.md).
+            controller.tableView.selectionShape = index == 0 ? .fullWidth : .roundedBand
             controller.paneDidChange()
             showSpinner(for: controller.pane)
             showMessage(for: controller)
