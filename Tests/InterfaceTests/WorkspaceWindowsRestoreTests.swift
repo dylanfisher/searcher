@@ -1699,18 +1699,28 @@ private func reportingStore(_ folder: TemporaryFolder, problems: EventLog<StoreP
     #expect(after.session?.undeletedSnapshots == [])
 }
 
-/// A folder visit just before quitting is written by the quit's flush. The windows are saved
-/// first, so the quit has nothing of their own to hand the store and flushes at once.
+/// A folder visit just before quitting is written by the quit's flush. The visit's save is held
+/// until the quit waits for it, and the store's own delay never passes, so only a flush that
+/// came after the save was handed over can write the history.
 @MainActor @Test func quitWritesTheFolderHistoryOfTheLastVisit() async throws {
     let folder = try TemporaryFolder("WorkspaceWindowsRestoreTests")
-    let windows = makeWindows(store: diskStore(folder))
-    windows.folderVisits.load(FolderHistory())
-    windows.open(at: Location(path: "/root"))
+    let writes = EventLog<(Data, URL)>()
+    let windows = makeWindows(store: recordingStore(folder, writes: writes))
+    let visits = windows.folderVisits
+    visits.load(FolderHistory())
+    let (released, release) = AsyncStream.makeStream(of: Void.self)
+    visits.beforeHandOver = {
+        for await _ in released { return }
+    }
+    visits.willWaitForSaves = { release.finish() }
+    // Released at the end whatever happened, so a held save doesn't outlive the test.
+    defer { release.finish() }
+
+    visits.visit(Location(path: "/root/docs"))
     #expect(await saveAll(windows))
 
-    windows.folderVisits.visit(Location(path: "/root/docs"))
-    #expect(await saveAll(windows))
-
-    let history = await diskStore(folder).loadFolderHistory()
-    #expect(history.folders.keys.contains("/root/docs"))
+    let written = writes.all.filter { $0.1.lastPathComponent == "folder-history.json" }
+    let history = try JSONDecoder().decode(
+        FolderHistory.self, from: try #require(written.last?.0))
+    #expect(history.folders.keys.sorted() == ["/root/docs"])
 }

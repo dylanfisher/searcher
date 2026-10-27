@@ -303,6 +303,50 @@ private func onePaneTab() -> TabState {
     #expect(problems.all.count == 1)
 }
 
+/// A failed write is tried again a write delay later with no save or flush to make it, and is
+/// reported once until a write of the file succeeds; a failure after that is reported again.
+@Test func aFailedWriteIsRetriedAfterTheDelayAndReportedOnce() async throws {
+    let folder = try TemporaryFolder("WorkspaceStoreTests")
+    let clock = ManualClock()
+    let problems = EventLog<StoreProblem>()
+    // The disk is full while its last entry is true.
+    let full = EventLog<Bool>()
+    full.append(true)
+    let attempts = EventLog<URL>()
+    let writer = store(folder, problems: problems, clock: clock) { data, url in
+        attempts.append(url)
+        guard full.all.last == false else { throw CocoaError(.fileWriteOutOfSpace) }
+        try AtomicWrite.write(data, to: url)
+    }
+    let saved = try workspace()
+    await writer.save(saved)
+    await writer.flush()
+    await writer.flush()
+    #expect(attempts.all.count == 2)
+    #expect(problems.all.map(\.kind) == [.unwritten])
+
+    // The retry's wait starts as the flush ends; any call on the store waits for that.
+    _ = await writer.loadFolderHistory()
+    clock.advance(by: WorkspaceStore.writeDelay)
+    #expect(await attempts.wait { $0.count == 3 })
+    _ = await writer.loadFolderHistory()
+    full.append(false)
+    clock.advance(by: WorkspaceStore.writeDelay)
+    #expect(await attempts.wait { $0.count == 4 })
+    #expect(problems.all.count == 1)
+    #expect(await store(folder).load().workspaces == [saved.id: saved])
+
+    // Written, so nothing is retried.
+    _ = await writer.loadFolderHistory()
+    clock.advance(by: WorkspaceStore.writeDelay)
+    #expect(await !attempts.wait(timeout: 0.2) { $0.count > 4 })
+
+    full.append(true)
+    await writer.save(try workspace(saved.id, name: "Later"))
+    await writer.flush()
+    #expect(problems.all.map(\.kind) == [.unwritten, .unwritten])
+}
+
 // MARK: Discarding
 
 /// Writes `good` and a second workspace, then replaces the second one's file with `damage` of
