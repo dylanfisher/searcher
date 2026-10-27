@@ -145,6 +145,33 @@ private func restored(
     pane.close()
 }
 
+/// A cursor on a folder with nothing selected, as a path bar click on a column leaves it
+/// (0119), comes back that way: the folder isn't selected and opens no column.
+@MainActor @Test func restoredColumnPaneWithACursorAndNothingSelectedOpensNoColumn() async throws {
+    let lister = GatedLister([
+        "/": .batches([[folder("p")]]),
+        "/p": .batches([[folder("docs"), file("a.txt")]]),
+        "/p/docs": .batches([[file("inside.txt")]]),
+    ])
+    lister.releaseAll()
+    let pane = restored(saved("/p", cursor: "docs", viewMode: .column), lister: lister)
+    let tab = Tab(pane: pane)
+
+    let trail = try #require(pane.columnTrail)
+    await settle {
+        trail.columns.allSatisfy { $0.pane.state.isLoaded }
+            && trail.focused.pane.selection.isSettled
+    }
+
+    #expect(trail.columns.map(\.pane.location.path) == ["/", "/p"])
+    #expect(trail.focused.pane.selection.isEmpty)
+    #expect(trail.focused.pane.selection.cursor == ExactName("docs"))
+    let state = try #require(tab.state.panes[tab.layout.focused])
+    #expect(state.selection.isEmpty)
+    #expect(state.cursor == ExactName("docs"))
+    pane.close()
+}
+
 /// The saved sort is the list's: a restored column pane's columns open by Name ascending, and the
 /// list comes back in the saved sort. Its state saves that sort, not a column's.
 @MainActor @Test func restoredColumnPaneSortsItsColumnsByNameAndKeepsTheListsSort() async throws {
