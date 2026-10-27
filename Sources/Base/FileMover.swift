@@ -15,8 +15,7 @@ public enum FileMover {
     /// `destination` for `exists` and `source` otherwise. Blocks the calling thread; call it off
     /// the main thread.
     public static func move(_ source: String, to destination: String) throws(FileOperationError) {
-        precondition(
-            !Thread.isMainThread, "FileMover does file-system I/O; call it off the main thread")
+        preconditionOffMain("FileMover")
         if renamex_np(source, destination, UInt32(RENAME_EXCL)) == 0 { return }
         var code = errno
         if code == ENOTSUP {

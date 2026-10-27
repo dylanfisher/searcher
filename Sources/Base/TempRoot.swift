@@ -14,8 +14,7 @@ public struct TempRoot: Sendable {
 
     /// Creates `<prefix>-<UUID>` under the temporary directory. Call it off the main thread.
     public init(prefix: String) throws {
-        precondition(
-            !Thread.isMainThread, "TempRoot does file-system I/O; call it off the main thread")
+        preconditionOffMain("TempRoot")
         folder = FileManager.default.temporaryDirectory
             .appending(path: "\(prefix)-\(UUID().uuidString)")
         suiteName = folder.appending(path: "preferences").path
@@ -25,8 +24,7 @@ public struct TempRoot: Sendable {
     /// Removes every root made with `prefix`, for an owner that was killed before it could call
     /// `remove()`. Call it off the main thread.
     public static func removeAll(prefix: String) throws {
-        precondition(
-            !Thread.isMainThread, "TempRoot does file-system I/O; call it off the main thread")
+        preconditionOffMain("TempRoot")
         // An empty prefix would match every `-*` in the temporary directory.
         precondition(
             !prefix.isEmpty && !prefix.contains("/"),
@@ -41,8 +39,7 @@ public struct TempRoot: Sendable {
     /// Removes the folder with everything in it, the suite's file among them. Call it off the
     /// main thread.
     public func remove() throws {
-        precondition(
-            !Thread.isMainThread, "TempRoot does file-system I/O; call it off the main thread")
+        preconditionOffMain("TempRoot")
         try FileManager.default.removeItem(at: folder)
     }
 }

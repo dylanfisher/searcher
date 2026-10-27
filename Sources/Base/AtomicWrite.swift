@@ -9,8 +9,7 @@ public enum AtomicWrite {
     public static func write(
         _ data: Data, to url: URL, beforeRename: () throws -> Void = {}
     ) throws {
-        precondition(
-            !Thread.isMainThread, "AtomicWrite does file-system I/O; call it off the main thread")
+        preconditionOffMain("AtomicWrite")
         // In the same folder, so the rename stays on one volume and can't turn into a copy.
         let partial = url.deletingLastPathComponent()
             .appending(path: ".\(url.lastPathComponent)\(partialMarker)\(UUID().uuidString)")
