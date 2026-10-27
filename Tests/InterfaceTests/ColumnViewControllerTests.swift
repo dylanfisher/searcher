@@ -1291,9 +1291,10 @@ private let chevronTree: [String: [DirectoryEntry]] = [
 }
 
 /// The bounds of what `image` draws, in points from its lower left: its pixels more than half
-/// opaque, drawn at 4 pixels a point.
+/// opaque, drawn at 4 pixels a point in the light appearance whatever the Mac's.
 @MainActor
 private func inkBounds(of image: NSImage) throws -> NSRect {
+    let light = try #require(NSAppearance(named: .aqua))
     let scale = 4.0
     let bitmap = try #require(
         NSBitmapImageRep(
@@ -1304,7 +1305,9 @@ private func inkBounds(of image: NSImage) throws -> NSRect {
     bitmap.size = image.size
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
-    image.draw(in: NSRect(origin: .zero, size: image.size))
+    light.performAsCurrentDrawingAppearance {
+        image.draw(in: NSRect(origin: .zero, size: image.size))
+    }
     NSGraphicsContext.restoreGraphicsState()
     var ink = NSRect.null
     for y in 0..<bitmap.pixelsHigh {

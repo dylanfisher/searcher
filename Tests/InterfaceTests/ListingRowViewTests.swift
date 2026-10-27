@@ -4,10 +4,12 @@ import Testing
 
 @testable import Interface
 
-/// A selected row 300 points wide, as a list's or a column's.
+/// A selected row 300 points wide, as a list's or a column's, in the light appearance whatever
+/// the Mac's, so what it draws doesn't follow the machine.
 @MainActor
 private func selectedRow(emphasized: Bool = true) -> ListingRowView {
     let row = ListingRowView(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+    row.appearance = NSAppearance(named: .aqua)
     row.isSelected = true
     row.isEmphasized = emphasized
     return row

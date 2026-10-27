@@ -985,7 +985,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// else before the chevron when it shows, else at the trailing padding.
     private static func nameEnd(cellWidth: Double, chevron: Bool, badge: Bool) -> Double {
         if badge { return badgeX(cellWidth: cellWidth, chevron: chevron) - badgeGap }
-        if chevron { return cellWidth - chevronWidth - badgeGap }
+        if chevron { return cellWidth - chevronRoom - badgeGap }
         return cellWidth - 2
     }
 
@@ -1079,7 +1079,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             view.frame.width - tableView.tableColumns[0].width + 2 * ListingTableView.cellInset
         // A point over, for the rounding of the field's own width.
         let field = (nameWidth + Self.nameFieldPadding).rounded(.up) + 1
-        let trailing = Self.badgeGap + Self.chevronWidth
+        let trailing = Self.badgeGap + Self.chevronRoom
         return (outside + Self.nameX + field + trailing).rounded(.up)
     }
 
@@ -1097,9 +1097,11 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// selection: the glyph, which stops 1.5 points short of its image's right edge, then ends
     /// 4.5 points inside the selection, as Finder's does.
     private static let chevronOverhang = 2.0
+    /// The room the chevron's view takes inside the cell, from its right edge.
+    private static let chevronRoom = chevronWidth - chevronOverhang
     /// The room a shown chevron takes from the cell's trailing padding, which a badge keeps clear
     /// of.
-    private static let chevronReserve = chevronWidth - 2 + badgeGap
+    private static let chevronReserve = chevronRoom - 2 + badgeGap
 
     /// A cell laid out with frames and autoresizing, which costs less per row than constraints.
     private func makeCell(for column: SortColumn) -> NSTableCellView {
@@ -1111,7 +1113,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             let chevron = named.chevron
             chevron.identifier = Self.folderChevronIdentifier
             chevron.frame = NSRect(
-                x: column.width - Self.chevronWidth + Self.chevronOverhang,
+                x: column.width - Self.chevronRoom,
                 y: (height - Self.badgeSize) / 2, width: Self.chevronWidth,
                 height: Self.badgeSize)
             chevron.autoresizingMask = [.minXMargin, .minYMargin, .maxYMargin]
