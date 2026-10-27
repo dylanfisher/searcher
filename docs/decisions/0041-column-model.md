@@ -51,7 +51,8 @@ the load through `ListingService`, the off-main sort and filter ([0025](0025-sor
   folder's own contents, which can't take it, and spring-loading
   ([0099](0099-get-info-and-spring-loading.md)) opens the folders the drag hovers over as before.
   A selection waiting for the keys to pause ([0094](0094-column-open-delay.md)) opens its column
-  at the press. ← still keeps the columns to the right.)
+  at the press. ← still keeps the columns to the right.) (Amended 2026-10-27: Escape then closes
+  them as the press does; see [0119](0119-escape-closes-columns.md).)
 - **Loads.** Each column's pane lists its folder. The focused column's load asks
   `ListingService` for `.focused` priority, so a parent column added by ← starts ahead of a
   child column queued before it, once both volumes are read; a load whose volume isn't known
@@ -153,8 +154,9 @@ the load through `ListingService`, the off-main sort and filter ([0025](0025-sor
 Switching views lists the folder again, and so does Go to folder in column mode once it has
 found the folder. → into a column whose rows haven't arrived selects nothing; the first row
 isn't selected when they arrive. ← keeps the columns to the right, so → goes back into the same
-folder. A closed column's settings observer stays in `Settings` until the next settings change
-after the column is freed, which drops it; pruning on `close()` would need a removal method in
+folder; Escape closes them ([0119](0119-escape-closes-columns.md)). A closed column's settings
+observer stays in `Settings` until the next settings change after the column is freed, which
+drops it; pruning on `close()` would need a removal method in
 `Settings`, and a closed pane ignores settings changes meanwhile.
 
 For M2.7, which builds the view on this model:

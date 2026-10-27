@@ -133,7 +133,8 @@ focused folder only ([0041](0041-column-model.md), [0096](0096-column-widths.md)
   ↓ goes on from it. Nothing lists again, but a column whose first load waits. The click is a
   step of the history, as every move of the keys to another column now is
   ([0041](0041-column-model.md)), so Back returns to the folder left, building its trail again
-  since its column closed. ← still keeps the columns to the right.)
+  since its column closed. ← still keeps the columns to the right; Escape closes them
+  ([0119](0119-escape-closes-columns.md)).)
 - **Scrolling.** A new trail (no column kept) is scrolled from the left end, so the focused
   column, with the one right of it where that fits, ends at the right edge and the columns above
   it fill the view to its left. It jumps, as a new trail did ([0046](0046-column-view.md)). A

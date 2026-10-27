@@ -494,7 +494,12 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         tableView.doubleAction = #selector(openClickedRow(_:))
         tableView.contextMenu = { [weak self] row in self?.contextMenu(forRow: row) }
         tableView.pressedSelectedRow = { [weak self] in self?.pane.pressSelectedFolder() }
-        tableView.escape = { [weak self] in self?.pane.cancelShareMount() ?? false }
+        // A share being mounted is let go of first; in column view a pending mount leaves no
+        // column right of its own, so the two never both apply.
+        tableView.escape = { [weak self] in
+            guard let pane = self?.pane else { return false }
+            return pane.cancelShareMount() || pane.closeColumnsPastNext()
+        }
         pane.reportShareMount = { [weak self] name, report in
             switch report {
             case .failed(let status):
