@@ -53,3 +53,32 @@ import Testing
         _ = try await MainActor.run { try VolumeIdentity(path: "/") }
     }
 }
+
+@Test func aShareInVolumesHasTheServerItsSourceNames() {
+    let music = VolumeIdentity(
+        device: "//dylan@HAL9000._smb._tcp.local/music", mountPoint: "/Volumes/music",
+        kind: .network)
+    let main = VolumeIdentity(
+        device: "//guest@HAL9000._smb._tcp.local/main", mountPoint: "/Volumes/main 1",
+        kind: .network)
+    #expect(music.server?.name == "HAL9000")
+    #expect(music.server != nil && music.server == main.server)
+}
+
+@Test(arguments: [
+    VolumeIdentity(device: "/dev/disk3s1", mountPoint: "/", kind: .local),
+    VolumeIdentity(device: "/dev/disk5s1", mountPoint: "/Volumes/USB", kind: .local),
+    VolumeIdentity(
+        device: "//dylan@HAL9000._smb._tcp.local/music", mountPoint: "/Users/dylan/music",
+        kind: .network),
+    VolumeIdentity(
+        device: "//dylan@HAL9000._smb._tcp.local/music", mountPoint: "/Volumes/a/music",
+        kind: .network),
+    VolumeIdentity(
+        device: "//dylan@HAL9000._smb._tcp.local/music", mountPoint: "/Volumes/music",
+        kind: .network, isBrowsable: false),
+    VolumeIdentity(device: "map auto_home", mountPoint: "/Volumes/home", kind: .network),
+])
+func aVolumeThatIsNoShareInVolumesHasNoServer(volume: VolumeIdentity) {
+    #expect(volume.server == nil)
+}
