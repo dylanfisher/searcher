@@ -1290,6 +1290,26 @@ private let chevronTree: [String: [DirectoryEntry]] = [
     #expect(iconCache.folderChevron.isTemplate)
 }
 
+/// Finder's chevron is small and thin beside the 13-point name: about 6 points tall and 3.5
+/// wide, measured from Dylan's screenshots. Its view is as wide as it, and it sits about as far
+/// inside the row's selection as Finder's, 4.5 points.
+@MainActor @Test func theChevronIsFindersSize() async throws {
+    let iconCache = TypeIconCache { _ in NSImage() }
+    let fixture = await Fixture(iconCache: iconCache, folders: chevronTree)
+    let table = fixture.tables[0]
+    let row = try #require(rowNames(table).firstIndex(of: "docs"))
+    let rowView = try #require(table.rowView(atRow: row, makeIfNecessary: true) as? ListingRowView)
+    let cell = try #require(rowView.view(atColumn: 0) as? NSTableCellView)
+    let mark = try chevron(cell)
+    let image = iconCache.folderChevron
+
+    #expect(image.symbolConfiguration == TypeIconCache.folderChevronConfiguration)
+    #expect(image.size.height <= 7 && image.size.width <= 6)
+    #expect(mark.frame.width == image.size.width)
+    let inside = rowView.selectionPath.bounds.maxX - rowView.convert(mark.frame, from: cell).maxX
+    #expect(inside >= 4 && inside <= 6)
+}
+
 @MainActor @Test func aNameEndsBeforeTheChevron() async throws {
     let fixture = await Fixture(folders: chevronTree)
     let table = fixture.tables[0]

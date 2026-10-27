@@ -82,15 +82,50 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
             }
         }
     }
-    /// Runs when a row's selection or its emphasis changes, which sets the style its cells
-    /// draw in. Set by the list's controller.
-    var rowStyleDidChange: @MainActor (NSTableRowView) -> Void = { _ in }
+    /// How much further in than AppKit's full-width style puts them the first column's cells
+    /// start and the last column's cells end, so a row's content sits inside its selection's
+    /// rounded band (`ListingRowView`) with the room Finder leaves there, as the inset style
+    /// places it. The header's titles move with their cells.
+    static let cellInset: CGFloat = 8
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         // AppKit's type-select makes a row view for each row it checks, on the main thread, so a
         // letter key in a 100k-entry folder costs hundreds of milliseconds.
         allowsTypeSelect = false
+        guard let header = headerView else {
+            preconditionFailure("a new table has no header view")
+        }
+        headerView = HeaderView(frame: header.frame)
+    }
+
+    override func frameOfCell(atColumn column: Int, row: Int) -> NSRect {
+        Self.inset(
+            super.frameOfCell(atColumn: column, row: row), column: column, of: numberOfColumns)
+    }
+
+    /// `frame`, a cell's or a header's in `column` of `count`, moved in by `cellInset` at the
+    /// table's ends.
+    fileprivate static func inset(_ frame: NSRect, column: Int, of count: Int) -> NSRect {
+        var frame = frame
+        if column == 0 {
+            frame.origin.x += cellInset
+            frame.size.width -= cellInset
+        }
+        if column == count - 1 {
+            frame.size.width -= cellInset
+        }
+        frame.size.width = max(frame.width, 0)
+        return frame
+    }
+
+    /// The column header, whose titles start and end where the cells under them do.
+    private final class HeaderView: NSTableHeaderView {
+        override func headerRect(ofColumn column: Int) -> NSRect {
+            ListingTableView.inset(
+                super.headerRect(ofColumn: column), column: column,
+                of: tableView?.numberOfColumns ?? 0)
+        }
     }
 
     @available(*, unavailable)

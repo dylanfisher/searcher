@@ -174,8 +174,10 @@ private func nameRow(_ name: String, in list: ListingViewController) throws
     return (rowView, cell)
 }
 
-/// As Finder's: the text sits where the name's label is, in its font, with no border, bezel,
-/// background or focus ring, and the label under it hides so the old name doesn't show through.
+/// As Finder's: a box in the text background color, with no border, bezel or focus ring,
+/// starting where the name's label does, in its font, the name in the label color with the
+/// system's text selection, as wide as the name with the editor's padding, and the label under
+/// it hidden so the old name doesn't show through.
 @MainActor
 private func expectFieldOverItsLabel(
     _ rename: RenameFieldController, in list: ListingViewController, name: String
@@ -186,11 +188,24 @@ private func expectFieldOverItsLabel(
     #expect(field.focusRingType == .none)
     #expect(!field.isBezeled)
     #expect(!field.isBordered)
-    #expect(!field.drawsBackground)
+    #expect(field.drawsBackground)
+    #expect(field.backgroundColor == .textBackgroundColor)
+    #expect(field.textColor == .labelColor)
     #expect(field.font == label.font)
-    let table = list.tableView
+    let editor = try #require(field.currentEditor() as? NSTextView)
     #expect(
-        table.convert(field.frame, from: field.superview) == table.convert(label.frame, from: cell))
+        editor.selectedTextAttributes[.backgroundColor] as? NSColor
+            == .selectedTextBackgroundColor)
+    let table = list.tableView
+    let box = table.convert(field.frame, from: field.superview)
+    let labelFrame = table.convert(label.frame, from: cell)
+    #expect(box.origin == labelFrame.origin)
+    #expect(box.height == labelFrame.height)
+    let textWidth = (name as NSString).size(withAttributes: [.font: try #require(label.font)])
+        .width
+    let padding = try #require(editor.textContainer).lineFragmentPadding
+    #expect(box.width == (textWidth + 2 * padding).rounded(.up) + 1)
+    #expect(box.width < labelFrame.width)
     #expect(label.isHidden)
 }
 
@@ -223,8 +238,31 @@ private func expectFieldOverItsLabel(
     try expectFieldOverItsLabel(column.renameField, in: column, name: "Stuff")
 }
 
-/// Finder keeps the selected row in the accent color while its name is edited, the name white
-/// on it; the table no longer has the keys, so AppKit alone would draw the row grey.
+/// The box grows with the name typed, up to the room the name has before the row's end.
+@MainActor @Test func theFieldGrowsWithTheNameUpToTheRoomItHas() async throws {
+    let fixture = try await Fixture("song.flac")
+    defer { fixture.stop() }
+    await fixture.select("song.flac")
+    let list = fixture.controller.listingViewController
+    try fixture.press(returnKey)
+    let field = fixture.field.field
+    let start = field.frame.width
+    let room = try nameRow("song.flac", in: list).cell.textField?.frame.width ?? 0
+
+    try fixture.type("a longer name for the song")
+
+    #expect(field.frame.width > start)
+    // The move into the clip view's coordinates leaves the width a hair off whole points.
+    #expect(abs(field.frame.width - fixture.field.fittingWidth) < 0.001)
+    #expect(field.frame.width < room)
+
+    try fixture.type(String(repeating: "much longer ", count: 40))
+
+    #expect(field.frame.width == room)
+}
+
+/// Finder keeps the selected row in the accent color while its name is edited, in its box;
+/// the table no longer has the keys, so AppKit alone would draw the row grey.
 @MainActor @Test func theRowStaysEmphasizedWhileItsNameIsEdited() async throws {
     let fixture = try await Fixture("song.flac", "other.txt")
     defer { fixture.stop() }
@@ -237,8 +275,6 @@ private func expectFieldOverItsLabel(
     #expect(rowView.isSelected)
     #expect(rowView.isEmphasized)
     #expect(rowView.interiorBackgroundStyle == .emphasized)
-    #expect(fixture.field.field.textColor == .alternateSelectedControlTextColor)
-    #expect(try fixture.editor().insertionPointColor == .alternateSelectedControlTextColor)
     let other = try nameRow("other.txt", in: list).row
     #expect(other.interiorBackgroundStyle == .normal)
 }
@@ -253,11 +289,10 @@ private func expectFieldOverItsLabel(
 
     let (rowView, _) = try nameRow("song.flac", in: column)
     #expect(rowView.isEmphasized)
-    #expect(column.renameField.field.textColor == .alternateSelectedControlTextColor)
 }
 
-/// In a window that isn't key the row is drawn grey, as AppKit draws a selection there, and
-/// the name in the label color; it turns back when the window is key again.
+/// In a window that isn't key the row is drawn grey, as AppKit draws a selection there; it
+/// turns back when the window is key again. The name in its box keeps the label color.
 @MainActor @Test func theRowIsNotEmphasizedWhileTheWindowIsNotKey() async throws {
     let fixture = try await Fixture("song.flac")
     defer { fixture.stop() }
@@ -271,13 +306,12 @@ private func expectFieldOverItsLabel(
 
     #expect(!rowView.isEmphasized)
     #expect(fixture.field.field.textColor == .labelColor)
-    #expect(try fixture.editor().insertionPointColor == .labelColor)
 
     fixture.window.isKey = true
     NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: fixture.window)
 
     #expect(rowView.isEmphasized)
-    #expect(fixture.field.field.textColor == .alternateSelectedControlTextColor)
+    #expect(fixture.field.field.textColor == .labelColor)
 }
 
 /// The row lets AppKit's emphasis back once the field closes.
@@ -328,8 +362,6 @@ func eachRenameStartsWithNothingToUndo(closingByReturn: Bool) async throws {
     let fixture = try await Fixture("song.flac")
     defer { fixture.stop() }
     await fixture.select("song.flac")
-    // The row's view, which the field's colors follow.
-    _ = try nameRow("song.flac", in: fixture.controller.listingViewController)
     try fixture.press(returnKey)
     let editor = try fixture.editor()
     let styled = NSAttributedString(
@@ -345,11 +377,11 @@ func eachRenameStartsWithNothingToUndo(closingByReturn: Bool) async throws {
     #expect(editor.string == "big.flac")
     let attributes = editor.textStorage?.attributes(at: 0, effectiveRange: nil) ?? [:]
     #expect(attributes[.font] as? NSFont == ListingViewController.nameFont)
-    #expect(attributes[.foregroundColor] as? NSColor == .alternateSelectedControlTextColor)
+    #expect(attributes[.foregroundColor] as? NSColor == .labelColor)
 }
 
-/// The field's white-on-accent colors stay in an editor of its own: the window's editor, which
-/// every other text field in it uses, keeps AppKit's.
+/// The field edits in an editor of its own, apart from the window's, which every other text
+/// field in it uses.
 @MainActor @Test func theFieldEditsInAnEditorOfItsOwn() async throws {
     let fixture = try await Fixture("song.flac")
     defer { fixture.stop() }
@@ -388,7 +420,7 @@ func eachRenameStartsWithNothingToUndo(closingByReturn: Bool) async throws {
     // The field holds the new name over the old row until the monitor lists the renamed entry.
     #expect(fixture.field.field.stringValue == "tune.flac")
     #expect(!fixture.field.field.isHidden)
-    #expect(fixture.field.field.frame == fieldFrame)
+    #expect(fixture.field.field.frame.origin == fieldFrame.origin)
     #expect(fixture.pane.state.listing?.row(named: "song.flac") == row)
     await settle { fixture.exists("tune.flac") && !fixture.exists("song.flac") }
     await settle { fixture.selectedNames == ["tune.flac"] }

@@ -31,13 +31,17 @@ public final class TypeIconCache {
         return image
     }()
 
+    /// The chevron's size and weight, Finder's: about 6 points tall and 3.5 wide, a thin stroke,
+    /// beside a name 13 points high (docs/decisions/0046-column-view.md).
+    static let folderChevronConfiguration = NSImage.SymbolConfiguration(
+        pointSize: 7, weight: .regular, scale: .medium)
+
     /// The chevron Finder draws at the right of a folder row in column view, made the first time a
     /// column shows one and shared by every such row. A template, so it takes its view's tint.
     public private(set) lazy var folderChevron: NSImage = {
         let name = "chevron.right"
         guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil),
-            let sized = image.withSymbolConfiguration(
-                NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold, scale: .medium))
+            let sized = image.withSymbolConfiguration(Self.folderChevronConfiguration)
         else {
             preconditionFailure("no system symbol named \(name)")
         }

@@ -19,20 +19,25 @@ once the operation ends.
   Cmd-Delete in the field would trash the file being renamed. Beside it, the file commands' menu
   items are off while the field has the keys, as 0066 expects of a text field. The clip view
   scrolls it with the rows.
-- **It looks as Finder's does** (amended 2026-10-26, from Dylan's screenshots of Finder's column
-  view; it replaces a thin plain border, [0076](0076-dialogs.md)). The field has no bezel,
-  border, background or focus ring, and its frame and font are the name label's, so the text
-  stays where the name was drawn; the label under it hides, as the old name would show through.
-  The row keeps its selection in the accent color while the field has the keys of the key
-  window: AppKit emphasizes a selection only while the table has them, so the list's row views
-  (`ListingRowView`) also emphasize it while the table's `keepsSelectionEmphasized` is set. On
-  the accent the name, the insertion point and the selected text are white, over a lighter shade
-  of the accent (white at 30 %), as Finder draws them; on a grey row, in a window that isn't
-  key or once the keys have left, they take the label's colors and AppKit's selection. The
-  field edits in an editor of its own, so those colors don't stay on the window's editor that
-  every other text field in it uses. That editor outlives each edit, so the window's undo
-  manager, which holds only text fields' typing, is emptied as an edit ends and as the next
-  begins: Undo in a rename never replays another rename's typing.
+- **It looks as Finder's does** (amended 2026-10-26, from Dylan's screenshots of Finder's list
+  and column views; it replaces a thin plain border, [0076](0076-dialogs.md)). The field is a
+  box in the text background color, white in light mode and dark in dark mode, with no bezel,
+  border or focus ring. It starts at the name label's origin, in its font and height, so the
+  text stays where the name was drawn, and it is as wide as the text plus the editor's padding
+  at both ends (2 pt each, as Finder's box), growing as the user types up to the room the name
+  has before a badge or chevron; the label under it hides, as the old name would show through.
+  The name is in the label color with the system's text selection, light blue under the
+  selected base name. Around the box the row keeps its selection in the accent color while the
+  field has the keys of the key window: AppKit emphasizes a selection only while the table has
+  them, so the list's row views (`ListingRowView`) also emphasize it while the table's
+  `keepsSelectionEmphasized` is set. In a window that isn't key, or once the keys have left,
+  the row turns grey and the box stays as it is. The field edits in an editor of its own,
+  apart from the window's editor that every other text field in it uses. That editor outlives
+  each edit, so the window's undo manager, which holds only text fields' typing, is emptied as
+  an edit ends and as the next begins: Undo in a rename never replays another rename's typing.
+  (Amended again 2026-10-26, RN.2: the first amendment drew the name white on the accent row
+  with no box, from a misread of the screenshots; Finder draws the white box over the accent
+  row.)
 - **What is selected:** a file's name up to the extension `UniqueName.split` finds, so it splits
   as Finder's copy names do ("song.flac" selects "song", "archive.tar.gz" selects "archive.tar");
   a folder's whole name. `split` is now public for this.

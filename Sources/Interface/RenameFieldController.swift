@@ -19,9 +19,11 @@ import Browser
 /// commands are out of its responder chain: with the field focused, the File menu's commands
 /// are off and their keys edit the text, as in any text field.
 ///
-/// It looks as Finder's does: the text where the name's label is, which hides under it, with
-/// no border or background, and the row's selection kept in the accent color while the field
-/// has the keys of the key window, the name white on it.
+/// It looks as Finder's does: a box in the text background color, with no border, starting
+/// where the name's label does, which hides under it, as wide as the name and growing with it
+/// up to the badge or chevron; the name in the label color with the system's text selection; and
+/// the row's selection kept in the accent color around it while the field has the keys of the
+/// key window.
 @MainActor
 final class RenameFieldController: NSObject, NSTextFieldDelegate {
     /// What VoiceOver calls the field.
@@ -82,18 +84,16 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
         }
     }
 
-    /// The selection's background on a row drawn in the accent color: a lighter shade of it,
-    /// under the white text, as Finder's.
-    static let selectionOnAccent = NSColor.white.withAlphaComponent(0.3)
-
-    /// The text field the name is edited in, drawn as the row's own label: no bezel, border,
-    /// background or focus ring, in the label's font.
+    /// The text field the name is edited in: a box in the text background color with no bezel,
+    /// border or focus ring, the name in the label's font and color.
     private(set) lazy var field: NSTextField = {
         let field = NSTextField()
         field.cell = Cell(textCell: "")
         field.isBezeled = false
         field.isBordered = false
-        field.drawsBackground = false
+        field.drawsBackground = true
+        field.backgroundColor = .textBackgroundColor
+        field.textColor = .labelColor
         field.focusRingType = .none
         field.font = ListingViewController.nameFont
         field.lineBreakMode = .byTruncatingMiddle
@@ -102,8 +102,8 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
         field.delegate = self
         return field
     }()
-    /// The field's cell, which edits in an editor of its own: the colors set for the accent
-    /// row would otherwise stay on the window's editor, which every other field in it uses.
+    /// The field's cell, which edits in an editor of its own, in plain text, apart from the
+    /// window's editor that every other field in it uses.
     private final class Cell: NSTextFieldCell {
         let editor: NSTextView = {
             let editor = NSTextView()
@@ -232,6 +232,8 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
         }
         table.scrollRowToVisible(row)
         window.makeFirstResponder(field)
+        // Fitted again with the padding the editor takes as it starts editing the field.
+        place()
         forgetTyping()
         selectBase(of: entry.name, isFolder: entry.type == .directory)
         observe(window)
@@ -278,8 +280,10 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
         }
     }
 
+    /// Clears the reason a name couldn't be used and fits the box to the name typed.
     func controlTextDidChange(_ notification: Notification) {
         showMessage(nil)
+        place()
     }
 
     /// The keys moved elsewhere, by a click or Tab: the name is renamed as on Return, and the
@@ -353,20 +357,20 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
 
     // MARK: Showing
 
-    /// Puts the field over its entry's row and the message under it, and returns the row; nil
-    /// when the rows don't have the entry.
+    /// Puts the field over its entry's row, as wide as its text up to the room the name has, and
+    /// the message under it, and returns the row; nil when the rows don't have the entry.
     @discardableResult
     private func place() -> Int? {
         guard let edit = state.edit, let row = list.listing?.row(named: edit.name),
             let clipView = field.superview
         else { return nil }
         let name = list.nameFrame(atRow: row)
-        let frame = clipView.convert(name, from: table)
+        var box = name
+        box.size.width = min(fittingWidth, name.width)
+        let frame = clipView.convert(box, from: table)
         if field.frame != frame {
             field.frame = frame
         }
-        restyle(
-            onAccent: table.rowView(atRow: row, makeIfNecessary: false).map(isOnAccent) ?? false)
         if let message {
             messageView.stringValue = message
             messageView.preferredMaxLayoutWidth = name.width
@@ -393,6 +397,19 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
             userInfo: [
                 .announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue,
             ])
+    }
+
+    /// The width that shows the field's text whole: the text, the editor's padding at both
+    /// ends, and a point over for rounding.
+    var fittingWidth: Double {
+        let text = field.currentEditor()?.string ?? field.stringValue
+        let width = (text as NSString).size(withAttributes: [
+            .font: ListingViewController.nameFont
+        ]).width
+        guard let container = editor.textContainer else {
+            preconditionFailure("the rename field's editor has no text container")
+        }
+        return (width + 2 * container.lineFragmentPadding).rounded(.up) + 1
     }
 
     /// Gives the keys back to the field once the window has finished moving them elsewhere: a
@@ -429,34 +446,6 @@ final class RenameFieldController: NSObject, NSTextFieldDelegate {
     private func updateEmphasis() {
         table.keepsSelectionEmphasized =
             isEditing && field.currentEditor() != nil && table.window?.isKeyWindow == true
-    }
-
-    /// Follows `rowView`'s style when it is the field's row.
-    func rowStyleDidChange(_ rowView: NSTableRowView) {
-        guard let edit = state.edit, let row = list.listing?.row(named: edit.name),
-            table.row(for: rowView) == row
-        else { return }
-        restyle(onAccent: isOnAccent(rowView))
-    }
-
-    private func isOnAccent(_ rowView: NSTableRowView) -> Bool {
-        rowView.interiorBackgroundStyle == .emphasized
-    }
-
-    /// Draws the name as the row's label is drawn: white on the accent color, with a lighter
-    /// shade of it under the selected text, or in the label color with AppKit's selection.
-    private func restyle(onAccent: Bool) {
-        let color: NSColor = onAccent ? .alternateSelectedControlTextColor : .labelColor
-        field.textColor = color
-        editor.textColor = color
-        editor.insertionPointColor = color
-        editor.selectedTextAttributes =
-            onAccent
-            ? [.backgroundColor: Self.selectionOnAccent, .foregroundColor: color]
-            : [
-                .backgroundColor: NSColor.selectedTextBackgroundColor,
-                .foregroundColor: NSColor.selectedTextColor,
-            ]
     }
 
     /// Follows `window` becoming and ceasing to be key, which the row's emphasis follows.

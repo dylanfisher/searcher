@@ -457,9 +457,6 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         tableView.doubleAction = #selector(openClickedRow(_:))
         tableView.contextMenu = { [weak self] row in self?.contextMenu(forRow: row) }
         tableView.pressedSelectedRow = { [weak self] in self?.pane.pressSelectedFolder() }
-        tableView.rowStyleDidChange = { [weak self] rowView in
-            self?.renameField.rowStyleDidChange(rowView)
-        }
         let promiseTypes = NSFilePromiseReceiver.readableDraggedTypes.map {
             NSPasteboard.PasteboardType($0)
         }
@@ -988,7 +985,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// else before the chevron when it shows, else at the trailing padding.
     private static func nameEnd(cellWidth: Double, chevron: Bool, badge: Bool) -> Double {
         if badge { return badgeX(cellWidth: cellWidth, chevron: chevron) - badgeGap }
-        if chevron { return cellWidth - chevronInset - chevronWidth - badgeGap }
+        if chevron { return cellWidth - chevronWidth - badgeGap }
         return cellWidth - 2
     }
 
@@ -1077,10 +1074,12 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         // The table fits its column to the view's width only when it next tiles, which may not
         // have happened since the column was resized.
         tableView.sizeLastColumnToFit()
-        let outside = view.frame.width - tableView.tableColumns[0].width
+        // The column's one cell is inset at both of the table's ends.
+        let outside =
+            view.frame.width - tableView.tableColumns[0].width + 2 * ListingTableView.cellInset
         // A point over, for the rounding of the field's own width.
         let field = (nameWidth + Self.nameFieldPadding).rounded(.up) + 1
-        let trailing = Self.badgeGap + Self.chevronWidth + Self.chevronInset
+        let trailing = Self.badgeGap + Self.chevronWidth
         return (outside + Self.nameX + field + trailing).rounded(.up)
     }
 
@@ -1092,12 +1091,12 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     private static let badgeSize = 16.0
     /// The space between a name and its badge or chevron.
     private static let badgeGap = 4.0
-    /// The chevron's width, and its distance from the cell's right edge.
-    private static let chevronWidth = 10.0
-    private static let chevronInset = 8.0
+    /// The chevron's width, its image's (`TypeIconCache.folderChevron`). It sits at the cell's
+    /// right edge, which leaves it as far inside the row's selection as Finder's.
+    static let chevronWidth = 6.0
     /// The room a shown chevron takes from the cell's trailing padding, which a badge keeps clear
     /// of.
-    private static let chevronReserve = chevronWidth + chevronInset - 2 + badgeGap
+    private static let chevronReserve = chevronWidth - 2 + badgeGap
 
     /// A cell laid out with frames and autoresizing, which costs less per row than constraints.
     private func makeCell(for column: SortColumn) -> NSTableCellView {
@@ -1109,7 +1108,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             let chevron = named.chevron
             chevron.identifier = Self.folderChevronIdentifier
             chevron.frame = NSRect(
-                x: column.width - Self.chevronInset - Self.chevronWidth,
+                x: column.width - Self.chevronWidth,
                 y: (height - Self.badgeSize) / 2, width: Self.chevronWidth,
                 height: Self.badgeSize)
             chevron.autoresizingMask = [.minXMargin, .minYMargin, .maxYMargin]
