@@ -93,17 +93,6 @@ public final class Settings {
         frame.origin.x.isFinite && frame.origin.y.isFinite && isWindowSize(frame.size)
     }
 
-    /// What the Settings window says about `commanderFKeys`.
-    public static let commanderFKeysHelp =
-        "F5 copies and F6 moves the selection to the other pane, F7 makes a new folder and F8 "
-        + "moves the selection to the Trash. Hold Fn with them unless “Use F1, F2, etc. keys as "
-        + "standard function keys” is on in System Settings ▸ Keyboard."
-
-    /// What the Settings window says about `hideEmptyOperationsPanel`.
-    public static let hideEmptyOperationsPanelHelp =
-        "The operations panel shows when an operation runs past a second and hides when the last "
-        + "one finishes. Window ▸ Operations still shows and hides it."
-
     /// Whether panes list hidden entries: names starting with a dot, and entries with the hidden
     /// flag (`chflags hidden`). Off by default.
     public var showHidden: Bool {

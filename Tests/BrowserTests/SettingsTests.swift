@@ -356,14 +356,6 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(delay(enabled: "NO", delay: 1.25) == .milliseconds(1250))
 }
 
-@MainActor @Test func theCommanderPresetsHelpSaysTheFKeysNeedFn() {
-    #expect(Settings.commanderFKeysHelp.contains("Fn"))
-}
-
-@MainActor @Test func theEmptyPanelsHelpNamesTheMenuItemThatStillShowsIt() {
-    #expect(Settings.hideEmptyOperationsPanelHelp.contains("Window ▸ Operations"))
-}
-
 // MARK: Shortcuts
 
 private let shortcutsKey = Settings.Key.shortcuts.rawValue
