@@ -392,19 +392,17 @@ public final class Pane {
     /// rows' patches and sorts from here on itself, and lists the folder when this pane still has
     /// a listing or a patch to land, which its rows lack. With `takingFocus` such a pane is
     /// focused already, so gaining the focus doesn't list it either. In column mode the new trail
-    /// selects the focused column's cursor in its column at the folder, and its columns open by
-    /// Name ascending. It has this pane's list sort and column widths.
+    /// selects the focused column's selection in its column at the folder, as a restore does,
+    /// and its columns open by Name ascending. It has this pane's list sort and column widths.
     func copy(takingFocus: Bool) -> Pane {
         let rows: Listing? =
             if viewMode == .list, case .loaded(let listing) = state { listing } else { nil }
-        let selected =
-            viewMode == .list
-            ? selection
-            : commandPane.selection.cursor.map { Selection([$0], cursor: $0) } ?? Selection()
         let pane = Pane(
             location: location, service: service, systemActions: systemActions,
             settings: settings, sortedBy: sortColumn, ascending: sortAscending,
-            isFocused: rows != nil && takingFocus, selection: selected, viewMode: viewMode,
+            isFocused: rows != nil && takingFocus,
+            selection: viewMode == .list ? selection : commandPane.selectionByName,
+            viewMode: viewMode,
             rows: rows)
         pane.folderSizes = folderSizes
         if let folderVisits { pane.countVisits(in: folderVisits) }
@@ -533,11 +531,12 @@ public final class Pane {
     // MARK: - View mode
 
     /// Switches between the list and columns. Columns start at the root of the pane's folder's
-    /// volume and run down to a focused column at the folder, with the entry under the cursor
-    /// selected (`ColumnTrail`); the pane's own load and monitor stop and its rows go, since that
+    /// volume and run down to a focused column at the folder, with the list's selection selected
+    /// (`ColumnTrail`); the pane's own load and monitor stop and its rows go, since that
     /// column has its own, so `state` holds no listing in column mode. The columns open by Name
     /// ascending (`columnSort`). The list starts at the focused column's folder, in the list's
-    /// own sort, with the entry under its cursor selected, and the columns close. Neither is a step in the
+    /// own sort, with that column's selection selected, and the columns close. Both views show
+    /// several rows selected, so neither switch drops any, as in Finder. Neither is a step in the
     /// history; either drops the pane's selection steps, as a navigation does. Switching to the
     /// mode the pane is in does nothing.
     public func setViewMode(_ mode: ViewMode) {
@@ -547,15 +546,12 @@ public final class Pane {
         stopShareMount()
         switch mode {
         case .column:
-            let cursor = selection.cursor
             stopListing()
             // The columns hold the rows now. The pane's own would only be sorted again on each
             // settings change and read by a view that should show the columns instead.
             show(.loading, after: .loaded(complete: true))
             viewMode = .column
-            columnTrail = ColumnTrail(
-                owner: self, at: location,
-                selecting: cursor.map { Selection([$0], cursor: $0) } ?? Selection())
+            columnTrail = ColumnTrail(owner: self, at: location, selecting: selectionByName)
             reportChange()
         case .list:
             guard let trail = columnTrail else {
@@ -565,7 +561,7 @@ public final class Pane {
             trail.close()
             columnTrail = nil
             viewMode = .list
-            move(to: focused.location, selecting: focused.selection.cursor)
+            move(to: focused.location, selection: focused.selectionByName)
         }
     }
 

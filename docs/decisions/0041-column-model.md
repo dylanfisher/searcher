@@ -74,7 +74,10 @@ the load through `ListingService`, the off-main sort and filter ([0025](0025-sor
   view can't show or act on rows under a location that moved. Its filter and selection stop
   mattering, and it ignores folder changes and settings changes. Switching back to the list
   moves the pane to the focused column's folder, selecting the entry under its cursor, and lists
-  it in the list's own sort (see Sort). Neither switch is a step in the history.
+  it in the list's own sort (see Sort). Neither switch is a step in the history. (Amended
+  2026-10-27: either switch keeps the whole selection, by name, with its cursor, since both
+  views show several rows selected, as Finder keeps a selection across views; several rows
+  open no column, [0080](0080-restore-at-launch.md).)
 - **History.** Moving between columns isn't a step. Back, Forward, Go to folder, a path bar click
   and a link to a folder record the focused column's folder and cursor, as a list pane records
   its own, and start the trail again with one column at the destination, the remembered entry
