@@ -200,7 +200,7 @@ private struct Fixture {
     let list = try #require(paneController).listingViewController
     list.tableView.registry = try AppCommands.registry()
     await settle { pane.state.isLoaded }
-    let pasteboard = NSPasteboard(name: NSPasteboard.Name("searcher-test-\(UUID().uuidString)"))
+    let pasteboard = testPasteboard()
     defer { pasteboard.releaseGlobally() }
     let item = NSPasteboardItem()
     item.setString(URL(fileURLWithPath: "/Users/someone/a.txt").absoluteString, forType: .fileURL)
