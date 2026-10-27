@@ -1236,8 +1236,10 @@ private func windowsOnShare(
     return windows
 }
 
-/// A session of one window of one pane at `path`, in list view.
-private func oneWindowSession(at path: String) -> WorkspaceStore.Contents {
+/// A session of one window of one pane at `path`, in `viewMode`.
+private func oneWindowSession(at path: String, viewMode: ViewMode = .list)
+    -> WorkspaceStore.Contents
+{
     let layout = Layout()
     let workspace = WorkspaceState(
         id: UUID(), name: nil, frame: Rect(x: 0, y: 0, width: 1000, height: 700),
@@ -1246,7 +1248,7 @@ private func oneWindowSession(at path: String) -> WorkspaceStore.Contents {
                 layout: layout,
                 panes: [
                     layout.focused: TabState.PaneState(
-                        location: Location(path: path), viewMode: .list, history: History(),
+                        location: Location(path: path), viewMode: viewMode, history: History(),
                         selection: [], cursor: nil, sortColumn: .name, sortAscending: true,
                         columnWidths: ColumnWidths())
                 ])
@@ -1331,6 +1333,41 @@ private func oneWindowSession(at path: String) -> WorkspaceStore.Contents {
     #expect(faults.count == 1)
     #expect(faults.first?.contains(album) == true)
     volumeGate.signal()
+}
+
+/// The restore waits for the mount table's first read, so a restored trail in a share has its
+/// server's column in its window's first frame (docs/decisions/0114-server-location.md).
+@MainActor @Test func aRestoreWaitsForTheMountTablesFirstRead() async throws {
+    let readGate = DispatchSemaphore(value: 0)
+    let table = MountTable(read: {
+        readGate.wait()
+        return [mountedShare("main"), mountedShare("music")]
+    })
+    let service = ListingService(
+        lister: StubLister([
+            "/Volumes/music": [folder("a")], "/Volumes/music/a": [file("x.txt")],
+        ]), rootVolumeName: { "Test Disk" }, mounts: table)
+    let windows = WorkspaceWindows(
+        service: service, mountTable: table, systemActions: StubSystemActions(),
+        settings: untouchedSettings(), folderSizes: nil, clipboard: MemoryClipboard(),
+        store: nil)
+    windows.showsWindows = false
+    windows.screens = { [screen] }
+    let clock = ManualClock()
+    windows.restoreClock = clock
+
+    let restoring = Task { () -> [String]? in
+        let restored = await windows.restore(
+            oneWindowSession(at: "/Volumes/music/a", viewMode: .column))
+        // Nothing has run on the main queue since: this is the trail the window first shows.
+        let trail = restored?.workspace.selectedTab.focusedPane.columnTrail
+        return trail?.columns.map(\.pane.location.name)
+    }
+    await settle { clock.waitingSleeps == 1 }
+    #expect(windows.controllers.isEmpty)
+    readGate.signal()
+
+    #expect(await restoring.value == ["HAL9000", "music", "a"])
 }
 
 // MARK: Column widths

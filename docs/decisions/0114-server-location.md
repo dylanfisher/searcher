@@ -98,6 +98,17 @@ hand before the step that builds it.
   since its row stands for `/Volumes/<name>`. A share row's Eject shows while the sidebar's own
   read lists the share as one it can eject; between an event and the next read the two reads
   can disagree, and the row has no Eject for that moment.
+- **Decided while building 7d.** A trail's server column is a column like any other: ← from
+  the share's root moves into it, and ⌘↑ there is ←. A navigation that stays with one server,
+  to another of its shares or to the server itself, keeps the server column with its rows, as
+  a navigation keeps the folder columns both trails share. In column view a path bar click on
+  the server follows 0103: its column takes the keys and is the last, the share its cursor,
+  unselected; in the list the pane goes to the server with the share selected. The server
+  column starts no folder monitor. In the list a share's bar comes from the table when the pane
+  changes: a list pane shown before the first read keeps the bar from `/` until its next change,
+  which only a restore past its cap can show. Paste and Move Items Here decide their folder
+  after `destination(in:)` opens a column waiting for the keys, so ⌘V right after an arrow onto
+  a share pastes into it, as for a folder.
 - **Column view.** The server is a column, its rows the shares. A pane at a server shows that
   one column; selecting a share opens the share's column right of it. A trail carries
   `serverRoot: Server?`, and when set, a column for the server comes before its first column.

@@ -33,6 +33,17 @@ public final class ColumnTrail {
     unowned let owner: Pane
 
     public var focused: Column { columns[focusedIndex] }
+    /// The server whose column is the trail's first: left of the root when the root is one of
+    /// its shares' mount points, or alone in a trail at the server. Nil when the first column
+    /// is a folder's. The server column comes before the root and isn't one: the root, its
+    /// check and the home rule are the first folder column's
+    /// (docs/decisions/0114-server-location.md).
+    public var serverRoot: Server? {
+        guard case .server(let server) = columns.first?.pane.location else { return nil }
+        return server
+    }
+    /// The index of the trail's first folder column, its root: 1 after a server column.
+    private var rootIndex: Int { serverRoot == nil ? 0 : 1 }
     /// The one file or package selected in the last column, shown to its right; nil for a
     /// folder, a link, several rows or none. It isn't a column: it lists, watches and takes the keys for nothing.
     public private(set) var preview: ColumnPreview?
@@ -80,41 +91,86 @@ public final class ColumnTrail {
     /// starts from the list. The focused column's load is asked first, and the others' once the
     /// root is checked, or the focus moves to one of them. The root is taken from the path first
     /// and checked against the mount table off the main thread; a volume mounted elsewhere moves
-    /// it (0103-column-trail-from-the-root.md).
+    /// it (0103-column-trail-from-the-root.md). A root that is a share's mount point has its
+    /// server's column left of it (`serverRoot`), and a trail at a server is that one column
+    /// (docs/decisions/0114-server-location.md).
     convenience init(
         owner: Pane, at location: Location, selecting name: ExactName?, sortedLike model: Pane
     ) {
-        self.init(owner: owner, at: location, selecting: name, sortedLike: model, keeping: [])
+        self.init(
+            owner: owner, at: location, selecting: name, sortedLike: model, keeping: [],
+            keepingServer: nil)
     }
 
     /// The trail `old` starts again at `location` with `name` selected, as a navigation or Back
     /// and Forward to a folder `old` doesn't show starts it. The leading columns of folders both
     /// trails run through stay, with their rows, monitors and views, so they neither list again
-    /// nor redraw; the rest of `old` closes. Each kept column above the focused one selects the
+    /// nor redraw, and so does `old`'s server column when this trail shows the same server
+    /// first; the rest of `old` closes. Each kept column above the focused one selects the
     /// next folder on the new way down, and the kept columns take the sort of `old`'s focused
     /// column, as the new ones do, and lose their filters. Different roots keep nothing. None of
     /// it is a step of any history (0041-column-model.md, 0103-column-trail-from-the-root.md).
     convenience init(
         owner: Pane, at location: Location, selecting name: ExactName?, replacing old: ColumnTrail
     ) {
-        let root = Self.root(of: location, mountedVolumes: [], home: Self.home(in: owner.settings))
-        let chain = location.ancestors.drop { $0 != root }
-        let shared = zip(old.columns, chain).prefix { $0.pane.location == $1 }.count
+        let home = Self.home(in: owner.settings)
         let model = old.focused.pane
+        let server: Server?
+        switch location {
+        case .server(let atServer):
+            server = atServer
+        case .folder:
+            server = Self.server(
+                ofRoot: Self.root(of: location, mountedVolumes: [], home: home),
+                in: owner.service.mounts)
+        }
+        var keptServer: Column?
+        if let server, old.serverRoot == server { keptServer = old.columns.removeFirst() }
+        var shared = 0
+        if location.isFolder {
+            let root = Self.root(of: location, mountedVolumes: [], home: home)
+            let chain = location.ancestors.drop { $0 != root }
+            shared = zip(old.columns, chain).prefix { $0.pane.location == $1 }.count
+        }
         let kept = Array(old.columns.prefix(shared))
         old.columns.removeFirst(shared)
         old.close()
-        self.init(owner: owner, at: location, selecting: name, sortedLike: model, keeping: kept)
+        self.init(
+            owner: owner, at: location, selecting: name, sortedLike: model, keeping: kept,
+            keepingServer: keptServer)
     }
 
     /// A trail at `location` whose leading columns are `kept`, columns of another trail for the
-    /// first folders from this one's root down to `location`, and whose other columns are made.
+    /// first folders from this one's root down to `location`, whose server column is
+    /// `keptServer` when it has one, and whose other columns are made.
     private init(
         owner: Pane, at location: Location, selecting name: ExactName?, sortedLike model: Pane,
-        keeping kept: [Column]
+        keeping kept: [Column], keepingServer keptServer: Column?
     ) {
         self.owner = owner
         home = Self.home(in: owner.settings)
+        guard location.isFolder else {
+            // At a server: its column alone, with no root to check.
+            let focused: Column
+            if let keptServer {
+                keep(keptServer, sortedLike: model)
+                keptServer.pane.select(
+                    name.map { Selection([$0], cursor: $0) } ?? Selection(), recordingAs: nil)
+                focused = keptServer
+                focused.pane.isFocused = owner.isFocused
+                focused.pane.listIfWaiting()
+            } else {
+                focused = makeColumn(
+                    at: location, selecting: name, sortedLike: model, isFocused: owner.isFocused)
+            }
+            columns = [focused]
+            if keptServer != nil {
+                follow(focused)
+                updatePreview()
+            }
+            observeMounts()
+            return
+        }
         let root = Self.root(of: location, mountedVolumes: [], home: home)
         let chain = Array(location.ancestors.drop { $0 != root })
         precondition(
@@ -148,11 +204,13 @@ public final class ColumnTrail {
         focusedIndex = ancestors.count
         // A kept column that has listed already lists nothing again (`Pane.listIfWaiting`).
         waitingColumns = ancestors
+        addServerColumn(keeping: keptServer, listsNow: false)
         if keepsFocused {
             follow(focused)
             updatePreview()
         }
         checkRoot(of: location)
+        observeMounts()
     }
 
     /// Makes `column`, a column of the trail this one replaces, one of this trail's, keeping its
@@ -203,7 +261,10 @@ public final class ColumnTrail {
         let home = Self.home(in: owner.settings)
         guard home != self.home else { return }
         self.home = home
-        checkRoot(of: focused.pane.location)
+        // A trail at a server alone has no root. With the keys in the server column, the root's
+        // column has the root any folder column of the trail has.
+        guard rootIndex < columns.count else { return }
+        checkRoot(of: columns[max(focusedIndex, rootIndex)].pane.location)
     }
 
     /// Returns once the trail has checked its root against the mount table.
@@ -250,6 +311,75 @@ public final class ColumnTrail {
             path: "/" + components.prefix(max(volumeRoot, homeRoot)).joined(separator: "/"))
     }
 
+    /// The server whose share `root`, a trail's root, is mounted at, by the app's mount table:
+    /// nil when the table has no read yet, `root` is no share's mount point, or the share is no
+    /// server's (`VolumeIdentity.server`). The table is in memory, so this reads nothing.
+    private static func server(ofRoot root: Location, in mounts: MountTable?) -> Server? {
+        guard let mounts, let path = root.path, let volume = mounts.volume(of: path),
+            let server = volume.server,
+            FileOperation.comparable(volume.mountPoint) == FileOperation.comparable(path)
+        else { return nil }
+        return server
+    }
+
+    /// Puts the column of the server whose share the root is left of the root, with the share
+    /// selected, when the trail has no server column and the mount table gives the root one:
+    /// `kept`, a column of the trail this one replaces, or a new one. Its load waits in
+    /// `waitingColumns` unless `listsNow`. The keys stay in the column they were in, so it is
+    /// no step of any history. Returns whether it added one.
+    @discardableResult
+    private func addServerColumn(keeping kept: Column? = nil, listsNow: Bool) -> Bool {
+        guard serverRoot == nil, let root = columns.first?.pane,
+            let server = Self.server(ofRoot: root.location, in: owner.service.mounts)
+        else {
+            kept?.close()
+            return false
+        }
+        let share = ExactName(root.location.name)
+        let column: Column
+        if let kept {
+            keep(kept, sortedLike: root)
+            kept.pane.select(Selection([share], cursor: share), recordingAs: nil)
+            column = kept
+        } else {
+            column = adopt(
+                Pane(
+                    waitingAt: .server(server), service: owner.service,
+                    systemActions: owner.systemActions, settings: owner.settings,
+                    sortedBy: root.sortColumn, ascending: root.sortAscending, selecting: share))
+        }
+        column.keepsNextColumnAt = column.pane.selectionVersion
+        columns.insert(column, at: 0)
+        focusedIndex += 1
+        if listsNow {
+            column.pane.listIfWaiting()
+        } else {
+            waitingColumns.insert(column, at: 0)
+        }
+        return true
+    }
+
+    /// Closes the server column, as the root moved above its share. Keys in it move to the
+    /// root's column first, which is no step of any history.
+    private func dropServerColumn() {
+        guard serverRoot != nil, columns.count > 1 else { return }
+        if focusedIndex == 0 { focus(1, recordsStep: false, recordingAs: nil) }
+        columns.removeFirst().close()
+        focusedIndex -= 1
+    }
+
+    /// Adds the server column when a read of the app's mount table gives the root a server, as
+    /// for a trail built before the table's first read or before its share mounted. A server
+    /// whose last share goes keeps its column, which shows it isn't connected.
+    private func observeMounts() {
+        owner.service.mounts?.observe(for: self) { [weak self] in
+            guard let self, !self.columns.isEmpty,
+                self.addServerColumn(listsNow: self.rootCheck == nil)
+            else { return }
+            self.owner.trailDidChange()
+        }
+    }
+
     /// A column for each folder from `root` down to the parent of `location`, but the first
     /// `count`, each with the next folder selected and its load waiting; none when `root` isn't
     /// `location` or above it.
@@ -278,12 +408,15 @@ public final class ColumnTrail {
         }
     }
 
-    /// Makes the trail start at `root`, as the mount table places its first column's folder: the
-    /// columns left of a root among them close, and a root above the first column adds a column
-    /// for each folder down to it. A trail no longer under `root`, its columns moved by a
-    /// selection, stays as it is.
+    /// Makes the trail start at `root`, as the mount table places its first folder column's
+    /// folder: the columns left of a root among them close, and a root above the first folder
+    /// column adds a column for each folder down to it and closes a server column. A trail no
+    /// longer under `root`, its columns moved by a selection, stays as it is. A new root that is
+    /// a share's mount point gets its server's column.
     private func start(at root: Location) {
-        guard let first = columns.first, first.pane.location != root else { return }
+        guard rootIndex < columns.count else { return }
+        let first = columns[rootIndex]
+        guard first.pane.location != root else { return }
         if let index = columns.firstIndex(where: { $0.pane.location == root }) {
             // The trail is being corrected, not moved: it is no step of the history.
             if focusedIndex < index { focus(index, recordsStep: false, recordingAs: nil) }
@@ -293,10 +426,12 @@ public final class ColumnTrail {
         } else {
             let added = makeAncestors(from: root, to: first.pane.location, sortedLike: first.pane)
             guard !added.isEmpty else { return }
+            dropServerColumn()
             columns.insert(contentsOf: added, at: 0)
             focusedIndex += added.count
             waitingColumns += added
         }
+        addServerColumn(listsNow: false)
         owner.trailDidChange()
     }
 

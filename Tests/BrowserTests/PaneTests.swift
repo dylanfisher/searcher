@@ -22,7 +22,8 @@ struct PaneFixture {
         at path: String, folders: [String: [DirectoryEntry]], held: Bool = false,
         settings: Settings = untouchedSettings(), sortedBy column: SortColumn = .name,
         ascending: Bool = true, thumbnails: ThumbnailService? = nil,
-        recentListings: RecentListings? = nil, volume: VolumeIdentity = ListingService.listerVolume
+        recentListings: RecentListings? = nil, volume: VolumeIdentity = ListingService.listerVolume,
+        mounts: MountTable? = nil, viewMode: ViewMode = .list
     ) {
         lister = GatedLister(folders.mapValues { .batches([$0]) })
         if !held { lister.releaseAll() }
@@ -31,8 +32,9 @@ struct PaneFixture {
             location: Location(path: path),
             service: ListingService(
                 lister: lister, volumeOf: { _ in volume }, thumbnails: thumbnails,
-                recentListings: recentListings),
-            systemActions: actions, settings: settings, sortedBy: column, ascending: ascending)
+                recentListings: recentListings, mounts: mounts),
+            systemActions: actions, settings: settings, sortedBy: column, ascending: ascending,
+            viewMode: viewMode)
         tab = Tab(pane: pane)
     }
 
