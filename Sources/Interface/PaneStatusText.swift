@@ -45,6 +45,16 @@ struct PaneStatusText {
         return "\(headline) Listed \(age(of: listedAt, now: now))."
     }
 
+    /// The note for a listed folder that has `count` entries whose names aren't valid UTF-8, which
+    /// the listing leaves out (docs/decisions/0117-unreadable-names.md); nil for none.
+    static func unreadableNamesNote(_ count: Int) -> String? {
+        switch count {
+        case 0: nil
+        case 1: "1 item with an unreadable name isn't shown."
+        default: "\(count) items with unreadable names aren't shown."
+        }
+    }
+
     /// "just now" under a minute, else whole minutes and up, "5 minutes ago": the note changes
     /// as each minute passes, so seconds would be wrong for most of it.
     private func age(of listedAt: Date, now: Date) -> String {

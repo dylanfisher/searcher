@@ -8,10 +8,29 @@ public protocol Lister: Sendable {
     /// returns once the directory is fully listed. An error thrown from `onBatch` stops the
     /// listing and is rethrown; other failures throw `ListingError`.
     func list(_ path: String, onBatch: ([DirectoryEntry]) throws -> Void) throws
+
+    /// Lists `path` as `list(_:onBatch:)` does, and returns how many entries it left out because
+    /// their names aren't valid UTF-8 (docs/decisions/0117-unreadable-names.md).
+    func listCountingUnreadableNames(
+        _ path: String, onBatch: ([DirectoryEntry]) throws -> Void
+    ) throws -> Int
+}
+
+extension Lister {
+    /// A lister that doesn't read names from the file system has every name as a `String`, so it
+    /// leaves none out.
+    public func listCountingUnreadableNames(
+        _ path: String, onBatch: ([DirectoryEntry]) throws -> Void
+    ) throws -> Int {
+        try list(path, onBatch: onBatch)
+        return 0
+    }
 }
 
 /// Lists a directory with `getattrlistbulk`, one batch per buffer the call fills. See
-/// docs/decisions/0003-enumeration.md.
+/// docs/decisions/0003-enumeration.md. An entry whose name isn't valid UTF-8 is left out: a
+/// `String` can't hold its name, so no path built from the name would reach it
+/// (docs/decisions/0117-unreadable-names.md).
 public struct DirectoryLister: Lister {
     /// Bytes per `getattrlistbulk` call. 256 KB holds about 2,000 entries.
     public let bufferSize: Int
@@ -21,10 +40,16 @@ public struct DirectoryLister: Lister {
     }
 
     public func list(_ path: String, onBatch: ([DirectoryEntry]) throws -> Void) throws {
+        _ = try listCountingUnreadableNames(path, onBatch: onBatch)
+    }
+
+    public func listCountingUnreadableNames(
+        _ path: String, onBatch: ([DirectoryEntry]) throws -> Void
+    ) throws -> Int {
         let fd = open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
         if fd < 0 { throw ListingError(path: path, code: errno) }
         defer { close(fd) }
-        try read(fd, path: path, skipsMountPoints: false, onBatch: onBatch)
+        return try read(fd, path: path, skipsMountPoints: false, onBatch: onBatch)
     }
 
     /// Lists `path` as `list(_:onBatch:)` does, leaving out folders that another volume is
@@ -41,7 +66,7 @@ public struct DirectoryLister: Lister {
         var info = Darwin.stat()
         if fstat(fd, &info) != 0 { throw ListingError(path: path, code: errno) }
         guard info.st_dev == device else { return false }
-        try read(fd, path: path, skipsMountPoints: true, onBatch: onBatch)
+        _ = try read(fd, path: path, skipsMountPoints: true, onBatch: onBatch)
         return true
     }
 
@@ -53,10 +78,11 @@ public struct DirectoryLister: Lister {
         return info.st_dev
     }
 
+    /// Reads the open folder `fd` to its end and returns how many entries had unreadable names.
     private func read(
         _ fd: Int32, path: String, skipsMountPoints: Bool,
         onBatch: ([DirectoryEntry]) throws -> Void
-    ) throws {
+    ) throws -> Int {
         var request = attrlist()
         request.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
         request.commonattr =
@@ -70,20 +96,25 @@ public struct DirectoryLister: Lister {
         let buffer = UnsafeMutableRawPointer.allocate(byteCount: bufferSize, alignment: 16)
         defer { buffer.deallocate() }
 
+        var unreadableNames = 0
         while true {
             let count = getattrlistbulk(fd, &request, buffer, bufferSize, 0)
             if count < 0 { throw ListingError(path: path, code: errno) }
-            if count == 0 { return }
+            if count == 0 { return unreadableNames }
             var batch: [DirectoryEntry] = []
             batch.reserveCapacity(Int(count))
-            var record = UnsafeRawPointer(buffer)
+            var offset = 0
             for _ in 0..<count {
-                if let parsed = try parseRecord(record, directory: fd, path: path),
-                    !(skipsMountPoints && parsed.isMountPoint)
-                {
-                    batch.append(parsed.entry)
+                let rest = UnsafeRawBufferPointer(
+                    start: buffer + offset, count: bufferSize - offset)
+                switch try parseRecord(rest, directory: fd, path: path) {
+                case .entry(let entry, let isMountPoint):
+                    if !(skipsMountPoints && isMountPoint) { batch.append(entry) }
+                case .removed: break
+                case .unreadableName: unreadableNames += 1
                 }
-                record += Int(record.loadUnaligned(as: UInt32.self))
+                // parseRecord checked the length lies within the buffer.
+                offset += Int(rest.loadUnaligned(as: UInt32.self))
             }
             try onBatch(batch)
         }
@@ -119,70 +150,82 @@ public struct DirectoryLister: Lister {
         }
     }
 
-    /// Reads one `getattrlistbulk` record. Attributes are packed in bitmap order and only those
-    /// marked returned are present, so each field is read only if its bit is set. Returns nil for
-    /// an entry deleted while the directory was being listed.
-    func parse(_ record: UnsafeRawPointer, directory fd: Int32, path: String) throws
-        -> DirectoryEntry?
-    {
-        try parseRecord(record, directory: fd, path: path)?.entry
+    /// What one `getattrlistbulk` record describes.
+    enum Record {
+        /// An entry, with whether it is a folder another volume is mounted on. That is known only
+        /// when the record has `ATTR_DIR_MOUNTSTATUS`, which `listWithoutMountPoints` asks for.
+        case entry(DirectoryEntry, isMountPoint: Bool)
+        /// An entry deleted while the directory was being listed.
+        case removed
+        /// An entry whose name isn't valid UTF-8, which the listing leaves out.
+        case unreadableName
     }
 
-    /// Reads one record as `parse` does, with whether the entry is a folder another volume is
-    /// mounted on. That is known only when the record has `ATTR_DIR_MOUNTSTATUS`, which
-    /// `listWithoutMountPoints` asks for.
-    func parseRecord(_ record: UnsafeRawPointer, directory fd: Int32, path: String) throws
-        -> (entry: DirectoryEntry, isMountPoint: Bool)?
+    /// Reads the record at the start of `buffer`, which runs to the end of the bytes
+    /// `getattrlistbulk` was given. Attributes are packed in bitmap order and only those marked
+    /// returned are present, so each field is read only if its bit is set. A record that runs
+    /// past `buffer`, or whose fields or name run past the record, throws `EBADMSG` rather than
+    /// reading outside it.
+    func parseRecord(_ buffer: UnsafeRawBufferPointer, directory fd: Int32, path: String) throws
+        -> Record
     {
-        var field = record + MemoryLayout<UInt32>.size
-        let returned = field.loadUnaligned(as: attribute_set_t.self)
-        field += MemoryLayout<attribute_set_t>.size
+        let malformed = ListingError(path: path, code: EBADMSG)
+        guard let record = buffer.baseAddress, buffer.count >= MemoryLayout<UInt32>.size,
+            Int(record.loadUnaligned(as: UInt32.self)) <= buffer.count
+        else { throw malformed }
+        var fields = Fields(
+            next: record + MemoryLayout<UInt32>.size,
+            end: record + Int(record.loadUnaligned(as: UInt32.self)), malformed: malformed)
+        let returned = try fields.take(attribute_set_t.self)
         if returned.commonattr & attrgroup_t(ATTR_CMN_ERROR) != 0 {
-            field += MemoryLayout<UInt32>.size
+            _ = try fields.take(UInt32.self)
         }
 
-        let nameReference = field.loadUnaligned(as: attrreference_t.self)
-        // attr_length counts the trailing NUL.
-        let name = String(
-            decoding: UnsafeRawBufferPointer(
-                start: field + Int(nameReference.attr_dataoffset),
-                count: Int(nameReference.attr_length) - 1),
-            as: UTF8.self)
-        field += MemoryLayout<attrreference_t>.size
+        guard returned.commonattr & attrgroup_t(ATTR_CMN_NAME) != 0 else { throw malformed }
+        let nameField = fields.next
+        let nameReference = try fields.take(attrreference_t.self)
+        // The offset counts from the reference, and the length counts the trailing NUL.
+        let nameStart = nameField + Int(nameReference.attr_dataoffset)
+        let nameLength = Int(nameReference.attr_length)
+        guard nameLength >= 1, nameStart >= record, fields.end - nameStart >= nameLength,
+            nameStart.load(fromByteOffset: nameLength - 1, as: UInt8.self) == 0
+        else { throw malformed }
+        // Validating costs what `String(decoding:)`'s repair did: one pass over the bytes, with
+        // a fast path for ASCII.
+        guard let name = String(validatingCString: nameStart.assumingMemoryBound(to: CChar.self))
+        else { return .unreadableName }
+        // A NUL before the end would make the name another, shorter one.
+        guard name.utf8.count == nameLength - 1 else { throw malformed }
 
         var objectType: fsobj_type_t?
         if returned.commonattr & attrgroup_t(ATTR_CMN_OBJTYPE) != 0 {
-            objectType = field.loadUnaligned(as: fsobj_type_t.self)
-            field += MemoryLayout<fsobj_type_t>.size
+            objectType = try fields.take(fsobj_type_t.self)
         }
         var modified: timespec?
         if returned.commonattr & attrgroup_t(ATTR_CMN_MODTIME) != 0 {
-            modified = field.loadUnaligned(as: timespec.self)
-            field += MemoryLayout<timespec>.size
+            modified = try fields.take(timespec.self)
         }
         // The Finder info's bundle bit makes a folder a package whatever its name.
         var hasBundleBit = false
         if returned.commonattr & attrgroup_t(ATTR_CMN_FNDRINFO) != 0 {
-            hasBundleBit = PackageRule.hasBundleBit(field)
-            field += PackageRule.finderInfoSize
+            let finderInfo = fields.next
+            try fields.skip(PackageRule.finderInfoSize)
+            hasBundleBit = PackageRule.hasBundleBit(finderInfo)
         }
         // A file system without flags leaves them out, and XNU's `stat` reports 0 for it too, so
         // stat'ing the entry would cost a call per entry for the same answer. APFS, HFS+, FAT32,
         // exFAT, SMB and devfs all return them.
         var flags: UInt32 = 0
         if returned.commonattr & attrgroup_t(ATTR_CMN_FLAGS) != 0 {
-            flags = field.loadUnaligned(as: UInt32.self)
-            field += MemoryLayout<UInt32>.size
+            flags = try fields.take(UInt32.self)
         }
         var isMountPoint = false
         if returned.dirattr & attrgroup_t(ATTR_DIR_MOUNTSTATUS) != 0 {
-            isMountPoint =
-                field.loadUnaligned(as: UInt32.self) & UInt32(DIR_MNTSTATUS_MNTPOINT) != 0
-            field += MemoryLayout<UInt32>.size
+            isMountPoint = try fields.take(UInt32.self) & UInt32(DIR_MNTSTATUS_MNTPOINT) != 0
         }
         var dataLength: off_t?
         if returned.fileattr & attrgroup_t(ATTR_FILE_DATALENGTH) != 0 {
-            dataLength = field.loadUnaligned(as: off_t.self)
+            dataLength = try fields.take(off_t.self)
         }
 
         // A firmlink reports the attributes of its stub on the read-only system volume, such as
@@ -191,7 +234,8 @@ public struct DirectoryLister: Lister {
         guard flags & UInt32(SF_FIRMLINK) == 0, let objectType, let modified,
             objectType != fsobj_type_t(VREG.rawValue) || dataLength != nil
         else {
-            return try stat(name, in: fd, path: path).map { ($0, isMountPoint) }
+            guard let entry = try stat(name, in: fd, path: path) else { return .removed }
+            return .entry(entry, isMountPoint: isMountPoint)
         }
         var type = fileType(objectType)
         if type == .directory, hasBundleBit || PackageRule.isPackage(named: name) {
@@ -201,7 +245,27 @@ public struct DirectoryLister: Lister {
             name: name, type: type, size: type == .regular ? dataLength : nil,
             modified: date(modified), isHidden: flags & UInt32(UF_HIDDEN) != 0,
             isDataless: flags & UInt32(SF_DATALESS) != 0)
-        return (entry, isMountPoint)
+        return .entry(entry, isMountPoint: isMountPoint)
+    }
+
+    /// The fixed-size fields of one record, read in order, each checked to end within the record.
+    private struct Fields {
+        private(set) var next: UnsafeRawPointer
+        let end: UnsafeRawPointer
+        let malformed: ListingError
+
+        /// Reads the next field as a `T`.
+        mutating func take<T>(_ type: T.Type) throws -> T {
+            let start = next
+            try skip(MemoryLayout<T>.size)
+            return start.loadUnaligned(as: T.self)
+        }
+
+        /// Moves past the next `size` bytes.
+        mutating func skip(_ size: Int) throws {
+            guard end - next >= size else { throw malformed }
+            next += size
+        }
     }
 
     private func stat(_ name: String, in fd: Int32, path: String) throws -> DirectoryEntry? {
