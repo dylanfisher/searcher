@@ -555,6 +555,7 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
     let plan = try OperationPlan.make(
         for: .copy(["/S/album", "/S/new"], into: "/A"),
         volumeOf: { _ throws(ListingError) in volumeA },
+        isCaseSensitive: { _ throws(ListingError) in false },
         measure: { _, _ in TreeSizeWalker.Total(bytes: 10, files: 2, isPartial: false) },
         inspect: { path throws(FileOperationError) in
             inspected.append(path)

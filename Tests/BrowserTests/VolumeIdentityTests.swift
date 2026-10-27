@@ -34,6 +34,24 @@ import Testing
     #expect(folderVolume.kind == .local)
 }
 
+/// Whether a volume tells names apart by case is what its names do: a file written as `a` is
+/// found as `A` only on a volume that doesn't. `devfs` does (`/dev/null`, no `/dev/NULL`),
+/// though `URLResourceValues.volumeSupportsCaseSensitiveNames` says it doesn't.
+@Test func aVolumeTellsCaseApartAsItsNamesDo() async throws {
+    let folder = try TemporaryFolder("VolumeIdentityTests")
+    let path = folder.url.path
+    try await Task.detached { try Data().write(to: URL(fileURLWithPath: path + "/a")) }.value
+    let foundAsUpper = await Task.detached { access(path + "/A", F_OK) == 0 }.value
+    let (temporary, devices) = try await BlockingCallThread.run { () throws(ListingError) in
+        (
+            try VolumeIdentity(path: path).isCaseSensitive(),
+            try VolumeIdentity(path: "/dev").isCaseSensitive()
+        )
+    }
+    #expect(temporary == !foundAsUpper)
+    #expect(devices)
+}
+
 @Test func missingPathThrowsNotFound() async {
     await #expect(throws: ListingError(path: "/no/such/folder", code: ENOENT)) {
         try await BlockingCallThread.run { () throws(ListingError) in

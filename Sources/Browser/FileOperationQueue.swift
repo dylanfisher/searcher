@@ -119,6 +119,8 @@ public actor FileOperationQueue {
     /// them.
     struct FileSystem: Sendable {
         var volumeOf: @Sendable (String) throws(ListingError) -> VolumeIdentity
+        /// Whether a volume tells names apart by case.
+        var isCaseSensitive: @Sendable (VolumeIdentity) throws(ListingError) -> Bool
         var measure: @Sendable (String, () -> Bool) throws -> TreeSizeWalker.Total
         var makeCopier: @Sendable () -> any Copier
         var move: @Sendable (String, String) throws(FileOperationError) -> Void
@@ -148,7 +150,9 @@ public actor FileOperationQueue {
         var sourceHolding: @Sendable (String, [String]) throws(FileOperationError) -> String?
 
         static let real = FileSystem(
-            volumeOf: VolumeIdentity.init(path:), measure: OperationPlan.measure,
+            volumeOf: VolumeIdentity.init(path:),
+            isCaseSensitive: { volume throws(ListingError) in try volume.isCaseSensitive() },
+            measure: OperationPlan.measure,
             makeCopier: { FileCopier() }, move: FileMover.move,
             trash: { path throws(FileOperationError) in try Trasher().trash(path) },
             putBack: Trasher.putBack(_:to:), deletePermanently: Trasher.deletePermanently,
@@ -656,7 +660,8 @@ public actor FileOperationQueue {
         let planned = await BlockingCallThread.run {
             Result {
                 try OperationPlan.make(
-                    for: operation, volumeOf: fileSystem.volumeOf, measure: fileSystem.measure,
+                    for: operation, volumeOf: fileSystem.volumeOf,
+                    isCaseSensitive: fileSystem.isCaseSensitive, measure: fileSystem.measure,
                     inspect: fileSystem.inspect, identify: fileSystem.makeIdentifier(),
                     sourceHolding: fileSystem.sourceHolding, isCancelled: { control.isCancelled },
                     // Known to copy before its pre-scan, which can take minutes.
@@ -1163,7 +1168,8 @@ public actor FileOperationQueue {
     }
 
     /// The identity of the item at each place `outcome`'s changes left one, read right after
-    /// them, for an undo to check against, by comparable path. Runs on a `BlockingCallThread`.
+    /// them, for an undo to check against, by path as `FileOperation.comparable` gives it
+    /// without folding case (`OperationRecord.identities`). Runs on a `BlockingCallThread`.
     /// `unread` holds the error for each place whose identity couldn't be read, or where no
     /// item was found right after the change; the operation can't be undone then.
     private static func identities(after outcome: ItemOutcome, identify: Identifier)
@@ -1181,7 +1187,7 @@ public actor FileOperationQueue {
                 guard let identity = try identify(location) else {
                     throw FileOperationError(reason: .sourceGone, path: location, errno: ENOENT)
                 }
-                identities[FileOperation.comparable(location)] = identity
+                identities[FileOperation.comparable(location, foldsCase: false)] = identity
             } catch {
                 unread.append(error)
             }

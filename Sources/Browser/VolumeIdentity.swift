@@ -120,6 +120,18 @@ public struct VolumeIdentity: Hashable, Sendable {
             fsType: Self.string(&info.f_fstypename))
     }
 
+    /// Whether the volume tells names apart by case, as `pathconf` reads it at its mount point
+    /// (`_PC_CASE_SENSITIVE`): APFS and HFS+ can be formatted either way. It asks the volume, so
+    /// this traps unless it runs on a `BlockingCallThread`.
+    public func isCaseSensitive() throws(ListingError) -> Bool {
+        BlockingCallThread.requireCurrent()
+        switch pathconf(mountPoint, _PC_CASE_SENSITIVE) {
+        case -1: throw ListingError(path: mountPoint, code: errno)
+        case 0: return false
+        default: return true
+        }
+    }
+
     /// Every mounted volume, from the kernel's mount table (`getmntinfo` with `MNT_NOWAIT`),
     /// which no volume is asked for, so it returns while a share hangs. It places a path by its
     /// text alone, so `VolumeIdentity(path:)` stays the answer for a path through a link.
