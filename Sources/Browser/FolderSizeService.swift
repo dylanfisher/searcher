@@ -407,7 +407,7 @@ public final class FolderSizeService: Sendable {
     /// is watched. Runs on the walk's `BlockingCallThread`, since FSEvents is set up off the main
     /// thread.
     private func watchParent(of path: String) -> Bool {
-        let parent = (path as NSString).deletingLastPathComponent
+        let parent = parentPath(of: path)
         let cache = cache
         do {
             let evicted = try watches.watch(parent) { change in
@@ -450,8 +450,8 @@ public final class FolderSizeService: Sendable {
     /// must-rescan event names the folder to read again, so only that folder's sizes are in
     /// doubt; the other events of its batch still name what changed.
     static func change(for events: [FileEvent], watched: String, as parent: String) -> Change {
-        let prefix = watched.hasSuffix("/") ? watched : watched + "/"
-        let named = parent.hasSuffix("/") ? parent : parent + "/"
+        let prefix = folderPrefix(watched)
+        let named = folderPrefix(parent)
         func name(_ path: String) -> String? {
             if path == watched { return parent }
             guard path.utf8.starts(with: prefix.utf8) else { return nil }
@@ -488,12 +488,10 @@ public final class FolderSizeService: Sendable {
                 if streams[parent] != nil { return [] }
                 // FSEvents reports resolved paths (`/private/var`, not `/var`); walks name folders
                 // as they were asked for.
-                guard let resolved = realpath(parent, nil) else {
+                guard let watched = resolvedPath(parent) else {
                     recency.removeLast()
                     throw ListingError(path: parent, code: errno)
                 }
-                let watched = String(cString: resolved)
-                free(resolved)
                 do {
                     streams[parent] = try FileEventStream(path: watched) { events in
                         onChange(
