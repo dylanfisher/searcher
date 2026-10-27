@@ -262,6 +262,12 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         fatalError("BrowserWindowController is built in code")
     }
 
+    /// The controller's window, which `init` makes; a controller never loses it.
+    public var requiredWindow: NSWindow {
+        guard let window else { preconditionFailure("a browser window controller has no window") }
+        return window
+    }
+
     /// The view controller of the selected tab's focused pane.
     public var paneViewController: PaneViewController {
         guard let controller = paneViewController(for: workspace.selectedTab.layout.focused) else {
@@ -373,7 +379,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// one, unless it already shows.
     private func askForWorkspaceName() {
         guard nameSheet == nil else { return }
-        guard let window else { preconditionFailure("a browser window controller has no window") }
+        let window = requiredWindow
         let sheet = WorkspaceNameSheet(
             workspace: workspace, list: workspaces, frame: { Rect(window.frame) })
         sheet.onClose = { [weak self] in self?.nameSheet = nil }
@@ -384,8 +390,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// Saves the window's workspace as the window has it now: under `name` if it isn't saved
     /// yet, else over its snapshot, keeping its name (docs/decisions/0088-workspace-snapshots.md).
     func saveWorkspace(as name: String? = nil) throws(WorkspaceList.NameRefusal) {
-        guard let window else { preconditionFailure("a browser window controller has no window") }
-        try workspaces.save(workspace, as: name, frame: Rect(window.frame))
+        try workspaces.save(workspace, as: name, frame: Rect(requiredWindow.frame))
     }
 
     /// Save Workspace on a saved workspace, which asks nothing and can't be refused.

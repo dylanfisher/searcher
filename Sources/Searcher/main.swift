@@ -230,10 +230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// Opens a browser window on the home folder.
     @discardableResult
     private func openHomeWindow() -> NSWindow {
-        guard let window = windows.open(at: Location(path: settings.home)).window else {
-            preconditionFailure("a browser window controller has no window")
-        }
-        return window
+        windows.open(at: Location(path: settings.home)).requiredWindow
     }
 }
 

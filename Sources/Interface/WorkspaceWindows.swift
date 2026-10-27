@@ -428,9 +428,7 @@ public final class WorkspaceWindows {
             lastSaved[state.id] = contents.workspaces[state.id]
             list.add(workspace)
             makeController(for: workspace, frame: CGRect(state.frame))
-            guard let window = controller(for: workspace).window else {
-                preconditionFailure("a browser window controller has no window")
-            }
+            let window = controller(for: workspace).requiredWindow
             if let snapshot = linked[state.id] {
                 if state.frame == snapshot.frame {
                     snapshotFramesShown[state.id] = Rect(window.frame)
@@ -457,9 +455,7 @@ public final class WorkspaceWindows {
             makeController(for: workspace, frame: CGRect(frame))
         }
         let controller = controller(for: workspace)
-        guard let window = controller.window else {
-            preconditionFailure("a browser window controller has no window")
-        }
+        let window = controller.requiredWindow
         if frame != nil {
             snapshotFramesShown[id] = Rect(window.frame)
         } else {
@@ -648,9 +644,7 @@ public final class WorkspaceWindows {
             workspaceChanged(workspace)
         }
         workspaceChanged(workspace)
-        guard let window = controller.window else {
-            preconditionFailure("a browser window controller has no window")
-        }
+        let window = controller.requiredWindow
         let names: [Notification.Name] = [
             NSWindow.didMoveNotification, NSWindow.didResizeNotification,
             NSWindow.didBecomeKeyNotification,
@@ -887,9 +881,7 @@ public final class WorkspaceWindows {
             owners[operation.id] = workspace.id
         }
         controller.showOperations(operations(of: controller))
-        guard let window = controller.window else {
-            preconditionFailure("a browser window controller has no window")
-        }
+        let window = controller.requiredWindow
         if let frame {
             window.setFrame(Self.placed(frame, on: screens()), display: false)
         } else if let stored = settings.newWindowFrame {
