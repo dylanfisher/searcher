@@ -168,6 +168,51 @@ private func names(in folder: String) throws -> Set<String> {
         ])
 }
 
+/// At a server in column view, Paste puts the files in the share selected alone in the server's
+/// column (0111-column-view-target-folder.md). Right after keys select another share, before
+/// its column opens, it goes into that share, opening its column at once, as for a folder
+/// (0114-server-location.md).
+@MainActor @Test func pasteAtAServersColumnGoesIntoTheShareSelectedThere() async throws {
+    let files = FakeFiles(releasingAll: true)
+    files.add(mountedShare("main"))
+    files.add(mountedShare("music"))
+    let queue = FileOperationQueue(
+        fileSystem: files.fileSystem(), prompts: .unexpected, clock: ContinuousClock()
+    ) { _ in }
+    let fixture = await PaneFixture.atServer(folders: ["/Volumes/main": [], "/Volumes/music": []])
+    fixture.pane.columnOpenClock = ManualClock()
+    fixture.pane.setViewMode(.column)
+    let trail = try #require(fixture.pane.columnTrail)
+    let server = trail.focused.pane
+    await settle { server.state.isLoaded }
+    let clipboard = CutState(clipboard: MemoryClipboard())
+    clipboard.copy([URL(fileURLWithPath: "/S/x.txt")])
+    let context = CommandContext(
+        pane: server, workspace: Workspace(tab: fixture.tab), fileOperations: queue,
+        clipboard: clipboard)
+    let paste = try #require(
+        ClipboardCommands.bindings.first { $0.command == ClipboardCommands.paste })
+    #expect(paste.isEnabled?(context) == false)
+
+    server.select(Selection([ExactName("main")], cursor: ExactName("main")))
+    await settle { trail.columns.count == 2 }
+    #expect(paste.isEnabled?(context) == true)
+    paste.run(context)
+    await settle { queue.submittedCount == 1 && queue.unfinishedCount == 0 }
+
+    server.moveSelection(by: 1)
+    #expect(server.selection.cursor == ExactName("music"))
+    #expect(trail.columns.count == 1)
+    paste.run(context)
+
+    #expect(trail.columns.last?.pane.location == Location(path: "/Volumes/music"))
+    await settle { queue.submittedCount == 2 && queue.unfinishedCount == 0 }
+    #expect(
+        files.events.all.filter { $0.hasPrefix("copied") } == [
+            "copied /S/x.txt to /Volumes/main/x.txt", "copied /S/x.txt to /Volumes/music/x.txt",
+        ])
+}
+
 // MARK: Chords
 
 @Test func eachClipboardChordInTheKeyTableResolvesToItsCommand() throws {

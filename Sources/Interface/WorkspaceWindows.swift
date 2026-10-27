@@ -291,8 +291,9 @@ public final class WorkspaceWindows {
     /// Returns the key window's controller, or nil when there was nothing to restore. Every pane
     /// lists its folder off the main thread, so a slow or missing one doesn't hold the windows
     /// back. The windows are made once the panes of their selected tabs have the rows the
-    /// listing cache keeps for them, so those are in each window's first frame, or once
-    /// `cachedRowsLimit` passes on `restoreClock`; saves stay held meanwhile.
+    /// listing cache keeps for them and the mount table's first read has landed, so those rows
+    /// and a share's server column are in each window's first frame, or once `cachedRowsLimit`
+    /// passes on `restoreClock`; saves stay held meanwhile.
     @discardableResult
     public func restore(_ contents: WorkspaceStore.Contents) async -> BrowserWindowController? {
         let saved = contents.session?.workspaces.compactMap { contents.workspaces[$0] } ?? []
@@ -355,9 +356,10 @@ public final class WorkspaceWindows {
         }
     }
 
-    /// How long a restore waits for its panes' cached rows before it shows the windows anyway.
-    /// The cache is asked off the main thread and never waits on a share, so only a cache
-    /// that stopped answering takes this long.
+    /// How long a restore waits for its panes' cached rows and the mount table's first read
+    /// before it shows the windows anyway. The cache is asked off the main thread and never
+    /// waits on a share, and the read asks no volume, so only a cache that stopped answering
+    /// takes this long.
     static let cachedRowsLimit: Duration = .milliseconds(300)
 
     /// The workspaces of `saved`, made with their panes, which start listing, each named after
@@ -378,13 +380,16 @@ public final class WorkspaceWindows {
         return (states, keyID, workspaces)
     }
 
-    /// Returns once every pane of `panes` has the rows the listing cache keeps for it, or once
-    /// `cachedRowsLimit` passes on `restoreClock`, which logs a fault naming the folders of the
-    /// panes still waiting.
+    /// Returns once every pane of `panes` has the rows the listing cache keeps for it and the
+    /// mount table has read, so a trail in a share has its server column
+    /// (docs/decisions/0114-server-location.md), or once `cachedRowsLimit` passes on
+    /// `restoreClock`, which logs a fault naming the folders of the panes still waiting.
     private func waitForCachedRows(of panes: [Pane]) async {
         let waiting = WaitingPanes(panes)
+        let mountTable = mountTable
         let handed = await Self.firstToFinish(on: restoreClock, limit: Self.cachedRowsLimit) {
             @MainActor in
+            await mountTable.firstRead()
             for pane in panes {
                 await pane.cachedRowsHanded()
                 waiting.remove(pane)
@@ -392,9 +397,11 @@ public final class WorkspaceWindows {
         }
         guard !handed else { return }
         let limit = String(describing: Self.cachedRowsLimit)
+        // The panes wait behind the read, so with it missing every pane is still named.
+        let unread = mountTable.isRead ? "" : "the mount table's first read and "
         logFault(
-            "showing the restored windows without the cached rows of \(waiting.folders): the "
-                + "listing cache didn't hand them in \(limit)")
+            "showing the restored windows without \(unread)the cached rows of "
+                + "\(waiting.folders): they didn't come in \(limit)")
     }
 
     /// `FirstToFinish.run` with a deadline `limit` from now on `clock`.

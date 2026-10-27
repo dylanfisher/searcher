@@ -1,9 +1,11 @@
 import AppKit
 import Browser
 
-/// A pane's folder as a row of buttons: the volume, then each folder down to the pane's. Clicking
-/// a folder above the pane's reports it with the child on the way down, so the pane can select
-/// the folder it came from; Cmd-clicking any folder, the pane's own too, asks for it in a new tab.
+/// A pane's folder as a row of buttons: the volume, then each folder down to the pane's; for a
+/// folder in a server's share, the server, then each folder from the share down
+/// (`Pane.ancestors`). Clicking a place above the pane's reports it with the child on the way
+/// down, so the pane can select the place it came from; Cmd-clicking any place, the pane's own
+/// too, asks for it in a new tab.
 /// When the row doesn't fit, the folders between the ends shrink first. A segment under the mouse
 /// gets a rounded grey highlight and, if it was shrunk, its full width while the others give way,
 /// as in Finder's path bar. Which segment is under the mouse is read from the row as it lies with
@@ -81,20 +83,22 @@ final class PathBarView: NSView {
         fatalError("PathBarView is built in code")
     }
 
-    /// Shows `location`, with `rootVolumeName` as the root's title. Does nothing if both are shown.
-    func show(_ location: Location, rootVolumeName: String) {
-        guard location != self.location || rootVolumeName != self.rootVolumeName else { return }
-        self.location = location
+    /// Shows `ancestors`, the pane's place last (`Pane.ancestors`), with `rootVolumeName` as the
+    /// title of `/` and a server's name as its own. Does nothing if both are shown.
+    func show(_ ancestors: [Location], rootVolumeName: String) {
+        guard ancestors != self.ancestors || rootVolumeName != self.rootVolumeName else { return }
+        location = ancestors.last
         self.rootVolumeName = rootVolumeName
         for view in segments + separators {
             view.removeFromSuperview()
         }
-        ancestors = location.ancestors
+        self.ancestors = ancestors
         hoveredSegment = nil
         segments = ancestors.enumerated().map { index, ancestor in
+            // `/` is titled by its volume; a server, first in a share's bar, by its name.
             let button = NSButton(
-                title: index == 0 ? rootVolumeName : ancestor.name, target: self,
-                action: #selector(segmentClicked(_:)))
+                title: index == 0 && ancestor.isFolder ? rootVolumeName : ancestor.name,
+                target: self, action: #selector(segmentClicked(_:)))
             button.isBordered = false
             button.font = Self.font
             button.contentTintColor = titleColor
