@@ -12,10 +12,10 @@ import UniformTypeIdentifiers
 /// on a workspace opens it, or focuses its window if open; a volume's or a server's eject button,
 /// or Eject in its context menu, ejects it, and an alert says why when that fails; with the keys
 /// in the list, the arrow keys move the selection and Return opens the selected row. Esc gives
-/// the keys back (`onEscape`). Files and folders dropped between the favorites are added there, a favorite
-/// dragged within the group moves, and one dragged out of the sidebar, or removed from its
-/// context menu, leaves it. The rows follow the lists, the mounts and the settings as they
-/// change, from any window (docs/decisions/0086-workspace-sidebar.md,
+/// the keys back (`onEscape`). Files and folders dropped between the favorites are added there,
+/// a favorite dragged within the group moves, and one dragged out of the sidebar, or removed
+/// from its context menu, leaves it. The rows follow the lists, the mounts and the settings as
+/// they change, from any window (docs/decisions/0086-workspace-sidebar.md,
 /// docs/decisions/0107-sidebar-favorites.md, docs/decisions/0108-sidebar-locations.md,
 /// docs/decisions/0114-server-location.md).
 @MainActor
