@@ -41,8 +41,9 @@ private func expectLeavesMatchPanes(_ tab: Tab) {
     let (tab, fixture) = makeTab()
     let first = tab.layout.focused
     fixture.pane.navigate(to: Location(path: "/r/docs"))
+    fixture.pane.setSort(.size, ascending: false)
     fixture.pane.setViewMode(.column)
-    fixture.pane.commandPane.setSort(.size, ascending: false)
+    fixture.pane.commandPane.setSort(.name, ascending: false)
 
     let new = try #require(tab.split(.horizontal, in: bounds))
 
@@ -52,8 +53,10 @@ private func expectLeavesMatchPanes(_ tab: Tab) {
     #expect(new.location == Location(path: "/r/docs"))
     #expect(new.viewMode == .column)
     #expect(new.commandPane.location == Location(path: "/r/docs"))
-    #expect(new.commandPane.sortColumn == .size)
-    #expect(!new.commandPane.sortAscending)
+    // The new columns open by Name ascending; the new pane's list sorts as the focused one's.
+    let columns = try #require(new.columnTrail?.columns)
+    #expect(columns.allSatisfy { $0.pane.sortColumn == .name && $0.pane.sortAscending })
+    #expect(new.sortColumn == .size && !new.sortAscending)
     // The pane starts in column mode, with no list load of its own to cancel.
     #expect(new.load == nil)
     expectLeavesMatchPanes(tab)

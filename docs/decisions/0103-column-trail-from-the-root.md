@@ -156,12 +156,12 @@ focused folder only ([0041](0041-column-model.md), [0096](0096-column-widths.md)
   and `/` for `/Applications`, keep nothing, and the root check corrects the trail as before.
   A trail whose root the check moved, as a volume mounted outside `/Volumes` moves it, starts
   at another folder than the path gives, so it keeps nothing on a restart either.
-  The kept columns take the sort of the old focused column, as the new ones do, and lose their
-  filters, as a navigation clears a filter ([0041](0041-column-model.md)). Their selections are
-  no steps of their selection histories, and the trail moves the keys without a step of the
-  pane's history: the step is the navigation's, or none for Back and Forward. A kept column
-  that was still waiting to list waits for the new root check, or lists at once when it is the
-  new focused column. List view is unchanged.
+  The kept columns keep their own sorts, the new ones open by Name ascending, and the kept ones
+  lose their filters, as a navigation clears a filter ([0041](0041-column-model.md)). Their
+  selections are no steps of their selection histories, and the trail moves the keys without a
+  step of the pane's history: the step is the navigation's, or none for Back and Forward. A kept
+  column that was still waiting to list waits for the new root check, or lists at once when it is
+  the new focused column. List view is unchanged.
 
 ## Alternatives considered
 

@@ -41,8 +41,12 @@ public final class Pane {
     /// Goes up each time `state` is set, so a view can tell new rows from a selection change
     /// without comparing listings.
     public private(set) var stateVersion = 0
+    /// In column mode, the list's sort, kept for the switch back; each column has its own.
     public private(set) var sortColumn: SortColumn
     public private(set) var sortAscending: Bool
+    /// The sort every column opens in. A column shows names only, so it sorts by Name, and only
+    /// a sort key in it changes that, while it stays open (0041-column-model.md).
+    static let columnSort = (column: SortColumn.name, ascending: true)
     /// The filter field's text. The rows follow it once a sort lands, as they follow a sort
     /// change; leaving the folder clears it, and History doesn't keep it.
     public private(set) var filter = NameFilter()
@@ -254,17 +258,18 @@ public final class Pane {
             viewMode: viewMode, rows: nil)
     }
 
-    /// A column's pane at `location`, with `name` to be selected once it's listed, that lists
-    /// nothing until `listIfWaiting()`, a reload or a change its monitor reports. A trail makes
-    /// the columns left of the one it is built at with it, so that column's load is asked first
-    /// (0103-column-trail-from-the-root.md).
+    /// A column's pane at `location`, sorted by Name ascending as every column opens, with `name`
+    /// to be selected once it's listed, that lists nothing until `listIfWaiting()`, a reload or a
+    /// change its monitor reports. A trail makes the columns left of the one it is built at with
+    /// it, so that column's load is asked first (0103-column-trail-from-the-root.md).
     convenience init(
         waitingAt location: Location, service: ListingService, systemActions: any SystemActions,
-        settings: Settings, sortedBy column: SortColumn, ascending: Bool, selecting name: ExactName
+        settings: Settings, selecting name: ExactName
     ) {
         self.init(
             location: location, service: service, systemActions: systemActions,
-            settings: settings, sortedBy: column, ascending: ascending, isFocused: false,
+            settings: settings, sortedBy: Self.columnSort.column,
+            ascending: Self.columnSort.ascending, isFocused: false,
             selection: Selection([name], cursor: name), viewMode: .list, rows: nil,
             listsNow: false)
     }
@@ -332,22 +337,21 @@ public final class Pane {
             }
         case .column:
             self.viewMode = .column
-            columnTrail = ColumnTrail(
-                owner: self, at: location, selecting: selection.cursor, sortedLike: self)
+            columnTrail = ColumnTrail(owner: self, at: location, selecting: selection.cursor)
         }
         settings.observe(for: self) { [weak self] in self?.settingsDidChange() }
         VolumeEvents.add(self)
         observeMountsIfAtServer()
     }
 
-    /// A pane at `location` in this pane's view mode, sorted as its focused column is, with its
-    /// folder sizes, services, settings and system actions. New Tab, Open in New Tab and New
-    /// Window make their pane with it; a split copies the pane instead (`copy`).
+    /// A pane at `location` in this pane's view mode, its list sorted as this pane's is, with its
+    /// folder sizes, services, settings and system actions. Its columns open by Name ascending,
+    /// as every column does. New Tab, Open in New Tab and New Window make their pane with it; a
+    /// split copies the pane instead (`copy`).
     public func newPane(at location: Location) -> Pane {
-        let sorted = commandPane
         let pane = Pane(
             location: location, service: service, systemActions: systemActions,
-            settings: settings, sortedBy: sorted.sortColumn, ascending: sorted.sortAscending,
+            settings: settings, sortedBy: sortColumn, ascending: sortAscending,
             viewMode: viewMode)
         pane.folderSizes = folderSizes
         if let folderVisits { pane.countVisits(in: folderVisits) }
@@ -360,18 +364,18 @@ public final class Pane {
     /// rows' patches and sorts from here on itself, and lists the folder when this pane still has
     /// a listing or a patch to land, which its rows lack. With `takingFocus` such a pane is
     /// focused already, so gaining the focus doesn't list it either. In column mode the new trail
-    /// selects the focused column's cursor in its column at the folder. It has this pane's column
-    /// widths.
+    /// selects the focused column's cursor in its column at the folder, and its columns open by
+    /// Name ascending. It has this pane's list sort and column widths.
     func copy(takingFocus: Bool) -> Pane {
-        let sorted = commandPane
         let rows: Listing? =
             if viewMode == .list, case .loaded(let listing) = state { listing } else { nil }
         let selected =
             viewMode == .list
-            ? selection : sorted.selection.cursor.map { Selection([$0], cursor: $0) } ?? Selection()
+            ? selection
+            : commandPane.selection.cursor.map { Selection([$0], cursor: $0) } ?? Selection()
         let pane = Pane(
             location: location, service: service, systemActions: systemActions,
-            settings: settings, sortedBy: sorted.sortColumn, ascending: sorted.sortAscending,
+            settings: settings, sortedBy: sortColumn, ascending: sortAscending,
             isFocused: rows != nil && takingFocus, selection: selected, viewMode: viewMode,
             rows: rows)
         pane.folderSizes = folderSizes
@@ -590,9 +594,9 @@ public final class Pane {
     /// Switches between the list and columns. Columns start at the root of the pane's folder's
     /// volume and run down to a focused column at the folder, with the entry under the cursor
     /// selected (`ColumnTrail`); the pane's own load and monitor stop and its rows go, since that
-    /// column has its own, so `state` holds no listing in column mode. The list
-    /// starts at the focused column's folder, in its sort, with
-    /// the entry under its cursor selected, and the columns close. Neither is a step in the
+    /// column has its own, so `state` holds no listing in column mode. The columns open by Name
+    /// ascending (`columnSort`). The list starts at the focused column's folder, in the list's
+    /// own sort, with the entry under its cursor selected, and the columns close. Neither is a step in the
     /// history; either drops the pane's selection steps, as a navigation does. Switching to the
     /// mode the pane is in does nothing.
     public func setViewMode(_ mode: ViewMode) {
@@ -607,8 +611,7 @@ public final class Pane {
             // settings change and read by a view that should show the columns instead.
             show(.loading, after: .loaded(complete: true))
             viewMode = .column
-            columnTrail = ColumnTrail(
-                owner: self, at: location, selecting: cursor, sortedLike: self)
+            columnTrail = ColumnTrail(owner: self, at: location, selecting: cursor)
             reportChange()
         case .list:
             guard let trail = columnTrail else {
@@ -618,8 +621,6 @@ public final class Pane {
             trail.close()
             columnTrail = nil
             viewMode = .list
-            sortColumn = focused.sortColumn
-            sortAscending = focused.sortAscending
             move(to: focused.location, selecting: focused.selection.cursor)
         }
     }
@@ -876,8 +877,7 @@ public final class Pane {
 
     /// Starts the trail again at `location`, with the selection's cursor selected there, keeping
     /// the columns of the folders above it that the old trail shows and closing the others
-    /// (`ColumnTrail.init(owner:at:selecting:replacing:)`). The columns take the focused column's
-    /// sort, since the pane's own isn't kept in step in column mode.
+    /// (`ColumnTrail.init(owner:at:selecting:replacing:)`).
     private func restartTrail() {
         guard let old = columnTrail else { preconditionFailure("restarting a trail in list mode") }
         columnTrail = ColumnTrail(
@@ -1297,25 +1297,30 @@ public final class Pane {
 
     /// Whether `listing` is in the pane's sort and shows what the settings ask for.
     public func isArranged(_ listing: Listing) -> Bool {
-        isArranged(listing, filteredBy: filter)
+        isArranged(listing, by: sortColumn, ascending: sortAscending, filteredBy: filter)
     }
 
-    private func isArranged(_ listing: Listing, filteredBy filter: NameFilter) -> Bool {
-        listing.column == sortColumn && listing.ascending == sortAscending
+    private func isArranged(
+        _ listing: Listing, by column: SortColumn, ascending: Bool, filteredBy filter: NameFilter
+    ) -> Bool {
+        listing.column == column && listing.ascending == ascending
             && listing.foldersFirst == settings.foldersFirst
             && listing.showsHidden == settings.showHidden
             && listing.hidesDSStore == settings.hideDSStore && listing.filter == filter
     }
 
-    /// Whether a pane made at `location` sorted like this one, with no filter, as a trail makes
-    /// a column, shows rows in the turn it is made: `service.recentListings` keeps the folder's
-    /// listing in that arrangement (`showRecentListing`). A dictionary read on the main actor.
+    /// Whether a column made at `location`, sorted by Name ascending with no filter as every
+    /// column opens, shows rows in the turn it is made: `service.recentListings` keeps the
+    /// folder's listing in that arrangement (`showRecentListing`). A dictionary read on the main
+    /// actor.
     func showsRecentRowsWhenMade(at location: Location) -> Bool {
         // A server keeps none (`showRecentListing`).
         guard case .folder(let path) = location,
             let recent = service.recentListings?.listing(at: path)
         else { return false }
-        return isArranged(recent.listing, filteredBy: NameFilter())
+        return isArranged(
+            recent.listing, by: Self.columnSort.column, ascending: Self.columnSort.ascending,
+            filteredBy: NameFilter())
     }
 
     /// Sorts a copy of the rows off the main actor when they aren't in the pane's sort, don't
