@@ -475,7 +475,7 @@ func anUnmountedShareBesideAnotherServersShareOfItsNameRefusesEverything(_ viewM
     #expect(table.canRunCommand(NavigationCommands.open.id))
 
     // A drop of a file on the row.
-    let pasteboard = NSPasteboard(name: NSPasteboard.Name("searcher-test-\(UUID().uuidString)"))
+    let pasteboard = testPasteboard()
     defer { pasteboard.releaseGlobally() }
     let item = NSPasteboardItem()
     item.setString(URL(fileURLWithPath: "/Users/someone/a.txt").absoluteString, forType: .fileURL)
@@ -541,7 +541,7 @@ func anUnmountedShareBesideAnotherServersShareOfItsNameRefusesEverything(_ viewM
     let table = list.tableView
     let kept = URL(fileURLWithPath: "/Users/someone/kept.txt")
     window.clipboard.copy([kept])
-    let services = NSPasteboard(name: NSPasteboard.Name("searcher-test-\(UUID().uuidString)"))
+    let services = testPasteboard()
     defer { services.releaseGlobally() }
 
     var checked: [[String]: (on: [CommandID], clipboard: [URL], services: Bool)] = [:]
@@ -585,6 +585,7 @@ func anUnmountedShareBesideAnotherServersShareOfItsNameRefusesEverything(_ viewM
     let cmdDown = try keyEvent(
         functionKey(NSDownArrowFunctionKey), modifiers: [.command, .numericPad, .function])
     let returnKey = try keyEvent("\r")
+    let rightKey = try keyEvent(functionKey(NSRightArrowFunctionKey), modifiers: arrowFlags)
 
     /// What went wrong when `name` was tried, empty when nothing opened.
     func tryOpening(_ name: String) -> [String] {
@@ -597,7 +598,7 @@ func anUnmountedShareBesideAnotherServersShareOfItsNameRefusesEverything(_ viewM
         }
         window.select([name])
         check("select")
-        trail.moveRight()
+        table.keyDown(with: rightKey)
         check("→")
         table.runCommand(NavigationCommands.open.id)
         check("Open")

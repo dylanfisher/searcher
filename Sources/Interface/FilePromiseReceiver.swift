@@ -84,7 +84,7 @@ enum FilePromiseReceiver {
                 let name = url.lastPathComponent
                 if let error {
                     failedNames.append(name)
-                    errors.append(Self.error(error, path: folder + "/" + name))
+                    errors.append(Self.error(error, path: join(folder, name)))
                 } else if let path = await queue.resolved(url.path, in: dropFolder) {
                     received.append(path)
                 } else {
@@ -94,7 +94,7 @@ enum FilePromiseReceiver {
                     )
                     failedNames.append(name)
                     errors.append(
-                        FileOperationError(reason: .other, path: folder + "/" + name, errno: nil))
+                        FileOperationError(reason: .other, path: join(folder, name), errno: nil))
                 }
             case .idle:
                 promised = 0

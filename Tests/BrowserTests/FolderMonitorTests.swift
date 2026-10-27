@@ -167,6 +167,19 @@ private func freshListing(of folder: String) throws -> Listing {
         #expect(change == .patches([.update(try #require(entry)), .remove(name: "gone")]))
     }
 
+    /// A batch naming more children than one patch run takes relists before reading any of
+    /// them. The folder isn't there, so each name read would patch as a remove.
+    @Test func aBatchNamingMoreChildrenThanThePatchLimitRelists() {
+        let folder = "/searcher-tests/missing"
+        let events = (0...FolderChange.patchLimit).map {
+            FileEvent(path: folder + "/file-\($0)", flags: [.created])
+        }
+
+        #expect(FolderMonitor.change(for: events, in: folder) == .relist)
+        let atTheLimit = FolderMonitor.change(for: Array(events.dropLast()), in: folder)
+        #expect(patches(atTheLimit.map { [$0] } ?? []).count == FolderChange.patchLimit)
+    }
+
     @Test func eventsForOtherPathsOnlyAreIgnored() throws {
         let folder = try TemporaryFolder("FolderMonitorTests")
         let events = [

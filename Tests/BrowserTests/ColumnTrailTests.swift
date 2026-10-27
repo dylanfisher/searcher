@@ -2210,10 +2210,14 @@ private func keyedPane(
     clock.advance(by: .milliseconds(1))
 
     await settle { paths(pane) == ["/", "/k", "/k/f10"] }
-    // A load's read starts on a thread of its own, so its call is recorded a moment after the
-    // column that asks for it: wait for the last one, then no column in between made a call.
-    #expect(await fixture.lister.waitForCalls(callsBefore + 2))
-    #expect(fixture.lister.calls.dropFirst(callsBefore).map(\.path) == ["/k/f1", "/k/f10"])
+    // `f1`'s column opened at once and the next press closed it: a load cancelled before its
+    // read starts never calls the lister, so `f1` may or may not appear (see
+    // `aLoadCancelledWhileWaitingForASlotNeverReads`). `f10` always does, and no column in
+    // between made a call.
+    #expect(await fixture.lister.waitForCall("/k/f10"))
+    let called = fixture.lister.calls.dropFirst(callsBefore).map(\.path)
+    #expect(Set(called).isSubset(of: ["/k/f1", "/k/f10"]))
+    #expect(called.count == Set(called).count)
 }
 
 @MainActor @Test func cmdOptDownSelectsTheLastRowAndItsColumnOpensOnlyAfterThePause() async throws {

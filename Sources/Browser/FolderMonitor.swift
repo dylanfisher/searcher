@@ -15,6 +15,11 @@ public enum FolderChange: Equatable, Sendable {
     case patches([Patch])
     /// The folder has to be listed again: a network folder changed, or events were lost.
     case relist
+
+    /// The most entries one patch run changes. Each patch shifts every index array of the
+    /// listing, so it costs O(n), and a relist O(n) once; past this many, the folder is listed
+    /// again instead. See docs/decisions/0020-folder-monitor.md.
+    public static let patchLimit = 1_000
 }
 
 /// Watches one folder and reports its changes. A folder on a local volume uses FSEvents and
@@ -102,8 +107,9 @@ public final class FolderMonitor: FolderMonitoring, @unchecked Sendable {
     /// The change a batch of events means for `folder`, or nil if none of them concerns its
     /// entries. Events name paths at any depth; only direct children matter, since a pane shows
     /// one level. Each named child is read once, as it is now, however many events it had, so a
-    /// create followed by a delete patches as a delete. `folder` is a resolved path, as FSEvents
-    /// reports them.
+    /// create followed by a delete patches as a delete. More named children than
+    /// `FolderChange.patchLimit` relist, without reading any. `folder` is a resolved path, as
+    /// FSEvents reports them.
     public static func change(for events: [FileEvent], in folder: String) -> FolderChange? {
         let prefix = folderPrefix(folder)
         if events.contains(where: { relists($0, prefix: prefix) }) { return .relist }
@@ -115,6 +121,8 @@ public final class FolderMonitor: FolderMonitoring, @unchecked Sendable {
                 names.append(name)
             }
         }
+        // Listing the folder again costs less than reading and patching this many entries.
+        if names.count > FolderChange.patchLimit { return .relist }
         var patches: [FolderChange.Patch] = []
         let lister = DirectoryLister()
         for name in names {

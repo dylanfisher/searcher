@@ -788,16 +788,9 @@ public final class ColumnTrail {
         let previewChanges =
             column === columns.last && previewed(in: column.pane)?.location != preview?.location
         guard opens || previewChanges else { return }
-        let wait = Self.startWait(on: owner.columnOpenClock, for: Self.openDelay)
+        let wait = DeadlineWait.make(on: owner.columnOpenClock)(Self.openDelay)
         let task = Task { [weak self, weak column] in
-            do {
-                try await wait()
-            } catch is CancellationError {
-                return
-            } catch {
-                preconditionFailure("the clock failed a wait with \(error)")
-            }
-            guard let self, let column, !Task.isCancelled,
+            guard await DeadlineWait.reached(wait), let self, let column, !Task.isCancelled,
                 column.held?.selectionVersion == version,
                 self.columns.contains(where: { $0 === column })
             else { return }
@@ -821,14 +814,6 @@ public final class ColumnTrail {
     {
         let deadline = clock.now.advanced(by: duration)
         return { clock.now >= deadline }
-    }
-
-    /// Takes the deadline on `clock` at once and returns the wait for it.
-    private static func startWait<C: Clock<Duration>>(on clock: C, for duration: Duration)
-        -> @Sendable () async throws -> Void
-    {
-        let deadline = clock.now.advanced(by: duration)
-        return { try await clock.sleep(until: deadline, tolerance: nil) }
     }
 
     /// Previews the one file selected in the last column, as its listing has it now, so a patch
@@ -1008,16 +993,9 @@ public final class ColumnTrail {
         guard heldPreview == nil || heldForKeys,
             heldForKeys || shown?.location != preview?.location
         else { return }
-        let wait = Self.startWait(on: owner.previewHoldClock, for: Self.previewHold)
+        let wait = DeadlineWait.make(on: owner.previewHoldClock)(Self.previewHold)
         let task = Task { [weak self] in
-            do {
-                try await wait()
-            } catch is CancellationError {
-                return
-            } catch {
-                preconditionFailure("the clock failed a wait with \(error)")
-            }
-            guard let self, !Task.isCancelled else { return }
+            guard await DeadlineWait.reached(wait), let self, !Task.isCancelled else { return }
             self.heldPreview = nil
             self.owner.trailDidChange()
         }

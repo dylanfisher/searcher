@@ -668,7 +668,7 @@ extension Fixture {
 }
 
 @MainActor @Test func aCutEntryDrawsDimmedInAColumnOpenedAfterTheCut() async throws {
-    let pasteboard = NSPasteboard(name: NSPasteboard.Name("searcher-test-\(UUID().uuidString)"))
+    let pasteboard = testPasteboard()
     defer { pasteboard.releaseGlobally() }
     let clipboard = CutState(clipboard: PasteboardFileClipboard(pasteboard: pasteboard))
     let fixture = await Fixture()
@@ -771,10 +771,7 @@ extension Fixture {
 @MainActor @Test func makingAColumnsTableFirstResponderFocusesItsColumn() async throws {
     let fixture = await Fixture()
     await fixture.openThreeColumns()
-    let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 800, height: 400), styleMask: [.titled],
-        backing: .buffered, defer: true)
-    window.isReleasedWhenClosed = false
+    let window = testWindow(size: NSSize(width: 800, height: 400))
     window.contentView?.addSubview(fixture.controller.view)
 
     #expect(window.makeFirstResponder(fixture.tables[2]))
@@ -794,21 +791,14 @@ extension Fixture {
     let fixture = await Fixture(width: width)
     await fixture.openThreeColumns()
     await fixture.select("one.flac", inColumn: 2)
-    let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: width, height: 400), styleMask: [.titled],
-        backing: .buffered, defer: true)
-    window.isReleasedWhenClosed = false
+    let window = testWindow(size: NSSize(width: width, height: 400))
     window.contentView?.addSubview(fixture.controller.view)
     window.contentView?.layoutSubtreeIfNeeded()
     #expect(window.makeFirstResponder(fixture.tables[2]))
     // The first column lists a.txt, docs, other.
     let table = fixture.tables[0]
     let point = table.convert(NSPoint(x: 20, y: table.rect(ofRow: 1).midY), to: nil)
-    let press = try #require(
-        NSEvent.mouseEvent(
-            with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 0,
-            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
-            pressure: 1))
+    let press = try mouseEvent(.leftMouseDown, at: point, in: window)
 
     table.selectOnPress(press)
 
@@ -822,10 +812,7 @@ extension Fixture {
 @MainActor @Test func aRealPressInAnotherColumnSelectsItsRowWhileTheButtonIsDown() async throws {
     let fixture = await Fixture()
     await fixture.select("docs", inColumn: 0)
-    let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 800, height: 400), styleMask: [.titled],
-        backing: .buffered, defer: true)
-    window.isReleasedWhenClosed = false
+    let window = testWindow(size: NSSize(width: 800, height: 400))
     window.contentView?.addSubview(fixture.controller.view)
     window.contentView?.layoutSubtreeIfNeeded()
     SecondDisplay.orderFront(window)
@@ -2205,10 +2192,7 @@ private let gripDrags: [[Double]] = [[-30.37, -60.81, -90.13], [-60.4, -20.77, 4
     folders["/Volumes/r/docs/sub"] = (0..<60).map { file("com.apple.LinkMetadata-\($0).db-wal") }
     let fixture = await Fixture(width: 1000, folders: folders)
     await fixture.openThreeColumns()
-    let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 700, height: 400), styleMask: [.titled],
-        backing: .buffered, defer: true)
-    window.isReleasedWhenClosed = false
+    let window = testWindow(size: NSSize(width: 700, height: 400))
     window.contentView?.wantsLayer = true
     fixture.controller.view.frame = try #require(window.contentView).bounds
     window.contentView?.addSubview(fixture.controller.view)
@@ -2389,10 +2373,7 @@ private let gripDrags: [[Double]] = [[-30.37, -60.81, -90.13], [-60.4, -20.77, 4
     await fixture.select("a.txt", inColumn: 0)
     // On the second display: a field takes the keys through the field editor only in a window
     // that is shown.
-    let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 800, height: 400), styleMask: [.titled],
-        backing: .buffered, defer: true)
-    window.isReleasedWhenClosed = false
+    let window = testWindow(size: NSSize(width: 800, height: 400))
     defer { window.orderOut(nil) }
     window.contentView = fixture.controller.view
     SecondDisplay.orderFront(window)
@@ -2405,11 +2386,7 @@ private let gripDrags: [[Double]] = [[-30.37, -60.81, -90.13], [-60.4, -20.77, 4
         let point = field.convert(NSPoint(x: field.bounds.midX, y: field.bounds.midY), to: nil)
         let now = ProcessInfo.processInfo.systemUptime
         func event(_ type: NSEvent.EventType, at time: Double) throws -> NSEvent {
-            try #require(
-                NSEvent.mouseEvent(
-                    with: type, location: point, modifierFlags: [], timestamp: time,
-                    windowNumber: window.windowNumber, context: nil, eventNumber: 0,
-                    clickCount: 1, pressure: 1))
+            try mouseEvent(type, at: point, in: window, timestamp: time)
         }
         nonisolated(unsafe) let down = try event(.leftMouseDown, at: now)
         try performRealPress(releasedBy: try event(.leftMouseUp, at: now + 0.05), selectsText: true)

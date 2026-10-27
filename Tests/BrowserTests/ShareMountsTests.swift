@@ -91,6 +91,8 @@ private struct Mounting {
 @MainActor @Test func aMountLeftBeforeItsStartReturnsIsCancelledOnceItDoes() async throws {
     let mounting = await Mounting()
     mounting.mounter.holdStarts()
+    // Releasing twice is harmless; the defer frees the parked start if a `try` below throws.
+    defer { mounting.mounter.releaseStarts() }
     let asking = mounting.ask()
     let handle = try await mounting.handle()
 

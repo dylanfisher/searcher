@@ -1005,6 +1005,72 @@ private func holdLinkChecks(of pane: Pane) -> HeldLinkChecks {
     #expect(fixture.pane.state.names == ["a.txt", "b.txt", "c", "d", "docs", "e", "f"])
 }
 
+/// `count` patches adding files the stub lister doesn't have, so rows that show them were
+/// patched, not listed.
+private func unlistedFiles(_ count: Int) -> [FolderChange.Patch] {
+    (0..<count).map { .update(file("new-\($0)")) }
+}
+
+@MainActor @Test func patchesOverThePatchLimitListTheFolderAgainInsteadOfPatching() async {
+    let fixture = await PaneFixture.loaded()
+    let version = fixture.pane.stateVersion
+
+    fixture.pane.apply(
+        .patches(unlistedFiles(FolderChange.patchLimit + 1)), at: fixture.pane.location)
+
+    #expect(await fixture.lister.waitForCalls(2))
+    await settle { fixture.pane.stateVersion > version && fixture.pane.state.isLoaded }
+    #expect(fixture.pane.state.names == ["a.txt", "b.txt", "docs"])
+    #expect(fixture.lister.calls.count == 2)
+}
+
+@MainActor @Test func patchesUpToThePatchLimitPatchWithoutListing() async {
+    let fixture = await PaneFixture.loaded()
+
+    fixture.pane.apply(.patches(unlistedFiles(FolderChange.patchLimit)), at: fixture.pane.location)
+
+    await settle { fixture.pane.state.names.count == 3 + FolderChange.patchLimit }
+    #expect(fixture.lister.calls.count == 1)
+}
+
+/// Batches that wait behind a running patch count together: a burst arriving as many small
+/// batches costs as much to patch as one large one.
+@MainActor @Test func waitingPatchesOverThePatchLimitListTheFolderAgain() async {
+    let fixture = await PaneFixture.loaded()
+    let queue = DispatchQueue(label: "PaneTests.rowWork")
+    fixture.pane.rowWorkQueue = queue
+    queue.suspend()
+    let here = fixture.pane.location
+
+    fixture.pane.apply(.patches([.update(file("first"))]), at: here)
+    for batch in 0...FolderChange.patchLimit / 100 {
+        fixture.pane.apply(
+            .patches((0..<100).map { .update(file("batch-\(batch)-\($0)")) }), at: here)
+    }
+    queue.resume()
+
+    #expect(await fixture.lister.waitForCalls(2))
+    await settle { fixture.pane.state.names == ["a.txt", "b.txt", "docs"] }
+    #expect(!fixture.pane.state.names.contains { $0.hasPrefix("batch-") })
+}
+
+@MainActor @Test func theSelectionByNameSurvivesARelistForPatchesOverTheLimit() async {
+    let fixture = await PaneFixture.loaded()
+    fixture.select("a.txt", "b.txt")
+    let version = fixture.pane.stateVersion
+
+    fixture.pane.apply(
+        .patches(unlistedFiles(FolderChange.patchLimit + 1)), at: fixture.pane.location)
+
+    #expect(await fixture.lister.waitForCalls(2))
+    await settle {
+        fixture.pane.stateVersion > version && fixture.pane.state.isLoaded
+            && fixture.pane.selection.isSettled
+    }
+    #expect(fixture.selectedNames == ["a.txt", "b.txt"])
+    #expect(fixture.pane.selection.cursor == ExactName("b.txt"))
+}
+
 @MainActor @Test func aRelistChangeListsTheFolderAgain() async {
     let fixture = await PaneFixture.loaded()
 
