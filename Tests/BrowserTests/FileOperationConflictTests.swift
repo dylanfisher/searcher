@@ -262,7 +262,7 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
             "copied /S/song.flac to \(staging)/song.flac", "trash /A/song.flac",
             "move \(staging)/song.flac to /A/song.flac", "delete \(staging)",
         ])
-    let trashed = URL(fileURLWithPath: "/S/.Trashes/501/song.flac")
+    let trashed = URL(fileURLWithPath: "/A/.Trashes/501/song.flac")
     #expect(
         watcher.state(of: copy)?.record.changes == [
             .replaced("/A/song.flac", originalTrashedTo: trashed),
@@ -277,7 +277,7 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
         watcher.state(of: move)?.record.changes == [
             .replaced(
                 "/A/sorted/cover.jpg",
-                originalTrashedTo: URL(fileURLWithPath: "/S/.Trashes/501/cover.jpg")),
+                originalTrashedTo: URL(fileURLWithPath: "/A/.Trashes/501/cover.jpg")),
             .moved(from: "/A/in/cover.jpg", to: "/A/sorted/cover.jpg"),
         ])
     #expect(!files.events.all.contains("copy /A/in/cover.jpg"))
@@ -313,7 +313,7 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
         state.record.changes == [
             .replaced(
                 "/A/song.flac",
-                originalTrashedTo: URL(fileURLWithPath: "/S/.Trashes/501/song.flac")),
+                originalTrashedTo: URL(fileURLWithPath: "/A/.Trashes/501/song.flac")),
             .created("/A/song.flac", from: .copy(of: "/S/song.flac")),
         ])
 }
@@ -335,7 +335,7 @@ private func stagingFolder(_ files: FakeFiles) throws -> String {
     #expect(
         Array(files.events.all.drop { !$0.hasPrefix("trash") }) == [
             "trash /A/song.flac", "move failed \(staging)/song.flac to /A/song.flac",
-            "move /S/.Trashes/501/song.flac to /A/song.flac", "delete \(staging)/song.flac",
+            "move /A/.Trashes/501/song.flac to /A/song.flac", "delete \(staging)/song.flac",
             "delete \(staging)",
         ])
     #expect(watcher.state(of: id)?.phase == .failed)

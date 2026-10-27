@@ -770,6 +770,29 @@ private func stopEverything(_ windows: WorkspaceWindows) async {
     #expect(redo.title == "Redo")
 }
 
+/// Cmd-Z on a change that can't be undone, and Cmd-Shift-Z with nothing to redo, beep through
+/// the table that took the key, as AppKit does for a key whose menu item is off.
+@MainActor @Test func cmdZOnCantUndoAndCmdShiftZWithNothingToRedoBeep() async throws {
+    let fixture = try await Fixture()
+    let controller = try #require(fixture.windows.controllers.first)
+    var beeps = 0
+    try fixture.keyTable(controller).beep = { beeps += 1 }
+    fixture.windows.undoHistory.record(
+        .deleteImmediately(["/root/a.txt"]),
+        OperationState(
+            phase: .done,
+            progress: OperationState.Progress(
+                itemsDone: 1, itemCount: 1, copied: CopyProgress(bytes: 0, files: 0), total: nil),
+            errors: [], record: OperationRecord(changes: [.deleted("/root/a.txt")])),
+        id: FileOperationQueue.ID(-1))
+    #expect(fixture.windows.undoHistory.undoTitle == "Can’t Undo Delete")
+
+    try fixture.press(try keyEvent("z", modifiers: .command), in: controller)
+    await settle { beeps == 1 }
+    try fixture.press(try keyEvent("Z", modifiers: [.command, .shift]), in: controller)
+    await settle { beeps == 2 }
+}
+
 /// Cmd-Z pressed as an operation finishes undoes that operation, not the one before it, though
 /// the operations panel hears of it up to a snapshot interval later.
 @MainActor @Test func cmdZRightAfterAnOperationEndsUndoesThatOperation() async throws {

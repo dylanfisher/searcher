@@ -1,4 +1,5 @@
 import Base
+import Foundation
 
 /// The app's one undo and redo history of file changes, built from each finished operation's
 /// `OperationRecord`. Every operation that changed something makes an entry when it finishes,
@@ -26,7 +27,10 @@ public final class UndoHistory {
         /// False for a change that deleted an item, which nothing can bring back, or whose
         /// items' identities couldn't be read.
         let canUndo: Bool
-        /// Kept once after its undo's check found a folder missing; failing again drops it.
+        /// Made by a move, or by an undo or redo of one, whose name counts its items.
+        let isMove: Bool
+        /// Kept once after its undo failed for a cause that can clear, such as a folder missing
+        /// or an item in the way; failing again drops it.
         var isRetry = false
     }
 
@@ -143,7 +147,11 @@ public final class UndoHistory {
         }
         let name = UndoCommands.name(of: operation, record: record)
         if !record.unidentified.isEmpty { logUnidentified(name, record) }
-        push(entry(name, record, canUndo: !deletes && record.unidentified.isEmpty), to: .undo)
+        let isMove = if case .move = operation { true } else { false }
+        push(
+            entry(
+                name, record, canUndo: !deletes && record.unidentified.isEmpty, isMove: isMove),
+            to: .undo)
         redoEntries.removeAll()
         changeCount += 1
     }
@@ -177,21 +185,27 @@ public final class UndoHistory {
 
     /// Undoes the newest entry through `queue`, after the presses made before this one. The
     /// task ends with the undo's last state, or nil when the press did nothing: nothing could
-    /// be undone, or the press no longer named the newest change.
+    /// be undone, or the press no longer named the newest change. `nothingToDo` runs when, at
+    /// its turn, the press finds nothing it can undo: no entry, or one that can't be undone.
     @discardableResult
-    public func undo(with queue: FileOperationQueue) -> Task<OperationState?, Never> {
-        start(.undo, with: queue)
+    public func undo(
+        with queue: FileOperationQueue, nothingToDo: @escaping @MainActor () -> Void = {}
+    ) -> Task<OperationState?, Never> {
+        start(.undo, with: queue, nothingToDo: nothingToDo)
     }
 
     /// Redoes the last undone entry, as `undo` undoes one.
     @discardableResult
-    public func redo(with queue: FileOperationQueue) -> Task<OperationState?, Never> {
-        start(.redo, with: queue)
+    public func redo(
+        with queue: FileOperationQueue, nothingToDo: @escaping @MainActor () -> Void = {}
+    ) -> Task<OperationState?, Never> {
+        start(.redo, with: queue, nothingToDo: nothingToDo)
     }
 
-    private func start(_ side: Side, with queue: FileOperationQueue)
-        -> Task<OperationState?, Never>
-    {
+    private func start(
+        _ side: Side, with queue: FileOperationQueue,
+        nothingToDo: @escaping @MainActor () -> Void
+    ) -> Task<OperationState?, Never> {
         let mark = queue.markPress()
         nextPress += 1
         let key = nextPress
@@ -209,12 +223,18 @@ public final class UndoHistory {
             guard press?.stillHolds(settled: settled) == true else { return nil }
             switch side {
             case .undo:
-                guard let entry = undoEntries.last, entry.canUndo else { return nil }
+                guard let entry = undoEntries.last, entry.canUndo else {
+                    nothingToDo()
+                    return nil
+                }
                 return await reverse(
                     entry, from: .undo, title: "\(UndoCommands.undo.title) \(entry.name)",
                     queue: queue)
             case .redo:
-                guard let entry = redoEntries.last else { return nil }
+                guard let entry = redoEntries.last else {
+                    nothingToDo()
+                    return nil
+                }
                 return await reverse(
                     entry, from: .redo, title: "\(UndoCommands.redo.title) \(entry.name)",
                     queue: queue)
@@ -227,12 +247,12 @@ public final class UndoHistory {
     /// Runs the reversal of `entry`, which stays on `side` while it runs.
     ///
     /// - Refused, or cancelled before it changed anything, the entry stays.
-    /// - Failed and changed nothing: the entry stays, once, only when the check found an outer
-    ///   folder missing, as a drive that isn't mounted; otherwise, or on its second try, it is
-    ///   dropped (`FileOperation.dropsUndoEntry`), and the operations panel says so.
-    /// - Otherwise what it changed goes on the other side under the same name, unless a new
-    ///   change cleared Redo while an undo ran, and what it couldn't change stays in the
-    ///   entry's place, so nothing is left that can't be undone. An item copied back between
+    /// - Failed and changed nothing: the entry stays, once, only when every failure can clear,
+    ///   as a drive that isn't mounted or an item in the way; otherwise, or on its second try,
+    ///   it is dropped (`FileOperation.dropsUndoEntry`), and the operations panel says so.
+    /// - Otherwise what it changed goes on the other side, unless a new change cleared Redo
+    ///   while an undo ran, and what it couldn't change stays in the entry's place, so nothing
+    ///   is left that can't be undone. Each is named for what it holds. An item copied back between
     ///   volumes that couldn't be deleted where it was is in neither: the move stays to undo,
     ///   and its check names the copy in the way.
     private func reverse(
@@ -260,27 +280,30 @@ public final class UndoHistory {
             }
             return state
         }
-        let remainder = entry.record.changes.filter { !Self.reverses(done, $0) }
+        let remainder = OperationRecord(
+            changes: Self.remainder(of: entry.record.changes, after: done),
+            identities: entry.record.identities)
         replace(
             entry,
-            with: remainder.isEmpty
+            with: remainder.changes.isEmpty
                 ? nil
                 : self.entry(
-                    entry.name,
-                    OperationRecord(changes: remainder, identities: entry.record.identities),
-                    canUndo: true))
+                    name(of: entry, holding: remainder), remainder, canUndo: true,
+                    isMove: entry.isMove))
         // A move between volumes undone: the item was copied back from where the move left it,
         // and that copy couldn't be deleted.
+        let changes = Set(entry.record.changes)
         let reversed = done.filter { change in
             guard case .created(let path, .copy(let source)) = change else { return true }
-            return !entry.record.changes.contains(.moved(from: path, to: source))
+            return !changes.contains(.moved(from: path, to: source))
         }
         guard !reversed.isEmpty else { return state }
         let record = OperationRecord(
             changes: reversed, identities: state.record.identities,
             unidentified: state.record.unidentified)
+        let name = name(of: entry, holding: record)
         let identified = record.unidentified.isEmpty
-        if !identified { logUnidentified(entry.name, record) }
+        if !identified { logUnidentified(name, record) }
         switch side {
         case .undo where !identified:
             // Redo can't tell these items from others, and nothing older on Redo can be
@@ -288,43 +311,79 @@ public final class UndoHistory {
             redoEntries.removeAll()
         case .undo:
             if changeCount == changesBefore {
-                push(self.entry(entry.name, record, canUndo: true), to: .redo)
+                push(self.entry(name, record, canUndo: true, isMove: entry.isMove), to: .redo)
             }
         case .redo:
-            push(self.entry(entry.name, record, canUndo: identified), to: .undo)
+            push(
+                self.entry(name, record, canUndo: identified, isMove: entry.isMove), to: .undo)
         }
         return state
     }
 
-    /// Whether `done`, the changes an undo made, hold the reversal of `change`.
-    private static func reverses(_ done: [OperationRecord.Change], _ change: OperationRecord.Change)
-        -> Bool
-    {
-        func same(_ a: String, _ b: String) -> Bool {
-            FileOperation.comparable(a) == FileOperation.comparable(b)
+    /// The name of an entry that holds `record`, part of `entry`'s changes or their reversal:
+    /// a move is named for the items it holds, "Move 1 Item" when one of three is left.
+    private func name(of entry: Entry, holding record: OperationRecord) -> String {
+        entry.isMove ? UndoCommands.moveName(record) : entry.name
+    }
+
+    /// What is left of `changes` once an undo made `done`: each change whose reversal isn't in
+    /// `done`, in order. Paths compare as `comparable` gives them, each read once, so a large
+    /// entry takes time in proportion to its size, not to its square.
+    static func remainder(
+        of changes: [OperationRecord.Change], after done: [OperationRecord.Change],
+        comparable: (String) -> String = FileOperation.comparable
+    ) -> [OperationRecord.Change] {
+        let reversals = Set(done.compactMap { Reversal(made: $0, comparable: comparable) })
+        return changes.filter { change in
+            guard let reversal = Reversal(reversing: change, comparable: comparable) else {
+                return true
+            }
+            return !reversals.contains(reversal)
         }
-        return done.contains { reversal in
-            switch (change, reversal) {
-            case (.created(let path, _), .uncreated(let undone, _, _)),
-                (.putBack(_, let path), .trashed(let undone, _)),
-                (.uncreated(let path, .newFolder, _), .created(let undone, _)),
-                (.uncreated(let path, .copy, _), .created(let undone, _)):
-                return same(path, undone)
-            case (.uncreated(let path, .drop, let url), .putBack(let from, let undone)),
-                (.trashed(let path, let url), .putBack(let from, let undone)),
-                (.replaced(let path, let url), .putBack(let from, let undone)):
-                return url == from && same(path, undone)
-            case (.moved(let from, let to), .moved(let back, let undone)):
-                return same(to, back) && same(from, undone)
-            default:
-                return false
+    }
+
+    /// A change an undo made, keyed so the change it reverses finds it: paths in their
+    /// comparable form, and a put back by its Trash URL too.
+    private enum Reversal: Hashable {
+        case uncreated(String)
+        case trashed(String)
+        case created(String)
+        case putBack(URL, String)
+        case moved(from: String, to: String)
+
+        /// The key of `change`, made by an undo; nil for a kind no undo makes.
+        init?(made change: OperationRecord.Change, comparable: (String) -> String) {
+            switch change {
+            case .uncreated(let path, _, _): self = .uncreated(comparable(path))
+            case .trashed(let path, _): self = .trashed(comparable(path))
+            case .created(let path, _): self = .created(comparable(path))
+            case .putBack(let url, let path): self = .putBack(url, comparable(path))
+            case .moved(let from, let to): self = .moved(from: comparable(from), to: comparable(to))
+            case .replaced, .deleted: return nil
+            }
+        }
+
+        /// The key of the change that reverses `change`; nil for a delete, which nothing does.
+        init?(reversing change: OperationRecord.Change, comparable: (String) -> String) {
+            switch change {
+            case .created(let path, _): self = .uncreated(comparable(path))
+            case .putBack(_, let path): self = .trashed(comparable(path))
+            case .uncreated(let path, .newFolder, _), .uncreated(let path, .copy, _):
+                self = .created(comparable(path))
+            case .uncreated(let path, .drop, let url), .trashed(let path, let url),
+                .replaced(let path, let url):
+                self = .putBack(url, comparable(path))
+            case .moved(let from, let to): self = .moved(from: comparable(to), to: comparable(from))
+            case .deleted: return nil
             }
         }
     }
 
-    private func entry(_ name: String, _ record: OperationRecord, canUndo: Bool) -> Entry {
+    private func entry(
+        _ name: String, _ record: OperationRecord, canUndo: Bool, isMove: Bool
+    ) -> Entry {
         nextID += 1
-        return Entry(id: nextID, name: name, record: record, canUndo: canUndo)
+        return Entry(id: nextID, name: name, record: record, canUndo: canUndo, isMove: isMove)
     }
 
     private func remove(_ entry: Entry) {

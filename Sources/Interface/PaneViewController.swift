@@ -425,7 +425,8 @@ public final class PaneViewController: NSViewController {
             showPalette: link.showPalette, showItemPalette: link.showItemPalette, folder: folder,
             fileOperations: link.fileOperations,
             editName: { [weak self] in self?.editName() }, clipboard: link.clipboard,
-            undoHistory: link.undoHistory, isKeyRepeat: isKeyRepeat)
+            undoHistory: link.undoHistory,
+            beep: { [weak self] in self?.keyListing.tableView.beep() }, isKeyRepeat: isKeyRepeat)
     }
 
     /// Rename's hook. Rename is on only with a queue in the context, and the field renames

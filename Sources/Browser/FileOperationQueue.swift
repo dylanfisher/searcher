@@ -1449,10 +1449,13 @@ public actor FileOperationQueue {
 
     /// A path `operation` would change that an unfinished operation reads or changes, or one
     /// it reads that an unfinished operation changes. Paths overlap when one is at or under the
-    /// other, compared as `FileOperation.comparable` gives them.
+    /// other, compared as `FileOperation.comparable` gives them. A new folder's name is picked
+    /// when it runs, so a new folder and another operation clash only when the other changes
+    /// the folder it is made in or one that folder is in.
     private func pathInUse(by operation: FileOperation) -> String? {
         let reads = operation.reads.map { ($0, FileOperation.comparable($0)) }
         let changes = operation.changes.map { ($0, FileOperation.comparable($0)) }
+        let madeIn = Self.folderMadeIn(by: operation)
         for other in entries where !other.phase.isFinished {
             let theirChanges = other.operation.changes.map(FileOperation.comparable)
             let theirUses = other.operation.reads.map(FileOperation.comparable) + theirChanges
@@ -1462,8 +1465,23 @@ public actor FileOperationQueue {
             if let path = reads.first(where: { Self.overlap($0.1, theirChanges) }) {
                 return path.0
             }
+            if let theirs = Self.folderMadeIn(by: other.operation),
+                let path = changes.first(where: { isPath(theirs.1, atOrUnder: $0.1) })
+            {
+                return path.0
+            }
+            if let madeIn, theirChanges.contains(where: { isPath(madeIn.1, atOrUnder: $0) }) {
+                return madeIn.0
+            }
         }
         return nil
+    }
+
+    /// The folder a new folder is made in, as given and as `FileOperation.comparable` gives
+    /// it; nil for any other operation.
+    private static func folderMadeIn(by operation: FileOperation) -> (String, String)? {
+        guard case .newFolder(let folder) = operation else { return nil }
+        return (folder, FileOperation.comparable(folder))
     }
 
     /// Every path `operation` names: its items and, for a copy or a move, the folder they go
