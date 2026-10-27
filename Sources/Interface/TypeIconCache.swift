@@ -24,13 +24,14 @@ public final class TypeIconCache {
 
     /// `makeIcon` is called once per type. Rows share the image it returns, so callers must not
     /// change it. `readIcons` gives the bytes of the CoreTypes icon files named, as
-    /// `CoreTypesIcons.read` does; tests replace it.
+    /// `CoreTypesIcons.read` does; tests replace it. Without one, the init picks that reader itself: as a
+    /// default argument it aborted the process, a bug of the 6.4 toolchain.
     public init(
         makeIcon: @escaping @MainActor (UTType) -> NSImage = { NSWorkspace.shared.icon(for: $0) },
-        readIcons: @escaping @Sendable ([String]) async -> [String: Data] = CoreTypesIcons.read
+        readIcons: (@Sendable ([String]) async -> [String: Data])? = nil
     ) {
         self.makeIcon = makeIcon
-        self.readIcons = readIcons
+        self.readIcons = readIcons ?? CoreTypesIcons.read
     }
 
     /// The icon of a server's share row: CoreTypes' `GenericSharepoint`, read once off the main

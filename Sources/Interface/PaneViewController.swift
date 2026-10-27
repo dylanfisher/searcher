@@ -93,6 +93,7 @@ public final class PaneViewController: NSViewController {
             listingViewController.mountTable = windowLink?.mountTable
             columnViewController.mountTable = windowLink?.mountTable
             listingViewController.volumes = windowLink?.volumes
+            columnViewController.volumes = windowLink?.volumes
         }
     }
 
@@ -639,7 +640,9 @@ public final class PaneViewController: NSViewController {
         let shown = pane.commandPane
         if case .loading = shown.state { return }
         guard let rootVolumeName = shown.rootVolumeName else { return }
-        pathBar.show(shown.location, rootVolumeName: rootVolumeName)
+        // The pane follows the focused column's folder, and its ancestors start at a share's
+        // server.
+        pathBar.show(pane.ancestors, rootVolumeName: rootVolumeName)
     }
 
     // MARK: Folder monitor
@@ -667,9 +670,10 @@ public final class PaneViewController: NSViewController {
 
     /// Starts a monitor for `target`'s location on a `BlockingCallThread`, where `FolderMonitor`
     /// must start, and hands it to `target` if it's still there and `isWanted` when it's ready.
-    /// Changes it reports go to `target` on the main actor.
+    /// Changes it reports go to `target` on the main actor. A server's column has no folder to
+    /// watch: it lists again on the mount table's changes (docs/decisions/0114-server-location.md).
     private func startMonitor(for target: Pane, isWanted: @escaping @MainActor () -> Bool) {
-        guard monitorsFolders else { return }
+        guard monitorsFolders, target.location.isFolder else { return }
         let location = target.location
         let logger = logger
         BlockingCallThread.start { [weak target] in

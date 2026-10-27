@@ -1052,13 +1052,32 @@ public final class Pane {
         systemActions.openFile(URL(fileURLWithPath: location.folderPath, isDirectory: false))
     }
 
-    /// Shows the folder that holds this one, with this one selected. Does nothing at `/`. A
-    /// column moves to the column on its left instead, as ← does, except in a trail's first
-    /// column at the home folder (`ColumnTrail.moveUp`).
+    /// Shows the place before this one in `ancestors`, with this one selected: the folder that
+    /// holds it, or a share's server at the share's mount point. Does nothing at `/` or at a
+    /// server. A column moves to the column on its left instead, as ← does, except in a trail's
+    /// first folder column at the home folder (`ColumnTrail.moveUp`).
     public func goToParent() {
         if let trail = containingTrail { return trail.moveUp() }
-        guard let parent = location.parent else { return }
-        navigate(to: parent, selecting: location.name)
+        let ancestors = ancestors
+        guard ancestors.count > 1 else { return }
+        navigate(to: ancestors[ancestors.count - 2], selecting: location.name)
+    }
+
+    /// The places from the top of the pane's path down to its own, which comes last: the path
+    /// bar's segments and the places Enclosing Folder goes up through. For a folder in a share of
+    /// a server, by the app's mount table, the server, then each folder from the share's mount
+    /// point down; for any other folder, each from `/`; for a server, the server alone. Disks
+    /// keep the path from `/` (docs/decisions/0114-server-location.md).
+    public var ancestors: [Location] {
+        guard let path = location.path, let volume = service.mounts?.volume(of: path),
+            let server = volume.server
+        else { return location.ancestors }
+        let mountPoint = FileOperation.comparable(volume.mountPoint)
+        let share = location.ancestors.drop {
+            FileOperation.comparable($0.folderPath) != mountPoint
+        }
+        precondition(!share.isEmpty, "\(path) isn't in the share at \(volume.mountPoint)")
+        return [.server(server)] + share
     }
 
     // MARK: - Listing

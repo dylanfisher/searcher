@@ -747,6 +747,34 @@ private func fileBinding(for chord: KeyChord) throws -> CommandBinding {
     #expect(queue.submittedCount == 0)
 }
 
+/// In column view, New Folder at a server makes the folder in the share selected alone in the
+/// server's column, its column shown (0111-column-view-target-folder.md); with no share
+/// selected it is off.
+@MainActor @Test func newFolderAtAServersColumnGoesIntoTheSelectedShare() async throws {
+    let files = FakeFiles(releasingAll: true)
+    files.add(mountedShare("music"))
+    let queue = FileOperationQueue(
+        fileSystem: files.fileSystem(), prompts: .unexpected, clock: ContinuousClock()
+    ) { _ in }
+    let fixture = await PaneFixture.atServer(folders: ["/Volumes/music": [file("m.txt")]])
+    fixture.pane.setViewMode(.column)
+    let trail = try #require(fixture.pane.columnTrail)
+    let server = trail.focused.pane
+    await settle { server.state.isLoaded }
+    let context = CommandContext(
+        pane: server, workspace: Workspace(tab: fixture.tab), tabBounds: { bounds },
+        fileOperations: queue, editName: {})
+    let binding = try fileBinding(for: newFolder)
+    #expect(binding.isEnabled?(context) == false)
+
+    server.select(Selection([ExactName("music")], cursor: ExactName("music")))
+    await settle { trail.columns.count == 2 }
+    #expect(binding.isEnabled?(context) == true)
+    binding.run(context)
+
+    #expect(await files.events.wait { $0.contains("new folder in /Volumes/music") })
+}
+
 /// A selected share can be copied into the other pane's folder, as Copy acts on it, but not
 /// moved there, as it can't be cut.
 @MainActor @Test func aShareCanBeCopiedToTheOtherPaneButNotMoved() async throws {

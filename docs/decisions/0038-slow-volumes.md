@@ -75,3 +75,8 @@ Amendment (M4.17): the last of the `mostRunningLoads` slots goes to a focused lo
 ([0048](0048-pane-load-priority.md)), so three hung loads, each holding a slot until the slow timer
 fires, stop every non-focused pane from starting; a focused load still gets the last slot, and
 a local volume's reads are likewise capped at three for background loads.
+
+Amendment (SB.7f): `CoreTypesIcons.read` and other async function values must not be default
+arguments. Under Swift 6.4 the default-argument thunk leaves a task-allocator frame behind, and the
+caller aborts with "freed pointer was not the last allocation". Take an optional parameter that
+defaults to nil and choose the function in the init body.

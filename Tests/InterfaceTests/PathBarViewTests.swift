@@ -10,7 +10,7 @@ private func pathBar(
 ) -> PathBarView {
     let bar = PathBarView()
     bar.frame = NSRect(x: 0, y: 0, width: width, height: PathBarView.height)
-    bar.show(Location(path: path), rootVolumeName: rootVolumeName)
+    bar.show(Location(path: path).ancestors, rootVolumeName: rootVolumeName)
     bar.layoutSubtreeIfNeeded()
     return bar
 }
@@ -179,7 +179,7 @@ private func pathBar(
     let bar = pathBar(showing: "/Users/dylan/Projects")
     bar.mouseMoved(with: try mouseEvent(.mouseMoved, at: middle(of: 2, in: bar)))
 
-    bar.show(Location(path: "/Users/dylan"), rootVolumeName: "Macintosh HD")
+    bar.show(Location(path: "/Users/dylan").ancestors, rootVolumeName: "Macintosh HD")
 
     #expect(bar.hoveredSegment == nil)
 }
@@ -283,7 +283,7 @@ private func pathBar(
     #expect(bar.segments.allSatisfy { $0.contentTintColor == .labelColor })
     #expect(bar.segments.map(\.frame) == frames)
 
-    bar.show(Location(path: "/Users/dylan"), rootVolumeName: "Macintosh HD")
+    bar.show(Location(path: "/Users/dylan").ancestors, rootVolumeName: "Macintosh HD")
     #expect(bar.segments.allSatisfy { $0.contentTintColor == .labelColor })
 
     bar.isEmphasized = false

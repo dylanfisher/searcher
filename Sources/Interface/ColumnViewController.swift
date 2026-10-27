@@ -63,6 +63,15 @@ final class ColumnViewController: NSViewController {
             }
         }
     }
+    /// The sidebar's volumes, which a share row in a server's column ejects through from its
+    /// context menu, as the list's does.
+    var volumes: SidebarVolumes? {
+        didSet {
+            for controller in columnControllers {
+                controller.volumes = volumes
+            }
+        }
+    }
     /// Opens the folder row a drag hovers over in any column.
     var springLoader: SpringLoader? {
         didSet {
@@ -284,6 +293,7 @@ final class ColumnViewController: NSViewController {
         controller.fileOperations = fileOperations
         controller.workspaceID = workspaceID
         controller.mountTable = mountTable
+        controller.volumes = volumes
         controller.springLoader = springLoader
         prepareTable(table)
         table.setAccessibilityLabel(column.pane.location.name)

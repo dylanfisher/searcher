@@ -76,7 +76,7 @@ public actor ListingCache {
         save: @escaping @Sendable ([String: Folder], VolumeIdentity) async -> Void,
         flush: @escaping @Sendable () async -> Void,
         findVolume: (@Sendable (String) async -> (VolumeIdentity, [String: Folder])?)? = nil,
-        keepFiles: @escaping @Sendable (Set<VolumeIdentity>) async -> Void = { _ in }
+        keepFiles: (@Sendable (Set<VolumeIdentity>) async -> Void)? = nil
     ) {
         precondition(volumeCap > 0, "a listing cache needs room for a volume, got \(volumeCap)")
         precondition(entryCap > 0, "a listing cache needs room for an entry, got \(entryCap)")
@@ -86,7 +86,7 @@ public actor ListingCache {
         self.save = save
         flushStore = flush
         self.findVolume = findVolume
-        self.keepFiles = keepFiles
+        self.keepFiles = keepFiles ?? { _ in }
     }
 
     /// The folder at `path` on `volume`, or nil if none is kept. Reads the volume's file the

@@ -231,7 +231,7 @@ private var modified: String {
 @MainActor @Test func pathBarSegmentsAreButtonsNamedForTheirFolders() {
     let bar = PathBarView()
     bar.frame = NSRect(x: 0, y: 0, width: 800, height: PathBarView.height)
-    bar.show(Location(path: "/Users/dylan"), rootVolumeName: "Work Disk")
+    bar.show(Location(path: "/Users/dylan").ancestors, rootVolumeName: "Work Disk")
 
     #expect(bar.isAccessibilityElement())
     #expect(bar.accessibilityRole() == .group)

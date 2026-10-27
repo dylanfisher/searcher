@@ -1763,3 +1763,57 @@ private func heldQueue(_ history: UndoHistory, _ held: HeldFinishes) -> FileOper
     #expect(await result(of: undo) == nil)
     #expect(!history.isBusy)
 }
+
+// MARK: In a server's share
+
+/// A paste into a share selected in the server's column, and a move inside the share with the
+/// server as the first column, undo on the paths their records name, and the trail stays as it
+/// was (docs/decisions/0114-server-location.md).
+@MainActor @Test func undoInAShareActsOnItsPathsAndLeavesTheServerColumn() async throws {
+    let files = FakeFiles(releasingAll: true)
+    files.add(mountedShare("music"))
+    let history = UndoHistory(log: { _ in })
+    let queue = followedQueue(history, fileSystem: files.fileSystem())
+    let fixture = await PaneFixture.atServer(folders: [
+        "/Volumes/music": [folder("a"), folder("b")], "/Volumes/music/a": [file("x.txt")],
+        "/Volumes/music/b": [],
+    ])
+    fixture.pane.setViewMode(.column)
+    let trail = try #require(fixture.pane.columnTrail)
+    let server = trail.focused.pane
+    await settle { server.state.isLoaded }
+    server.select(Selection([ExactName("music")], cursor: ExactName("music")))
+    await settle { trail.columns.count == 2 && trail.columns[1].pane.state.isLoaded }
+    let clipboard = CutState(clipboard: MemoryClipboard())
+    clipboard.copy([URL(fileURLWithPath: "/S/x.txt")])
+    let paste = try #require(
+        ClipboardCommands.bindings.first { $0.command == ClipboardCommands.paste })
+
+    paste.run(
+        CommandContext(
+            pane: server, workspace: Workspace(tab: fixture.tab), fileOperations: queue,
+            clipboard: clipboard))
+    await settle { queue.submittedCount == 1 && queue.unfinishedCount == 0 }
+    await history.catchUp(with: queue)
+    let columns = trail.columns.map(\.pane)
+    files.place("/Volumes/music/x.txt")
+    #expect(history.undoTitle == "Undo Copy")
+    #expect(try await value(of: history.undo(with: queue)).phase == .done)
+
+    #expect(files.events.all.filter { $0.hasPrefix("trash") } == ["trash /Volumes/music/x.txt"])
+    #expect(trail.columns.map(\.pane).elementsEqual(columns, by: ===))
+    #expect(trail.focusedIndex == 0)
+    #expect(server.selection.cursor == ExactName("music"))
+
+    files.place("/Volumes/music/a/x.txt")
+    _ = await queue.perform(.move(["/Volumes/music/a/x.txt"], into: "/Volumes/music/b"))
+    await history.catchUp(with: queue)
+    files.remove("/Volumes/music/a/x.txt")
+    files.place("/Volumes/music/a", isFolder: true)
+    files.place("/Volumes/music/b/x.txt")
+    #expect(try await value(of: history.undo(with: queue)).phase == .done)
+
+    #expect(files.events.all.contains("move /Volumes/music/b/x.txt to /Volumes/music/a/x.txt"))
+    #expect(trail.columns.map(\.pane).elementsEqual(columns, by: ===))
+    #expect(server.state.names == ["main", "music"])
+}

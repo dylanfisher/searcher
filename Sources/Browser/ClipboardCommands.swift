@@ -57,11 +57,12 @@ public enum ClipboardCommands: CommandSet {
     /// Puts the clipboard's files in the pane's folder, or in column view in the folder selected
     /// alone in the focused column (`FileCommands.destination(in:)`): a move for a cut still on
     /// the clipboard or when `alwaysMoving`, else a copy. A move ends the cut, so a second Paste
-    /// copies.
+    /// copies. The folder is decided once `destination(in:)` has opened a column waiting for
+    /// the keys to pause, so a paste right after an arrow onto a share at a server goes into it.
     @MainActor
     private static func pasteFiles(_ context: CommandContext, alwaysMoving: Bool) {
-        guard canPaste(context), let clipboard = context.clipboard,
-            let queue = context.fileOperations
+        guard let clipboard = context.clipboard, let queue = context.fileOperations,
+            !clipboard.clipboard.fileURLs().isEmpty
         else { return }
         let pane = FileCommands.destination(in: context)
         guard pane.location.isFolder else { return }
