@@ -435,6 +435,60 @@ final class ClipAnimation {
     #expect(fixture.tables[0].selectedRowIndexes == [1])
 }
 
+/// The selected row of the column at `index`, made if it isn't on screen.
+@MainActor
+private func selectedRowView(_ fixture: Fixture, inColumn index: Int) throws -> ListingRowView {
+    let table = fixture.tables[index]
+    let row = try #require(table.selectedRowIndexes.first)
+    return try #require(table.rowView(atRow: row, makeIfNecessary: true) as? ListingRowView)
+}
+
+/// Whether `row`'s selection is Finder's first column's: the whole row, square.
+@MainActor
+private func isFullWidth(_ row: ListingRowView) -> Bool {
+    row.selectionPath.bounds == row.bounds && row.selectionPath.contains(NSPoint(x: 0.5, y: 0.5))
+}
+
+/// Finder draws the selection of the trail's first column as a square band across the whole
+/// column, and every other column's as the rounded band inset from its sides
+/// (first-column-square.jpg, second-column-rounded.jpg).
+@MainActor @Test func theFirstColumnSelectsFullWidthAndTheOthersRounded() async throws {
+    let fixture = await Fixture()
+    await fixture.openThreeColumns()
+    fixture.trail.moveRight()
+    fixture.controller.view.layoutSubtreeIfNeeded()
+
+    #expect(fixture.tables.map(\.selectionShape) == [.fullWidth, .roundedBand, .roundedBand])
+    let first = try selectedRowView(fixture, inColumn: 0)
+    let second = try selectedRowView(fixture, inColumn: 1)
+    #expect(isFullWidth(first))
+    #expect(!isFullWidth(second))
+    let inset = ListingRowView.selectionInset
+    #expect(!second.selectionPath.contains(NSPoint(x: inset / 2, y: 12)))
+    #expect(!second.selectionPath.contains(NSPoint(x: inset + 0.5, y: 0.5)))
+}
+
+/// A trail started again from another root has a new first column, which takes the full-width
+/// selection; the column after it keeps the rounded one.
+@MainActor @Test func aRestartedTrailsFirstColumnSelectsFullWidth() async throws {
+    let fixture = await Fixture(folders: tree.merging(["/Volumes/s": [file("s.txt")]]) { $1 })
+    await fixture.openThreeColumns()
+    let oldFirst = fixture.tables[0]
+
+    fixture.pane.navigate(to: Location(path: "/Volumes/s"))
+    await settle { fixture.trail.focused.pane.state.isLoaded }
+    fixture.pane.navigate(to: Location(path: "/Volumes/r/docs"))
+    await settle { fixture.trail.columns.allSatisfy { $0.pane.state.isLoaded } }
+    await fixture.select("x.txt", inColumn: 1)
+    fixture.controller.view.layoutSubtreeIfNeeded()
+
+    #expect(fixture.tables.count == 2)
+    #expect(fixture.tables[0] !== oldFirst)
+    #expect(fixture.tables.map(\.selectionShape) == [.fullWidth, .roundedBand])
+    #expect(isFullWidth(try selectedRowView(fixture, inColumn: 0)))
+    #expect(!isFullWidth(try selectedRowView(fixture, inColumn: 1)))
+}
+
 @MainActor @Test func theSelectionMovesAtOnceWhileTheScrollAnimates() async throws {
     let fixture = await Fixture(width: Settings.defaultColumnWidth * 2 + 20)
     await fixture.openThreeColumns()
@@ -1347,7 +1401,10 @@ private func inkBounds(of image: NSImage) throws -> NSRect {
 
     #expect(abs(glyph.height - 6) <= 1, "\(glyph)")
     #expect(abs(glyph.width - 3.5) <= 1, "\(glyph)")
-    let inside = rowView.selectionPath.bounds.maxX - glyph.maxX
+    // Measured from where a rounded band ends: the first column's selection runs to the row's
+    // edge, and the chevron stays where it is in every column.
+    let bandMaxX = rowView.bounds.maxX - ListingRowView.selectionInset
+    let inside = bandMaxX - glyph.maxX
     #expect(abs(inside - 4.5) <= 0.75, "\(inside)")
 }
 

@@ -76,7 +76,12 @@ name about 32 ms, and a click selecting half the rows 32–51 ms.
   (`ListingTableView.HeaderCell`), which inset only the title they draw: the header's rects,
   which its fill, sort clicks, resizing and reordering use, stay AppKit's, so a press in the
   first column's left 8 pt still lands on it. The drop-target highlight on a folder row stays
-  AppKit's square full-width one; only the selection is rounded.)
+  AppKit's square full-width one; only the selection is rounded. Amended 2026-10-26, RN.3,
+  Dylan: "in finder it seems like there's a rule where the first column gets the square
+  highlight and other columns are rounded. lets match that." A table's `selectionShape` picks
+  the band: `.roundedBand`, the default and the list's, or `.fullWidth`, the whole row, square,
+  which a column view gives its trail's first column ([0046](0046-column-view.md)). The cells
+  keep their 8 pt inset in both.)
 - **A new listing of the folder on screen refreshes the rows in place.** A patch, a sort or a
   reload of the folder shown tells the table the row count (`noteNumberOfRowsChanged`) and
   fills the cells of the row views it already has, instead of `reloadData`, which drops them
