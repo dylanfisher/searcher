@@ -140,6 +140,13 @@ private final class Fixture {
         guard selection.isSettled, case .only(let names) = selection.members else { return [] }
         return Set(names.map(\.name))
     }
+
+    /// The selected names once a late patch, for a file the fixture wrote before its monitor
+    /// started, has finished resolving the selection. `selectedNames` reads an unsettled one as empty.
+    func settledSelectedNames() async -> Set<String> {
+        await settle { self.pane.commandPane.selection.isSettled }
+        return selectedNames
+    }
 }
 
 private let returnKey = "\r"
@@ -500,7 +507,7 @@ func eachRenameStartsWithNothingToUndo(closingByReturn: Bool) async throws {
     try await Task.sleep(for: .milliseconds(100))
     #expect(fixture.operationCount == 0)
     #expect(fixture.exists("song.flac"))
-    #expect(fixture.selectedNames == ["song.flac"])
+    #expect(await fixture.settledSelectedNames() == ["song.flac"])
 }
 
 @MainActor @Test func typeToSelectDoesNotFireWhileTheFieldIsOpen() async throws {
@@ -513,7 +520,7 @@ func eachRenameStartsWithNothingToUndo(closingByReturn: Bool) async throws {
     try fixture.editor().keyDown(with: try keyEvent("o"))
 
     #expect(list.typeSelect.query == "")
-    #expect(fixture.selectedNames == ["song.flac"])
+    #expect(await fixture.settledSelectedNames() == ["song.flac"])
     #expect(fixture.field.field.stringValue == "o.flac")
 }
 
@@ -524,7 +531,7 @@ func eachRenameStartsWithNothingToUndo(closingByReturn: Bool) async throws {
     try fixture.press("N", [.command, .shift])
 
     await settle { fixture.field.isEditing }
-    #expect(fixture.selectedNames == ["untitled folder"])
+    #expect(await fixture.settledSelectedNames() == ["untitled folder"])
     #expect(fixture.field.field.stringValue == "untitled folder")
     #expect(try fixture.editor().selectedRange == NSRange(location: 0, length: 15))
 }
@@ -540,7 +547,7 @@ func eachRenameStartsWithNothingToUndo(closingByReturn: Bool) async throws {
     await settle { fixture.pane.state.listing?.row(named: "untitled folder") != nil }
     try await Task.sleep(for: .milliseconds(100))
     #expect(!fixture.field.isShown)
-    #expect(fixture.selectedNames == ["song.flac"])
+    #expect(await fixture.settledSelectedNames() == ["song.flac"])
 }
 
 @MainActor @Test func renameWorksInTheFocusedColumn() async throws {
