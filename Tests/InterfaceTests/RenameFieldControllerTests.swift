@@ -713,7 +713,7 @@ private func showColumns(_ fixture: Fixture) async throws -> ListingViewControll
     let fixture = try await Fixture("song.flac", monitors: false)
     defer { fixture.stop() }
     let clock = ManualClock()
-    fixture.field.startWait = RenameFieldController.waiter(on: clock)
+    fixture.field.startWait = DeadlineWait.make(on: clock)
     await fixture.select("song.flac")
     try fixture.press(returnKey)
     try fixture.type("tune")
@@ -758,7 +758,7 @@ private final class FirstListingOnly: Lister, @unchecked Sendable {
         lister.release()
     }
     let clock = ManualClock()
-    fixture.field.startWait = RenameFieldController.waiter(on: clock)
+    fixture.field.startWait = DeadlineWait.make(on: clock)
     await fixture.select("song.flac")
     try fixture.press(returnKey)
     try fixture.type("tune")
@@ -970,7 +970,7 @@ extension Fixture {
 @MainActor @Test func returnWhileTheRenameWaitsForItsRowStartsNoSecondRename() async throws {
     let fixture = try await Fixture("song.flac", monitors: false)
     defer { fixture.stop() }
-    fixture.field.startWait = RenameFieldController.waiter(on: ManualClock())
+    fixture.field.startWait = DeadlineWait.make(on: ManualClock())
     await fixture.select("song.flac")
     try fixture.press(returnKey)
     try fixture.type("tune")
@@ -993,7 +993,7 @@ extension Fixture {
 /// shows the new name over the old row.
 @MainActor
 private func renameAndWait(_ fixture: Fixture) async throws {
-    fixture.field.startWait = RenameFieldController.waiter(on: ManualClock())
+    fixture.field.startWait = DeadlineWait.make(on: ManualClock())
     await fixture.select("song.flac")
     try fixture.press(returnKey)
     try fixture.type("tune")

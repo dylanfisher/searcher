@@ -1,4 +1,5 @@
 import AppKit
+import Base
 import Browser
 
 /// Finder's spring-loaded folders for one pane's lists: a drag that hovers over a folder row for
@@ -40,7 +41,7 @@ final class SpringLoader {
     /// Whether the mouse button is down, as a drag holds it.
     private let isMouseDown: @MainActor () -> Bool
     /// Starts a wait of the given length on the clock, taking the deadline at once.
-    private let startWait: @MainActor (Duration) -> @Sendable () async throws -> Void
+    private let startWait: DeadlineWait.Start
 
     /// `delay` reads the system setting, through `Settings.springLoadingDelay`. Tests pass a
     /// clock they advance and a mouse they press.
@@ -51,10 +52,7 @@ final class SpringLoader {
     ) {
         self.delay = delay
         self.isMouseDown = isMouseDown
-        startWait = { duration in
-            let deadline = clock.now.advanced(by: duration)
-            return { try await clock.sleep(until: deadline, tolerance: nil) }
-        }
+        startWait = DeadlineWait.make(on: clock)
     }
 
     /// What AppKit's spring loading may do over the row the drag is over: activate on Space or a
@@ -76,13 +74,7 @@ final class SpringLoader {
         guard let target, let delay = delay() else { return }
         let sleep = startWait(delay)
         wait = Task { [weak self] in
-            do {
-                try await sleep()
-            } catch is CancellationError {
-                return
-            } catch {
-                preconditionFailure("the clock failed a wait with \(error)")
-            }
+            guard await DeadlineWait.reached(sleep) else { return }
             guard let self, !Task.isCancelled, self.target == target else { return }
             spring(target)
         }
@@ -136,13 +128,7 @@ final class SpringLoader {
         let startWait = startWait
         mouseCheck = Task { [weak self] in
             while !Task.isCancelled, self?.endIfMouseIsUp() == false {
-                do {
-                    try await startWait(Self.mouseCheckInterval)()
-                } catch is CancellationError {
-                    return
-                } catch {
-                    preconditionFailure("the clock failed a wait with \(error)")
-                }
+                guard await DeadlineWait.reached(startWait(Self.mouseCheckInterval)) else { return }
             }
         }
     }

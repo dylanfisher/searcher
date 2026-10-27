@@ -37,7 +37,7 @@ public actor WorkspaceStore {
     private let folderHistoryFile: URL
     private let report: @Sendable (StoreProblem) -> Void
     /// Starts a wait of the given length on the store's clock, taking the deadline at once.
-    private let startWait: @Sendable (Duration) -> @Sendable () async throws -> Void
+    private let startWait: DeadlineWait.Start
     private let write: @Sendable (Data, URL) throws -> Void
     /// Workspaces not yet written, by ID.
     private var pending: [UUID: WorkspaceState] = [:]
@@ -64,10 +64,7 @@ public actor WorkspaceStore {
         sessionFile = roots.applicationSupport.appending(path: "session.json")
         folderHistoryFile = roots.applicationSupport.appending(path: "folder-history.json")
         self.report = report
-        startWait = { duration in
-            let deadline = clock.now.advanced(by: duration)
-            return { try await clock.sleep(until: deadline, tolerance: nil) }
-        }
+        startWait = DeadlineWait.make(on: clock)
         self.write = write
     }
 
@@ -124,13 +121,7 @@ public actor WorkspaceStore {
         guard scheduledWrite == nil else { return }
         let wait = startWait(Self.writeDelay)
         scheduledWrite = Task {
-            do {
-                try await wait()
-            } catch is CancellationError {
-                return
-            } catch {
-                preconditionFailure("the clock failed a wait with \(error)")
-            }
+            guard await DeadlineWait.reached(wait) else { return }
             // A flush between the wait's end and this point cancelled it; both run on the actor.
             guard !Task.isCancelled else { return }
             flush()

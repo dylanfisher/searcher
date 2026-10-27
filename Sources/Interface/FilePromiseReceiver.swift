@@ -129,13 +129,8 @@ enum FilePromiseReceiver {
         Task {
             var bytes: Int64 = 0
             while true {
-                do {
-                    try await clock.sleep(for: progressInterval)
-                } catch is CancellationError {
-                    return
-                } catch {
-                    preconditionFailure("the clock failed a wait with \(error)")
-                }
+                guard await DeadlineWait.reached({ try await clock.sleep(for: progressInterval) })
+                else { return }
                 let now: Int64
                 do throws(FileOperationError) {
                     now = try await queue.bytes(in: dropFolder)
