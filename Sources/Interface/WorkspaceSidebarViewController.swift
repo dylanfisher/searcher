@@ -159,12 +159,18 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
             }
         }
 
+        /// The eject glyph's scale of the row's symbol size. Finder's eject glyph is about four
+        /// fifths of a symbol at the row's size, which the small scale draws: 9.5 points wide
+        /// in a medium row, where the row's 13-point symbol is 12.
+        static let ejectScale = NSImage.SymbolConfiguration(scale: .small)
+
         // AppKit gives the icon its symbols' size as it lays the cell out; the eject glyph
-        // takes the same size.
+        // takes that size at `ejectScale`.
         override func layout() {
             super.layout()
-            if ejectButton.symbolConfiguration != imageView?.symbolConfiguration {
-                ejectButton.symbolConfiguration = imageView?.symbolConfiguration
+            let eject = imageView?.symbolConfiguration?.applying(Self.ejectScale)
+            if ejectButton.symbolConfiguration != eject {
+                ejectButton.symbolConfiguration = eject
             }
         }
 

@@ -699,7 +699,8 @@ private func hasHue(_ color: NSColor, of accent: NSColor) -> Bool {
 }
 
 /// As Finder's, Finder's glyphs take the size drawn for the system's sidebar icon size, which
-/// gives the rows their size, and the eject glyph the size AppKit gives a sidebar's symbols.
+/// gives the rows their size, and the eject glyph the small scale of the size AppKit gives a
+/// sidebar's symbols: Finder's is about four fifths of a symbol at the row's size.
 @MainActor @Test func glyphsFollowTheSidebarIconSize() async throws {
     let fixture = try Fixture()
     await fixture.mount([usb])
@@ -720,7 +721,8 @@ private func hasHue(_ color: NSColor, of accent: NSColor) -> Bool {
         }
         let volume = try #require(fixture.volumeCells.first)
         let symbolSize = try #require(volume.imageView?.symbolConfiguration)
-        #expect(volume.ejectButton.symbolConfiguration == symbolSize, "\(style)")
+        let eject = try #require(volume.ejectButton.symbolConfiguration)
+        #expect(eject == symbolSize.applying(.init(scale: .small)), "\(style)")
     }
 }
 
