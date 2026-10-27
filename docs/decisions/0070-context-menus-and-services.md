@@ -45,8 +45,8 @@ or how a setting changes the keys of a registry that was built once.
   command's own chords, so the menus still show Cmd-Shift-C and the rest, and F5 and F6 run the
   same commands, which ask first. `PaneViewController` keeps the two registries and gives each
   table the one the setting asks for, again after every settings change.
-- **Setting.** `Settings.commanderFKeys`, off by default. `Settings.commanderFKeysHelp` is the text
-  the Settings window (M5b.8) shows: F-keys need Fn unless the system's standard function keys
+- **Setting.** `Settings.commanderFKeys`, off by default. When the Settings window gets a
+  checkbox for it, its help says F-keys need Fn unless the system's standard function keys
   setting is on. Until then it is set with
   `defaults write com.dylanfisher.searcher commanderFKeys -bool true`.
 

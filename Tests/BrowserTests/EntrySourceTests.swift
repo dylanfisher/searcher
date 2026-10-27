@@ -105,6 +105,23 @@ private struct Fixture {
     #expect(handedOver == [Palette.limit])
 }
 
+/// A source cancelled before its items are prepared keeps the first rows it made, rather than
+/// the nothing the cancelled preparation returns.
+@MainActor @Test func aCancelledSourceKeepsItsFirstRows() async throws {
+    let fixture = PaneFixture(
+        at: "/root", folders: ["/root": (0..<500).map { file(String(format: "f%03d", $0)) }])
+    await settle { fixture.pane.state.isLoaded }
+    let source = EntrySource(pane: fixture.pane)
+
+    source.cancel()
+    await source.handOver?.value
+
+    #expect(source.handOver?.isCancelled == true)
+    var handedOver: [Int] = []
+    source.gather("") { handedOver.append($0.count) }
+    #expect(handedOver == [Palette.limit])
+}
+
 @MainActor @Test func choosingAFolderSelectsItAloneWithoutOpeningIt() async throws {
     let fixture = await Fixture()
     await fixture.search("docs")

@@ -11,6 +11,17 @@ enum Dialog {
     /// The title of the button that backs out. NSAlert gives a button with this title Esc.
     static let cancel = "Cancel"
 
+    /// The color of text saying why something failed or can't be done.
+    static let errorColor: NSColor = .systemRed
+
+    /// A wrapping label in `errorColor`, for the line under a field saying why what was typed
+    /// can't be used.
+    static func errorLabel() -> NSTextField {
+        let label = NSTextField(wrappingLabelWithString: "")
+        label.textColor = errorColor
+        return label
+    }
+
     /// An alert saying `message`, with `information` under it, and a button for each of
     /// `buttons`. The first is the default: rightmost, or on top when the alert stacks its
     /// buttons, and Return presses it. `firstIsDestructive` marks it as one that loses data.

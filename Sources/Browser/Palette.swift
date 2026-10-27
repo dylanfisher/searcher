@@ -51,7 +51,7 @@ public final class Palette {
     /// The ranking whose results `results` holds.
     private var rankedRequest = 0
 
-    /// The latest ranking, cancelled when a later one replaces it.
+    /// The latest ranking, cancelled when a later one replaces it or the palette closes.
     private(set) var ranking: Task<[Result], Never>?
 
     /// Whether a ranking is still running. Tests wait on it.
@@ -90,11 +90,13 @@ public final class Palette {
         result.item.action()
     }
 
-    /// Stops the sources' work, as the palette closes.
+    /// Stops the sources' work and the ranking, as the palette closes. `results` stay as they
+    /// are.
     public func close() {
         for source in sources {
             source.cancel()
         }
+        ranking?.cancel()
     }
 
     private func rank() {
@@ -112,6 +114,8 @@ public final class Palette {
             let results = await ranking.value
             guard let self, request == rankRequest else { return }
             rankedRequest = request
+            // Only `close` cancels the latest ranking.
+            guard !ranking.isCancelled else { return }
             self.results = results
             onChange?()
         }

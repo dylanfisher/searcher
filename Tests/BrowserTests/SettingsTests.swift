@@ -274,17 +274,6 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(cleared.newWindowFrame == nil)
 }
 
-@MainActor @Test func theRetiredNewWindowSizeKeyIsRemoved() throws {
-    let folder = try TemporaryFolder("SettingsTests")
-    let defaults = temporarySuite(in: folder.url.path)
-    defaults.set([800, 600], forKey: "newWindowSize")
-
-    let settings = Settings(defaults: defaults)
-
-    #expect(defaults.object(forKey: "newWindowSize") == nil)
-    #expect(settings.newWindowFrame == nil)
-}
-
 @MainActor @Test func aNewWindowFrameOfAnotherShapeIsDiscarded() throws {
     let folder = try TemporaryFolder("SettingsTests")
     let key = Settings.Key.newWindowFrame.rawValue
@@ -365,14 +354,6 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(delay(enabled: true, delay: true) == .milliseconds(500))
     #expect(delay(enabled: true, delay: -1) == .milliseconds(500))
     #expect(delay(enabled: "NO", delay: 1.25) == .milliseconds(1250))
-}
-
-@MainActor @Test func theCommanderPresetsHelpSaysTheFKeysNeedFn() {
-    #expect(Settings.commanderFKeysHelp.contains("Fn"))
-}
-
-@MainActor @Test func theEmptyPanelsHelpNamesTheMenuItemThatStillShowsIt() {
-    #expect(Settings.hideEmptyOperationsPanelHelp.contains("Window ▸ Operations"))
 }
 
 // MARK: Shortcuts
@@ -490,6 +471,20 @@ private let showPalette = WindowCommands.showPalette.id
     let relaunched = Settings(defaults: try #require(UserDefaults(suiteName: name)))
 
     #expect(relaunched.shortcuts == shortcuts)
+}
+
+/// Every pane observes the settings; one closed leaves no entry behind once another observes.
+@MainActor @Test func observingSettingsDropsTheObserversWhoseOwnerIsGone() {
+    let settings = untouchedSettings()
+    do {
+        let gone = NSObject()
+        settings.observe(for: gone) {}
+    }
+    let kept = NSObject()
+
+    settings.observe(for: kept) {}
+
+    #expect(settings.observerCount == 1)
 }
 
 @MainActor @Test func changingShortcutsNotifiesObservers() {

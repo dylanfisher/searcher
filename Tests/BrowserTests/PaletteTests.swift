@@ -391,6 +391,23 @@ private final class HeldSource: PaletteSource {
     await settle { !fixture.palette.isRanking }
 }
 
+@MainActor @Test func closingThePaletteCancelsItsRankingAndKeepsItsResults() async throws {
+    let fixture = try PaletteFixture()
+    await fixture.search("a")
+    let titles = fixture.titles
+    var changes = 0
+    fixture.palette.onChange = { changes += 1 }
+
+    fixture.palette.setQuery("ab")
+    let ranking = fixture.palette.ranking
+    fixture.palette.close()
+    await settle { !fixture.palette.isRanking }
+
+    #expect(ranking?.isCancelled == true)
+    #expect(fixture.titles == titles)
+    #expect(changes == 0)
+}
+
 @Test func aCancelledRankingStopsBetweenBuckets() {
     let items = [
         PaletteItem(id: .workspace(UUID()), title: "abc") {},

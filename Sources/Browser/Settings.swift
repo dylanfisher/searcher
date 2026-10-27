@@ -93,17 +93,6 @@ public final class Settings {
         frame.origin.x.isFinite && frame.origin.y.isFinite && isWindowSize(frame.size)
     }
 
-    /// What the Settings window says about `commanderFKeys`.
-    public static let commanderFKeysHelp =
-        "F5 copies and F6 moves the selection to the other pane, F7 makes a new folder and F8 "
-        + "moves the selection to the Trash. Hold Fn with them unless “Use F1, F2, etc. keys as "
-        + "standard function keys” is on in System Settings ▸ Keyboard."
-
-    /// What the Settings window says about `hideEmptyOperationsPanel`.
-    public static let hideEmptyOperationsPanelHelp =
-        "The operations panel shows when an operation runs past a second and hides when the last "
-        + "one finishes. Window ▸ Operations still shows and hides it."
-
     /// Whether panes list hidden entries: names starting with a dot, and entries with the hidden
     /// flag (`chflags hidden`). Off by default.
     public var showHidden: Bool {
@@ -296,13 +285,11 @@ public final class Settings {
     /// default, on and 0.5 s; it isn't removed, since the key isn't the app's.
     public var springLoadingDelay: Duration? {
         let enabled = defaults.object(forKey: Self.springLoadingEnabledKey)
-        if let enabled = enabled as? NSNumber, CFGetTypeID(enabled) == CFBooleanGetTypeID(),
-            !enabled.boolValue
-        {
+        if let enabled = enabled as? NSNumber, Self.isBoolean(enabled), !enabled.boolValue {
             return nil
         }
         let delay = defaults.object(forKey: Self.springLoadingDelayKey)
-        guard let delay = delay as? NSNumber, CFGetTypeID(delay) != CFBooleanGetTypeID(),
+        guard let delay = delay as? NSNumber, !Self.isBoolean(delay),
             delay.doubleValue >= 0, delay.doubleValue.isFinite
         else { return Self.defaultSpringLoadingDelay }
         return .seconds(delay.doubleValue)
@@ -343,14 +330,16 @@ public final class Settings {
         showsLocationsInSidebar = Self.bool(.showsLocationsInSidebar, in: defaults) ?? true
         showsWorkspacesInSidebar = Self.bool(.showsWorkspacesInSidebar, in: defaults) ?? true
         shortcuts = Self.shortcuts(in: defaults)
-        // The key `newWindowFrame` replaced (0057-windows-and-tear-out.md).
-        defaults.removeObject(forKey: "newWindowSize")
     }
 
     /// Runs `handler` after each change of a setting, for as long as `owner` exists.
     public func observe(for owner: AnyObject, _ handler: @escaping @MainActor () -> Void) {
+        observers.removeAll { $0.owner == nil }
         observers.append(Observer(owner: owner, handler: handler))
     }
+
+    /// How many observers are kept, those whose owner is gone among them. Tests read it.
+    var observerCount: Int { observers.count }
 
     private func store(_ value: Any, for key: Key, changed: Bool) {
         guard changed else { return }
@@ -365,12 +354,17 @@ public final class Settings {
         }
     }
 
+    /// Whether `number` is a Boolean. A Boolean reads back as an NSNumber, as integers do; only
+    /// CFBoolean is one.
+    private static func isBoolean(_ number: NSNumber) -> Bool {
+        CFGetTypeID(number) == CFBooleanGetTypeID()
+    }
+
     /// The Boolean stored under `key`; nil when there is none or it has another type, which is
     /// removed.
     private static func bool(_ key: Key, in defaults: UserDefaults) -> Bool? {
         guard let value = defaults.object(forKey: key.rawValue) else { return nil }
-        // A Boolean reads back as an NSNumber, as integers do; only CFBoolean is one.
-        if let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() {
+        if let number = value as? NSNumber, isBoolean(number) {
             return number.boolValue
         }
         defaults.removeObject(forKey: key.rawValue)
@@ -383,9 +377,7 @@ public final class Settings {
         _ key: Key, in defaults: UserDefaults, where isValid: (Double) -> Bool
     ) -> Double? {
         guard let value = defaults.object(forKey: key.rawValue) else { return nil }
-        if let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
-            isValid(number.doubleValue)
-        {
+        if let number = value as? NSNumber, !isBoolean(number), isValid(number.doubleValue) {
             return number.doubleValue
         }
         defaults.removeObject(forKey: key.rawValue)
@@ -409,8 +401,8 @@ public final class Settings {
         let key = Key.palettePlace.rawValue
         guard let value = defaults.object(forKey: key) else { return nil }
         if let shares = value as? [Any], shares.count == 2,
-            let x = shares[0] as? NSNumber, CFGetTypeID(x) != CFBooleanGetTypeID(),
-            let y = shares[1] as? NSNumber, CFGetTypeID(y) != CFBooleanGetTypeID(),
+            let x = shares[0] as? NSNumber, !isBoolean(x),
+            let y = shares[1] as? NSNumber, !isBoolean(y),
             let place = PalettePlace(x: x.doubleValue, y: y.doubleValue)
         {
             return place
@@ -426,8 +418,7 @@ public final class Settings {
         guard let value = defaults.object(forKey: key) else { return nil }
         if let sides = value as? [Any], sides.count == 4 {
             let numbers = sides.compactMap { side -> Double? in
-                guard let number = side as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID()
-                else { return nil }
+                guard let number = side as? NSNumber, !isBoolean(number) else { return nil }
                 return number.doubleValue
             }
             if numbers.count == 4,
