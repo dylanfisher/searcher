@@ -27,6 +27,14 @@ segment ([0026](0026-path-bar.md)); nothing else in the app had a hover look.
   so the fill has room around a symbol. The operations panel's row buttons use it.
 - **A row or segment that acts on a click**, such as a path bar segment, takes the same hover
   fill.
+- **The path bar's segments** (amended 2026-10-27, AU.9) take `HoverButton`'s fills and shape:
+  the bar draws the pressed fill behind a segment while the button is down on it, and the hover
+  fill again once it is up with the mouse still there. A segment with the keys rings the same
+  rounded shape its fill takes. Segments join the key loop only as every button does, with
+  keyboard navigation on in System Settings: Finder's path bar segments aren't in the loop
+  without it, so they take no focus of their own. No segment is disabled: each is a folder
+  above the pane's, which a click opens, or the pane's own, which a Cmd-click opens in a new
+  tab, so the bar has no disabled look.
 - **The sidebar's eject button darkens its glyph instead.** (Amended 2026-10-26, Dylan: "eject
   icon should hover darker color".) Finder's sidebar eject button has no fill: its glyph is
   light at rest and darker under the mouse. `HoverButton`'s `.glyph` look draws that: the

@@ -2426,6 +2426,43 @@ extension PressFixture {
     }
 }
 
+/// A path bar segment held down with a real press draws the pressed fill behind it, and the
+/// hover fill again once the button is up with the mouse still over it
+/// (docs/decisions/0110-interaction-states.md).
+@MainActor @Test func aHeldPathBarSegmentShowsThePressedFillUntilTheMouseUp() async throws {
+    let press = try await PressFixture()
+    press.show()
+    defer { press.fixture.window.orderOut(nil) }
+    let window = press.fixture.window
+    let bar = try press.fixture.paneController(press.fixture.tab.layout.focused).pathBar
+    let segment = try #require(bar.segments.last)
+    let point = bar.convert(NSPoint(x: segment.frame.midX, y: segment.frame.midY), to: nil)
+    let content = try #require(window.contentView)
+    #expect(content.hitTest(try #require(content.superview).convert(point, from: nil)) === segment)
+    func event(_ type: NSEvent.EventType) throws -> NSEvent {
+        try #require(
+            NSEvent.mouseEvent(
+                with: type, location: point, modifierFlags: [], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                clickCount: type == .mouseMoved ? 0 : 1, pressure: 1))
+    }
+    #expect(bar.highlightFill == nil)
+    bar.mouseMoved(with: try event(.mouseMoved))
+    #expect(bar.highlightFill == HoverButton.hoverFill)
+    nonisolated(unsafe) let down = try event(.leftMouseDown)
+    nonisolated(unsafe) var held: (fill: NSColor?, frame: NSRect?)?
+
+    try performRealPress(
+        releasedBy: try event(.leftMouseUp), pressesButton: true,
+        whileDown: { held = (bar.highlightFill, bar.highlightFrame) }
+    ) { segment.mouseDown(with: down) }
+
+    let shot = try #require(held)
+    #expect(shot.fill == HoverButton.pressedFill)
+    #expect(shot.frame == segment.frame.insetBy(dx: 0, dy: -2))
+    #expect(bar.highlightFill == HoverButton.hoverFill)
+}
+
 /// A regression guard: a list's table already took this press, and must keep taking it.
 @MainActor @Test func aPressBelowTheRowsOfAListFocusesItsPane() async throws {
     let press = try await PressFixture()

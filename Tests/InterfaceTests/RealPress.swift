@@ -81,9 +81,13 @@ extension ListingTableView {
 /// in the field's selection, and an up with a zero timestamp hangs the press, whatever the
 /// down's stamp is. Stamps of 0/0 and now/0 (down/up) hung; now/now, now/now-0.05 and
 /// now/now+0.05 passed (0090-preview-column.md).
+/// A press on a button, `pressesButton`, keeps its up too. With `whileDown`, the up is queued
+/// only after `whileDown` has run inside the press's tracking loop, so it reads the view while
+/// the button is held.
 @MainActor
 func performRealPress(
-    releasedBy up: NSEvent, selectsText: Bool = false, _ press: @escaping @MainActor () -> Void
+    releasedBy up: NSEvent, selectsText: Bool = false, pressesButton: Bool = false,
+    whileDown: (@MainActor () -> Void)? = nil, _ press: @escaping @MainActor () -> Void
 ) throws {
     nonisolated(unsafe) let up = up
     // Once events are pulled with `NSApp.nextEvent`, HIToolbox queues blocks that stop the
@@ -94,7 +98,19 @@ func performRealPress(
     nonisolated(unsafe) var pressed = false
     CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
         MainActor.assumeIsolated {
-            NSApp.postEvent(up, atStart: false)
+            if let whileDown {
+                // Queued from inside this block, so the tracking loop's run loop runs it: the
+                // run loop doesn't run a block queued in the pass it is running.
+                CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
+                    MainActor.assumeIsolated {
+                        whileDown()
+                        NSApp.postEvent(up, atStart: false)
+                    }
+                }
+                CFRunLoopWakeUp(CFRunLoopGetMain())
+            } else {
+                NSApp.postEvent(up, atStart: false)
+            }
             press()
             pressed = true
         }
@@ -103,12 +119,12 @@ func performRealPress(
         CFRunLoopRunInMode(.defaultMode, 0, true)
     }
     // The tracking loop put back the mouse up it took, and the press is over, so it is in
-    // the queue now, unless text selection took it. Take it and anything else the press
+    // the queue now, unless text selection or a button took it. Take it and anything else the press
     // posted, so the next press starts with an empty queue.
     let reposted = NSApp.nextEvent(
         matching: .leftMouseUp, until: .distantPast, inMode: .default, dequeue: true)
-    if selectsText {
-        try #require(reposted == nil, "the text selection left its mouse up in the queue")
+    if selectsText || pressesButton {
+        try #require(reposted == nil, "the press left its mouse up in the queue")
     } else {
         try #require(reposted != nil, "the press left no mouse up in the queue")
     }
