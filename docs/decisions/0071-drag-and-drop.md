@@ -50,9 +50,11 @@ to a folder the receiver names. Cut and paste already read and write Finder's pa
   `FilePromiseReceiver` asks the queue for a hidden `.searcher-drop-<UUID>` folder in the target
   folder, calls the promises in to it (readers on an `OperationQueue`, off the main thread), and
   once every promised file has arrived or failed, moves the ones that arrived into the target as
-  one queued move. Promises always copy. A file the source reports outside that folder, or
-  through a `..`, is not moved: it is logged and fails as a promised file that didn't arrive
-  (AU.7).
+  one queued move. Promises always copy. A file the source reports outside that folder is not
+  moved: it is logged and fails as a promised file that didn't arrive (AU.7). The check
+  resolves links in the drop folder and in the file's folder, off the main thread, since a
+  source may report `/private/var/…` for a folder made at `/var/…`; the file itself isn't
+  followed.
 - **A source that stops answering.** Every `FilePromiseReceiver.progressInterval`, 5 s, the
   receiver has the queue read how many bytes the drop folder holds, off the main thread. Once
   `idleTimeout`, 60 s, passes with no new bytes and no file arriving, the files still promised

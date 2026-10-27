@@ -463,6 +463,8 @@ private final class StubPromise: FilePromiseReceiver.Promise, @unchecked Sendabl
         case writes, fails, hangs
         /// Reports the file at this URL, or at `name` in the drop folder when nil.
         case reports(URL?)
+        /// Writes the file and reports the URL the closure makes of where it wrote it.
+        case writesReporting(@Sendable (URL) -> URL)
     }
 
     let name: String
@@ -491,6 +493,15 @@ private final class StubPromise: FilePromiseReceiver.Promise, @unchecked Sendabl
                 do {
                     try Data("promised".utf8).write(to: url)
                     reader(url, nil)
+                } catch {
+                    reader(url, error)
+                }
+            }
+        case .writesReporting(let reported):
+            DispatchQueue.global().async {
+                do {
+                    try Data("promised".utf8).write(to: url)
+                    reader(reported(url), nil)
                 } catch {
                     reader(url, error)
                 }
@@ -553,6 +564,31 @@ extension Fixture {
         state.errors == [
             FileOperationError(errno: EIO, path: fixture.folder.appending(path: "lost.jpg").path)
         ])
+}
+
+/// The target folder reached through a symlink, as `/var` reaches `/private/var`, and the source
+/// reporting the file by its resolved path.
+@MainActor @Test func aPromisedFileReportedByItsResolvedPathLands() async throws {
+    let fixture = try await Fixture()
+    defer { fixture.stop() }
+    let link = fixture.root.url.appending(path: "link")
+    try FileManager.default.createSymbolicLink(
+        atPath: link.path, withDestinationPath: fixture.folder.path)
+    let (linkPath, folderPath) = (link.path, fixture.folder.path)
+
+    await FilePromiseReceiver.receive(
+        [
+            StubPromise(
+                "photo.jpg",
+                .writesReporting { url in
+                    URL(
+                        fileURLWithPath: folderPath + url.path.dropFirst(linkPath.count),
+                        isDirectory: false)
+                })
+        ], into: link.path, from: "Photos", selectingIn: nil, queue: fixture.queue)
+
+    #expect(try fixture.contents(of: fixture.folder) == ["a.txt", "sub", "photo.jpg"])
+    #expect(fixture.reportedFailures.isEmpty)
 }
 
 @MainActor @Test func aPromisedFileReportedOutsideTheDropFolderIsLeftWhereItIs() async throws {
