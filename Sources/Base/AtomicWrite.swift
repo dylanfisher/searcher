@@ -2,6 +2,8 @@ import Foundation
 
 /// Replaces a file in one step: the data goes to a temporary file beside it, which is renamed over
 /// the old one, so a reader sees either the previous file or the new one, never a partial write.
+/// The temporary file is synced to the disk before the rename, so a power loss after the rename
+/// can't leave an empty file in place of the old one.
 public enum AtomicWrite {
     /// Writes `data` to `url`. `beforeRename` runs between the write and the rename; tests use it
     /// to interrupt a write. If anything throws, the temporary file is removed and `url` is left
@@ -9,12 +11,28 @@ public enum AtomicWrite {
     public static func write(
         _ data: Data, to url: URL, beforeRename: () throws -> Void = {}
     ) throws {
+        try write(data, to: url, synchronize: { try $0.synchronize() }, beforeRename: beforeRename)
+    }
+
+    /// `write(_:to:beforeRename:)`, syncing the temporary file's open handle with `synchronize`;
+    /// tests pass one that records the call or fails.
+    static func write(
+        _ data: Data, to url: URL, synchronize: (FileHandle) throws -> Void,
+        beforeRename: () throws -> Void
+    ) throws {
         preconditionOffMain("AtomicWrite")
         // In the same folder, so the rename stays on one volume and can't turn into a copy.
         let partial = url.deletingLastPathComponent()
             .appending(path: ".\(url.lastPathComponent)\(partialMarker)\(UUID().uuidString)")
         do {
             try data.write(to: partial, options: .withoutOverwriting)
+            // fsync hands the data to the drive before the rename is made, so the rename can't
+            // reach the disk ahead of it. F_FULLFSYNC, which also empties the drive's own cache,
+            // was left out for its cost (0078-workspace-store.md).
+            let handle = try FileHandle(forWritingTo: partial)
+            let synced = Result { try synchronize(handle) }
+            try handle.close()
+            try synced.get()
             try beforeRename()
             guard rename(partial.path, url.path) == 0 else {
                 throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
