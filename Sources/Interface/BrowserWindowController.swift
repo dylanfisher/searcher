@@ -54,24 +54,24 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// opens, whose palette lists no visited folder.
     let folderVisits: FolderVisits?
     /// The palette while it shows over the window.
-    public private(set) var palette: PaletteWindowController?
+    public internal(set) var palette: PaletteWindowController?
     /// The operations panel under the panes, hidden until shown.
     let operations: OperationsViewController
     /// Ends the panes at the panel while it shows, and at the window's bottom while it doesn't.
-    private let panesOverOperations: NSLayoutConstraint
-    private let panesToBottom: NSLayoutConstraint
-    private let settings: Settings
+    let panesOverOperations: NSLayoutConstraint
+    let panesToBottom: NSLayoutConstraint
+    let settings: Settings
     /// `settings.hideEmptyOperationsPanel` as last seen, so another setting's change leaves the
     /// panel alone.
-    private var hidesEmptyOperations: Bool
+    var hidesEmptyOperations: Bool
     /// Whether the user opened the panel with Operations; only one that showed itself hides
     /// when it empties.
-    private var userOpenedOperations = false
+    var userOpenedOperations = false
     /// Each open tab's views, shown or not.
     private var tabViews: [TabID: TabViews] = [:]
     /// Set once the workspace closed with its last tab or the window closed; the window shows
     /// nothing after that.
-    private var isClosed = false
+    private(set) var isClosed = false
     /// Whether the window is main, as its delegate last heard: kept here rather than read from
     /// `isMainWindow`, which a test's window, never shown, can't become.
     private var isMain = false
@@ -88,6 +88,23 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     let sidebarItem: NSSplitViewItem
     /// Watches the split view's resizes, by which a drag of the divider collapses the sidebar.
     private var sidebarResizeObserver: (any NSObjectProtocol)?
+    /// Whether the sidebar is collapsing (true) or opening (false) in an animation a command
+    /// started, until the animation ends; nil otherwise. The split view resizes all through it,
+    /// with `isCollapsed` read at any point of the way, so those resizes say nothing about a
+    /// drag of the divider.
+    var sidebarTarget: Bool?
+    /// Runs `change` in an animation and `completion` once it ends. Tests replace it to step
+    /// through an animation.
+    var animateSidebar:
+        @MainActor (
+            _ change: @escaping @MainActor () -> Void, _ completion: @escaping @MainActor () -> Void
+        ) -> Void = { change, completion in
+            NSAnimationContext.runAnimationGroup { _ in
+                MainActor.assumeIsolated { change() }
+            } completionHandler: {
+                MainActor.assumeIsolated { completion() }
+            }
+        }
 
     /// A tab's layout view and a view controller for each of its panes.
     private final class TabViews {
@@ -147,17 +164,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             preconditionFailure("this window can't open saved workspace \(id)")
         }
     ) {
-        // The window has its own tab strip; AppKit's tabs would add a second kind of tab and
-        // their items in the Window menu.
-        NSWindow.allowsAutomaticWindowTabbing = false
-        let window = BrowserWindow(
-            contentRect: NSRect(origin: .zero, size: settings.newWindowSize),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-        window.tabbingMode = .disallowed
-        window.isReleasedWhenClosed = false
+        let window = Self.makeWindow(size: settings.newWindowSize)
         self.workspace = workspace
         self.workspaces = workspaces
         self.takePaneController = takePaneController
@@ -185,6 +192,39 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         sidebar.open = openSavedWorkspace
         sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
         super.init(window: window)
+        let splitView = layOut(content, in: window)
+        wireSidebar(favorites: favorites, splitView: splitView)
+        wireCallbacks(window: window)
+        window.delegate = self
+        showWorkspace()
+        window.initialFirstResponder = paneViewController.keyView
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("BrowserWindowController is built in code")
+    }
+
+    /// A window for `init` to fill, `size` big.
+    private static func makeWindow(size: NSSize) -> BrowserWindow {
+        // The window has its own tab strip; AppKit's tabs would add a second kind of tab and
+        // their items in the Window menu.
+        NSWindow.allowsAutomaticWindowTabbing = false
+        let window = BrowserWindow(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.tabbingMode = .disallowed
+        window.isReleasedWhenClosed = false
+        return window
+    }
+
+    /// Puts the tab strip, the tab host and the operations panel in `content`, and `content`
+    /// right of the sidebar in `window`, sized as `settings` says for a new window and centered.
+    /// Returns the split view between the sidebar and `content`.
+    private func layOut(_ content: NSView, in window: BrowserWindow) -> NSSplitView {
         for view in [tabStrip.view, tabHost, operations.view] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
@@ -211,6 +251,12 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         // Setting the content view controller sizes the window to it.
         window.setContentSize(settings.newWindowSize)
         window.center()
+        return split.splitView
+    }
+
+    /// Gives the sidebar what it runs: Esc, a favorite opened from `favorites`, a location, the
+    /// keys it passes to the focused pane's table, and the resizes of `splitView`.
+    private func wireSidebar(favorites: Favorites, splitView: NSSplitView) {
         sidebar.onEscape = { [weak self] in self?.giveKeysBack() }
         sidebar.openFavorite = { [weak self] path in
             favorites.open(path) { [weak self] in
@@ -235,11 +281,16 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             return true
         }
         sidebarResizeObserver = NotificationCenter.default.addObserver(
-            forName: NSSplitView.didResizeSubviewsNotification, object: split.splitView,
+            forName: NSSplitView.didResizeSubviewsNotification, object: splitView,
             queue: nil
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.sidebarDidResize() }
         }
+    }
+
+    /// Has the operations panel, `settings`, the tab strip, the workspace, `window` and the
+    /// sidebar's list call back into the controller.
+    private func wireCallbacks(window: BrowserWindow) {
         operations.onNeedsAttention = { [weak self] in self?.operationNeedsAttention() }
         operations.onEmptied = { [weak self] in self?.hideEmptyOperations() }
         settings.observe(for: self) { [weak self] in self?.settingsChanged() }
@@ -252,14 +303,6 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         sidebar.outlineView.takeKeysFromText = { [weak self] in
             if self?.window?.firstResponder is NSText { self?.giveKeysBack() }
         }
-        window.delegate = self
-        showWorkspace()
-        window.initialFirstResponder = paneViewController.keyView
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("BrowserWindowController is built in code")
     }
 
     /// The controller's window, which `init` makes; a controller never loses it.
@@ -440,263 +483,6 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         onCommand?()
     }
 
-    // MARK: Sidebar
-
-    /// Whether the sidebar shows, or is on its way to showing.
-    var showsSidebar: Bool { !(sidebarTarget ?? sidebarItem.isCollapsed) }
-
-    /// Whether the sidebar is collapsing (true) or opening (false) in an animation a command
-    /// started, until the animation ends; nil otherwise. The split view resizes all through it,
-    /// with `isCollapsed` read at any point of the way, so those resizes say nothing about a
-    /// drag of the divider.
-    private var sidebarTarget: Bool?
-
-    /// Runs `change` in an animation and `completion` once it ends. Tests replace it to step
-    /// through an animation.
-    var animateSidebar:
-        @MainActor (
-            _ change: @escaping @MainActor () -> Void, _ completion: @escaping @MainActor () -> Void
-        ) -> Void = { change, completion in
-            NSAnimationContext.runAnimationGroup { _ in
-                MainActor.assumeIsolated { change() }
-            } completionHandler: {
-                MainActor.assumeIsolated { completion() }
-            }
-        }
-
-    /// Shows or hides the sidebar as the workspace says, animated in a window on screen. Keys in
-    /// a sidebar that hides go back to the focused pane once the window shows its workspace.
-    private func showSidebar() {
-        setSidebarCollapsed(!workspace.showsSidebar, animated: window?.isVisible == true)
-    }
-
-    /// Collapses or opens the sidebar for a command, unless it is already that way or on its way.
-    func setSidebarCollapsed(_ collapsed: Bool, animated: Bool) {
-        guard (sidebarTarget ?? sidebarItem.isCollapsed) != collapsed else { return }
-        guard animated else {
-            sidebarItem.isCollapsed = collapsed
-            return
-        }
-        sidebarTarget = collapsed
-        animateSidebar(
-            { [weak self] in self?.sidebarItem.animator().isCollapsed = collapsed },
-            { [weak self] in
-                // A later command's animation may have taken over.
-                guard let self, sidebarTarget == collapsed else { return }
-                sidebarTarget = nil
-                sidebarDidResize()
-            })
-    }
-
-    /// Shows the sidebar, which the command has the workspace show, and moves the keys into it;
-    /// with the keys in it already, gives them back to the focused pane.
-    private func focusSidebar() {
-        if let responder = window?.firstResponder as? NSView,
-            responder.isDescendant(of: sidebar.view)
-        {
-            giveKeysBack()
-            return
-        }
-        showSidebar()
-        window?.makeFirstResponder(sidebar.outlineView)
-    }
-
-    /// Gives the keys to the focused pane, as Esc in the sidebar does and as going to a saved
-    /// workspace does.
-    func giveKeysBack() {
-        guard !isClosed, !workspace.isClosed else { return }
-        window?.makeFirstResponder(paneViewController.keyView)
-    }
-
-    /// The split view resized: a drag of its divider may have collapsed or opened the sidebar,
-    /// which the workspace keeps. Resizes during a command's animation are the command's.
-    private func sidebarDidResize() {
-        guard !isClosed, !workspace.isClosed, sidebarTarget == nil,
-            workspace.showsSidebar == sidebarItem.isCollapsed
-        else { return }
-        workspace.showsSidebar = !sidebarItem.isCollapsed
-        if sidebarItem.isCollapsed {
-            moveKeys(to: paneViewController)
-        }
-    }
-
-    // MARK: Palette
-
-    /// Shows the palette over the window, with the keys in its field, unless it already shows.
-    /// It lists the saved workspaces, the visited folders and the folders open panes show, the
-    /// folders of a typed path, and the commands of the focused pane's table, a command that is
-    /// off there greyed; then `extra`'s items, which the UI bench adds. A folder opens in the
-    /// focused pane, a command runs as its key would, and a saved workspace opens or comes to
-    /// the front.
-    public func showPalette(adding extra: [any PaletteSource] = []) {
-        guard palette == nil, !isClosed, !workspace.isClosed, let window else { return }
-        let workspace = workspace
-        let focusedPane: @MainActor @Sendable () -> Pane = { workspace.selectedTab.focusedPane }
-        let visits = folderVisits
-        let history: @MainActor () -> FolderHistory = { visits?.history ?? FolderHistory() }
-        let home = settings.home
-        let sources: [any PaletteSource] = [
-            WorkspaceSource(list: workspaces) { [weak self] id in self?.sidebar.open(id) },
-            FolderSource(
-                history: history, workspaces: workspaces, focusedPane: focusedPane, home: home),
-            PathSource(
-                service: focusedPane().service, history: history, focusedPane: focusedPane,
-                home: home),
-            CommandSource(
-                registry: { [weak self] in
-                    // The window closes its palette as it closes.
-                    guard let self else { preconditionFailure("the palette outlived its window") }
-                    return focusedTable.registry
-                },
-                run: { [weak self] id in self?.runFromPalette(id) }),
-        ]
-        let controller = PaletteWindowController(
-            palette: Palette(sources: sources + extra), settings: settings)
-        controller.viewController.isEnabled = { [weak self] item in
-            guard case .command(let id) = item.id else { return true }
-            return self?.canRunFromPalette(id) ?? false
-        }
-        present(
-            controller, closedBy: WindowCommands.showPalette.id,
-            switchingTo: WindowCommands.goToItem.id, over: window)
-    }
-
-    /// Shows the palette over the window in Go to Item mode, unless a palette already shows. It
-    /// lists the rows of the focused pane, or of its focused column and the folder selected
-    /// there, as the pane shows them, and selects the chosen one there with its row in the middle
-    /// of the view (docs/decisions/0101-go-to-item.md).
-    func showItemPalette() {
-        guard palette == nil, !isClosed, !workspace.isClosed, let window else { return }
-        let source = EntrySource(pane: workspace.selectedTab.focusedPane)
-        let label = "Go to Item"
-        let controller = PaletteWindowController(
-            palette: Palette(sources: [source]), settings: settings, label: label,
-            placeholder: "\(label) in \(source.folderNames.joined(separator: " and "))")
-        present(
-            controller, closedBy: WindowCommands.goToItem.id,
-            switchingTo: WindowCommands.showPalette.id, over: window)
-    }
-
-    /// Shows `controller`'s palette over `window` with the keys in its field. Command `id`'s
-    /// chords and Close Pane's close it, those a menu could have as key equivalents: the field
-    /// types a plain one, such as "j" or Esc. Command `other`'s chords close it and show the
-    /// other palette, which gives the keys back where this one would have. As it closes, the
-    /// keys go back where they were; a chosen folder or row then gives them to the focused
-    /// pane, where it went (docs/decisions/0087-palette-window.md).
-    private func present(
-        _ controller: PaletteWindowController, closedBy id: CommandID,
-        switchingTo other: CommandID, over window: NSWindow
-    ) {
-        controller.closingChords = { [weak self] in
-            self?.menuChords(of: [id, TilingCommands.closePane.id]) ?? []
-        }
-        controller.switchingChords = { [weak self] in self?.menuChords(of: [other]) ?? [] }
-        controller.onSwitchingChord = { [weak self, weak controller] in
-            // Closing gives the keys back, so the other palette finds them where this one did.
-            controller?.close()
-            guard let self else { return }
-            if other == WindowCommands.goToItem.id {
-                showItemPalette()
-            } else {
-                showPalette()
-            }
-        }
-        controller.viewController.didRun = { [weak self] item in
-            switch item.kind {
-            case .folder, .entry: self?.giveKeysBack()
-            case .workspace, .command: break
-            }
-        }
-        // Where the keys were, to give them back there: a field's editor stands in for the field.
-        var keys = window.firstResponder
-        if let editor = keys as? NSTextView, editor.isFieldEditor,
-            let field = editor.delegate as? NSResponder
-        {
-            keys = field
-        }
-        controller.onClose = { [weak self, weak controller, weak keys] in
-            guard let self, palette === controller else { return }
-            palette = nil
-            giveKeys(backTo: keys)
-        }
-        palette = controller
-        controller.show(over: window)
-    }
-
-    /// The chords of `ids` that a menu could have as key equivalents, from the focused table's
-    /// registry, so they follow the user's shortcuts.
-    private func menuChords(of ids: [CommandID]) -> Set<KeyChord> {
-        // A closed window's workspace has no focused table to read.
-        guard !isClosed, !workspace.isClosed else { return [] }
-        let registry = focusedTable.registry
-        return Set(ids.flatMap { registry.command(for: $0).map(MainMenuBuilder.menuChords) ?? [] })
-    }
-
-    /// Gives the keys back to `responder`, which had them when the palette opened: the focused
-    /// pane's table, the sidebar or the filter field. One that has left the window or is
-    /// hidden gives them to the focused pane.
-    private func giveKeys(backTo responder: NSResponder?) {
-        guard !isClosed, !workspace.isClosed, let window else { return }
-        if let view = responder as? NSView, view.window === window,
-            !view.isHiddenOrHasHiddenAncestor, window.makeFirstResponder(view)
-        {
-            return
-        }
-        giveKeysBack()
-    }
-
-    private func canRunFromPalette(_ id: CommandID) -> Bool {
-        !isClosed && !workspace.isClosed && focusedTable.canRunCommand(id)
-    }
-
-    /// Runs a command the palette chose on the focused pane's table, as its key would, if it
-    /// can still run once the palette has closed.
-    private func runFromPalette(_ id: CommandID) {
-        guard canRunFromPalette(id) else { return }
-        focusedTable.run(id)
-        followFocus(after: id)
-    }
-
-    // MARK: Operations panel
-
-    /// Shows the queue's latest snapshots in the panel.
-    public func showOperations(_ snapshots: [FileOperationQueue.Snapshot]) {
-        operations.show(snapshots)
-    }
-
-    private func toggleOperations() {
-        userOpenedOperations = operations.view.isHidden
-        setOperationsShown(userOpenedOperations)
-    }
-
-    /// An operation ran past `OperationsViewController.attentionDelay` or finished in trouble.
-    /// Only its own window lists it, so that window shows its panel, whether or not it is the
-    /// most recently active.
-    private func operationNeedsAttention() {
-        guard !isClosed else { return }
-        setOperationsShown(true)
-    }
-
-    private func settingsChanged() {
-        guard settings.hideEmptyOperationsPanel != hidesEmptyOperations else { return }
-        hidesEmptyOperations = settings.hideEmptyOperationsPanel
-        hideEmptyOperations()
-    }
-
-    /// Hides the panel while it has no rows, if the setting says to and the user didn't open it.
-    private func hideEmptyOperations() {
-        guard settings.hideEmptyOperationsPanel, operations.isEmpty, !userOpenedOperations else {
-            return
-        }
-        setOperationsShown(false)
-    }
-
-    private func setOperationsShown(_ isShown: Bool) {
-        operations.view.isHidden = !isShown
-        panesToBottom.isActive = !isShown
-        panesOverOperations.isActive = isShown
-    }
-
     // MARK: Menu items from outside the panes' tables
 
     // With the keys outside every pane's table, as in the sidebar, the path bar or the tab strip
@@ -752,7 +538,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// Gives the keys to the focused pane after command `id` ran from outside the panes' tables,
     /// if it is one that focuses a pane. Any other command leaves them where they are, as in the
     /// sidebar (docs/decisions/0089-sidebar-key-routing.md).
-    private func followFocus(after id: CommandID) {
+    func followFocus(after id: CommandID) {
         guard Self.paneFocusCommands.contains(id) else { return }
         giveKeysBack()
     }
@@ -816,7 +602,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         return true
     }
 
-    private var focusedTable: ListingTableView {
+    var focusedTable: ListingTableView {
         guard let table = paneViewController.keyView as? ListingTableView else {
             preconditionFailure("the focused pane's key view isn't a listing table")
         }
@@ -1021,7 +807,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
 
     /// Makes `controller`'s table first responder unless something in its pane already is, such
     /// as its filter field, or the sidebar has the keys while it shows.
-    private func moveKeys(to controller: PaneViewController) {
+    func moveKeys(to controller: PaneViewController) {
         guard let window else { return }
         if let responder = window.firstResponder as? NSView,
             responder.isDescendant(of: controller.view)
