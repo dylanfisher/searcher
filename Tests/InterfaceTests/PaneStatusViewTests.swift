@@ -131,6 +131,24 @@ private func letTasksRun() async {
     #expect(view.note.isHidden)
 }
 
+@MainActor @Test func aListingThatLeftOutUnreadableNamesSaysHowManyUntilTheNextLoad() async {
+    let view = statusView(clock: ManualClock())
+    let one = await Task.detached { Listing([file("track.flac")], unreadableNameCount: 1) }.value
+    let three = await Task.detached { Listing([], unreadableNameCount: 3) }.value
+
+    view.show(.loaded(one), location: album, volumeName: nil)
+    #expect(!view.note.isHidden)
+    #expect(view.note.stringValue == "1 item with an unreadable name isn't shown.")
+    view.show(.loaded(three), location: album, volumeName: nil)
+    #expect(view.note.stringValue == "3 items with unreadable names aren't shown.")
+
+    // The slow note takes the line; a load without the count has no note.
+    view.show(.slow(nil), location: album, volumeName: "music")
+    #expect(view.note.stringValue == "music is slow to answer.")
+    view.show(.loading, location: album, volumeName: nil)
+    #expect(view.note.isHidden)
+}
+
 @MainActor @Test func aLoadThatLandsBeforeTheDelayNeverShowsTheSpinner() async throws {
     let clock = ManualClock()
     let view = statusView(clock: clock)

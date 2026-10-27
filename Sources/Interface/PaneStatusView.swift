@@ -2,7 +2,8 @@ import AppKit
 import Browser
 
 /// The end of a pane's path bar: a small spinner while the folder's listing is in flight, and a
-/// one-line note with the age of the rows shown while the folder is slow or offline.
+/// one-line note with the age of the rows shown while the folder is slow or offline, or, once it
+/// is listed, how many entries with unreadable names it leaves out.
 ///
 /// The spinner waits `LoadTimeouts.spinnerDelay` on the injected clock, so a folder that lists
 /// quickly never flashes one. The note's age is reckoned from the injected date and written again
@@ -35,6 +36,9 @@ final class PaneStatusView: NSView {
     private var refreshedListedAt: Date?
     /// The slow or offline state the note shows and the volume it names; nil for no note.
     private var shown: (state: ListingState, volumeName: String)?
+    /// How many entries a loaded folder's listing left out for unreadable names; 0 in any other
+    /// state.
+    private var unreadableNames = 0
     /// Whether the note last announced said offline rather than slow, and the volume it named;
     /// nil since the note went away. A pane that stays slow or offline is announced once.
     private var announced: (isOffline: Bool, volumeName: String)?
@@ -91,6 +95,9 @@ final class PaneStatusView: NSView {
         case .loading, .partial, .loaded, .cachedRefreshing, .denied, .failed, .notConnected:
             shown = nil
         }
+        // Only a full listing knows how many names it left out.
+        unreadableNames =
+            if case .loaded(let listing) = state { listing.unreadableNameCount } else { 0 }
         showNote()
         announceNote()
     }
@@ -149,9 +156,9 @@ final class PaneStatusView: NSView {
     }
 
     private func showNote() {
-        let line = shown.flatMap {
-            text.note(for: $0.state, volumeName: $0.volumeName, now: now())
-        }
+        let line =
+            shown.flatMap { text.note(for: $0.state, volumeName: $0.volumeName, now: now()) }
+            ?? PaneStatusText.unreadableNamesNote(unreadableNames)
         // Set only on a change: most calls come from pane changes that leave the note as it is.
         if note.stringValue != line ?? "" { note.stringValue = line ?? "" }
         note.isHidden = line == nil

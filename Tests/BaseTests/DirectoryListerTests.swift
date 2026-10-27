@@ -218,12 +218,12 @@ private func setBundleBit(_ path: String) throws {
 }
 
 /// Parses one getattrlistbulk record as the lister requests it, for a 4096-byte regular file
-/// named cloud.txt, with `flags` or without the flags attribute: attributes in bitmap order,
-/// then the name the name reference points to. The directory is -1, so a stat fails.
-private func parseRecord(flags: UInt32?) throws -> DirectoryEntry? {
+/// named `name`, with `flags` or without the flags attribute: attributes in bitmap order, then
+/// the name the name reference points to. The directory is -1, so a stat fails.
+private func parseRecord(flags: UInt32?, name: String = "cloud.txt") throws -> DirectoryEntry? {
     var record: [UInt8] = []
     func append<T>(_ value: T) { withUnsafeBytes(of: value) { record += $0 } }
-    let name = Array("cloud.txt".utf8) + [0]
+    let name = Array(name.utf8) + [0]
     var returned = attribute_set_t()
     returned.commonattr =
         attrgroup_t(ATTR_CMN_RETURNED_ATTRS) | attrgroup_t(ATTR_CMN_NAME)
@@ -246,8 +246,94 @@ private func parseRecord(flags: UInt32?) throws -> DirectoryEntry? {
     record += name
 
     return try record.withUnsafeBytes {
-        try DirectoryLister().parse($0.baseAddress!, directory: -1, path: "/nowhere")
+        try DirectoryLister().parseRecord($0, directory: -1, path: "/nowhere").entry
     }
+}
+
+/// A getattrlistbulk record holding only a name, `name`'s bytes and a NUL, followed in the
+/// buffer by `extra` zero bytes. The name reference's length and offset, and the record's own
+/// length, can be overridden to make it malformed.
+private func nameOnlyRecord(
+    _ name: [UInt8], nameLength: UInt32? = nil, nameOffset: Int32? = nil,
+    recordLength: UInt32? = nil, extra: Int = 0
+) -> [UInt8] {
+    var record: [UInt8] = []
+    func append<T>(_ value: T) { withUnsafeBytes(of: value) { record += $0 } }
+    var returned = attribute_set_t()
+    returned.commonattr = attrgroup_t(ATTR_CMN_RETURNED_ATTRS) | attrgroup_t(ATTR_CMN_NAME)
+    let headerSize = MemoryLayout<UInt32>.size + MemoryLayout<attribute_set_t>.size
+    let referenceSize = MemoryLayout<attrreference_t>.size
+    append(recordLength ?? UInt32(headerSize + referenceSize + name.count + 1))
+    append(returned)
+    append(
+        attrreference_t(
+            attr_dataoffset: nameOffset ?? Int32(referenceSize),
+            attr_length: nameLength ?? UInt32(name.count + 1)))
+    record += name + [0]
+    return record + [UInt8](repeating: 0, count: extra)
+}
+
+private func parseNameOnly(_ record: [UInt8]) throws -> DirectoryLister.Record {
+    try record.withUnsafeBytes {
+        try DirectoryLister().parseRecord($0, directory: -1, path: "/nowhere")
+    }
+}
+
+/// What a malformed record fails the listing with.
+private let malformed = ListingError(path: "/nowhere", code: EBADMSG)
+
+@Test func aNameOfLengthZeroFailsTheListing() throws {
+    #expect(throws: malformed) {
+        try parseNameOnly(nameOnlyRecord(Array("a".utf8), nameLength: 0))
+    }
+}
+
+@Test func aNameOutsideItsRecordFailsTheListing() throws {
+    // Each of the first three names would take bytes that are in the buffer but not the record.
+    let name = Array("name".utf8)
+    #expect(throws: malformed) {
+        try parseNameOnly(nameOnlyRecord(name, nameOffset: 1000, extra: 2000))
+    }
+    #expect(throws: malformed) {
+        try parseNameOnly(nameOnlyRecord(name, nameLength: 100, extra: 200))
+    }
+    #expect(throws: malformed) {
+        try parseNameOnly(nameOnlyRecord(name, nameOffset: -40, extra: 200))
+    }
+    // The name's last byte isn't its NUL, or it holds a NUL before its end.
+    #expect(throws: malformed) { try parseNameOnly(nameOnlyRecord(name, nameLength: 4)) }
+    #expect(throws: malformed) { try parseNameOnly(nameOnlyRecord(name + [0, 0x61])) }
+}
+
+@Test func aRecordLongerThanTheBufferOrShorterThanItsAttributesFailsTheListing() throws {
+    let name = Array("name".utf8)
+    #expect(throws: malformed) { try parseNameOnly(nameOnlyRecord(name, recordLength: 4096)) }
+    #expect(throws: malformed) { try parseNameOnly(nameOnlyRecord(name, recordLength: 0)) }
+    #expect(throws: malformed) {
+        try parseNameOnly(nameOnlyRecord(name, recordLength: 30, extra: 200))
+    }
+}
+
+@Test(
+    arguments: [
+        [0x63, 0x61, 0x66, 0xE9],  // Latin-1 "café"
+        [0x61, 0x80],  // a lone continuation byte
+        [0xF0, 0x9F, 0x98],  // a 4-byte sequence cut short
+        [0xED, 0xA0, 0x80],  // an encoded surrogate
+        [0xC0, 0xAF],  // an overlong "/"
+    ] as [[UInt8]])
+func aNameThatIsNotUTF8IsUnreadable(name: [UInt8]) throws {
+    let parsed = try parseNameOnly(nameOnlyRecord(name))
+    guard case .unreadableName = parsed else {
+        Issue.record("\(name) parsed as \(parsed)")
+        return
+    }
+}
+
+@Test func aUTF8NameParsesWhateverItsScript() throws {
+    // U+FFFD is a valid character: only bytes that aren't UTF-8 make a name unreadable.
+    let name = "Ünïcødé 日本語 🙂 \u{FFFD}"
+    #expect(try parseRecord(flags: 0, name: name)?.name == name)
 }
 
 @Test func unreadableFolderThrowsPermissionDenied() throws {
@@ -352,11 +438,21 @@ func mountStatusParsesFromARawFolderRecord(status: UInt32, isMountPoint: Bool) t
     record += name
 
     let parsed = try record.withUnsafeBytes {
-        try DirectoryLister().parseRecord($0.baseAddress!, directory: -1, path: "/nowhere")
+        try DirectoryLister().parseRecord($0, directory: -1, path: "/nowhere")
     }
-    #expect(parsed?.entry.name == "Data")
-    #expect(parsed?.entry.type == .directory)
-    #expect(parsed?.isMountPoint == isMountPoint)
+    guard case .entry(let entry, let parsedIsMountPoint) = parsed else {
+        Issue.record("the record parsed as \(parsed)")
+        return
+    }
+    #expect(entry.name == "Data")
+    #expect(entry.type == .directory)
+    #expect(parsedIsMountPoint == isMountPoint)
+}
+
+extension DirectoryLister.Record {
+    fileprivate var entry: DirectoryEntry? {
+        if case .entry(let entry, _) = self { entry } else { nil }
+    }
 }
 
 /// Read-only: `/System/Volumes` holds the mount points of the boot volume group, `Data` among

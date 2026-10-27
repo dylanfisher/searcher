@@ -46,6 +46,9 @@ public struct Listing: Sendable {
     public private(set) var hidesDSStore = false
     /// Names that don't match it have no row.
     public private(set) var filter = NameFilter()
+    /// How many entries the lister left out of the folder because their names aren't valid
+    /// UTF-8 (docs/decisions/0117-unreadable-names.md).
+    public let unreadableNameCount: Int
 
     // Parallel to `entries`.
     private var keys: [NameSortKey]
@@ -77,11 +80,12 @@ public struct Listing: Sendable {
     public init(
         _ entries: [DirectoryEntry], column: SortColumn = .name, ascending: Bool = true,
         foldersFirst: Bool = false, showsHidden: Bool = true, hidesDSStore: Bool = false,
-        filter: NameFilter = NameFilter()
+        filter: NameFilter = NameFilter(), unreadableNameCount: Int = 0
     ) {
         dispatchPrecondition(condition: .notOnQueue(.main))
         precondition(entries.count < Int32.max, "\(entries.count) entries don't fit Int32 indexes")
         self.entries = entries
+        self.unreadableNameCount = unreadableNameCount
         (foldedNames, keys) = NameSortKey.foldedNamesAndKeys(for: entries.map(\.name))
         kindIndexes = []
         nameRanks = []
