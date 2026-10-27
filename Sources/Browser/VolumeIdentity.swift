@@ -36,6 +36,17 @@ public struct VolumeIdentity: Hashable, Sendable {
     /// component, read without asking the volume, which may not be answering.
     public var name: String { Self.name(mountedAt: mountPoint) }
 
+    /// The server this volume is a share of, read from `device` without asking the volume. Only
+    /// a browsable network volume mounted directly in `/Volumes`, where the system mounts shares,
+    /// has one; any other volume, or one whose source doesn't name a host, gives nil and keeps
+    /// its own sidebar row.
+    public var server: Server? {
+        guard kind == .network, isBrowsable,
+            Location(path: mountPoint).parent == Server.sharesFolder
+        else { return nil }
+        return Server(mountSource: device)
+    }
+
     /// The name of the volume mounted at `mountPoint`, as `name` gives it, for a volume known
     /// only by where it was mounted.
     public static func name(mountedAt mountPoint: String) -> String {
