@@ -63,7 +63,10 @@ steps of their own, and restoring into a column the trail has closed.
   Moves inside a trail (selecting a folder, ←, →, Back and Forward to a shown column, ⌘U's own
   restart) are no barrier. A drag's spring-loaded folders are none either: the drag's end comes
   back ([0099](0099-get-info-and-spring-loading.md)). Listing the folder the pane is in again
-  keeps the steps. This replaces 0077's per-folder steps: a step could otherwise name a folder
+  keeps the steps. (Amended 2026-10-26: a folder chosen in Open Quickly is such a navigation,
+  and the first row it selects once listed ([0087](0087-palette-window.md)) is part of it, as →
+  's first row is part of its step: it records no step. ⌘U right after has nothing to step to,
+  and after a move returns to that first row.) This replaces 0077's per-folder steps: a step could otherwise name a folder
   the pane no longer shows, which ⌘U would have to navigate to or leave unreachable.
 - **Dropped:** a pane's steps when it closes, a grid takes it out, or it moves to another window
   (`Tab.removeFocusedPane`), where it starts with none. A split's new pane starts with none.

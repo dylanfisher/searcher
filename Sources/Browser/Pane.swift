@@ -66,6 +66,11 @@ public final class Pane {
             names: [ExactName], selectionVersion: Int, showsHidden: Bool, hidesDSStore: Bool,
             selected: (@MainActor () -> Void)?
         )?
+    /// The selection version at which `navigateSelectingFirstRow(to:)` showed the folder in list
+    /// view: its first row is selected once the rows show the whole folder, unless the
+    /// selection, the focus or the location changed first. Nil when nothing waits. In column
+    /// view the focused column waits instead (`Column.selectsFirstRowAt`).
+    private var selectsFirstRowAt: Int?
     /// A copy of the selection is being settled off the main thread.
     private var settleIsRunning = false
     /// Where selections settle. Tests suspend a queue of their own here to hold one unsettled.
@@ -413,6 +418,20 @@ public final class Pane {
         }
         history.leave(here)
         move(to: location, selecting: name.map(ExactName.init))
+    }
+
+    /// Shows `location` as `navigate(to:)` does, then selects its first row alone, in the sort,
+    /// filter and hidden-file setting the rows have, once they show the whole folder, unless
+    /// something is selected by then: a folder chosen in Open Quickly
+    /// (docs/decisions/0087-palette-window.md). An empty folder selects nothing. The selection
+    /// is part of the navigation, which is a barrier of the selection history, so it records no
+    /// step (docs/decisions/0112-position-history.md).
+    public func navigateSelectingFirstRow(to location: Location) {
+        navigate(to: location)
+        if let trail = columnTrail { return trail.selectFirstRowOnceListed() }
+        guard selection.isEmpty else { return }
+        selectsFirstRowAt = selectionVersion
+        selectFirstRowIfWanted()
     }
 
     /// A column's pane answers for its trail's owner, whose history it is.
@@ -1060,6 +1079,7 @@ public final class Pane {
         isFocused = false
         // A column → moved into while its rows load doesn't select its first row in a pane
         // the keys have left.
+        selectsFirstRowAt = nil
         columnTrail?.focused.selectsFirstRowAt = nil
         columnTrail?.focused.pane.didLoseFocus()
     }
@@ -1177,6 +1197,7 @@ public final class Pane {
         show(.loaded(listing), after: change, resolved: resolved, from: selectionVersion)
         selectNamesIfListed()
         selectNextIfTrashLanded()
+        selectFirstRowIfWanted()
         startSortIfNeeded()
         reportChange()
         startPatch()
@@ -1311,6 +1332,7 @@ public final class Pane {
         show(state.showing(listing), after: change, resolved: resolved, from: selectionVersion)
         selectNamesIfListed()
         selectNextIfTrashLanded()
+        selectFirstRowIfWanted()
         reportChange()
     }
 
@@ -1458,6 +1480,7 @@ public final class Pane {
         }
         selectNamesIfListed()
         selectNextIfTrashLanded()
+        selectFirstRowIfWanted()
         // A load that started before `setSort` arrives in the old sort, and shows in it until
         // this sort lands.
         startSortIfNeeded()
@@ -1961,6 +1984,29 @@ public final class Pane {
             })
         else { return }
         select(Selection([next], cursor: next))
+    }
+
+    /// Selects the first row once the rows show the whole folder, as
+    /// `navigateSelectingFirstRow(to:)` asked, if the selection hasn't changed since. A first
+    /// batch isn't the whole folder: its first row needn't be the folder's. Rows that arrive
+    /// empty, or a folder that can't be listed, give up the wait.
+    private func selectFirstRowIfWanted() {
+        guard let version = selectsFirstRowAt else { return }
+        switch state {
+        case .denied, .failed:
+            selectsFirstRowAt = nil
+            return
+        case .loading, .partial, .loaded, .cachedRefreshing, .slow, .offline:
+            break
+        }
+        guard version == selectionVersion else {
+            selectsFirstRowAt = nil
+            return
+        }
+        guard state.showsWholeFolder, let listing = state.listing else { return }
+        selectsFirstRowAt = nil
+        guard listing.count > 0, selection.isEmpty else { return }
+        selectFirstRow(byKey: false, recordingAs: nil)
     }
 
     // MARK: - Folder sizes

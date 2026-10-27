@@ -1861,3 +1861,134 @@ private func volumePane(_ reads: HeldVolumeReads) async -> Pane {
     reads.release()
     await settle { pane.state.isLoaded && pane.folderVolume == reads.disk }
 }
+
+// MARK: - Going into a folder from Open Quickly
+
+/// A focused pane at `/r` over a lister that holds `/r/in` and `/r/empty` until the test releases
+/// them: `in` lists `c.txt`, a hidden `.a` and `b.txt`, so its first row by name with hidden
+/// entries off is `b.txt`; `empty` is empty.
+@MainActor
+private func paneGoingIn() async -> PaneFixture {
+    let fixture = PaneFixture(
+        at: "/r",
+        folders: [
+            "/": [folder("r")], "/r": [folder("in"), folder("empty")],
+            "/r/in": [file("c.txt"), file(".a"), file("b.txt")], "/r/empty": [],
+        ], held: true)
+    fixture.lister.release("/")
+    fixture.lister.release("/r")
+    await settle { fixture.pane.state.isLoaded }
+    fixture.pane.didGainFocus()
+    await settle { fixture.pane.state.isLoaded }
+    return fixture
+}
+
+@MainActor @Test func goingIntoAFolderSelectsItsFirstRowOnceItsRowsLand() async throws {
+    let fixture = await paneGoingIn()
+    let pane = fixture.pane
+
+    pane.navigateSelectingFirstRow(to: Location(path: "/r/in"))
+    #expect(await fixture.lister.waitForCall("/r/in"))
+    #expect(pane.selection.isEmpty)
+    fixture.lister.release("/r/in")
+
+    await settle { pane.state.isLoaded }
+    await drainMainQueue()
+    #expect(pane.selection == Selection([ExactName("b.txt")], cursor: ExactName("b.txt")))
+}
+
+/// Rows already there, kept by `RecentListings`, are selected from in the same turn.
+@MainActor @Test func goingIntoAFolderWithRecentRowsSelectsTheirFirstRowAtOnce() async throws {
+    let fixture = PaneFixture(
+        at: "/r/in",
+        folders: ["/r/in": [file("c.txt"), file("b.txt")], "/r": [folder("in")]], held: true,
+        recentListings: RecentListings())
+    fixture.lister.release("/r")
+    fixture.lister.release("/r/in")
+    let pane = fixture.pane
+    await settle { pane.state.isLoaded }
+    pane.navigate(to: Location(path: "/r"))
+    await settle { pane.state.isLoaded }
+    fixture.lister.hold("/r/in")
+
+    pane.navigateSelectingFirstRow(to: Location(path: "/r/in"))
+
+    #expect(pane.state.isCachedRefreshing)
+    #expect(pane.selection.cursor == ExactName("b.txt"))
+}
+
+@MainActor @Test func aPlainNavigationSelectsNoFirstRow() async throws {
+    let fixture = await paneGoingIn()
+    let pane = fixture.pane
+    fixture.lister.release("/r/in")
+
+    pane.navigate(to: Location(path: "/r/in"))
+
+    await settle { pane.state.isLoaded }
+    await drainMainQueue()
+    #expect(pane.selection.isEmpty)
+}
+
+/// A selection made, the pane losing the keys, or another navigation before the rows land each
+/// give up selecting the first row.
+@MainActor @Test func aSelectionFocusChangeOrNavigationBeforeTheRowsLandCancelsTheFirstRow()
+    async throws
+{
+    let cancels: [(String, @MainActor (Pane) -> Void)] = [
+        ("select", { $0.select(Selection([ExactName("c.txt")], cursor: ExactName("c.txt"))) }),
+        ("blur", { $0.didLoseFocus() }),
+        ("navigate", { $0.navigate(to: Location(path: "/r/empty")) }),
+    ]
+    for (name, cancel) in cancels {
+        let fixture = await paneGoingIn()
+        let pane = fixture.pane
+        pane.navigateSelectingFirstRow(to: Location(path: "/r/in"))
+        #expect(await fixture.lister.waitForCall("/r/in"))
+
+        cancel(pane)
+        fixture.lister.release("/r/in")
+        fixture.lister.release("/r/empty")
+        await settle { pane.state.isLoaded }
+        await drainMainQueue()
+
+        #expect(
+            pane.selection.cursor == (name == "select" ? ExactName("c.txt") : nil),
+            "after \(name)")
+    }
+}
+
+/// An empty folder selects nothing, and a file that arrives later isn't selected.
+@MainActor @Test func goingIntoAnEmptyFolderSelectsNothingLater() async throws {
+    let fixture = await paneGoingIn()
+    let pane = fixture.pane
+    pane.navigateSelectingFirstRow(to: Location(path: "/r/empty"))
+    fixture.lister.release("/r/empty")
+    await settle { pane.state.isLoaded }
+
+    pane.apply(.patches([.update(file("n.txt"))]), at: pane.location)
+
+    await settle { pane.state.names == ["n.txt"] }
+    await drainMainQueue()
+    #expect(pane.selection.isEmpty)
+}
+
+/// The go is a navigation, a barrier of the selection history, and the first row it selects is
+/// part of it: Undo Selection has nothing to go back to, and after a move goes back to that row.
+@MainActor @Test func theFirstRowAGoSelectsIsNoStepOfItsOwn() async throws {
+    let fixture = await paneGoingIn()
+    let pane = fixture.pane
+    pane.select(Selection([ExactName("in")], cursor: ExactName("in")))
+    fixture.lister.release("/r/in")
+
+    pane.navigateSelectingFirstRow(to: Location(path: "/r/in"))
+    await settle { pane.selection.cursor == ExactName("b.txt") }
+    #expect(!fixture.tab.canUndoSelection)
+
+    pane.moveSelection(by: 1)
+    #expect(pane.selection.cursor == ExactName("c.txt"))
+    fixture.tab.undoSelection()
+
+    #expect(pane.location == Location(path: "/r/in"))
+    #expect(pane.selection == Selection([ExactName("b.txt")], cursor: ExactName("b.txt")))
+    #expect(!fixture.tab.canUndoSelection)
+}

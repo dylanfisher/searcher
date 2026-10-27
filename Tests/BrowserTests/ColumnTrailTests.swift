@@ -3414,3 +3414,93 @@ private func sharePhotoPane(
     #expect(trail(pane).shownPreview?.thumbnail == nil)
     lister.release()
 }
+
+// MARK: - Going into a folder from Open Quickly
+
+/// A focused pane at `/r` in column mode, every column loaded, with the lister holding
+/// `/r/docs`'s and `/r/empty`'s listings until the test releases them.
+@MainActor
+private func columnsGoingIn() async -> PaneFixture {
+    var folders = tree
+    folders["/r"] = [folder("docs"), folder("other"), folder("empty"), file("a.txt")]
+    folders["/r/empty"] = []
+    let fixture = PaneFixture(at: "/r", folders: folders, held: true)
+    fixture.lister.release("/")
+    fixture.lister.release("/r")
+    fixture.lister.release("/r/docs/sub")
+    let pane = fixture.pane
+    await settle { pane.state.isLoaded }
+    pane.didGainFocus()
+    pane.setViewMode(.column)
+    await settle { trail(pane).columns.allSatisfy { $0.pane.state.isLoaded } }
+    return fixture
+}
+
+/// The folder's column is the last, with the keys; its first row by name, hidden entries off,
+/// is the folder `sub`, which opens its column as a click on it would.
+@MainActor @Test func goingIntoAFolderInColumnsSelectsItsFirstRowOnceItsRowsLand() async throws {
+    let fixture = await columnsGoingIn()
+    let pane = fixture.pane
+
+    pane.navigateSelectingFirstRow(to: Location(path: "/r/docs"))
+    #expect(await fixture.lister.waitForCall("/r/docs"))
+    #expect(paths(pane) == ["/", "/r", "/r/docs"])
+    #expect(trail(pane).focusedIndex == 2)
+    #expect(trail(pane).focused.pane.selection.isEmpty)
+    fixture.lister.release("/r/docs")
+
+    await settle { trail(pane).columns[2].pane.selection.cursor == ExactName("sub") }
+    #expect(paths(pane) == ["/", "/r", "/r/docs", "/r/docs/sub"])
+    #expect(trail(pane).focusedIndex == 2)
+    #expect(pane.location == Location(path: "/r/docs"))
+}
+
+@MainActor @Test func goingIntoAFileFirstFolderInColumnsPreviewsTheFile() async throws {
+    let fixture = await columnsGoingIn()
+    let pane = fixture.pane
+    fixture.lister.release("/r/other")
+
+    pane.navigateSelectingFirstRow(to: Location(path: "/r/other"))
+
+    await settle { trail(pane).focused.pane.selection.cursor == ExactName("o.txt") }
+    #expect(trail(pane).preview?.location == Location(path: "/r/other/o.txt"))
+}
+
+@MainActor @Test func goingIntoAnEmptyFolderInColumnsSelectsNothingLater() async throws {
+    let fixture = await columnsGoingIn()
+    let pane = fixture.pane
+    pane.navigateSelectingFirstRow(to: Location(path: "/r/empty"))
+    let empty = trail(pane).focused.pane
+    fixture.lister.release("/r/empty")
+    await settle { empty.state.isLoaded }
+
+    empty.apply(.patches([.update(file("n.txt"))]), at: empty.location)
+
+    await settle { empty.state.names == ["n.txt"] }
+    await drainMainQueue()
+    #expect(empty.selection.isEmpty)
+}
+
+/// The go starts the trail again, a barrier of the selection history, and the first row it
+/// selects is part of it: Undo Selection has nothing to go back to, and after a move goes back
+/// to that row.
+@MainActor @Test func theFirstRowAGoSelectsInColumnsIsNoStepOfItsOwn() async throws {
+    let fixture = await columnsGoingIn()
+    let pane = fixture.pane
+    select("other", in: trail(pane).columns[1])
+    fixture.lister.release("/r/docs")
+    fixture.lister.release("/r/other")
+
+    pane.navigateSelectingFirstRow(to: Location(path: "/r/docs"))
+    let docs = trail(pane).columns[2].pane
+    await settle { docs.selection.cursor == ExactName("sub") }
+    #expect(!fixture.tab.canUndoSelection)
+
+    try press(KeyChord(.down), on: pane)
+    #expect(docs.selection.cursor == ExactName("x.txt"))
+    fixture.tab.undoSelection()
+
+    #expect(trail(pane).focused.pane === docs)
+    #expect(docs.selection == Selection([ExactName("sub")], cursor: ExactName("sub")))
+    #expect(!fixture.tab.canUndoSelection)
+}
