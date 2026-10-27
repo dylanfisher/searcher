@@ -877,6 +877,59 @@ func leftOrCommandUpMovesToTheParentsColumnAndDoesNothingAtTheRoot(chord: KeyCho
     #expect(monitors.map(\.stopCount) == [1, 1, 1])
 }
 
+/// `docs` and `a.txt` selected, the cursor on `a.txt`.
+private let twoRows = Selection(
+    [ExactName("docs"), ExactName("a.txt")], cursor: ExactName("a.txt"))
+
+/// Both views can show several rows selected, so a switch keeps them, as Finder does; the
+/// columns open none right of them.
+@MainActor @Test func switchingEitherWayKeepsSeveralSelectedRows() async throws {
+    let fixture = PaneFixture(at: "/r", folders: tree)
+    let pane = fixture.pane
+    await settle { pane.state.isLoaded }
+    pane.select(twoRows)
+
+    pane.setViewMode(.column)
+    await settle {
+        trail(pane).columns.allSatisfy { $0.pane.state.isLoaded }
+            && trail(pane).focused.pane.selection.isSettled
+    }
+
+    #expect(paths(pane) == ["/", "/r"])
+    #expect(trail(pane).focused.pane.selection.members == twoRows.members)
+    #expect(trail(pane).focused.pane.selection.cursor == ExactName("a.txt"))
+
+    pane.setViewMode(.list)
+    await settle { pane.state.isLoaded && pane.selection.isSettled }
+
+    #expect(pane.selection.members == twoRows.members)
+    #expect(pane.selection.cursor == ExactName("a.txt"))
+}
+
+/// A split's copy of a column pane starts with the focused column's whole selection, as a
+/// restore does: several rows open no column, and a cursor with nothing selected, as a path bar
+/// click leaves it, opens none either.
+@MainActor
+@Test(arguments: [
+    twoRows, Selection([], cursor: ExactName("docs")),
+])
+func aSplitOfAColumnPaneKeepsTheFocusedColumnsSelection(_ selection: Selection) async throws {
+    let fixture = await columnPane()
+    trail(fixture.pane).focused.pane.select(selection)
+    await settle { paths(fixture.pane) == ["/", "/r"] }
+
+    let copy = fixture.pane.copy(takingFocus: false)
+    await settle {
+        trail(copy).columns.allSatisfy { $0.pane.state.isLoaded }
+            && trail(copy).focused.pane.selection.isSettled
+    }
+
+    #expect(paths(copy) == ["/", "/r"])
+    #expect(trail(copy).focused.pane.selection.members == selection.members)
+    #expect(trail(copy).focused.pane.selection.cursor == selection.cursor)
+    copy.close()
+}
+
 @MainActor @Test func rowKeysAndTypeToSelectActOnTheFocusedColumn() async throws {
     let fixture = await columnPane()
     let pane = fixture.pane

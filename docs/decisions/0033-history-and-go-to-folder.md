@@ -25,7 +25,11 @@ the pane, which can't show a sheet: Browser has no AppKit.
   another column is a step too, since the pane's folder is the focused column's, and Back or
   Forward to a folder the trail shows moves the keys to its column, selecting the remembered
   entry against the rows it already has, instead of listing it again; see
-  [0041](0041-column-model.md).)
+  [0041](0041-column-model.md).) (Amended 2026-10-27: each way keeps its nearest 500 entries
+  (`History.limit`) and drops the farthest, since column moves add a step per key and
+  `TabState` saves the whole history. A saved history past 500 keeps its nearest 500 rather
+  than being discarded: it has the one stored shape, only longer, and the user's recent Back
+  steps are worth more than the rule. Finder's own depth is unverified.)
 - **Restoring the selection.** Back and Forward move as a navigation with a name to select does,
   by `ExactName`, so the selection is resolved on the load's worker and goes through the
   provisional and settled paths of [0029](0029-row-movement.md) if the user moves first. A
@@ -68,7 +72,7 @@ the pane, which can't show a sheet: Browser has no AppKit.
 ## Consequences
 
 A slow folder typed in Go to folder keeps the sheet up until its first rows arrive; Esc gives up.
-The history grows without bound for a pane's life, a few hundred bytes a step. A path with a
+A pane's history is at most 1,000 entries, 500 each way, a few hundred bytes a step. A path with a
 symbolic link and `..` is taken apart by its text, so `link/..` is the folder holding the link,
 not the link target's parent, as in Terminal's `cd` rather than `cd -P`. `CommandContext(pane:)`
 without `askForFolder` traps if Go to folder runs on it; the UI bench and tests build it that

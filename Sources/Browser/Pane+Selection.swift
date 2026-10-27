@@ -76,6 +76,16 @@ extension Pane {
         return selectedRows.map { listing[$0] }
     }
 
+    /// The selection by name alone, for a pane that lists this folder again, as a split's copy
+    /// in column view or a switch of view mode makes: rows resolved in this pane's listing would
+    /// point at other entries in a listing of another sort.
+    var selectionByName: Selection {
+        let members: Selection.Members =
+            selection.isSettled
+            ? selection.members : .only(Set(selectedEntries.map { ExactName($0.name) }))
+        return Selection(members, cursor: selection.cursor, anchor: selection.anchor)
+    }
+
     /// Selects `names`, the cursor on the last, once the rows list them all: at once if they do,
     /// otherwise when the load or folder change that brings the last of them lands. Does nothing
     /// if the selection has changed since `selectionVersion` was read, as it does when the user

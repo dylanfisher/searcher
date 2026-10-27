@@ -43,10 +43,14 @@ from its load and from writes in the background, and they must reach the user.
   launch doesn't write it again.
 - **Panes** start as saved: folder, view mode, sort, Back and Forward, and the selection by
   name, which the existing load path resolves as the rows arrive; a full listing drops names
-  that are gone. A column-mode pane restores one column at its folder with the saved cursor,
-  as `TabState` keeps only that folder. A folder that isn't there is the missing state
-  (`ListingState.missingFolder`: a failed listing with ENOENT or ENOTDIR), shown with its path,
-  and the pane stays at that path. An unmounted share's folder lists as missing until M5a.3.
+  that are gone. A column-mode pane restores one column at its folder with the saved selection
+  and cursor, as `TabState` keeps only that folder; several rows selected open no column to
+  their right, as in [0041](0041-column-model.md), and neither does a cursor with nothing
+  selected. (Amended 2026-10-27: it restored the cursor alone, so a multi-selection came back
+  as one row. A split's copy and a switch of view mode carry the whole selection the same
+  way.) A folder that isn't there is the missing state (`ListingState.missingFolder`: a
+  failed listing with ENOENT or ENOTDIR), shown with its path, and the pane stays at that path.
+  An unmounted share's folder lists as missing until M5a.3.
 - **Frames.** A saved frame is kept while at least 100 × 22 pt of its title bar is on an
   attached display, so the window can still be dragged; otherwise it is centered on the main
   display and shrunk to fit it.

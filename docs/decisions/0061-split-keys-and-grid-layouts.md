@@ -24,7 +24,9 @@ the table's `keyDown` passed.
   focus doesn't list it either, as a pane moved to a new window isn't
   ([0057](0057-windows-and-tear-out.md)). Without complete rows the copy lists the folder, and
   its selection is resolved against the rows as they arrive, as any load's is. In column mode the
-  copy's trail starts at the focused column's folder with its cursor selected, as before. New
+  copy's trail starts at the focused column's folder with its cursor selected, as before.
+  (Amended 2026-10-27: with the focused column's whole selection, by name, and its cursor, as
+  a restore starts it, [0080](0080-restore-at-launch.md).) New
   Tab, Open in New Tab and New Window keep `newPane(at:)`.
 - **Scroll position.** The copy holds a weak `copiedFrom`. When the window makes the view of a
   pane a split or a grid key added to the selected tab, it scrolls the new list to the source

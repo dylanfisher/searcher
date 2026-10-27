@@ -1,7 +1,13 @@
 /// The folders a pane has left, for Back and Forward. Each entry keeps the entry that was
 /// selected there, so stepping back selects it again. A filter isn't kept: Back doesn't restore
-/// one (`tmp/behavior.md`).
+/// one (`tmp/behavior.md`). Each way keeps the nearest `limit` entries, dropping the farthest:
+/// every move of the keys between columns adds one, and `TabState` saves them all
+/// (docs/decisions/0033-history-and-go-to-folder.md).
 public struct History: Equatable, Sendable {
+    /// The entries kept each way. Finder's own depth is unverified; this is past any Back run a
+    /// person makes and keeps a saved tab small.
+    public static let limit = 500
+
     /// A folder left and the entry under the cursor when the pane left it.
     public struct Entry: Equatable, Sendable {
         public let location: Location
@@ -20,10 +26,11 @@ public struct History: Equatable, Sendable {
 
     public init() {}
 
-    /// A history with these entries, nearest last, as `TabState` stores them.
+    /// A history with these entries, nearest last, as `TabState` stores them; past `limit`, the
+    /// farthest go.
     public init(back: [Entry], forward: [Entry]) {
-        backEntries = back
-        forwardEntries = forward
+        backEntries = Array(back.suffix(Self.limit))
+        forwardEntries = Array(forward.suffix(Self.limit))
     }
 
     public var canGoBack: Bool { !backEntries.isEmpty }
@@ -31,21 +38,27 @@ public struct History: Equatable, Sendable {
 
     /// Records `entry` as left for a new folder, which ends the way forward.
     public mutating func leave(_ entry: Entry) {
-        backEntries.append(entry)
+        Self.add(entry, to: &backEntries)
         forwardEntries.removeAll()
     }
 
     /// The folder before `current`, which becomes the way forward; nil at the start.
     public mutating func back(from current: Entry) -> Entry? {
         guard let entry = backEntries.popLast() else { return nil }
-        forwardEntries.append(current)
+        Self.add(current, to: &forwardEntries)
         return entry
     }
 
     /// The folder `back` last stepped from, with `current` the way back again; nil at the end.
     public mutating func forward(from current: Entry) -> Entry? {
         guard let entry = forwardEntries.popLast() else { return nil }
-        backEntries.append(current)
+        Self.add(current, to: &backEntries)
         return entry
+    }
+
+    /// Adds `entry` nearest in `entries`, dropping the farthest past `limit`.
+    private static func add(_ entry: Entry, to entries: inout [Entry]) {
+        entries.append(entry)
+        if entries.count > limit { entries.removeFirst() }
     }
 }
