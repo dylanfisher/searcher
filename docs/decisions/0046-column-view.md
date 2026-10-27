@@ -135,7 +135,15 @@ would be a read, and a name is fitted to end before the chevron. Amended 2026-10
 Finder's chevron, measured from Dylan's screenshots beside the 13 pt name, is about 6 pt tall,
 3.5 pt wide and a thin stroke, so the symbol is 7 pt regular, not 10 pt semibold. Its view is
 the image's 6 pt width and ends 2 pt past the cell's right edge, so the drawn glyph ends 4.5 pt
-inside the row's selection, as Finder's does). A column whose folder can't be
+inside the row's selection, as Finder's does. Amended 2026-10-26, CH.1: in the trail's first
+column, whose selection is square across the row, Finder draws the glyph further in, about 15.75
+pt from the column's right edge in first-column-square.jpg against 13.5 in a rounded column. The
+chevron's overhang past the cell follows the table's `selectionShape`: 2 pt for the rounded band,
+none for the full-width one, so the glyph ends 15.5 pt in; a quarter point more is no whole
+pixel at 2x, and AppKit would round the chevron and the name's width apart. The badge, the
+name's end, the rename field's room and the width a double-click fits all take the same room,
+and the table moves its chevrons, badges and names when its shape changes, as when a trail
+started again from another root makes a column its first). A column whose folder can't be
 listed shows an empty table with no message; only the spinner is per column ([0053](0053-column-accessibility.md)).
 (Superseded 2026-10-24: a column with no rows to show says why in its middle, in the list's
 words from `PaneViewController.message(for:)`, `AccessDeniedView` and `PaneStatusText`. Denied
