@@ -76,9 +76,13 @@ name can't ride in the listing itself.
   - **with the keys in the sidebar**, though the ring hides then: the pane is still the one the
     commands act on and the keys go back to, as Finder's window keeps its target while its
     sidebar has the keys;
-  - **only while the window is key**, read from `Workspace.isActive`, which the window sets as
-    it gains and loses key. Another window's bars, and this one's under a sheet or the palette,
-    all show unemphasized, as the selection's highlight turns grey there.
+  - **only while the window is key or main**: `Workspace.isActive`, which the window sets as it
+    gains and loses key, or the window being main, which it tracks as it gains and loses main.
+    The palette's panel and a sheet take the keys but can't become main, so the window under
+    them stays main and keeps its bar dark (BC.1c, at Dylan's request: with key alone, every bar
+    went grey while Cmd-K was open). Another window or app coming forward takes main too, and
+    then every bar here shows unemphasized. `isActive` keeps meaning key, since it also orders
+    the loads and the panes' focus.
 
 ## Alternatives considered
 

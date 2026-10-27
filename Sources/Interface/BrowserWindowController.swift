@@ -70,6 +70,9 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// Set once the workspace closed with its last tab or the window closed; the window shows
     /// nothing after that.
     private var isClosed = false
+    /// Whether the window is main, as its delegate last heard: kept here rather than read from
+    /// `isMainWindow`, which a test's window, never shown, can't become.
+    private var isMain = false
 
     /// Whether the left mouse button is down, which tells a move by the title bar from one the
     /// app makes; a test sets it.
@@ -328,6 +331,20 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     public func windowDidResignKey(_ notification: Notification) {
         guard !isClosed else { return }
         workspace.isActive = false
+    }
+
+    /// The window stays main while a panel it opened, the palette or a sheet, has the keys, and
+    /// stops being main once another window or app comes forward.
+    public func windowDidBecomeMain(_ notification: Notification) {
+        guard !isClosed else { return }
+        isMain = true
+        markFocusedPane()
+    }
+
+    public func windowDidResignMain(_ notification: Notification) {
+        guard !isClosed else { return }
+        isMain = false
+        markFocusedPane()
     }
 
     /// The window closes for good: its panes stop their loads, walks and watches now. A
@@ -967,15 +984,16 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// Rings the focused pane while another pane shows and the sidebar doesn't have the keys.
     /// With the keys in the sidebar no pane is ringed, though the focused pane keeps the focus for
     /// the commands and for the keys to go back to (docs/decisions/0089-sidebar-key-routing.md).
-    /// The focused pane's path bar is emphasized while the window is key, alone or not and with
-    /// the keys in the sidebar too, since its pane is still the one the commands act on
-    /// (docs/decisions/0026-path-bar.md).
+    /// The focused pane's path bar is emphasized while the window is key or main, so under the
+    /// palette or a sheet too, alone or not and with the keys in the sidebar too, since its pane
+    /// is still the one the commands act on (docs/decisions/0026-path-bar.md).
     private func markFocusedPane(in views: TabViews, of tab: Tab) {
         let marksFocus = tab.layout.panes.count > 1 && !tab.layout.isZoomed && !sidebarHasKeys
+        let emphasizes = workspace.isActive || isMain
         for (id, controller) in views.paneControllers {
             let isFocused = id == tab.layout.focused
             controller.showsFocus = marksFocus && isFocused
-            controller.pathBar.isEmphasized = workspace.isActive && isFocused
+            controller.pathBar.isEmphasized = emphasizes && isFocused
         }
     }
 
