@@ -94,7 +94,7 @@ public final class WorkspaceSystemActions: SystemActions {
             openURL: { url in
                 if !NSWorkspace.shared.open(url) {
                     Logger(category: "workspace").error(
-                        "NSWorkspace couldn't open \(url.absoluteString, privacy: .public)")
+                        "NSWorkspace couldn't open \(url.absoluteString)")
                 }
             })
     }
@@ -308,7 +308,7 @@ public final class WorkspaceSystemActions: SystemActions {
         dispatchPrecondition(condition: .notOnQueue(.main))
         return OpenWith.App(readingBundleAt: url) { url in
             Logger(category: "openWith").error(
-                "no readable bundle at \(url.path, privacy: .public); listed by its path")
+                "no readable bundle at \(url.path); listed by its path")
         }
     }
 
@@ -324,14 +324,14 @@ public final class WorkspaceSystemActions: SystemActions {
                 .cgImage
         } catch {
             Logger(category: "openWith").error(
-                "no icon for \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                "no icon for \(url.path): \(error.localizedDescription)"
             )
         }
         return icon
     }
 
     private func fail(_ error: any Error) {
-        logger.error("\(error.localizedDescription, privacy: .public)")
+        logger.error("\(error.localizedDescription)")
         presentError(error)
     }
 
@@ -339,7 +339,7 @@ public final class WorkspaceSystemActions: SystemActions {
         let logger = logger
         DispatchQueue.global(qos: .userInitiated).async {
             if !NSWorkspace.shared.open(url) {
-                logger.error("NSWorkspace couldn't open \(url.absoluteString, privacy: .public)")
+                logger.error("NSWorkspace couldn't open \(url.absoluteString)")
             }
         }
     }

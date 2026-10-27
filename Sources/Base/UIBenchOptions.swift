@@ -81,10 +81,19 @@ public struct UIBenchOptions: Sendable, Equatable {
     /// The spelling of a nil `scenario`, `w8` or `image`.
     private static let none = "-"
 
-    /// The options in `arguments`, or nil when `flag` isn't there. Traps on a malformed set: only
-    /// the runner writes them.
-    public init?(arguments: [String]) {
-        guard let start = arguments.firstIndex(of: Self.flag) else { return nil }
+    /// The variable the runner sets in a bench launch's environment. The options name an output
+    /// file, folders to open and a prefix of temporary entries to delete, so the app takes them
+    /// only from a launch that has it, not from any launch's arguments.
+    public static let runnerVariable = "SEARCHER_BENCH_UI"
+    /// What the runner adds to a bench launch's environment.
+    public static let runnerEnvironment = [runnerVariable: "1"]
+
+    /// The options in `arguments`, or nil when `flag` isn't there or `environment` doesn't hold
+    /// `runnerEnvironment`. Traps on a malformed set: only the runner writes them.
+    public init?(arguments: [String], environment: [String: String]) {
+        guard environment[Self.runnerVariable] == Self.runnerEnvironment[Self.runnerVariable],
+            let start = arguments.firstIndex(of: Self.flag)
+        else { return nil }
         let rest = arguments[arguments.index(after: start)...]
         let values = Array(rest.prefix(9))
         guard values.count == 9, let keyPresses = Int(values[3]), keyPresses >= 0,

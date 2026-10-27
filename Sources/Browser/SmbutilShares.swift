@@ -47,7 +47,7 @@ public struct SmbutilShares: ShareEnumerator {
 
     /// `smbutil`'s arguments for `request`: `view -N //[user@]host`, the user percent-encoded
     /// once for a URL's user part (`;` kept, `:` encoded), the host as its share's source writes
-    /// it.
+    /// it, an IPv6 address in brackets.
     public static func arguments(for request: ShareRequest) -> [String] {
         var target = "//"
         if let user = request.user {
@@ -58,7 +58,9 @@ public struct SmbutilShares: ShareEnumerator {
             }
             target += encoded + "@"
         }
-        return ["view", "-N", target + request.server.host]
+        let host = request.server.host
+        // Only an IPv6 address holds a `:` (`Server.init(host:)`); it needs its brackets back.
+        return ["view", "-N", target + (host.contains(":") ? "[\(host)]" : host)]
     }
 
     public func start(_ request: ShareRequest) throws(ShareListError) -> any ShareEnumeration {

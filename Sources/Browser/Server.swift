@@ -23,10 +23,10 @@ public struct Server: Hashable, Sendable {
     }
 
     /// The server at `host`, as `host` reads it: without a user, port or IPv6 brackets. A saved
-    /// session stores it so. Nil for an empty host and for a Bonjour name whose escapes don't
-    /// decode.
+    /// session stores it so. Nil for a host `isHost` refuses and for a Bonjour name whose escapes
+    /// don't decode.
     public init?(host: String) {
-        guard !host.isEmpty, let name = Self.name(ofHost: host) else { return nil }
+        guard Self.isHost(host), let name = Self.name(ofHost: host) else { return nil }
         self.host = host
         self.name = name
     }
@@ -37,6 +37,53 @@ public struct Server: Hashable, Sendable {
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(host.lowercased())
+    }
+
+    /// Whether `host` is an IPv6 address, with an optional `%zone`, or a host name: an IPv4
+    /// address, a DNS name or a Bonjour name, whose `\` escapes one character or starts `\DDD`
+    /// and whose `%` starts two hex digits. `smbutil` reads its target as a URL, so a host that
+    /// holds `/ ? # @ : [ ]`, white space or a control character could name a target other than
+    /// the one the row shows, and is none.
+    private static func isHost(_ host: String) -> Bool {
+        if host.contains(":") { return isIPv6(host) }
+        var characters = host.unicodeScalars.makeIterator()
+        var count = 0
+        while let character = characters.next() {
+            count += 1
+            switch character {
+            case "\\":
+                guard let escaped = characters.next(), !isReserved(escaped) else { return false }
+            case "%":
+                guard let high = characters.next(), let low = characters.next(),
+                    high.properties.isASCIIHexDigit, low.properties.isASCIIHexDigit
+                else { return false }
+            default:
+                guard !isReserved(character) else { return false }
+            }
+        }
+        return count > 0
+    }
+
+    /// Whether `character` ends or splits a URL's host, or is white space or a control or format
+    /// character.
+    private static func isReserved(_ character: Unicode.Scalar) -> Bool {
+        "/?#@:[]".unicodeScalars.contains(character) || character.properties.isWhitespace
+            || [.control, .format].contains(character.properties.generalCategory)
+    }
+
+    /// Whether `host` is an IPv6 address `inet_pton` reads, with an optional `%zone` of ASCII
+    /// letters, digits, `.`, `_` and `-`.
+    private static func isIPv6(_ host: String) -> Bool {
+        let parts = host.split(separator: "%", maxSplits: 1, omittingEmptySubsequences: false)
+        if parts.count == 2 {
+            guard !parts[1].isEmpty,
+                parts[1].allSatisfy({
+                    $0.isASCII && ($0.isLetter || $0.isNumber || "._-".contains($0))
+                })
+            else { return false }
+        }
+        var address = in6_addr()
+        return inet_pton(AF_INET6, String(parts[0]), &address) == 1
     }
 
     private static func host(inMountSource source: String) -> String? {

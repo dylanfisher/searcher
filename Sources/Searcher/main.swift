@@ -65,7 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             let logger = Logger(category: "cache")
             // One store, so a share's sizes are kept in its volume file beside its listings.
             let store = ListingCacheStore(
-                roots: roots, log: { logger.error("\($0, privacy: .public)") })
+                roots: roots, log: { logger.error("\($0)") })
             let cache = ListingCache(store: store)
             self.cache = cache
             // The app's one mount table: the service lists servers from it, and the windows'
@@ -77,8 +77,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             let dropLogger = Logger(category: "folderSizes")
             folderSizes = FolderSizeService(
                 cache: FolderSizeCache(
-                    store: store, debugLog: { dropLogger.debug("\($0, privacy: .public)") }),
-                log: { sizeLogger.error("\($0, privacy: .public)") })
+                    store: store, debugLog: { dropLogger.debug("\($0)") }),
+                log: { sizeLogger.error("\($0)") })
             let (problems, problemFeed) = AsyncStream.makeStream(of: StoreProblem.self)
             storeProblems = problems
             let workspaceStore = WorkspaceStore(roots: roots, report: { problemFeed.yield($0) })
@@ -235,7 +235,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 }
 
 // First, so the launch span starts as early as the app's own code can start it.
-let bench = UIBenchOptions(arguments: CommandLine.arguments).map(UIBench.init)
+let bench = UIBenchOptions(
+    arguments: CommandLine.arguments, environment: ProcessInfo.processInfo.environment
+).map(UIBench.init)
 
 // Started before anything else runs on the main thread, and kept until the process exits.
 let stallWatchdog = StallLogging.start(

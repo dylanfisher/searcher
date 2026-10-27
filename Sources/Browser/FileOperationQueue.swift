@@ -523,6 +523,27 @@ public actor FileOperationQueue {
         }
     }
 
+    /// `path`, a file a promise source reports, with the links in its folder resolved, when that
+    /// folder is `dropFolder` or inside it; nil otherwise. Both folders are resolved, since a
+    /// source may report `/private/var/…` for a drop folder made at `/var/…`. The file itself
+    /// isn't followed: a link the source wrote moves as a link.
+    public func resolved(_ path: String, in dropFolder: DropFolder) async -> String? {
+        await BlockingCallThread.run { () -> String? in
+            func resolve(_ path: String) -> String? {
+                guard let resolved = realpath(path, nil) else { return nil }
+                defer { free(resolved) }
+                return String(cString: resolved)
+            }
+            let url = URL(fileURLWithPath: path, isDirectory: false)
+            let name = url.lastPathComponent
+            guard name != ".", name != "..", let folder = resolve(dropFolder.path),
+                let parent = resolve(url.deletingLastPathComponent().path),
+                isPath(parent, atOrUnder: folder)
+            else { return nil }
+            return parent + "/" + name
+        }
+    }
+
     private func clear(_ dropFolders: [DropFolder]) async -> [FileOperationError] {
         let fileSystem = fileSystem
         let errors = await BlockingCallThread.run {

@@ -34,6 +34,10 @@ hand before the step that builds it.
   `<instance>._<service>._tcp.<domain>`, with `\DDD`, `\c` and percent escapes undone
   ("HAL9000"), and the host as written otherwise ("192.168.1.5"). Two keys can show one name:
   the same instance in two domains, or over SMB and AFP, are two servers both named "HAL9000".
+  A host is an IPv6 address (with an optional `%zone`) or a name whose characters leave a URL
+  host whole: no `/ ? # @ : [ ]`, white space or control character, `\` only as an escape
+  and `%` only before two hex digits. A source or a saved session with any other host names no
+  server, since `smbutil` would read it as another target than the row shows (AU.7).
   Shares mounted outside `/Volumes`, or whose source doesn't parse, keep their own rows as 0108
   has them (Dylan confirmed 2026-10-26).
 - **The model: `Location` gets a second case.** `enum Location { case folder(path: String),
