@@ -19,8 +19,8 @@ public final class EntrySource: PaletteSource {
     private var items: [PaletteItem]
     /// Makes every row's item, off the main actor; nil when the first rows were all.
     private(set) var preparing: Task<[PaletteItem], Never>?
-    /// Takes `preparing`'s items and hands them over, unless the palette closed first. Tests
-    /// wait on it.
+    /// Takes `preparing`'s items and hands them over, unless the palette closed first, which
+    /// cancels it. Tests wait on it.
     private(set) var handOver: Task<Void, Never>?
     /// Hands over the items for the latest query; nil once the palette closed.
     private var deliver: (@MainActor ([PaletteItem]) -> Void)?
@@ -72,7 +72,8 @@ public final class EntrySource: PaletteSource {
         self.preparing = preparing
         handOver = Task { [weak self] in
             let items = await preparing.value
-            guard let self else { return }
+            // A cancelled preparation returns no items; the first rows stay.
+            guard let self, !Task.isCancelled else { return }
             self.items = items
             deliver?(items)
         }
@@ -85,6 +86,7 @@ public final class EntrySource: PaletteSource {
 
     public func cancel() {
         preparing?.cancel()
+        handOver?.cancel()
         deliver = nil
     }
 
