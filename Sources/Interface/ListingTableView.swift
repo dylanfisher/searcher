@@ -82,15 +82,58 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
             }
         }
     }
-    /// Runs when a row's selection or its emphasis changes, which sets the style its cells
-    /// draw in. Set by the list's controller.
-    var rowStyleDidChange: @MainActor (NSTableRowView) -> Void = { _ in }
+    /// How much further in than AppKit's full-width style puts them the first column's cells
+    /// start and the last column's cells end, so a row's content sits inside its selection's
+    /// rounded band (`ListingRowView`) with the room Finder leaves there, as the inset style
+    /// places it. The header's titles move with their cells (`HeaderCell`).
+    static let cellInset: CGFloat = 8
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         // AppKit's type-select makes a row view for each row it checks, on the main thread, so a
         // letter key in a 100k-entry folder costs hundreds of milliseconds.
         allowsTypeSelect = false
+    }
+
+    override func frameOfCell(atColumn column: Int, row: Int) -> NSRect {
+        Self.inset(
+            super.frameOfCell(atColumn: column, row: row), column: column, of: numberOfColumns)
+    }
+
+    /// `frame`, a cell's or a header title's in `column` of `count`, moved in by `cellInset` at
+    /// the table's ends.
+    static func inset(_ frame: NSRect, column: Int, of count: Int) -> NSRect {
+        var frame = frame
+        if column == 0 {
+            frame.origin.x += cellInset
+            frame.size.width -= cellInset
+        }
+        if column == count - 1 {
+            frame.size.width -= cellInset
+        }
+        frame.size.width = max(frame.width, 0)
+        return frame
+    }
+
+    /// A column's header cell, whose title starts and ends where the cells under it do. Only the
+    /// title moves: the header's rects, which its fill, clicks, resizing and reordering use, and
+    /// the sort indicator stay AppKit's. The column it heads is the one under its frame at each
+    /// draw, so the title follows a column the user moves. Drawn anywhere but in a table's
+    /// header, as AppKit may draw it for a dragged column's image, the title stays where AppKit
+    /// puts it: no table's ends are there to move it from.
+    final class HeaderCell: NSTableHeaderCell {
+        override func drawInterior(withFrame cellFrame: NSRect, in controlView: NSView) {
+            guard let header = controlView as? NSTableHeaderView, let table = header.tableView
+            else {
+                super.drawInterior(withFrame: cellFrame, in: controlView)
+                return
+            }
+            let column = header.column(at: NSPoint(x: cellFrame.midX, y: cellFrame.midY))
+            super.drawInterior(
+                withFrame: ListingTableView.inset(
+                    cellFrame, column: column, of: table.numberOfColumns),
+                in: controlView)
+        }
     }
 
     @available(*, unavailable)

@@ -1290,6 +1290,67 @@ private let chevronTree: [String: [DirectoryEntry]] = [
     #expect(iconCache.folderChevron.isTemplate)
 }
 
+/// The bounds of what `image` draws, in points from its lower left: its pixels more than half
+/// opaque, drawn at 4 pixels a point in the light appearance whatever the Mac's.
+@MainActor
+private func inkBounds(of image: NSImage) throws -> NSRect {
+    let light = try #require(NSAppearance(named: .aqua))
+    let scale = 4.0
+    let bitmap = try #require(
+        NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: Int(image.size.width * scale),
+            pixelsHigh: Int(image.size.height * scale), bitsPerSample: 8, samplesPerPixel: 4,
+            hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0,
+            bitsPerPixel: 0))
+    bitmap.size = image.size
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+    light.performAsCurrentDrawingAppearance {
+        image.draw(in: NSRect(origin: .zero, size: image.size))
+    }
+    NSGraphicsContext.restoreGraphicsState()
+    var ink = NSRect.null
+    for y in 0..<bitmap.pixelsHigh {
+        for x in 0..<bitmap.pixelsWide
+        where (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.5 {
+            // The bitmap's rows run down from the top.
+            let bottom = Double(bitmap.pixelsHigh - y - 1)
+            ink = ink.union(
+                NSRect(x: Double(x) / scale, y: bottom / scale, width: 1 / scale, height: 1 / scale)
+            )
+        }
+    }
+    return ink
+}
+
+/// Finder's chevron is small and thin beside the 13-point name: its glyph about 6 points tall
+/// and 3.5 wide, its right edge 4.5 points inside the row's selection, measured from Dylan's
+/// screenshots (chevron-finder.jpg). The glyph is measured as drawn, not by its view's frame.
+@MainActor @Test func theChevronIsFindersSize() async throws {
+    let iconCache = TypeIconCache { _ in NSImage() }
+    let fixture = await Fixture(iconCache: iconCache, folders: chevronTree)
+    let table = fixture.tables[0]
+    let row = try #require(rowNames(table).firstIndex(of: "docs"))
+    let rowView = try #require(table.rowView(atRow: row, makeIfNecessary: true) as? ListingRowView)
+    let cell = try #require(rowView.view(atColumn: 0) as? NSTableCellView)
+    let mark = try chevron(cell)
+    #expect(iconCache.folderChevron.symbolConfiguration == TypeIconCache.folderChevronConfiguration)
+
+    // The view draws its image unscaled, centered across it.
+    let image = try #require(mark.image)
+    #expect(mark.imageScaling == .scaleNone && mark.imageAlignment == .alignCenter)
+    let ink = try inkBounds(of: image)
+    let imageMinX = mark.frame.minX + (mark.frame.width - image.size.width) / 2
+    let glyph = rowView.convert(
+        NSRect(x: imageMinX + ink.minX, y: mark.frame.minY, width: ink.width, height: ink.height),
+        from: cell)
+
+    #expect(abs(glyph.height - 6) <= 1, "\(glyph)")
+    #expect(abs(glyph.width - 3.5) <= 1, "\(glyph)")
+    let inside = rowView.selectionPath.bounds.maxX - glyph.maxX
+    #expect(abs(inside - 4.5) <= 0.75, "\(inside)")
+}
+
 @MainActor @Test func aNameEndsBeforeTheChevron() async throws {
     let fixture = await Fixture(folders: chevronTree)
     let table = fixture.tables[0]
@@ -1299,7 +1360,9 @@ private let chevronTree: [String: [DirectoryEntry]] = [
     let text = try #require(cell.textField)
 
     #expect(text.frame.maxX <= mark.frame.minX)
-    #expect(mark.frame.maxX <= cell.bounds.width)
+    // The chevron reaches a little past the cell, never past the row's selection.
+    let row = try #require(cell.superview as? ListingRowView)
+    #expect(row.convert(mark.frame, from: cell).maxX <= row.selectionPath.bounds.maxX)
     // A file's name takes the room back.
     let file = try nameCell(table, row: try #require(names.firstIndex(of: "a.txt")))
     #expect(try #require(file.textField).frame.width > text.frame.width)

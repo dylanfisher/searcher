@@ -62,7 +62,21 @@ name about 32 ms, and a click selecting half the rows 32–51 ms.
   changed row). In a release build on 100k rows, `selectRowIndexes` from one row to all took
   13–15 ms with it and 0.2 ms with `.fullWidth`; shifting 50k selected rows by one, 6–8 ms and
   0.01 ms. The table keeps its own selection, so clicks, Shift-clicks and VoiceOver work as
-  before.
+  before. (Amended 2026-10-26, RN.2, from Dylan's screenshots of Finder: the table keeps the
+  full-width style, and `ListingRowView.drawSelection` draws the inset style's look. The band
+  sits `Margin.standard` (9 pt) in from the row's sides, so it lines up with the path bar's
+  first folder, with 8 pt corners, as the inset style draws them; accent while emphasized,
+  `unemphasizedSelectedContentBackgroundColor` otherwise. It is square where the row above or
+  below is selected, from the row's `isPreviousRowSelected` and `isNextRowSelected`, which
+  AppKit keeps in the full-width style too, so adjacent selected rows make one block, as
+  Finder's do. Only row views on screen redraw. `ListingTableView.frameOfCell` moves the first
+  column's cells 8 pt right and ends the last column's 8 pt sooner, so the icon sits 7 pt inside
+  the band, as Finder's does; the inset style would move them 10 pt, but its cost is what this
+  record avoids. The header's titles move with their cells through the columns' header cells
+  (`ListingTableView.HeaderCell`), which inset only the title they draw: the header's rects,
+  which its fill, sort clicks, resizing and reordering use, stay AppKit's, so a press in the
+  first column's left 8 pt still lands on it. The drop-target highlight on a folder row stays
+  AppKit's square full-width one; only the selection is rounded.)
 - **A new listing of the folder on screen refreshes the rows in place.** A patch, a sort or a
   reload of the folder shown tells the table the row count (`noteNumberOfRowsChanged`) and
   fills the cells of the row views it already has, instead of `reloadData`, which drops them
