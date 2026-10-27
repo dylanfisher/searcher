@@ -1,5 +1,6 @@
 import Base
 import Foundation
+import os
 
 /// Runs file operations off the main actor. Each operation is planned first (`OperationPlan`):
 /// volumes read and copies pre-scanned. Operations that copy, which are copies, duplicates and
@@ -148,6 +149,8 @@ public actor FileOperationQueue {
         /// The first of the sources given second that the folder given first is or is inside,
         /// judged by the items' identities, or nil when there is none.
         var sourceHolding: @Sendable (String, [String]) throws(FileOperationError) -> String?
+        /// Writes a line to the log, for what goes wrong without failing an operation.
+        var log: @Sendable (String) -> Void
 
         static let real = FileSystem(
             volumeOf: VolumeIdentity.init(path:),
@@ -164,7 +167,8 @@ public actor FileOperationQueue {
                 guard rmdir(path) == 0 else { throw FileOperationError(errno: errno, path: path) }
             },
             makeIdentifier: OperationPlan.identifier, stamp: OperationPlan.stamp,
-            sourceHolding: OperationPlan.source(holding:among:))
+            sourceHolding: OperationPlan.source(holding:among:),
+            log: { message in Logger(category: "file-operations").error("\(message)") })
     }
 
     private let fileSystem: FileSystem
@@ -197,6 +201,9 @@ public actor FileOperationQueue {
     /// Drop folders made and not yet removed.
     private var dropFolders: Set<DropFolder> = []
     private var finished = 0
+    /// The paths whose volume's case sensitivity an undo's check couldn't read, each logged
+    /// once.
+    private var pathsWithUnreadCase: Set<String> = []
 
     /// The longest an undo waits for an operation still being planned or run that it would
     /// otherwise wait for, such as a move whose volume is on a share that stopped answering:
@@ -681,6 +688,12 @@ public actor FileOperationQueue {
             return
         } catch {
             preconditionFailure("planning \(operation) threw \(error)")
+        }
+        for (path, error) in plan.unreadCaseSensitivity.sorted(by: { $0.key < $1.key })
+        where pathsWithUnreadCase.insert(path).inserted {
+            fileSystem.log(
+                "undo compares names without case at \(path), since whether its volume tells "
+                    + "case apart couldn't be read: \(error)")
         }
         entry.plan = plan
         entry.errors = plan.failures

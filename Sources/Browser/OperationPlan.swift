@@ -48,6 +48,10 @@ public struct OperationPlan: Equatable, Sendable {
     /// Items that can't run, such as a source that is gone, and a destination whose volume
     /// can't be read.
     public let failures: [FileOperationError]
+    /// For an undo, why the volume, or whether it tells case apart, couldn't be read for a pair
+    /// of paths that differ only by case, by the path read: the check compared the pair without
+    /// case, as on most volumes, and the queue logs it.
+    var unreadCaseSensitivity: [String: ListingError] = [:]
 
     /// The sizes of the items that are copied, added up; nil when no item is.
     public var total: TreeSizeWalker.Total? { Self.total(of: items) }
@@ -258,11 +262,15 @@ public struct OperationPlan: Equatable, Sendable {
             return try volume.get()
         }
         var caseSensitivity: [VolumeIdentity: Result<Bool, ListingError>] = [:]
+        var unreadCaseSensitivity: [String: ListingError] = [:]
         /// Whether `path` and `other` name one place: spelled alike, or differing only by case
         /// on a volume that doesn't tell case apart. That is the volume of the folder holding
-        /// the first name that differs or, where that folder is gone, of the nearest folder
-        /// above it that is there.
-        func isSamePlace(_ path: String, _ other: String) throws(FileOperationError) -> Bool {
+        /// the first name that differs or, where no folder is there (`ENOENT`, or `ENOTDIR`
+        /// through a file), of the nearest folder above it that is there. Where the volume, or
+        /// whether it tells case apart, can't be read, the pair is one place, as on most
+        /// volumes, and the error is kept for the log: a check that failed on it would drop
+        /// the undo of a rename that changed only case.
+        func isSamePlace(_ path: String, _ other: String) -> Bool {
             let spelled = FileOperation.comparable(path, foldsCase: false)
             let otherSpelled = FileOperation.comparable(other, foldsCase: false)
             if spelled == otherSpelled { return true }
@@ -279,7 +287,9 @@ public struct OperationPlan: Equatable, Sendable {
                     do throws(ListingError) {
                         found = try volume(ofFolder: folder)
                         break
-                    } catch let error where error.code == ENOENT && parentPath(of: folder) != folder
+                    } catch let error
+                        where [ENOENT, ENOTDIR].contains(error.code)
+                        && parentPath(of: folder) != folder
                     {
                         folder = parentPath(of: folder)
                     }
@@ -290,7 +300,8 @@ public struct OperationPlan: Equatable, Sendable {
                 caseSensitivity[found] = sensitive
                 return try !sensitive.get()
             } catch {
-                throw failure(error)
+                unreadCaseSensitivity[error.path] = error
+                return true
             }
         }
         // What the earlier steps leave at each path they touch: by comparable path, each
@@ -305,14 +316,14 @@ public struct OperationPlan: Equatable, Sendable {
         }
         /// Whether `path` holds an item once the earlier steps have run, or nil when none
         /// touched it.
-        func left(at path: String) throws(FileOperationError) -> Bool? {
+        func left(at path: String) -> Bool? {
             for entry in (after[FileOperation.comparable(path)] ?? []).reversed() {
-                if try isSamePlace(entry.path, path) { return entry.isTaken }
+                if isSamePlace(entry.path, path) { return entry.isTaken }
             }
             return nil
         }
         func isTaken(_ path: String) throws(FileOperationError) -> Bool {
-            if let taken = try left(at: path) { return taken }
+            if let taken = left(at: path) { return taken }
             return try inspect(path) != nil
         }
         // The steps' paths by comparable path, so a missing folder that is one of them is
@@ -341,7 +352,7 @@ public struct OperationPlan: Equatable, Sendable {
             if !spellings.contains(where: {
                 FileOperation.comparable($0, foldsCase: false) == spelled
             }) {
-                for item in spellings where try isSamePlace(item, missing) {
+                for item in spellings where isSamePlace(item, missing) {
                     missing = item
                     break
                 }
@@ -356,7 +367,7 @@ public struct OperationPlan: Equatable, Sendable {
             let source = step.source
             do throws(FileOperationError) {
                 if let source {
-                    if let taken = try left(at: source) {
+                    if let taken = left(at: source) {
                         if !taken { try gone(source) }
                     } else if try inspect(source) == nil {
                         try gone(source)
@@ -375,7 +386,7 @@ public struct OperationPlan: Equatable, Sendable {
                     // A rename that changes only case, on a volume that doesn't tell case
                     // apart, finds the item itself at its destination.
                     var isItself = false
-                    if let source { isItself = try isSamePlace(source, destination) }
+                    if let source { isItself = isSamePlace(source, destination) }
                     if !isItself, try isTaken(destination) {
                         failures.append(
                             FileOperationError(reason: .exists, path: destination, errno: EEXIST))
@@ -390,7 +401,9 @@ public struct OperationPlan: Equatable, Sendable {
             if let destination = step.destination { leave(destination, isTaken: true) }
         }
         guard failures.isEmpty else {
-            return OperationPlan(items: [], lane: nil, failures: failures)
+            return OperationPlan(
+                items: [], lane: nil, failures: failures,
+                unreadCaseSensitivity: unreadCaseSensitivity)
         }
         func volume(of path: String) throws(ListingError) -> VolumeIdentity {
             try volume(ofFolder: parentPath(of: path))
@@ -455,9 +468,12 @@ public struct OperationPlan: Equatable, Sendable {
                     crossesVolumes: crosses, conflict: nil))
         }
         guard failures.isEmpty else {
-            return OperationPlan(items: [], lane: nil, failures: failures)
+            return OperationPlan(
+                items: [], lane: nil, failures: failures,
+                unreadCaseSensitivity: unreadCaseSensitivity)
         }
-        return OperationPlan(items: items, lane: lane, failures: [])
+        return OperationPlan(
+            items: items, lane: lane, failures: [], unreadCaseSensitivity: unreadCaseSensitivity)
     }
 
     /// The pre-scan of `source`, or the error that kept it from being read; a cancel throws.
