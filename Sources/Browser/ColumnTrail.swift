@@ -332,6 +332,18 @@ public final class ColumnTrail {
         owner.trailDidChange()
     }
 
+    /// Selects the focused column's first row once it shows the whole folder, as → does in the
+    /// column it moves into, if nothing is selected there by then: for a folder chosen in Open
+    /// Quickly, which the trail started again at. The selection is part of that navigation, so
+    /// it records no step.
+    func selectFirstRowOnceListed() {
+        let pane = focused.pane
+        guard pane.selection.isEmpty else { return }
+        focused.selectsFirstRowAt = pane.selectionVersion
+        // A selection made now reports itself, and the columns follow it.
+        selectFirstRowIfWanted(in: focused)
+    }
+
     /// ← , and Cmd-↑ outside the home column (`moveUp`): moves to the column on the left,
     /// keeping the columns to the right. A column waiting for the keys to pause gives up the
     /// wait, so the folder selected in it opens no column until → or another selection. Does
@@ -629,24 +641,13 @@ public final class ColumnTrail {
             column.selectsFirstRowAt = nil
             return false
         }
-        guard Self.showsWholeFolder(pane.state), let listing = pane.state.listing else {
+        guard pane.state.showsWholeFolder, let listing = pane.state.listing else {
             return false
         }
         column.selectsFirstRowAt = nil
         guard listing.count > 0, pane.selection.isEmpty else { return false }
         pane.selectFirstRow(byKey: false, recordingAs: nil)
         return pane.selectionVersion != version
-    }
-
-    /// Whether `state`'s rows are the whole folder in its sort, so their first row is the
-    /// folder's: a full listing or cached rows, kept or not, but not a first batch.
-    private static func showsWholeFolder(_ state: ListingState) -> Bool {
-        switch state {
-        case .loaded, .cachedRefreshing: true
-        case .slow(let kept), .offline(let kept):
-            kept.map { $0.isComplete || $0.listedAt != nil } ?? false
-        case .loading, .partial, .denied, .failed: false
-        }
     }
 
     /// Drops the columns right of `column` that its key-made selection no longer asks for, and

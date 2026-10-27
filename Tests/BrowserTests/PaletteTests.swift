@@ -31,7 +31,7 @@ private final class PaletteFixture {
     init(homeFolder: [DirectoryEntry] = [], heldHome: Bool = false) throws {
         lister = GatedLister([
             "/root": .batches([[file("a.txt")]]),
-            "\(home)/projects": .batches([[]]),
+            "\(home)/projects": .batches([[file("b.txt"), file("a.txt")]]),
             home: .batches([homeFolder]),
         ])
         lister.release("/root")
@@ -169,6 +169,19 @@ private final class PaletteFixture {
     fixture.palette.run(try fixture.result(titled: "~/projects"))
 
     #expect(fixture.pane.location == Location(path: "\(home)/projects"))
+    // Its first row is selected once listed (Pane.navigateSelectingFirstRow).
+    await settle { fixture.pane.selection.cursor == ExactName("a.txt") }
+}
+
+@MainActor @Test func aTypedPathsFolderSelectsItsFirstRowOnceListed() async throws {
+    let fixture = try PaletteFixture(homeFolder: [folder("projects")])
+
+    fixture.palette.setQuery("~/pro")
+    await settle { fixture.titles.contains("~/projects") }
+    fixture.palette.run(try fixture.result(titled: "~/projects"))
+
+    #expect(fixture.pane.location == Location(path: "\(home)/projects"))
+    await settle { fixture.pane.selection.cursor == ExactName("a.txt") }
 }
 
 @MainActor @Test func aWorkspaceItemOpensIt() async throws {

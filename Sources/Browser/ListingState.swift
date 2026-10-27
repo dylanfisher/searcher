@@ -81,6 +81,17 @@ public enum ListingState: Sendable {
         }
     }
 
+    /// The rows are the whole folder in its sort, so their first row is the folder's: a full
+    /// listing or cached rows, kept or not, but not a first batch.
+    var showsWholeFolder: Bool {
+        switch self {
+        case .loaded, .cachedRefreshing: true
+        case .slow(let kept), .offline(let kept):
+            kept.map { $0.isComplete || $0.listedAt != nil } ?? false
+        case .loading, .partial, .denied, .failed: false
+        }
+    }
+
     /// The rows shown came from the pane's own load, a first batch or all of it, so the folder's
     /// volume answered. Cached rows, and the rows a slow or offline state keeps, come from a
     /// volume that hasn't answered since, and a read there can wait on a share that is gone.
