@@ -120,7 +120,7 @@ private func buildMenu(_ registry: CommandRegistry) throws -> NSMenu {
     let error = #expect(throws: MainMenuBuilder.BuildError.self) {
         try buildMenu(CommandRegistry())
     }
-    #expect(error?.description.contains(WindowCommands.newWindow.id.rawValue) == true)
+    #expect(error?.description.contains(SystemCommands.openConfigFile.id.rawValue) == true)
 }
 
 @MainActor @Test func aCommandOnAnAppOrWindowChordFailsNamingBoth() throws {
@@ -1003,4 +1003,16 @@ private func expectKey(_ chord: KeyChord?, on item: NSMenuItem, _ comment: Comme
     #expect(!NSApplication.shared.responds(to: settings.action))
     expectKey(KeyChord(",", modifiers: .command), on: settings)
     #expect(MainMenuBuilder.reservedChords.contains(KeyChord(",", modifiers: .command)))
+}
+
+/// Open Config File sits under Settings…, the other way to change the settings.
+@MainActor @Test func theAppMenuHasOpenConfigFileUnderSettings() throws {
+    let menu = try buildMenu(try AppCommands.registry())
+    let appMenu = try #require(menu.items.first?.submenu)
+    let settings = try #require(appMenu.items.firstIndex { $0.title == "Settings…" })
+
+    let next = appMenu.items[settings + 1]
+
+    #expect(next.title == "Open Config File")
+    #expect(next.representedObject as? CommandID == SystemCommands.openConfigFile.id)
 }

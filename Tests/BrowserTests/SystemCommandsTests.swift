@@ -3,6 +3,7 @@ import BrowserTestSupport
 import Foundation
 import TestSupport
 import Testing
+import UniformTypeIdentifiers
 
 @testable import Browser
 
@@ -226,4 +227,78 @@ private func isEnabled(_ chord: KeyChord, on pane: Pane) throws -> Bool {
     #expect(fixture.actions.revealed == [[music]])
     #expect(fixture.actions.shownInfo == [[music]])
     #expect(try !isEnabled(openTerminal, on: fixture.pane))
+}
+
+// MARK: Open Config File
+
+private let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
+
+/// Settings whose config file is `file`, over a suite in the file's test folder.
+@MainActor
+private func configured(_ folder: TemporaryFolder, file: URL) -> Settings {
+    Settings(
+        defaults: temporarySuite(in: folder.url.path), configFile: file,
+        log: unexpectedSettingsLog)
+}
+
+private func openConfigBinding() throws -> CommandBinding {
+    try #require(AppCommands.bindings.first { $0.command == SystemCommands.openConfigFile })
+}
+
+/// With no file and no folder, the command makes both, the file from the template, and opens it
+/// in the default app for plain text.
+@MainActor @Test func openConfigFileWithNoFileCreatesItFromTheTemplate() async throws {
+    let folder = try TemporaryFolder("SystemCommandsTests")
+    let file = folder.url.appending(path: "searcher/config")
+    let settings = configured(folder, file: file)
+    let fixture = await systemPane(settings: settings)
+    fixture.actions.setApplications([:], defaultApplications: [.plainText: textEdit])
+    let binding = try openConfigBinding()
+    #expect(binding.isEnabled?(CommandContext(pane: fixture.pane)) ?? true)
+
+    binding.run(CommandContext(pane: fixture.pane))
+    await settle { !fixture.actions.openedWithApp.isEmpty }
+
+    #expect(try String(contentsOf: file, encoding: .utf8) == ConfigTemplate.text)
+    #expect(fixture.actions.openedWithApp == [OpenedWithApp(urls: [file], application: textEdit)])
+}
+
+@MainActor @Test func openConfigFileWithAFileOpensItAndLeavesItsBytes() async throws {
+    let folder = try TemporaryFolder("SystemCommandsTests")
+    let file = folder.url.appending(path: "config")
+    let bytes = Data("show-hidden = true\n".utf8)
+    try bytes.write(to: file)
+    let actions = StubSystemActions(defaultApplications: [.plainText: textEdit])
+
+    await SystemCommands.openConfig(
+        settings: configured(folder, file: file), systemActions: actions
+    )
+    .value
+
+    #expect(try Data(contentsOf: file) == bytes)
+    #expect(actions.openedWithApp == [OpenedWithApp(urls: [file], application: textEdit)])
+}
+
+/// A file that can't be made shows in the banner, and nothing opens.
+@MainActor @Test func aConfigFileThatCantBeCreatedIsReported() async throws {
+    let folder = try TemporaryFolder("SystemCommandsTests")
+    // The file's folder is a file, so neither can be made.
+    try Data().write(to: folder.url.appending(path: "searcher"))
+    let file = folder.url.appending(path: "searcher/config")
+    let settings = configured(folder, file: file)
+    let actions = StubSystemActions(defaultApplications: [.plainText: textEdit])
+
+    await SystemCommands.openConfig(settings: settings, systemActions: actions).value
+
+    #expect(settings.configErrors.count == 1)
+    #expect(settings.configErrors.first?.description.contains("couldn't be created") == true)
+    #expect(actions.openedWithApp.isEmpty)
+    #expect(actions.openedFiles.isEmpty)
+}
+
+/// Settings with no config file, as the tests' and the bench's, leave the command off.
+@MainActor @Test func openConfigFileIsOffWithoutAConfigFile() async throws {
+    let fixture = await systemPane()
+
+    #expect(try openConfigBinding().isEnabled?(CommandContext(pane: fixture.pane)) == false)
 }

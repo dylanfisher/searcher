@@ -160,3 +160,10 @@ Tags needs search, which is on hold.
 A favorite moved while the app is active shows its old name until the next activation or a
 click on it. A mount while the app is active doesn't un-grey a favorite until then either.
 `Settings` now stores Data in a preference.
+
+## Amendment: the config file (2026-10-27)
+
+The favorites stay out of the config file ([0120](0120-config-format.md)): they are where the
+user left things in the sidebar, not a choice typed ahead of time. The sidebar's three groups
+can be shown or hidden from it, as `sidebar-favorites`, `sidebar-locations` and
+`sidebar-workspaces`.

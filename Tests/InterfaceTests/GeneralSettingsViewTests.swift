@@ -1,4 +1,5 @@
 import AppKit
+import BrowserTestSupport
 import ServiceManagement
 import Testing
 
@@ -47,7 +48,8 @@ final class StubLoginItem: LoginItem {
 /// A model over `loginItem` that records what it would announce instead of posting it.
 @MainActor
 private func general(_ loginItem: StubLoginItem) -> (GeneralSettings, () -> [String]) {
-    let model = GeneralSettings(loginItem: loginItem)
+    let model = GeneralSettings(
+        loginItem: loginItem, settings: untouchedSettings(), systemActions: StubSystemActions())
     var announced: [String] = []
     model.postAccessibility = { _, notification, userInfo in
         #expect(notification == .announcementRequested)

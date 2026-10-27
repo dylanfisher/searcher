@@ -1,4 +1,5 @@
 import AppKit
+import Browser
 import Observation
 import ServiceManagement
 import SwiftUI
@@ -7,6 +8,10 @@ import SwiftUI
 /// checkbox shows the status last read from them, never a stored copy, and is read again when
 /// the window shows and when the app becomes active, so a change made in System Settings shows
 /// (docs/decisions/0113-open-at-login.md).
+///
+/// Under it, the config file: where it is, a button that opens it, and each setting changed in
+/// the app to another value than the file's, with a button that gives the file's value back
+/// (docs/decisions/0120-config-format.md).
 @MainActor @Observable
 final class GeneralSettings {
     /// What the pane says while the item waits for the user to allow it in System Settings.
@@ -30,9 +35,46 @@ final class GeneralSettings {
                     element: element, notification: notification, userInfo: userInfo)
             }
 
-    init(loginItem: any LoginItem) {
+    @ObservationIgnored private let settings: Browser.Settings
+    @ObservationIgnored private let systemActions: any SystemActions
+    /// The settings changed in the app to another value than the config file's, as
+    /// `Settings.configOverrides` last had them.
+    private(set) var configOverrides: [Browser.Settings.ConfigOverride]
+
+    init(loginItem: any LoginItem, settings: Browser.Settings, systemActions: any SystemActions) {
         self.loginItem = loginItem
         loginItemStatus = loginItem.status
+        self.settings = settings
+        self.systemActions = systemActions
+        configOverrides = settings.configOverrides
+        settings.observe(for: self) { [weak self, weak settings] in
+            guard let self, let settings else { return }
+            let overrides = settings.configOverrides
+            if overrides != configOverrides { configOverrides = overrides }
+        }
+    }
+
+    /// The config file's path, or nil for settings with none, which hide its section.
+    var configFilePath: String? { settings.configFile?.path }
+
+    /// What the pane says of `override`: the value the app has, then the file's.
+    static func note(for override: Browser.Settings.ConfigOverride) -> String {
+        "Searcher has \(spelled(override.appValue)); the config file has"
+            + " \(spelled(override.fileValue))."
+    }
+
+    /// `value` as the file spells it, without quotes, which the note's sentence doesn't need.
+    private static func spelled(_ value: Browser.Settings.Value) -> String {
+        guard case .string(let string) = value else { return value.description }
+        return string
+    }
+
+    func openConfigFile() {
+        SystemCommands.openConfig(settings: settings, systemActions: systemActions)
+    }
+
+    func useConfigValue(for override: Browser.Settings.ConfigOverride) {
+        settings.useConfigValue(for: override)
     }
 
     /// Whether the checkbox is on: registered, or registered and waiting for approval.
@@ -114,9 +156,47 @@ struct GeneralSettingsView: View {
                     Button("OK") { model.dismissLoginItemProblem() }.controlSize(.small)
                 }
             }
+            if let path = model.configFilePath {
+                Divider().padding(.vertical, 8)
+                configFile(path)
+            }
             Spacer()
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Where the config file is, its button, and the settings the app overrides in it.
+    @ViewBuilder
+    private func configFile(_ path: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Config file")
+                Text((path as NSString).abbreviatingWithTildeInPath)
+                    .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            }
+            Spacer()
+            Button(SystemCommands.openConfigFile.title) { model.openConfigFile() }
+        }
+        if !model.configOverrides.isEmpty {
+            Text("Changed in Searcher, which wins over the config file:")
+                .font(.caption).foregroundStyle(.secondary).padding(.top, 8)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(model.configOverrides, id: \.name) { override in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(override.name).font(.body.monospaced())
+                                Text(GeneralSettings.note(for: override))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Use Config File Value") { model.useConfigValue(for: override) }
+                                .controlSize(.small)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
