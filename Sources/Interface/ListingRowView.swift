@@ -5,7 +5,9 @@ import AppKit
 /// `selectionRadius`, in the accent color while emphasized and grey otherwise, and square where
 /// the row above or below is selected too, so adjacent selected rows make one block. The table
 /// keeps its full-width style, which selects many rows in a fraction of the inset style's time
-/// (docs/decisions/0029-row-movement.md).
+/// (docs/decisions/0029-row-movement.md). In a table whose `selectionShape` is `.fullWidth`, as a
+/// column view's first column is, the selection is the whole row, square, as Finder's first
+/// column draws it (docs/decisions/0046-column-view.md).
 ///
 /// Its selection stays emphasized while its table keeps it so
 /// (`ListingTableView.keepsSelectionEmphasized`), though AppKit, which emphasizes a selection
@@ -62,9 +64,11 @@ final class ListingRowView: NSTableRowView {
         isEmphasized ? .selectedContentBackgroundColor : .unemphasizedSelectedContentBackgroundColor
     }
 
-    /// The shape the selection is drawn in: rounded at the top unless the row above is
-    /// selected, and at the bottom unless the row below is.
+    /// The shape the selection is drawn in: the whole row in a table that selects full width,
+    /// otherwise a band rounded at the top unless the row above is selected, and at the bottom
+    /// unless the row below is.
     var selectionPath: NSBezierPath {
+        if table?.selectionShape == .fullWidth { return NSBezierPath(rect: bounds) }
         let rect = bounds.insetBy(dx: Self.selectionInset, dy: 0)
         let radius = min(Self.selectionRadius, rect.width / 2, rect.height / 2)
         // The view is flipped: the top is at minY.
