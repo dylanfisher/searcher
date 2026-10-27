@@ -278,6 +278,35 @@ private func shownNames(_ controller: ListingViewController) -> [String] {
     #expect(!table.visibleRect.intersects(table.rect(ofRow: 2)))
 }
 
+/// A folder change too large to patch lists the folder again, and the rows land as a patch's
+/// do: the selection follows its names and the view stays where the user scrolled it.
+@MainActor @Test func aChangeOverThePatchLimitRelistsKeepingTheSelectionAndScroll() async throws {
+    let entries = (0..<2_000).map { file(String(format: "e%04d", $0)) }
+    let lister = StubLister([:])
+    let controller = await controller(showing: entries, lister: lister)
+    let pane = controller.pane
+    let table = controller.tableView
+    controller.view.layoutSubtreeIfNeeded()
+    pane.select(Selection([ExactName("e0000"), ExactName("e0001")], cursor: ExactName("e0001")))
+    table.scrollRowToVisible(1_500)
+    let scrolled = table.visibleRect
+
+    // The folder now holds one new first row, and a batch names more entries than one patch run
+    // takes.
+    lister.set("/folder", to: [file("a-new")] + entries)
+    let unlisted = (0...FolderChange.patchLimit).map { FolderChange.Patch.update(file("z\($0)")) }
+    pane.apply(.patches(unlisted), at: pane.location)
+    await settle { controller.listing?.count == 2_001 && pane.selection.isSettled }
+    // Past the pass a scroll after a reload waits for.
+    await withCheckedContinuation { continuation in
+        DispatchQueue.main.async { continuation.resume() }
+    }
+
+    #expect(table.numberOfRows == 2_001)
+    #expect(table.selectedRowIndexes == [1, 2])
+    #expect(table.visibleRect == scrolled)
+}
+
 /// A row that leaves the folder goes at once, as in Finder: the table keeps no row view past the
 /// new last row fading out, as it does when the count drops inside an animation.
 @MainActor @Test func aRowThatLeavesGoesAtOnceWithNoFade() async throws {
