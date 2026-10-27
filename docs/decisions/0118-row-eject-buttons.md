@@ -41,6 +41,9 @@ sidebar had the button.
   trailing edge in a list (`ListingCellLayout.ejectX`). The glyph is centered in the 22-point
   button, so it ends about 6 points before the chevron, as Finder's does. The name ends where the
   button starts and truncates before it, never under it. The rename field ends there too.
+- **VoiceOver names the volume.** A list can show many buttons, so each one's label is
+  `Eject “name”`, the menu item's title (`WorkspaceSidebarViewController.ejectTitle`), not the
+  glyph's "Eject" alone.
 - **A press goes to the button.** The table never sees it, so the selection, the keys and the
   folder shown stay as they were.
 - **Cost per row.** The button is made the first time a cell shows one, so the cells of other

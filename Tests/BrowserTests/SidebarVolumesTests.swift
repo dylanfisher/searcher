@@ -321,3 +321,25 @@ private func share(_ mountPoint: String, of server: Server?) -> SidebarVolume {
     // without it lands.
     #expect(volumes.ejecting == [music.mountPoint])
 }
+
+/// A list view's column is made per navigation and observes the list, so observing drops the
+/// observers whose owners are gone, with their handlers, rather than only at the next change.
+@MainActor @Test func observingDropsTheObserversWhoseOwnersAreGone() async {
+    final class Owner {}
+    final class Captured {}
+    let volumes = StubSidebarVolumes().list()
+    weak var captured: Captured?
+    do {
+        let owner = Owner()
+        let held = Captured()
+        captured = held
+        volumes.observe(for: owner) { _ = held }
+    }
+    #expect(captured != nil)
+
+    let next = Owner()
+    volumes.observe(for: next) {}
+
+    #expect(captured == nil)
+    withExtendedLifetime(next) {}
+}

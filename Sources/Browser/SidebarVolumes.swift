@@ -84,6 +84,7 @@ public final class SidebarVolumes {
     /// Runs `handler` after each change of `volumes` or `ejecting`, for as long as `owner`
     /// exists.
     public func observe(for owner: AnyObject, _ handler: @escaping @MainActor () -> Void) {
+        observers.removeAll { $0.owner == nil }
         observers.append(Observer(owner: owner, handler: handler))
     }
 
