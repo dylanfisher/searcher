@@ -22,23 +22,31 @@ AGENTS.md first; these rules add to it.
 7. Never take focus or show windows on the main display; test windows go on the second display
    (0091-test-windows-on-second-display.md). Never run `./scripts/dev`. Don't run benches.
 8. Never write to `tmp/` or `/Volumes`. Scratch files go in your session's scratchpad directory,
-   named with your step as a prefix.
+   named with your step as a prefix. Read the user's screenshots from `tmp/shots/` when the brief
+   names them.
 9. No `&` and no `pkill` in shell commands. Run anything concurrent as a background command.
 10. Commit on your worktree branch, following docs/writing.md, with no Claude or Anthropic
     attribution. Never push.
 11. Match Finder for behavior questions. Undo and persistence must have no edge cases.
-12. Report the commit sha(s), what changed, the tests added and how each failed before the change,
+12. A step that adds a path the user can reach (a place, a row, a menu item, a view) has at least
+    one window-level test that drives it through the real collaborators. Fakes stand in only for
+    the disk, the network and the clock, never for the icon cache, the listing service or the
+    views: SB.7c's stubbed icon cache hid a crash that every server listing would have hit.
+13. Report the commit sha(s), what changed, the tests added and how each failed before the change,
     the gate result, judgement calls, the benches to run, and steps to check by hand.
 
 ## Reviewers
 
-1. Reset your worktree to the builder's sha and confirm it. Write no product code and commit
-   nothing.
+1. Check out the builder's sha in a throwaway `git worktree add` under `$TMPDIR` and confirm it;
+   remove it at the end. Never run `git checkout` or `git switch` in the main repo directory: the
+   merge gate runs there. Write no product code and commit nothing.
 2. Run `./scripts/test --changed <base>`, where `<base>` is the commit the step sits on. The
    orchestrator runs the full gate at merge. Don't run it.
 3. A test that waits on real time is a finding. Say whether it can fail under load and what would
    make it deterministic; the fix goes in before merge, not after it flakes.
-4. Report PASS or FAIL. For each finding give file:line, the problem, a concrete failure scenario,
+4. A user-reachable path with no window-level test through the real collaborators (builders,
+   rule 12) is a blocking finding.
+5. Report PASS or FAIL. For each finding give file:line, the problem, a concrete failure scenario,
    its severity, and whether it blocks. Keep nits apart from blockers.
 
 ## Orchestrator
@@ -59,3 +67,7 @@ AGENTS.md first; these rules add to it.
    working blind each define it, and one fails review for it.
 7. Never run a load reproduction (a CPU hog for a flake hunt) while a merge gate runs. Flake hunts
    and merges take turns.
+8. Save the user's screenshots into `tmp/shots/` as soon as they arrive, named for what they
+   show, and give builders the paths. Describe what to match only beside the image, never instead
+   of it: a misread "no white box" in RN.1's brief cost a build, a FAIL and a full redo. The
+   scratchpad is wiped when a session crashes; `tmp/` is not.
