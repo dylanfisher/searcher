@@ -113,6 +113,7 @@ private struct Window {
     /// The server's rows, once it shows `names`, with the commands' registry on its table.
     func shows(_ names: [String]) async throws -> ListingViewController {
         await settle { self.serverPane.state.names == names }
+        try #require(serverPane.state.names == names)
         let list = try serverList
         list.tableView.registry = try AppCommands.registry()
         return list
