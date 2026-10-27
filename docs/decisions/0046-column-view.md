@@ -124,9 +124,9 @@ template that is white on a selected row in the focused column and secondary gra
 files, packages and links show none, since the listing holds no link target and resolving one
 would be a read, and a name is fitted to end before the chevron. Amended 2026-10-26, RN.2:
 Finder's chevron, measured from Dylan's screenshots beside the 13 pt name, is about 6 pt tall,
-3.5 pt wide and a thin stroke, so the symbol is 7 pt regular, not 10 pt semibold; its view is
-the image's 6 pt width at the cell's right edge, about 5 pt inside the row's selection, as
-Finder's sits 4.5 pt inside). A column whose folder can't be
+3.5 pt wide and a thin stroke, so the symbol is 7 pt regular, not 10 pt semibold. Its view is
+the image's 6 pt width and ends 2 pt past the cell's right edge, so the drawn glyph ends 4.5 pt
+inside the row's selection, as Finder's does). A column whose folder can't be
 listed shows an empty table with no message; only the spinner is per column ([0053](0053-column-accessibility.md)).
 (Superseded 2026-10-24: a column with no rows to show says why in its middle, in the list's
 words from `PaneViewController.message(for:)`, `AccessDeniedView` and `PaneStatusText`. Denied

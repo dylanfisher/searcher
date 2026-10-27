@@ -99,7 +99,31 @@ private func alpha(of row: NSView, at point: NSPoint) throws -> Double {
     let icon = try #require(name.imageView)
     let last = try #require(row.view(atColumn: table.numberOfColumns - 1) as? NSView)
 
-    let band = (row as? ListingRowView)?.selectionPath.bounds ?? .zero
-    #expect(row.convert(icon.frame, from: name).minX - band.minX == 7)
+    let band = try #require(row as? ListingRowView).selectionPath.bounds
+    let iconInside = row.convert(icon.frame, from: name).minX - band.minX
+    // Where AppKit's full-width style starts the first cell, in a table of its own.
+    let rows = OneRow()
+    let plain = NSTableView(frame: table.frame)
+    plain.style = table.style
+    plain.intercellSpacing = table.intercellSpacing
+    let column = NSTableColumn(identifier: table.tableColumns[0].identifier)
+    column.width = table.tableColumns[0].width
+    plain.addTableColumn(column)
+    plain.dataSource = rows
+    plain.reloadData()
+    let appKitCellX = plain.frameOfCell(atColumn: 0, row: 0).minX
+
+    #expect(
+        iconInside
+            == appKitCellX + ListingTableView.cellInset + icon.frame.minX
+            - ListingRowView.selectionInset)
+    // Finder's icon sits 7 points inside its selection (chevron-finder.jpg).
+    #expect(iconInside == 7)
     #expect(row.convert(last.bounds, from: last).maxX <= band.maxX - 5)
+}
+
+/// One row of nothing, for a table of AppKit's own.
+@MainActor
+private final class OneRow: NSObject, NSTableViewDataSource {
+    func numberOfRows(in tableView: NSTableView) -> Int { 1 }
 }

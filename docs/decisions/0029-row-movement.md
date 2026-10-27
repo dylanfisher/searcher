@@ -70,9 +70,13 @@ name about 32 ms, and a click selecting half the rows 32–51 ms.
   below is selected, from the row's `isPreviousRowSelected` and `isNextRowSelected`, which
   AppKit keeps in the full-width style too, so adjacent selected rows make one block, as
   Finder's do. Only row views on screen redraw. `ListingTableView.frameOfCell` moves the first
-  column's cells 8 pt right and ends the last column's 8 pt sooner, and its header moves the
-  titles with them, so the icon sits 7 pt inside the band, as Finder's does; the inset style
-  would move them 10 pt, but its cost is what this record avoids.)
+  column's cells 8 pt right and ends the last column's 8 pt sooner, so the icon sits 7 pt inside
+  the band, as Finder's does; the inset style would move them 10 pt, but its cost is what this
+  record avoids. The header's titles move with their cells through the columns' header cells
+  (`ListingTableView.HeaderCell`), which inset only the title they draw: the header's rects,
+  which its fill, sort clicks, resizing and reordering use, stay AppKit's, so a press in the
+  first column's left 8 pt still lands on it. The drop-target highlight on a folder row stays
+  AppKit's square full-width one; only the selection is rounded.)
 - **A new listing of the folder on screen refreshes the rows in place.** A patch, a sort or a
   reload of the folder shown tells the table the row count (`noteNumberOfRowsChanged`) and
   fills the cells of the row views it already has, instead of `reloadData`, which drops them

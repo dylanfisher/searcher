@@ -411,3 +411,116 @@ private let quickLook = ViewCommands.toggleQuickLook
     #expect(recording.queries == ["x", "xy"])
     #expect(recording.beeps == 2)
 }
+
+// MARK: - The header and the cells' inset
+
+/// A list's table, its columns laid out and its header in place.
+@MainActor
+private func laidOutList() async throws -> (table: ListingTableView, header: NSTableHeaderView) {
+    let list = await controller(showing: [file("a")])
+    list.view.layoutSubtreeIfNeeded()
+    list.tableView.layoutSubtreeIfNeeded()
+    return (list.tableView, try #require(list.tableView.headerView))
+}
+
+/// The index of the column titled `title` in `table`, in the order shown.
+@MainActor
+private func column(_ title: String, in table: NSTableView) throws -> Int {
+    try #require(table.tableColumns.firstIndex { $0.title == title })
+}
+
+/// Where the first dark pixel of `header`'s drawing is, left to right, in `rect`: the start of
+/// the title drawn there.
+@MainActor
+private func titleStart(in header: NSTableHeaderView, within rect: NSRect) throws -> Double {
+    let bitmap = try #require(header.bitmapImageRepForCachingDisplay(in: header.bounds))
+    header.cacheDisplay(in: header.bounds, to: bitmap)
+    let scale = Double(bitmap.pixelsWide) / header.bounds.width
+    let y = Int(header.bounds.midY * scale)
+    for x in Int(rect.minX * scale)..<Int(rect.maxX * scale) {
+        for dy in -4...4 {
+            guard let color = bitmap.colorAt(x: x, y: y + dy)?.usingColorSpace(.sRGB),
+                color.alphaComponent > 0.5,
+                (color.redComponent + color.greenComponent + color.blueComponent) / 3 < 0.5
+            else { continue }
+            return Double(x) / scale
+        }
+    }
+    Issue.record("no title drawn in \(rect)")
+    return .nan
+}
+
+/// How far right of where AppKit's own header cell draws it the title of `index` starts.
+@MainActor
+private func titleShift(ofColumn index: Int, in header: NSTableHeaderView) throws -> Double {
+    let column = try #require(header.tableView?.tableColumns[index])
+    let rect = header.headerRect(ofColumn: index)
+    let moved = try titleStart(in: header, within: rect)
+    let cell = column.headerCell
+    let plain = NSTableHeaderCell(textCell: cell.stringValue)
+    plain.alignment = cell.alignment
+    column.headerCell = plain
+    defer { column.headerCell = cell }
+    return moved - (try titleStart(in: header, within: rect))
+}
+
+/// The first column's title and cells move in by the one constant, `cellInset`; a column
+/// between the ends keeps AppKit's. The last column's cells end that much sooner.
+@MainActor @Test func theFirstHeadersTitleMovesInWithItsCells() async throws {
+    let (table, header) = try await laidOutList()
+    let last = table.numberOfColumns - 1
+    let inset = ListingTableView.cellInset
+
+    #expect(try column("Name", in: table) == 0)
+    #expect(abs(try titleShift(ofColumn: 0, in: header) - inset) <= 0.5)
+    #expect(abs(try titleShift(ofColumn: 1, in: header)) <= 0.5)
+    // AppKit's cells, in a table of its own with the same columns.
+    let plain = NSTableView(frame: table.frame)
+    plain.style = table.style
+    plain.intercellSpacing = table.intercellSpacing
+    for column in table.tableColumns {
+        let copy = NSTableColumn(identifier: column.identifier)
+        copy.width = column.width
+        plain.addTableColumn(copy)
+    }
+    let rows = ThreeRows()
+    plain.dataSource = rows
+    plain.reloadData()
+    let first = table.frameOfCell(atColumn: 0, row: 0)
+    let plainFirst = plain.frameOfCell(atColumn: 0, row: 0)
+    #expect(first.minX - plainFirst.minX == inset)
+    #expect(
+        plain.frameOfCell(atColumn: last, row: 0).maxX
+            - table.frameOfCell(atColumn: last, row: 0).maxX == inset)
+    #expect(table.frameOfCell(atColumn: 1, row: 0) == plain.frameOfCell(atColumn: 1, row: 0))
+}
+
+/// A column the user moves to the front takes the moved title; the one it displaced loses it.
+@MainActor @Test func aColumnMovedToTheFrontTakesTheMovedTitle() async throws {
+    let (table, header) = try await laidOutList()
+
+    table.moveColumn(try column("Kind", in: table), toColumn: 0)
+
+    #expect(try column("Kind", in: table) == 0)
+    #expect(abs(try titleShift(ofColumn: 0, in: header) - ListingTableView.cellInset) <= 0.5)
+    #expect(abs(try titleShift(ofColumn: try column("Name", in: table), in: header)) <= 0.5)
+}
+
+/// Only the titles move: the header's rects stay AppKit's, from the header's left edge to the
+/// last column's end, so a press in the first column's left 8 points or the last column's right
+/// 8 points lands on that column, to sort it or drag it, and the last column's resize edge is
+/// where it shows. A real press can't be sent (`clickHeader` in ListingViewControllerTests says
+/// why), so the column the header finds at the point stands for it.
+@MainActor @Test func theHeadersRectsAndPressesStayAppKits() async throws {
+    let (table, header) = try await laidOutList()
+    let last = table.numberOfColumns - 1
+    let first = header.headerRect(ofColumn: 0)
+    let end = header.headerRect(ofColumn: last)
+
+    #expect(first.minX == 0)
+    #expect(first.minX == table.rect(ofColumn: 0).minX)
+    #expect(end.maxX == table.rect(ofColumn: last).maxX)
+    let inset = ListingTableView.cellInset
+    #expect(header.column(at: NSPoint(x: first.minX + inset / 2, y: first.midY)) == 0)
+    #expect(header.column(at: NSPoint(x: end.maxX - inset / 2, y: end.midY)) == last)
+}
