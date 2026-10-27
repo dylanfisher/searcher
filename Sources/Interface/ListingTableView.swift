@@ -85,7 +85,7 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
     /// How much further in than AppKit's full-width style puts them the first column's cells
     /// start and the last column's cells end, so a row's content sits inside its selection's
     /// rounded band (`ListingRowView`) with the room Finder leaves there, as the inset style
-    /// places it. The header's titles move with their cells.
+    /// places it. The header's titles move with their cells (`HeaderCell`).
     static let cellInset: CGFloat = 8
 
     override init(frame frameRect: NSRect) {
@@ -93,10 +93,6 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
         // AppKit's type-select makes a row view for each row it checks, on the main thread, so a
         // letter key in a 100k-entry folder costs hundreds of milliseconds.
         allowsTypeSelect = false
-        guard let header = headerView else {
-            preconditionFailure("a new table has no header view")
-        }
-        headerView = HeaderView(frame: header.frame)
     }
 
     override func frameOfCell(atColumn column: Int, row: Int) -> NSRect {
@@ -104,9 +100,9 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
             super.frameOfCell(atColumn: column, row: row), column: column, of: numberOfColumns)
     }
 
-    /// `frame`, a cell's or a header's in `column` of `count`, moved in by `cellInset` at the
-    /// table's ends.
-    fileprivate static func inset(_ frame: NSRect, column: Int, of count: Int) -> NSRect {
+    /// `frame`, a cell's or a header title's in `column` of `count`, moved in by `cellInset` at
+    /// the table's ends.
+    static func inset(_ frame: NSRect, column: Int, of count: Int) -> NSRect {
         var frame = frame
         if column == 0 {
             frame.origin.x += cellInset
@@ -119,12 +115,21 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
         return frame
     }
 
-    /// The column header, whose titles start and end where the cells under them do.
-    private final class HeaderView: NSTableHeaderView {
-        override func headerRect(ofColumn column: Int) -> NSRect {
-            ListingTableView.inset(
-                super.headerRect(ofColumn: column), column: column,
-                of: tableView?.numberOfColumns ?? 0)
+    /// A column's header cell, whose title starts and ends where the cells under it do. Only the
+    /// title moves: the header's rects, which its fill, clicks, resizing and reordering use, and
+    /// the sort indicator stay AppKit's. The column it heads is the one under its frame at each
+    /// draw, so the title follows a column the user moves.
+    final class HeaderCell: NSTableHeaderCell {
+        override func drawInterior(withFrame cellFrame: NSRect, in controlView: NSView) {
+            guard let header = controlView as? NSTableHeaderView, let table = header.tableView
+            else {
+                preconditionFailure("a header cell drawn outside a table's header: \(controlView)")
+            }
+            let column = header.column(at: NSPoint(x: cellFrame.midX, y: cellFrame.midY))
+            super.drawInterior(
+                withFrame: ListingTableView.inset(
+                    cellFrame, column: column, of: table.numberOfColumns),
+                in: controlView)
         }
     }
 

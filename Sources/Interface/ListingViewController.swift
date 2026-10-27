@@ -480,7 +480,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
 
     private static func tableColumn(for column: SortColumn) -> NSTableColumn {
         let tableColumn = NSTableColumn(identifier: column.identifier)
-        tableColumn.title = column.title
+        tableColumn.headerCell = ListingTableView.HeaderCell(textCell: column.title)
         tableColumn.width = column.width
         tableColumn.minWidth = 40
         tableColumn.sortDescriptorPrototype = sortDescriptor(
@@ -1091,9 +1091,12 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     private static let badgeSize = 16.0
     /// The space between a name and its badge or chevron.
     private static let badgeGap = 4.0
-    /// The chevron's width, its image's (`TypeIconCache.folderChevron`). It sits at the cell's
-    /// right edge, which leaves it as far inside the row's selection as Finder's.
+    /// The chevron's width, its image's (`TypeIconCache.folderChevron`).
     static let chevronWidth = 6.0
+    /// How far past the cell's right edge the chevron's view ends, still inside the row's
+    /// selection: the glyph, which stops 1.5 points short of its image's right edge, then ends
+    /// 4.5 points inside the selection, as Finder's does.
+    private static let chevronOverhang = 2.0
     /// The room a shown chevron takes from the cell's trailing padding, which a badge keeps clear
     /// of.
     private static let chevronReserve = chevronWidth - 2 + badgeGap
@@ -1108,7 +1111,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             let chevron = named.chevron
             chevron.identifier = Self.folderChevronIdentifier
             chevron.frame = NSRect(
-                x: column.width - Self.chevronWidth,
+                x: column.width - Self.chevronWidth + Self.chevronOverhang,
                 y: (height - Self.badgeSize) / 2, width: Self.chevronWidth,
                 height: Self.badgeSize)
             chevron.autoresizingMask = [.minXMargin, .minYMargin, .maxYMargin]
