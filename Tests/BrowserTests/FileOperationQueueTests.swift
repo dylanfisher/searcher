@@ -16,8 +16,9 @@ let volumeS = VolumeIdentity(device: "/dev/fakeS", mountPoint: "/S", kind: .loca
 /// item are folders that exist. A copy logs its start, reports `progressSteps`
 /// changes, then waits until its source is released or the copy is cancelled. A pre-scan of a
 /// held path waits until it is let go, as one on a share that stopped answering does. Every
-/// path under `/S` exists; elsewhere only what a test places does, so a copy or move into
-/// another volume has no conflict unless the test places one.
+/// path under `/S` exists, and every path in a volume's Trash, where a trash puts an item;
+/// elsewhere only what a test places does, so a copy or move into another volume has no
+/// conflict unless the test places one.
 final class FakeFiles: @unchecked Sendable {
     let events = EventLog<String>()
     private let condition = NSCondition()
@@ -25,6 +26,7 @@ final class FakeFiles: @unchecked Sendable {
     private var placed: [String: ConflictRequest.Item] = [:]
     private var hasNoTrash = false
     private var heldScans: Set<String> = []
+    private var heldNewFolders: Set<String> = []
     private var heldVolumes: Set<String> = []
     private var released: Set<String> = []
     private var allReleased = false
@@ -110,6 +112,18 @@ final class FakeFiles: @unchecked Sendable {
     func letScanGo(of path: String) {
         condition.withLock {
             heldScans.remove(path)
+            condition.broadcast()
+        }
+    }
+
+    /// Making a new folder in `folder` waits until it is let go.
+    func holdNewFolder(in folder: String) {
+        condition.withLock { _ = heldNewFolders.insert(folder) }
+    }
+
+    func letNewFolderGo(in folder: String) {
+        condition.withLock {
+            heldNewFolders.remove(folder)
             condition.broadcast()
         }
     }
@@ -225,8 +239,13 @@ final class FakeFiles: @unchecked Sendable {
                     throw FileOperationError(reason: .noTrash, path: path, errno: nil)
                 }
                 self.events.append("trash \(path)")
+                // In the Trash of the item's volume, as the system puts it.
+                let volume = self.condition.withLock { self.volumes }.first {
+                    isPath(path, atOrUnder: $0.mountPoint)
+                }
                 return URL(
-                    fileURLWithPath: "/S/.Trashes/501/" + (path as NSString).lastPathComponent)
+                    fileURLWithPath: (volume?.mountPoint ?? "/S") + "/.Trashes/501/"
+                        + (path as NSString).lastPathComponent)
             },
             putBack: { url, destination throws(FileOperationError) in
                 try move(url.path, destination)
@@ -241,6 +260,12 @@ final class FakeFiles: @unchecked Sendable {
                 self.events.append("delete \(path)")
             },
             makeUntitledFolder: { folder throws(FileOperationError) in
+                self.condition.withLock {
+                    if self.heldNewFolders.contains(folder) {
+                        self.events.append("holding new folder in \(folder)")
+                    }
+                    while self.heldNewFolders.contains(folder) { self.condition.wait() }
+                }
                 self.events.append("new folder in \(folder)")
                 return folder + "/untitled folder"
             },
@@ -262,7 +287,8 @@ final class FakeFiles: @unchecked Sendable {
                 }
                 if let item { return item }
                 if isFolder { return Self.item(path, isFolder: true) }
-                return isPath(path, atOrUnder: "/S") ? Self.item(path) : nil
+                return isPath(path, atOrUnder: "/S") || path.contains("/.Trashes/")
+                    ? Self.item(path) : nil
             },
             listNames: { folder throws(FileOperationError) in
                 self.events.append("list \(folder)")
@@ -511,7 +537,7 @@ func pause() async throws {
     #expect(watcher.state(of: move)?.record.changes == [.moved(from: "/A/x", to: "/A/sorted/x")])
     #expect(
         watcher.state(of: trash)?.record.changes == [
-            .trashed(from: "/A/old", to: URL(fileURLWithPath: "/S/.Trashes/501/old"))
+            .trashed(from: "/A/old", to: URL(fileURLWithPath: "/A/.Trashes/501/old"))
         ])
     #expect(
         watcher.state(of: newFolder)?.record.changes == [

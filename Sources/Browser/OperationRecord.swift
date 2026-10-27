@@ -5,7 +5,7 @@ import Foundation
 /// things back, and where commands find the names a new folder or a duplicate was given.
 public struct OperationRecord: Equatable, Sendable {
     /// How a change made an item, which tells Redo how to make it again.
-    public enum Origin: Equatable, Sendable {
+    public enum Origin: Hashable, Sendable {
         /// Copied from the item at the path: by a copy, a duplicate, a replace, or a move to
         /// another volume whose source couldn't be deleted. Redo copies from the path again.
         case copy(of: String)
@@ -16,7 +16,7 @@ public struct OperationRecord: Equatable, Sendable {
         case drop
     }
 
-    public enum Change: Equatable, Sendable {
+    public enum Change: Hashable, Sendable {
         /// A copy, a duplicate, a new folder or a drop made this item.
         case created(String, from: Origin)
         /// A move or a rename; across volumes, the source was deleted once its copy was done.

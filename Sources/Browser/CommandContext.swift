@@ -57,6 +57,10 @@ public struct CommandContext {
     /// The app's undo history of file changes, for Undo and Redo. Nil where there is none; those
     /// commands are off then, and without `fileOperations`, which runs them.
     public let undoHistory: UndoHistory?
+    /// Plays the alert sound, as AppKit does for a key whose menu item is off: for Undo or Redo
+    /// pressed with nothing it can do. Only the view can; a context built without it traps when
+    /// a press finds nothing to do.
+    public let beep: @MainActor () -> Void
     /// The command runs for a key held down, repeating, rather than pressed: a row key's
     /// repeats are one step of the selection history with its press.
     public let isKeyRepeat: Bool
@@ -109,6 +113,9 @@ public struct CommandContext {
         editName: (@MainActor () -> Void)? = nil,
         clipboard: CutState? = nil,
         undoHistory: UndoHistory? = nil,
+        beep: @escaping @MainActor () -> Void = {
+            preconditionFailure("this command context can't beep")
+        },
         isKeyRepeat: Bool = false
     ) {
         if let workspace {
@@ -136,6 +143,7 @@ public struct CommandContext {
         self.editName = editName
         self.clipboard = clipboard
         self.undoHistory = undoHistory
+        self.beep = beep
         self.isKeyRepeat = isKeyRepeat
     }
 

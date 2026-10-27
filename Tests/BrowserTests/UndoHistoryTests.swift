@@ -282,6 +282,8 @@ private func tree(_ root: String) throws -> [String] {
     #expect(!harness.history.canRedo)
 }
 
+/// An item now where the undo would put one fails it, naming the path. The user can move that
+/// item away, so the entry stays, and the undo runs once it is gone.
 @MainActor @Test func anItemNowAtTheOldPathFailsTheUndoNamingIt() async throws {
     let folder = try TemporaryFolder("UndoHistoryTests")
     let root = folder.url.path
@@ -297,8 +299,10 @@ private func tree(_ root: String) throws -> [String] {
     )
     #expect(try read(root + "/a.txt") == "new")
     #expect(try read(root + "/b.txt") == "a")
-    // Only a missing folder keeps an entry; this one would block every older undo.
-    #expect(!harness.history.canUndo)
+    #expect(harness.history.undoTitle == "Undo Rename")
+    try FileManager.default.removeItem(atPath: root + "/a.txt")
+    #expect(try await harness.undo().phase == .done)
+    #expect(try read(root + "/a.txt") == "a")
 }
 
 /// An item whose folder is gone too, as on a drive that isn't mounted, fails the undo naming
@@ -865,7 +869,7 @@ func aPressWaitingItsTurnWhileANewChangeIsMadeDoesNothing() async throws {
     files.remove("/A/mail.eml")
     let redone = try await value(of: history.redo(with: queue))
     #expect(redone.phase == .done)
-    #expect(files.events.all.contains("move /S/.Trashes/501/mail.eml to /A/mail.eml"))
+    #expect(files.events.all.contains("move /A/.Trashes/501/mail.eml to /A/mail.eml"))
 }
 
 // MARK: Commands
@@ -1320,6 +1324,12 @@ func aPressWaitingItsTurnWhileANewChangeIsMadeDoesNothing() async throws {
     #expect(undone.errors.map(\.reason) == [.notTheSameItem])
     #expect(try read(root + "/b.txt") == "new")
     #expect(!exists(root + "/a.txt"))
+    // The entry stays, and its next undo checks again: the other item is never moved.
+    #expect(harness.history.undoTitle == "Undo Rename")
+    let again = try await harness.undo()
+    #expect(again.errors.map(\.reason) == [.notTheSameItem])
+    #expect(try read(root + "/b.txt") == "new")
+    #expect(!exists(root + "/a.txt"))
     #expect(!harness.history.canUndo)
 }
 
@@ -1401,7 +1411,8 @@ private func finished(_ changes: OperationRecord.Change...) -> OperationState {
 
 /// A move between volumes undone whose copy back is made but whose item can't be deleted where
 /// it was: the copy back is in no entry, so there is no Redo, and the move stays to undo. Its
-/// check then names the copy in the way, which drops it: both copies are kept.
+/// check then names the copy in the way, which keeps the entry once; failing again drops it.
+/// Both copies are kept.
 @MainActor @Test func anUndoThatCopiesBackButCantDeleteOffersNoRedo() async throws {
     let files = FakeFiles(releasingAll: true)
     let watcher = Watcher()
@@ -1420,7 +1431,10 @@ private func finished(_ changes: OperationRecord.Change...) -> OperationState {
     #expect(history.undoTitle == "Undo Move 1 Item")
     files.place("/A/x")
     let again = try await value(of: history.undo(with: queue))
-    #expect(again.errors == [FileOperationError(reason: .exists, path: "/A/x", errno: EEXIST)])
+    let inTheWay = FileOperationError(reason: .exists, path: "/A/x", errno: EEXIST)
+    #expect(again.errors == [inTheWay])
+    #expect(history.undoTitle == "Undo Move 1 Item")
+    #expect(try await value(of: history.undo(with: queue)).errors == [inTheWay])
     #expect(!history.canUndo)
 }
 
@@ -1454,8 +1468,9 @@ private func finished(_ changes: OperationRecord.Change...) -> OperationState {
         undone.record.changes == [
             .moved(from: "/A/d/p3", to: "/A/p3"), .moved(from: "/A/d/p1", to: "/A/p1"),
         ])
-    #expect(history.undoTitle == "Undo Move 3 Items")
-    #expect(history.redoTitle == "Redo Move 3 Items")
+    // Each side is named for what it holds.
+    #expect(history.undoTitle == "Undo Move 1 Item")
+    #expect(history.redoTitle == "Redo Move 2 Items")
     let again = try await value(of: history.undo(with: queue))
     #expect(again.record.changes == [.moved(from: "/A/d/p2", to: "/A/p2")])
     #expect(!history.canUndo)
@@ -1474,7 +1489,7 @@ private func finished(_ changes: OperationRecord.Change...) -> OperationState {
     let watcher = Watcher()
     let history = UndoHistory(log: { _ in })
     let queue = followedQueue(history, fileSystem: files.fileSystem(), watcher: watcher)
-    let original = URL(fileURLWithPath: "/S/.Trashes/501/old/a")
+    let original = URL(fileURLWithPath: "/A/.Trashes/501/old/a")
     recordEarlier(
         history, .copy(["/S/a"], into: "/A"),
         finished(
@@ -1489,12 +1504,12 @@ private func finished(_ changes: OperationRecord.Change...) -> OperationState {
     let redone = try await value(of: history.redo(with: queue))
 
     #expect(redone.errors == [gone])
-    #expect(redone.record.changes.map(\.location) == ["/S/.Trashes/501/a"])
+    #expect(redone.record.changes.map(\.location) == ["/A/.Trashes/501/a"])
     #expect(history.undoTitle == "Undo Replace")
     #expect(history.redoTitle == "Redo Replace")
     files.remove("/A/a")
     #expect(try await value(of: history.undo(with: queue)).phase == .done)
-    #expect(files.events.all.contains("move /S/.Trashes/501/a to /A/a"))
+    #expect(files.events.all.contains("move /A/.Trashes/501/a to /A/a"))
 }
 
 /// A move to another volume whose source couldn't be deleted is recorded as a copy, so its undo
@@ -1584,7 +1599,11 @@ private func finished(_ changes: OperationRecord.Change...) -> OperationState {
     #expect(
         undone.errors == [FileOperationError(reason: .notTheSameItem, path: "/A/b", errno: nil)])
     #expect(!files.events.all.contains("move /A/b to /A/a"))
-    #expect(!history.canUndo)
+    // Kept: the recorded item may come back to the path, and the undo then runs.
+    #expect(history.undoTitle == "Undo Rename")
+    files.identify("/A/b", as: FakeFiles.identity)
+    #expect(try await value(of: history.undo(with: queue)).phase == .done)
+    #expect(files.events.all.contains("move /A/b to /A/a"))
 }
 
 /// An operation an item of which couldn't be identified can't be undone: its entry reads
@@ -1859,4 +1878,200 @@ private func heldQueue(_ history: UndoHistory, _ held: HeldFinishes) -> FileOper
     #expect(files.events.all.contains("move /Volumes/music/b/x.txt to /Volumes/music/a/x.txt"))
     #expect(trail.columns.map(\.pane).elementsEqual(columns, by: ===))
     #expect(server.state.names == ["main", "music"])
+}
+
+// MARK: Large entries
+
+/// What is left of an entry after an undo is each change the undo didn't reverse, in order, with
+/// paths compared without case and with Unicode normalized, and a put back matched by its Trash
+/// URL too.
+@MainActor @Test func theRemainderIsEveryChangeTheUndoDidntReverseInOrder() {
+    let trashed = URL(fileURLWithPath: "/A/.Trashes/501/t")
+    let original = URL(fileURLWithPath: "/A/.Trashes/501/r")
+    let made = URL(fileURLWithPath: "/A/.Trashes/501/m")
+    let changes: [OperationRecord.Change] = [
+        .moved(from: "/A/x", to: "/A/d/Cafe\u{301}"),
+        .trashed(from: "/A/t", to: trashed),
+        .replaced("/A/r", originalTrashedTo: original),
+        .created("/A/r", from: .copy(of: "/S/r")),
+        .putBack(from: trashed, to: "/A/p"),
+        .uncreated("/A/n", from: .newFolder, trashedTo: made),
+        .uncreated("/A/q", from: .drop, trashedTo: made),
+        .moved(from: "/A/y", to: "/A/d/y"),
+    ]
+    // Last first, as an undo runs; the replace's original came back from another Trash URL,
+    // and the drop's file didn't come back.
+    let done: [OperationRecord.Change] = [
+        .moved(from: "/A/d/Y", to: "/A/y"),
+        .created("/A/n", from: .newFolder),
+        .trashed(from: "/A/p", to: URL(fileURLWithPath: "/A/.Trashes/501/p")),
+        .uncreated("/A/r", from: .copy(of: "/S/r"), trashedTo: made),
+        .putBack(from: URL(fileURLWithPath: "/A/.Trashes/501/other"), to: "/A/r"),
+        .putBack(from: trashed, to: "/A/t"),
+        .moved(from: "/A/d/Caf\u{e9}", to: "/A/X"),
+    ]
+
+    #expect(UndoHistory.remainder(of: changes, after: done) == [changes[2], changes[6]])
+}
+
+/// Finding what is left of a large entry reads each path once, not once per change the undo
+/// made: compared pairwise, an undo of a 3,000-item move held the main actor for seconds.
+@MainActor @Test func theRemainderOfALargeEntryReadsEachPathOnce() {
+    let changes = (0..<400).map {
+        OperationRecord.Change.moved(from: "/A/\($0)", to: "/A/d/\($0)")
+    }
+    // Last first; every third failed.
+    let done = changes.indices.reversed().filter { $0 % 3 != 0 }.map {
+        OperationRecord.Change.moved(from: "/A/d/\($0)", to: "/A/\($0)")
+    }
+    var reads = 0
+
+    let left = UndoHistory.remainder(of: changes, after: done) { path in
+        reads += 1
+        return FileOperation.comparable(path)
+    }
+
+    #expect(left == changes.indices.filter { $0 % 3 == 0 }.map { changes[$0] })
+    #expect(reads <= 2 * (changes.count + done.count))
+}
+
+/// Items whose folder is gone, as on a drive that isn't mounted, name it once.
+@MainActor @Test func itemsWhoseFolderIsGoneNameItOnce() async throws {
+    let files = FakeFiles()
+    let watcher = Watcher()
+    let history = UndoHistory(log: { _ in })
+    let queue = followedQueue(history, fileSystem: files.fileSystem(), watcher: watcher)
+    recordEarlier(
+        history, .move(["/A/x", "/A/y"], into: "/A/drive/in"),
+        finished(
+            .moved(from: "/A/x", to: "/A/drive/in/x"), .moved(from: "/A/y", to: "/A/drive/in/y")))
+
+    let undone = try await value(of: history.undo(with: queue))
+
+    #expect(
+        undone.errors == [FileOperationError(reason: .sourceGone, path: "/A/drive", errno: ENOENT)])
+}
+
+// MARK: Kept after a failure
+
+/// A drive unmounted while its undo copies an item back stops the undo with nothing changed;
+/// the entry stays, and the undo runs once the drive is back.
+@MainActor @Test(.timeLimit(.minutes(2))) func anUndoStoppedByAnUnmountKeepsItsEntry()
+    async throws
+{
+    let files = FakeFiles()
+    let watcher = Watcher()
+    let history = UndoHistory(log: { _ in })
+    let queue = followedQueue(history, fileSystem: files.fileSystem(), watcher: watcher)
+    files.place("/B/x")
+    recordEarlier(history, .move(["/A/x"], into: "/B"), finished(.moved(from: "/A/x", to: "/B/x")))
+    let undo = history.undo(with: queue)
+    #expect(await files.events.wait { $0.contains("copy /B/x") })
+
+    await queue.volumeWillUnmount(at: "/B")
+
+    let undone = try await value(of: undo)
+    #expect(undone.phase == .failed)
+    #expect(undone.errors == [FileOperationError(reason: .unreachable, path: "/B", errno: nil)])
+    #expect(undone.record.changes.isEmpty)
+    #expect(history.undoTitle == "Undo Move 1 Item")
+    files.releaseAll()
+    #expect(try await value(of: history.undo(with: queue)).phase == .done)
+    #expect(files.events.all.contains("delete /B/x"))
+}
+
+// MARK: Put back
+
+/// A put back is a rename, so one whose Trash is on another volume than its folder can't run.
+/// The check finds it before anything changes: the item on the same volume isn't put back either.
+@MainActor @Test func aPutBackAcrossVolumesFailsTheCheckBeforeAnythingChanges() async throws {
+    let files = FakeFiles()
+    let watcher = Watcher()
+    let history = UndoHistory(log: { _ in })
+    let queue = followedQueue(history, fileSystem: files.fileSystem(), watcher: watcher)
+    let far = URL(fileURLWithPath: "/B/.Trashes/501/a")
+    recordEarlier(
+        history, .trash(["/A/a", "/A/b"]),
+        finished(
+            .trashed(from: "/A/a", to: far),
+            .trashed(from: "/A/b", to: URL(fileURLWithPath: "/A/.Trashes/501/b"))))
+
+    let undone = try await value(of: history.undo(with: queue))
+
+    #expect(undone.phase == .failed)
+    #expect(
+        undone.errors == [FileOperationError(reason: .crossVolume, path: far.path, errno: EXDEV)])
+    #expect(undone.record.changes.isEmpty)
+    #expect(!files.events.all.contains { $0.hasPrefix("move") })
+}
+
+// MARK: Refusals
+
+/// An undo that would trash the folder a New Folder is being made in is refused while the New
+/// Folder runs, and a New Folder in a folder an unfinished operation moves is refused too.
+@MainActor @Test(.timeLimit(.minutes(2)))
+func aRunningNewFolderAndAnUndoOfItsFolderRefuseEachOther() async throws {
+    let files = FakeFiles()
+    let watcher = Watcher()
+    let history = UndoHistory(log: { _ in })
+    let queue = followedQueue(history, fileSystem: files.fileSystem(), watcher: watcher)
+    files.place("/A/m", isFolder: true)
+    recordEarlier(history, .newFolder(in: "/A"), finished(.created("/A/m", from: .newFolder)))
+    files.holdNewFolder(in: "/A/m")
+    let made = await enqueue(queue, .newFolder(in: "/A/m"), watcher)
+    #expect(await files.events.wait { $0.contains("holding new folder in /A/m") })
+
+    let undone = await result(of: history.undo(with: queue))
+
+    #expect(undone?.phase == .refused(.inUse(path: "/A/m")))
+    #expect(!files.events.all.contains("trash /A/m"))
+    files.letNewFolderGo(in: "/A/m")
+    #expect(await watcher.waitUntilFinished(made))
+
+    // A move to another volume, held in its copy.
+    let move = await enqueue(queue, .move(["/A/m"], into: "/B"), watcher)
+    #expect(await files.events.wait { $0.contains("copy /A/m") })
+    let inside = await queue.perform(.newFolder(in: "/A/m"))
+    #expect(inside.phase == .refused(.inUse(path: "/A/m")))
+    files.releaseAll()
+    #expect(await watcher.waitUntilFinished(move))
+}
+
+// MARK: Keys
+
+/// The Undo and Redo keys run their commands whether or not the items are on. A press that
+/// finds nothing to undo or redo, or a Can’t Undo entry, beeps, as AppKit does for a key whose
+/// item is off; one that undoes or redoes doesn't.
+@MainActor @Test func aPressWithNothingItCanDoBeeps() async throws {
+    let folder = try TemporaryFolder("UndoHistoryTests")
+    let root = folder.url.path
+    try write("a", to: root + "/a.txt")
+    try write("b", to: root + "/b.txt")
+    let harness = Harness()
+    let beeps = EventLog<String>()
+    let context = CommandContext(
+        pane: Pane(
+            location: Location(path: root), service: ListingService(),
+            systemActions: StubSystemActions(), settings: untouchedSettings()),
+        fileOperations: harness.queue, undoHistory: harness.history,
+        beep: { beeps.append("beep") })
+    let undo = try #require(UndoCommands.bindings.first { $0.command == UndoCommands.undo })
+    let redo = try #require(UndoCommands.bindings.first { $0.command == UndoCommands.redo })
+    func press(_ binding: CommandBinding) async {
+        binding.run(context)
+        await settle { !harness.history.isBusy }
+    }
+
+    await press(undo)
+    await press(redo)
+    #expect(beeps.all.count == 2)
+
+    await harness.perform(.rename(root + "/a.txt", to: "c.txt"))
+    await press(undo)
+    await press(redo)
+    #expect(beeps.all.count == 2)
+
+    await harness.perform(.deleteImmediately([root + "/b.txt"]))
+    await press(undo)
+    #expect(beeps.all.count == 3)
 }
