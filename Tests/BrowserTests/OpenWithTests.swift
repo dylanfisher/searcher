@@ -155,13 +155,36 @@ private func chromeForTesting(_ version: String, in folder: String = "chrome") -
     let chrome = chromeForTesting("153.0.8010.12")
     let (cache, _) = openWith(
         [.html: [chrome.url, textEdit]], apps: [chrome], hangingIcons: [chrome.url])
-    cache.iconWait = .milliseconds(50)
+    let clock = ManualClock()
+    cache.clock = clock
+    let building = Task { await cache.choices(for: [.html]) }
+    await settle { clock.waitingSleeps == 1 }
+    #expect(cache.cachedChoices(for: [.html]) == nil)
 
-    let choices = await cache.choices(for: [.html])
+    clock.advance(by: cache.iconWait)
+    let choices = await building.value
 
     #expect(names(choices.others) == ["Google Chrome for Testing.app", "TextEdit"])
     #expect(choices.others.map { $0.icon == nil } == [true, false])
     #expect(cache.cachedChoices(for: [.html]) == choices)
+}
+
+/// Icons that land within the wait end it, and its timer with it: only the list's rest is left
+/// waiting on the clock.
+@MainActor @Test func iconsThatLandStopTheIconWaitsTimer() async throws {
+    let chrome = chromeForTesting("153.0.8010.12")
+    let (cache, _) = openWith([.html: [chrome.url, textEdit]], apps: [chrome])
+    let clock = ManualClock()
+    cache.clock = clock
+
+    _ = await cache.choices(for: [.html])
+    await settle { clock.waitingSleeps == 1 && cache.resting.contains(.html) }
+    await drainMainQueue()
+
+    #expect(clock.waitingSleeps == 1)
+    clock.advance(by: cache.refreshInterval)
+    await settle { !cache.resting.contains(.html) }
+    #expect(clock.waitingSleeps == 0)
 }
 
 @MainActor @Test func copiesOfAnAppAtDifferentVersionsAreEachListedAndShowTheirVersions() async {
@@ -219,7 +242,7 @@ private func chromeForTesting(_ version: String, in folder: String = "chrome") -
 @MainActor @Test func aTypeIsRefreshedAtMostOnceARefreshInterval() async {
     let (cache, actions) = openWith([.plainText: [textEdit]])
     let clock = ManualClock()
-    cache.refreshClock = clock
+    cache.clock = clock
     #expect(cache.refreshInterval == .seconds(5))
     _ = await cache.choices(for: [.plainText])
     await settle { clock.waitingSleeps == 1 }
@@ -249,7 +272,7 @@ private func endRest(of type: UTType, in cache: OpenWith, on clock: ManualClock)
 @MainActor @Test func aTypeHasOneRefreshInFlightAndNoneBeforeItsFirstList() async {
     let (cache, actions) = openWith([.plainText: [textEdit]])
     let clock = ManualClock()
-    cache.refreshClock = clock
+    cache.clock = clock
 
     // Nothing to refresh before the type's first list; the menu builds that one.
     cache.refresh([.plainText])
@@ -276,7 +299,7 @@ private func endRest(of type: UTType, in cache: OpenWith, on clock: ManualClock)
     let chrome = chromeForTesting("153.0.8010.12")
     let (cache, actions) = openWith([.html: [chrome.url, textEdit]], apps: [chrome])
     let clock = ManualClock()
-    cache.refreshClock = clock
+    cache.clock = clock
     _ = await cache.choices(for: [.html])
     #expect(Set(actions.iconReads.all.map(\.url)) == [chrome.url, textEdit])
 
