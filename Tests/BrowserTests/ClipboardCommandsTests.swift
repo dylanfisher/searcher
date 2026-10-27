@@ -304,6 +304,21 @@ private func names(in folder: String) throws -> Set<String> {
     #expect(changes == 2)
 }
 
+/// Each column pane observes the cut; one closed between two cuts leaves no entry behind once
+/// another pane observes.
+@MainActor @Test func observingTheCutDropsTheObserversWhoseOwnerIsGone() {
+    let clipboard = CutState(clipboard: MemoryClipboard())
+    do {
+        let gone = NSObject()
+        clipboard.observe(for: gone) {}
+    }
+    let kept = NSObject()
+
+    clipboard.observe(for: kept) {}
+
+    #expect(clipboard.observerCount == 1)
+}
+
 // MARK: Paste
 
 @MainActor @Test func cutThenPasteInAnotherFolderMovesTheFilesAndClearsTheCut() async throws {
