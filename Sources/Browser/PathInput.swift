@@ -19,10 +19,10 @@ public enum PathInput {
         } else {
             switch folder {
             case .folder(let path):
-                absolute = path + "/" + text
+                absolute = join(path, text)
             case .server:
                 // A server's shares are its folders in /Volumes (0114-server-location.md).
-                absolute = Server.sharesFolder.folderPath + "/" + text
+                absolute = join(Server.sharesFolder.folderPath, text)
             }
         }
         var components: [Substring] = []

@@ -121,7 +121,7 @@ public actor FolderSizeCache {
         var folders: Set<String> = [changedPath]
         var path = changedPath
         while path != "/", !path.isEmpty {
-            path = (path as NSString).deletingLastPathComponent
+            path = parentPath(of: path)
             folders.insert(path)
         }
         let dropped = dropLocal { folders.contains($0) }
@@ -137,7 +137,7 @@ public actor FolderSizeCache {
     /// deeper down is watched through its own parent. `reason` goes to the log.
     func markForWalk(childrenOf parent: String, around root: String, because reason: String) {
         func isAffected(_ path: String) -> Bool {
-            (path as NSString).deletingLastPathComponent == parent
+            parentPath(of: path) == parent
                 && (isPath(path, atOrUnder: root) || isPath(root, atOrUnder: path))
         }
         let marked = kept.withLockUnchecked { kept in

@@ -65,6 +65,6 @@ public enum Location: Hashable, Sendable {
     ///   without a `/`.
     public func folderChild(named name: String) -> Location {
         precondition(!name.isEmpty && !name.contains("/"), "\"\(name)\" isn't one path component")
-        return Location(path: (folderPath.hasSuffix("/") ? folderPath : folderPath + "/") + name)
+        return Location(path: join(folderPath, name))
     }
 }

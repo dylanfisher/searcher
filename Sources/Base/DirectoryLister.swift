@@ -124,11 +124,11 @@ public struct DirectoryLister: Lister {
     /// nil if there is none. Change watching uses it to patch one entry without a listing.
     public func entry(named name: String, inDirectory path: String) throws -> DirectoryEntry? {
         var info = Darwin.stat()
-        if lstat(path + "/" + name, &info) != 0 {
+        if lstat(join(path, name), &info) != 0 {
             if errno == ENOENT { return nil }
-            throw ListingError(path: path + "/" + name, code: errno)
+            throw ListingError(path: join(path, name), code: errno)
         }
-        return try entry(named: name, at: path + "/" + name, info: info)
+        return try entry(named: name, at: join(path, name), info: info)
     }
 
     /// Whether what `path` names, following links, is a package, by the target's own name and
@@ -136,9 +136,7 @@ public struct DirectoryLister: Lister {
     /// folder or can't be read: the listing of `path` that a caller makes next reports why.
     /// Blocks on the file system, so call it off the main thread.
     public static func isPackage(followingLinksAt path: String) -> Bool {
-        guard let resolved = realpath(path, nil) else { return false }
-        let target = String(cString: resolved)
-        free(resolved)
+        guard let target = resolvedPath(path) else { return false }
         var info = Darwin.stat()
         guard lstat(target, &info) == 0, info.st_mode & S_IFMT == S_IFDIR,
             let name = target.split(separator: "/").last
@@ -272,9 +270,9 @@ public struct DirectoryLister: Lister {
         var info = Darwin.stat()
         if fstatat(fd, name, &info, AT_SYMLINK_NOFOLLOW) != 0 {
             if errno == ENOENT { return nil }
-            throw ListingError(path: path + "/" + name, code: errno)
+            throw ListingError(path: join(path, name), code: errno)
         }
-        return try entry(named: name, at: path + "/" + name, info: info)
+        return try entry(named: name, at: join(path, name), info: info)
     }
 
     /// The entry `info` describes, named `name`, at `path`; nil if it was removed since. A

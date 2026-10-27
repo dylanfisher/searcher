@@ -56,9 +56,8 @@ public enum UniqueName {
     public static func isTaken(_ name: String, in folder: String) throws(FileOperationError)
         -> Bool
     {
-        precondition(
-            !Thread.isMainThread, "UniqueName does file-system I/O; call it off the main thread")
-        let path = folder + "/" + name
+        preconditionOffMain("UniqueName")
+        let path = join(folder, name)
         var info = stat()
         if lstat(path, &info) == 0 { return true }
         if errno == ENOENT { return false }

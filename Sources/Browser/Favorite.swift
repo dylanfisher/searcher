@@ -134,7 +134,8 @@ public struct Favorite: Hashable, Sendable {
         }
         guard !isInTrash(url.path), let state = state(at: url) else { return nil }
         var path = url.path
-        if path != favorite.path, let real = realPath(path), real == realPath(favorite.path) {
+        if path != favorite.path, let real = resolvedPath(path), real == resolvedPath(favorite.path)
+        {
             path = favorite.path
         }
         return Resolution(
@@ -145,7 +146,7 @@ public struct Favorite: Hashable, Sendable {
     /// What is at `url`, following links: a folder, or a file or package; nil for nothing, a
     /// broken link or a loop of links, which realpath can't resolve.
     private nonisolated static func state(at url: URL) -> State? {
-        guard let real = realPath(url.path) else { return nil }
+        guard let real = resolvedPath(url.path) else { return nil }
         let target = URL(fileURLWithPath: real, isDirectory: false)
         let values: URLResourceValues
         do {
@@ -169,12 +170,5 @@ public struct Favorite: Hashable, Sendable {
     /// Whether `path` is in a Trash: the user's, or a volume's.
     nonisolated static func isInTrash(_ path: String) -> Bool {
         pathComponents(path).contains { $0 == ".Trash" || $0 == ".Trashes" }
-    }
-
-    /// `path` with every link resolved, or nil when it can't be.
-    private nonisolated static func realPath(_ path: String) -> String? {
-        guard let resolved = realpath(path, nil) else { return nil }
-        defer { free(resolved) }
-        return String(cString: resolved)
     }
 }

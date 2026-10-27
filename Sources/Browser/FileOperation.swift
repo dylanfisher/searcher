@@ -172,11 +172,11 @@ public enum FileOperation: Equatable, Sendable {
 
     /// Where `source` goes when it moves or is copied into `folder`.
     static func path(of source: String, in folder: String) -> String {
-        (folder.hasSuffix("/") ? folder : folder + "/") + (source as NSString).lastPathComponent
+        join(folder, lastComponent(of: source))
     }
 
     /// The path `path` has once renamed to `name`.
     static func renamed(_ path: String, to name: String) -> String {
-        (path as NSString).deletingLastPathComponent + "/" + name
+        join(parentPath(of: path), name)
     }
 }

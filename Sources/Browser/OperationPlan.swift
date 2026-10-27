@@ -105,7 +105,7 @@ public struct OperationPlan: Equatable, Sendable {
                 inspect: inspect, isCancelled: isCancelled, copies: copies)
         case .duplicate(let sources):
             guard let first = sources.first else { return empty }
-            let parent = (first as NSString).deletingLastPathComponent
+            let parent = parentPath(of: first)
             let lane: VolumeIdentity
             do {
                 lane = try volumeOf(parent)
@@ -181,7 +181,7 @@ public struct OperationPlan: Equatable, Sendable {
             if isCancelled() { throw CancellationError() }
             var crosses = true
             if isMove {
-                let parent = (source as NSString).deletingLastPathComponent
+                let parent = parentPath(of: source)
                 let volume =
                     parentVolumes[parent]
                     ?? Result { () throws(ListingError) in try volumeOf(parent) }
@@ -254,7 +254,7 @@ public struct OperationPlan: Equatable, Sendable {
         func gone(_ path: String) throws(FileOperationError) {
             var missing = path
             while true {
-                let folder = (missing as NSString).deletingLastPathComponent
+                let folder = parentPath(of: missing)
                 guard folder != missing, try !isTaken(folder) else { break }
                 missing = folder
             }
@@ -289,7 +289,7 @@ public struct OperationPlan: Equatable, Sendable {
                         failures.append(
                             FileOperationError(reason: .exists, path: destination, errno: EEXIST))
                     }
-                    let folder = (destination as NSString).deletingLastPathComponent
+                    let folder = parentPath(of: destination)
                     if try !isTaken(folder) { try gone(folder) }
                 }
             } catch {
@@ -307,7 +307,7 @@ public struct OperationPlan: Equatable, Sendable {
         }
         var folderVolumes: [String: Result<VolumeIdentity, ListingError>] = [:]
         func volume(of path: String) throws(ListingError) -> VolumeIdentity {
-            let folder = (path as NSString).deletingLastPathComponent
+            let folder = parentPath(of: path)
             let volume =
                 folderVolumes[folder] ?? Result { () throws(ListingError) in try volumeOf(folder) }
             folderVolumes[folder] = volume
@@ -537,11 +537,9 @@ public struct OperationPlan: Equatable, Sendable {
             let device: dev_t
             let inode: ino_t
         }
-        guard let resolved = realpath(folder, nil) else {
+        guard var path = resolvedPath(folder) else {
             throw FileOperationError(errno: errno, path: folder)
         }
-        var path = String(cString: resolved)
-        free(resolved)
         var above: Set<Identity> = []
         while true {
             var info = stat()
@@ -550,7 +548,7 @@ public struct OperationPlan: Equatable, Sendable {
             }
             above.insert(Identity(device: info.st_dev, inode: info.st_ino))
             if path == "/" { break }
-            path = (path as NSString).deletingLastPathComponent
+            path = parentPath(of: path)
         }
         return sources.first { source in
             var info = stat()

@@ -57,11 +57,9 @@ public final class FolderMonitor: FolderMonitoring, @unchecked Sendable {
         case .local:
             watcher = .fileEvents
             // FSEvents reports resolved paths, so children are matched against the resolved folder.
-            guard let resolved = realpath(location.folderPath, nil) else {
+            guard let folder = resolvedPath(location.folderPath) else {
                 throw ListingError(path: location.folderPath, code: errno)
             }
-            defer { free(resolved) }
-            let folder = String(cString: resolved)
             stream = try FileEventStream(path: folder) { events in
                 if let change = Self.change(for: events, in: folder) { onChange(change) }
             }
@@ -109,7 +107,7 @@ public final class FolderMonitor: FolderMonitoring, @unchecked Sendable {
         if events.contains(where: { !$0.flags.isDisjoint(with: [.mustRescan, .rootChanged]) }) {
             return .relist
         }
-        let prefix = folder.hasSuffix("/") ? folder : folder + "/"
+        let prefix = folderPrefix(folder)
         var names: [String] = []
         var seen: Set<String> = []
         for event in events where event.path.utf8.starts(with: prefix.utf8) {
