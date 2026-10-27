@@ -2,7 +2,9 @@
 /// folders first toggles, which are app-wide `Settings`, as are the toggles of the sidebar's
 /// groups, and the sort keys, which sort the focused pane by a column. A sort key for the column
 /// already sorted by reverses it; Sort by Next Column moves to the next column in the header's
-/// order, and Reverse Sort Direction reverses the column sorted by. Space opens and closes Quick
+/// order, and Reverse Sort Direction reverses the column sorted by. A column of column view shows
+/// names only, so it sorts by Name only: the other sort keys and Sort by Next Column are off
+/// there. The item of the column sorted by is checked. Space opens and closes Quick
 /// Look on the selection, Cmd-F opens the pane's filter field, and Cmd-1 and Cmd-3 show the pane
 /// as a list or as columns. The appearance commands make the app light, dark or follow the
 /// system.
@@ -88,14 +90,17 @@ public enum ViewCommands: CommandSet {
             CommandBinding(
                 toggleFoldersFirst, isChecked: { $0.foldersFirst },
                 run: { $0.pane.settings.foldersFirst.toggle() }),
-            CommandBinding(sortByName) { sort($0.pane, by: .name) },
-            CommandBinding(sortBySize) { sort($0.pane, by: .size) },
-            CommandBinding(sortByDateModified) { sort($0.pane, by: .dateModified) },
-            CommandBinding(sortByKind) { sort($0.pane, by: .kind) },
-            CommandBinding(sortByNextColumn) {
-                let next = $0.pane.sortColumn.next
-                $0.pane.setSort(next, ascending: next.firstAscending)
-            },
+            sort(sortByName, by: .name),
+            sort(sortBySize, by: .size),
+            sort(sortByDateModified, by: .dateModified),
+            sort(sortByKind, by: .kind),
+            CommandBinding(
+                sortByNextColumn, isEnabled: { sortsByEveryColumn($0.pane) },
+                run: {
+                    guard sortsByEveryColumn($0.pane) else { return }
+                    let next = $0.pane.sortColumn.next
+                    $0.pane.setSort(next, ascending: next.firstAscending)
+                }),
             CommandBinding(reverseSortDirection) {
                 $0.pane.setSort($0.pane.sortColumn, ascending: !$0.pane.sortAscending)
             },
@@ -129,10 +134,26 @@ public enum ViewCommands: CommandSet {
         pane.containingTrail?.owner ?? pane
     }
 
-    /// Sorts by `column` in its first direction, or reverses it if the pane already sorts by it.
+    /// The binding of `command`, which sorts by `column` in its first direction, or reverses it
+    /// if the pane already sorts by it, and is checked while the pane sorts by it. A column of
+    /// column view sorts by Name only.
+    private static func sort(_ command: Command, by column: SortColumn) -> CommandBinding {
+        CommandBinding(
+            command, isCurrent: { $0.pane.sortColumn == column },
+            isEnabled: { column == .name || sortsByEveryColumn($0.pane) },
+            run: {
+                let pane = $0.pane
+                guard column == .name || sortsByEveryColumn(pane) else { return }
+                let ascending =
+                    pane.sortColumn == column ? !pane.sortAscending : column.firstAscending
+                pane.setSort(column, ascending: ascending)
+            })
+    }
+
+    /// Whether `pane` shows every column it can sort by: a list does, and a column of column
+    /// view shows names only.
     @MainActor
-    private static func sort(_ pane: Pane, by column: SortColumn) {
-        let ascending = pane.sortColumn == column ? !pane.sortAscending : column.firstAscending
-        pane.setSort(column, ascending: ascending)
+    private static func sortsByEveryColumn(_ pane: Pane) -> Bool {
+        pane.containingTrail == nil
     }
 }

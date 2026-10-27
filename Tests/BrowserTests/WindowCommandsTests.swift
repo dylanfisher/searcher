@@ -58,7 +58,9 @@ private func list(_ workspaces: Workspace...) -> WorkspaceList {
     let pane = added.focusedPane
     #expect(pane.location == Location(path: "/root/docs"))
     #expect(pane.viewMode == .column)
-    #expect(pane.commandPane.sortColumn == .size && !pane.commandPane.sortAscending)
+    // Its columns open by Name ascending; its list sorts as the focused pane's.
+    #expect(pane.commandPane.sortColumn == .name && pane.commandPane.sortAscending)
+    #expect(pane.sortColumn == .size && !pane.sortAscending)
     #expect(pane.folderSizes === sizes)
     #expect(pane.isFocused && !fixture.pane.isFocused)
     #expect(first.focusedPane.location == Location(path: "/root"))

@@ -71,16 +71,15 @@ the load through `ListingService`, the off-main sort and filter ([0025](0025-sor
   pane's `location` follows the focused column, for the path bar, the window title and History.
   Its own rows go: its state holds no listing, so a settings change sorts nothing in it and a
   view can't show or act on rows under a location that moved. Its filter and selection stop
-  mattering, and it ignores folder changes and settings changes. Switching back to the list moves the
-  pane to the focused column's folder, in that column's sort, selecting the entry under its
-  cursor, and lists it. Neither switch is a step in the history.
+  mattering, and it ignores folder changes and settings changes. Switching back to the list
+  moves the pane to the focused column's folder, selecting the entry under its cursor, and lists
+  it in the list's own sort (see Sort). Neither switch is a step in the history.
 - **History.** Moving between columns isn't a step. Back, Forward, Go to folder, a path bar click
   and a link to a folder record the focused column's folder and cursor, as a list pane records
   its own, and start the trail again with one column at the destination, the remembered entry
-  selected, in the sort of the focused column it replaces. Every old column closes. (Amended
-  2026-10-25: the new trail runs from the root of the destination's volume down to it; a path
-  bar click on a folder that has a column moves the focus there instead, keeping every column,
-  and is no step; see [0103](0103-column-trail-from-the-root.md).) (Amended 2026-10-25, Dylan:
+  selected. Every old column closes. (Amended 2026-10-25: the new trail runs from the root of
+  the destination's volume down to it; a path bar click on a folder that has a column moves the
+  focus there instead, keeping every column, and is no step; see [0103](0103-column-trail-from-the-root.md).) (Amended 2026-10-25, Dylan:
   "forward/back should save the directory changing within columns. right now if i go back it
   jumps back to a cimpletely different directory, not just the last directory i was in within
   the columns.": the folder History keeps is the pane's, the focused column's, the one the path
@@ -108,8 +107,19 @@ the load through `ListingService`, the off-main sort and filter ([0025](0025-sor
   stays with the column until the column closes; a navigation closes every column, so it clears
   the filter as it does in a list. (Amended 2026-10-25: a navigation keeps the columns both
   trails show ([0103](0103-column-trail-from-the-root.md)) and clears their filters.)
-- **Sort.** A sort key sorts the focused column. A new column takes the sort of the column it
-  opens from. Hidden files and folders first are app-wide `Settings`, which every column observes.
+- **Sort.** A sort key sorts the focused column. Hidden files and folders first are app-wide
+  `Settings`, which every column observes. (Amended 2026-10-26, Dylan: "column view should always
+  default to order name ascending unless you change the order for that particular column. column
+  and other views should only ever be sortable by the information visible (in column view that's
+  only name), in list view that's any of the headers present": every column opens sorted by Name
+  ascending (`Pane.columnSort`): a column opened from another, the columns a navigation or a
+  restore builds, those of a switch from the list and a split's. Only a sort key in a column
+  changes its sort, for as long as it stays open; a column a navigation keeps
+  ([0103](0103-column-trail-from-the-root.md)) keeps its sort. A column sorts by Name only
+  ([0031](0031-view-settings.md)). The pane's own sort is the list's: column mode leaves it as it
+  was, the switch back lists in it, `Tab.state` saves it and a split, New Tab and New Window copy
+  it ([0042](0042-workspace-model.md), [0078](0078-workspace-store.md)). Column sorts aren't
+  saved.)
 - **Keys.** → and ← are commands in `ColumnCommands`; in list mode they do nothing. Cmd-1 and
   Cmd-3 are `ViewCommands.asList` and `asColumns`. Neither chord is used elsewhere in the key
   table: the sort keys are Ctrl-Opt-Cmd-1 and 2, and split resizing is Ctrl-Cmd-arrows.

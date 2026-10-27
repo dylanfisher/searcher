@@ -87,19 +87,16 @@ public final class ColumnTrail {
 
     /// A focused column at `location` with `name` selected, and left of it a column for each
     /// folder from the trail's root down, each with the next folder selected
-    /// (`root(of:mountedVolumes:home:)`), all sorted like `model`: the owner when the trail
-    /// starts from the list. The focused column's load is asked first, and the others' once the
-    /// root is checked, or the focus moves to one of them. The root is taken from the path first
-    /// and checked against the mount table off the main thread; a volume mounted elsewhere moves
-    /// it (0103-column-trail-from-the-root.md). A root that is a share's mount point has its
+    /// (`root(of:mountedVolumes:home:)`), all sorted by Name ascending (`Pane.columnSort`). The
+    /// focused column's load is asked first, and the others' once the root is checked, or the
+    /// focus moves to one of them. The root is taken from the path first and checked against the
+    /// mount table off the main thread; a volume mounted elsewhere moves it
+    /// (0103-column-trail-from-the-root.md). A root that is a share's mount point has its
     /// server's column left of it (`serverRoot`), and a trail at a server is that one column
     /// (docs/decisions/0114-server-location.md).
-    convenience init(
-        owner: Pane, at location: Location, selecting name: ExactName?, sortedLike model: Pane
-    ) {
+    convenience init(owner: Pane, at location: Location, selecting name: ExactName?) {
         self.init(
-            owner: owner, at: location, selecting: name, sortedLike: model, keeping: [],
-            keepingServer: nil)
+            owner: owner, at: location, selecting: name, keeping: [], keepingServer: nil)
     }
 
     /// The trail `old` starts again at `location` with `name` selected, as a navigation or Back
@@ -107,14 +104,13 @@ public final class ColumnTrail {
     /// trails run through stay, with their rows, monitors and views, so they neither list again
     /// nor redraw, and so does `old`'s server column when this trail shows the same server
     /// first; the rest of `old` closes. Each kept column above the focused one selects the
-    /// next folder on the new way down, and the kept columns take the sort of `old`'s focused
-    /// column, as the new ones do, and lose their filters. Different roots keep nothing. None of
+    /// next folder on the new way down, and the kept columns keep their sorts and lose their
+    /// filters; the new ones open by Name ascending. Different roots keep nothing. None of
     /// it is a step of any history (0041-column-model.md, 0103-column-trail-from-the-root.md).
     convenience init(
         owner: Pane, at location: Location, selecting name: ExactName?, replacing old: ColumnTrail
     ) {
         let home = Self.home(in: owner.settings)
-        let model = old.focused.pane
         let server: Server?
         switch location {
         case .server(let atServer):
@@ -136,16 +132,15 @@ public final class ColumnTrail {
         old.columns.removeFirst(shared)
         old.close()
         self.init(
-            owner: owner, at: location, selecting: name, sortedLike: model, keeping: kept,
-            keepingServer: keptServer)
+            owner: owner, at: location, selecting: name, keeping: kept, keepingServer: keptServer)
     }
 
     /// A trail at `location` whose leading columns are `kept`, columns of another trail for the
     /// first folders from this one's root down to `location`, whose server column is
     /// `keptServer` when it has one, and whose other columns are made.
     private init(
-        owner: Pane, at location: Location, selecting name: ExactName?, sortedLike model: Pane,
-        keeping kept: [Column], keepingServer keptServer: Column?
+        owner: Pane, at location: Location, selecting name: ExactName?, keeping kept: [Column],
+        keepingServer keptServer: Column?
     ) {
         self.owner = owner
         home = Self.home(in: owner.settings)
@@ -153,15 +148,14 @@ public final class ColumnTrail {
             // At a server: its column alone, with no root to check.
             let focused: Column
             if let keptServer {
-                keep(keptServer, sortedLike: model)
+                keep(keptServer)
                 keptServer.pane.select(
                     name.map { Selection([$0], cursor: $0) } ?? Selection(), recordingAs: nil)
                 focused = keptServer
                 focused.pane.isFocused = owner.isFocused
                 focused.pane.listIfWaiting()
             } else {
-                focused = makeColumn(
-                    at: location, selecting: name, sortedLike: model, isFocused: owner.isFocused)
+                focused = makeColumn(at: location, selecting: name, isFocused: owner.isFocused)
             }
             columns = [focused]
             if keptServer != nil {
@@ -179,7 +173,7 @@ public final class ColumnTrail {
         // The kept panes' changes reach the trail before it has columns, so none is followed
         // until the trail is whole.
         for (index, column) in kept.enumerated() {
-            keep(column, sortedLike: model)
+            keep(column)
             let isAbove = index + 1 < chain.count
             let selected = isAbove ? ExactName(chain[index + 1].name) : name
             column.pane.select(
@@ -194,11 +188,10 @@ public final class ColumnTrail {
             // focused column now, it lists at once, before the columns above it.
             focused.pane.listIfWaiting()
         } else {
-            focused = makeColumn(
-                at: location, selecting: name, sortedLike: model, isFocused: owner.isFocused)
+            focused = makeColumn(at: location, selecting: name, isFocused: owner.isFocused)
         }
         let made = makeAncestors(
-            from: root, to: location, sortedLike: model, after: min(kept.count, chain.count - 1))
+            from: root, to: location, after: min(kept.count, chain.count - 1))
         let ancestors = Array(kept.prefix(chain.count - 1)) + made
         columns = ancestors + [focused]
         focusedIndex = ancestors.count
@@ -214,9 +207,9 @@ public final class ColumnTrail {
     }
 
     /// Makes `column`, a column of the trail this one replaces, one of this trail's, keeping its
-    /// pane: unfocused, waiting on nothing, sorted like `model`, with its filter cleared, as a
+    /// pane: unfocused, waiting on nothing, in its own sort, with its filter cleared, as a
     /// navigation clears it.
-    private func keep(_ column: Column, sortedLike model: Pane) {
+    private func keep(_ column: Column) {
         release(column)
         column.followedSelectionVersion = nil
         column.selectsFirstRowAt = nil
@@ -224,11 +217,7 @@ public final class ColumnTrail {
         column.listedNextFolder = false
         wire(column)
         column.pane.isFocused = false
-        let pane = column.pane
-        if pane.sortColumn != model.sortColumn || pane.sortAscending != model.sortAscending {
-            pane.setSort(model.sortColumn, ascending: model.sortAscending)
-        }
-        pane.setFilter("")
+        column.pane.setFilter("")
     }
 
     /// The home folder a trail in it starts at, from `settings`; nil when trails start at their
@@ -338,7 +327,7 @@ public final class ColumnTrail {
         let share = ExactName(root.location.name)
         let column: Column
         if let kept {
-            keep(kept, sortedLike: root)
+            keep(kept)
             kept.pane.select(Selection([share], cursor: share), recordingAs: nil)
             column = kept
         } else {
@@ -346,7 +335,7 @@ public final class ColumnTrail {
                 Pane(
                     waitingAt: .server(server), service: owner.service,
                     systemActions: owner.systemActions, settings: owner.settings,
-                    sortedBy: root.sortColumn, ascending: root.sortAscending, selecting: share))
+                    selecting: share))
         }
         column.keepsNextColumnAt = column.pane.selectionVersion
         columns.insert(column, at: 0)
@@ -384,15 +373,14 @@ public final class ColumnTrail {
     /// `count`, each with the next folder selected and its load waiting; none when `root` isn't
     /// `location` or above it.
     private func makeAncestors(
-        from root: Location, to location: Location, sortedLike model: Pane, after count: Int = 0
+        from root: Location, to location: Location, after count: Int = 0
     ) -> [Column] {
         let chain = Array(location.ancestors.drop { $0 != root })
         guard chain.count > 1 else { return [] }
         return zip(chain, chain.dropFirst()).dropFirst(count).map { folder, next in
             let pane = Pane(
                 waitingAt: folder, service: owner.service, systemActions: owner.systemActions,
-                settings: owner.settings, sortedBy: model.sortColumn,
-                ascending: model.sortAscending, selecting: ExactName(next.name))
+                settings: owner.settings, selecting: ExactName(next.name))
             let column = adopt(pane)
             column.keepsNextColumnAt = pane.selectionVersion
             return column
@@ -424,7 +412,7 @@ public final class ColumnTrail {
             columns.removeSubrange(..<index)
             focusedIndex -= index
         } else {
-            let added = makeAncestors(from: root, to: first.pane.location, sortedLike: first.pane)
+            let added = makeAncestors(from: root, to: first.pane.location)
             guard !added.isEmpty else { return }
             dropServerColumn()
             columns.insert(contentsOf: added, at: 0)
@@ -632,8 +620,7 @@ public final class ColumnTrail {
         follow(columns[index])
         columns.append(
             makeColumn(
-                at: pane.location.folderChild(named: name), selecting: nil, sortedLike: pane,
-                isFocused: false))
+                at: pane.location.folderChild(named: name), selecting: nil, isFocused: false))
         updatePreview()
         moveRight(
             selectingFirstRow: false, recordsStep: stepsToColumn(at: index), recordingAs: .once)
@@ -686,14 +673,14 @@ public final class ColumnTrail {
         columns.firstIndex { $0.pane === pane }
     }
 
+    /// A column at `location`, sorted by Name ascending, as every column opens.
     private func makeColumn(
-        at location: Location, selecting name: ExactName?, sortedLike model: Pane,
-        isFocused: Bool
+        at location: Location, selecting name: ExactName?, isFocused: Bool
     ) -> Column {
         let pane = Pane(
             location: location, service: owner.service, systemActions: owner.systemActions,
-            settings: owner.settings, sortedBy: model.sortColumn, ascending: model.sortAscending,
-            isFocused: isFocused, selecting: name)
+            settings: owner.settings, sortedBy: Pane.columnSort.column,
+            ascending: Pane.columnSort.ascending, isFocused: isFocused, selecting: name)
         return adopt(pane)
     }
 
@@ -1136,7 +1123,7 @@ public final class ColumnTrail {
         guard let folder else { return false }
         if opening {
             columns.append(
-                makeColumn(at: folder, selecting: nil, sortedLike: pane, isFocused: false))
+                makeColumn(at: folder, selecting: nil, isFocused: false))
         }
         return true
     }

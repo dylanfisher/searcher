@@ -22,7 +22,9 @@ on screen, with frames and tab strips set and the key window's focused pane show
   workspace files. JSON, with sorted keys, so the same state writes the same bytes.
 - **What is kept.** `WorkspaceState`: ID, name (absent when unnamed), window frame as `Rect`,
   the tabs as `TabState`, the selected tab's index and whether the sidebar shows. `TabState`
-  adds per pane the selection by name, the cursor, the sort column and direction. Not kept: the
+  adds per pane the selection by name, the cursor, the sort column and direction (amended
+  2026-10-26: the list's sort, also in column mode; a column's sort isn't kept, and restored
+  columns open by Name ascending, see [0041](0041-column-model.md)). Not kept: the
   scroll offset, the filter, hidden files (a setting, not per pane), the rows and the selection
   history ([0077](0077-selection-history.md)). `SessionState`: the open workspaces' IDs, front
   window first, and the key window's.
