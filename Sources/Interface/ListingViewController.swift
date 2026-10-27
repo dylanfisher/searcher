@@ -121,8 +121,15 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     }
     /// Opens the folder row a drag hovers over; nil opens none. The pane's lists share one.
     var springLoader: SpringLoader?
+    /// A thumbnail asked for a row on screen: the file's path and entry when asked, and the
+    /// request.
+    struct ThumbnailRequest {
+        let path: String
+        let entry: DirectoryEntry
+        let task: Task<Void, Never>
+    }
     /// The thumbnails being made for rows on screen, by name.
-    private var thumbnailRequests: [String: ThumbnailRequest] = [:]
+    var thumbnailRequests: [String: ThumbnailRequest] = [:]
     /// The names of the rows whose thumbnails are being asked for, for tests.
     var askedThumbnails: Set<String> { Set(thumbnailRequests.keys) }
     /// The modifier keys held in the event being handled, read when a click changes the
@@ -523,9 +530,6 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         tableView.selectionShapeChanged = { [weak self] in self?.placeChevrons() }
     }
 
-    /// What a drag of rows lets its destination do with them.
-    static let dragOperations: NSDragOperation = [.copy, .move, .generic, .link]
-
     private static func tableColumn(for column: SortColumn) -> NSTableColumn {
         let tableColumn = NSTableColumn(identifier: column.identifier)
         tableColumn.headerCell = ListingTableView.HeaderCell(textCell: column.title)
@@ -623,163 +627,6 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             return
         }
         tableView.runCommand(NavigationCommands.open.id)
-    }
-
-    // MARK: Drag and drop
-
-    /// A row drags out as its file URL, a folder's ending in a slash, built from the listing
-    /// without reading the disk (docs/decisions/0071-drag-and-drop.md). A selected row drags with
-    /// the selection, so none of it drags while the selection holds a server's row with no
-    /// location, rather than part of it (docs/decisions/0115-server-shares.md).
-    public func tableView(
-        _ tableView: NSTableView, pasteboardWriterForRow row: Int
-    ) -> (any NSPasteboardWriting)? {
-        guard let listing, row >= 0, row < listing.count,
-            !(pane.selectsUnmountedShare && pane.selection.contains(ExactName(listing[row].name))),
-            let url = ClipboardCommands.fileURL(of: listing[row], in: pane)
-        else { return nil }
-        return PasteboardFileClipboard.item(for: url)
-    }
-
-    /// What a drop does where it is: into the folder of a folder row it is on, to the app of an
-    /// app's row, which opens the files, else into the pane's folder, for which the whole list is
-    /// highlighted; a package that isn't an app takes nothing, as a file doesn't. Reads only the
-    /// drag's pasteboard, the listing and the mount table, so it makes no file-system call.
-    public func tableView(
-        _ tableView: NSTableView, validateDrop info: any NSDraggingInfo, proposedRow row: Int,
-        proposedDropOperation dropOperation: NSTableView.DropOperation
-    ) -> NSDragOperation {
-        let drop = drop(info, row: row, dropOperation)
-        springLoader?.hover(
-            over: drop?.folderRow.map {
-                SpringLoader.Target(pane: pane, location: pane.location, name: $0)
-            }, info: info)
-        guard let drop else { return [] }
-        if drop.pane != nil, row != -1 || dropOperation != .on {
-            tableView.setDropRow(-1, dropOperation: .on)
-        }
-        switch drop.content {
-        case .files(_, let operation):
-            return operation.dragOperation(allowed: info.draggingSourceOperationMask)
-        case .promises:
-            return .copy
-        case .open:
-            return .generic
-        }
-    }
-
-    /// Queues the drop's one copy, move or duplicate, without asking first, as Paste does; or
-    /// takes its file promises. What lands in the pane's folder is selected once the pane lists
-    /// it.
-    public func tableView(
-        _ tableView: NSTableView, acceptDrop info: any NSDraggingInfo, row: Int,
-        dropOperation: NSTableView.DropOperation
-    ) -> Bool {
-        guard let queue = fileOperations, let drop = drop(info, row: row, dropOperation) else {
-            return false
-        }
-        // The drop's operations are listed in the window it landed in.
-        let workspace = workspaceID
-        switch drop.content {
-        case .files(let paths, let operation):
-            let operation = operation.fileOperation(paths, into: drop.folder)
-            Task { [pane = drop.pane] in
-                await FileOperationQueue.$workspace.withValue(workspace) {
-                    _ = await FileCommands.perform(operation, selectingIn: pane, queue: queue)
-                }
-            }
-        case .promises:
-            guard
-                let promises = info.draggingPasteboard.readObjects(
-                    forClasses: [NSFilePromiseReceiver.self]) as? [NSFilePromiseReceiver],
-                !promises.isEmpty
-            else {
-                preconditionFailure("a drop that offered file promises has none to read")
-            }
-            // A drag leaves the app it came from active, so that names the source.
-            let app = NSWorkspace.shared.frontmostApplication?.localizedName
-            Task { [pane = drop.pane, folder = drop.folder] in
-                await FileOperationQueue.$workspace.withValue(workspace) {
-                    await FilePromiseReceiver.receive(
-                        promises, into: folder, from: app, selectingIn: pane, queue: queue)
-                }
-            }
-        case .open(let urls, let application):
-            pane.systemActions.open(urls, withApplicationAt: application)
-        }
-        return true
-    }
-
-    /// A drop the list takes: the folder it goes into, the pane when that is the pane's folder,
-    /// the folder row's name when it goes into one, which springs open while the drag hovers,
-    /// and what it carries.
-    private struct Drop {
-        enum Content {
-            /// File URLs' paths, and whether they copy or move.
-            case files([String], DropOperation)
-            /// File promises, which always copy.
-            case promises
-            /// File URLs dropped on the app at a URL, which opens them.
-            case open([URL], withApplicationAt: URL)
-        }
-
-        let folder: String
-        let pane: Pane?
-        var folderRow: String?
-        let content: Content
-    }
-
-    /// The drop `info` makes at `row` with `dropOperation`, or nil when the list takes none
-    /// there. File URLs are read first; a drag with none is taken for its file promises.
-    private func drop(
-        _ info: any NSDraggingInfo, row: Int, _ dropOperation: NSTableView.DropOperation
-    ) -> Drop? {
-        guard fileOperations != nil, let mountTable else { return nil }
-        var folder = pane.location
-        var target: Pane? = pane
-        var app: Location?
-        var folderRow: String?
-        if dropOperation == .on, let listing, row >= 0, row < listing.count {
-            let kind = listing.kind(atRow: row).type
-            if kind == .folder {
-                // A server's row whose share isn't mounted where it says takes no drop.
-                guard let child = pane.childLocation(of: listing[row]) else { return nil }
-                folder = child
-                target = nil
-                folderRow = listing[row].name
-            } else if listing[row].type == .package, kind.conforms(to: .application) {
-                app = pane.location.folderChild(named: listing[row].name)
-            }
-        }
-        // A server has no folder to drop into; a share row is one (0114-server-location.md).
-        guard folder.isFolder else { return nil }
-        let pasteboard = info.draggingPasteboard
-        let urls = PasteboardFileClipboard(pasteboard: pasteboard).fileURLs()
-        let paths = urls.map(\.path)
-        if let app {
-            // Files dropped on an app open with it, as in Finder; nothing goes into the app.
-            guard !paths.isEmpty, !paths.contains(app.folderPath) else { return nil }
-            let application = URL(fileURLWithPath: app.folderPath, isDirectory: true)
-            return Drop(
-                folder: folder.folderPath, pane: nil,
-                content: .open(urls, withApplicationAt: application)
-            )
-        }
-        if !paths.isEmpty {
-            guard
-                let operation = DropOperation(
-                    dropping: paths, into: folder.folderPath,
-                    allowed: info.draggingSourceOperationMask, mounts: mountTable)
-            else { return nil }
-            return Drop(
-                folder: folder.folderPath, pane: target, folderRow: folderRow,
-                content: .files(paths, operation))
-        }
-        guard pasteboard.canReadObject(forClasses: [NSFilePromiseReceiver.self]),
-            info.draggingSourceOperationMask.contains(.copy)
-        else { return nil }
-        return Drop(
-            folder: folder.folderPath, pane: target, folderRow: folderRow, content: .promises)
     }
 
     /// The context menu for a right-click on `row`, or below the rows at -1. A row outside the
@@ -935,102 +782,6 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         cell.alphaValue = cutNames.contains(listing[row].name) ? Self.cutAlpha : 1
     }
 
-    // MARK: Thumbnails
-
-    /// A thumbnail asked for a row on screen: the file's path and entry when asked, and the
-    /// request.
-    private struct ThumbnailRequest {
-        let path: String
-        let entry: DirectoryEntry
-        let task: Task<Void, Never>
-    }
-
-    /// The thumbnail the service keeps for `row`'s file, as it is in `listing`; nil when it keeps
-    /// none, the file has none, or may not show one.
-    private func keptThumbnail(row: Int, in listing: Listing) -> CGImage? {
-        let entry = listing[row]
-        guard let thumbnails = pane.service.thumbnails,
-            ThumbnailService.shows(entry, kind: listing.kind(atRow: row)),
-            case .some(.some(let image)) = thumbnails.cached(
-                at: pane.location.folderChild(named: entry.name).folderPath, entry: entry,
-                side: Self.iconSize)
-        else { return nil }
-        return image
-    }
-
-    @objc private func rowsOnScreenMayHaveChanged(_ notification: Notification) {
-        updateThumbnails()
-    }
-
-    /// Asks for the thumbnail of each row on screen that may show one and has none kept or
-    /// asked for, and cancels the requests of rows that left the screen, or whose entry or
-    /// folder changed. A request cancelled while it waits for its volume's slot is never made;
-    /// one being made is kept by the service, and shows when its row is next filled. Rows its
-    /// volume hasn't answered with, as cached rows, ask for none, and neither does a folder
-    /// whose volume isn't known yet or is a share.
-    private func updateThumbnails() {
-        guard let thumbnails = pane.service.thumbnails, isViewLoaded else { return }
-        var onScreen: Set<String> = []
-        if let listing, pane.state.isAnswered, let volume = pane.folderVolume,
-            ThumbnailService.makes(on: volume)
-        {
-            let rows = tableView.rows(in: tableView.visibleRect)
-            for row in rows.lowerBound..<min(rows.upperBound, listing.count) {
-                let entry = listing[row]
-                guard ThumbnailService.shows(entry, kind: listing.kind(atRow: row)) else {
-                    continue
-                }
-                let path = pane.location.folderChild(named: entry.name).folderPath
-                if let request = thumbnailRequests[entry.name], request.path == path,
-                    request.entry == entry
-                {
-                    onScreen.insert(entry.name)
-                    continue
-                }
-                if thumbnails.cached(at: path, entry: entry, side: Self.iconSize) != nil {
-                    continue
-                }
-                onScreen.insert(entry.name)
-                thumbnailRequests[entry.name]?.task.cancel()
-                thumbnailRequests[entry.name] = ThumbnailRequest(
-                    path: path, entry: entry,
-                    task: requestThumbnail(
-                        at: path, entry: entry, on: volume, from: thumbnails))
-            }
-        }
-        for (name, request) in thumbnailRequests where !onScreen.contains(name) {
-            request.task.cancel()
-            thumbnailRequests[name] = nil
-        }
-    }
-
-    /// Asks `thumbnails` for the thumbnail of `entry`, the file at `path`, and shows it in the
-    /// entry's row once made, unless the request was cancelled first.
-    private func requestThumbnail(
-        at path: String, entry: DirectoryEntry, on volume: VolumeIdentity,
-        from thumbnails: ThumbnailService
-    ) -> Task<Void, Never> {
-        Task { [weak self] in
-            let thumbnail: CGImage?
-            do {
-                thumbnail = try await thumbnails.thumbnail(
-                    at: path, entry: entry, side: Self.iconSize, on: volume)
-            } catch {
-                // Cancelled while it waited: the row left the screen.
-                return
-            }
-            guard let self, !Task.isCancelled else { return }
-            thumbnailRequests[entry.name] = nil
-            guard let thumbnail, let listing, let row = listing.row(named: entry.name),
-                listing[row] == entry,
-                let cell = tableView.view(
-                    atColumn: tableView.column(withIdentifier: SortColumn.name.identifier),
-                    row: row, makeIfNecessary: false) as? NSTableCellView
-            else { return }
-            cell.imageView?.image = NSImage(thumbnail: thumbnail)
-        }
-    }
-
     /// What `column`'s cell shows for `row` of `listing`.
     private func text(_ column: SortColumn, row: Int, in listing: Listing) -> String {
         let entry = listing[row]
@@ -1116,12 +867,12 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// Shows or hides the name cell's badge and fits the name to it. A cell the table reuses, or a
     /// row refilled in place, may have shown another entry's badge.
     private func showNotDownloadedBadge(_ shown: Bool, in cell: NSTableCellView) {
-        let badge = Self.badge(in: cell)
+        let badge = ListingCellLayout.badge(in: cell)
         if shown, badge.image == nil {
             badge.image = iconCache.notDownloadedBadge
         }
         badge.isHidden = !shown
-        fitBadgeAndName(in: cell)
+        ListingCellLayout.fitBadgeAndName(in: cell, chevronRoom: chevronRoom)
     }
 
     /// Shows or hides the name cell's spinner, for the share whose mount has waited
@@ -1138,17 +889,6 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         }
     }
 
-    /// Puts the name cell's badge and spinner left of its chevron when it shows one, else at its
-    /// trailing edge, and fits the name to them.
-    private func fitBadgeAndName(in cell: NSTableCellView) {
-        let badgeX = Self.badgeX(cellWidth: cell.bounds.width, chevronRoom: shownChevronRoom(cell))
-        for view in [Self.badge(in: cell), Self.connectingSpinner(in: cell)]
-        where view.frame.minX != badgeX {
-            view.frame.origin.x = badgeX
-        }
-        fitName(in: cell)
-    }
-
     /// Whether `entry`'s row shows a chevron in column view: a folder's, and a share's that isn't
     /// mounted, as Finder draws one on every share (docs/decisions/0115-server-shares.md); not a
     /// file's, a package's or a link's, whose target the listing doesn't hold.
@@ -1159,18 +899,9 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// Shows or hides a column name cell's chevron, as `showsChevron` says. A list's cell has
     /// none. The name is fitted after, by `showNotDownloadedBadge`.
     private func showFolderChevron(_ shown: Bool, in cell: NSTableCellView) {
-        guard let chevron = Self.chevron(in: cell) else { return }
+        guard let chevron = ListingCellLayout.chevron(in: cell) else { return }
         chevron.isHidden = !shown
-        place(chevron, in: cell)
-    }
-
-    /// Puts a name cell's chevron `chevronRoom` in from the cell's right edge. A reused cell may
-    /// come from before the table's selection changed shape.
-    private func place(_ chevron: NSImageView, in cell: NSTableCellView) {
-        let x = cell.bounds.width - chevronRoom
-        if chevron.frame.minX != x {
-            chevron.frame.origin.x = x
-        }
+        ListingCellLayout.place(chevron, in: cell, chevronRoom: chevronRoom)
     }
 
     /// Moves the chevrons, badges and names on screen to the table's selection shape, which the
@@ -1180,53 +911,12 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         guard index >= 0 else { return }
         tableView.enumerateAvailableRowViews { rowView, _ in
             guard let cell = rowView.view(atColumn: index) as? NSTableCellView,
-                let chevron = Self.chevron(in: cell)
+                let chevron = ListingCellLayout.chevron(in: cell)
             else { return }
-            place(chevron, in: cell)
-            fitBadgeAndName(in: cell)
+            ListingCellLayout.place(chevron, in: cell, chevronRoom: chevronRoom)
+            ListingCellLayout.fitBadgeAndName(in: cell, chevronRoom: chevronRoom)
         }
         renameField.layout()
-    }
-
-    private static func chevron(in cell: NSTableCellView) -> NSImageView? {
-        (cell as? ColumnNameCellView)?.chevron
-    }
-
-    /// The room the cell's chevron takes when it shows one, else nil.
-    private func shownChevronRoom(_ cell: NSTableCellView) -> Double? {
-        Self.chevron(in: cell).flatMap { $0.isHidden ? nil : chevronRoom }
-    }
-
-    /// Where a name cell `cellWidth` wide puts its badge: at its trailing edge, left of a
-    /// chevron that takes `chevronRoom`, when it shows one.
-    private static func badgeX(cellWidth: Double, chevronRoom: Double?) -> Double {
-        cellWidth - 2 - badgeSize - (chevronRoom.map { $0 - 2 + badgeGap } ?? 0)
-    }
-
-    /// Where the name ends in a name cell `cellWidth` wide: before the badge when it shows,
-    /// else before a chevron that takes `chevronRoom` when it shows one, else at the trailing
-    /// padding.
-    private static func nameEnd(cellWidth: Double, chevronRoom: Double?, badge: Bool) -> Double {
-        if badge { return badgeX(cellWidth: cellWidth, chevronRoom: chevronRoom) - badgeGap }
-        if let chevronRoom { return cellWidth - chevronRoom - badgeGap }
-        return cellWidth - 2
-    }
-
-    /// Sets the name's width from the cell's: up to the badge when it shows, else up to the
-    /// chevron when it shows, else up to the trailing padding. Set outright, since autoresizing
-    /// clamps a width at zero in a column narrower than the name and the badge, and widening the
-    /// column doesn't give that back.
-    private func fitName(in cell: NSTableCellView) {
-        guard let textField = cell.textField else {
-            preconditionFailure("the name cell has no text field: \(cell.subviews)")
-        }
-        let end = Self.nameEnd(
-            cellWidth: cell.bounds.width, chevronRoom: shownChevronRoom(cell),
-            badge: !Self.badge(in: cell).isHidden || !Self.connectingSpinner(in: cell).isHidden)
-        let width = max(end - textField.frame.minX, 0)
-        if textField.frame.width != width {
-            textField.frame.size.width = width
-        }
     }
 
     static func connectingSpinner(in cell: NSTableCellView) -> NSProgressIndicator {
@@ -1240,17 +930,6 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         return spinner
     }
 
-    private static func badge(in cell: NSTableCellView) -> NSImageView {
-        guard
-            let badge = cell.subviews.first(where: {
-                $0.identifier == notDownloadedBadgeIdentifier
-            }) as? NSImageView
-        else {
-            preconditionFailure("the name cell has no badge view: \(cell.subviews)")
-        }
-        return badge
-    }
-
     /// Fits the names on screen to a Name column the user or the window resized.
     public func tableViewColumnDidResize(_ notification: Notification) {
         guard let column = notification.userInfo?["NSTableColumn"] as? NSTableColumn,
@@ -1259,13 +938,14 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         let index = tableView.column(withIdentifier: column.identifier)
         tableView.enumerateAvailableRowViews { rowView, _ in
             guard let cell = rowView.view(atColumn: index) as? NSTableCellView else { return }
-            fitName(in: cell)
+            ListingCellLayout.fitName(in: cell, chevronRoom: chevronRoom)
         }
         renameField.layout()
     }
 
     /// The frame of `row`'s name label, in the table's coordinates: in the Name column after
-    /// the icon, centered in the row, and ending where `fitName` ends it for the row's entry.
+    /// the icon, centered in the row, and ending where `ListingCellLayout.fitName` ends it for the
+    /// row's entry.
     func nameFrame(atRow row: Int) -> NSRect {
         guard let listing, row < listing.count else {
             preconditionFailure("no row \(row) to frame the name of")
@@ -1274,32 +954,24 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         precondition(column >= 0, "the table has no Name column")
         let cell = tableView.frameOfCell(atColumn: column, row: row)
         let entry = listing[row]
-        let end = Self.nameEnd(
+        let end = ListingCellLayout.nameEnd(
             cellWidth: cell.width,
             chevronRoom: showsNamesOnly && Self.showsChevron(entry) ? chevronRoom : nil,
             badge: entry.isDataless)
+        let nameX = ListingCellLayout.nameX
+        let labelHeight = ListingCellLayout.labelHeight
         return NSRect(
-            x: cell.minX + Self.nameX, y: cell.minY + (cell.height - Self.labelHeight) / 2,
-            width: max(end - Self.nameX, 0), height: Self.labelHeight)
+            x: cell.minX + nameX, y: cell.minY + (cell.height - labelHeight) / 2,
+            width: max(end - nameX, 0), height: labelHeight)
     }
 
-    /// The height of every cell's text field, a label's in `nameFont`.
-    private static let labelHeight = NSTextField(labelWithString: "").intrinsicContentSize.height
-
-    /// The font of every name cell's text, which `makeCell` leaves at a label's default.
+    /// The font of every name cell's text, which `ListingCellLayout.makeCell` leaves at a label's
+    /// default.
     static let nameFont: NSFont = {
         guard let font = NSTextField(labelWithString: "").font else {
             preconditionFailure("a label has no font")
         }
         return font
-    }()
-
-    /// What a name's text field adds to the width of its text as `NSString.size(withAttributes:)`
-    /// measures it in `nameFont`: the field's own insets.
-    private static let nameFieldPadding: Double = {
-        let sample = "M"
-        let textWidth = (sample as NSString).size(withAttributes: [.font: nameFont]).width
-        return NSTextField(labelWithString: sample).intrinsicContentSize.width - textWidth
     }()
 
     /// The width this column of column view needs to show, whole beside a folder's chevron, a
@@ -1313,111 +985,23 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         let outside =
             view.frame.width - tableView.tableColumns[0].width + 2 * ListingTableView.cellInset
         // A point over, for the rounding of the field's own width.
-        let field = (nameWidth + Self.nameFieldPadding).rounded(.up) + 1
-        let trailing = Self.badgeGap + chevronRoom
-        return (outside + Self.nameX + field + trailing).rounded(.up)
+        let field = (nameWidth + ListingCellLayout.nameFieldPadding).rounded(.up) + 1
+        let trailing = ListingCellLayout.badgeGap + chevronRoom
+        return (outside + ListingCellLayout.nameX + field + trailing).rounded(.up)
     }
 
-    /// The icon's side in the Name column, and where the name starts after it.
-    private static let iconSize = 16.0
-    private static let nameX = 2 + iconSize + 4
-
-    /// The side of the badge, which is also the height of the chevron's view.
-    private static let badgeSize = 16.0
-    /// The space between a name and its badge or chevron.
-    private static let badgeGap = 4.0
-    /// The chevron's width, its image's (`TypeIconCache.folderChevron`).
-    static let chevronWidth = 6.0
-    /// How far past the cell's right edge the chevron's view ends in a table whose selection is
-    /// `shape`. In the rounded band the glyph, which stops 1.5 points short of its image's right
-    /// edge, ends 4.5 points inside the selection, 13.5 from the column's right edge, as
-    /// Finder's does (second-column-rounded.jpg). Finder's trail's first column, whose
-    /// selection runs the whole row, draws it further in, about 15.75 points from the column's
-    /// right edge (first-column-square.jpg): its view ends at the cell's edge, so the glyph ends
-    /// 15.5 points in. A point and a quarter isn't a whole pixel at 2x, where AppKit would
-    /// round the view's frame and the name's width apart.
-    private static func chevronOverhang(_ shape: ListingTableView.SelectionShape) -> Double {
-        switch shape {
-        case .roundedBand: 2
-        case .fullWidth: 0
-        }
-    }
     /// The room the chevron's view takes inside the cell, from its right edge, for the table's
     /// selection shape.
     private var chevronRoom: Double {
-        Self.chevronWidth - Self.chevronOverhang(tableView.selectionShape)
+        ListingCellLayout.chevronRoom(for: tableView.selectionShape)
     }
 
-    /// A cell laid out with frames and autoresizing, which costs less per row than constraints.
+    /// A new cell for `column`; a column of column view's name cell has a chevron.
     private func makeCell(for column: SortColumn) -> NSTableCellView {
-        let height = tableView.rowHeight
-        let frame = NSRect(x: 0, y: 0, width: column.width, height: height)
-        let cell: NSTableCellView
-        if showsNamesOnly, column == .name {
-            let named = ColumnNameCellView(frame: frame, chevronImage: iconCache.folderChevron)
-            let chevron = named.chevron
-            chevron.identifier = Self.folderChevronIdentifier
-            chevron.frame = NSRect(
-                x: column.width - chevronRoom,
-                y: (height - Self.badgeSize) / 2, width: Self.chevronWidth,
-                height: Self.badgeSize)
-            chevron.autoresizingMask = [.minXMargin, .minYMargin, .maxYMargin]
-            chevron.isHidden = true
-            cell = named
-        } else {
-            cell = NSTableCellView(frame: frame)
-        }
-        cell.identifier = column.identifier
-        var textX = 2.0
-        if column == .name {
-            let iconSize = Self.iconSize
-            let imageView = NSImageView(
-                frame: NSRect(x: 2, y: (height - iconSize) / 2, width: iconSize, height: iconSize))
-            imageView.imageScaling = .scaleProportionallyUpOrDown
-            imageView.autoresizingMask = [.minYMargin, .maxYMargin]
-            // The icon repeats the Kind column, so VoiceOver reads the name alone.
-            imageView.setAccessibilityElement(false)
-            cell.addSubview(imageView)
-            cell.imageView = imageView
-            textX = Self.nameX
-        }
-        let textField = NSTextField(labelWithString: "")
-        textField.lineBreakMode = column == .name ? .byTruncatingMiddle : .byTruncatingTail
-        textField.alignment = column.alignment
-        let textHeight = Self.labelHeight
-        textField.frame = NSRect(
-            x: textX, y: (height - textHeight) / 2, width: column.width - textX - 2,
-            height: textHeight)
-        textField.autoresizingMask = [.width, .minYMargin, .maxYMargin]
-        cell.addSubview(textField)
-        cell.textField = textField
-        if column == .name {
-            // At the cell's trailing edge, as Finder draws it. Hidden until an entry needs it.
-            // The row's label says the entry isn't downloaded, so the badge isn't read again.
-            let badgeSize = Self.badgeSize
-            let badge = NSImageView(
-                frame: NSRect(
-                    x: column.width - 2 - badgeSize, y: (height - badgeSize) / 2,
-                    width: badgeSize, height: badgeSize))
-            badge.identifier = Self.notDownloadedBadgeIdentifier
-            badge.imageScaling = .scaleProportionallyUpOrDown
-            badge.contentTintColor = .secondaryLabelColor
-            badge.autoresizingMask = [.minXMargin, .minYMargin, .maxYMargin]
-            badge.setAccessibilityElement(false)
-            badge.isHidden = true
-            cell.addSubview(badge)
-            // In the badge's place, for a share whose mount is taking a while.
-            let spinner = NSProgressIndicator(frame: badge.frame)
-            spinner.identifier = Self.connectingSpinnerIdentifier
-            spinner.style = .spinning
-            spinner.controlSize = .small
-            spinner.isDisplayedWhenStopped = false
-            spinner.autoresizingMask = badge.autoresizingMask
-            spinner.setAccessibilityLabel(Self.connectingLabel)
-            spinner.isHidden = true
-            cell.addSubview(spinner)
-        }
-        return cell
+        ListingCellLayout.makeCell(
+            for: column, height: tableView.rowHeight,
+            chevronImage: showsNamesOnly && column == .name ? iconCache.folderChevron : nil,
+            chevronRoom: chevronRoom)
     }
 }
 
@@ -1446,7 +1030,7 @@ extension SortColumn {
         self = column
     }
 
-    fileprivate var identifier: NSUserInterfaceItemIdentifier {
+    var identifier: NSUserInterfaceItemIdentifier {
         switch self {
         case .name: NSUserInterfaceItemIdentifier("name")
         case .size: NSUserInterfaceItemIdentifier("size")
@@ -1464,7 +1048,7 @@ extension SortColumn {
         }
     }
 
-    fileprivate var width: Double {
+    var width: Double {
         switch self {
         case .name: 260
         case .size: 80
@@ -1473,7 +1057,7 @@ extension SortColumn {
         }
     }
 
-    fileprivate var alignment: NSTextAlignment {
+    var alignment: NSTextAlignment {
         self == .size ? .right : .natural
     }
 }

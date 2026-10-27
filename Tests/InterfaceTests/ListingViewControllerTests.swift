@@ -1532,7 +1532,10 @@ private func folderSize(_ name: String, in pane: Pane) -> Listing.FolderSizeValu
 
     walks.release("/folder/Music", bytes: 4_000_000)
     await settle { !pane.waitingSizes.isEmpty }
-    try await Task.sleep(for: .milliseconds(50))
+    // `startSizeBatchAfterThisPass` hops through the main queue; two drains let a batch that
+    // ignored the running patch start.
+    await drainMainQueue()
+    await drainMainQueue()
     #expect(!pane.waitingSizes.isEmpty)
 
     queue.resume()
