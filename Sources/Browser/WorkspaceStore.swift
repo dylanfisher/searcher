@@ -48,6 +48,10 @@ public actor WorkspaceStore {
     /// The wait for the next write, cancelled by a `flush` that writes first, so a save after
     /// the flush waits the whole delay.
     private var scheduledWrite: Task<Void, Never>?
+    /// The files whose last write failed and was reported. Their next failures aren't reported
+    /// again until a write of them succeeds, so a full disk shows one problem per file, not one
+    /// per retry.
+    private var unwritten: Set<URL> = []
 
     /// A store in `roots.applicationSupport`. `report` gets each file that couldn't be read,
     /// written or decoded. `write` replaces a file's contents; tests pass one that records its
@@ -96,6 +100,7 @@ public actor WorkspaceStore {
     /// never written has no file, which isn't a problem.
     public func delete(_ id: UUID) {
         pending[id] = nil
+        unwritten.remove(url(for: id))
         deleteFile(url(for: id))
     }
 
@@ -105,6 +110,7 @@ public actor WorkspaceStore {
     @discardableResult
     public func deleteSnapshot(_ id: UUID) -> Bool {
         pendingSnapshots[id] = nil
+        unwritten.remove(snapshotURL(for: id))
         return deleteFile(snapshotURL(for: id))
     }
 
@@ -135,9 +141,19 @@ public actor WorkspaceStore {
     }
 
     /// Writes every save not yet written, at once, as quitting needs. A save whose write fails
-    /// is reported and stays unwritten, so the next flush, after the next save or at quit,
-    /// writes it again, unless a newer save or a delete replaced it.
+    /// stays unwritten and a write is scheduled again, `writeDelay` later, so it is retried until
+    /// it succeeds, unless a newer save or a delete replaces it. A file's failure is reported
+    /// once until a write of it succeeds.
     public func flush() {
+        writePending()
+        if !pending.isEmpty || !pendingSnapshots.isEmpty || pendingSession != nil
+            || pendingFolderHistory != nil
+        {
+            scheduleWrite()
+        }
+    }
+
+    private func writePending() {
         dispatchPrecondition(condition: .notOnQueue(.main))
         scheduledWrite?.cancel()
         scheduledWrite = nil
@@ -157,7 +173,7 @@ public actor WorkspaceStore {
             if session != nil { files.append(sessionFile) }
             if folderHistory != nil { files.append(folderHistoryFile) }
             for url in files {
-                report(StoreProblem(file: url, kind: .unwritten, reason: "\(error)"))
+                reportUnwritten(url, error)
             }
             return
         }
@@ -182,11 +198,18 @@ public actor WorkspaceStore {
     private func store(_ value: some Encodable, to url: URL) -> Bool {
         do {
             try write(Self.encoder.encode(value), url)
+            unwritten.remove(url)
             return true
         } catch {
-            report(StoreProblem(file: url, kind: .unwritten, reason: "\(error)"))
+            reportUnwritten(url, error)
             return false
         }
+    }
+
+    /// Reports that `url` couldn't be written, unless its last write failed and was reported.
+    private func reportUnwritten(_ url: URL, _ error: any Error) {
+        guard unwritten.insert(url).inserted else { return }
+        report(StoreProblem(file: url, kind: .unwritten, reason: "\(error)"))
     }
 
     /// The session, every window's workspace and every snapshot: the latest saves, written or
@@ -239,13 +262,17 @@ public actor WorkspaceStore {
     }
 
     /// When the file at `url` was last written. One whose date can't be read, though it was just
-    /// read, counts as the oldest: its window is restored either way, and only its place in the
-    /// order is unknown.
+    /// read, is reported and counts as the oldest: its window is restored either way, and only
+    /// its place in the order is unknown.
     private func modified(_ url: URL) -> Date {
         do {
-            return try url.resourceValues(forKeys: [.contentModificationDateKey])
-                .contentModificationDate ?? .distantPast
+            guard
+                let date = try url.resourceValues(forKeys: [.contentModificationDateKey])
+                    .contentModificationDate
+            else { throw CocoaError(.fileReadUnknown) }
+            return date
         } catch {
+            report(StoreProblem(file: url, kind: .undated, reason: "\(error)"))
             return .distantPast
         }
     }

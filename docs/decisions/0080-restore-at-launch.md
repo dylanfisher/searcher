@@ -107,9 +107,11 @@ keeps only the CI run's launches.
   saved but not yet written before them all; equal dates go by ID, so the order doesn't depend
   on the folder's. The rebuilt session is saved, so the store writes it with its next flush, and
   `restore` opens every window. A file whose date can't be read, though it was just read, counts
-  as the oldest; its window is restored either way. The discard or read failure is still
-  reported. The same rule covers a crash between a flush's workspace writes and its session
-  write, which used to delete the windows just written.
+  as the oldest and is reported (`undated`); its window is restored either way. The discard or
+  read failure is still reported. The same rule covers a crash between a flush's workspace
+  writes and its session write, which used to delete the windows just written. Accepted edge: a
+  closed window whose file couldn't be deleted (reported as `unforgotten`) comes back in the
+  rebuilt session if the session file is lost as well; it takes both failures, each reported.
   - **Alternatives considered.** Keep the window files and open the home window — rejected: the
     files would sit unused until a later save deleted them, so the windows would still be lost.
     Store the window order in each workspace file — rejected: a second copy of the session's one
