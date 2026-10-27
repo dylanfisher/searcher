@@ -22,9 +22,7 @@ private final class RecordingPanel: PreviewPanel {
 /// closing and beeps are only counted.
 @MainActor
 private final class Fixture {
-    let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 800, height: 400), styleMask: [.titled],
-        backing: .buffered, defer: true)
+    let window = testWindow(size: NSSize(width: 800, height: 400))
     let pane: Pane
     let actions = StubSystemActions()
     let controller: PaneViewController
@@ -258,8 +256,7 @@ private let downArrow = functionKey(NSDownArrowFunctionKey)
     let names = (0..<100).map { String(format: "n%03d", $0) }
     let fixture = await Fixture(names.map { file($0) })
     let pane = fixture.pane
-    let held = DispatchQueue(label: "held settles")
-    held.suspend()
+    let held = heldQueue("held settles")
     pane.settleQueue = held
     let version = pane.stateVersion
 

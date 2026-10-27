@@ -32,10 +32,6 @@ private func ftsTotal(_ path: String) throws -> TreeSizeWalker.Total {
     return TreeSizeWalker.Total(bytes: bytes, files: files, isPartial: isPartial)
 }
 
-private func makeFolder(_ path: String) throws {
-    try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
-}
-
 private func makeFile(_ path: String, size: Int) throws {
     try Data(count: size).write(to: URL(fileURLWithPath: path))
 }

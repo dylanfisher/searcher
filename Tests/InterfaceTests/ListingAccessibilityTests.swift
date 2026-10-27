@@ -26,9 +26,7 @@ private struct Post {
 /// table's own selection changes, which `NSTableView` reports to VoiceOver itself, are counted.
 @MainActor
 private final class Fixture {
-    let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 800, height: 400), styleMask: [.titled],
-        backing: .buffered, defer: true)
+    let window = testWindow(size: NSSize(width: 800, height: 400))
     let pane: Pane
     let controller: PaneViewController
     let table = ListingTableView()
@@ -209,8 +207,7 @@ private var modified: String {
     let names = (0..<100).map { String(format: "n%03d", $0) }
     let fixture = await Fixture(names.map { file($0) })
     let pane = fixture.pane
-    let held = DispatchQueue(label: "held settles")
-    held.suspend()
+    let held = heldQueue("held settles")
     pane.settleQueue = held
     let version = pane.stateVersion
 

@@ -189,9 +189,7 @@ private func cacheStore(_ root: TemporaryFolder, log: EventLog<String> = EventLo
     -> ListingCacheStore
 {
     ListingCacheStore(
-        roots: StoreRoots(
-            caches: root.url.appending(path: "Caches"),
-            applicationSupport: root.url.appending(path: "Application Support")),
+        roots: roots(root),
         log: { log.append($0) }, clock: ManualClock())
 }
 

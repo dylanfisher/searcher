@@ -267,8 +267,7 @@ func aSortKeySortsByItsColumnAndTheSameKeyAgainReverses(
 /// Holds `pane`'s sorts until the test resumes the returned queue.
 @MainActor
 private func holdSorts(of pane: Pane) -> DispatchQueue {
-    let held = DispatchQueue(label: "held sorts")
-    held.suspend()
+    let held = heldQueue("held sorts")
     pane.sortQueue = held
     return held
 }

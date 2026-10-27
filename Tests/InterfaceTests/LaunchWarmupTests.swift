@@ -7,9 +7,7 @@ import os
 
 /// A window that is never shown, with its content waiting to be drawn, as a new window's is.
 @MainActor private func unshownWindow() -> NSWindow {
-    let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: [.titled],
-        backing: .buffered, defer: false)
+    let window = testWindow(size: NSSize(width: 200, height: 100), deferred: false)
     window.contentView?.needsDisplay = true
     return window
 }

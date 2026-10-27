@@ -121,15 +121,13 @@ private func twoVolumes() async -> MountTable {
 @MainActor
 private final class Fixture {
     let root: TemporaryFolder
-    let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 800, height: 400), styleMask: [.titled],
-        backing: .buffered, defer: true)
+    let window = testWindow(size: NSSize(width: 800, height: 400))
     let actions = StubSystemActions()
     let pane: Pane
     let controller: PaneViewController
     let queue: FileOperationQueue
     let snapshots = EventLog<FileOperationQueue.Snapshot>()
-    let pasteboard = NSPasteboard(name: NSPasteboard.Name("searcher-test-\(UUID().uuidString)"))
+    let pasteboard = testPasteboard()
 
     var folder: URL { root.url.appending(path: "pane") }
     var elsewhere: URL { root.url.appending(path: "elsewhere") }
@@ -862,7 +860,7 @@ private let readsToTimeOut = Int(
     let list = controller.listingViewController
     list.fileOperations = FileOperationQueue(prompts: .unexpected) { _ in }
     list.mountTable = mounts
-    let pasteboard = NSPasteboard(name: NSPasteboard.Name("searcher-test-\(UUID().uuidString)"))
+    let pasteboard = testPasteboard()
     defer { pasteboard.releaseGlobally() }
     let item = NSPasteboardItem()
     item.setString(URL(fileURLWithPath: "/Users/someone/a.txt").absoluteString, forType: .fileURL)

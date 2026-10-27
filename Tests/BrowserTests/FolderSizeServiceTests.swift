@@ -1,4 +1,5 @@
 import Base
+import BrowserTestSupport
 import Darwin
 import Foundation
 import TestSupport
@@ -149,9 +150,7 @@ private func request(
 
 private func store(_ folder: TemporaryFolder) -> ListingCacheStore {
     ListingCacheStore(
-        roots: StoreRoots(
-            caches: folder.url.appending(path: "Caches"),
-            applicationSupport: folder.url.appending(path: "Application Support")),
+        roots: roots(folder),
         log: { _ in }, clock: ManualClock())
 }
 
@@ -163,10 +162,6 @@ private func localVolume(of path: String) async throws -> VolumeIdentity {
 
 private func makeFile(_ path: String, size: Int) throws {
     try Data(count: size).write(to: URL(fileURLWithPath: path))
-}
-
-private func makeFolder(_ path: String) throws {
-    try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
 }
 
 @Test func aFolderOnDiskGetsTheWalkersTotal() async throws {

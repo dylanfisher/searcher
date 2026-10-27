@@ -1,4 +1,5 @@
 import Base
+import BrowserTestSupport
 import Foundation
 import TestSupport
 import Testing
@@ -11,35 +12,9 @@ private func volume(_ mountPoint: String, device: String? = nil) -> VolumeIdenti
         mountPoint: mountPoint, kind: .local)
 }
 
-/// The volumes a stub table reads, which a test changes between reads. Counts the reads and
-/// records whether each ran on a `BlockingCallThread`.
-private final class StubMounts: @unchecked Sendable {
-    // `lock` guards everything below it.
-    private let lock = NSLock()
-    private var volumes: [VolumeIdentity]
-    private var reads: [Bool] = []
-
-    init(_ volumes: [VolumeIdentity]) {
-        self.volumes = volumes
-    }
-
-    func set(_ volumes: [VolumeIdentity]) {
-        lock.withLock { self.volumes = volumes }
-    }
-
-    func read() -> [VolumeIdentity] {
-        lock.withLock {
-            reads.append(BlockingCallThread.isCurrent)
-            return volumes
-        }
-    }
-
-    var readsOnBlockingCallThreads: [Bool] { lock.withLock { reads } }
-}
-
 @MainActor
 private func loadedTable(_ mounts: StubMounts) async -> MountTable {
-    let table = MountTable(read: mounts.read)
+    let table = mounts.table()
     await settle { table.volume(of: "/") != nil }
     return table
 }
@@ -93,19 +68,12 @@ private func loadedTable(_ mounts: StubMounts) async -> MountTable {
     await settle { table.volume(of: mountPoint + "/b") == root }
 }
 
-/// A share mounted directly in /Volumes from a host the source names.
-private func share(_ name: String) -> VolumeIdentity {
-    VolumeIdentity(
-        device: "//dylan@HAL9000._smb._tcp.local/\(name)", mountPoint: "/Volumes/\(name)",
-        kind: .network)
-}
-
 @MainActor @Test func theTableListsItsVolumesInTheKernelsOrderAndPlacesAServer() async throws {
     let root = volume("/")
     let disk = volume("/Volumes/a")
-    let table = await loadedTable(StubMounts([share("music"), root, disk]))
+    let table = await loadedTable(StubMounts([mountedShare("music"), root, disk]))
 
-    #expect(table.volumes == [share("music"), root, disk])
+    #expect(table.volumes == [mountedShare("music"), root, disk])
     let server = try #require(Server(host: "hal9000._smb._tcp.local"))
     #expect(table.server(holding: "/Volumes/music/Albums") == server)
     #expect(table.server(holding: "/Volumes/a/b") == nil)
@@ -144,16 +112,17 @@ private func share(_ name: String) -> VolumeIdentity {
     await settle { table.readsLanded > landed }
     #expect(runs == 0)
 
-    mounts.set([volume("/"), share("music")])
+    mounts.set([volume("/"), mountedShare("music")])
     table.refresh()
     await settle { runs == 1 }
-    #expect(table.volumes == [volume("/"), share("music")])
+    #expect(table.volumes == [volume("/"), mountedShare("music")])
 }
 
 @MainActor @Test func aReadThatChangesOnlyAVolumesFileSystemTypeChangesTheTable() async {
     func music(_ fsType: String) -> VolumeIdentity {
         VolumeIdentity(
-            device: share("music").device, mountPoint: share("music").mountPoint, kind: .network,
+            device: mountedShare("music").device, mountPoint: mountedShare("music").mountPoint,
+            kind: .network,
             fsType: fsType)
     }
     let mounts = StubMounts([volume("/"), music("afpfs")])

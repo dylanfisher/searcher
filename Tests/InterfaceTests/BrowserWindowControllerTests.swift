@@ -70,11 +70,7 @@ private func arrow(_ code: Int, _ modifiers: NSEvent.ModifierFlags) throws -> NS
 /// Cmd-Shift-] or Cmd-Shift-[ as a US keyboard types them.
 @MainActor
 private func shiftedBracket(_ typed: String, keyCode: UInt16) throws -> NSEvent {
-    try #require(
-        NSEvent.keyEvent(
-            with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0,
-            windowNumber: 0, context: nil, characters: typed, charactersIgnoringModifiers: typed,
-            isARepeat: false, keyCode: keyCode))
+    try keyEvent(typed, modifiers: [.command, .shift], keyCode: keyCode)
 }
 
 @MainActor @Test func theWindowTurnsOffSystemTabbing() async throws {
@@ -690,19 +686,6 @@ private func receiver(of item: NSMenuItem, in window: NSWindow) throws -> NSResp
 
 // MARK: Split state, grid keys and Ctrl-Tab
 
-/// A key event as a US keyboard sends it, with the key code that reads its own character.
-@MainActor
-private func usKey(
-    _ ignoringModifiers: String, characters: String, keyCode: UInt16,
-    _ modifiers: NSEvent.ModifierFlags
-) throws -> NSEvent {
-    try #require(
-        NSEvent.keyEvent(
-            with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
-            windowNumber: 0, context: nil, characters: characters,
-            charactersIgnoringModifiers: ignoringModifiers, isARepeat: false, keyCode: keyCode))
-}
-
 @MainActor @Test func splitOpensOnTheSameSelectionAndScrollPosition() async throws {
     let names = (0..<300).map { "file\(1000 + $0).txt" }
     let settings = untouchedSettings()
@@ -751,8 +734,10 @@ private func usKey(
     let first = fixture.tab.layout.focused
 
     // Option-3 types "£"; Option-Shift-2 types "€", and Shift-2 alone "@".
-    try fixture.press(try usKey("3", characters: "£", keyCode: 20, [.command, .option]))
-    try fixture.press(try usKey("@", characters: "€", keyCode: 19, [.command, .option, .shift]))
+    try fixture.press(
+        try keyEvent("3", characters: "£", modifiers: [.command, .option], keyCode: 20))
+    try fixture.press(
+        try keyEvent("@", characters: "€", modifiers: [.command, .option, .shift], keyCode: 19))
 
     #expect(fixture.tab.layout.columnCount == 3 && fixture.tab.layout.rowCount == 2)
     #expect(fixture.tab.panes.count == 6)
@@ -768,16 +753,19 @@ private func usKey(
     let fixture = try await Fixture()
 
     // Option-Shift-T types "ˇ".
-    try fixture.press(try usKey("T", characters: "ˇ", keyCode: 17, [.option, .shift]))
+    try fixture.press(
+        try keyEvent("T", characters: "ˇ", modifiers: [.option, .shift], keyCode: 17))
     #expect(fixture.tab.panes.count == 2 && fixture.tab.layout.rowCount == 2)
 
-    fixture.window.sendEvent(try usKey("T", characters: "ˇ", keyCode: 17, [.option, .shift]))
+    fixture.window.sendEvent(
+        try keyEvent("T", characters: "ˇ", modifiers: [.option, .shift], keyCode: 17))
     #expect(fixture.tab.panes.count == 3)
 
     // Command is no part of the key now, so no command takes it and the table beeps.
     var beeps = 0
     try fixture.keyTable.beep = { beeps += 1 }
-    try fixture.press(try usKey("T", characters: "ˇ", keyCode: 17, [.command, .option, .shift]))
+    try fixture.press(
+        try keyEvent("T", characters: "ˇ", modifiers: [.command, .option, .shift], keyCode: 17))
     #expect(fixture.tab.panes.count == 3)
     #expect(beeps == 1)
 }
@@ -790,8 +778,9 @@ private func usKey(
     try fixture.press(try keyEvent("t", modifiers: .command))
     let second = fixture.tab
     try #require(second !== first)
-    let next = try usKey("\t", characters: "\t", keyCode: 48, .control)
-    let previous = try usKey("\u{19}", characters: "\u{19}", keyCode: 48, [.control, .shift])
+    let next = try keyEvent("\t", characters: "\t", modifiers: .control, keyCode: 48)
+    let previous = try keyEvent(
+        "\u{19}", characters: "\u{19}", modifiers: [.control, .shift], keyCode: 48)
 
     // The window, not the table, sees the key first, as AppKit delivers it.
     fixture.window.sendEvent(next)
@@ -820,7 +809,7 @@ private func usKey(
     fixture.window.recalculateKeyViewLoop()
     let before = try #require(fixture.window.firstResponder)
 
-    fixture.window.sendEvent(try usKey("\t", characters: "\t", keyCode: 48, .control))
+    fixture.window.sendEvent(try keyEvent("\t", characters: "\t", modifiers: .control, keyCode: 48))
 
     #expect(fixture.tab === only)
     #expect(fixture.window.firstResponder !== before)
@@ -1582,11 +1571,7 @@ private struct PressFixture {
         on row: Int, modifiers: NSEvent.ModifierFlags = [], type: NSEvent.EventType = .leftMouseDown
     ) throws -> NSEvent {
         let point = table.convert(NSPoint(x: 20, y: table.rect(ofRow: row).midY), to: nil)
-        return try #require(
-            NSEvent.mouseEvent(
-                with: type, location: point, modifierFlags: modifiers, timestamp: 0,
-                windowNumber: fixture.window.windowNumber, context: nil, eventNumber: 0,
-                clickCount: 1, pressure: 1))
+        return try mouseEvent(type, at: point, in: fixture.window, modifiers: modifiers)
     }
 
     /// Orders the window in on the second display, which a real press needs: a window that isn't
@@ -2218,12 +2203,9 @@ extension PressFixture {
         let location = view.convert(point, to: nil)
         let now = ProcessInfo.processInfo.systemUptime
         func event(_ type: NSEvent.EventType) throws -> NSEvent {
-            try #require(
-                NSEvent.mouseEvent(
-                    with: type, location: location, modifierFlags: [],
-                    timestamp: type == .leftMouseUp ? now + 0.05 : now,
-                    windowNumber: window.windowNumber, context: nil, eventNumber: 0,
-                    clickCount: 1, pressure: 1))
+            try mouseEvent(
+                type, at: location, in: window,
+                timestamp: type == .leftMouseUp ? now + 0.05 : now)
         }
         let content = try #require(window.contentView)
         let frameView = try #require(content.superview)
@@ -2440,11 +2422,7 @@ extension PressFixture {
     let content = try #require(window.contentView)
     #expect(content.hitTest(try #require(content.superview).convert(point, from: nil)) === segment)
     func event(_ type: NSEvent.EventType) throws -> NSEvent {
-        try #require(
-            NSEvent.mouseEvent(
-                with: type, location: point, modifierFlags: [], timestamp: 0,
-                windowNumber: window.windowNumber, context: nil, eventNumber: 0,
-                clickCount: type == .mouseMoved ? 0 : 1, pressure: 1))
+        try mouseEvent(type, at: point, in: window, clickCount: type == .mouseMoved ? 0 : 1)
     }
     #expect(bar.highlightFill == nil)
     bar.mouseMoved(with: try event(.mouseMoved))
@@ -2484,12 +2462,9 @@ extension PressFixture {
         let location = table.convert(NSPoint(x: 10, y: table.rect(ofRow: row).midY), to: nil)
         let now = ProcessInfo.processInfo.systemUptime
         func event(_ type: NSEvent.EventType) throws -> NSEvent {
-            try #require(
-                NSEvent.mouseEvent(
-                    with: type, location: location, modifierFlags: [],
-                    timestamp: type == .leftMouseUp ? now + 0.05 : now,
-                    windowNumber: fixture.window.windowNumber, context: nil, eventNumber: 0,
-                    clickCount: 1, pressure: 1))
+            try mouseEvent(
+                type, at: location, in: fixture.window,
+                timestamp: type == .leftMouseUp ? now + 0.05 : now)
         }
         nonisolated(unsafe) let down = try event(.leftMouseDown)
         try performRealPress(releasedBy: try event(.leftMouseUp)) {

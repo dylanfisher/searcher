@@ -12,9 +12,7 @@ import Testing
 /// table first responder.
 @MainActor
 private struct Fixture {
-    let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 800, height: 400), styleMask: [.titled],
-        backing: .buffered, defer: true)
+    let window = testWindow(size: NSSize(width: 800, height: 400))
     let pane: Pane
     let controller: PaneViewController
     let table = ListingTableView()

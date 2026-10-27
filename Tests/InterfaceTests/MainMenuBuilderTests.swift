@@ -273,28 +273,6 @@ private struct TextFieldWindow {
     #expect(setup.log.ids == [SelectionCommands.selectAll.id])
 }
 
-/// Settings for a test that never changes one, over a `temporarySuite` under the temporary
-/// directory, which removes its file with the settings. TestSupport can't build `Settings`, which
-/// is in Browser, so each test target has this and `storedSettings`.
-@MainActor
-func untouchedSettings() -> Settings {
-    Settings(defaults: temporarySuite(in: FileManager.default.temporaryDirectory.path))
-}
-
-/// `untouchedSettings` with folder sizes on, for a test of the walks that setting starts.
-@MainActor
-func sizedSettings() -> Settings {
-    let settings = untouchedSettings()
-    settings.folderSizes = true
-    return settings
-}
-
-/// Settings stored in `folder`, which takes the suite's file with it when the test removes it.
-@MainActor
-func storedSettings(in folder: TemporaryFolder) -> Settings {
-    Settings(defaults: temporarySuite(in: folder.url.path))
-}
-
 @MainActor @Test func viewMenuRunsTheTogglesAndSortKeysWithTheirChords() throws {
     let menu = try buildMenu(try AppCommands.registry())
     let view = try #require(menu.items.first { $0.title == "View" }?.submenu)
@@ -320,11 +298,7 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
 
     // Cmd-Shift-. types ">" on a US keyboard; the chord names the unshifted key.
     let presses = [
-        try #require(
-            NSEvent.keyEvent(
-                with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0,
-                windowNumber: 0, context: nil, characters: ">", charactersIgnoringModifiers: ">",
-                isARepeat: false, keyCode: 47)),
+        try keyEvent(">", modifiers: [.command, .shift], keyCode: 47),
         try keyEvent("2", characters: "™", modifiers: [.control, .option]),
         try keyEvent("p", characters: "π", modifiers: [.option, .command]),
         try keyEvent("P", characters: "∏", modifiers: [.option, .command, .shift]),
@@ -624,20 +598,6 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
         ])
 }
 
-/// A key event as a US keyboard sends it: Shift applies to `ignoringModifiers`, and `keyCode`
-/// reads the key's own character.
-@MainActor
-private func usKey(
-    _ ignoringModifiers: String, characters: String, keyCode: UInt16,
-    _ modifiers: NSEvent.ModifierFlags
-) throws -> NSEvent {
-    try #require(
-        NSEvent.keyEvent(
-            with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
-            windowNumber: 0, context: nil, characters: characters,
-            charactersIgnoringModifiers: ignoringModifiers, isARepeat: false, keyCode: keyCode))
-}
-
 @MainActor @Test func windowMenuRunsTheSplitAndGridKeysFromItsItems() throws {
     let menu = try buildMenu(try AppCommands.registry())
     let window = try #require(menu.items.first { $0.title == "Window" }?.submenu)
@@ -655,10 +615,10 @@ private func usKey(
 
     // Option and Shift-Option type other characters; Shift-4 types "$".
     let presses = [
-        try usKey("T", characters: "T", keyCode: 17, [.command, .shift]),
-        try usKey("T", characters: "ˇ", keyCode: 17, [.option, .shift]),
-        try usKey("1", characters: "¡", keyCode: 18, [.command, .option]),
-        try usKey("$", characters: "›", keyCode: 21, [.command, .option, .shift]),
+        try keyEvent("T", characters: "T", modifiers: [.command, .shift], keyCode: 17),
+        try keyEvent("T", characters: "ˇ", modifiers: [.option, .shift], keyCode: 17),
+        try keyEvent("1", characters: "¡", modifiers: [.command, .option], keyCode: 18),
+        try keyEvent("$", characters: "›", modifiers: [.command, .option, .shift], keyCode: 21),
     ]
     for press in presses {
         let item = try item(for: press, in: menu)
@@ -681,8 +641,8 @@ private func usKey(
 
     for (typed, keyCode) in [("!", 18), ("@", 19), ("#", 20), ("$", 21)] as [(String, UInt16)] {
         table.keyDown(
-            with: try usKey(
-                typed, characters: typed, keyCode: keyCode, [.command, .option, .shift]))
+            with: try keyEvent(
+                typed, characters: typed, modifiers: [.command, .option, .shift], keyCode: keyCode))
     }
 
     #expect(log.ids == (1...4).compactMap { TilingCommands.rows[$0]?.id })
@@ -696,8 +656,10 @@ private func usKey(
     table.beep = { Issue.record("beeped") }
 
     // Option-Shift-T types "ˇ" on a US keyboard; the key is read without Option, so "T".
-    table.keyDown(with: try usKey("T", characters: "ˇ", keyCode: 17, [.option, .shift]))
-    table.keyDown(with: try usKey("t", characters: "ˇ", keyCode: 17, [.option, .shift]))
+    table.keyDown(
+        with: try keyEvent("T", characters: "ˇ", modifiers: [.option, .shift], keyCode: 17))
+    table.keyDown(
+        with: try keyEvent("t", characters: "ˇ", modifiers: [.option, .shift], keyCode: 17))
 
     #expect(log.ids == [TilingCommands.splitDown.id, TilingCommands.splitDown.id])
     #expect(!table.typeSelect.isTyping)

@@ -11,9 +11,7 @@ import Testing
 @MainActor
 private final class Fixture {
     let prompter: OperationPrompter
-    let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled],
-        backing: .buffered, defer: true)
+    let window = testWindow(size: NSSize(width: 400, height: 300))
     var hasWindow = true
     var presented: [NSWindow] = []
     var dismissed: [NSWindow] = []
@@ -180,9 +178,7 @@ private func ask(_ request: ConfirmRequest, of fixture: Fixture, into returned: 
     ask(otherPane("one"), of: fixture, into: returned)
     await settle { fixture.confirmSheet != nil }
     let closed = fixture.window
-    let next = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled],
-        backing: .buffered, defer: true)
+    let next = testWindow(size: NSSize(width: 400, height: 300))
     var shownOn: [NSWindow] = []
     fixture.prompter.window = { _ in next }
     fixture.prompter.present = { _, window in shownOn.append(window) }

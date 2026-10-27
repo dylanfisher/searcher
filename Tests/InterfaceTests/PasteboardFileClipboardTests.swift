@@ -8,7 +8,7 @@ import Testing
 /// `body` returns.
 @MainActor
 private func withTestPasteboard(_ body: (NSPasteboard) throws -> Void) rethrows {
-    let pasteboard = NSPasteboard(name: NSPasteboard.Name("searcher-test-\(UUID().uuidString)"))
+    let pasteboard = testPasteboard()
     defer { pasteboard.releaseGlobally() }
     try body(pasteboard)
 }

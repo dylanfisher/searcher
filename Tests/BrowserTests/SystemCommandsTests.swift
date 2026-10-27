@@ -149,8 +149,7 @@ private func systemPane(settings: Settings = untouchedSettings()) async -> PaneF
             lister: StubLister(["/n": (0..<100).map { file(String(format: "n%03d", $0)) }])),
         systemActions: StubSystemActions(), settings: untouchedSettings())
     await settle { pane.state.isLoaded }
-    let held = DispatchQueue(label: "held settles")
-    held.suspend()
+    let held = heldQueue("held settles")
     pane.settleQueue = held
     let version = pane.stateVersion
 

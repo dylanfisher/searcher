@@ -127,10 +127,6 @@ private func write(_ names: String..., in folder: String) throws {
     }
 }
 
-private func exists(_ path: String) -> Bool {
-    FileManager.default.fileExists(atPath: path)
-}
-
 private func names(in folder: String) throws -> Set<String> {
     Set(try FileManager.default.contentsOfDirectory(atPath: folder))
 }

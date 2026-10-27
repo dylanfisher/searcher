@@ -177,7 +177,7 @@ private final class Fixture {
 
     /// A drag's info carrying the file URLs of `paths`, from no view of the app.
     func drag(_ paths: [String]) -> StubDraggingInfo {
-        let pasteboard = NSPasteboard(name: NSPasteboard.Name("searcher-test-\(UUID().uuidString)"))
+        let pasteboard = testPasteboard()
         pasteboard.clearContents()
         pasteboard.writeObjects(paths.map { URL(fileURLWithPath: $0, isDirectory: true) as NSURL })
         return StubDraggingInfo(pasteboard: pasteboard)
@@ -185,7 +185,7 @@ private final class Fixture {
 
     /// A drag's info carrying the favorite in `row`, as the sidebar's list writes it.
     func dragFavorite(row: Int) throws -> StubDraggingInfo {
-        let pasteboard = NSPasteboard(name: NSPasteboard.Name("searcher-test-\(UUID().uuidString)"))
+        let pasteboard = testPasteboard()
         pasteboard.clearContents()
         let item = try #require(outline.item(atRow: row))
         let writer = try #require(

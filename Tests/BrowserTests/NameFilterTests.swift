@@ -6,10 +6,6 @@ import Testing
 
 @testable import Browser
 
-private func names(_ listing: Listing) -> [String] {
-    (0..<listing.count).map { listing[$0].name }
-}
-
 private func matches(_ query: String, _ name: String) -> Bool {
     NameFilter(query).matches(foldedName: NameSortKey.fold(name))
 }
@@ -116,16 +112,9 @@ private func filterPane() async -> PaneFixture {
     return fixture
 }
 
-/// A serial queue, suspended, for `Pane.sortQueue`: sorts wait on it until `resume()`.
-private func heldQueue() -> DispatchQueue {
-    let queue = DispatchQueue(label: "held filter sorts")
-    queue.suspend()
-    return queue
-}
-
 @MainActor @Test func setFilterNarrowsTheRowsOffTheMainThread() async {
     let fixture = await filterPane()
-    let sorts = heldQueue()
+    let sorts = heldQueue("held filter sorts")
     fixture.pane.sortQueue = sorts
 
     fixture.pane.setFilter("port")
@@ -140,8 +129,8 @@ private func heldQueue() -> DispatchQueue {
 
 @MainActor @Test func anOlderQuerysResultsArrivingLateAreDropped() async {
     let fixture = await filterPane()
-    let older = heldQueue()
-    let newer = heldQueue()
+    let older = heldQueue("held filter sorts")
+    let newer = heldQueue("held filter sorts")
 
     fixture.pane.sortQueue = older
     fixture.pane.setFilter("p")
@@ -161,8 +150,8 @@ private func heldQueue() -> DispatchQueue {
 /// so it doesn't change the state the newer result checks, and the pane ends on the newer query.
 @MainActor @Test func anOlderQuerysResultsLandingFirstAreDroppedAndTheNewerOneLands() async {
     let fixture = await filterPane()
-    let older = heldQueue()
-    let newer = heldQueue()
+    let older = heldQueue("held filter sorts")
+    let newer = heldQueue("held filter sorts")
 
     fixture.pane.sortQueue = older
     fixture.pane.setFilter("p")

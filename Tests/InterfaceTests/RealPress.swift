@@ -33,11 +33,7 @@ extension ListingTableView {
         let window = try #require(window)
         let point = convert(NSPoint(x: 20, y: rect(ofRow: row).midY), to: nil)
         func event(_ type: NSEvent.EventType) throws -> NSEvent {
-            try #require(
-                NSEvent.mouseEvent(
-                    with: type, location: point, modifierFlags: modifiers, timestamp: 0,
-                    windowNumber: window.windowNumber, context: nil, eventNumber: 0,
-                    clickCount: 1, pressure: 1))
+            try mouseEvent(type, at: point, in: window, modifiers: modifiers)
         }
         nonisolated(unsafe) let down = try event(.leftMouseDown)
         nonisolated(unsafe) let up = try event(.leftMouseUp)
@@ -142,12 +138,7 @@ extension WorkspaceSidebarViewController.SidebarOutlineView {
         let window = try #require(window)
         let point = convert(NSPoint(x: rect(ofRow: row).midX, y: rect(ofRow: row).midY), to: nil)
         func event(_ type: NSEvent.EventType) throws -> NSEvent {
-            try #require(
-                NSEvent.mouseEvent(
-                    with: type, location: point, modifierFlags: [],
-                    timestamp: 0,
-                    windowNumber: window.windowNumber, context: nil, eventNumber: 0,
-                    clickCount: 1, pressure: 1))
+            try mouseEvent(type, at: point, in: window)
         }
         nonisolated(unsafe) let down = try event(.leftMouseDown)
         let list = UncheckedSendable(self)
