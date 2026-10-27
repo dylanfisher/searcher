@@ -33,7 +33,7 @@ public final class ThumbnailService: Sendable {
     private let cache: ThumbnailCache
     /// Starts a wait of the given length on the service's clock, taking the deadline at once, and
     /// returns the wait.
-    private let startWait: @Sendable (Duration) -> @Sendable () async throws -> Void
+    private let startWait: DeadlineWait.Start
     /// The requests making a thumbnail and waiting for a slot, per volume.
     let calls = InfoReads()
 
@@ -43,10 +43,7 @@ public final class ThumbnailService: Sendable {
     ) {
         self.maker = maker
         cache = ThumbnailCache(mostBytes: mostCachedBytes)
-        startWait = { duration in
-            let deadline = clock.now.advanced(by: duration)
-            return { try await clock.sleep(until: deadline, tolerance: nil) }
-        }
+        startWait = DeadlineWait.make(on: clock)
     }
 
     /// Whether `entry`, of `kind`, may show a thumbnail: a regular file whose contents are on
@@ -117,12 +114,8 @@ public final class ThumbnailService: Sendable {
                 let start: @Sendable () -> Void = {
                     let wait = startWait(onShare ? Self.shareGiveUp : Self.giveUp)
                     let watchdog = Task {
-                        do {
-                            try await wait()
-                        } catch {
-                            // Cancelled: the thumbnail came in time, or the making ended.
-                            return
-                        }
+                        // Cancelled when the thumbnail came in time, or the making ended.
+                        guard await DeadlineWait.reached(wait) else { return }
                         // A share's is asked again when the file is selected again: it is slow,
                         // not broken, and the selection moving on is what bounds it.
                         making.abandon(with: .some(nil)) {

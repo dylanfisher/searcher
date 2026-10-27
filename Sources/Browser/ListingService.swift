@@ -39,7 +39,7 @@ public final class ListingService: Sendable {
     private let mountedVolumes: @Sendable () -> [VolumeIdentity]
     /// Starts a wait of the given length on the service's clock, taking the deadline at once, and
     /// returns the wait.
-    private let startWait: @Sendable (Duration) -> @Sendable () async throws -> Void
+    private let startWait: DeadlineWait.Start
     /// Owns `queue`; every change to it runs here, so `load` costs its caller one dispatch.
     private let scheduler = DispatchQueue(label: "ListingService", qos: .userInitiated)
     private let queue = Queue()
@@ -105,10 +105,7 @@ public final class ListingService: Sendable {
         self.cache = cache
         self.thumbnails = thumbnails
         self.recentListings = recentListings
-        startWait = { duration in
-            let deadline = clock.now.advanced(by: duration)
-            return { try await clock.sleep(until: deadline, tolerance: nil) }
-        }
+        startWait = DeadlineWait.make(on: clock)
         self.rootVolumeName = rootVolumeName
         self.volumeOf = volumeOf
     }
@@ -594,14 +591,8 @@ public final class ListingService: Sendable {
         let wait = startWait(LoadTimeouts.slow)
         read.restartTimer { generation in
             Task {
-                do {
-                    try await wait()
-                } catch is CancellationError {
-                    // A batch arrived or the read ended first.
-                    return
-                } catch {
-                    preconditionFailure("the clock failed a wait with \(error)")
-                }
+                // Cancelled when a batch arrived or the read ended first.
+                guard await DeadlineWait.reached(wait) else { return }
                 self.giveUpSlot(of: load, read: read, generation: generation)
             }
         }
@@ -630,18 +621,12 @@ public final class ListingService: Sendable {
     }
 
     private func stallTimer(
-        _ wait: @escaping @Sendable () async throws -> Void, reporting kind: LoadStall.Kind,
+        _ wait: @escaping DeadlineWait.Wait, reporting kind: LoadStall.Kind,
         of load: ListingLoad, generation: Int
     ) -> Task<Void, Never> {
         Task {
-            do {
-                try await wait()
-            } catch is CancellationError {
-                // A batch arrived or the load ended first.
-                return
-            } catch {
-                preconditionFailure("the clock failed a wait with \(error)")
-            }
+            // Cancelled when a batch arrived or the load ended first.
+            guard await DeadlineWait.reached(wait) else { return }
             // Handed while the stall is locked, so it reaches the main queue before the load's
             // last update.
             load.stall.report(kind, generation: generation) { names in
