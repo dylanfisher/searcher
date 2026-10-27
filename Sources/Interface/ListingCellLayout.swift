@@ -56,26 +56,63 @@ enum ListingCellLayout {
         cellWidth - 2 - badgeSize - (chevronRoom.map { $0 - 2 + badgeGap } ?? 0)
     }
 
-    /// Where the name ends in a name cell `cellWidth` wide: before the badge when it shows,
-    /// else before a chevron that takes `chevronRoom` when it shows one, else at the trailing
-    /// padding.
-    static func nameEnd(cellWidth: Double, chevronRoom: Double?, badge: Bool) -> Double {
+    /// Where a name cell `cellWidth` wide puts its eject button: at its trailing edge, or
+    /// ending where a chevron that takes `chevronRoom` starts, when it shows one. The glyph sits
+    /// in the middle of the button, so it ends about 6 points before the cell's edge or the
+    /// chevron, as Finder's does (docs/decisions/0118-row-eject-buttons.md).
+    static func ejectX(cellWidth: Double, chevronRoom: Double?) -> Double {
+        cellWidth - (chevronRoom ?? 0) - HoverButton.side
+    }
+
+    /// Where the name ends in a name cell `cellWidth` wide: before the eject button when it
+    /// shows, else before the badge when it shows, else before a chevron that takes
+    /// `chevronRoom` when it shows one, else at the trailing padding. A row with an eject button
+    /// is a volume's, which has no badge.
+    static func nameEnd(
+        cellWidth: Double, chevronRoom: Double?, badge: Bool, eject: Bool = false
+    ) -> Double {
+        if eject { return ejectX(cellWidth: cellWidth, chevronRoom: chevronRoom) }
         if badge { return badgeX(cellWidth: cellWidth, chevronRoom: chevronRoom) - badgeGap }
         if let chevronRoom { return cellWidth - chevronRoom - badgeGap }
         return cellWidth - 2
     }
 
-    /// Puts the name cell's badge and spinner left of its chevron when it shows one, else at its
-    /// trailing edge, and fits the name to them. The chevron takes `chevronRoom` when it shows.
+    /// Puts the name cell's badge, spinner and eject button left of its chevron when it shows
+    /// one, else at its trailing edge, and fits the name to them. The chevron takes
+    /// `chevronRoom` when it shows.
     static func fitBadgeAndName(in cell: NSTableCellView, chevronRoom: Double) {
-        let x = badgeX(
-            cellWidth: cell.bounds.width,
-            chevronRoom: shownChevronRoom(cell, chevronRoom: chevronRoom))
+        let shownRoom = shownChevronRoom(cell, chevronRoom: chevronRoom)
+        let x = badgeX(cellWidth: cell.bounds.width, chevronRoom: shownRoom)
         for view in [badge(in: cell), ListingViewController.connectingSpinner(in: cell)]
         where view.frame.minX != x {
             view.frame.origin.x = x
         }
+        if let eject = shownEjectButton(in: cell) {
+            let ejectX = ejectX(cellWidth: cell.bounds.width, chevronRoom: shownRoom)
+            if eject.frame.minX != ejectX {
+                eject.frame.origin.x = ejectX
+            }
+        }
         fitName(in: cell, chevronRoom: chevronRoom)
+    }
+
+    /// Adds `button`, an eject button, to the name cell `cell`, centered in its height, laid out
+    /// with frames and autoresizing as the cell's other views are.
+    static func addEjectButton(_ button: HoverButton, to cell: ListingNameCellView) {
+        let side = HoverButton.side
+        button.frame = NSRect(
+            x: ejectX(cellWidth: cell.bounds.width, chevronRoom: nil),
+            y: (cell.bounds.height - side) / 2, width: side, height: side)
+        button.autoresizingMask = [.minXMargin, .minYMargin, .maxYMargin]
+        cell.addEjectButton(button)
+    }
+
+    /// The name cell's eject button when it shows one, else nil.
+    static func shownEjectButton(in cell: NSTableCellView) -> HoverButton? {
+        guard let button = (cell as? ListingNameCellView)?.ejectButton, !button.isHidden else {
+            return nil
+        }
+        return button
     }
 
     /// Puts a name cell's chevron `chevronRoom` in from the cell's right edge. A reused cell may
@@ -96,10 +133,11 @@ enum ListingCellLayout {
         chevron(in: cell).flatMap { $0.isHidden ? nil : chevronRoom }
     }
 
-    /// Sets the name's width from the cell's: up to the badge when it shows, else up to the
-    /// chevron, which takes `chevronRoom`, when it shows, else up to the trailing padding. Set
-    /// outright, since autoresizing clamps a width at zero in a column narrower than the name and
-    /// the badge, and widening the column doesn't give that back.
+    /// Sets the name's width from the cell's: up to the eject button when it shows, else up to
+    /// the badge when it shows, else up to the chevron, which takes `chevronRoom`, when it shows,
+    /// else up to the trailing padding. Set outright, since autoresizing clamps a width at zero
+    /// in a column narrower than the name and the badge, and widening the column doesn't give
+    /// that back.
     static func fitName(in cell: NSTableCellView, chevronRoom: Double) {
         guard let textField = cell.textField else {
             preconditionFailure("the name cell has no text field: \(cell.subviews)")
@@ -108,7 +146,8 @@ enum ListingCellLayout {
             cellWidth: cell.bounds.width,
             chevronRoom: shownChevronRoom(cell, chevronRoom: chevronRoom),
             badge: !badge(in: cell).isHidden
-                || !ListingViewController.connectingSpinner(in: cell).isHidden)
+                || !ListingViewController.connectingSpinner(in: cell).isHidden,
+            eject: shownEjectButton(in: cell) != nil)
         let width = max(end - textField.frame.minX, 0)
         if textField.frame.width != width {
             textField.frame.size.width = width
@@ -144,6 +183,8 @@ enum ListingCellLayout {
             chevron.autoresizingMask = [.minXMargin, .minYMargin, .maxYMargin]
             chevron.isHidden = true
             cell = named
+        } else if column == .name {
+            cell = ListingNameCellView(frame: frame)
         } else {
             cell = NSTableCellView(frame: frame)
         }

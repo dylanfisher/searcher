@@ -64,8 +64,8 @@ final class ColumnViewController: NSViewController {
             }
         }
     }
-    /// The sidebar's volumes, which a share row in a server's column ejects through from its
-    /// context menu, as the list's does.
+    /// The sidebar's volumes, which a volume's row in any column ejects through from its eject
+    /// button and its context menu, as the list's does.
     var volumes: SidebarVolumes? {
         didSet {
             for controller in columnControllers {

@@ -151,7 +151,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     /// in the selected row's colors, as it draws the name.
     final class Cell: NSTableCellView {
         let openMark = NSImageView()
-        let ejectButton = HoverButton(look: .glyph)
+        let ejectButton = Cell.makeEjectButton()
         /// The icon's width and height, which follow the row size.
         var iconSize: [NSLayoutConstraint] = []
 
@@ -176,6 +176,18 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         /// fifths of a symbol at the row's size, which the small scale draws: 9.5 points wide
         /// in a medium row, where the row's 13-point symbol is 12.
         static let ejectScale = NSImage.SymbolConfiguration(scale: .small)
+
+        /// Finder's eject button: the filled glyph with the `.glyph` look. The sidebar's rows and
+        /// the rows of lists and columns that show a volume make theirs here
+        /// (docs/decisions/0118-row-eject-buttons.md).
+        static func makeEjectButton() -> HoverButton {
+            let name = "eject.fill"
+            guard let image = NSImage(systemSymbolName: name, accessibilityDescription: "Eject")
+            else { preconditionFailure("the system has no \(name) symbol") }
+            let button = HoverButton(look: .glyph)
+            button.image = image
+            return button
+        }
 
         // AppKit gives the icon its symbols' size as it lays the cell out; the eject glyph
         // takes that size at `ejectScale`.
@@ -934,8 +946,6 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         // The cell's label says "open"; the dot alone adds nothing for VoiceOver.
         mark.setAccessibilityElement(false)
         let eject = cell.ejectButton
-        // Finder's eject glyph is the filled one.
-        eject.image = symbol("eject.fill", description: "Eject")
         eject.target = self
         eject.action = #selector(ejectClicked(_:))
         eject.isHidden = true

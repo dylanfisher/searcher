@@ -4,7 +4,7 @@ import AppKit
 /// the right of a folder row. The chevron is a template that takes its tint from the row's
 /// background style, as the name beside it takes its text color: white on a selected row in the
 /// column that has the keys, the secondary label color otherwise.
-final class ColumnNameCellView: NSTableCellView {
+final class ColumnNameCellView: ListingNameCellView {
     let chevron = NSImageView()
 
     override var backgroundStyle: NSView.BackgroundStyle {
