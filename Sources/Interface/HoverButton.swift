@@ -28,7 +28,6 @@ final class HoverButton: NSButton {
     static let pressedFill = NSColor.tertiaryLabelColor
     /// The width and height, so the fill has room around a symbol.
     static let side: CGFloat = 22
-    private static let cornerRadius: CGFloat = 4
     /// A `.glyph` button's tints on an emphasized selection, the selected row's text color at
     /// the label colors' levels, since the label colors would vanish on the accent.
     private static let emphasizedGlyphTints: [GlyphState: NSColor] = [
@@ -149,7 +148,11 @@ final class HoverButton: NSButton {
         shape.fill()
     }
 
-    private var shape: NSBezierPath {
-        NSBezierPath(roundedRect: bounds, xRadius: Self.cornerRadius, yRadius: Self.cornerRadius)
+    private var shape: NSBezierPath { Self.shape(bounds) }
+
+    /// The rounded shape the fills and the focus ring take in `rect`, which the path bar's
+    /// segments share.
+    static func shape(_ rect: NSRect) -> NSBezierPath {
+        NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4)
     }
 }

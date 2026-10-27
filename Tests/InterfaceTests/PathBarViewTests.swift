@@ -289,3 +289,14 @@ private func pathBar(
     bar.isEmphasized = false
     #expect(bar.segments.allSatisfy { $0.contentTintColor == .secondaryLabelColor })
 }
+
+/// A segment with the keys, as with Full Keyboard Access, rings the rounded shape its hover fill
+/// takes, as `HoverButton` does (docs/decisions/0110-interaction-states.md).
+@MainActor @Test func aFocusedSegmentRingsItsHighlightShape() throws {
+    let bar = pathBar(showing: "/Users/dylan/Projects")
+    bar.mouseMoved(with: try mouseEvent(.mouseMoved, at: middle(of: 2, in: bar)))
+    let segment = bar.segments[2]
+
+    let highlight = try #require(bar.highlightFrame)
+    #expect(segment.convert(segment.focusRingMaskBounds, to: bar) == highlight)
+}

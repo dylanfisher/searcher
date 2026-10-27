@@ -55,6 +55,10 @@ final class PathBarView: NSView {
     private var ancestors: [Location] = []
     private var separators: [NSImageView] = []
 
+    /// The index of the segment the button is down on, if any. Its cell's highlight redraws the
+    /// bar (`SegmentCell`).
+    private var pressedSegment: Int? { segments.firstIndex(where: \.isHighlighted) }
+
     /// The index of the segment under the mouse, if any.
     private(set) var hoveredSegment: Int? {
         didSet {
@@ -96,7 +100,7 @@ final class PathBarView: NSView {
         hoveredSegment = nil
         segments = ancestors.enumerated().map { index, ancestor in
             // `/` is titled by its volume; a server, first in a share's bar, by its name.
-            let button = NSButton(
+            let button = Segment(
                 title: index == 0 && ancestor.isFolder ? rootVolumeName : ancestor.name,
                 target: self, action: #selector(segmentClicked(_:)))
             button.isBordered = false
@@ -211,15 +215,24 @@ final class PathBarView: NSView {
         }
     }
 
-    /// Where the hover highlight is drawn, if a segment is hovered.
+    /// Where the highlight is drawn: behind the pressed segment, or else the hovered one.
     var highlightFrame: NSRect? {
-        hoveredSegment.map { segments[$0].frame.insetBy(dx: 0, dy: -Self.highlightOutset) }
+        (pressedSegment ?? hoveredSegment).map {
+            segments[$0].frame.insetBy(dx: 0, dy: -Self.highlightOutset)
+        }
+    }
+
+    /// The highlight's color: `HoverButton`'s pressed fill while a segment is held, its hover
+    /// fill under the mouse (docs/decisions/0110-interaction-states.md).
+    var highlightFill: NSColor? {
+        if pressedSegment != nil { return HoverButton.pressedFill }
+        return hoveredSegment == nil ? nil : HoverButton.hoverFill
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        guard let frame = highlightFrame else { return }
-        NSColor.quaternaryLabelColor.setFill()
-        NSBezierPath(roundedRect: frame, xRadius: 4, yRadius: 4).fill()
+        guard let frame = highlightFrame, let fill = highlightFill else { return }
+        fill.setFill()
+        HoverButton.shape(frame).fill()
     }
 
     /// Each segment's width when `natural` must fit in `available`. The segments between the ends
@@ -241,6 +254,34 @@ final class PathBarView: NSView {
             excess -= cut
         }
         return widths
+    }
+
+    /// A segment, which rings the shape its highlight takes when it has the keys. It takes them
+    /// only as any button does, with keyboard navigation on in System Settings, as Finder's path
+    /// bar does.
+    private final class Segment: NSButton {
+        override class var cellClass: AnyClass? {
+            get { SegmentCell.self }
+            set {}
+        }
+
+        override var focusRingMaskBounds: NSRect {
+            bounds.insetBy(dx: 0, dy: -PathBarView.highlightOutset)
+        }
+
+        override func drawFocusRingMask() {
+            HoverButton.shape(focusRingMaskBounds).fill()
+        }
+    }
+
+    /// A press highlights the segment's cell, not the segment, so the cell tells the bar, which
+    /// draws the pressed fill behind it.
+    private final class SegmentCell: NSButtonCell {
+        override var isHighlighted: Bool {
+            didSet {
+                if isHighlighted != oldValue { controlView?.superview?.needsDisplay = true }
+            }
+        }
     }
 
     @objc private func segmentClicked(_ sender: NSButton) {

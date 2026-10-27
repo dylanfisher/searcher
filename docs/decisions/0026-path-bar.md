@@ -64,7 +64,9 @@ name can't ride in the listing itself.
   `quaternaryLabelColor` rectangle behind that segment, 2 points taller than the title above and
   below, as Finder does; the color is darker grey in light mode and lighter in dark. Segments keep
   their intrinsic height, because a taller button draws its title lower than its baseline offset
-  reports, which put the chevrons off center. A new path clears the highlight.
+  reports, which put the chevrons off center. A new path clears the highlight. A held segment
+  takes the darker pressed fill, and a focused one a rounded focus ring
+  ([0110](0110-interaction-states.md)).
 - **The focused pane's bar** (added 2026-10-26, BC.1b, at Dylan's request) draws its titles in
   `labelColor`, and every other bar in `secondaryLabelColor`, as Finder and Xcode set the active
   tab's title apart. The chevrons stay tertiary, and nothing else changes: no weight, size or
