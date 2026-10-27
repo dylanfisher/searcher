@@ -443,6 +443,9 @@ public final class ColumnTrail {
             follow(focused)
             updatePreview()
         }
+        // A share that isn't mounted has no column to move into until it is mounted: → mounts
+        // it, again after a mount that failed (docs/decisions/0115-server-shares.md).
+        focused.pane.mountSelectedShare()
         guard focusedIndex + 1 < columns.count else {
             if wasHeld { owner.trailDidChange() }
             return
@@ -1083,9 +1086,10 @@ public final class ColumnTrail {
     /// rows that aren't a complete listing (a first batch or cached rows, slow or offline or
     /// not) of a folder, the columns stay; a server's rows can always tell. Without `opening` it
     /// only drops the columns that don't match, for a selection that waits for the keys to
-    /// pause. Returns whether it opened a column, or would have.
+    /// pause. Returns whether it opened a column or mounted a share, or would have.
     @discardableResult
     private func follow(_ column: Column, opening: Bool = true) -> Bool {
+        let followed = column.followedSelectionVersion
         if opening {
             release(column)
             column.followedSelectionVersion = column.pane.selectionVersion
@@ -1110,12 +1114,19 @@ public final class ColumnTrail {
         }
         var folder: Location?
         var package: Location?
+        var mountsShare = false
         if let entry = Self.soleSelectedEntry(in: pane, of: listing) {
             switch entry.type {
             // A server's share row whose share isn't mounted where it says opens no column.
             case .directory: folder = pane.childLocation(of: entry)
             case .package: package = pane.location.folderChild(named: entry.name)
-            case .regular, .symbolicLink, .other, .unmountedShare: break
+            // A share that isn't mounted is mounted where its column would open: for a new
+            // selection, a click's at once and a key's once the keys pause; not for rows that
+            // changed under a selection already followed, nor for the selection a column was
+            // made with (docs/decisions/0115-server-shares.md).
+            case .unmountedShare:
+                mountsShare = followed != nil && followed != pane.selectionVersion
+            case .regular, .symbolicLink, .other: break
             }
         }
         // A package opens no column, but keeps the one Show Package Contents opened for it.
@@ -1124,7 +1135,9 @@ public final class ColumnTrail {
             return false
         }
         truncate(after: index)
-        guard let folder else { return false }
+        // Last: the mount reports a change of the pane, which the trail follows again.
+        if mountsShare, opening { pane.mountSelectedShare() }
+        guard let folder else { return mountsShare }
         if opening {
             columns.append(
                 makeColumn(at: folder, selecting: nil, isFocused: false))

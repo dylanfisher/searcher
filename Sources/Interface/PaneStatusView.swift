@@ -42,6 +42,8 @@ final class PaneStatusView: NSView {
     /// How many entries a loaded folder's listing left out for unreadable names; 0 in any other
     /// state, and at a server, whose rows are its shares.
     private var unreadableNames = 0
+    /// The share being mounted, which the note names over anything else; nil for none.
+    private var connecting: String?
     /// What the note last announced said, and the volume or server it named; nil since the note
     /// went away. A pane that stays slow or offline, or keeps its notice, is announced once.
     private var announced: (headline: Headline, volumeName: String)?
@@ -91,9 +93,21 @@ final class PaneStatusView: NSView {
     /// flight from one call to the next keeps its spinner wait. `volumeName` names the volume
     /// holding the folder, and a slow or offline state must have one. A server's notice names
     /// the server at `location`.
-    func show(_ state: ListingState, location: Location, volumeName: String?) {
-        spinner.setAccessibilityLabel(PaneStatusText.spinnerLabel(location.name))
-        showSpinner(Self.isInFlight(state))
+    /// `connecting` names a share of the server at `location` whose mount the pane has waited
+    /// `LoadTimeouts.spinnerDelay` for: the spinner shows at once and the note says so, over any
+    /// other.
+    func show(
+        _ state: ListingState, location: Location, volumeName: String?,
+        connecting: String? = nil
+    ) {
+        self.connecting = connecting
+        if connecting != nil {
+            spinner.setAccessibilityLabel(ListingViewController.connectingLabel)
+            showSpinner(true, waits: false)
+        } else {
+            spinner.setAccessibilityLabel(PaneStatusText.spinnerLabel(location.name))
+            showSpinner(Self.isInFlight(state))
+        }
         switch state {
         case .slow, .offline:
             guard let volumeName else {
@@ -120,7 +134,7 @@ final class PaneStatusView: NSView {
     /// Tells VoiceOver the note when the pane turns slow or offline, or its volume changes, at
     /// high priority so it isn't dropped behind the row being read.
     private func announceNote() {
-        guard let shown, !note.isHidden else {
+        guard connecting == nil, let shown, !note.isHidden else {
             announced = nil
             return
         }
@@ -153,12 +167,21 @@ final class PaneStatusView: NSView {
         }
     }
 
-    private func showSpinner(_ inFlight: Bool) {
+    /// Shows the spinner while `inFlight`, once `LoadTimeouts.spinnerDelay` has passed unless
+    /// it doesn't `wait`.
+    private func showSpinner(_ inFlight: Bool, waits: Bool = true) {
         guard inFlight else {
             spinnerWait?.cancel()
             spinnerWait = nil
             spinner.stopAnimation(nil)
             spinner.isHidden = true
+            return
+        }
+        guard waits else {
+            spinnerWait?.cancel()
+            spinnerWait = nil
+            spinner.isHidden = false
+            spinner.startAnimation(nil)
             return
         }
         guard spinnerWait == nil else { return }
@@ -172,10 +195,12 @@ final class PaneStatusView: NSView {
     }
 
     private func showNote() {
-        // In order: slow or offline, then a server's notice, both from `shown`, which holds one
-        // state; then a listed folder's unreadable names, which a server never has.
+        // In order: a share being mounted; slow or offline, then a server's notice, both from
+        // `shown`, which holds one state; then a listed folder's unreadable names, which a
+        // server never has.
         let line =
-            shown.flatMap { text.note(for: $0.state, volumeName: $0.volumeName, now: now()) }
+            connecting.map(PaneStatusText.connectingNote)
+            ?? shown.flatMap { text.note(for: $0.state, volumeName: $0.volumeName, now: now()) }
             ?? PaneStatusText.unreadableNamesNote(unreadableNames)
         // Set only on a change: most calls come from pane changes that leave the note as it is.
         if note.stringValue != line ?? "" { note.stringValue = line ?? "" }

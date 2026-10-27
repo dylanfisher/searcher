@@ -70,10 +70,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             self.cache = cache
             // The app's one mount table: the service lists servers from it, and the windows'
             // drops read it (docs/decisions/0114-server-location.md). A server's listing adds
-            // the shares it offers that aren't mounted (docs/decisions/0115-server-shares.md).
+            // the shares it offers that aren't mounted, and opening one mounts it
+            // (docs/decisions/0115-server-shares.md).
+            let mounts = MountTable()
             service = ListingService(
                 cache: cache, thumbnails: ThumbnailService(), recentListings: RecentListings(),
-                mounts: MountTable(), shares: ServerShares())
+                mounts: mounts, shares: ServerShares(),
+                shareMounts: ShareMounts(mounter: NetFSShareMounter(), table: mounts))
             let sizeLogger = Logger(category: "sizes")
             let dropLogger = Logger(category: "folderSizes")
             folderSizes = FolderSizeService(

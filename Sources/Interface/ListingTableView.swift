@@ -35,6 +35,9 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
     /// Runs at mouse down for a plain press on the row selected alone, after the table takes the
     /// keys. A column's list closes the columns past the one its folder opens here.
     var pressedSelectedRow: @MainActor () -> Void = {}
+    /// Runs for Escape when no command takes it, and returns whether it did something: a list
+    /// at a server lets go of the share it is mounting. Set by the list's controller.
+    var escape: @MainActor () -> Bool = { false }
     /// The text typed into this list since the last pause. Tests give it a clock they advance.
     var typeSelect = TypeSelect()
     /// Selects the first row of this table's pane whose name starts with a query, returning
@@ -171,7 +174,8 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
     /// (0034-type-to-select.md). Other unbound plain and Shift-only keys still go to `super`; the
     /// ones `NSTableView` would move or extend its selection with (↑, ↓, Shift-↑, Shift-↓) are
     /// bound. A Tab key, with any modifiers, goes to `super`, which moves the key view, when no
-    /// command takes it or its command is off, as Focus Other Pane is with one pane.
+    /// command takes it or its command is off, as Focus Other Pane is with one pane. Escape that
+    /// no command takes runs `escape`, and goes to `super` when that does nothing.
     override func keyDown(with event: NSEvent) {
         let chords = KeyChord.candidates(for: event)
         if let chord = chords.first {
@@ -190,6 +194,7 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
                 run(command.id)
                 return
             }
+            if chord == KeyChord(.escape), escape() { return }
             if !chord.modifiers.isDisjoint(with: [.command, .control, .option]) {
                 beep()
                 return

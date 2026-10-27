@@ -244,6 +244,10 @@ before the step that builds it, and the list is under "For Dylan to check".
     the first of the completion's list, or, when that is empty, the mounted share of this
     server matching the share key in the table's current read; with none found it is a failure
     with `strerror`. Status -128 and a cancel are `cancelled` and show nothing.
+  - *(8d)* NetFS.h defines no `kNetFSAlreadyMounted`, so `EEXIST` alone is `alreadyMounted`. A
+    status 0 with no mount point is looked up in the table the same way, and is a failure with
+    `ENOENT` when the table has none. A failure and a user's cancel answer without a read of
+    the table; only a status that may have mounted reads it.
 - **What a successful mount does.** The pane isn't matched by server: a remount may record a
   different host than the row's. After a result the pane's table is read again
   (`MountTable.refreshed()`, which starts a read and returns once it has landed) and the mount
@@ -254,7 +258,12 @@ before the step that builds it, and the list is under "For Dylan to check".
   selected" exactly while it hasn't been cancelled, and a waiter is cancelled by any change of
   the pane's location (Back, Forward, a path bar click, a new location), by a selection that
   isn't that one row, by Escape, and by the pane closing. So a mount finishing after the user
-  moved on makes a mounted row and nothing else.
+  moved on makes a mounted row and nothing else. *(8d)* In column view a share the table
+  records under another host than the column's server is no row of it, so the trail starts
+  again at the mount point, as list view's navigation does. A change of view mode cancels too.
+  A path bar click can't come while a mount waits: a pane at a server shows one segment, its
+  own, which does nothing on a click. A column still selecting the share after a cancel opens
+  its column if the mount finishes anyway, as any column follows a selected folder.
 - **When a mount starts.** Only where a column would open, so holding ↓ through seven shares
   starts nothing on the six it passes. The delay is `ColumnTrail.openDelay` (120 ms,
   [0094](0094-column-open-delay.md)), not 0111's. In column view: a click on the row follows at
@@ -265,6 +274,12 @@ before the step that builds it, and the list is under "For Dylan to check".
   Finder's behavior on a plain selection, whether it connects when a share is highlighted in
   column view and how it treats a key stopped on a share, is *(unverified)*. Because a stop of
   the arrow starts a mount, an unmounted share the keys stop on may show a sign-in window.
+  *(8d)* In list view Return stays Rename, which a share refuses, and → does nothing, as for a
+  folder: in this app neither opens a folder in list view, and in Finder Return renames and →
+  expands a row. Open (⌘↓, ⌘O, the menu, the context menu) and a double-click mount. In column
+  view a selection is mounted only when it is new: rows that change under a selection already
+  followed, and the selection a column is made with (a restored window, Back to a kept server
+  column), mount nothing; → mounts again after a failure.
 - **What a mount shows.** After `LoadTimeouts.spinnerDelay` (150 ms) the row shows a spinner and
   the status bar "Connecting to “main”…". A mount has no give-up time, since a sign-in window
   may be waiting for the user. A result other than `mounted`, `alreadyMounted` and `cancelled`

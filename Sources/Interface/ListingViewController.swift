@@ -26,6 +26,11 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     static let notMountedLabel = "not mounted"
     /// The name cell's badge view, shown only for an entry that isn't downloaded.
     static let notDownloadedBadgeIdentifier = NSUserInterfaceItemIdentifier("notDownloadedBadge")
+    /// The name cell's spinner, shown only for the share being mounted
+    /// (docs/decisions/0115-server-shares.md).
+    static let connectingSpinnerIdentifier = NSUserInterfaceItemIdentifier("connectingSpinner")
+    /// What VoiceOver calls the spinner of a share being mounted.
+    static let connectingLabel = "Connecting"
     /// The name cell's chevron view in column view, shown only for a folder.
     static let folderChevronIdentifier = NSUserInterfaceItemIdentifier("folderChevron")
     /// The opacity of a cut entry's cells.
@@ -54,6 +59,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
 
     /// The rows on screen: the pane's listing when `paneDidChange` last ran; nil while it has none.
     public private(set) var listing: Listing?
+    /// The share whose row shows the spinner: the pane's `connectingShare` once it shows.
+    private var shownConnecting: String?
 
     private let iconCache: TypeIconCache
     private let formatter: EntryCellFormatter
@@ -219,6 +226,12 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             ]
         }
         var reloaded = false
+        let connecting = pane.connectingShare.flatMap { $0.isShown ? $0.name : nil }
+        if connecting != shownConnecting {
+            shownConnecting = connecting
+            // Rows about to reload show it as they do.
+            if shownVersion == pane.stateVersion, listing != nil { refreshRows() }
+        }
         if shownVersion != pane.stateVersion {
             shownVersion = pane.stateVersion
             readCutNames()
@@ -473,6 +486,10 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         tableView.doubleAction = #selector(openClickedRow(_:))
         tableView.contextMenu = { [weak self] row in self?.contextMenu(forRow: row) }
         tableView.pressedSelectedRow = { [weak self] in self?.pane.pressSelectedFolder() }
+        tableView.escape = { [weak self] in self?.pane.cancelShareMount() ?? false }
+        pane.onShareMountFailure = { [weak self] name, status in
+            self?.showAlert(Self.mountFailedAlert(name: name, status: status))
+        }
         let promiseTypes = NSFilePromiseReceiver.readableDraggedTypes.map {
             NSPasteboard.PasteboardType($0)
         }
@@ -825,6 +842,33 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         }
     }
 
+    /// The alert saying the share `name` wasn't mounted, with why: the system's text for an
+    /// `errno` above 0, a short text for the NetFS and NetAuth codes NetFS.h lists, else the
+    /// code (docs/decisions/0115-server-shares.md).
+    static func mountFailedAlert(name: String, status: Int32) -> NSAlert {
+        Dialog.alert(
+            message: "The share “\(name)” couldn’t be opened.",
+            information: mountFailureReason(status), buttons: ["OK"])
+    }
+
+    /// Why a mount that ended with `status` failed.
+    static func mountFailureReason(_ status: Int32) -> String {
+        if status > 0 { return String(cString: strerror(status)) }
+        return switch status {
+        // NetFS.h's ENETFSPWDNEEDSCHANGE, ENETFSPWDPOLICY, ENETFSACCOUNTRESTRICTED,
+        // ENETFSNOSHARESAVAIL and NetAuth's kNetAuthErrorNoSharesAvailable,
+        // ENETFSNOAUTHMECHSUPP, ENETFSNOPROTOVERSSUPP, and kNetAuthErrorGuestNotSupported.
+        case -5045: "The password has to be changed."
+        case -5046: "The server rejected the password."
+        case -5999: "The account is restricted."
+        case -5998, -6003: "The server has no shares available to this user."
+        case -5997: "The server offers no way to sign in that this Mac supports."
+        case -5996: "The server offers no version of its protocol that this Mac supports."
+        case -6004: "The server doesn't allow guests."
+        default: "Error \(status)."
+        }
+    }
+
     public func tableView(
         _ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int
     ) -> NSView? {
@@ -863,6 +907,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
                 : keptThumbnail(row: row, in: listing).map(NSImage.init(thumbnail:))
                     ?? iconCache.icon(for: listing.kind(atRow: row).type)
             showFolderChevron(Self.showsChevron(listing[row]), in: cell)
+            showConnectingSpinner(listing[row].name == shownConnecting, in: cell)
             showNotDownloadedBadge(listing[row].isDataless, in: cell)
             cell.textField?.isHidden = listing[row].name == coveredName
         }
@@ -1059,13 +1104,27 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         fitBadgeAndName(in: cell)
     }
 
-    /// Puts the name cell's badge left of its chevron when it shows one, else at its trailing
-    /// edge, and fits the name to them.
+    /// Shows or hides the name cell's spinner, for the share whose mount has waited
+    /// `LoadTimeouts.spinnerDelay`, and fits the name to it. A share that isn't mounted shows no
+    /// badge, so the spinner takes the badge's place.
+    private func showConnectingSpinner(_ shown: Bool, in cell: NSTableCellView) {
+        let spinner = Self.connectingSpinner(in: cell)
+        guard shown == spinner.isHidden else { return }
+        spinner.isHidden = !shown
+        if shown {
+            spinner.startAnimation(nil)
+        } else {
+            spinner.stopAnimation(nil)
+        }
+    }
+
+    /// Puts the name cell's badge and spinner left of its chevron when it shows one, else at its
+    /// trailing edge, and fits the name to them.
     private func fitBadgeAndName(in cell: NSTableCellView) {
-        let badge = Self.badge(in: cell)
         let badgeX = Self.badgeX(cellWidth: cell.bounds.width, chevronRoom: shownChevronRoom(cell))
-        if badge.frame.minX != badgeX {
-            badge.frame.origin.x = badgeX
+        for view in [Self.badge(in: cell), Self.connectingSpinner(in: cell)]
+        where view.frame.minX != badgeX {
+            view.frame.origin.x = badgeX
         }
         fitName(in: cell)
     }
@@ -1143,11 +1202,22 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         }
         let end = Self.nameEnd(
             cellWidth: cell.bounds.width, chevronRoom: shownChevronRoom(cell),
-            badge: !Self.badge(in: cell).isHidden)
+            badge: !Self.badge(in: cell).isHidden || !Self.connectingSpinner(in: cell).isHidden)
         let width = max(end - textField.frame.minX, 0)
         if textField.frame.width != width {
             textField.frame.size.width = width
         }
+    }
+
+    static func connectingSpinner(in cell: NSTableCellView) -> NSProgressIndicator {
+        guard
+            let spinner = cell.subviews.first(where: {
+                $0.identifier == connectingSpinnerIdentifier
+            }) as? NSProgressIndicator
+        else {
+            preconditionFailure("the name cell has no spinner: \(cell.subviews)")
+        }
+        return spinner
     }
 
     private static func badge(in cell: NSTableCellView) -> NSImageView {
@@ -1316,6 +1386,16 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             badge.setAccessibilityElement(false)
             badge.isHidden = true
             cell.addSubview(badge)
+            // In the badge's place, for a share whose mount is taking a while.
+            let spinner = NSProgressIndicator(frame: badge.frame)
+            spinner.identifier = Self.connectingSpinnerIdentifier
+            spinner.style = .spinning
+            spinner.controlSize = .small
+            spinner.isDisplayedWhenStopped = false
+            spinner.autoresizingMask = badge.autoresizingMask
+            spinner.setAccessibilityLabel(Self.connectingLabel)
+            spinner.isHidden = true
+            cell.addSubview(spinner)
         }
         return cell
     }

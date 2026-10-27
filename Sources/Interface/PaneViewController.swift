@@ -628,7 +628,9 @@ public final class PaneViewController: NSViewController {
     /// path bar they sit in names that column's folder.
     private func showStatus() {
         let shown = pane.commandPane
-        status.show(shown.state, location: shown.location, volumeName: shown.volumeName)
+        status.show(
+            shown.state, location: shown.location, volumeName: shown.volumeName,
+            connecting: shown.connectingShare.flatMap { $0.isShown ? $0.name : nil })
     }
 
     /// Moves the path bar to the pane's location once something of it is on screen: its first
