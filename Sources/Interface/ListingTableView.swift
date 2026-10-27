@@ -89,8 +89,12 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
         didSet {
             guard selectionShape != oldValue else { return }
             enumerateAvailableRowViews { rowView, _ in rowView.needsDisplay = true }
+            selectionShapeChanged()
         }
     }
+    /// Tells the list's controller the selection's shape changed, which moves a column's
+    /// chevrons. Set by the list's controller.
+    var selectionShapeChanged: @MainActor () -> Void = {}
 
     /// The shapes a row's selection is drawn in.
     enum SelectionShape {

@@ -1377,19 +1377,16 @@ private func inkBounds(of image: NSImage) throws -> NSRect {
     return ink
 }
 
-/// Finder's chevron is small and thin beside the 13-point name: its glyph about 6 points tall
-/// and 3.5 wide, its right edge 4.5 points inside the row's selection, measured from Dylan's
-/// screenshots (chevron-finder.jpg). The glyph is measured as drawn, not by its view's frame.
-@MainActor @Test func theChevronIsFindersSize() async throws {
-    let iconCache = TypeIconCache { _ in NSImage() }
-    let fixture = await Fixture(iconCache: iconCache, folders: chevronTree)
-    let table = fixture.tables[0]
-    let row = try #require(rowNames(table).firstIndex(of: "docs"))
+/// The glyph `table`'s chevron draws in the row named `name`, measured as drawn, not by its
+/// view's frame, in the row's coordinates, and the row.
+@MainActor
+private func drawnChevron(
+    _ table: NSTableView, row name: String
+) throws -> (glyph: NSRect, row: ListingRowView) {
+    let row = try #require(rowNames(table).firstIndex(of: name))
     let rowView = try #require(table.rowView(atRow: row, makeIfNecessary: true) as? ListingRowView)
     let cell = try #require(rowView.view(atColumn: 0) as? NSTableCellView)
     let mark = try chevron(cell)
-    #expect(iconCache.folderChevron.symbolConfiguration == TypeIconCache.folderChevronConfiguration)
-
     // The view draws its image unscaled, centered across it.
     let image = try #require(mark.image)
     #expect(mark.imageScaling == .scaleNone && mark.imageAlignment == .alignCenter)
@@ -1398,14 +1395,90 @@ private func inkBounds(of image: NSImage) throws -> NSRect {
     let glyph = rowView.convert(
         NSRect(x: imageMinX + ink.minX, y: mark.frame.minY, width: ink.width, height: ink.height),
         from: cell)
+    return (glyph, rowView)
+}
 
-    #expect(abs(glyph.height - 6) <= 1, "\(glyph)")
-    #expect(abs(glyph.width - 3.5) <= 1, "\(glyph)")
-    // Measured from where a rounded band ends: the first column's selection runs to the row's
-    // edge, and the chevron stays where it is in every column.
-    let bandMaxX = rowView.bounds.maxX - ListingRowView.selectionInset
-    let inside = bandMaxX - glyph.maxX
-    #expect(abs(inside - 4.5) <= 0.75, "\(inside)")
+/// Finder's chevron is small and thin beside the 13-point name: its glyph about 6 points tall
+/// and 3.5 wide, measured from Dylan's screenshots (chevron-finder.jpg). In a column after the
+/// trail's first its right edge is 4.5 points inside the rounded selection
+/// (second-column-rounded.jpg); in the first, whose selection runs the whole row, it is about
+/// 15.75 points from the column's right edge (first-column-square.jpg).
+@MainActor @Test func theChevronIsFindersSize() async throws {
+    let iconCache = TypeIconCache { _ in NSImage() }
+    let fixture = await Fixture(iconCache: iconCache)
+    await fixture.openThreeColumns()
+    fixture.controller.view.layoutSubtreeIfNeeded()
+    #expect(iconCache.folderChevron.symbolConfiguration == TypeIconCache.folderChevronConfiguration)
+
+    let first = try drawnChevron(fixture.tables[0], row: "docs")
+    let second = try drawnChevron(fixture.tables[1], row: "sub")
+    for glyph in [first.glyph, second.glyph] {
+        #expect(abs(glyph.height - 6) <= 1, "\(glyph)")
+        #expect(abs(glyph.width - 3.5) <= 1, "\(glyph)")
+    }
+    let fromFirstEdge = first.row.bounds.maxX - first.glyph.maxX
+    #expect(abs(fromFirstEdge - 15.75) <= 0.5, "\(fromFirstEdge)")
+    let bandMaxX = second.row.bounds.maxX - ListingRowView.selectionInset
+    let insideBand = bandMaxX - second.glyph.maxX
+    #expect(abs(insideBand - 4.5) <= 0.5, "\(insideBand)")
+}
+
+/// A column that stops or starts being its trail's first moves its chevron to where Finder draws
+/// it for that column's selection, and its badge, its name and the width that fits a name with
+/// it.
+@MainActor @Test func aColumnsChevronMovesWithItsSelectionShape() async throws {
+    let cloud = DirectoryEntry(
+        name: "cloud", type: .directory, size: nil, modified: testDate, isHidden: false,
+        isDataless: true)
+    let fixture = await Fixture(folders: [
+        "/": [folder("r")], "/Volumes/r": [cloud, folder(longFolder)], "/Volumes/r/cloud": [],
+    ])
+    fixture.controller.view.layoutSubtreeIfNeeded()
+    let controller = fixture.controller.columnControllers[0]
+    let table = controller.tableView
+    #expect(table.selectionShape == .fullWidth)
+    func inset() throws -> Double {
+        let drawn = try drawnChevron(table, row: "cloud")
+        return drawn.row.bounds.maxX - drawn.glyph.maxX
+    }
+    /// Checks that the badge, the name and the long name end just before the chevron.
+    func fits() throws {
+        let names = rowNames(table)
+        let cell = try nameCell(table, row: try #require(names.firstIndex(of: "cloud")))
+        let mark = try chevron(cell)
+        let badge = try #require(
+            cell.subviews.first {
+                $0.identifier == ListingViewController.notDownloadedBadgeIdentifier
+            })
+        #expect(!badge.isHidden && !mark.isHidden)
+        #expect(badge.frame.maxX <= mark.frame.minX)
+        #expect(badge.frame.maxX >= mark.frame.minX - 4)
+        #expect(try #require(cell.textField).frame.maxX <= badge.frame.minX)
+        let longRow = try #require(names.firstIndex(of: longFolder))
+        let long = try nameCell(table, row: longRow)
+        let longText = try #require(long.textField)
+        let longMark = try chevron(long)
+        #expect(longText.frame.maxX <= longMark.frame.minX)
+        #expect(longText.frame.maxX >= longMark.frame.minX - 4)
+        let shown = long.convert(longText.frame, to: table)
+        #expect(controller.nameFrame(atRow: longRow).maxX == shown.maxX)
+    }
+    let firstInset = try inset()
+    try fits()
+    let firstFit = controller.columnWidth(fittingNameWidth: 100)
+
+    table.selectionShape = .roundedBand
+
+    let laterInset = try inset()
+    #expect(abs(laterInset - ListingRowView.selectionInset - 4.5) <= 0.5, "\(laterInset)")
+    #expect(firstInset - laterInset == 2, "\(firstInset) \(laterInset)")
+    try fits()
+    #expect(controller.columnWidth(fittingNameWidth: 100) <= firstFit - 2)
+
+    table.selectionShape = .fullWidth
+
+    #expect(try inset() == firstInset)
+    try fits()
 }
 
 @MainActor @Test func aNameEndsBeforeTheChevron() async throws {
@@ -2502,12 +2575,20 @@ private func nameRoom(_ name: String, in table: NSTableView) throws -> (
     let fitted = columnWidths(fixture)[1]
     #expect(fitted > Settings.defaultColumnWidth)
 
+    // Every column fits the name beside the first column's chevron, which sits further in.
+    let columns = fixture.controller.columnControllers
+    let firstColumnsRoom =
+        columns[0].columnWidth(fittingNameWidth: 100)
+        - columns[1].columnWidth(fittingNameWidth: 100)
+    #expect(firstColumnsRoom > 0)
+    let fittedAll = fitted + firstColumnsRoom
+
     doubleClick(try #require(fixture.controller.grip(forColumnAt: 0)), option: true)
     await fixture.controller.fitting?.value
 
-    #expect(columnWidths(fixture) == [fitted, fitted, fitted])
-    #expect(fixture.controller.previewView.map { Double($0.frame.width) } == fitted)
-    #expect(settings.columnWidth == fitted)
+    #expect(columnWidths(fixture) == [fittedAll, fittedAll, fittedAll])
+    #expect(fixture.controller.previewView.map { Double($0.frame.width) } == fittedAll)
+    #expect(settings.columnWidth == fittedAll)
     try expectPacked(fixture)
 }
 
