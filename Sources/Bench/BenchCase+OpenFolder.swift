@@ -152,6 +152,8 @@ extension BenchCase {
                 continuation.finish()
             case .cached:
                 preconditionFailure("the bench's listing service has no cache")
+            case .notConnected:
+                preconditionFailure("the bench lists folders, never a server")
             case .failed(let error, _, _), .volumeGone(let error, _, _):
                 continuation.finish(throwing: error)
             }

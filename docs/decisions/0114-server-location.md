@@ -91,6 +91,13 @@ hand before the step that builds it.
   network browsing the app doesn't have). It lists again when a read of the table holds one of
   its shares. Panes inside a share that unmounts go offline as [0049](0049-volume-events.md)
   says.
+- **Decided while building 7c.** A server's load waits for the table's `firstRead()` before
+  it reads the shares, so a pane made before the first read lands shows loading, not "isn't
+  connected". The observer runs only after a read whose volumes changed, and focus doesn't list
+  a server again, since that observer already has. A cut share dims in the server's listing,
+  since its row stands for `/Volumes/<name>`. A share row's Eject shows while the sidebar's own
+  read lists the share as one it can eject; between an event and the next read the two reads
+  can disagree, and the row has no Eject for that moment.
 - **Column view.** The server is a column, its rows the shares. A pane at a server shows that
   one column; selecting a share opens the share's column right of it. A trail carries
   `serverRoot: Server?`, and when set, a column for the server comes before its first column.

@@ -50,26 +50,34 @@ struct PaneFixture {
     }
 
     /// The server a pane `atServer` is at, `HAL9000`.
-    static let server = Server(host: "HAL9000._smb._tcp.local")!
+    static let server = testServer
 
-    /// A pane at `server` showing its shares `main` and `music` as folders. Nothing lists a
-    /// server yet, so the pane is made with its rows and lists nothing; it has the focus
-    /// already, so a workspace made for it doesn't list it on giving it the focus. Its lister
-    /// lists `folders`, for panes it makes or that go elsewhere.
-    static func atServer(folders: [String: [DirectoryEntry]] = [:]) async -> PaneFixture {
-        let listing = await Task.detached { Listing([folder("main"), folder("music")]) }.value
-        return PaneFixture(atServerShowing: listing, folders: folders)
+    /// A pane at `server`, with the focus, listed from a mount table that reads `mounts`: by
+    /// default the server's shares `main` and `music`, which the pane shows as folders. Its
+    /// lister lists `folders`, for panes it makes or that go elsewhere. Returns once the pane
+    /// shows the server's listing or that it isn't connected.
+    static func atServer(
+        folders: [String: [DirectoryEntry]] = [:],
+        mounts: StubMounts = StubMounts([mountedShare("main"), mountedShare("music")])
+    ) async -> PaneFixture {
+        let fixture = PaneFixture(atServerReading: mounts.table(), folders: folders)
+        await settle {
+            switch fixture.pane.state {
+            case .loaded, .notConnected: true
+            default: false
+            }
+        }
+        return fixture
     }
 
-    private init(atServerShowing listing: Listing, folders: [String: [DirectoryEntry]]) {
+    private init(atServerReading mounts: MountTable, folders: [String: [DirectoryEntry]]) {
         lister = GatedLister(folders.mapValues { .batches([$0]) })
         lister.releaseAll()
         actions = StubSystemActions()
         pane = Pane(
-            location: .server(Self.server), service: ListingService(lister: lister),
-            systemActions: actions, settings: untouchedSettings(), sortedBy: .name,
-            ascending: true, isFocused: true, selection: Selection(), viewMode: .list,
-            rows: listing)
+            location: .server(Self.server),
+            service: ListingService(lister: lister, mounts: mounts), systemActions: actions,
+            settings: untouchedSettings(), isFocused: true)
         tab = Tab(pane: pane)
     }
 
@@ -97,10 +105,11 @@ extension ListingState {
     var isCachedRefreshing: Bool { if case .cachedRefreshing = self { true } else { false } }
     var isSlow: Bool { if case .slow = self { true } else { false } }
     var isOffline: Bool { if case .offline = self { true } else { false } }
+    var isNotConnected: Bool { if case .notConnected = self { true } else { false } }
     var error: ListingError? {
         switch self {
         case .denied(let error), .failed(let error): error
-        case .loading, .partial, .loaded, .cachedRefreshing, .slow, .offline: nil
+        case .loading, .partial, .loaded, .cachedRefreshing, .slow, .offline, .notConnected: nil
         }
     }
 
@@ -142,7 +151,7 @@ func drainMainQueue() async {
         case .partial: seen.append("partial")
         case .loaded: seen.append("loaded")
         case .cachedRefreshing, .slow, .offline: seen.append("kept")
-        case .denied, .failed: seen.append("error")
+        case .denied, .failed, .notConnected: seen.append("error")
         }
     }
 

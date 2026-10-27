@@ -42,7 +42,7 @@ extension BenchCase {
             systemActions: NoSystemActions(), settings: Settings(defaults: defaults))
         await waitUntil(pane) {
             switch $0.state {
-            case .loaded, .offline, .denied, .failed: true
+            case .loaded, .offline, .denied, .failed, .notConnected: true
             case .loading, .partial, .cachedRefreshing, .slow: false
             }
         }

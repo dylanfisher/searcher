@@ -57,6 +57,10 @@ public final class ListingService: Sendable {
     /// The listings this service's panes last showed of folders, which a pane coming back to one
     /// shows at once (0109); nil keeps none.
     public let recentListings: RecentListings?
+    /// The app's mount table, which a server's listing is built from and its panes list again
+    /// on; nil for a service that lists no server, as a bench makes, which traps on a server
+    /// load (docs/decisions/0114-server-location.md).
+    public let mounts: MountTable?
 
     /// A service that lists folders on the file system and finds each one's volume with `statfs`.
     /// `rootVolumeName` runs once per load, on the load's thread.
@@ -64,12 +68,12 @@ public final class ListingService: Sendable {
         clock: C = ContinuousClock(),
         rootVolumeName: @escaping @Sendable () -> String = { readRootVolumeName() },
         cache: ListingCache? = nil, thumbnails: ThumbnailService? = nil,
-        recentListings: RecentListings? = nil
+        recentListings: RecentListings? = nil, mounts: MountTable? = nil
     ) {
         self.init(
             lister: DirectoryLister(), clock: clock, rootVolumeName: rootVolumeName,
             volumeOf: VolumeIdentity.init(path:), mountedVolumes: VolumeIdentity.mounted,
-            cache: cache, thumbnails: thumbnails, recentListings: recentListings)
+            cache: cache, thumbnails: thumbnails, recentListings: recentListings, mounts: mounts)
     }
 
     /// A service that lists folders with `lister`. `volumeOf` says which volume a path is on, and
@@ -85,9 +89,10 @@ public final class ListingService: Sendable {
         },
         mountedVolumes: @escaping @Sendable () -> [VolumeIdentity] = { [] },
         cache: ListingCache? = nil, thumbnails: ThumbnailService? = nil,
-        recentListings: RecentListings? = nil
+        recentListings: RecentListings? = nil, mounts: MountTable? = nil
     ) {
         self.mountedVolumes = mountedVolumes
+        self.mounts = mounts
         self.lister = lister
         self.cache = cache
         self.thumbnails = thumbnails
@@ -114,7 +119,8 @@ public final class ListingService: Sendable {
     /// `.DS_Store` hidden and names filtered as asked (`Listing`). `onUpdate` runs on the main
     /// actor with a `cached` (a network folder the cache keeps), `firstBatch` (folders that take
     /// more than one read), `slow` and `gaveUp` (a load that stalls) as they happen, then `full`,
-    /// `failed` or `volumeGone`, unless the load is cancelled first.
+    /// `failed` or `volumeGone`, unless the load is cancelled first. A server's load hands only
+    /// `full` or `notConnected` (`loadServer`).
     @discardableResult
     public func load(
         _ location: Location, sortedBy column: SortColumn = .name, ascending: Bool = true,
@@ -153,6 +159,10 @@ public final class ListingService: Sendable {
                 let prepared = prepare(update)
                 return { onUpdate(prepared) }
             })
+        if case .server(let server) = location {
+            loadServer(server, load)
+            return load
+        }
         // Counted from the request, so a load whose volume read hangs is slow too.
         restartStallTimers(for: load)
         // Queued in the order asked, so loads start in that order once their volumes are known.
@@ -170,6 +180,41 @@ public final class ListingService: Sendable {
                 root: root, folder: self.volumeName(of: load.location.folderPath, root: root))
         }
         return load
+    }
+
+    /// Lists `server`'s shares from `mounts` once its first read has landed, asking no share:
+    /// one folder entry per share, in the table's order, named by its mount point's last
+    /// component and dated the Unix epoch, which no view shows. A server with no share hands
+    /// `notConnected`. The load takes no slot and has no stall timers or cached rows, since it
+    /// reads nothing that can stall (docs/decisions/0114-server-location.md).
+    private func loadServer(_ server: Server, _ load: ListingLoad) {
+        guard let mounts else {
+            preconditionFailure("listing the server \(server.host) with no mount table")
+        }
+        endCachedLookup(of: load)
+        Task { @MainActor in
+            await mounts.firstRead()
+            guard !load.isCancelled else { return }
+            let shares = mounts.volumes.filter { $0.server == server }.map(\.name)
+            // The root volume's name is read from the file system, so off the main thread.
+            BlockingCallThread.start {
+                let rootVolumeName = self.rootVolumeName()
+                guard !shares.isEmpty else {
+                    return self.handLast(.notConnected(rootVolumeName: rootVolumeName), to: load)
+                }
+                let entries = shares.map { name in
+                    DirectoryEntry(
+                        name: name, type: .directory, size: nil,
+                        modified: Date(timeIntervalSince1970: 0), isHidden: false,
+                        isDataless: false)
+                }
+                let listing = Listing(
+                    entries, column: load.column, ascending: load.ascending,
+                    foldersFirst: load.foldersFirst, showsHidden: load.showsHidden,
+                    hidesDSStore: load.hidesDSStore, filter: load.filter)
+                self.handLast(.full(listing, rootVolumeName: rootVolumeName), to: load)
+            }
+        }
     }
 
     /// The folder column view's trail for `location` starts at, from the mount table, which it
