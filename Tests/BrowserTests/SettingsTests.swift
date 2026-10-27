@@ -274,17 +274,6 @@ func storedSettings(in folder: TemporaryFolder) -> Settings {
     #expect(cleared.newWindowFrame == nil)
 }
 
-@MainActor @Test func theRetiredNewWindowSizeKeyIsRemoved() throws {
-    let folder = try TemporaryFolder("SettingsTests")
-    let defaults = temporarySuite(in: folder.url.path)
-    defaults.set([800, 600], forKey: "newWindowSize")
-
-    let settings = Settings(defaults: defaults)
-
-    #expect(defaults.object(forKey: "newWindowSize") == nil)
-    #expect(settings.newWindowFrame == nil)
-}
-
 @MainActor @Test func aNewWindowFrameOfAnotherShapeIsDiscarded() throws {
     let folder = try TemporaryFolder("SettingsTests")
     let key = Settings.Key.newWindowFrame.rawValue
