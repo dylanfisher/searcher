@@ -312,6 +312,24 @@ private func expectLeavesMatchPanes(_ tab: Tab) {
     tab.close()
 }
 
+/// A stored tab with a pane in each view mode, sorted by two columns, decodes and encodes back
+/// to the same bytes, so the stored names of view modes and sort columns stay as written.
+@Test func aStoredTabStateEncodesBackToTheSameBytes() throws {
+    let stored = #"""
+        {"layout":{"focused":"9B7C1F7E-5D0B-4C35-9E57-2F1E1B2A6C01","history":["9B7C1F7E-5D0B-4C35-9E57-2F1E1B2A6C01","3A2D9E10-7C44-4F0E-8B1A-6D5E4C3B2A19"],"isZoomed":false,"root":{"split":{"axis":"horizontal","first":{"pane":{"_0":"9B7C1F7E-5D0B-4C35-9E57-2F1E1B2A6C01"}},"ratio":0.5,"second":{"pane":{"_0":"3A2D9E10-7C44-4F0E-8B1A-6D5E4C3B2A19"}}}}},"panes":[{"back":[{"path":"\/r","selected":"docs"}],"cursor":"a.txt","forward":[],"id":"9B7C1F7E-5D0B-4C35-9E57-2F1E1B2A6C01","path":"\/r\/docs","selection":["a.txt","b.txt"],"sortAscending":false,"sortColumn":"dateModified","viewMode":"list"},{"back":[],"columnWidths":{"folders":[{"path":"\/r","width":320}],"preview":400},"forward":[],"id":"3A2D9E10-7C44-4F0E-8B1A-6D5E4C3B2A19","path":"\/r","selection":[],"sortAscending":true,"sortColumn":"kind","viewMode":"column"}]}
+        """#
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = .sortedKeys
+
+    let state = try JSONDecoder().decode(TabState.self, from: Data(stored.utf8))
+    let encoded = try encoder.encode(state)
+
+    #expect(String(decoding: encoded, as: UTF8.self) == stored)
+    let panes = state.layout.panes.compactMap { state.panes[$0] }
+    #expect(panes.map(\.viewMode) == [.list, .column])
+    #expect(panes.map(\.sortColumn) == [.dateModified, .kind])
+}
+
 @MainActor @Test func tabStateWhosePanesDontMatchTheLayoutFailsToDecode() throws {
     let (one, _) = makeTab(held: true)
     let (other, _) = makeTab(held: true)

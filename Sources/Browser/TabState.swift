@@ -77,13 +77,13 @@ public struct TabState: Codable, Equatable, Sendable {
         let id: PaneID
         let path: String?
         let server: String?
-        let viewMode: StoredViewMode
+        let viewMode: ViewMode
         let back: [StoredEntry]
         let forward: [StoredEntry]
         /// Sorted by UTF-8 bytes, for the same reason.
         let selection: [String]
         let cursor: String?
-        let sortColumn: StoredSortColumn
+        let sortColumn: SortColumn
         let sortAscending: Bool
         /// Left out when no width was set, so a pane whose widths were never set stores what a
         /// file without widths holds.
@@ -100,14 +100,6 @@ public struct TabState: Codable, Equatable, Sendable {
         let path: String?
         let server: String?
         let width: Double
-    }
-
-    private enum StoredViewMode: String, Codable {
-        case list, column
-    }
-
-    private enum StoredSortColumn: String, Codable {
-        case name, size, dateModified, kind
     }
 
     private struct StoredEntry: Codable {
@@ -163,27 +155,15 @@ public struct TabState: Codable, Equatable, Sendable {
         try container.encode(layout, forKey: .layout)
         let stored = layout.panes.map { id in
             guard let pane = panes[id] else { preconditionFailure("pane \(id) has no state") }
-            let viewMode: StoredViewMode =
-                switch pane.viewMode {
-                case .list: .list
-                case .column: .column
-                }
-            let sortColumn: StoredSortColumn =
-                switch pane.sortColumn {
-                case .name: .name
-                case .size: .size
-                case .dateModified: .dateModified
-                case .kind: .kind
-                }
             let (path, server) = Self.stored(pane.location)
             return StoredPane(
-                id: id, path: path, server: server, viewMode: viewMode,
+                id: id, path: path, server: server, viewMode: pane.viewMode,
                 back: pane.history.backEntries.map(StoredEntry.init),
                 forward: pane.history.forwardEntries.map(StoredEntry.init),
                 selection: pane.selection.map(\.name).sorted {
                     $0.utf8.lexicographicallyPrecedes($1.utf8)
                 },
-                cursor: pane.cursor?.name, sortColumn: sortColumn,
+                cursor: pane.cursor?.name, sortColumn: pane.sortColumn,
                 sortAscending: pane.sortAscending,
                 columnWidths: pane.columnWidths.isEmpty
                     ? nil
@@ -236,18 +216,6 @@ public struct TabState: Codable, Equatable, Sendable {
         }
         panes = Dictionary(
             uniqueKeysWithValues: try zip(stored, widths).map { pane, columnWidths in
-                let viewMode: ViewMode =
-                    switch pane.viewMode {
-                    case .list: .list
-                    case .column: .column
-                    }
-                let sortColumn: SortColumn =
-                    switch pane.sortColumn {
-                    case .name: .name
-                    case .size: .size
-                    case .dateModified: .dateModified
-                    case .kind: .kind
-                    }
                 let history = History(
                     back: try pane.back.map { try $0.entry(codingPath: codingPath) },
                     forward: try pane.forward.map { try $0.entry(codingPath: codingPath) })
@@ -256,9 +224,9 @@ public struct TabState: Codable, Equatable, Sendable {
                 return (
                     pane.id,
                     PaneState(
-                        location: location, viewMode: viewMode, history: history,
+                        location: location, viewMode: pane.viewMode, history: history,
                         selection: Set(pane.selection.map(ExactName.init)),
-                        cursor: pane.cursor.map(ExactName.init), sortColumn: sortColumn,
+                        cursor: pane.cursor.map(ExactName.init), sortColumn: pane.sortColumn,
                         sortAscending: pane.sortAscending, columnWidths: columnWidths)
                 )
             })
