@@ -68,7 +68,7 @@ public enum FileCommands: CommandSet {
                 run: { context in
                     guard let queue = context.fileOperations else { return }
                     let pane = destination(in: context)
-                    make(.newFolder(in: pane.location.path), in: pane, queue: queue) {
+                    make(.newFolder(in: pane.location.folderPath), in: pane, queue: queue) {
                         guard selectedCount(in: pane) == 1, let editName = context.editName
                         else { return }
                         editName()
@@ -106,7 +106,8 @@ public enum FileCommands: CommandSet {
         _ name: String, to newName: String, in pane: Pane, queue: FileOperationQueue
     ) async -> OperationState {
         let version = pane.selectionVersion
-        let state = await queue.perform(.rename(pane.location.child(named: name).path, to: newName))
+        let state = await queue.perform(
+            .rename(pane.location.child(named: name).folderPath, to: newName))
         pane.select(names(madeBy: state.record), whenListedAtSelectionVersion: version)
         return state
     }
@@ -185,7 +186,7 @@ public enum FileCommands: CommandSet {
         guard let folder = otherPaneFolder(context), let queue = context.fileOperations else {
             return
         }
-        let operation = operation(selectedPaths(in: context.pane), folder.path)
+        let operation = operation(selectedPaths(in: context.pane), folder.folderPath)
         Task {
             guard await queue.prompts.confirm(.otherPane(operation)) else { return }
             queue.submit(operation)
@@ -205,7 +206,7 @@ public enum FileCommands: CommandSet {
 
     @MainActor
     private static func selectedPaths(in pane: Pane) -> [String] {
-        pane.selectedEntries.map { pane.location.child(named: $0.name).path }
+        pane.selectedEntries.map { pane.location.child(named: $0.name).folderPath }
     }
 
     @MainActor

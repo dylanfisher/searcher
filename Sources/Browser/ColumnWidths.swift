@@ -83,9 +83,9 @@ public struct ColumnWidths: Sendable {
     /// or outside `Settings.columnWidths`, NaN among them; or a preview width outside
     /// `Settings.previewWidths`.
     static func problem(folders: [Folder], preview: Double?) -> String? {
-        let paths = folders.map(\.location.path)
-        if Set(paths).count != paths.count {
-            return "a folder has two column widths: \(paths)"
+        let locations = folders.map(\.location)
+        if Set(locations).count != locations.count {
+            return "a folder has two column widths: \(locations)"
         }
         if folders.count > folderLimit {
             return "\(folders.count) column widths are more than the \(folderLimit) kept"

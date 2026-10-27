@@ -17,7 +17,7 @@ public enum PathInput {
         } else if text.hasPrefix("/") {
             absolute = text
         } else {
-            absolute = folder.path + "/" + text
+            absolute = folder.folderPath + "/" + text
         }
         var components: [Substring] = []
         for component in pathComponents(absolute) {

@@ -57,8 +57,8 @@ public final class FolderMonitor: FolderMonitoring, @unchecked Sendable {
         case .local:
             watcher = .fileEvents
             // FSEvents reports resolved paths, so children are matched against the resolved folder.
-            guard let resolved = realpath(location.path, nil) else {
-                throw ListingError(path: location.path, code: errno)
+            guard let resolved = realpath(location.folderPath, nil) else {
+                throw ListingError(path: location.folderPath, code: errno)
             }
             defer { free(resolved) }
             let folder = String(cString: resolved)
@@ -67,7 +67,7 @@ public final class FolderMonitor: FolderMonitoring, @unchecked Sendable {
             }
         case .network:
             watcher = .vnode
-            vnode = try VnodeWatch(path: location.path) { onChange(.relist) }
+            vnode = try VnodeWatch(path: location.folderPath) { onChange(.relist) }
         }
     }
 
@@ -78,7 +78,7 @@ public final class FolderMonitor: FolderMonitoring, @unchecked Sendable {
     ) throws {
         dispatchPrecondition(condition: .notOnQueue(.main))
         try self.init(
-            location: location, volume: try VolumeIdentity(path: location.path).kind,
+            location: location, volume: try VolumeIdentity(path: location.folderPath).kind,
             onChange: onChange)
     }
 

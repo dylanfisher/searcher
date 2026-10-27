@@ -1057,6 +1057,6 @@ private final class WaitingPanes: Sendable {
 
     /// The waiting panes' folders, for a log line.
     var folders: String {
-        panes.map(\.location.path).joined(separator: ", ")
+        panes.map(\.location.folderPath).joined(separator: ", ")
     }
 }

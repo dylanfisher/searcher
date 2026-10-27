@@ -167,7 +167,7 @@ public final class ListingService: Sendable {
         BlockingCallThread.start {
             let root = self.rootVolumeName()
             load.stall.setVolumeNames(
-                root: root, folder: self.volumeName(of: load.location.path, root: root))
+                root: root, folder: self.volumeName(of: load.location.folderPath, root: root))
         }
         return load
     }
@@ -234,7 +234,7 @@ public final class ListingService: Sendable {
             endCachedLookup(of: load)
             return readVolume(of: load, cachedFrom: nil)
         }
-        let path = load.location.path
+        let path = load.location.folderPath
         if let mounted = mountedNetworkVolume(holding: path) {
             return handCachedRows(of: load, on: mounted) {
                 self.endCachedLookup(of: load)
@@ -296,16 +296,17 @@ public final class ListingService: Sendable {
     private func readVolume(of load: ListingLoad, cachedFrom: VolumeIdentity?) {
         let volume: VolumeIdentity
         do {
-            volume = try volumeOf(load.location.path)
+            volume = try volumeOf(load.location.folderPath)
         } catch {
             scheduler.async { self.queue.remove(load) }
-            guard error.reason == .notFound, let gone = goneVolume(holding: load.location.path)
+            guard error.reason == .notFound,
+                let gone = goneVolume(holding: load.location.folderPath)
             else {
                 let root = rootVolumeName()
                 handLast(
                     .failed(
                         error, rootVolumeName: root,
-                        volumeName: volumeName(of: load.location.path, root: root)),
+                        volumeName: volumeName(of: load.location.folderPath, root: root)),
                     to: load)
                 return
             }
@@ -338,7 +339,7 @@ public final class ListingService: Sendable {
         then: @escaping @Sendable () -> Void
     ) {
         guard let cache else { preconditionFailure("looking up cached rows with no cache") }
-        let path = load.location.path
+        let path = load.location.folderPath
         Task {
             let folder = load.isCancelled ? nil : await cache.folder(at: path, on: volume)
             // Sorted on a thread of the load's, as its other listings are.
@@ -406,7 +407,7 @@ public final class ListingService: Sendable {
         restartSlowTimer(read, for: load)
         let outcome: Result<Void, any Error>
         do {
-            try lister.list(load.location.path) { batch in
+            try lister.list(load.location.folderPath) { batch in
                 if load.isCancelled { throw Cancelled() }
                 restartSlowTimer(read, for: load)
                 restartStallTimers(for: load)
@@ -436,12 +437,12 @@ public final class ListingService: Sendable {
             load.stall.finish {}
             return
         case .failure(let error as ListingError):
-            if error.reason == .notFound, let gone = goneVolume(holding: load.location.path) {
+            if error.reason == .notFound, let gone = goneVolume(holding: load.location.folderPath) {
                 handLast(
                     .volumeGone(error, rootVolumeName: rootVolumeName, volumeName: gone.name),
                     to: load)
             } else {
-                let name = volumeName(of: load.location.path, root: rootVolumeName)
+                let name = volumeName(of: load.location.folderPath, root: rootVolumeName)
                 handLast(
                     .failed(error, rootVolumeName: rootVolumeName, volumeName: name),
                     to: load)
@@ -465,7 +466,7 @@ public final class ListingService: Sendable {
         if let cache, let volume = load.volume, volume.kind == .network {
             cache.startInsert(
                 ListingCache.Folder(entries: entries.all, listedAt: Date()),
-                at: load.location.path, on: volume)
+                at: load.location.folderPath, on: volume)
         }
     }
 
@@ -659,7 +660,7 @@ public final class ListingService: Sendable {
         private func volume(of load: ListingLoad) -> VolumeIdentity {
             guard let volume = load.volume else {
                 preconditionFailure(
-                    "load of \(load.location.path) started before its volume was read")
+                    "load of \(load.location.folderPath) started before its volume was read")
             }
             return volume
         }

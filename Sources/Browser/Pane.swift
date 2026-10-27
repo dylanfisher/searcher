@@ -1033,7 +1033,7 @@ public final class Pane {
         otherwise: @escaping @MainActor () -> Void
     ) {
         cancelGoToFolder()
-        let path = link.path
+        let path = link.folderPath
         let check = linkIsPackage
         packageCheck = Task { [weak self] in
             let isPackage = await BlockingCallThread.run { check(path) }
@@ -1044,7 +1044,7 @@ public final class Pane {
     }
 
     private func openFile(_ location: Location) {
-        systemActions.openFile(URL(fileURLWithPath: location.path, isDirectory: false))
+        systemActions.openFile(URL(fileURLWithPath: location.folderPath, isDirectory: false))
     }
 
     /// Shows the folder that holds this one, with this one selected. Does nothing at `/`. A
@@ -1111,7 +1111,7 @@ public final class Pane {
             // the folder itself is dropped: the folders under it fail their own loads, which drops
             // them, and walking every kept path for each removed entry costs the main actor.
             for case .remove(name: let name) in patches {
-                service.recentListings?.drop(location.child(named: name).path)
+                service.recentListings?.drop(location.child(named: name).folderPath)
             }
             waitingPatches += patches
             startPatch()
@@ -1257,7 +1257,9 @@ public final class Pane {
     /// a column, shows rows in the turn it is made: `service.recentListings` keeps the folder's
     /// listing in that arrangement (`showRecentListing`). A dictionary read on the main actor.
     func showsRecentRowsWhenMade(at location: Location) -> Bool {
-        guard let recent = service.recentListings?.listing(at: location.path) else { return false }
+        guard let recent = service.recentListings?.listing(at: location.folderPath) else {
+            return false
+        }
         return isArranged(recent.listing, filteredBy: NameFilter())
     }
 
@@ -1374,7 +1376,7 @@ public final class Pane {
     /// the main actor.
     private func showRecentListing() {
         guard state.listing == nil,
-            let recent = service.recentListings?.listing(at: location.path),
+            let recent = service.recentListings?.listing(at: location.folderPath),
             isArranged(recent.listing)
         else { return }
         show(
@@ -1388,7 +1390,7 @@ public final class Pane {
         guard case .loaded(let listing) = state, let recent = service.recentListings else {
             return
         }
-        recent.keep(listing, listedAt: loadedAt ?? Date(), at: location.path)
+        recent.keep(listing, listedAt: loadedAt ?? Date(), at: location.folderPath)
     }
 
     /// `selection` resolved against a load's update, on the load's worker thread; nil for a
@@ -1452,7 +1454,7 @@ public final class Pane {
             self.volumeName = volumeName
             loadIsRunning = false
             // Gone, or no longer readable: kept rows would show until the next failure.
-            service.recentListings?.drop(under: location.path)
+            service.recentListings?.drop(under: location.folderPath)
             switch error.reason {
             case .unreachable: goOffline()
             case .privacyProtected: show(.denied(error), after: .loaded(complete: true))
@@ -1463,7 +1465,7 @@ public final class Pane {
             self.rootVolumeName = rootVolumeName
             self.volumeName = volumeName
             loadIsRunning = false
-            service.recentListings?.drop(under: location.path)
+            service.recentListings?.drop(under: location.folderPath)
             goOffline()
         case .slow(let rootVolumeName, let volumeName):
             self.rootVolumeName = rootVolumeName
@@ -1953,7 +1955,7 @@ public final class Pane {
     /// arrives after it ends.
     func trashDidFinish(_ trash: Int, _ state: OperationState) {
         guard let pending = cursorAfterTrash, pending.trash == trash else { return }
-        let cursorPath = location.child(named: pending.cursor.name).path
+        let cursorPath = location.child(named: pending.cursor.name).folderPath
         let removedCursor = state.record.changes.contains { change in
             switch change {
             case .trashed(let path, _), .deleted(let path): path == cursorPath
@@ -2032,7 +2034,7 @@ public final class Pane {
     /// on or in a folder `calculateSizes()` walked.
     public var showsFolderSizes: Bool {
         canCalculateSizes
-            && (settings.folderSizes || calculatedFolders.contains(ExactName(location.path)))
+            && (settings.folderSizes || calculatedFolders.contains(ExactName(location.folderPath)))
     }
     /// Whether a folder row without a size waits for a walk, and shows pending text: the setting
     /// is on, or the walks `calculateSizes()` asked for haven't all landed. Otherwise it shows no
@@ -2095,9 +2097,9 @@ public final class Pane {
     public func calculateSizes() {
         guard canCalculateSizes, let folderSizes else { return }
         let folder = location
-        if !settings.folderSizes { calculatedFolders.insert(ExactName(folder.path)) }
+        if !settings.folderSizes { calculatedFolders.insert(ExactName(folder.folderPath)) }
         Task { [weak self] in
-            guard await folderSizes.recalculateSizes(under: folder.path) else { return }
+            guard await folderSizes.recalculateSizes(under: folder.folderPath) else { return }
             guard let self, self.location == folder, self.showsFolderSizes else { return }
             self.forgetFolderSizes()
             self.calculatesSizesOnce = !self.settings.folderSizes
@@ -2189,8 +2191,8 @@ public final class Pane {
             }
             let asked = found
             let walks = folderSizes.requestSizes(
-                of: asked.map { (folder.child(named: $0.name.name).path, $0.modified) },
-                in: folder.path, for: owner
+                of: asked.map { (folder.child(named: $0.name.name).folderPath, $0.modified) },
+                in: folder.folderPath, for: owner
             ) { index, result in
                 self?.receiveSize(
                     result, of: asked[index].name, modified: asked[index].modified,
@@ -2385,7 +2387,9 @@ public final class Pane {
     ) -> [ExactName: Listing.FolderSizeUpdate] {
         guard let folderSizes else { return [:] }
         let folders = (0..<listing.count).map { listing[$0] }.filter { $0.type.isFolderOnDisk }
-        let asked = folders.map { (path: folder.child(named: $0.name).path, modified: $0.modified) }
+        let asked = folders.map {
+            (path: folder.child(named: $0.name).folderPath, modified: $0.modified)
+        }
         var found: [ExactName: Listing.FolderSizeUpdate] = [:]
         for (entry, size) in zip(folders, folderSizes.keptSizes(of: asked)) {
             guard let size else { continue }

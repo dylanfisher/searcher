@@ -187,7 +187,7 @@ public actor ListingCache {
 
     /// The folder of every pane in `workspaces`.
     public static func folders(of workspaces: [WorkspaceState]) -> Set<String> {
-        Set(workspaces.flatMap(\.tabs).flatMap { $0.panes.values.map(\.location.path) })
+        Set(workspaces.flatMap(\.tabs).flatMap { $0.panes.values.map(\.location.folderPath) })
     }
 
     /// The volume `restore` found in the store for `path`, which the mount table didn't place:

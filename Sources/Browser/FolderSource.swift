@@ -37,7 +37,7 @@ public final class FolderSource: PaletteSource {
                     guard let pane = tab.panes[id] else {
                         preconditionFailure("leaf \(id) of tab \(tab.id) has no pane")
                     }
-                    return pane.location.path
+                    return pane.location.folderPath
                 }
             }
         }
@@ -46,7 +46,7 @@ public final class FolderSource: PaletteSource {
         }
         let now = now()
         let visited = history.recent(at: now)
-        let visitedPaths = Set(visited.map(\.path))
+        let visitedPaths = Set(visited.map(\.folderPath))
         var unvisited: [Location] = []
         var seen: Set<String> = []
         for path in panes where !visitedPaths.contains(path) && seen.insert(path).inserted {
@@ -55,7 +55,7 @@ public final class FolderSource: PaletteSource {
         let focusedPane = focusedPane
         let items = (visited + unvisited).map { location in
             PaletteItem(
-                id: .folder(path: location.path), title: Self.title(of: location, home: home),
+                id: .folder(path: location.folderPath), title: Self.title(of: location, home: home),
                 frecency: history.frecency(of: location, at: now)
             ) { focusedPane().navigateSelectingFirstRow(to: location) }
         }
@@ -67,7 +67,7 @@ public final class FolderSource: PaletteSource {
 
     /// `location`'s path, with `home` written `~` when it is or holds the path.
     static func title(of location: Location, home: String) -> String {
-        let path = location.path
+        let path = location.folderPath
         if path == home { return "~" }
         if path.hasPrefix(home + "/") { return "~" + path.dropFirst(home.count) }
         return path

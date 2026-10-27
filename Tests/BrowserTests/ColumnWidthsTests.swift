@@ -77,3 +77,20 @@ private func at(_ path: String) -> Location { Location(path: path) }
     #expect(ColumnWidths.problem(folders: [], preview: narrow) != nil)
     #expect(ColumnWidths.problem(folders: [], preview: Settings.previewWidths.lowerBound) == nil)
 }
+
+@Test func aServersColumnWidthIsKeptByTheServer() {
+    let server = Location.server(Server(mountSource: "//HAL9000._smb._tcp.local/music")!)
+    let sameServer = Location.server(Server(mountSource: "//guest@hal9000._smb._tcp.local/main")!)
+    var widths = ColumnWidths()
+    widths.set(300, of: server)
+    widths.set(200, of: at("/Volumes"))
+
+    #expect(widths.width(of: sameServer) == 300)
+    #expect(widths.width(of: at("/Volumes")) == 200)
+    #expect(
+        ColumnWidths.problem(
+            folders: [
+                .init(location: server, width: 300), .init(location: sameServer, width: 200),
+            ],
+            preview: nil) != nil)
+}

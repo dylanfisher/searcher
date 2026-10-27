@@ -702,26 +702,28 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         let paths = urls.map(\.path)
         if let app {
             // Files dropped on an app open with it, as in Finder; nothing goes into the app.
-            guard !paths.isEmpty, !paths.contains(app.path) else { return nil }
-            let application = URL(fileURLWithPath: app.path, isDirectory: true)
+            guard !paths.isEmpty, !paths.contains(app.folderPath) else { return nil }
+            let application = URL(fileURLWithPath: app.folderPath, isDirectory: true)
             return Drop(
-                folder: folder.path, pane: nil, content: .open(urls, withApplicationAt: application)
+                folder: folder.folderPath, pane: nil,
+                content: .open(urls, withApplicationAt: application)
             )
         }
         if !paths.isEmpty {
             guard
                 let operation = DropOperation(
-                    dropping: paths, into: folder.path,
+                    dropping: paths, into: folder.folderPath,
                     allowed: info.draggingSourceOperationMask, mounts: mountTable)
             else { return nil }
             return Drop(
-                folder: folder.path, pane: target, folderRow: folderRow,
+                folder: folder.folderPath, pane: target, folderRow: folderRow,
                 content: .files(paths, operation))
         }
         guard pasteboard.canReadObject(forClasses: [NSFilePromiseReceiver.self]),
             info.draggingSourceOperationMask.contains(.copy)
         else { return nil }
-        return Drop(folder: folder.path, pane: target, folderRow: folderRow, content: .promises)
+        return Drop(
+            folder: folder.folderPath, pane: target, folderRow: folderRow, content: .promises)
     }
 
     /// The context menu for a right-click on `row`, or below the rows at -1. A row outside the
@@ -798,7 +800,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         guard let thumbnails = pane.service.thumbnails,
             ThumbnailService.shows(entry, kind: listing.kind(atRow: row)),
             case .some(.some(let image)) = thumbnails.cached(
-                at: pane.location.child(named: entry.name).path, entry: entry, side: Self.iconSize)
+                at: pane.location.child(named: entry.name).folderPath, entry: entry,
+                side: Self.iconSize)
         else { return nil }
         return image
     }
@@ -825,7 +828,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
                 guard ThumbnailService.shows(entry, kind: listing.kind(atRow: row)) else {
                     continue
                 }
-                let path = pane.location.child(named: entry.name).path
+                let path = pane.location.child(named: entry.name).folderPath
                 if let request = thumbnailRequests[entry.name], request.path == path,
                     request.entry == entry
                 {

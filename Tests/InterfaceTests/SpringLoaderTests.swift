@@ -127,7 +127,7 @@ private final class Fixture {
 
     /// The column trail's folders, left to right.
     var columnFolders: [String] {
-        pane.columnTrail?.columns.map(\.pane.location.path) ?? []
+        pane.columnTrail?.columns.map(\.pane.location.folderPath) ?? []
     }
 }
 

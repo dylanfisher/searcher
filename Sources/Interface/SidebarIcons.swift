@@ -44,10 +44,10 @@ final class SidebarIcons {
             let home = Location(path: home)
             switch path {
             case "/Applications": return .applications
-            case home.child(named: "Desktop").path: return .desktop
-            case home.child(named: "Documents").path: return .documents
-            case home.child(named: "Downloads").path: return .downloads
-            case home.path: return .home
+            case home.child(named: "Desktop").folderPath: return .desktop
+            case home.child(named: "Documents").folderPath: return .documents
+            case home.child(named: "Downloads").folderPath: return .downloads
+            case home.folderPath: return .home
             default: return .folder
             }
         }

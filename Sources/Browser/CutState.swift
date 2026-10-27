@@ -48,7 +48,7 @@ public final class CutState {
     public func cutNames(in folder: Location) -> Set<String> {
         guard let paths = cutPaths else { return [] }
         return Set(
-            paths.lazy.filter { ($0 as NSString).deletingLastPathComponent == folder.path }
+            paths.lazy.filter { ($0 as NSString).deletingLastPathComponent == folder.folderPath }
                 .map { ($0 as NSString).lastPathComponent })
     }
 
