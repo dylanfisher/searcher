@@ -118,12 +118,15 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
     /// A column's header cell, whose title starts and ends where the cells under it do. Only the
     /// title moves: the header's rects, which its fill, clicks, resizing and reordering use, and
     /// the sort indicator stay AppKit's. The column it heads is the one under its frame at each
-    /// draw, so the title follows a column the user moves.
+    /// draw, so the title follows a column the user moves. Drawn anywhere but in a table's
+    /// header, as AppKit may draw it for a dragged column's image, the title stays where AppKit
+    /// puts it: no table's ends are there to move it from.
     final class HeaderCell: NSTableHeaderCell {
         override func drawInterior(withFrame cellFrame: NSRect, in controlView: NSView) {
             guard let header = controlView as? NSTableHeaderView, let table = header.tableView
             else {
-                preconditionFailure("a header cell drawn outside a table's header: \(controlView)")
+                super.drawInterior(withFrame: cellFrame, in: controlView)
+                return
             }
             let column = header.column(at: NSPoint(x: cellFrame.midX, y: cellFrame.midY))
             super.drawInterior(

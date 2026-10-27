@@ -414,10 +414,12 @@ private let quickLook = ViewCommands.toggleQuickLook
 
 // MARK: - The header and the cells' inset
 
-/// A list's table, its columns laid out and its header in place.
+/// A list's table, its columns laid out and its header in place, drawn in the light appearance
+/// whatever the Mac's, so its titles are dark for `titleStart`.
 @MainActor
 private func laidOutList() async throws -> (table: ListingTableView, header: NSTableHeaderView) {
     let list = await controller(showing: [file("a")])
+    list.view.appearance = NSAppearance(named: .aqua)
     list.view.layoutSubtreeIfNeeded()
     list.tableView.layoutSubtreeIfNeeded()
     return (list.tableView, try #require(list.tableView.headerView))
@@ -523,4 +525,30 @@ private func titleShift(ofColumn index: Int, in header: NSTableHeaderView) throw
     let inset = ListingTableView.cellInset
     #expect(header.column(at: NSPoint(x: first.minX + inset / 2, y: first.midY)) == 0)
     #expect(header.column(at: NSPoint(x: end.maxX - inset / 2, y: end.midY)) == last)
+}
+
+/// Drawn outside a table's header, as AppKit may draw a header cell for a dragged column's
+/// image, the cell draws its title where AppKit's own does.
+@MainActor @Test func aHeaderCellDrawnOutsideAHeaderDrawsItsTitleUnmoved() throws {
+    let view = NSView(frame: NSRect(x: 0, y: 0, width: 120, height: 28))
+    view.appearance = NSAppearance(named: .aqua)
+    /// The opacity of each pixel the cell draws.
+    func drawn(_ cell: NSTableHeaderCell) throws -> [CGFloat] {
+        let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+        view.effectiveAppearance.performAsCurrentDrawingAppearance {
+            cell.drawInterior(withFrame: view.bounds, in: view)
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        return (0..<bitmap.pixelsHigh).flatMap { y in
+            (0..<bitmap.pixelsWide).map { x in bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0 }
+        }
+    }
+
+    let ours = try drawn(ListingTableView.HeaderCell(textCell: "Name"))
+    let appKits = try drawn(NSTableHeaderCell(textCell: "Name"))
+
+    #expect(ours.contains { $0 > 0.5 })
+    #expect(ours == appKits)
 }
