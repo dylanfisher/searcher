@@ -15,10 +15,6 @@ private func makeFile(_ path: String, size: Int, seed: UInt64 = 1) throws {
     try Data(bytes).write(to: URL(fileURLWithPath: path))
 }
 
-private func makeFolder(_ path: String) throws {
-    try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
-}
-
 private func check(_ result: Int32, _ call: String) throws {
     guard result != 0 else { return }
     let code = errno
@@ -170,11 +166,6 @@ private func bytesWritten(under path: String) throws -> Int64 {
         if info.st_mode & S_IFMT == S_IFREG { total += info.st_size }
     }
     return total
-}
-
-private func exists(_ path: String) -> Bool {
-    var info = stat()
-    return lstat(path, &info) == 0
 }
 
 private func copy(

@@ -24,9 +24,7 @@ private func ids(_ items: [ContextMenuBuilder.Item]) -> [CommandID] {
 /// row. The window is never ordered in.
 @MainActor
 private struct ListWindow {
-    let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 800, height: 400), styleMask: [.titled],
-        backing: .buffered, defer: true)
+    let window = testWindow(size: NSSize(width: 800, height: 400))
     let list: ListingViewController
 
     init(showing entries: [DirectoryEntry]) async throws {
@@ -54,11 +52,7 @@ private struct ListWindow {
     private func rightClick(at tablePoint: NSPoint) throws -> NSMenu? {
         let table = list.tableView
         let point = table.convert(tablePoint, to: nil)
-        let event = try #require(
-            NSEvent.mouseEvent(
-                with: .rightMouseDown, location: point, modifierFlags: [], timestamp: 0,
-                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
-                pressure: 1))
+        let event = try mouseEvent(.rightMouseDown, at: point, in: window)
         return table.menu(for: event)
     }
 }

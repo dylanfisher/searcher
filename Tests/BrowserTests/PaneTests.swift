@@ -123,13 +123,6 @@ extension ListingState {
     }
 }
 
-/// Returns once the main queue has run every block queued on it before this call.
-func drainMainQueue() async {
-    await withCheckedContinuation { continuation in
-        DispatchQueue.main.async { continuation.resume() }
-    }
-}
-
 @MainActor @Test func paneLoadsItsLocationInItsSort() async {
     let fixture = PaneFixture(
         at: "/root", folders: ["/root": [file("a"), file("c"), file("b")]], ascending: false)
@@ -348,13 +341,6 @@ func drainMainQueue() async {
     #expect(pane.state.names == ["d", "a", "c", "b"])
 }
 
-/// A serial queue, suspended, for `Pane.sortQueue`: sorts wait on it until `resume()`.
-private func heldSortQueue() -> DispatchQueue {
-    let queue = DispatchQueue(label: "held sorts")
-    queue.suspend()
-    return queue
-}
-
 @MainActor @Test func aSortThatLandsAfterANavigationIsDropped() async {
     let fixture = PaneFixture(
         at: "/a",
@@ -363,7 +349,7 @@ private func heldSortQueue() -> DispatchQueue {
             "/b": [file("b1", size: 1), file("b2", size: 2)],
         ])
     await settle { fixture.pane.state.isLoaded }
-    let sorts = heldSortQueue()
+    let sorts = heldQueue("held sorts")
     fixture.pane.sortQueue = sorts
 
     fixture.pane.setSort(.size, ascending: false)
@@ -383,7 +369,7 @@ private func heldSortQueue() -> DispatchQueue {
         location: Location(path: "/root"), service: ListingService(lister: lister),
         systemActions: StubSystemActions(), settings: untouchedSettings())
     await settle { pane.state.isLoaded }
-    let sorts = heldSortQueue()
+    let sorts = heldQueue("held sorts")
     pane.sortQueue = sorts
 
     pane.setSort(.size, ascending: false)
@@ -402,7 +388,7 @@ private func heldSortQueue() -> DispatchQueue {
         at: "/root",
         folders: ["/root": [file("a", size: 3), file("b", size: 1), file("c", size: 2)]])
     await settle { fixture.pane.state.isLoaded }
-    let sorts = heldSortQueue()
+    let sorts = heldQueue("held sorts")
     fixture.pane.sortQueue = sorts
     let here = fixture.pane.location
 
@@ -1273,8 +1259,7 @@ private func heldSettlePane() async -> (Pane, StubSystemActions, DispatchQueue) 
             lister: StubLister(["/n": (0..<100).map { file(String(format: "n%03d", $0)) }])),
         systemActions: actions, settings: untouchedSettings())
     await settle { pane.state.isLoaded }
-    let held = DispatchQueue(label: "held settles")
-    held.suspend()
+    let held = heldQueue("held settles")
     pane.settleQueue = held
     return (pane, actions, held)
 }
@@ -1379,8 +1364,7 @@ private func bigSize(_ pane: Pane) -> Listing.FolderSizeValue? {
 @MainActor
 private func goBackWithBatchesHeld(_ pane: Pane, to root: String) async -> Listing.FolderSizeValue?
 {
-    let held = DispatchQueue(label: "held size batches")
-    held.suspend()
+    let held = heldQueue("held size batches")
     pane.rowWorkQueue = held
     pane.goBack()
     await settle { pane.location.path == root && pane.state.listing != nil }

@@ -281,8 +281,7 @@ private func endRest(of type: UTType, in cache: OpenWith, on clock: ManualClock)
     #expect(actions.lookups.all.count == 1)
     await endRest(of: .plainText, in: cache, on: clock)
 
-    let held = DispatchQueue(label: "OpenWithTests.held")
-    held.suspend()
+    let held = heldQueue("OpenWithTests.held")
     cache.buildQueue = held
     cache.refresh([.plainText])
     cache.refresh([.plainText])

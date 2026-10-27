@@ -185,11 +185,3 @@ func aMissingFolderShowsWhyWithThePathAndStaysOpen(typed: String, path: String) 
     #expect(fixture.sheet.messageLabel.isHidden)
     #expect(fixture.sheet.panel.frame.height == closedHeight)
 }
-
-/// Returns once the main queue has run every block queued on it before this call.
-@MainActor
-private func drainMainQueue() async {
-    await withCheckedContinuation { continuation in
-        DispatchQueue.main.async { continuation.resume() }
-    }
-}

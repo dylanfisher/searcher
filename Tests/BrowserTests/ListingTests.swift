@@ -1,4 +1,5 @@
 import Base
+import BrowserTestSupport
 import Foundation
 import Testing
 import UniformTypeIdentifiers
@@ -21,10 +22,6 @@ private func package(_ name: String, modified: TimeInterval = 0) -> DirectoryEnt
     DirectoryEntry(
         name: name, type: .package, size: nil, modified: Date(timeIntervalSince1970: modified),
         isHidden: false, isDataless: false)
-}
-
-private func names(_ listing: Listing) -> [String] {
-    (0..<listing.count).map { listing[$0].name }
 }
 
 /// Each row's folded name as bytes, since `String` equality treats canonically equivalent strings

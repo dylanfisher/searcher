@@ -159,12 +159,9 @@ private struct UnreadableNamesLister: Lister {
 /// ↓ as AppKit sends it, first pressed or repeating while held.
 @MainActor
 private func downKey(isARepeat: Bool) throws -> NSEvent {
-    let down = functionKey(NSDownArrowFunctionKey)
-    return try #require(
-        NSEvent.keyEvent(
-            with: .keyDown, location: .zero, modifierFlags: arrowFlags, timestamp: 0,
-            windowNumber: 0, context: nil, characters: down, charactersIgnoringModifiers: down,
-            isARepeat: isARepeat, keyCode: 125))
+    try keyEvent(
+        functionKey(NSDownArrowFunctionKey), modifiers: arrowFlags, keyCode: 125,
+        isARepeat: isARepeat)
 }
 
 /// The table hands a key's repeat flag to the command, so a held ↓ is one selection step and
@@ -366,10 +363,7 @@ private final class MainThreadRecord: @unchecked Sendable {
     let lister = GatedLister(["/Volumes/nas": .blockForever])
     lister.releaseAll()
     let fixture = Fixture(lister: lister, at: "/Volumes/nas")
-    let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 500, height: 300), styleMask: [.titled],
-        backing: .buffered, defer: true)
-    window.isReleasedWhenClosed = false
+    let window = testWindow(size: NSSize(width: 500, height: 300))
     fixture.controller.view.frame = window.contentView?.bounds ?? .zero
     window.contentView?.addSubview(fixture.controller.view)
     let status = fixture.controller.status
@@ -570,9 +564,7 @@ private final class VolumeName: @unchecked Sendable {
 /// first responder, loaded.
 @MainActor
 private final class WindowFixture {
-    let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 800, height: 400), styleMask: [.titled],
-        backing: .buffered, defer: true)
+    let window = testWindow(size: NSSize(width: 800, height: 400))
     let fixture: Fixture
 
     init(folders: [String: [DirectoryEntry]] = Fixture.folders) async {

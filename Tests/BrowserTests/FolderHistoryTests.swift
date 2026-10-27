@@ -1,4 +1,5 @@
 import Base
+import BrowserTestSupport
 import Foundation
 import TestSupport
 import Testing
@@ -6,12 +7,6 @@ import Testing
 @testable import Browser
 
 private let start = Date(timeIntervalSinceReferenceDate: 800_000_000)
-
-private func roots(_ folder: TemporaryFolder) -> StoreRoots {
-    StoreRoots(
-        caches: folder.url.appending(path: "Caches"),
-        applicationSupport: folder.url.appending(path: "Application Support"))
-}
 
 private func historyFile(_ folder: TemporaryFolder) -> URL {
     roots(folder).applicationSupport.appending(path: "folder-history.json")

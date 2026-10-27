@@ -128,9 +128,7 @@ private func content(of row: OperationRowView, in view: NSView) -> NSRect {
 /// A button hidden with an ancestor, or taken out of its window, gets no `mouseExited`, so it
 /// drops the hover itself; shown again, it has no fill until the mouse comes back.
 @MainActor @Test func aHoverButtonDropsItsHoverWhenHiddenOrMovedOutOfItsWindow() throws {
-    let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: [.titled],
-        backing: .buffered, defer: true)
+    let window = testWindow(size: NSSize(width: 200, height: 100))
     let container = NSView()
     let button = HoverButton()
     container.addSubview(button)

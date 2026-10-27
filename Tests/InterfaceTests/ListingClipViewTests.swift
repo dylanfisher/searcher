@@ -85,7 +85,7 @@ private func shortList() async throws -> (
     let log = DragLog(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
     let spare = ListingClipView()
     spare.documentView = log
-    let pasteboard = NSPasteboard(name: NSPasteboard.Name("searcher-test-\(UUID().uuidString)"))
+    let pasteboard = testPasteboard()
     defer { pasteboard.releaseGlobally() }
     let info = StubDraggingInfo(pasteboard: pasteboard)
 

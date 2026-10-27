@@ -1,4 +1,5 @@
 import Base
+import BrowserTestSupport
 import Darwin
 import Foundation
 import TestSupport
@@ -14,10 +15,6 @@ private func files(_ prefix: String, _ numbers: some Sequence<Int>) -> [Director
             name: "\(prefix)\($0)", type: .regular, size: Int64($0),
             modified: Date(timeIntervalSince1970: 0), isHidden: false, isDataless: false)
     }
-}
-
-private func names(_ listing: Listing) -> [String] {
-    (0..<listing.count).map { listing[$0].name }
 }
 
 /// Updates one load handed to the main actor, in arrival order.

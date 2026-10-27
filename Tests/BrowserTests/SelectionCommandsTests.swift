@@ -482,8 +482,7 @@ private func isEnabled(_ chord: KeyChord, in fixture: PaneFixture) throws -> Boo
     pane.apply(.patches([.remove(name: "r05")]), at: pane.location)
     await settle { pane.stateVersion != version }
     pane.select(Selection())
-    let naming = DispatchQueue(label: "naming")
-    naming.suspend()
+    let naming = heldQueue("naming")
     pane.settleQueue = naming
 
     pane.select(rows: [3], cursor: name(3), anchor: name(3))

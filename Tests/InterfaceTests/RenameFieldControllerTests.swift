@@ -374,7 +374,7 @@ func eachRenameStartsWithNothingToUndo(closingByReturn: Bool) async throws {
     let styled = NSAttributedString(
         string: "big",
         attributes: [.font: NSFont.boldSystemFont(ofSize: 30), .foregroundColor: NSColor.red])
-    let pasteboard = NSPasteboard(name: NSPasteboard.Name("RN1-RenameFieldControllerTests"))
+    let pasteboard = testPasteboard()
     defer { pasteboard.releaseGlobally() }
     pasteboard.clearContents()
     pasteboard.writeObjects([styled])

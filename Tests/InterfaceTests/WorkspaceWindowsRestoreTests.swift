@@ -11,12 +11,6 @@ import Testing
 /// A screen large enough for every frame these tests use, so a restored frame stays as saved.
 private let screen = CGRect(x: 0, y: 0, width: 5000, height: 3000)
 
-private func roots(_ folder: TemporaryFolder) -> StoreRoots {
-    StoreRoots(
-        caches: folder.url.appending(path: "Caches"),
-        applicationSupport: folder.url.appending(path: "Application Support"))
-}
-
 /// Saves `windows` as quitting does and waits for the writes to land, whatever the disk and the
 /// machine's load. The tests are not about the quit deadline, so it is an hour, which a loaded
 /// run can't pass; a save that never ends hangs the test instead of passing it by luck.

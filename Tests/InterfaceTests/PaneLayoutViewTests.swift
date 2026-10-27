@@ -79,11 +79,7 @@ private func expectPaneFramesMatchModel(_ view: PaneLayoutView) {
 private func drag(_ view: PaneLayoutView, from: NSPoint, to: NSPoint) throws {
     let window = try #require(view.window)
     func event(_ type: NSEvent.EventType, _ point: NSPoint) throws -> NSEvent {
-        try #require(
-            NSEvent.mouseEvent(
-                with: type, location: view.convert(point, to: nil), modifierFlags: [],
-                timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 0,
-                clickCount: 1, pressure: 1))
+        try mouseEvent(type, at: view.convert(point, to: nil), in: window)
     }
     #expect(view.hitTest(view.convert(from, to: view.superview)) === view)
     view.mouseDown(with: try event(.leftMouseDown, from))

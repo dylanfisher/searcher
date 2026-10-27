@@ -895,11 +895,7 @@ private func stopEverything(_ windows: WorkspaceWindows) async {
     // The drag has ended, but its last step was made with the button down, so the claim is
     // still set. The next click in the window ends it: a move the app makes after that, with a
     // button down, records nothing.
-    let click = try #require(
-        NSEvent.mouseEvent(
-            with: .leftMouseDown, location: NSPoint(x: -10, y: -10), modifierFlags: [],
-            timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 0,
-            clickCount: 1, pressure: 1))
+    let click = try mouseEvent(.leftMouseDown, at: NSPoint(x: -10, y: -10), in: window)
     window.sendEvent(click)
     window.setFrameOrigin(NSPoint(x: 90, y: 100))
     first.windowDidMove(moved)
@@ -1164,12 +1160,8 @@ private func showSidebar(of fixture: UndoableWindow) {
 private func sendPress(at point: NSPoint, of fixture: UndoableWindow) throws {
     let window = fixture.window
     func event(_ type: NSEvent.EventType) throws -> NSEvent {
-        try #require(
-            NSEvent.mouseEvent(
-                with: type, location: point, modifierFlags: [],
-                timestamp: ProcessInfo.processInfo.systemUptime,
-                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
-                pressure: 1))
+        try mouseEvent(
+            type, at: point, in: window, timestamp: ProcessInfo.processInfo.systemUptime)
     }
     nonisolated(unsafe) let down = try event(.leftMouseDown)
     try performRealPress(releasedBy: try event(.leftMouseUp)) { window.sendEvent(down) }
@@ -1286,11 +1278,7 @@ private func middle(ofSidebarRow row: Int, of fixture: UndoableWindow) -> NSPoin
     let outline = fixture.controller.sidebar.outlineView
     let point = middle(
         ofSidebarRow: try sidebarRow("Applications", in: fixture.controller), of: fixture)
-    let event = try #require(
-        NSEvent.mouseEvent(
-            with: .rightMouseDown, location: point, modifierFlags: [], timestamp: 0,
-            windowNumber: fixture.window.windowNumber, context: nil, eventNumber: 0,
-            clickCount: 1, pressure: 1))
+    let event = try mouseEvent(.rightMouseDown, at: point, in: fixture.window)
     var menu: NSMenu?
 
     outline.sendMouseDown(.rightMouseDown, atWindowPoint: point) {

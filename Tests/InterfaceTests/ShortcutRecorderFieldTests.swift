@@ -1,5 +1,6 @@
 import AppKit
 import Browser
+import BrowserTestSupport
 import Testing
 
 @testable import Interface
@@ -7,9 +8,7 @@ import Testing
 /// A recording field in an unshown window, and what it recorded.
 @MainActor
 private final class RecorderFixture {
-    let window = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 300, height: 100), styleMask: [.titled],
-        backing: .buffered, defer: true)
+    let window = testWindow(size: NSSize(width: 300, height: 100))
     let field = ShortcutRecorderField()
     var recorded: [ShortcutRecorderField.Recording] = []
 
@@ -24,12 +23,9 @@ private final class RecorderFixture {
         _ type: NSEvent.EventType, _ ignoringModifiers: String, keyCode: UInt16,
         modifiers: NSEvent.ModifierFlags = [], isARepeat: Bool = false
     ) throws -> NSEvent {
-        try #require(
-            NSEvent.keyEvent(
-                with: type, location: .zero, modifierFlags: modifiers, timestamp: 0,
-                windowNumber: window.windowNumber, context: nil, characters: ignoringModifiers,
-                charactersIgnoringModifiers: ignoringModifiers, isARepeat: isARepeat,
-                keyCode: keyCode))
+        try keyEvent(
+            ignoringModifiers, modifiers: modifiers, keyCode: keyCode, type: type,
+            isARepeat: isARepeat, windowNumber: window.windowNumber)
     }
 
     /// Releases the key a recording took, which ends the swallowing of its repeats, so no test
@@ -60,11 +56,9 @@ private final class RecorderFixture {
     // Once recording ends, keys pass.
     #expect(fixture.field.handle(event) === event)
     NSApplication.shared.sendEvent(
-        try #require(
-            NSEvent.keyEvent(
-                with: .keyUp, location: .zero, modifierFlags: [.command, .shift], timestamp: 0,
-                windowNumber: 0, context: nil, characters: "O", charactersIgnoringModifiers: "o",
-                isARepeat: false, keyCode: event.keyCode)))
+        try keyEvent(
+            "o", characters: "O", modifiers: [.command, .shift], keyCode: event.keyCode,
+            type: .keyUp))
     #expect(!ShortcutRecorderField.isSwallowingHeldKey)
 }
 
@@ -249,18 +243,13 @@ private final class ActionCounter: NSObject {
         item.keyEquivalentModifierMask = chord.keyEquivalentModifierMask
     }
     func key(_ type: NSEvent.EventType, isARepeat: Bool = false) throws -> NSEvent {
-        try #require(
-            NSEvent.keyEvent(
-                with: type, location: .zero, modifierFlags: [.command, .option], timestamp: 0,
-                windowNumber: fixture.window.windowNumber, context: nil, characters: "π",
-                charactersIgnoringModifiers: "p", isARepeat: isARepeat, keyCode: 35))
+        try keyEvent(
+            "p", characters: "π", modifiers: [.command, .option], keyCode: 35, type: type,
+            isARepeat: isARepeat, windowNumber: fixture.window.windowNumber)
     }
     fixture.field.startRecording()
-    let heldReturn = try #require(
-        NSEvent.keyEvent(
-            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
-            windowNumber: fixture.window.windowNumber, context: nil, characters: "\r",
-            charactersIgnoringModifiers: "\r", isARepeat: true, keyCode: 36))
+    let heldReturn = try keyEvent(
+        "\r", keyCode: 36, isARepeat: true, windowNumber: fixture.window.windowNumber)
     app.sendEvent(heldReturn)
     #expect(fixture.recorded.isEmpty)
     #expect(fixture.field.isRecording)
