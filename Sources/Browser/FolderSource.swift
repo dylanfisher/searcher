@@ -1,3 +1,4 @@
+import Base
 import Foundation
 
 /// Visited folders as palette items, the most frecent first, then the folders open panes show
@@ -73,7 +74,7 @@ public final class FolderSource: PaletteSource {
     static func title(of location: Location, home: String) -> String {
         let path = location.folderPath
         if path == home { return "~" }
-        if path.hasPrefix(home + "/") { return "~" + path.dropFirst(home.count) }
+        if path.hasPrefix(folderPrefix(home)) { return "~" + path.dropFirst(home.count) }
         return path
     }
 }

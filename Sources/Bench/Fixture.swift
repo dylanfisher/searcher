@@ -1,3 +1,4 @@
+import Base
 import Foundation
 
 /// A generated workload folder from the W1–W3 and W8 rows of docs/performance.md, built once from
@@ -217,7 +218,7 @@ struct Fixture: Sendable, Equatable {
     /// Creates the entry: a sparse file of its size when `block` is nil, else one filled with
     /// `block` repeated.
     private static func create(_ entry: Entry, in folder: String, writing block: [UInt8]?) throws {
-        let path = folder + "/" + entry.path
+        let path = join(folder, entry.path)
         guard let size = entry.size else {
             guard mkdir(path, 0o755) == 0 else { throw failure("mkdir", path) }
             return
@@ -241,7 +242,7 @@ struct Fixture: Sendable, Equatable {
     }
 
     private static func setModified(_ entry: Entry, in folder: String) throws {
-        let path = folder + "/" + entry.path
+        let path = join(folder, entry.path)
         let time = timespec(tv_sec: Int(entry.modified), tv_nsec: 0)
         guard utimensat(AT_FDCWD, path, [time, time], 0) == 0 else {
             throw failure("utimensat", path)

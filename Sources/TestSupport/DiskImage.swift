@@ -1,3 +1,4 @@
+import Base
 import Foundation
 import Testing
 
@@ -104,11 +105,10 @@ public final class DiskImage {
         else {
             throw Failure(arguments: ["info", "-plist"], output: listing)
         }
-        guard let temporary = realpath(FileManager.default.temporaryDirectory.path, nil) else {
+        guard let temporary = resolvedPath(FileManager.default.temporaryDirectory.path) else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
-        let root = String(cString: temporary) + "/" + folderPrefix
-        free(temporary)
+        let root = join(temporary, folderPrefix)
         for image in images {
             guard let path = image["image-path"] as? String, path.hasPrefix(root),
                 path.hasSuffix("/image.dmg"),

@@ -25,7 +25,7 @@ extension BenchCase {
     /// Copies `source` into `folder` under its own name and returns the milliseconds the copy
     /// took, then flushes the copy to disk, removes it and flushes `folder` for the removal, untimed.
     static func timeCopy(_ source: String, into folder: String) async throws -> Double {
-        let destination = folder + "/" + (source as NSString).lastPathComponent
+        let destination = join(folder, lastComponent(of: source))
         return try await BlockingCallThread.run { () throws -> Double in
             let start = ContinuousClock.now
             _ = try FileCopier().copy(source, to: destination)

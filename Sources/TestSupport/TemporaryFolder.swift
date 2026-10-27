@@ -1,3 +1,4 @@
+import Base
 import Darwin
 import Foundation
 import Testing
@@ -12,11 +13,10 @@ public final class TemporaryFolder {
             .appending(path: "\(name)-\(UUID().uuidString)").path
         try FileManager.default.createDirectory(
             atPath: path, withIntermediateDirectories: false)
-        guard let resolved = realpath(path, nil) else {
+        guard let resolved = resolvedPath(path) else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
-        defer { free(resolved) }
-        url = URL(fileURLWithPath: String(cString: resolved))
+        url = URL(fileURLWithPath: resolved)
     }
 
     deinit {

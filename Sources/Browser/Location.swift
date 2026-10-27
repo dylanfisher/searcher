@@ -41,9 +41,8 @@ public enum Location: Hashable, Sendable {
     /// The folder that holds this one, or nil for `/` and for a server.
     public var parent: Location? {
         guard case .folder(let path) = self else { return nil }
-        let components = pathComponents(path)
-        guard !components.isEmpty else { return nil }
-        return Location(path: "/" + components.dropLast().joined(separator: "/"))
+        guard !pathComponents(path).isEmpty else { return nil }
+        return Location(path: parentPath(of: path))
     }
 
     /// Every folder from `/` down to this one, this one last. A server is its only ancestor.
