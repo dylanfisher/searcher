@@ -148,6 +148,9 @@ func aVolumesRowShowsAnEjectButtonOnlyWhenTheSidebarCanEjectIt(_ viewMode: ViewM
     let eject = try #require(try window.ejectButton("USB"))
     #expect(String(describing: eject.image).contains("eject.fill"))
     #expect(eject.isEnabled)
+    // VoiceOver names the volume, in the words of the menu's Eject.
+    #expect(eject.accessibilityLabel() == "Eject “USB”")
+    #expect(try window.ejectButton("main")?.accessibilityLabel() == "Eject “main”")
     let name = try #require(cell.textField)
     #expect(name.frame.maxX <= eject.frame.minX)
     if let chevron = ListingCellLayout.chevron(in: cell) {
@@ -205,6 +208,31 @@ func aVolumesEjectButtonComesAndGoesWithTheSidebarsVolumes(_ viewMode: ViewMode)
 
     #expect(try window.ejectButton("USB") != nil)
     #expect(try window.ejectButton("main") == nil)
+}
+
+/// A cell that showed the button for a volume's row and is filled again for another row, here
+/// by reversing the sort, shows none, and the volume's row, now in another cell, shows it.
+@MainActor @Test(arguments: [ViewMode.list, .column])
+func aCellFilledAgainForARowThatIsntAVolumeDropsTheEjectButton(_ viewMode: ViewMode)
+    async throws
+{
+    let window = try await VolumesWindow(viewMode: viewMode)
+    let list = try window.list
+    let usbRow = try window.row(of: "USB")
+    let cell = try list.shownNameCell(atRow: usbRow)
+    let eject = try #require(try window.ejectButton("USB"))
+
+    list.pane.setSort(.name, ascending: false)
+    await settle { (try? window.row(of: "USB")) != usbRow }
+
+    let filled = try list.shownNameCell(atRow: usbRow)
+    #expect(filled === cell)
+    // Reversed, the row holds "Backup" or the startup disk's link, neither a volume to eject.
+    let shown = try #require(filled.textField?.stringValue)
+    #expect(["Backup", "Macintosh HD"].contains(shown))
+    #expect(try list.shownEjectButton(atRow: usbRow) == nil)
+    #expect(eject.isHidden)
+    #expect(try window.ejectButton("USB")?.accessibilityLabel() == "Eject “USB”")
 }
 
 @MainActor @Test func aVolumesRowOffersEjectInItsMenuAsItsButtonDoes() async throws {

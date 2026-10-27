@@ -744,6 +744,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         let button = cell.ejectButton ?? makeEjectButton(in: cell)
         button.isHidden = false
         button.isEnabled = !ejectingMountPoints.contains(volume.mountPoint)
+        // A list has many such buttons, so each names its volume, as the menu's Eject does.
+        button.setAccessibilityLabel(WorkspaceSidebarViewController.ejectTitle(volume.name))
     }
 
     /// The sidebar's eject button, at the size the sidebar's medium rows draw it, whose symbols
