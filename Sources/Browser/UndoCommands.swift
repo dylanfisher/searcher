@@ -4,7 +4,8 @@
 /// finished change, as in Finder; a copy still running isn't one yet. Both are off without a
 /// history or a queue, with nothing to undo or redo, and while an undo or redo runs. A key
 /// press doesn't check for an entry: an operation that has just ended may not be in the
-/// history yet, and the history waits for it (docs/decisions/0072-undo.md).
+/// history yet, and the history waits for it. One that then finds nothing it can undo or redo
+/// beeps, as AppKit does for a key whose item is off (docs/decisions/0072-undo.md).
 public enum UndoCommands: CommandSet {
     public static let undo = Command(
         id: CommandID("undo.undo"), title: "Undo",
@@ -13,8 +14,8 @@ public enum UndoCommands: CommandSet {
         id: CommandID("undo.redo"), title: "Redo",
         chords: [KeyChord("z", modifiers: [.command, .shift])])
 
-    // A key runs its command whether or not it is enabled; the history does nothing while busy
-    // or with nothing to undo once it has caught up.
+    // A key runs its command whether or not it is enabled; the history does nothing while busy,
+    // and beeps with nothing to undo once it has caught up.
     public static var bindings: [CommandBinding] {
         [
             CommandBinding(
@@ -23,7 +24,7 @@ public enum UndoCommands: CommandSet {
                 run: { context in
                     guard let history = context.undoHistory, let queue = context.fileOperations
                     else { return }
-                    history.undo(with: queue)
+                    history.undo(with: queue, nothingToDo: context.beep)
                 }),
             CommandBinding(
                 redo, isEnabled: { canRedo($0) },
@@ -31,7 +32,7 @@ public enum UndoCommands: CommandSet {
                 run: { context in
                     guard let history = context.undoHistory, let queue = context.fileOperations
                     else { return }
-                    history.redo(with: queue)
+                    history.redo(with: queue, nothingToDo: context.beep)
                 }),
         ]
     }
@@ -45,15 +46,7 @@ public enum UndoCommands: CommandSet {
         }
         if deletes { return "Delete" }
         switch operation {
-        case .move:
-            // Every item that ended up in the folder, replacing or not.
-            let placed = record.changes.filter { change in
-                switch change {
-                case .moved, .created: true
-                case .trashed, .deleted, .replaced, .putBack, .uncreated: false
-                }
-            }
-            return placed.count == 1 ? "Move 1 Item" : "Move \(placed.count) Items"
+        case .move: return moveName(record)
         case .rename: return "Rename"
         case .trash: return FileCommands.moveToTrash.title
         case .copy:
@@ -68,6 +61,18 @@ public enum UndoCommands: CommandSet {
         // Never run, so its record is empty and it makes no entry.
         case .receive: return "Drop"
         }
+    }
+
+    /// A move's name, "Move 3 Items", by the items `record` holds: those a move put in the
+    /// folder, replacing or not, or those an undo of one took back out.
+    static func moveName(_ record: OperationRecord) -> String {
+        let items = record.changes.filter { change in
+            switch change {
+            case .moved, .created, .uncreated: true
+            case .trashed, .deleted, .replaced, .putBack: false
+            }
+        }
+        return items.count == 1 ? "Move 1 Item" : "Move \(items.count) Items"
     }
 
     @MainActor

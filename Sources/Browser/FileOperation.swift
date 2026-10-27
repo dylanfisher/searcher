@@ -26,37 +26,41 @@ public enum FileOperation: Equatable, Sendable {
     /// Reverses `record`'s changes, last first (`UndoStep`), after checking that every item is
     /// where the record left it; if one isn't, nothing is changed. Redo is the undo of an
     /// undo's record. `title` names it in the operations panel, as the Edit menu did.
-    /// `isRetry` says its entry was kept once after a check that found a folder missing, so
-    /// failing again drops it (`dropsUndoEntry`, docs/decisions/0072-undo.md).
+    /// `isRetry` says its entry was kept once after a failure that can clear, so failing again
+    /// drops it (`dropsUndoEntry`, docs/decisions/0072-undo.md).
     case undo(OperationRecord, title: String, isRetry: Bool)
 
     /// Whether the history drops the entry `operation`, an undo, reversed once it ended in
     /// `state`: it failed and changed nothing, and either this was the entry's second try or
-    /// the check named something other than a missing outer folder, such as a drive that isn't
-    /// mounted. Only that kind of failure can clear without the user losing the item.
+    /// a failure can't clear (`canClear`).
     public static func dropsUndoEntry(_ operation: FileOperation, after state: OperationState)
         -> Bool
     {
         guard case .undo(let record, _, let isRetry) = operation, state.phase == .failed,
             state.record.changes.isEmpty
         else { return false }
-        return isRetry || !onlyFoldersAreMissing(state.errors, undoing: record)
+        return isRetry || !canClear(state.errors, undoing: record)
     }
 
-    /// Whether every error in `errors`, from an undo of `record`, names a folder that is gone,
-    /// not an item the undo would change, copy or put somewhere: the check names the outermost
-    /// missing folder when an item's folder is gone too.
-    static func onlyFoldersAreMissing(
-        _ errors: [FileOperationError], undoing record: OperationRecord
-    )
-        -> Bool
-    {
+    /// Whether every error in `errors`, from an undo of `record`, can clear without the user
+    /// losing an item: a missing folder outside the items, as a drive that isn't mounted, which
+    /// the check names when an item's folder is gone too; a volume that went away or stopped
+    /// answering; an item in the way (`exists`); or another item where the recorded one was
+    /// (`notTheSameItem`), as after a save that replaced it. The check runs again on the next
+    /// try, so a kept entry never acts on another item.
+    static func canClear(_ errors: [FileOperationError], undoing record: OperationRecord) -> Bool {
         let items = Set(
             steps(undoing: record).flatMap { [$0.source, $0.destination].compactMap { $0 } }
                 .map(comparable))
         return !errors.isEmpty
-            && errors.allSatisfy {
-                $0.reason == .sourceGone && !items.contains(comparable($0.path))
+            && errors.allSatisfy { error in
+                switch error.reason {
+                case .exists, .notTheSameItem, .unreachable: true
+                case .sourceGone: !items.contains(comparable(error.path))
+                case .noSpace, .permissionDenied, .crossVolume, .noTrash, .invalidName,
+                    .changedDuringMove, .other:
+                    false
+                }
             }
     }
 

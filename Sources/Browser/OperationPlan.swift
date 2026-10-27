@@ -232,7 +232,9 @@ public struct OperationPlan: Equatable, Sendable {
     /// it plans no items and each such path is a failure, so nothing is changed. A copy made
     /// again only reads its source, so its identity isn't checked. A move whose two folders are
     /// on different volumes is copied, as is a copy made again, so each is pre-scanned and the
-    /// undo waits in the lane of the first such destination's volume.
+    /// undo waits in the lane of the first such destination's volume. A put back is a rename,
+    /// so one whose Trash is on another volume than its folder fails (`crossVolume`), and
+    /// nothing is changed.
     private static func undoing(
         _ steps: [FileOperation.UndoStep], identities: [String: OperationRecord.ItemIdentity],
         volumeOf: (String) throws(ListingError) -> VolumeIdentity,
@@ -248,6 +250,8 @@ public struct OperationPlan: Equatable, Sendable {
             return try inspect(path) != nil
         }
         var failures: [FileOperationError] = []
+        // The paths `gone` has named, so each is named once.
+        var named: Set<String> = []
         /// Records `path` as gone or, when its folder is gone too, the outermost folder that
         /// is, as a drive that isn't mounted: the history keeps an entry whose folder may come
         /// back, and drops one whose item left a folder that is still there.
@@ -258,8 +262,10 @@ public struct OperationPlan: Equatable, Sendable {
                 guard folder != missing, try !isTaken(folder) else { break }
                 missing = folder
             }
-            let error = FileOperationError(reason: .sourceGone, path: missing, errno: ENOENT)
-            if !failures.contains(error) { failures.append(error) }
+            if named.insert(missing).inserted {
+                failures.append(
+                    FileOperationError(reason: .sourceGone, path: missing, errno: ENOENT))
+            }
         }
         for step in steps {
             if isCancelled() { throw CancellationError() }
@@ -341,7 +347,18 @@ public struct OperationPlan: Equatable, Sendable {
                     continue
                 }
                 copied = source
-            case .putBack, .trash, .unmake, .make:
+            case .putBack(let url, let to):
+                do throws(ListingError) {
+                    if try volume(of: url.path) != volume(of: to) {
+                        failures.append(
+                            FileOperationError(reason: .crossVolume, path: url.path, errno: EXDEV))
+                        continue
+                    }
+                } catch {
+                    failures.append(failure(error))
+                    continue
+                }
+            case .trash, .unmake, .make:
                 break
             }
             if let copied {
