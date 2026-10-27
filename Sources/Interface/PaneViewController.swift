@@ -68,6 +68,9 @@ public final class PaneViewController: NSViewController {
         /// The app's mount table, for drops; nil where there is none, and the lists take no
         /// drop then.
         let mountTable: MountTable?
+        /// The sidebar's volumes, which a server's share row ejects through from its context
+        /// menu.
+        let volumes: SidebarVolumes
         /// The app's undo history, for Undo and Redo; nil where there is none.
         let undoHistory: UndoHistory?
         /// The app's Open With cache; nil where there is none, and Open With is off then.
@@ -89,6 +92,7 @@ public final class PaneViewController: NSViewController {
             columnViewController.workspaceID = windowLink?.workspace.id
             listingViewController.mountTable = windowLink?.mountTable
             columnViewController.mountTable = windowLink?.mountTable
+            listingViewController.volumes = windowLink?.volumes
         }
     }
 
@@ -601,6 +605,8 @@ public final class PaneViewController: NSViewController {
             return nil
         case .failed(let error):
             return pane.state.missingFolder.map(missingMessage) ?? error.description
+        case .notConnected:
+            return notConnectedMessage(pane.location.name)
         }
     }
 
@@ -608,6 +614,12 @@ public final class PaneViewController: NSViewController {
     /// folder was deleted or its disk ejected.
     static func missingMessage(_ path: String) -> String {
         "The folder \(path) isn't there."
+    }
+
+    /// The line over a pane at the server `name` with no share mounted
+    /// (docs/decisions/0114-server-location.md).
+    static func notConnectedMessage(_ name: String) -> String {
+        "“\(name)” isn't connected."
     }
 
     /// The spinner and note for the pane's state, or in column mode the focused column's: the
@@ -633,13 +645,16 @@ public final class PaneViewController: NSViewController {
     // MARK: Folder monitor
 
     /// Starts a monitor for the list's folder when it changes or its volume mounts again. Each
-    /// column starts its own when it shows (`ColumnViewController.startMonitor`).
+    /// column starts its own when it shows (`ColumnViewController.startMonitor`). A server has
+    /// no folder to watch: its pane lists again on the mount table's changes
+    /// (docs/decisions/0114-server-location.md).
     private func startMonitorIfNeeded() {
         guard pane.viewMode == .list,
             pane.location != monitoredLocation || pane.monitorGeneration != monitoredGeneration
         else { return }
         monitoredLocation = pane.location
         monitoredGeneration = pane.monitorGeneration
+        guard pane.location.isFolder else { return }
         monitorRequest += 1
         let request = monitorRequest
         let location = pane.location

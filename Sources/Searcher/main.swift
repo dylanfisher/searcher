@@ -17,11 +17,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// bench makes its own over a suite of its own.
     private lazy var settings = Settings(defaults: .standard)
     /// The browser windows, made on first use so a bench launch, which opens its own window,
-    /// never makes them.
-    private lazy var windows = WorkspaceWindows(
-        service: service, systemActions: systemActions, settings: settings,
-        folderSizes: folderSizes, clipboard: PasteboardFileClipboard(pasteboard: .general),
-        store: workspaceStore, cache: cache)
+    /// never makes them. They share the service's mount table, the app's one.
+    private lazy var windows: WorkspaceWindows = {
+        guard let mounts = service.mounts else {
+            preconditionFailure(
+                "the windows are made in a bench launch, whose service has no mount table")
+        }
+        return WorkspaceWindows(
+            service: service, mountTable: mounts, systemActions: systemActions,
+            settings: settings, folderSizes: folderSizes,
+            clipboard: PasteboardFileClipboard(pasteboard: .general), store: workspaceStore,
+            cache: cache)
+    }()
     /// The one Settings window, made the first time App ▸ Settings… asks for it.
     private lazy var settingsWindow = SettingsWindowController(settings: settings)
     private let bench: UIBench?
@@ -61,8 +68,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 roots: roots, log: { logger.error("\($0, privacy: .public)") })
             let cache = ListingCache(store: store)
             self.cache = cache
+            // The app's one mount table: the service lists servers from it, and the windows'
+            // drops read it (docs/decisions/0114-server-location.md).
             service = ListingService(
-                cache: cache, thumbnails: ThumbnailService(), recentListings: RecentListings())
+                cache: cache, thumbnails: ThumbnailService(), recentListings: RecentListings(),
+                mounts: MountTable())
             let sizeLogger = Logger(category: "sizes")
             let dropLogger = Logger(category: "folderSizes")
             folderSizes = FolderSizeService(

@@ -1,4 +1,5 @@
 import AppKit
+import Browser
 import UniformTypeIdentifiers
 
 /// One icon per file type, shared by every row of that type. Rows show no per-file icons; a
@@ -9,15 +10,54 @@ public final class TypeIconCache {
     /// The cache the app's listings share.
     public static let shared = TypeIconCache()
 
+    /// The CoreTypes icon a server's share rows show, Finder's for a share.
+    nonisolated static let shareIconName = "GenericSharepoint"
+
     private let makeIcon: @MainActor (UTType) -> NSImage
     private var icons: [UTType: NSImage] = [:]
+    private let readIcons: @Sendable ([String]) async -> [String: Data]
+    /// The read of the share icon, started the first time a row asks for it.
+    private var shareIconRead: Task<Void, Never>?
+    private var readShareIcon: NSImage?
+    /// What runs once the share icon's read lands, for the calls made while it ran.
+    private var shareIconWaiters: [@MainActor () -> Void] = []
 
     /// `makeIcon` is called once per type. Rows share the image it returns, so callers must not
-    /// change it.
+    /// change it. `readIcons` gives the bytes of the CoreTypes icon files named, as
+    /// `CoreTypesIcons.read` does; tests replace it.
     public init(
-        makeIcon: @escaping @MainActor (UTType) -> NSImage = { NSWorkspace.shared.icon(for: $0) }
+        makeIcon: @escaping @MainActor (UTType) -> NSImage = { NSWorkspace.shared.icon(for: $0) },
+        readIcons: @escaping @Sendable ([String]) async -> [String: Data] = CoreTypesIcons.read
     ) {
         self.makeIcon = makeIcon
+        self.readIcons = readIcons
+    }
+
+    /// The icon of a server's share row: CoreTypes' `GenericSharepoint`, read once off the main
+    /// thread as the sidebar's glyphs are (`CoreTypesIcons`), and decoded here from memory. Until
+    /// the read lands, and if the bundle lacks it, a volume's type icon stands in. The first call
+    /// starts the read; `shown` runs once it lands with the icon, for every call made while it
+    /// ran, so rows on screen can take it (docs/decisions/0114-server-location.md).
+    func shareIcon(shown: @escaping @MainActor () -> Void) -> NSImage {
+        if let readShareIcon { return readShareIcon }
+        guard shareIconRead == nil || !shareIconWaiters.isEmpty else {
+            // Read already, and the bundle has no such icon.
+            return icon(for: .volume)
+        }
+        shareIconWaiters.append(shown)
+        if shareIconRead == nil {
+            shareIconRead = Task { [readIcons] in
+                let files = await readIcons([Self.shareIconName])
+                let waiters = shareIconWaiters
+                shareIconWaiters = []
+                guard let data = files[Self.shareIconName], let image = NSImage(data: data) else {
+                    return
+                }
+                readShareIcon = image
+                for waiter in waiters { waiter() }
+            }
+        }
+        return icon(for: .volume)
     }
 
     /// The cloud with a down arrow that Finder shows by an iCloud item that isn't downloaded, made

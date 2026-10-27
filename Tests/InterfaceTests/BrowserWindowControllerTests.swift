@@ -358,16 +358,14 @@ private func shiftedBracket(_ typed: String, keyCode: UInt16) throws -> NSEvent 
 }
 
 /// A window and a tab at a server are titled by the server's name (0114-server-location.md).
-/// Nothing lists a server yet, so its pane is made with its rows and no monitor.
 @MainActor @Test func aWindowAndATabAtAServerAreTitledByItsName() async throws {
     let settings = untouchedSettings()
-    let service = ListingService(lister: StubLister(Fixture.folders))
-    let server = try #require(Server(host: "HAL9000._smb._tcp.local"))
-    let rows = await Task.detached { Listing([folder("main"), folder("music")]) }.value
+    let service = ListingService(
+        lister: StubLister(Fixture.folders),
+        mounts: StubMounts([mountedShare("main"), mountedShare("music")]).table())
     let serverPane = Pane(
-        location: .server(server), service: service, systemActions: StubSystemActions(),
-        settings: settings, sortedBy: .name, ascending: true, isFocused: true,
-        selection: Selection(), viewMode: .list, rows: rows)
+        location: .server(testServer), service: service, systemActions: StubSystemActions(),
+        settings: settings, isFocused: true)
     let folderPane = Pane(
         location: Location(path: "/root"), service: service, systemActions: StubSystemActions(),
         settings: settings)

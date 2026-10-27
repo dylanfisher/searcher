@@ -7,16 +7,31 @@ import Foundation
 /// unmount `VolumeEvents` reports. A path is placed by its text alone: the longest mount point
 /// it is at or under, compared as `FileOperation.comparable` gives them. See
 /// docs/decisions/0071-drag-and-drop.md.
+///
+/// The app makes one, which its `ListingService` and its windows share: a server's listing is
+/// built from it, so the listing and the drops read the same mounts, and each table made
+/// registers with `VolumeEvents` (docs/decisions/0114-server-location.md).
 @MainActor
 public final class MountTable {
-    /// The volumes from the last read, longest mount point first, each with its mount point in
-    /// comparable form.
-    private var volumes: [(mountPoint: String, volume: VolumeIdentity)] = []
+    /// The volumes from the last read, in the kernel's order; empty before the first read lands.
+    public private(set) var volumes: [VolumeIdentity] = []
+    /// `volumes`, longest mount point first, each with its mount point in comparable form.
+    private var byLongestMountPoint: [(mountPoint: String, volume: VolumeIdentity)] = []
     /// Whether a read has landed.
     public private(set) var isRead = false
     private let read: @Sendable () -> [VolumeIdentity]
     /// Counts reads started, so a read that lands after a newer one started is dropped.
     private var readCount = 0
+    /// Counts reads that came back, dropped ones included, so a test can tell one has landed.
+    private(set) var readsLanded = 0
+    /// The calls of `firstRead()` waiting for a read to land.
+    private var firstReadWaiters: [CheckedContinuation<Void, Never>] = []
+    private var observers: [Observer] = []
+
+    private struct Observer {
+        weak var owner: AnyObject?
+        let handler: @MainActor () -> Void
+    }
 
     /// A table of the volumes the kernel has mounted.
     public convenience init() {
@@ -35,7 +50,26 @@ public final class MountTable {
     /// mount point holds it.
     public func volume(of path: String) -> VolumeIdentity? {
         let path = FileOperation.comparable(path)
-        return volumes.first { isPath(path, atOrUnder: $0.mountPoint) }?.volume
+        return byLongestMountPoint.first { isPath(path, atOrUnder: $0.mountPoint) }?.volume
+    }
+
+    /// The server whose share holds `path`, by the path's text (`VolumeIdentity.server`); nil
+    /// before the first read lands, or when the volume holding it is no server's share.
+    public func server(holding path: String) -> Server? {
+        volume(of: path)?.server
+    }
+
+    /// Returns once a read has landed, at once if one has. The read can't hang: `getmntinfo`
+    /// with `MNT_NOWAIT` asks no volume.
+    public func firstRead() async {
+        guard !isRead else { return }
+        await withCheckedContinuation { firstReadWaiters.append($0) }
+    }
+
+    /// Runs `handler` after each read that changed `volumes`, for as long as `owner` exists.
+    public func observe(for owner: AnyObject, _ handler: @escaping @MainActor () -> Void) {
+        observers.removeAll { $0.owner == nil }
+        observers.append(Observer(owner: owner, handler: handler))
     }
 
     /// Reads the mount table again, as a volume mounted or unmounted.
@@ -45,12 +79,29 @@ public final class MountTable {
         let read = read
         Task { [weak self] in
             let volumes = await BlockingCallThread.run { read() }
+            self?.readsLanded += 1
             guard let self, self.readCount == count else { return }
-            self.volumes =
-                volumes
-                .map { (FileOperation.comparable($0.mountPoint), $0) }
-                .sorted { $0.mountPoint.utf8.count > $1.mountPoint.utf8.count }
-            self.isRead = true
+            self.land(volumes)
         }
+    }
+
+    /// Takes a read's volumes, ends the waits for the first read, and tells the observers when
+    /// the volumes changed.
+    private func land(_ read: [VolumeIdentity]) {
+        // A volume's identity leaves out whether it is browsable, which decides its server.
+        let changed =
+            read != volumes || zip(read, volumes).contains { $0.isBrowsable != $1.isBrowsable }
+        volumes = read
+        byLongestMountPoint =
+            read
+            .map { (FileOperation.comparable($0.mountPoint), $0) }
+            .sorted { $0.mountPoint.utf8.count > $1.mountPoint.utf8.count }
+        isRead = true
+        let waiters = firstReadWaiters
+        firstReadWaiters = []
+        for waiter in waiters { waiter.resume() }
+        guard changed else { return }
+        observers.removeAll { $0.owner == nil }
+        for observer in observers { observer.handler() }
     }
 }

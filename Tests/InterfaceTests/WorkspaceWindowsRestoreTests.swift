@@ -37,7 +37,8 @@ private func makeWindows(
     ])
     let windows = WorkspaceWindows(
         service: ListingService(lister: lister) { "Test Disk" },
-        systemActions: StubSystemActions(), settings: settings, folderSizes: nil,
+        mountTable: MountTable(), systemActions: StubSystemActions(), settings: settings,
+        folderSizes: nil,
         clipboard: MemoryClipboard(), store: store, cache: cache)
     windows.showsWindows = false
     windows.screens = { [screen] }
@@ -1227,7 +1228,8 @@ private func windowsOnShare(
         },
         mountedVolumes: { [share] }, cache: cache)
     let windows = WorkspaceWindows(
-        service: service, systemActions: StubSystemActions(), settings: untouchedSettings(),
+        service: service, mountTable: MountTable(), systemActions: StubSystemActions(),
+        settings: untouchedSettings(),
         folderSizes: nil, clipboard: MemoryClipboard(), store: nil, cache: cache)
     windows.showsWindows = false
     windows.screens = { [screen] }

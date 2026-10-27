@@ -38,6 +38,10 @@ public enum ListingState: Sendable {
     /// access wouldn't help.
     case denied(ListingError)
     case failed(ListingError)
+    /// The pane is at a server with no share in the mount table, so it has no rows. It lists
+    /// again when a read of the table holds one of its shares
+    /// (docs/decisions/0114-server-location.md).
+    case notConnected
 
     /// The rows to show, if any have arrived.
     public var listing: Listing? {
@@ -45,7 +49,7 @@ public enum ListingState: Sendable {
         case .partial(let listing), .loaded(let listing), .cachedRefreshing(let listing, _):
             listing
         case .slow(let kept), .offline(let kept): kept?.listing
-        case .loading, .denied, .failed: nil
+        case .loading, .denied, .failed, .notConnected: nil
         }
     }
 
@@ -55,7 +59,7 @@ public enum ListingState: Sendable {
         switch self {
         case .cachedRefreshing(_, let listedAt): listedAt
         case .slow(let kept), .offline(let kept): kept?.listedAt
-        case .loading, .partial, .loaded, .denied, .failed: nil
+        case .loading, .partial, .loaded, .denied, .failed, .notConnected: nil
         }
     }
 
@@ -77,7 +81,7 @@ public enum ListingState: Sendable {
         switch self {
         case .loaded: true
         case .slow(let kept), .offline(let kept): kept?.isComplete ?? false
-        case .loading, .partial, .cachedRefreshing, .denied, .failed: false
+        case .loading, .partial, .cachedRefreshing, .denied, .failed, .notConnected: false
         }
     }
 
@@ -88,7 +92,7 @@ public enum ListingState: Sendable {
         case .loaded, .cachedRefreshing: true
         case .slow(let kept), .offline(let kept):
             kept.map { $0.isComplete || $0.listedAt != nil } ?? false
-        case .loading, .partial, .denied, .failed: false
+        case .loading, .partial, .denied, .failed, .notConnected: false
         }
     }
 
@@ -98,7 +102,7 @@ public enum ListingState: Sendable {
     public var isAnswered: Bool {
         switch self {
         case .partial, .loaded: true
-        case .loading, .cachedRefreshing, .slow, .offline, .denied, .failed: false
+        case .loading, .cachedRefreshing, .slow, .offline, .denied, .failed, .notConnected: false
         }
     }
 
@@ -110,7 +114,7 @@ public enum ListingState: Sendable {
         case .cachedRefreshing(_, let listedAt): .cachedRefreshing(listing, listedAt: listedAt)
         case .slow(let kept?): .slow(kept.showing(listing))
         case .offline(let kept?): .offline(kept.showing(listing))
-        case .loading, .slow(nil), .offline(nil), .denied, .failed:
+        case .loading, .slow(nil), .offline(nil), .denied, .failed, .notConnected:
             preconditionFailure("\(self) has no rows to replace")
         }
     }

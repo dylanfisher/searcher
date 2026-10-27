@@ -43,6 +43,8 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// The app's mount table, for drops; nil in a window the UI bench opens, where the lists
     /// take no drop.
     let mountTable: MountTable?
+    /// The mounted volumes the sidebar lists, which a server's share row ejects through.
+    let volumes: SidebarVolumes
     /// The app's undo history, for Undo and Redo; nil in a window the UI bench opens, where
     /// those commands are off.
     let undoHistory: UndoHistory?
@@ -165,6 +167,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         self.fileOperations = fileOperations
         self.clipboard = clipboard
         self.mountTable = mountTable
+        self.volumes = volumes
         self.undoHistory = undoHistory
         self.openWith = openWith
         self.folderVisits = folderVisits
@@ -911,7 +914,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             showPalette: { [weak self] in self?.showPalette() },
             showItemPalette: { [weak self] in self?.showItemPalette() },
             fileOperations: fileOperations, clipboard: clipboard, mountTable: mountTable,
-            undoHistory: undoHistory, openWith: openWith,
+            volumes: volumes, undoHistory: undoHistory, openWith: openWith,
             didRunCommand: { [weak self] in
                 self?.onCommand?()
                 self?.showWorkspace()

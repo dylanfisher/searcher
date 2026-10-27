@@ -88,7 +88,7 @@ final class PaneStatusView: NSView {
                 preconditionFailure("a pane in \(state) has no volume name")
             }
             shown = (state, volumeName)
-        case .loading, .partial, .loaded, .cachedRefreshing, .denied, .failed:
+        case .loading, .partial, .loaded, .cachedRefreshing, .denied, .failed, .notConnected:
             shown = nil
         }
         showNote()
@@ -120,7 +120,7 @@ final class PaneStatusView: NSView {
     static func isInFlight(_ state: ListingState) -> Bool {
         switch state {
         case .loading, .partial, .cachedRefreshing, .slow: true
-        case .loaded, .offline, .denied, .failed: false
+        case .loaded, .offline, .denied, .failed, .notConnected: false
         }
     }
 

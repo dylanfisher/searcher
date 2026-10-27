@@ -37,7 +37,7 @@ struct PaneStatusText {
         case .offline(let rows):
             kept = rows
             headline = "\(volumeName) is offline."
-        case .loading, .partial, .loaded, .cachedRefreshing, .denied, .failed:
+        case .loading, .partial, .loaded, .cachedRefreshing, .denied, .failed, .notConnected:
             return nil
         }
         guard let kept else { return headline }

@@ -96,8 +96,9 @@ public final class WorkspaceWindows {
     let prompter: OperationPrompter
     /// The app's clipboard and its cut, shared by every window.
     public let clipboard: CutState
-    /// Every mounted volume, which every window's drops check.
-    let mountTable = MountTable()
+    /// Every mounted volume, which every window's drops check: the app's one table, which its
+    /// `ListingService` lists servers from (docs/decisions/0114-server-location.md).
+    let mountTable: MountTable
     /// The folders every window's panes visit, saved to the store, for the palette. The app
     /// hands it the stored history once read.
     public let folderVisits: FolderVisits
@@ -130,13 +131,19 @@ public final class WorkspaceWindows {
     private nonisolated let finishedFeed: AsyncStream<FileOperationQueue.Snapshot>.Continuation
 
     /// Windows whose workspaces and session are saved to `store`; nil saves nothing.
+    /// `mountTable` is the app's one table: the one `service` lists servers from, when it has
+    /// one, since each table made reads the mounts again on every mount event.
     public init(
-        service: ListingService, systemActions: any SystemActions, settings: Settings,
-        folderSizes: FolderSizeService?, clipboard: any FileClipboard, store: WorkspaceStore?,
-        cache: ListingCache? = nil
+        service: ListingService, mountTable: MountTable, systemActions: any SystemActions,
+        settings: Settings, folderSizes: FolderSizeService?, clipboard: any FileClipboard,
+        store: WorkspaceStore?, cache: ListingCache? = nil
     ) {
+        precondition(
+            service.mounts.map { $0 === mountTable } ?? true,
+            "the windows and their listing service have different mount tables")
         self.store = store
         self.service = service
+        self.mountTable = mountTable
         self.systemActions = systemActions
         self.settings = settings
         self.folderSizes = folderSizes
@@ -1055,8 +1062,15 @@ private final class WaitingPanes: Sendable {
         panes.removeAll { $0 === pane }
     }
 
-    /// The waiting panes' folders, for a log line.
+    /// The waiting panes' folders, for a log line. A pane at a server, which has no cached rows
+    /// to wait for but can still be waiting when the limit passes, is named by its host.
     var folders: String {
-        panes.map(\.location.folderPath).joined(separator: ", ")
+        panes.map { pane in
+            switch pane.location {
+            case .folder(let path): path
+            case .server(let server): "the server \(server.host)"
+            }
+        }
+        .joined(separator: ", ")
     }
 }

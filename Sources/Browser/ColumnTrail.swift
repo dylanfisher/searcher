@@ -632,7 +632,7 @@ public final class ColumnTrail {
         guard let version = column.selectsFirstRowAt else { return false }
         let pane = column.pane
         switch pane.state {
-        case .denied, .failed:
+        case .denied, .failed, .notConnected:
             column.selectsFirstRowAt = nil
             return false
         case .loading, .partial, .loaded, .cachedRefreshing, .slow, .offline:

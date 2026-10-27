@@ -16,6 +16,9 @@ public struct EntryCellFormatter {
     public static let noSize = "--"
     /// Before a folder's size when the walk couldn't read all of it, so the size is a lower bound.
     public static let partialPrefix = "≥ "
+    /// The Kind of a server's share row, which shows `noSize` for its Size and Date Modified:
+    /// the share's entry carries no date of its own (docs/decisions/0114-server-location.md).
+    public static let shareKind = "Volume"
 
     private let sizes: ByteCountFormatter
     private let dates: DateFormatter

@@ -78,6 +78,20 @@ enum ContextMenuBuilder {
         SystemCommands.getInfo.id: "info.circle",
     ]
 
+    /// The item a server's share row adds below `rowItems`: `Eject “music”`, titled as the
+    /// sidebar's, which sends `action` to `target` with the share's mount point as its
+    /// represented object (docs/decisions/0114-server-location.md).
+    static func ejectItem(
+        named name: String, mountPoint: String, target: AnyObject, action: Selector
+    ) -> NSMenuItem {
+        let item = NSMenuItem(
+            title: WorkspaceSidebarViewController.ejectTitle(name), action: action,
+            keyEquivalent: "")
+        item.target = target
+        item.representedObject = mountPoint
+        return item
+    }
+
     /// A menu of `items` whose commands run on `target`, which also turns each item off while its
     /// command would do nothing. Share… shares `selection`.
     static func build(

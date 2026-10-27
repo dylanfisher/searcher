@@ -44,11 +44,18 @@ public final class CutState {
     }
 
     /// The names of the cut entries in `folder`, while the cut lasts; empty otherwise. Paths
-    /// compare exactly, as the pane's names do.
+    /// compare exactly, as the pane's names do. A server's entries are its shares' mount points
+    /// in `/Volumes` (`Location.child(named:)`), so a cut of one, made in a pane at `/Volumes`,
+    /// dims its row there too.
     public func cutNames(in folder: Location) -> Set<String> {
         guard let paths = cutPaths else { return [] }
+        let parent =
+            switch folder {
+            case .folder(let path): path
+            case .server: Server.sharesFolder.folderPath
+            }
         return Set(
-            paths.lazy.filter { ($0 as NSString).deletingLastPathComponent == folder.folderPath }
+            paths.lazy.filter { ($0 as NSString).deletingLastPathComponent == parent }
                 .map { ($0 as NSString).lastPathComponent })
     }
 
