@@ -694,3 +694,90 @@ func aTrashedCursorRowHandsTheCursorToTheRowAfterItOnceItLeaves(
         try await image.detach()
     }
 }
+
+// MARK: At a server
+
+/// A tab of two panes over `fixture`'s server pane: the focused one at the server with `music`
+/// selected, and the other at `other`, listed, or at the server too without one. The context
+/// has a queue that asks nothing.
+@MainActor
+private func serverTab(_ fixture: PaneFixture, other path: String? = nil) async throws
+    -> (context: CommandContext, other: Pane, queue: FileOperationQueue)
+{
+    let tab = fixture.tab
+    let first = tab.layout.focused
+    let other = try #require(tab.split(.horizontal, in: bounds))
+    if let path {
+        other.navigate(to: Location(path: path))
+        await settle { other.state.isLoaded }
+    }
+    tab.focus(first)
+    fixture.select("music")
+    let queue = FileOperationQueue(prompts: .unexpected) { _ in }
+    let context = CommandContext(
+        pane: tab.focusedPane.commandPane, workspace: Workspace(tab: tab), tabBounds: { bounds },
+        fileOperations: queue, editName: { Issue.record("a name was edited at a server") })
+    return (context, other, queue)
+}
+
+@MainActor
+private func fileBinding(for chord: KeyChord) throws -> CommandBinding {
+    var registry = CommandRegistry()
+    for binding in FileCommands.bindings {
+        try registry.register(binding.command)
+    }
+    let command = try #require(registry.command(for: chord), "nothing is bound to \(chord)")
+    return try #require(FileCommands.bindings.first { $0.command == command })
+}
+
+/// A server has no folder to make one in, and its shares can't be trashed, duplicated, renamed
+/// or moved; nothing goes into another pane at a server. Each command is off, and its key
+/// queues nothing (0114-server-location.md).
+@MainActor @Test func atAServerTheFileCommandsAreOffAndTheirKeysDoNothing() async throws {
+    let fixture = await PaneFixture.atServer()
+    let (context, other, queue) = try await serverTab(fixture)
+    #expect(!other.location.isFolder)
+
+    for chord in [trash, newFolder, duplicate, rename, copyToOtherPane, moveToOtherPane] {
+        let binding = try fileBinding(for: chord)
+        #expect(binding.isEnabled?(context) == false, "\(chord)")
+        binding.run(context)
+    }
+
+    #expect(queue.submittedCount == 0)
+}
+
+/// A selected share can be copied into the other pane's folder, as Copy acts on it, but not
+/// moved there, as it can't be cut.
+@MainActor @Test func aShareCanBeCopiedToTheOtherPaneButNotMoved() async throws {
+    let fixture = await PaneFixture.atServer(folders: ["/dest": [file("d.txt")]])
+    let (context, other, _) = try await serverTab(fixture, other: "/dest")
+    #expect(other.location == Location(path: "/dest"))
+
+    #expect(try fileBinding(for: copyToOtherPane).isEnabled?(context) == true)
+    #expect(try fileBinding(for: moveToOtherPane).isEnabled?(context) == false)
+}
+
+/// Nothing goes from a folder into another pane at a server.
+@MainActor @Test func nothingGoesIntoAnOtherPaneAtAServer() async throws {
+    let fixture = await PaneFixture.atServer(folders: ["/root": [file("a.txt")]])
+    let tab = fixture.tab
+    let server = tab.layout.focused
+    let first = try #require(tab.split(.horizontal, in: bounds))
+    tab.focus(try #require(tab.layout.panes.first { $0 != server }))
+    first.navigate(to: Location(path: "/root"))
+    await settle { first.state.isLoaded }
+    #expect(tab.layout.otherPane == server)
+    first.select(Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+    let queue = FileOperationQueue(prompts: .unexpected) { _ in }
+    let context = CommandContext(
+        pane: first, workspace: Workspace(tab: tab), tabBounds: { bounds }, fileOperations: queue)
+
+    for chord in [copyToOtherPane, moveToOtherPane] {
+        let binding = try fileBinding(for: chord)
+        #expect(binding.isEnabled?(context) == false, "\(chord)")
+        binding.run(context)
+    }
+
+    #expect(queue.submittedCount == 0)
+}

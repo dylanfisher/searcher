@@ -135,6 +135,39 @@ private func names(in folder: String) throws -> Set<String> {
     Set(try FileManager.default.contentsOfDirectory(atPath: folder))
 }
 
+// MARK: At a server
+
+/// A server has no folder to paste into, and its shares can't be cut; Copy takes a selected
+/// share's mount point as it takes any folder (0114-server-location.md).
+@MainActor @Test func atAServerCopyIsOnAndCutAndThePastesAreOff() async throws {
+    let fixture = await PaneFixture.atServer()
+    fixture.select("music")
+    let clipboard = CutState(clipboard: MemoryClipboard())
+    clipboard.copy([URL(fileURLWithPath: "/Users/me/a.txt")])
+    let queue = FileOperationQueue(prompts: .unexpected) { _ in }
+    let context = CommandContext(
+        pane: fixture.pane, workspace: Workspace(tab: fixture.tab), fileOperations: queue,
+        clipboard: clipboard)
+    func binding(_ command: Command) throws -> CommandBinding {
+        try #require(ClipboardCommands.bindings.first { $0.command == command })
+    }
+
+    for command in [ClipboardCommands.cut, ClipboardCommands.paste, ClipboardCommands.moveHere] {
+        #expect(try binding(command).isEnabled?(context) == false, "\(command.title)")
+        try binding(command).run(context)
+    }
+    #expect(queue.submittedCount == 0)
+    #expect(clipboard.cutPaths == nil)
+    #expect(clipboard.clipboard.fileURLs() == [URL(fileURLWithPath: "/Users/me/a.txt")])
+
+    #expect(try binding(ClipboardCommands.copy).isEnabled?(context) == true)
+    try binding(ClipboardCommands.copy).run(context)
+    #expect(
+        clipboard.clipboard.fileURLs() == [
+            URL(fileURLWithPath: "/Volumes/music", isDirectory: true)
+        ])
+}
+
 // MARK: Chords
 
 @Test func eachClipboardChordInTheKeyTableResolvesToItsCommand() throws {

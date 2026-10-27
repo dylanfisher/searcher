@@ -697,6 +697,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
                 app = pane.location.child(named: listing[row].name)
             }
         }
+        // A server has no folder to drop into; a share row is one (0114-server-location.md).
+        guard folder.isFolder else { return nil }
         let pasteboard = info.draggingPasteboard
         let urls = PasteboardFileClipboard(pasteboard: pasteboard).fileURLs()
         let paths = urls.map(\.path)

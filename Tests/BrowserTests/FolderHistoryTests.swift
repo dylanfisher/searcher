@@ -39,7 +39,7 @@ private func load(
 
 @Test func frecencyIsVisitsWeightedByHowLongAgoTheLastOneWas() {
     var history = FolderHistory()
-    let projects = Location(path: "/Users/me/projects")
+    let projects = "/Users/me/projects"
     history.visit(projects, at: start)
     history.visit(projects, at: start)
 
@@ -47,7 +47,7 @@ private func load(
     #expect(history.frecency(of: projects, at: start + 2 * 3600) == 4)
     #expect(history.frecency(of: projects, at: start + 2 * 86_400) == 1)
     #expect(history.frecency(of: projects, at: start + 8 * 86_400) == 0.5)
-    #expect(history.frecency(of: Location(path: "/never"), at: start) == 0)
+    #expect(history.frecency(of: "/never", at: start) == 0)
 }
 
 @Test func recentListsTheMostFrecentFolderFirst() {
@@ -55,9 +55,9 @@ private func load(
     let old = Location(path: "/old")
     let often = Location(path: "/often")
     let once = Location(path: "/once")
-    for _ in 0..<5 { history.visit(old, at: start) }
-    for _ in 0..<3 { history.visit(often, at: start + 10 * 86_400) }
-    history.visit(once, at: start + 10 * 86_400)
+    for _ in 0..<5 { history.visit(old.folderPath, at: start) }
+    for _ in 0..<3 { history.visit(often.folderPath, at: start + 10 * 86_400) }
+    history.visit(once.folderPath, at: start + 10 * 86_400)
 
     // `old`: 5 × ¼ = 1.25; `often`: 3 × 4 = 12; `once`: 4.
     #expect(history.recent(at: start + 10 * 86_400) == [often, once, old])
@@ -66,14 +66,14 @@ private func load(
 @Test func theLeastFrecentFolderIsDroppedPastTheCap() {
     var history = FolderHistory()
     let stale = Location(path: "/stale")
-    history.visit(stale, at: start)
+    history.visit(stale.folderPath, at: start)
     let now = start + 30 * 86_400
     for index in 1..<FolderHistory.mostFolders {
-        history.visit(Location(path: "/f\(index)"), at: now)
+        history.visit("/f\(index)", at: now)
     }
     #expect(history.recent(at: now).count == FolderHistory.mostFolders)
 
-    history.visit(Location(path: "/new"), at: now)
+    history.visit("/new", at: now)
 
     let recent = history.recent(at: now)
     #expect(recent.count == FolderHistory.mostFolders)
@@ -84,8 +84,8 @@ private func load(
 @Test func historyRoundTripsThroughTheWorkspaceStoresFolder() async throws {
     let folder = try TemporaryFolder()
     var history = FolderHistory()
-    history.visit(Location(path: "/Users/me/projects"), at: start)
-    history.visit(Location(path: "/Users/me/Downloads"), at: start + 60)
+    history.visit("/Users/me/projects", at: start)
+    history.visit("/Users/me/Downloads", at: start + 60)
     let first = store(folder)
 
     await first.saveFolderHistory(history)
@@ -98,7 +98,7 @@ private func load(
 @Test func anUnsavedHistoryLoadsAsTheLatestSave() async throws {
     let folder = try TemporaryFolder()
     var history = FolderHistory()
-    history.visit(Location(path: "/a"), at: start)
+    history.visit("/a", at: start)
     let store = store(folder)
 
     await store.saveFolderHistory(history)
@@ -133,8 +133,8 @@ private func load(
 @Test func historyIsStoredAsASortedListOfFolders() async throws {
     let folder = try TemporaryFolder()
     var history = FolderHistory()
-    history.visit(Location(path: "/b"), at: Date(timeIntervalSinceReferenceDate: 10))
-    history.visit(Location(path: "/a"), at: Date(timeIntervalSinceReferenceDate: 0))
+    history.visit("/b", at: Date(timeIntervalSinceReferenceDate: 10))
+    history.visit("/a", at: Date(timeIntervalSinceReferenceDate: 0))
     let writer = store(folder)
 
     await writer.saveFolderHistory(history)
@@ -157,7 +157,7 @@ private func load(
     }
     var history = FolderHistory()
     for visit in 1...10 {
-        history.visit(Location(path: "/f\(visit)"), at: start)
+        history.visit("/f\(visit)", at: start)
         await writer.saveFolderHistory(history)
     }
 

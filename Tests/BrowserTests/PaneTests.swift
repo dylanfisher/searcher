@@ -49,6 +49,30 @@ struct PaneFixture {
         return fixture
     }
 
+    /// The server a pane `atServer` is at, `HAL9000`.
+    static let server = Server(host: "HAL9000._smb._tcp.local")!
+
+    /// A pane at `server` showing its shares `main` and `music` as folders. Nothing lists a
+    /// server yet, so the pane is made with its rows and lists nothing; it has the focus
+    /// already, so a workspace made for it doesn't list it on giving it the focus. Its lister
+    /// lists `folders`, for panes it makes or that go elsewhere.
+    static func atServer(folders: [String: [DirectoryEntry]] = [:]) async -> PaneFixture {
+        let listing = await Task.detached { Listing([folder("main"), folder("music")]) }.value
+        return PaneFixture(atServerShowing: listing, folders: folders)
+    }
+
+    private init(atServerShowing listing: Listing, folders: [String: [DirectoryEntry]]) {
+        lister = GatedLister(folders.mapValues { .batches([$0]) })
+        lister.releaseAll()
+        actions = StubSystemActions()
+        pane = Pane(
+            location: .server(Self.server), service: ListingService(lister: lister),
+            systemActions: actions, settings: untouchedSettings(), sortedBy: .name,
+            ascending: true, isFocused: true, selection: Selection(), viewMode: .list,
+            rows: listing)
+        tab = Tab(pane: pane)
+    }
+
     /// Selects `names`, with the cursor and anchor on the last.
     func select(_ names: String...) {
         pane.select(

@@ -2,9 +2,9 @@ import Base
 import Foundation
 
 /// Turns a path the user typed into a folder: `~` and `~/…` start at the home folder, a path not
-/// starting with `/` starts at the pane's folder, and `.` and `..` are taken apart by their text,
-/// with `..` at `/` staying there. It makes no file-system call, so a symbolic link in the path
-/// isn't resolved first and the result may not exist.
+/// starting with `/` starts at the pane's folder, or at `/Volumes` for a server, and `.` and `..`
+/// are taken apart by their text, with `..` at `/` staying there. It makes no file-system call,
+/// so a symbolic link in the path isn't resolved first and the result may not exist.
 public enum PathInput {
     /// The folder `text` names, or nil when it is blank. `~user` isn't expanded; it's a name like
     /// any other.
@@ -17,7 +17,13 @@ public enum PathInput {
         } else if text.hasPrefix("/") {
             absolute = text
         } else {
-            absolute = folder.folderPath + "/" + text
+            switch folder {
+            case .folder(let path):
+                absolute = path + "/" + text
+            case .server:
+                // A server's shares are its folders in /Volumes (0114-server-location.md).
+                absolute = Server.sharesFolder.folderPath + "/" + text
+            }
         }
         var components: [Substring] = []
         for component in pathComponents(absolute) {

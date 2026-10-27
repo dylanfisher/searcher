@@ -1,11 +1,11 @@
 import AppKit
 import Base
-import Browser
 import BrowserTestSupport
 import Foundation
 import TestSupport
 import Testing
 
+@testable import Browser
 @testable import Interface
 
 // MARK: Finder's table
@@ -767,6 +767,49 @@ private let readsToTimeOut = Int(
         queue: fixture.queue)
 
     #expect(try fixture.contents(of: sub) == ["photo.jpg"])
+}
+
+// MARK: Dropping at a server
+
+/// A drop at a server pane, whose rows are its shares `main` and `music`, refuses the pane's
+/// background, as a server has no folder to put the files in, and takes a share's row as any
+/// folder's, into its mount point (0114-server-location.md). Nothing lists a server yet, so the
+/// pane is made with its rows; nothing is dropped, only validated, since a share's mount point
+/// is in /Volumes.
+@MainActor @Test func aDropAtAServerIsRefusedOnTheBackgroundAndTakenOnAShare() async throws {
+    let server = try #require(Server(host: "HAL9000._smb._tcp.local"))
+    let rows = await Task.detached { Listing([folder("main"), folder("music")]) }.value
+    let pane = Pane(
+        location: .server(server), service: ListingService(), systemActions: StubSystemActions(),
+        settings: untouchedSettings(), sortedBy: .name, ascending: true, isFocused: true,
+        selection: Selection(), viewMode: .list, rows: rows)
+    let controller = PaneViewController(
+        pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
+        tableView: ListingTableView(), monitorsFolders: false)
+    controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 400)
+    let list = controller.listingViewController
+    let mounts = MountTable(read: {
+        [VolumeIdentity(device: "/dev/disk3s1", mountPoint: "/", kind: .local)]
+    })
+    await settle { mounts.isRead }
+    list.fileOperations = FileOperationQueue(prompts: .unexpected) { _ in }
+    list.mountTable = mounts
+    let pasteboard = NSPasteboard(name: NSPasteboard.Name("searcher-test-\(UUID().uuidString)"))
+    defer { pasteboard.releaseGlobally() }
+    let item = NSPasteboardItem()
+    item.setString(URL(fileURLWithPath: "/Users/someone/a.txt").absoluteString, forType: .fileURL)
+    #expect(pasteboard.writeObjects([item]))
+    let info = StubDraggingInfo(pasteboard: pasteboard, mask: noKeys)
+    func validate(row: Int, _ operation: NSTableView.DropOperation) -> NSDragOperation {
+        list.tableView(
+            list.tableView, validateDrop: info, proposedRow: row, proposedDropOperation: operation)
+    }
+    let music = try #require(rows.row(named: "music"))
+
+    #expect(validate(row: -1, .on) == [])
+    #expect(validate(row: 1, .above) == [])
+    #expect(!list.tableView(list.tableView, acceptDrop: info, row: -1, dropOperation: .on))
+    #expect(validate(row: music, .on) == .move)
 }
 
 // MARK: Dragging from the list

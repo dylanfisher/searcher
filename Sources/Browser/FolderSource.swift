@@ -33,11 +33,15 @@ public final class FolderSource: PaletteSource {
         let history = history()
         let panes = workspaces.workspaces.flatMap { workspace in
             workspace.tabs.flatMap { tab in
-                tab.layout.panes.map { id in
+                tab.layout.panes.compactMap { id -> String? in
                     guard let pane = tab.panes[id] else {
                         preconditionFailure("leaf \(id) of tab \(tab.id) has no pane")
                     }
-                    return pane.location.folderPath
+                    switch pane.location {
+                    case .folder(let path): return path
+                    // A server isn't a folder ⌘K lists (0114-server-location.md).
+                    case .server: return nil
+                    }
                 }
             }
         }
@@ -56,7 +60,7 @@ public final class FolderSource: PaletteSource {
         let items = (visited + unvisited).map { location in
             PaletteItem(
                 id: .folder(path: location.folderPath), title: Self.title(of: location, home: home),
-                frecency: history.frecency(of: location, at: now)
+                frecency: history.frecency(of: location.folderPath, at: now)
             ) { focusedPane().navigateSelectingFirstRow(to: location) }
         }
         made = (history, panes, items)

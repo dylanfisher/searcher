@@ -185,9 +185,18 @@ public actor ListingCache {
             mountedVolumes: mountedVolumes)
     }
 
-    /// The folder of every pane in `workspaces`.
+    /// The folder of every pane in `workspaces`. A pane at a server has none: a server's
+    /// listing is never cached (0114-server-location.md).
     public static func folders(of workspaces: [WorkspaceState]) -> Set<String> {
-        Set(workspaces.flatMap(\.tabs).flatMap { $0.panes.values.map(\.location.folderPath) })
+        Set(
+            workspaces.flatMap(\.tabs).flatMap { tab in
+                tab.panes.values.compactMap { pane -> String? in
+                    switch pane.location {
+                    case .folder(let path): path
+                    case .server: nil
+                    }
+                }
+            })
     }
 
     /// The volume `restore` found in the store for `path`, which the mount table didn't place:

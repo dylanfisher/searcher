@@ -73,7 +73,7 @@ private final class PaletteFixture {
 
     func visit(_ path: String, times: Int = 1, at date: Date = now) {
         for _ in 0..<times {
-            state.history.visit(Location(path: path), at: date)
+            state.history.visit(path, at: date)
         }
     }
 
@@ -133,6 +133,22 @@ private final class PaletteFixture {
     // The most frecent first; the open pane's folder, never visited, last.
     #expect(folders == ["/often", "/once", "/root"])
     #expect(fixture.palette.results.count == Palette.limit)
+}
+
+/// A pane at a server shows no folder, so the folders ⌘K lists leave it out
+/// (0114-server-location.md).
+@MainActor @Test func aPaneAtAServerIsNoFolderOfThePalette() async throws {
+    let fixture = try PaletteFixture()
+    let server = await PaneFixture.atServer()
+    fixture.list.add(Workspace(tab: server.tab))
+    let source = FolderSource(
+        history: { FolderHistory() }, workspaces: fixture.list,
+        focusedPane: { preconditionFailure("nothing is chosen") }, home: home, now: { now })
+
+    let items = EventLog<[String]>()
+    source.gather("") { items.append($0.map(\.title)) }
+
+    #expect(items.all == [["/root"]])
 }
 
 @MainActor @Test func aTypedPathListsItsParentsMatchingFolders() async throws {

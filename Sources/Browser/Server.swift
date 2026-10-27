@@ -18,9 +18,15 @@ public struct Server: Hashable, Sendable {
     /// of these forms, such as a local disk's `/dev/disk3s1`, and for a Bonjour name whose
     /// escapes don't decode.
     public init?(mountSource: String) {
-        guard let host = Self.host(inMountSource: mountSource),
-            let name = Self.name(ofHost: host)
-        else { return nil }
+        guard let host = Self.host(inMountSource: mountSource) else { return nil }
+        self.init(host: host)
+    }
+
+    /// The server at `host`, as `host` reads it: without a user, port or IPv6 brackets. A saved
+    /// session stores it so. Nil for an empty host and for a Bonjour name whose escapes don't
+    /// decode.
+    public init?(host: String) {
+        guard !host.isEmpty, let name = Self.name(ofHost: host) else { return nil }
         self.host = host
         self.name = name
     }

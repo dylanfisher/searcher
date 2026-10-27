@@ -271,6 +271,27 @@ private func folder(of count: Int, at seconds: Double) -> ListingCache.Folder {
     #expect(await cache.folder(at: "/fake/a/kept", on: share("a")) != nil)
 }
 
+/// A server's listing isn't cached, so a pane at one keeps no folder; a restored session with
+/// one keeps the other panes' folders.
+@Test func aPaneAtAServerKeepsNoFolder() throws {
+    let layout = Layout()
+    let server = try #require(Server(host: "HAL9000._smb._tcp.local"))
+    let state = { (location: Location) in
+        TabState.PaneState(
+            location: location, viewMode: .list, history: History(), selection: [], cursor: nil,
+            sortColumn: .name, sortAscending: true, columnWidths: ColumnWidths())
+    }
+    let tab = { (location: Location) in
+        TabState(layout: layout, panes: [layout.focused: state(location)])
+    }
+    let saved = WorkspaceState(
+        id: UUID(), name: nil, frame: Rect(x: 0, y: 0, width: 800, height: 600),
+        tabs: [tab(.server(server)), tab(Location(path: "/fake/a/kept"))], selectedTab: 0,
+        showsSidebar: false)
+
+    #expect(ListingCache.folders(of: [saved]) == ["/fake/a/kept"])
+}
+
 @Test func keepingNewFoldersReplacesTheOnesTheCapsLeave() async {
     let cache = ListingCache(entryCap: 4, store: nil)
     await cache.restore(folders: ["/fake/a/old"], mountedVolumes: { [] })
