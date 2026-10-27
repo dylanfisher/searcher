@@ -97,12 +97,14 @@ public final class OpenWith {
     /// How long a type's list stays after it lands before `refresh` lists the type again, so
     /// opening the menu over and over asks Launch Services at most this often.
     var refreshInterval = Duration.seconds(5)
-    /// Where a list waits out `refreshInterval`. Tests pass a clock they advance.
-    var refreshClock: any Clock<Duration> = ContinuousClock()
+    /// Where a list waits out `iconWait` and `refreshInterval`. Tests pass a clock they advance.
+    var clock: any Clock<Duration> = ContinuousClock()
 
     private struct IconWaiter {
         let keys: [[String]]
         let continuation: CheckedContinuation<Void, Never>
+        /// Ends the wait after `iconWait`; cancelled when the icons land first.
+        let timer: Task<Void, Never>
     }
 
     /// `didBuild` gets each type and how long listing and reading its apps took, off the main
@@ -205,7 +207,7 @@ public final class OpenWith {
     /// since a build starts only once a type stops resting.
     private func rest(_ type: UTType) {
         resting.insert(type)
-        let clock = refreshClock
+        let clock = clock
         let interval = refreshInterval
         Task {
             do {
@@ -233,13 +235,20 @@ public final class OpenWith {
         let keys = apps.map(\.iconKey)
         guard !keys.allSatisfy(iconsLanded.contains) else { return }
         let id = UUID()
+        let clock = clock
         let wait = iconWait
         await withCheckedContinuation { continuation in
-            iconWaiters[id] = IconWaiter(keys: keys, continuation: continuation)
-            Task {
-                try? await Task.sleep(for: wait)
+            let timer = Task {
+                do {
+                    try await clock.sleep(for: wait)
+                } catch is CancellationError {
+                    return
+                } catch {
+                    preconditionFailure("the clock failed a wait with \(error)")
+                }
                 stopWaiting(id)
             }
+            iconWaiters[id] = IconWaiter(keys: keys, continuation: continuation, timer: timer)
         }
     }
 
@@ -252,7 +261,9 @@ public final class OpenWith {
     }
 
     private func stopWaiting(_ id: UUID) {
-        iconWaiters.removeValue(forKey: id)?.continuation.resume()
+        guard let waiter = iconWaiters.removeValue(forKey: id) else { return }
+        waiter.timer.cancel()
+        waiter.continuation.resume()
     }
 
     /// Asks Launch Services for `type`'s apps and reads each app, on `queue`, off the main
