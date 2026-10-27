@@ -11,7 +11,7 @@ public enum FolderMaker {
     {
         precondition(
             !Thread.isMainThread, "FolderMaker does file-system I/O; call it off the main thread")
-        let path = folder + "/" + name
+        let path = join(folder, name)
         if FileNameRule.problem(with: name) != nil {
             throw FileOperationError(reason: .invalidName, path: path, errno: nil)
         }
