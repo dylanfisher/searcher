@@ -120,8 +120,8 @@ final class TagPillView: NSView {
     /// intrinsic width leaves out the cell's own 2 points either side, so a pill sized by it cuts
     /// the name short.
     override var fittingSize: NSSize {
-        guard let cell = label.cell else { preconditionFailure("A text field has a cell") }
-        let text = cell.cellSize
+        // A text field always has a cell.
+        let text = label.cell!.cellSize
         return NSSize(
             width: (text.width + 2 * Self.padding.width).rounded(.up),
             height: (text.height + 2 * Self.padding.height).rounded(.up))

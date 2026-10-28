@@ -5,6 +5,8 @@ extension NSColor {
     /// that color in. A dot's rim is drawn in it and a preview pill is filled with it
     /// (docs/decisions/0127-tag-colors-and-pill-widths.md).
     static func tagLabel(_ label: Int) -> NSColor {
+        // Callers pass 1...7. `FinderTags.label(of:)` yields 0 for a tag without a color, which
+        // has none to draw: a caller handles it before asking, as `TagPillView.fill` does.
         precondition(tagLabels.indices.contains(label - 1), "No tag color has label \(label)")
         return tagLabels[label - 1]
     }
@@ -13,6 +15,7 @@ extension NSColor {
     /// Finder fills them: the tag's color lightened toward white by `tagDotLightening`, in each
     /// appearance.
     static func tagLabelDot(_ label: Int) -> NSColor {
+        // Callers pass 1...7, as to `tagLabel(_:)`; a row's labels never hold 0.
         precondition(tagLabels.indices.contains(label - 1), "No tag color has label \(label)")
         return tagLabelDots[label - 1]
     }

@@ -126,20 +126,33 @@ func aTagChangeUpdatesTheRow(_ viewMode: ViewMode) async throws {
         6: [240, 110, 108], 7: [244, 169, 104], 5: [248, 216, 104], 2: [131, 208, 131],
         4: [99, 158, 249], 3: [201, 100, 226], 1: [165, 164, 169],
     ]
+    let aqua = try #require(NSAppearance(named: .aqua))
     for (label, expected) in finder {
         let dots = RowTagDotsView()
-        dots.appearance = NSAppearance(named: .aqua)
         dots.show([label])
-        let bitmap = try #require(dots.bitmapImageRepForCachingDisplay(in: dots.bounds))
-        dots.cacheDisplay(in: dots.bounds, to: bitmap)
-        let scale = CGFloat(bitmap.pixelsWide) / dots.bounds.width
+        // Drawn into a Display P3 bitmap, the space the screenshots hold, so no conversion
+        // through the windowless cache's Generic RGB clips the saturated colors.
+        let scale: CGFloat = 2
+        let bitmap = try #require(
+            NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: Int(dots.bounds.width * scale),
+                pixelsHigh: Int(dots.bounds.height * scale), bitsPerSample: 8,
+                samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                bytesPerRow: 0, bitsPerPixel: 0)?
+                .retagging(with: .displayP3))
+        bitmap.size = dots.bounds.size
+        let context = try #require(NSGraphicsContext(bitmapImageRep: bitmap))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        aqua.performAsCurrentDrawingAppearance { dots.draw(dots.bounds) }
+        NSGraphicsContext.restoreGraphicsState()
         let middle = dots.dotRect(at: 0)
-        let pixel = try #require(
-            bitmap.colorAt(x: Int(middle.midX * scale), y: Int(middle.midY * scale))?
-                .usingColorSpace(.displayP3))
-        let drawn = [pixel.redComponent, pixel.greenComponent, pixel.blueComponent].map {
-            $0 * 255
-        }
+        #expect(context.cgContext.colorSpace?.name == CGColorSpace.displayP3)
+        // The raw bytes: `colorAt` tags a device-RGB rep's pixels Generic RGB whatever space the
+        // rep was drawn in.
+        var bytes = [Int](repeating: 0, count: 4)
+        bitmap.getPixel(&bytes, atX: Int(middle.midX * scale), y: Int(middle.midY * scale))
+        let drawn = bytes.prefix(3).map { CGFloat($0) }
         #expect(zip(drawn, expected).allSatisfy { abs($0 - $1) <= 4 }, "label \(label): \(drawn)")
     }
 }
