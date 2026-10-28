@@ -115,3 +115,24 @@ private func exit(_ view: NSView) throws {
 
     #expect(commands.toggled.isEmpty)
 }
+
+/// A press takes the dot inside its circle, grown, plus a small margin, and not in the
+/// button's corners, both as the window finds the view under it and as the cell tracks it.
+@MainActor @Test func aPressTakesTheDotInItsCircleAndNotInACorner() throws {
+    let window = testWindow(size: NSSize(width: 300, height: 100))
+    let view = TagDotsView(isEnabled: { _ in true }, toggle: { _ in })
+    window.contentView?.addSubview(view)
+    let dot = try #require(view.dots.first { $0.finderTag == red })
+    let center = NSPoint(x: dot.bounds.midX, y: dot.bounds.midY)
+    let corner = NSPoint(x: dot.bounds.minX + 0.5, y: dot.bounds.minY + 0.5)
+    func event(at point: NSPoint) throws -> NSEvent {
+        try mouseEvent(.leftMouseDown, at: dot.convert(point, to: nil), in: window)
+    }
+
+    #expect(view.hitTest(dot.convert(center, to: view.superview)) === dot)
+    #expect(view.hitTest(dot.convert(corner, to: view.superview)) === view)
+    let cell = try #require(dot.cell)
+    #expect(
+        cell.hitTest(for: try event(at: center), in: dot.bounds, of: dot).contains(.contentArea))
+    #expect(cell.hitTest(for: try event(at: corner), in: dot.bounds, of: dot).isEmpty)
+}

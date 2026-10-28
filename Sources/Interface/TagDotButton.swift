@@ -18,14 +18,31 @@ final class TagDotButton: NSButton {
     static let pressedShade: CGFloat = 0.25
     static let disabledAlpha: CGFloat = 0.35
 
-    /// A cell that takes a press anywhere in the button. AppKit's own takes none on a button with
-    /// no title, image or bezel, so a click would pass the dot by.
+    /// How far outside the grown dot a press still takes it.
+    static let hitMargin: CGFloat = 2
+
+    /// Whether `point`, in a button whose bounds are `bounds`, is on the dot: inside the circle
+    /// it grows to under the mouse, or within `hitMargin` of it. The button's corners aren't.
+    static func isOnDot(_ point: NSPoint, in bounds: NSRect) -> Bool {
+        let radius = hoverDiameter / 2 + hitMargin
+        return hypot(point.x - bounds.midX, point.y - bounds.midY) <= radius
+    }
+
+    /// A cell that takes a press on the dot (`isOnDot`) and nowhere else. AppKit's own may take
+    /// none on a button with no title, image or bezel, so a click would pass the dot by.
     private final class Cell: NSButtonCell {
         override func hitTest(for event: NSEvent, in cellFrame: NSRect, of controlView: NSView)
             -> NSCell.HitResult
         {
-            [.contentArea, .trackableArea]
+            let point = controlView.convert(event.locationInWindow, from: nil)
+            return TagDotButton.isOnDot(point, in: cellFrame) ? [.contentArea, .trackableArea] : []
         }
+    }
+
+    // A press in a corner, off the dot, goes to the view behind it, the dots' row.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard Self.isOnDot(convert(point, from: superview), in: bounds) else { return nil }
+        return super.hitTest(point)
     }
 
     override class var cellClass: AnyClass? {
