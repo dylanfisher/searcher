@@ -226,6 +226,15 @@ struct ConfigText {
         guard quoted.count >= 2, quoted.last == quote else {
             throw ScanError(offset: offset, reason: "a key's string isn't closed")
         }
+        // Foundation drops a U+FEFF that starts a key, so the name it reads would differ from
+        // the bytes compared here, and a patch would add the key a second time.
+        guard
+            !quoted.indices.dropLast(2).contains(where: {
+                quoted[$0...].starts(with: byteOrderMark)
+            })
+        else {
+            throw ScanError(offset: offset, reason: "a key has a byte order mark (U+FEFF) in it")
+        }
         guard quoted.contains(backslash) else {
             return String(decoding: quoted.dropFirst().dropLast(), as: UTF8.self)
         }

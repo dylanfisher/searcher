@@ -406,6 +406,16 @@ private func changedValue(_ preference: Settings.Preference) -> Settings.Value {
     #expect(values(configLoad("\u{FEFF}{\"show-hidden\": true}")) == ["show-hidden": .bool(true)])
 }
 
+/// A U+FEFF inside a key is an error on its line: Foundation drops it from the name, so a patch
+/// would miss the key and add it a second time.
+@Test func aByteOrderMarkInAKeyIsAnError() {
+    for text in ["{\n  \"\u{FEFF}shortcuts\": {}\n}", "{\n  \"show-\u{FEFF}hidden\": true\n}"] {
+        let errors = configLoad(text).errors
+        #expect(errors.map(\.line) == [2], "\(text)")
+        #expect(errors.first?.reason.contains("U+FEFF") == true, "\(text)")
+    }
+}
+
 /// A new file reads back as the defaults, and each preference, and the shortcuts, has its
 /// comment on the lines above it, taken from where the key is declared.
 @Test func aNewFileCommentsEveryKey() {
