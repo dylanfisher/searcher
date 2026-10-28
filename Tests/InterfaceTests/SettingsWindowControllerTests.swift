@@ -420,6 +420,29 @@ private let ctrlOptCmdL = KeyChord("l", modifiers: [.control, .option, .command]
     #expect(settings.configShortcuts == fileShortcuts)
 }
 
+/// An app override that the file's change leaves doing nothing turns Reset and Reset All off,
+/// though it stays stored: a read of the file never writes the app's defaults.
+@MainActor @Test func anOverrideTheFileLeftDoingNothingTurnsResetOff() throws {
+    let defaults = temporarySuite(in: FileManager.default.temporaryDirectory.path)
+    let settings = Settings(defaults: defaults, log: unexpectedSettingsLog)
+    let (controller, _) = controller(settings)
+    let model = controller.shortcuts
+    let filter = ViewCommands.filter
+    #expect(filter.alternate == nil)
+    settings.applyConfig(ConfigParser.parse("shortcut.\(filter.id).alternate = ctrl+opt+cmd+j"))
+    model.record(.removed, for: filter.id, at: .alternate)
+    #expect(try shortcutRow(filter.id, in: model).isChanged)
+    #expect(model.canResetAll)
+    let stored = defaults.object(forKey: "shortcuts") as? [String: [String: String]]
+    #expect(stored != nil)
+
+    settings.applyConfig(.missing)
+
+    #expect(try !shortcutRow(filter.id, in: model).isChanged)
+    #expect(!model.canResetAll)
+    #expect(defaults.object(forKey: "shortcuts") as? [String: [String: String]] == stored)
+}
+
 /// Recording the file's own chord in the app clears the app's override rather than storing it.
 @MainActor @Test func recordingTheFilesChordFollowsTheFileAgain() throws {
     let settings = untouchedSettings()

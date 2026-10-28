@@ -54,6 +54,16 @@ A line that starts with the chord can't say which slot it fills, so the file fol
   override changes are compared, so an override set while the file said something else keeps
   overriding it after the file changes. Reading the stored shortcuts at launch no longer drops a
   slot equal to its default: the file isn't read yet, and that slot may be what overrides it.
+- **A file change doesn't normalize the stored overrides again.** A read of the file never
+  writes `UserDefaults`, as for preferences (0120): the file can change many times a minute
+  while it is edited, and a half-written save would otherwise rewrite, and lose, the app's
+  overrides. So "no change" has two stored forms: no entry, and an entry that the file's change
+  left equal to what the slot has without it, such as `.removed` on a slot with no default after
+  the file line that gave it a chord is deleted. That entry does nothing until the file sets the
+  slot again, when it overrides it again. Reset and Reset All are on only for an override that
+  changes a command's slots now (`Settings.shortcutOverrideChangesSlots(of:)`), so neither
+  stays on for a row that shows no change. The entry is normalized away the next time that
+  command's override is set.
 - **The Shortcuts pane.** A slot whose chord, or lack of one, is the file's says so under the
   row ("The config file sets the alternate shortcut."). A slot the app sets to other than the
   file's is listed under its row as the General pane lists a preference: "Searcher has ⌃⌥⌘L as
