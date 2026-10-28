@@ -128,7 +128,8 @@ public final class WorkspaceList {
         workspace.isActive = true
     }
 
-    /// Saves `workspace`, open in a window at `frame`: its state becomes its snapshot. An
+    /// Saves `workspace`, open in a window at `frame`: its state, without the window's own Back
+    /// and Forward, becomes its snapshot. An
     /// unsaved one takes `name`, trimmed of white space at both ends; a name that is empty, or
     /// that another saved workspace has in any case, is refused and leaves the workspace as it
     /// was, as is any name while `awaitsRestore`. A saved one keeps its name, so `name` is nil.
@@ -142,7 +143,8 @@ public final class WorkspaceList {
         } else {
             precondition(name == nil, "workspace \(workspace.id) is saved already; rename it")
         }
-        keep(workspace.state(frame: frame))
+        // Only a window goes back to what it showed before (0125).
+        keep(workspace.state(frame: frame).withHistory(WorkspaceHistory()))
     }
 
     /// Renames saved workspace `workspace` and its snapshot, which keeps the rest as saved. The

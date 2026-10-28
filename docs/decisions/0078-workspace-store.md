@@ -2,6 +2,8 @@
 
 - **Date:** 2026-10-23
 - **Status:** accepted
+- **2026-10-27:** a window's file keeps the window's Back and Forward steps; see
+  [0125](0125-workspace-open-is-a-back-step.md).
 
 ## Context
 
@@ -131,3 +133,11 @@ edge cases.
 - **An undated window file is reported.** A session rebuilt from the window files
   ([0080](0080-restore-at-launch.md)) orders them by modification date. A file whose date can't
   be read is reported as `undated` and ordered behind the others; its window is still restored.
+
+## Amendment: the window's Back and Forward (2026-10-27)
+
+`WorkspaceState` also keeps `history`, the window's own Back and Forward steps
+(`WorkspaceHistory`), each the window's tabs as `TabState`, the selected tab and whether the
+sidebar shows. The key is always written, with empty lists when there are none. A snapshot keeps
+none: Save Workspace leaves them out, and a snapshot file with any is deleted and reported as
+discarded. See [0125](0125-workspace-open-is-a-back-step.md).

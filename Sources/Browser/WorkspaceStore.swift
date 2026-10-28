@@ -214,7 +214,8 @@ public actor WorkspaceStore {
 
     /// The session, every window's workspace and every snapshot: the latest saves, written or
     /// not. A file that isn't in the one stored shape, a workspace file not named for its
-    /// workspace's ID, and a snapshot without a name are deleted and reported, and load as
+    /// workspace's ID, and a snapshot without a name or with window steps are deleted and
+    /// reported, and load as
     /// missing. In the workspaces and snapshots folders, an unfinished write left by a crash is
     /// deleted without a report, and other dot-files are left alone. The session is returned as
     /// saved, even when it names a workspace that didn't load; with no session file, or one that
@@ -228,6 +229,12 @@ public actor WorkspaceStore {
         for (id, snapshot) in snapshots where snapshot.value.name == nil {
             snapshots[id] = nil
             discard(snapshotURL(for: id), because: "it has no name, which a saved workspace has")
+        }
+        for (id, snapshot) in snapshots where !snapshot.value.history.isEmpty {
+            snapshots[id] = nil
+            discard(
+                snapshotURL(for: id),
+                because: "it has Back or Forward steps, which only a window keeps")
         }
         let loadedSnapshots = snapshots.mapValues { kept($0, at: snapshotURL(for: $0.value.id)) }
             .merging(pendingSnapshots) { _, new in new }

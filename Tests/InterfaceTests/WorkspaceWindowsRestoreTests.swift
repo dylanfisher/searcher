@@ -913,7 +913,7 @@ private func expectReopenedAsSaved(closingWith key: NSEvent) async throws {
     // As a hand edit could leave it: a closed one of the same name.
     let twin = WorkspaceState(
         id: UUID(), name: "project 1", frame: openState.frame, tabs: openState.tabs,
-        selectedTab: 0, showsSidebar: false)
+        selectedTab: 0, showsSidebar: false, history: WorkspaceHistory())
     let writer = diskStore(folder)
     await writer.saveSnapshot(twin)
     await writer.flush()
@@ -1246,7 +1246,7 @@ private func oneWindowSession(at path: String, viewMode: ViewMode = .list)
                         selection: [], cursor: nil, sortColumn: .name, sortAscending: true,
                         columnWidths: ColumnWidths())
                 ])
-        ], selectedTab: 0, showsSidebar: false)
+        ], selectedTab: 0, showsSidebar: false, history: WorkspaceHistory())
     return WorkspaceStore.Contents(
         session: SessionState(workspaces: [workspace.id], keyWindow: workspace.id),
         workspaces: [workspace.id: workspace], snapshots: [:])

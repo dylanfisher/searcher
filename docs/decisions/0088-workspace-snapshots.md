@@ -2,6 +2,9 @@
 
 - **Date:** 2026-10-24
 - **Status:** accepted
+- **2026-10-27:** going to a saved workspace that reloads its window keeps what it showed as a
+  Back step, and the edited dot ignores Back and Forward; see
+  [0125](0125-workspace-open-is-a-back-step.md).
 
 ## Context
 
@@ -117,3 +120,14 @@ at once. The key is always written, empty when nothing waits, as the one stored 
 - **Consequences.** A session that didn't load is rebuilt without the list
   ([0080](0080-restore-at-launch.md)), so a snapshot whose delete failed comes back if its
   session file is lost as well; both failures are reported.
+
+## Amendment: going back to the workspace is a Back step (2026-10-27)
+
+When going to a saved workspace rebuilds its window's tabs, what the window showed becomes a
+step of the window's own Back, and Forward returns to the workspace
+([0125](0125-workspace-open-is-a-back-step.md)). A drifted window's state is no longer lost on
+reload: Back brings it back. The rebuilt panes also start with no Back or Forward, so Back
+reaches that step at once. A move to the snapshot's frame alone, or to its column widths, is no
+step. The edited dot, and the choice between moving, resizing columns and reloading, now leave
+out Back and Forward, the window's and every pane's (`WorkspaceState.withoutHistories`). Neither
+shows in the window, and a window just reloaded has none while its snapshot keeps its panes'.

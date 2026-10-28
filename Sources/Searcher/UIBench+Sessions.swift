@@ -159,7 +159,8 @@ extension UIBench {
             states.append(
                 WorkspaceState(
                     id: UUID(), name: nil, frame: Rect(frame), tabs: tabs,
-                    selectedTab: Self.restoredTabs - 1, showsSidebar: false))
+                    selectedTab: Self.restoredTabs - 1, showsSidebar: false,
+                    history: WorkspaceHistory()))
         }
         let session = SessionState(workspaces: states.map(\.id), keyWindow: states[0].id)
         return (session, states)
@@ -222,7 +223,7 @@ extension UIBench {
                             selection: [], cursor: nil, sortColumn: .name, sortAscending: true,
                             columnWidths: ColumnWidths())
                     ])
-            ], selectedTab: 0, showsSidebar: false)
+            ], selectedTab: 0, showsSidebar: false, history: WorkspaceHistory())
         // Not synced to the disk, as in `restoreSession`.
         let writer = WorkspaceStore(
             roots: roots, report: report, write: { data, url in try data.write(to: url) })

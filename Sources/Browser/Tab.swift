@@ -27,6 +27,9 @@ public final class Tab {
     /// panes. Its workspace sets it, to save the change. Reading `state` costs work per selected
     /// row, so whoever saves reads it once changes stop, not on each one.
     var onChange: (@MainActor () -> Void)?
+    /// Runs after one of the panes records a folder it left: a navigation, which ends the
+    /// window's way forward. Its workspace sets it.
+    var onNavigate: (@MainActor () -> Void)?
     /// Set once `closePane` reported `.tab`, `removeFocusedPane` took the last pane, or `close`
     /// ran.
     public private(set) var isClosed = false

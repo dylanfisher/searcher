@@ -223,7 +223,8 @@ private func restored(
     let id = UUID()
 
     let workspace = Workspace(
-        id: id, name: "Project 1", tabs: [one, two], selectedTab: 1, showsSidebar: true)
+        id: id, name: "Project 1", tabs: [one, two], selectedTab: 1, showsSidebar: true,
+        history: WorkspaceHistory())
 
     #expect(workspace.id == id)
     #expect(workspace.name == "Project 1")

@@ -1,5 +1,5 @@
-/// Moving between folders: Open, Go to parent, Back and Forward through the pane's history, and
-/// Go to folder.
+/// Moving between folders: Open, Go to parent, Back and Forward through the pane's history and
+/// then the window's, and Go to folder.
 public enum NavigationCommands: CommandSet {
     public static let open = Command(
         id: CommandID("navigation.open"), title: "Open",
@@ -37,9 +37,22 @@ public enum NavigationCommands: CommandSet {
                 showPackageContents, isEnabled: { $0.pane.selectedPackage != nil },
                 run: { $0.pane.showPackageContents() }),
             CommandBinding(goToParent) { $0.pane.goToParent() },
-            CommandBinding(back, isEnabled: { $0.pane.canGoBack }, run: { $0.pane.goBack() }),
+            // The pane's own steps first, then the window's
+            // (docs/decisions/0125-workspace-open-is-a-back-step.md).
             CommandBinding(
-                forward, isEnabled: { $0.pane.canGoForward }, run: { $0.pane.goForward() }),
+                back,
+                isEnabled: { $0.pane.canGoBack || $0.windowWorkspace?.canStepBack == true },
+                run: { context in
+                    if context.pane.canGoBack { return context.pane.goBack() }
+                    context.windowWorkspace?.stepBack()
+                }),
+            CommandBinding(
+                forward,
+                isEnabled: { $0.pane.canGoForward || $0.windowWorkspace?.canStepForward == true },
+                run: { context in
+                    if context.pane.canGoForward { return context.pane.goForward() }
+                    context.windowWorkspace?.stepForward()
+                }),
             CommandBinding(goToFolder) { $0.askForFolder() },
         ]
     }

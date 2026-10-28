@@ -74,7 +74,7 @@ private func workspace(
     let tabs = try tabs ?? [fourPaneTab(), onePaneTab()]
     return WorkspaceState(
         id: id, name: name, frame: Rect(x: 120, y: 80.5, width: 1400, height: 900),
-        tabs: tabs, selectedTab: tabs.count - 1, showsSidebar: true)
+        tabs: tabs, selectedTab: tabs.count - 1, showsSidebar: true, history: WorkspaceHistory())
 }
 
 /// A one-pane tab at `/Users/d/Downloads`.
@@ -1109,4 +1109,24 @@ private func snapshotsFolder(_ folder: TemporaryFolder) -> URL {
     #expect(problems.all.map(\.file) == [url])
     #expect(problems.all.map(\.kind) == [.discarded])
     #expect(!FileManager.default.fileExists(atPath: url.path))
+}
+
+/// Only a window goes back to what it showed before a workspace was opened into it; a snapshot
+/// with Back or Forward steps is a file of another shape. A window's file keeps them.
+@Test func aSnapshotWithWindowStepsIsDeletedAndReportedAndAWindowKeepsThem() async throws {
+    let folder = try TemporaryFolder("WorkspaceStoreTests")
+    let step = WorkspaceHistory.Step(tabs: [onePaneTab()], selectedTab: 0, showsSidebar: false)
+    let stepped = try workspace().withHistory(WorkspaceHistory(back: [step], forward: [step]))
+    let writer = store(folder)
+    await writer.saveSnapshot(stepped)
+    await writer.save(stepped)
+    await writer.flush()
+
+    let problems = EventLog<StoreProblem>()
+    let loaded = await store(folder, problems: problems).load()
+    let url = snapshotsFolder(folder).appending(path: "\(stepped.id.uuidString).json")
+    #expect(loaded.snapshots.isEmpty)
+    #expect(loaded.workspaces[stepped.id] == stepped)
+    #expect(problems.all.map(\.file) == [url])
+    #expect(problems.all.map(\.kind) == [.discarded])
 }
