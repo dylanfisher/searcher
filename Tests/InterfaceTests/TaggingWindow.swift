@@ -37,13 +37,17 @@ struct TaggingWindow {
     let controller: BrowserWindowController
     let paneController: PaneViewController
 
-    /// A window at a folder holding `files`, each with its tags, in `viewMode`. With
-    /// `monitorsFolders`, the folder's FSEvents patch its rows.
+    /// A window at a folder holding `files`, each with its tags, and the empty folders
+    /// `folders`, in `viewMode`. With `monitorsFolders`, the folder's FSEvents patch its rows.
     init(
-        _ files: [(name: String, tags: [String])], viewMode: ViewMode = .list,
-        monitorsFolders: Bool = false
+        _ files: [(name: String, tags: [String])], folders: [String] = [],
+        viewMode: ViewMode = .list, monitorsFolders: Bool = false
     ) async throws {
         folder = try TemporaryFolder("TaggingWindow")
+        for name in folders {
+            try FileManager.default.createDirectory(
+                at: folder.url.appending(path: name), withIntermediateDirectories: false)
+        }
         for file in files {
             let path = folder.url.appending(path: file.name).path
             try Data(file.name.utf8).write(to: URL(fileURLWithPath: path))
@@ -126,6 +130,17 @@ struct TaggingWindow {
         await settle { dots.hasTags }
         dots.validate()
         return dots
+    }
+
+    /// The Name cell of `name`'s row.
+    func nameCell(of name: String) throws -> ListingNameCellView {
+        let cell = try list.shownNameCell(atRow: try row(of: name))
+        return try #require(cell as? ListingNameCellView)
+    }
+
+    /// The tag dots `name`'s row shows, nil when it shows none.
+    func rowDots(of name: String) throws -> RowTagDotsView? {
+        try nameCell(of: name).tagDots.flatMap { $0.isHidden ? nil : $0 }
     }
 
     func dot(_ name: String, in dots: TagDotsView) throws -> TagDotButton {
