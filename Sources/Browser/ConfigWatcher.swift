@@ -63,6 +63,18 @@ public actor ConfigWatcher {
         feed.finish()
     }
 
+    /// Sends `errors`, found with the file outside a read, as Open Config File finds a file it
+    /// can't make, and logs them. They count as the last read, so the next read, which differs
+    /// from them, is sent and clears them.
+    public func report(_ errors: [ConfigError]) {
+        let load = ConfigLoad.failed(errors)
+        for error in errors {
+            log("the config file \(file.path) has a problem: \(error)")
+        }
+        last = load
+        feed.yield(load)
+    }
+
     /// Reads the file again, and sends the read when it differs from the last.
     func reload() {
         let load = read()

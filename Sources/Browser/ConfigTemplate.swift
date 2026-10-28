@@ -34,7 +34,12 @@ public enum ConfigTemplate {
     /// `url` after the check is kept. Call it off the main thread.
     static func create(at url: URL) throws {
         let files = FileManager.default
-        if files.fileExists(atPath: url.path) { return }
+        var isFolder: ObjCBool = false
+        if files.fileExists(atPath: url.path, isDirectory: &isFolder) {
+            // An editor asked to open a folder opens nothing of use.
+            if isFolder.boolValue { throw Folder() }
+            return
+        }
         // `fileExists` follows a link, so a link to a missing file reads as no file; the
         // create-only write would then fail on the link and the open would open nothing.
         if let target = try? files.destinationOfSymbolicLink(atPath: url.path) {
@@ -47,6 +52,11 @@ public enum ConfigTemplate {
         } catch POSIXError.EEXIST {
             // Made since the check, by the user: that file is the one to open.
         }
+    }
+
+    /// A folder at the config file's path.
+    struct Folder: LocalizedError {
+        var errorDescription: String? { "it is a folder" }
     }
 
     /// A symbolic link at the config file's path to a file that isn't there.
