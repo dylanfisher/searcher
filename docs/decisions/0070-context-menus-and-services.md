@@ -108,3 +108,9 @@ While the setting is on, each F-key is its command's default alternate, which no
 has otherwise; the user's own alternate replaces it, and removing it is stored
 ([0106](0106-primary-and-alternate-shortcuts.md)). `PaneViewController.registry(for:)` makes
 the registry again only when the setting or the shortcuts change, not per key.
+
+## Amendment: tag dots (2026-10-27, TG.1)
+
+The row menu has Finder's tag dots after Share…, an item with a view of its own
+(`ContextMenuBuilder.Item.tags`), and the File menu ends with a Tags submenu
+([0121](0121-tag-commands.md)).

@@ -151,6 +151,12 @@ public actor FileOperationQueue {
         var sourceHolding: @Sendable (String, [String]) throws(FileOperationError) -> String?
         /// Writes a line to the log, for what goes wrong without failing an operation.
         var log: @Sendable (String) -> Void
+        /// The Finder tags of the item at a path.
+        var readTags: @Sendable (String) throws(FileOperationError) -> [String] =
+            FinderTags.names(at:)
+        /// Gives the item at the path given second the Finder tags given first.
+        var writeTags: @Sendable ([String], String) throws(FileOperationError) -> Void =
+            FinderTags.set(_:at:)
 
         static let real = FileSystem(
             volumeOf: VolumeIdentity.init(path:),
@@ -670,7 +676,8 @@ public actor FileOperationQueue {
                     for: operation, volumeOf: fileSystem.volumeOf,
                     isCaseSensitive: fileSystem.isCaseSensitive, measure: fileSystem.measure,
                     inspect: fileSystem.inspect, identify: fileSystem.makeIdentifier(),
-                    sourceHolding: fileSystem.sourceHolding, isCancelled: { control.isCancelled },
+                    sourceHolding: fileSystem.sourceHolding, readTags: fileSystem.readTags,
+                    isCancelled: { control.isCancelled },
                     // Known to copy before its pre-scan, which can take minutes.
                     copies: {
                         intake.settle(id)
@@ -736,7 +743,9 @@ public actor FileOperationQueue {
             switch entry.operation {
             case .copy: .copy
             case .move: .move
-            case .trash, .rename, .newFolder, .duplicate, .deleteImmediately, .receive, .undo: nil
+            case .trash, .rename, .newFolder, .duplicate, .deleteImmediately, .receive, .undo,
+                .toggleTag:
+                nil
             }
         var forAll: ConflictResolution.Choice?
         for (number, index) in asked.enumerated() {
@@ -857,10 +866,12 @@ public actor FileOperationQueue {
             // An undo plans one item per step, or none.
             let undoStep = undoSteps.isEmpty ? nil : undoSteps[index]
             let isFromDrop = isInDropFolder(item.source)
+            let addsTag = plan.addsTag
             var (outcome, identities) = await BlockingCallThread.run {
                 let outcome = Self.perform(
                     item, of: operation, choice: choice, deletesWithoutTrash: deletesWithoutTrash,
-                    undoStep: undoStep, isFromDrop: isFromDrop, fileSystem: fileSystem,
+                    undoStep: undoStep, isFromDrop: isFromDrop, addsTag: addsTag,
+                    fileSystem: fileSystem,
                     identify: identify, liveFolders: liveFolders, copier: copier,
                     control: control
                 ) { progress in
@@ -1218,10 +1229,12 @@ public actor FileOperationQueue {
     /// delete what would go to a Trash the volume doesn't have. `undoStep` is the step of an
     /// undo the item runs. `isFromDrop` says the item is a file a drop promised, in the queue's
     /// drop folder: a move records it as made, since that folder is removed once the drop ends.
+    /// `addsTag` says a tag toggle adds its tag (`OperationPlan.addsTag`).
     private static func perform(
         _ item: OperationPlan.Item, of operation: FileOperation,
         choice: ConflictResolution.Choice?, deletesWithoutTrash: Bool,
-        undoStep: FileOperation.UndoStep?, isFromDrop: Bool, fileSystem: FileSystem,
+        undoStep: FileOperation.UndoStep?, isFromDrop: Bool, addsTag: Bool,
+        fileSystem: FileSystem,
         identify: Identifier, liveFolders: LiveFolders, copier: any Copier, control: Control,
         progress: @escaping (CopyProgress) -> Void
     ) -> ItemOutcome {
@@ -1394,6 +1407,17 @@ public actor FileOperationQueue {
                 let folder = try fileSystem.makeUntitledFolder(source)
                 return .done(
                     [.created(folder, from: .newFolder)], copied: CopyProgress(bytes: 0, files: 0))
+            case .toggleTag(let tag, _):
+                // Read again as it runs, so a tag another app gave the item since the plan read
+                // it stays.
+                let tags = try fileSystem.readTags(source)
+                let changed =
+                    addsTag ? (tags.contains(tag) ? tags : tags + [tag]) : tags.filter { $0 != tag }
+                // An item that has the tag already, or lacks it, is left alone and isn't
+                // recorded, so an undo never touches it.
+                guard changed != tags else { return .done([], copied: none) }
+                try fileSystem.writeTags(changed, source)
+                return .done([.tagged(source, from: tags, to: changed)], copied: none)
             case .receive:
                 preconditionFailure("\(operation) is reported, never run")
             case .undo:
@@ -1420,6 +1444,13 @@ public actor FileOperationQueue {
                 case .putBack(let url, let path):
                     try fileSystem.putBack(url, path)
                     return .done([.putBack(from: url, to: path)], copied: none)
+                case .retag(let path, let from, let to):
+                    // Checked again, since another app may have changed them since the check.
+                    guard try fileSystem.readTags(path) == from else {
+                        throw FileOperationError(reason: .tagsChanged, path: path, errno: nil)
+                    }
+                    try fileSystem.writeTags(to, path)
+                    return .done([.tagged(path, from: from, to: to)], copied: none)
                 case .move(let from, let to):
                     guard item.crossesVolumes else {
                         try fileSystem.move(from, to)
@@ -1447,7 +1478,7 @@ public actor FileOperationQueue {
         switch error.reason {
         case .noSpace, .unreachable: true
         case .permissionDenied, .sourceGone, .exists, .crossVolume, .noTrash, .invalidName,
-            .notTheSameItem, .changedDuringMove, .other:
+            .notTheSameItem, .tagsChanged, .changedDuringMove, .other:
             false
         }
     }
@@ -1508,7 +1539,9 @@ public actor FileOperationQueue {
     private static func paths(of operation: FileOperation) -> [String] {
         switch operation {
         case .copy(let sources, let folder), .move(let sources, let folder): sources + [folder]
-        case .trash(let paths), .duplicate(let paths), .deleteImmediately(let paths): paths
+        case .trash(let paths), .duplicate(let paths), .deleteImmediately(let paths),
+            .toggleTag(_, let paths):
+            paths
         case .rename(let path, _): [path]
         case .newFolder(let folder), .receive(_, _, let folder): [folder]
         case .undo: operation.changes + operation.reads
@@ -1653,7 +1686,8 @@ public actor FileOperationQueue {
                 open[id] =
                     switch operation {
                     case .copy, .duplicate: true
-                    case .move, .trash, .rename, .newFolder, .deleteImmediately, .receive, .undo:
+                    case .move, .trash, .rename, .newFolder, .deleteImmediately, .receive, .undo,
+                        .toggleTag:
                         false
                     }
                 waiting.append(

@@ -41,6 +41,20 @@ import Testing
         #expect(log.wait { sawEvent($0, file.path, .removed) })
     }
 
+    /// A Finder tag is an extended attribute; its change names the file as modified, which is
+    /// how a pane learns of a tag change (docs/decisions/0121-tag-commands.md).
+    @Test func aTagChangeNamesTheFileAsModified() throws {
+        let folder = try TemporaryFolder("FileEventStreamTests")
+        let file = folder.url.appending(path: "tagged")
+        try Data("x".utf8).write(to: file)
+        let (stream, log) = try start(folder)
+        defer { stream.stop() }
+
+        try FinderTags.set(["Red"], at: file.path)
+
+        #expect(log.wait { sawEvent($0, file.path, .modified) })
+    }
+
     @Test func renameNamesBothFiles() throws {
         let folder = try TemporaryFolder("FileEventStreamTests")
         let old = folder.url.appending(path: "old")

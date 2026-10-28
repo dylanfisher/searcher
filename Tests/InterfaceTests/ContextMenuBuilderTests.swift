@@ -73,10 +73,11 @@ private func selectedNames(_ pane: Pane) -> Set<String> {
         ContextMenuBuilder.rowItems, registry: registry, target: table, selection: [])
 
     #expect(commandIDs(menu) == ids(ContextMenuBuilder.rowItems))
-    // Open With and Share… run no command; OpenWithMenuTests and the Share… test cover them.
+    // Open With, Share… and the tag dots run no command of their own; OpenWithMenuTests, the
+    // Share… test and TagDotButtonTests cover them.
     for item in menu.items
     where !item.isSeparatorItem && item.title != OpenWithMenu.title
-        && !(item.representedObject is NSSharingServicePicker)
+        && !(item.representedObject is NSSharingServicePicker) && !(item.view is TagDotsView)
     {
         let id = try #require(item.representedObject as? CommandID)
         let command = try #require(registry.command(for: id))

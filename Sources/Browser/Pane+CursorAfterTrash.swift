@@ -33,7 +33,7 @@ extension Pane {
         let removedCursor = state.record.changes.contains { change in
             switch change {
             case .trashed(let path, _), .deleted(let path): path == cursorPath
-            case .created, .moved, .replaced, .putBack, .uncreated: false
+            case .created, .moved, .replaced, .putBack, .uncreated, .tagged: false
             }
         }
         if state.phase != .done || !removedCursor {
