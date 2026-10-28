@@ -71,3 +71,8 @@ is no Settings window yet (M5b.8), and every command has a menu item
 shown and `.DS_Store` hidden, a sort by name walks the entries to drop it rather than taking the
 name order as it is, an O(n) pass on the sort queue. Changing the system accent color doesn't
 recolor a focus ring already drawn until the appearance changes or the ring is drawn again.
+
+## Amendment: the config file (2026-10-27)
+
+`appearance`, `hide-ds-store` and `columns-start-at-home` can be set in the config file
+([0120](0120-config-format.md)). A value the app stored wins over the file's.

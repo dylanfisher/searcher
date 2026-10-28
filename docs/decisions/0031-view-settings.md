@@ -119,3 +119,12 @@ another shape removes the key. An entry for an unknown command ID removes only t
 Recording a chord checks every chord `KeyChord.candidates(for:)` gives the key press, so both
 AppKit spellings of a shifted punctuation key count, and stores the last, the key's own
 character.
+
+## Amendment: the config file (2026-10-27)
+
+The config file sets these preferences too ([0120](0120-config-format.md)). Each reads as the
+value the app stored, then the file's, then its default, and the defaults are declared once, in
+`Settings.preferences`, with each key's name in the file. A toggle still writes only
+`UserDefaults`, and still only when it changes what the preference reads as. A stored value of
+another shape is still removed and logged; the shapes are the same checks the file's values
+pass.

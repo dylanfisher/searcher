@@ -517,3 +517,158 @@ private let showPalette = WindowCommands.showPalette.id
 
     #expect(calls == 2)
 }
+
+// MARK: Config file
+
+@MainActor @Test func aFileSettingFoldersFirstAndHiddenFilesGivesBoth() {
+    let settings = untouchedSettings()
+
+    settings.applyConfig(ConfigParser.parse("folders-first = true\nshow-hidden = true\n"))
+
+    #expect(settings.foldersFirst)
+    #expect(settings.showHidden)
+    #expect(settings.configErrors.isEmpty)
+}
+
+/// A file with an error isn't applied: the values from before stay, the defaults at launch, and
+/// the errors are kept for the banner until a good file loads.
+@MainActor @Test func aFileWithAnErrorIsNotApplied() {
+    let settings = untouchedSettings()
+
+    settings.applyConfig(ConfigParser.parse("show-hidden = true\nfolders-first = yes"))
+    #expect(!settings.showHidden)
+    #expect(!settings.foldersFirst)
+    #expect(settings.configErrors.map(\.line) == [2])
+
+    settings.applyConfig(ConfigParser.parse("show-hidden = true"))
+    settings.applyConfig(ConfigParser.parse("show-hidden = false\ncolumn-width = 1"))
+    #expect(settings.showHidden)
+    #expect(settings.configErrors.map(\.line) == [2])
+
+    settings.applyConfig(ConfigParser.parse("show-hidden = false"))
+    #expect(!settings.showHidden)
+    #expect(settings.configErrors.isEmpty)
+}
+
+/// No file, as after it is deleted, gives every default back.
+@MainActor @Test func noFileMeansEveryDefault() {
+    let settings = untouchedSettings()
+    settings.applyConfig(
+        ConfigParser.parse(
+            "show-hidden = true\ncolumn-width = 400\nappearance = dark\nhide-ds-store = false"))
+    #expect(settings.columnWidth == 400)
+
+    settings.applyConfig(.missing)
+
+    #expect(!settings.showHidden)
+    #expect(settings.columnWidth == Settings.defaultColumnWidth)
+    #expect(settings.appearance == .auto)
+    #expect(settings.hideDSStore)
+    #expect(settings.configErrors.isEmpty)
+}
+
+/// A value the app sets is kept in its defaults over the file's, through a relaunch that reads
+/// the same file, and the file isn't touched.
+@MainActor @Test func aToggleInTheAppOverridesTheFileAndSurvivesARelaunch() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config")
+    let bytes = Data("folders-first = false\n".utf8)
+    try bytes.write(to: file)
+    let name = folder.url.appending(path: "preferences").path
+    let first = Settings(
+        defaults: try #require(UserDefaults(suiteName: name)), configFile: file,
+        log: unexpectedSettingsLog)
+    await first.follow(ConfigWatcher(file: file, log: { _ in }, watch: { _, _ in {} }))
+    #expect(!first.foldersFirst)
+
+    first.foldersFirst = true
+    #expect(first.foldersFirst)
+
+    let relaunched = Settings(
+        defaults: try #require(UserDefaults(suiteName: name)), configFile: file,
+        log: unexpectedSettingsLog)
+    await relaunched.follow(ConfigWatcher(file: file, log: { _ in }, watch: { _, _ in {} }))
+    #expect(relaunched.foldersFirst)
+    #expect(try Data(contentsOf: file) == bytes)
+}
+
+/// The file's value is what an app value overrides, so only a key both set, to different
+/// values, is listed; Use Config File Value removes the app's and gives the file's.
+@MainActor @Test func anOverrideOfADifferentFileValueIsListedAndCanBeCleared() throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let defaults = temporarySuite(in: folder.url.path)
+    let settings = Settings(defaults: defaults, log: unexpectedSettingsLog)
+    settings.applyConfig(ConfigParser.parse("show-hidden = true\nfolders-first = true"))
+    settings.showHidden = false
+    settings.foldersFirst = false
+    settings.foldersFirst = true
+    settings.folderSizes = true
+    var calls = 0
+    settings.observe(for: settings) { calls += 1 }
+
+    let overrides = settings.configOverrides
+    #expect(overrides.map(\.name) == ["show-hidden"])
+    #expect(overrides.first?.appValue == .bool(false))
+    #expect(overrides.first?.fileValue == .bool(true))
+
+    settings.useConfigValue(for: try #require(overrides.first))
+
+    #expect(settings.showHidden)
+    #expect(defaults.object(forKey: Settings.Key.showHidden.rawValue) == nil)
+    #expect(settings.configOverrides.isEmpty)
+    #expect(calls == 1)
+}
+
+/// Observers hear of a load that changes a value or the errors, and not of one that changes
+/// nothing.
+@MainActor @Test func aLoadNotifiesObserversOnlyOfAChange() {
+    let settings = untouchedSettings()
+    var calls = 0
+    settings.observe(for: settings) { calls += 1 }
+
+    settings.applyConfig(ConfigParser.parse("show-hidden = true"))
+    settings.applyConfig(ConfigParser.parse("show-hidden = true # again"))
+    #expect(calls == 1)
+    settings.applyConfig(ConfigParser.parse("show-hidden = maybe"))
+    #expect(calls == 2)
+    settings.applyConfig(ConfigParser.parse("show-hidden = maybe"))
+    #expect(calls == 2)
+    settings.applyConfig(.missing)
+    #expect(calls == 3)
+}
+
+/// Setting in the app the value the file has removes the app's value rather than storing it, so
+/// the preference follows the file again and no override is left behind to outlast it.
+@MainActor @Test func settingTheFilesValueInTheAppFollowsTheFileAgain() throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let defaults = temporarySuite(in: folder.url.path)
+    let settings = Settings(defaults: defaults, log: unexpectedSettingsLog)
+    settings.applyConfig(ConfigParser.parse("folders-first = true"))
+    settings.foldersFirst = false
+    var calls = 0
+    settings.observe(for: settings) { calls += 1 }
+
+    settings.foldersFirst = true
+
+    #expect(settings.foldersFirst)
+    #expect(defaults.object(forKey: Settings.Key.foldersFirst.rawValue) == nil)
+    #expect(calls == 1)
+    settings.applyConfig(ConfigParser.parse("folders-first = false"))
+    #expect(!settings.foldersFirst)
+}
+
+/// Each preference is declared once: one file name and one stored key each. Only preferences a
+/// user sets are in the file; state the app keeps by itself is not.
+@MainActor @Test func eachPreferenceIsDeclaredOnce() {
+    let names = Settings.preferences.map(\.name)
+    let keys = Settings.preferences.map(\.key)
+    #expect(Set(names).count == names.count)
+    #expect(Set(keys).count == keys.count)
+    #expect(
+        Set(keys) == [
+            .showHidden, .hideDSStore, .columnsStartAtHome, .foldersFirst, .folderSizes,
+            .terminalBundleID, .commanderFKeys, .hideEmptyOperationsPanel, .columnWidth,
+            .appearance, .showsFavoritesInSidebar, .showsLocationsInSidebar,
+            .showsWorkspacesInSidebar,
+        ])
+}

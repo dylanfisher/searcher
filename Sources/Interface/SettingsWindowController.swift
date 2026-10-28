@@ -55,16 +55,20 @@ public final class SettingsWindowController: NSWindowController, NSToolbarDelega
 
     /// The Shortcuts pane's size.
     nonisolated static let size = NSSize(width: 640, height: 560)
-    nonisolated static let generalSize = NSSize(width: 520, height: 160)
+    /// The General pane's size, with room for the config file's section and a few overrides.
+    nonisolated static let generalSize = NSSize(width: 520, height: 320)
 
     /// A window over `settings`, which the panes read and write, with Searcher's own login item.
-    public convenience init(settings: Browser.Settings) {
-        self.init(settings: settings, loginItem: MainAppLoginItem())
+    /// The General pane opens the config file through `systemActions`.
+    public convenience init(settings: Browser.Settings, systemActions: any SystemActions) {
+        self.init(settings: settings, loginItem: MainAppLoginItem(), systemActions: systemActions)
     }
 
-    /// A window over `settings` and `loginItem`; tests pass a stub login item.
-    init(settings: Browser.Settings, loginItem: any LoginItem) {
-        general = GeneralSettings(loginItem: loginItem)
+    /// A window over `settings` and `loginItem`; tests pass a stub login item and system
+    /// actions.
+    init(settings: Browser.Settings, loginItem: any LoginItem, systemActions: any SystemActions) {
+        general = GeneralSettings(
+            loginItem: loginItem, settings: settings, systemActions: systemActions)
         shortcuts = ShortcutsSettings(settings: settings)
         let window = SettingsWindow(
             contentRect: NSRect(origin: .zero, size: Pane.general.size),
