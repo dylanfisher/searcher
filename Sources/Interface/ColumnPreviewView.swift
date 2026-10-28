@@ -11,7 +11,8 @@ import Browser
 /// thumbnail is scaled, as Finder's, to the width inside the insets, its edges on the fields',
 /// or down from that to keep the fields below it in view; a thumbnail is the image alone, with
 /// Finder's small rounded corners and no shadow. The rows are drawn as Finder's: title left, value right, a rule
-/// under each. The name, the kind line, the values and the tags can be selected, not edited.
+/// under each; the tags are pills in their colors. The name, the kind line and the values can be
+/// selected, not edited.
 /// Built once and refilled for each file (0090-preview-column.md, 0095-preview-metadata.md,
 /// 0102-thumbnails.md).
 ///
@@ -29,8 +30,6 @@ final class ColumnPreviewView: NSView {
     /// A date that was read and isn't there, or a read that failed, as Finder shows an unknown
     /// value.
     static let noDate = "--"
-    /// Between two tags' names.
-    static let tagSeparator = ", "
     /// The name's type, as Finder's preview sets it: bold, larger than the rest.
     static let nameFont = NSFont.boldSystemFont(ofSize: 15)
     /// The section headers', Information and Tags.
@@ -61,8 +60,9 @@ final class ColumnPreviewView: NSView {
     let createdField = ColumnPreviewView.value()
     let modifiedField = ColumnPreviewView.value()
     let lastOpenedField = ColumnPreviewView.value()
-    /// The tags' names; hidden, with its title, when the file has none or they aren't read.
-    let tagsField = NSTextField(wrappingLabelWithString: "")
+    /// The tags, each a pill in its color; hidden, with its title, when the file has none or
+    /// they aren't read.
+    let tagPills = TagPillsView()
     /// The Information rows, top to bottom: Created, Modified and Last opened, each its
     /// title left, its value right and a rule below it, as Finder draws them.
     let rows: [InformationRow]
@@ -72,9 +72,10 @@ final class ColumnPreviewView: NSView {
     /// Shift-Tab pass nil, ↑ and ↓ their key press, which the column then takes as its own.
     var returnKeys: @MainActor (NSEvent?) -> Void = { _ in }
 
-    /// The fields whose text can be selected: the name, the kind line, the values and the tags.
+    /// The fields whose text can be selected: the name, the kind line and the values. The tags'
+    /// pills aren't text, as Finder's aren't.
     var selectableFields: [NSTextField] {
-        [nameField, summaryField] + rows.map(\.value) + [tagsField]
+        [nameField, summaryField] + rows.map(\.value)
     }
 
     /// Whether one of the preview's fields has the keys, through the window's field editor.
@@ -151,9 +152,9 @@ final class ColumnPreviewView: NSView {
             lastOpenedField.stringValue = Self.noDate
             tags = []
         }
-        tagsField.stringValue = tags.joined(separator: Self.tagSeparator)
+        tagPills.show(tags)
         tagsTitleField.isHidden = tags.isEmpty
-        tagsField.isHidden = tags.isEmpty
+        tagPills.isHidden = tags.isEmpty
         setAccessibilityChildren(readingOrder())
         setAccessibilityLabel(entry.name)
         sizeImage()
@@ -164,9 +165,10 @@ final class ColumnPreviewView: NSView {
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         let wrapWidth = max(newSize.width - 2 * Self.inset, 0)
-        for field in [nameField, tagsField] where field.preferredMaxLayoutWidth != wrapWidth {
-            field.preferredMaxLayoutWidth = wrapWidth
+        if nameField.preferredMaxLayoutWidth != wrapWidth {
+            nameField.preferredMaxLayoutWidth = wrapWidth
         }
+        tagPills.wrapWidth = wrapWidth
         for row in rows { row.wrapValue(at: wrapWidth) }
         sizeImage()
     }
@@ -220,17 +222,17 @@ final class ColumnPreviewView: NSView {
         for header in [informationField, tagsTitleField] {
             header.font = Self.headerFont
         }
-        tagsField.font = Self.detailFont
         // Finder's preview text can be selected and copied. A press on it takes the keys into
         // the text, which focuses the pane holding it; a press on the preview's empty space
         // gives the focused column the keys back (0090-preview-column.md).
-        for field in [nameField, summaryField, tagsField] {
+        for field in [nameField, summaryField] {
             field.isSelectable = true
             field.isEditable = false
         }
         for field in selectableFields { field.delegate = self }
         tagsTitleField.isHidden = true
-        tagsField.isHidden = true
+        tagPills.isHidden = true
+        tagPills.translatesAutoresizingMaskIntoConstraints = false
 
         for row in rows { rowStack.addArrangedSubview(row) }
         rowStack.orientation = .vertical
@@ -238,7 +240,7 @@ final class ColumnPreviewView: NSView {
         rowStack.spacing = 0
         for view in [
             iconView, nameField, summaryField, informationField, rowStack, tagsTitleField,
-            tagsField,
+            tagPills,
         ] {
             stack.addArrangedSubview(view)
         }
@@ -286,14 +288,15 @@ final class ColumnPreviewView: NSView {
             rowStack.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
             rowStack.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
             tagsTitleField.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
-            tagsField.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
+            tagPills.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
+            tagPills.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
         ]
         for row in rows {
             constraints.append(row.widthAnchor.constraint(equalTo: rowStack.widthAnchor))
         }
         // A view in a centering stack can be wider than the stack; these keep each field inside
         // it, truncating or wrapping the text instead.
-        for field in [nameField, summaryField, informationField, tagsTitleField, tagsField] {
+        for field in [nameField, summaryField, informationField, tagsTitleField] {
             constraints.append(field.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor))
             field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         }
@@ -304,10 +307,13 @@ final class ColumnPreviewView: NSView {
         setAccessibilityChildren(readingOrder())
     }
 
-    /// The text fields VoiceOver reads, in order: the ones shown.
+    /// The text fields VoiceOver reads, in order: the ones shown, each tag's pill's name last.
     private func readingOrder() -> [NSTextField] {
-        ([nameField, summaryField, informationField] + rows.flatMap { [$0.titleField, $0.value] }
-            + [tagsTitleField, tagsField]).filter { !$0.isHidden }
+        let fields =
+            [nameField, summaryField, informationField]
+            + rows.flatMap { [$0.titleField, $0.value] }
+            + [tagsTitleField]
+        return fields.filter { !$0.isHidden } + (tagPills.isHidden ? [] : tagPills.labels)
     }
 
     /// An Information row's value: wrapping, right-aligned, in the label color, selectable as
