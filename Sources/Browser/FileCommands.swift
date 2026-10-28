@@ -217,7 +217,7 @@ public enum FileCommands: CommandSet {
             switch change {
             case .created(let path, _), .moved(_, let path), .putBack(_, let path):
                 lastComponent(of: path)
-            case .trashed, .deleted, .replaced, .uncreated: nil
+            case .trashed, .deleted, .replaced, .uncreated, .tagged: nil
             }
         }
     }
@@ -226,7 +226,7 @@ public enum FileCommands: CommandSet {
     /// where the row says, so a command refuses the selection rather than act on part of it
     /// (docs/decisions/0115-server-shares.md).
     @MainActor
-    private static func selectedPaths(in pane: Pane) -> [String]? {
+    static func selectedPaths(in pane: Pane) -> [String]? {
         var paths: [String] = []
         for entry in pane.selectedEntries {
             guard let location = pane.childLocation(of: entry) else { return nil }
@@ -253,7 +253,7 @@ public enum FileCommands: CommandSet {
     /// can take the selection, and the pane is at a folder. A server's shares can't be changed
     /// so (0114-server-location.md).
     @MainActor
-    private static func canChangeSelection(_ context: CommandContext) -> Bool {
+    static func canChangeSelection(_ context: CommandContext) -> Bool {
         context.pane.location.isFolder && canTakeSelection(context)
     }
 

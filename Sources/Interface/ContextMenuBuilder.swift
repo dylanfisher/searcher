@@ -17,6 +17,8 @@ enum ContextMenuBuilder {
         case openWith
         /// AppKit's Share… submenu for the selection.
         case share
+        /// Finder's tag dots for the selection (`TagDotsView`).
+        case tags
         case separator
     }
 
@@ -46,6 +48,9 @@ enum ContextMenuBuilder {
         .separator,
         .command(ClipboardCommands.cut.id), .command(ClipboardCommands.copy.id),
         .command(SystemCommands.copyPath.id), .share,
+        .separator,
+        // Where Finder puts its tag dots: after Share….
+        .tags,
         .separator,
         .command(SystemCommands.revealInFinder.id),
         .separator,
@@ -98,7 +103,8 @@ enum ContextMenuBuilder {
     }
 
     /// A menu of `items` whose commands run on `target`, which also turns each item off while its
-    /// command would do nothing. Share… shares `selection`.
+    /// command would do nothing. Share… shares `selection`, and the tag dots show its tags once
+    /// they are read.
     static func build(
         _ items: [Item], registry: CommandRegistry, target: ListingTableView, selection: [URL]
     ) throws(BuildError) -> NSMenu {
@@ -111,6 +117,14 @@ enum ContextMenuBuilder {
                 menu.addItem(OpenWithMenu(target: { [weak target] in target?.openWith() }).item)
             case .share:
                 menu.addItem(NSSharingServicePicker(items: selection).standardShareMenuItem)
+            case .tags:
+                let dots = TagDotsView(
+                    isEnabled: { [weak target] id in target?.canRunCommand(id) == true },
+                    toggle: { [weak target] tag in target?.run(TagCommands.command(for: tag).id) })
+                if !selection.isEmpty { dots.readTags(of: selection.map(\.path)) }
+                let item = NSMenuItem()
+                item.view = dots
+                menu.addItem(item)
             case .command(let id):
                 guard let command = registry.command(for: id) else { throw .unregistered(id) }
                 let menuItem = NSMenuItem(

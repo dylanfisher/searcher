@@ -52,6 +52,9 @@ public struct OperationPlan: Equatable, Sendable {
     /// of paths that differ only by case, by the path read: the check compared the pair without
     /// case, as on most volumes, and the queue logs it.
     var unreadCaseSensitivity: [String: ListingError] = [:]
+    /// For a tag toggle, whether it adds the tag: some item it read lacks it. Otherwise every
+    /// item has it, and the toggle takes it off each, as Finder's tag dots do.
+    var addsTag = false
 
     /// The sizes of the items that are copied, added up; nil when no item is.
     public var total: TreeSizeWalker.Total? { Self.total(of: items) }
@@ -75,7 +78,9 @@ public struct OperationPlan: Equatable, Sendable {
     /// `identify` the identity of each source the record has one for, reads the volumes of its
     /// moves and of the copies it makes again, and pre-scans what it copies. Where two of its
     /// paths differ only by case, it reads the volume they are on and, with `isCaseSensitive`,
-    /// whether it tells them apart. Nothing else reads the file system. Blocks while it reads,
+    /// whether it tells them apart. A tag toggle reads each item's tags with `readTags`, and an
+    /// undo each tagged item's, which must be the ones the record left. Nothing else reads the
+    /// file system. Blocks while it reads,
     /// so it runs on a `BlockingCallThread`.
     ///
     /// `copies` is called once the volumes show the operation copies, before any pre-scan, so
@@ -90,6 +95,7 @@ public struct OperationPlan: Equatable, Sendable {
         inspect: (String) throws(FileOperationError) -> ConflictRequest.Item?,
         identify: FileOperationQueue.Identifier,
         sourceHolding: (String, [String]) throws(FileOperationError) -> String?,
+        readTags: (String) throws(FileOperationError) -> [String] = FinderTags.names(at:),
         isCancelled: @escaping () -> Bool,
         copies: () -> Void
     ) throws -> OperationPlan {
@@ -145,6 +151,25 @@ public struct OperationPlan: Equatable, Sendable {
                         source: path, destination: FileOperation.renamed(path, to: name),
                         size: nil, crossesVolumes: false, conflict: nil)
                 ], lane: nil, failures: [])
+        case .toggleTag(let tag, let paths):
+            var items: [Item] = []
+            var failures: [FileOperationError] = []
+            var everyItemHasIt = true
+            for path in paths {
+                if isCancelled() { throw CancellationError() }
+                do throws(FileOperationError) {
+                    if try !readTags(path).contains(tag) { everyItemHasIt = false }
+                    items.append(
+                        Item(
+                            source: path, destination: nil, size: nil, crossesVolumes: false,
+                            conflict: nil))
+                } catch {
+                    failures.append(error)
+                }
+            }
+            var plan = OperationPlan(items: items, lane: nil, failures: failures)
+            plan.addsTag = !everyItemHasIt
+            return plan
         case .receive:
             preconditionFailure("\(operation) is reported, never planned")
         case .newFolder(let folder):
@@ -158,7 +183,8 @@ public struct OperationPlan: Equatable, Sendable {
             return try undoing(
                 FileOperation.steps(undoing: record), identities: record.identities,
                 volumeOf: volumeOf, isCaseSensitive: isCaseSensitive, measure: measure,
-                inspect: inspect, identify: identify, isCancelled: isCancelled, copies: copies)
+                inspect: inspect, identify: identify, readTags: readTags,
+                isCancelled: isCancelled, copies: copies)
         }
     }
 
@@ -240,7 +266,8 @@ public struct OperationPlan: Equatable, Sendable {
     /// on different volumes is copied, as is a copy made again, so each is pre-scanned and the
     /// undo waits in the lane of the first such destination's volume. A put back is a rename,
     /// so one whose Trash is on another volume than its folder fails (`crossVolume`), and
-    /// nothing is changed.
+    /// nothing is changed. A tagged item's tags, read with `readTags`, must be the ones its
+    /// change left (`tagsChanged`), so an undo never overwrites tags changed since.
     ///
     /// Two paths that differ only by case name one place on a volume that doesn't tell case
     /// apart, as APFS and HFS+ by default, and two on one that does; the volume is read only
@@ -252,6 +279,7 @@ public struct OperationPlan: Equatable, Sendable {
         measure: (String, () -> Bool) throws -> TreeSizeWalker.Total,
         inspect: (String) throws(FileOperationError) -> ConflictRequest.Item?,
         identify: FileOperationQueue.Identifier,
+        readTags: (String) throws(FileOperationError) -> [String],
         isCancelled: @escaping () -> Bool, copies: () -> Void
     ) throws -> OperationPlan {
         var folderVolumes: [String: Result<VolumeIdentity, ListingError>] = [:]
@@ -380,6 +408,11 @@ public struct OperationPlan: Equatable, Sendable {
                         // does, so only an item it would change is checked.
                         failures.append(
                             FileOperationError(reason: .notTheSameItem, path: source, errno: nil))
+                    } else if case .retag(let path, let from, _) = step,
+                        try readTags(path) != from
+                    {
+                        failures.append(
+                            FileOperationError(reason: .tagsChanged, path: path, errno: nil))
                     }
                 }
                 if let destination = step.destination {
@@ -447,7 +480,7 @@ public struct OperationPlan: Equatable, Sendable {
                     failures.append(failure(error))
                     continue
                 }
-            case .trash, .unmake, .make:
+            case .trash, .unmake, .make, .retag:
                 break
             }
             if let copied {

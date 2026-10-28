@@ -281,6 +281,12 @@ public enum MainMenuBuilder {
                 .separator,
                 // Where Finder puts Find.
                 .command(ViewCommands.filter.id),
+                .separator,
+                // Where Finder puts Tags… and its tag dots, last.
+                .submenu(
+                    Menu(
+                        title: TagCommands.menuTitle,
+                        items: TagCommands.commands.map { .command($0.command.id) })),
             ]),
         Menu(
             title: "Edit",
@@ -535,6 +541,10 @@ public enum MainMenuBuilder {
                     command: id, position: position, showsChords: menu.showsChords)
                 menuItem.representedObject = id
                 if position > 0 { hide(menuItem) }
+                // A tag command's item shows its tag's color, as Finder's File menu does.
+                if let tag = TagCommands.commands.first(where: { $0.command.id == id })?.tag {
+                    menuItem.image = TagDotButton.image(for: tag)
+                }
                 return menuItem
             }
         case .standard(let standard):
