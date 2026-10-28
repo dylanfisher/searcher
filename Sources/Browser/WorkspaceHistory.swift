@@ -3,11 +3,14 @@
 /// own `History` first; Back in a pane with none left steps the window
 /// (docs/decisions/0125-workspace-open-is-a-back-step.md).
 public struct WorkspaceHistory: Codable, Equatable, Sendable {
-    /// The steps kept each way. Each holds every tab of the window with its panes' own Back and
-    /// Forward, up to `History.limit` entries each way per pane, so a step can run to hundreds of
-    /// kilobytes, and the window file holds them all. A step needs the window to drift from its
-    /// saved workspace and the workspace opened again, which few runs repeat ten times.
+    /// The steps kept each way. A step needs the window to drift from its saved workspace and
+    /// the workspace opened again, which few runs repeat ten times.
     public static let limit = 10
+    /// The Back and Forward entries each pane of a step keeps each way, the nearest. Every save
+    /// writes the window file whole and every launch reads it, so a step can't carry the 500 a
+    /// live pane keeps (`History.limit`): with one, 10 steps each way of 8 tabs of 4 panes add
+    /// 477 KB to the window file (docs/decisions/0125-workspace-open-is-a-back-step.md).
+    public static let paneEntries = 1
 
     /// What a window shows, as `WorkspaceState` keeps it, without its frame: Back and Forward
     /// never move the window.
@@ -25,6 +28,25 @@ public struct WorkspaceHistory: Codable, Equatable, Sendable {
             self.tabs = tabs
             self.selectedTab = selectedTab
             self.showsSidebar = showsSidebar
+        }
+
+        /// The same step with each pane's Back and Forward cut to their nearest `paneEntries`.
+        var bounded: Step {
+            withHistories {
+                History(
+                    back: Array($0.backEntries.suffix(paneEntries)),
+                    forward: Array($0.forwardEntries.suffix(paneEntries)))
+            }
+        }
+
+        /// Whether a pane keeps more than `paneEntries` either way.
+        var isOverBound: Bool {
+            tabs.contains { tab in
+                tab.panes.values.contains {
+                    $0.history.backEntries.count > paneEntries
+                        || $0.history.forwardEntries.count > paneEntries
+                }
+            }
         }
 
         /// The same step with each pane's history passed through `transform`.
@@ -61,10 +83,39 @@ public struct WorkspaceHistory: Codable, Equatable, Sendable {
 
     public init() {}
 
-    /// A history with these steps, nearest last; past `limit`, the farthest go.
+    /// A history with these steps, nearest last; past `limit`, the farthest go, and each pane
+    /// keeps its nearest `paneEntries` each way.
     public init(back: [Step], forward: [Step]) {
-        self.back = Array(back.suffix(Self.limit))
-        self.forward = Array(forward.suffix(Self.limit))
+        self.back = back.suffix(Self.limit).map(\.bounded)
+        self.forward = forward.suffix(Self.limit).map(\.bounded)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case back, forward
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(back, forKey: .back)
+        try container.encode(forward, forKey: .forward)
+    }
+
+    /// Stored steps past `limit` either way, or a pane of one past `paneEntries`, are rejected,
+    /// not trimmed: only a file edited by hand or of another build holds them.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        back = try container.decode([Step].self, forKey: .back)
+        forward = try container.decode([Step].self, forKey: .forward)
+        func broken(_ reason: String) -> DecodingError {
+            .dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: reason))
+        }
+        guard back.count <= Self.limit, forward.count <= Self.limit else {
+            throw broken(
+                "\(back.count) steps back and \(forward.count) forward; at most \(Self.limit) each")
+        }
+        guard !(back + forward).contains(where: \.isOverBound) else {
+            throw broken("a step's pane keeps more than \(Self.paneEntries) entries one way")
+        }
     }
 
     public var isEmpty: Bool { back.isEmpty && forward.isEmpty }
@@ -94,9 +145,9 @@ public struct WorkspaceHistory: Codable, Equatable, Sendable {
         forward.removeAll()
     }
 
-    /// Adds `step` nearest in `steps`, dropping the farthest past `limit`.
+    /// Adds `step`, bounded, nearest in `steps`, dropping the farthest past `limit`.
     private static func add(_ step: Step, to steps: inout [Step]) {
-        steps.append(step)
+        steps.append(step.bounded)
         if steps.count > limit { steps.removeFirst() }
     }
 }

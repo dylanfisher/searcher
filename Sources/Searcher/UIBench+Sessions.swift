@@ -117,7 +117,9 @@ extension UIBench {
     /// The session `restoreSession` writes, front window first: each window cascaded on the
     /// bench's display, each tab a 2 × 2 grid on W1 with the second tab selected, and in the key
     /// window, the front one, one unfocused pane of the selected tab on W2, so its load runs
-    /// beside the focused pane's.
+    /// beside the focused pane's. Each window holds the most Back and Forward steps of its own
+    /// it can keep, its tabs with every pane at its most entries each way, so B1 reads the
+    /// largest window files steps make (docs/decisions/0125-workspace-open-is-a-back-step.md).
     private func restoredSessionFixture() throws -> (SessionState, [WorkspaceState]) {
         let screens = NSScreen.screens
         guard let screen = screens.count > 1 ? screens[1] : screens.first else {
@@ -156,11 +158,20 @@ extension UIBench {
                     })
                 return TabState(layout: layout, panes: panes)
             }
+            let entries = Array(
+                repeating: History.Entry(location: Location(path: options.w1), selected: nil),
+                count: WorkspaceHistory.paneEntries)
+            let shown = WorkspaceHistory.Step(
+                tabs: tabs.map {
+                    $0.withHistories { _ in History(back: entries, forward: entries) }
+                },
+                selectedTab: 0, showsSidebar: false)
+            let steps = Array(repeating: shown, count: WorkspaceHistory.limit)
             states.append(
                 WorkspaceState(
                     id: UUID(), name: nil, frame: Rect(frame), tabs: tabs,
                     selectedTab: Self.restoredTabs - 1, showsSidebar: false,
-                    history: WorkspaceHistory()))
+                    history: WorkspaceHistory(back: steps, forward: steps)))
         }
         let session = SessionState(workspaces: states.map(\.id), keyWindow: states[0].id)
         return (session, states)
