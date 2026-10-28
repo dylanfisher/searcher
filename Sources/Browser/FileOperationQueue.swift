@@ -155,8 +155,11 @@ public actor FileOperationQueue {
         var readTags: @Sendable (String) throws(FileOperationError) -> [String] =
             FinderTags.entries(at:)
         /// Gives the item at the path given second exactly the Finder tag entries given first.
-        var writeTags: @Sendable ([String], String) throws(FileOperationError) -> Void =
-            FinderTags.set(entries:at:)
+        /// Throws when nothing changed; returns an error when the tags changed but the color
+        /// label couldn't be set (`FinderTags.set`).
+        var writeTags:
+            @Sendable ([String], String) throws(FileOperationError) -> FileOperationError? =
+                FinderTags.set(entries:at:)
 
         static let real = FileSystem(
             volumeOf: VolumeIdentity.init(path:),
@@ -1420,8 +1423,12 @@ public actor FileOperationQueue {
                 // An item that has the tag already, or lacks it, is left alone and isn't
                 // recorded, so an undo never touches it.
                 guard changed != tags else { return .done([], copied: none) }
-                try fileSystem.writeTags(changed, source)
-                return .done([.tagged(source, from: tags, to: changed)], copied: none)
+                let change = OperationRecord.Change.tagged(source, from: tags, to: changed)
+                // Tags written without their color label are still a change, kept undoable.
+                if let error = try fileSystem.writeTags(changed, source) {
+                    return .failed(error, changes: [change])
+                }
+                return .done([change], copied: none)
             case .receive:
                 preconditionFailure("\(operation) is reported, never run")
             case .undo:
@@ -1453,8 +1460,11 @@ public actor FileOperationQueue {
                     guard try fileSystem.readTags(path) == from else {
                         throw FileOperationError(reason: .tagsChanged, path: path, errno: nil)
                     }
-                    try fileSystem.writeTags(to, path)
-                    return .done([.tagged(path, from: from, to: to)], copied: none)
+                    let change = OperationRecord.Change.tagged(path, from: from, to: to)
+                    if let error = try fileSystem.writeTags(to, path) {
+                        return .failed(error, changes: [change])
+                    }
+                    return .done([change], copied: none)
                 case .move(let from, let to):
                     guard item.crossesVolumes else {
                         try fileSystem.move(from, to)

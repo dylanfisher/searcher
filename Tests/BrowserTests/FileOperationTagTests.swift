@@ -21,18 +21,19 @@ private let work = "Work\n4"
 /// A tag with no color, stored without a number.
 private let home = "Home"
 
-/// A queue over the real file system and the history that follows it, as the app's windows
-/// make them.
+/// A queue over the real file system, or `fileSystem`, and the history that follows it, as the
+/// app's windows make them.
 @MainActor
 private final class Harness {
     let queue: FileOperationQueue
     let history = UndoHistory(log: { _ in })
 
-    init() {
+    init(fileSystem: FileOperationQueue.FileSystem = .real) {
         let (finished, feed) = AsyncStream.makeStream(of: FileOperationQueue.Snapshot.self)
         history.follow(finished)
         queue = FileOperationQueue(
-            prompts: .unexpected, onChange: { _ in }, onAnyFinish: { feed.yield($0) })
+            fileSystem: fileSystem, prompts: .unexpected, clock: ContinuousClock(),
+            onChange: { _ in }, onAnyFinish: { feed.yield($0) })
     }
 
     /// Runs `operation` and waits until the history has taken it in.
@@ -70,9 +71,11 @@ private func tags(_ path: String) async throws -> [String] {
 
 /// Sets the tags as another app would, outside the queue.
 private func setTags(_ tags: [String], _ path: String) async throws {
-    try await BlockingCallThread.run { () throws(FileOperationError) in
+    let unlabeled = try await BlockingCallThread.run {
+        () throws(FileOperationError) -> FileOperationError? in
         try FinderTags.set(entries: tags, at: path)
     }
+    #expect(unlabeled == nil)
 }
 
 /// The item that holds `Work\n4` keeps that entry, color and all, through the toggle, its
@@ -357,4 +360,37 @@ private func setTags(_ tags: [String], _ path: String) async throws {
 
     #expect(left == changes.indices.filter { $0 % 3 == 0 }.map { changes[$0] })
     #expect(reads <= 2 * (changes.count + done.count))
+}
+
+/// Tags written whose color label couldn't be set, and couldn't be put back, are a change on
+/// disk: the item fails with the label's error and its change is recorded, so undo puts the
+/// tags back.
+@MainActor @Test func tagsWrittenWithoutTheirLabelAreRecordedAndUndone() async throws {
+    let folder = try TemporaryFolder("FileOperationTagTests")
+    let a = try await file("a.txt", in: folder, tags: [work])
+    var fileSystem = FileOperationQueue.FileSystem.real
+    let refusal = FileOperationError(reason: .permissionDenied, path: a, errno: EPERM)
+    // Only the toggle's write leaves its label unset; the undo's writes as usual.
+    let failsOnce = UncheckedSendable(Box(true))
+    fileSystem.writeTags = { entries, path throws(FileOperationError) in
+        let error = try FinderTags.set(entries: entries, at: path)
+        guard failsOnce.value.value else { return error }
+        failsOnce.value.value = false
+        return refusal
+    }
+    let harness = Harness(fileSystem: fileSystem)
+
+    let state = await harness.perform(.toggleTag(red, on: [a]))
+
+    #expect(state.phase == .failed)
+    #expect(state.errors == [refusal])
+    #expect(state.record.changes == [.tagged(a, from: [work], to: [work, redEntry])])
+    #expect(harness.history.undoTitle == "Undo Add Tag “Red”")
+    _ = try await harness.undo()
+    #expect(try await tags(a) == [work])
+}
+
+private final class Box<T> {
+    var value: T
+    init(_ value: T) { self.value = value }
 }
