@@ -151,12 +151,12 @@ public actor FileOperationQueue {
         var sourceHolding: @Sendable (String, [String]) throws(FileOperationError) -> String?
         /// Writes a line to the log, for what goes wrong without failing an operation.
         var log: @Sendable (String) -> Void
-        /// The Finder tags of the item at a path.
+        /// The Finder tag entries of the item at a path, names with their colors.
         var readTags: @Sendable (String) throws(FileOperationError) -> [String] =
-            FinderTags.names(at:)
-        /// Gives the item at the path given second the Finder tags given first.
+            FinderTags.entries(at:)
+        /// Gives the item at the path given second exactly the Finder tag entries given first.
         var writeTags: @Sendable ([String], String) throws(FileOperationError) -> Void =
-            FinderTags.set(_:at:)
+            FinderTags.set(entries:at:)
 
         static let real = FileSystem(
             volumeOf: VolumeIdentity.init(path:),
@@ -1411,8 +1411,12 @@ public actor FileOperationQueue {
                 // Read again as it runs, so a tag another app gave the item since the plan read
                 // it stays.
                 let tags = try fileSystem.readTags(source)
+                let has = tags.contains { FinderTags.name(of: $0) == tag.name }
+                // Every other entry stays as it is, its color included.
                 let changed =
-                    addsTag ? (tags.contains(tag) ? tags : tags + [tag]) : tags.filter { $0 != tag }
+                    addsTag
+                    ? (has ? tags : tags + [tag.entry])
+                    : tags.filter { FinderTags.name(of: $0) != tag.name }
                 // An item that has the tag already, or lacks it, is left alone and isn't
                 // recorded, so an undo never touches it.
                 guard changed != tags else { return .done([], copied: none) }

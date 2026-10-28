@@ -42,17 +42,32 @@ import Testing
     }
 
     /// A Finder tag is an extended attribute; its change names the file as modified, which is
-    /// how a pane learns of a tag change (docs/decisions/0121-tag-commands.md).
-    @Test func aTagChangeNamesTheFileAsModified() throws {
+    /// how a pane learns of a tag change (docs/decisions/0121-tag-commands.md). A stream started
+    /// since now can miss its first event under load, so the tags change every 100 ms until the
+    /// event arrives; the bound only catches a hang.
+    @Test func aTagChangeNamesTheFileAsModified() async throws {
         let folder = try TemporaryFolder("FileEventStreamTests")
         let file = folder.url.appending(path: "tagged")
         try Data("x".utf8).write(to: file)
         let (stream, log) = try start(folder)
         defer { stream.stop() }
+        let path = file.path
+        let writer = Task.detached {
+            for write in 1... {
+                // Each write differs from the last, so each is a change on disk.
+                let entries = write % 2 == 0 ? ["Red\n6"] : ["Red\n6", "Blue\n4"]
+                try await BlockingCallThread.run { () throws(FileOperationError) in
+                    try FinderTags.set(entries: entries, at: path)
+                }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+        }
 
-        try FinderTags.set(["Red"], at: file.path)
+        let saw = await log.wait { sawEvent($0, path, .modified) }
+        writer.cancel()
+        _ = await writer.result
 
-        #expect(log.wait { sawEvent($0, file.path, .modified) })
+        #expect(saw)
     }
 
     @Test func renameNamesBothFiles() throws {

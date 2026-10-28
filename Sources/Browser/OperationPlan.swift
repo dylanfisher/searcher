@@ -79,9 +79,8 @@ public struct OperationPlan: Equatable, Sendable {
     /// moves and of the copies it makes again, and pre-scans what it copies. Where two of its
     /// paths differ only by case, it reads the volume they are on and, with `isCaseSensitive`,
     /// whether it tells them apart. A tag toggle reads each item's tags with `readTags`, and an
-    /// undo each tagged item's, which must be the ones the record left. Nothing else reads the
-    /// file system. Blocks while it reads,
-    /// so it runs on a `BlockingCallThread`.
+    /// undo each tagged item's, which must be the entries the record left. Nothing else reads
+    /// the file system. Blocks while it reads, so it runs on a `BlockingCallThread`.
     ///
     /// `copies` is called once the volumes show the operation copies, before any pre-scan, so
     /// an undo pressed meanwhile doesn't wait for it.
@@ -95,7 +94,7 @@ public struct OperationPlan: Equatable, Sendable {
         inspect: (String) throws(FileOperationError) -> ConflictRequest.Item?,
         identify: FileOperationQueue.Identifier,
         sourceHolding: (String, [String]) throws(FileOperationError) -> String?,
-        readTags: (String) throws(FileOperationError) -> [String] = FinderTags.names(at:),
+        readTags: (String) throws(FileOperationError) -> [String] = FinderTags.entries(at:),
         isCancelled: @escaping () -> Bool,
         copies: () -> Void
     ) throws -> OperationPlan {
@@ -158,7 +157,8 @@ public struct OperationPlan: Equatable, Sendable {
             for path in paths {
                 if isCancelled() { throw CancellationError() }
                 do throws(FileOperationError) {
-                    if try !readTags(path).contains(tag) { everyItemHasIt = false }
+                    let names = try readTags(path).map(FinderTags.name(of:))
+                    if !names.contains(tag.name) { everyItemHasIt = false }
                     items.append(
                         Item(
                             source: path, destination: nil, size: nil, crossesVolumes: false,

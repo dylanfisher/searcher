@@ -15,7 +15,7 @@ import Testing
 /// The tags of the item at `path`, read off the main thread.
 private func tags(_ path: String) async throws -> [String] {
     try await BlockingCallThread.run { () throws(FileOperationError) -> [String] in
-        try FinderTags.names(at: path)
+        try FinderTags.entries(at: path)
     }
 }
 
@@ -35,7 +35,7 @@ private struct TaggingWindow {
             try Data(file.name.utf8).write(to: URL(fileURLWithPath: path))
             let tags = file.tags
             try await BlockingCallThread.run { () throws(FileOperationError) in
-                try FinderTags.set(tags, at: path)
+                try FinderTags.set(entries: tags, at: path)
             }
         }
         let settings = untouchedSettings()
@@ -107,7 +107,7 @@ private struct TaggingWindow {
     await settle { window.history.undoTitle == "Undo Add Tag “Red”" }
 
     #expect(try await tags(window.path("a.txt")) == ["Red", "Work"])
-    #expect(try await tags(window.path("b.txt")) == ["Red"])
+    #expect(try await tags(window.path("b.txt")) == ["Red\n6"])
     let after = try window.dot("Red", in: try await window.dots(onRowOf: "b.txt"))
     #expect(after.coverage == .allItems)
     #expect(after.mark == .check)
@@ -135,5 +135,5 @@ private struct TaggingWindow {
     #expect(window.list.tableView.validateMenuItem(green))
     window.list.tableView.runMenuCommand(green)
     await settle { window.history.undoTitle == "Undo Add Tag “Green”" }
-    #expect(try await tags(window.path("a.txt")) == ["Green"])
+    #expect(try await tags(window.path("a.txt")) == ["Green\n2"])
 }

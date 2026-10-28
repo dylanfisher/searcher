@@ -49,10 +49,10 @@ The records this has to fit:
 ## What Finder does, and how it was found
 
 - **Edit menu titles.** Finder's own strings (`LocalizableMerged.strings` in Finder.app's
-  `en.lproj`, and FinderKit's `LocalizableMerged.loctable`) hold "Undo Add Tag “^0”", "Redo Add
-  Tag “^0”", "Undo Remove Tag “^0”" and "Redo Remove Tag “^0”", beside "Undo Edit Tags" and
-  "Undo Remove All Tags". So a toggle's entry is "Add Tag “Red”" or "Remove Tag “Red”", with no
-  item count; not "Tag 2 Items".
+  `en.lproj`, and FinderKit's `LocalizableMerged.loctable`) hold "Undo Add Tag “^0”",
+  "Redo Add Tag “^0”", "Undo Remove Tag “^0”" and "Redo Remove Tag “^0”", beside "Undo Edit
+  Tags" and "Undo Remove All Tags". So a toggle's entry is "Add Tag “Red”" or "Remove Tag
+  “Red”", with no item count; not "Tag 2 Items".
 - **The menu's line.** Finder's context menu strings key `N160` "Tags…" and `N160.1` "Remove
   Tag “^0”": the line under the dots names what a click on the dot under the mouse does.
 - **Which dots.** Finder shows the user's favorite tags (`defaults read com.apple.finder
@@ -66,40 +66,53 @@ The records this has to fit:
   adds the tag to the rest, as clicking a mixed checkbox turns it on; only a dot whose tag
   every item has shows a check and removes it, and only that one reads "Remove Tag “Red”",
   which is the one hover title Finder has a string for. **To check by hand** (below).
-- **Colors.** The supported API is `NSURL`'s `tagNamesKey`, written through
-  `setResourceValue` since `URLResourceValues.tagNames` has a setter only from macOS 26. A file
-  given `["Red", "Work", "Gray"]` this way stores `Red\n6`, `Work\n0` and `Gray\n1` in
-  `com.apple.metadata:_kMDItemUserTags`, Finder's label numbers, so Finder shows the colors
-  (`tagsWrittenReadBackInOrderAndKeepFindersColors`).
+- **Colors.** Finder keeps an item's tags in `com.apple.metadata:_kMDItemUserTags`, a binary
+  property list of entries, each a name and its label number: `Red\n6`, `Work\n4`, or a bare
+  name for a tag without a color. The supported API, `NSURL`'s `tagNamesKey`, reads and writes
+  names only: written back, `["Work\n4", "Plain\n0"]` plus Red became `Work\n0`, `Plain\n0`,
+  `Red\n6`, since it takes each name's color from the user's tag list, and Work, whose color only
+  the item held, lost its 4 (TG.1 review). `NSURL` also sets the legacy color label in
+  `com.apple.FinderInfo`'s `fdFlags` to the last colored entry's, and removes a `FinderInfo` left
+  all zero: written `["Blue", "Plain"]` the label is 4, `["Blue", "Red"]` 6, `["Plain"]` none.
+  Spotlight's importer takes the entries as they are: `mdimport -t -d2` on a file written raw
+  with `Work\n4`, `Red\n6` and `Plain` lists exactly those under `_kMDItemUserTags`.
 
 ## Decision
 
-- **Reading and writing.** `FinderTags` in Base reads and writes an item's tags by name through
-  `NSURL`, fresh each time, off the main thread (`preconditionOffMain`). A read-only or locked
-  file refuses with the Carbon status `afpAccessDenied` (-5000), which is `permissionDenied`; a
-  missing item gives `fnfErr` (-43), `sourceGone`. A symlink's tags are its target's, as
-  `NSURL` follows it both ways.
-- **The operation.** `FileOperation.toggleTag(name, on: paths)`. Its plan reads every item's
+- **Reading and writing: the attribute itself.** `FinderTags` in Base reads and writes the
+  entries of `_kMDItemUserTags` with `getxattr` and `setxattr`, off the main thread
+  (`preconditionOffMain`), and sets `FinderInfo`'s color label as `NSURL` does. Every entry is
+  written back exactly as read, so a tag that stays keeps its color, whether or not the user's
+  tag list has it (`entriesAreWrittenExactlySoEachTagKeepsItsColor`); `NSURL` reads the result
+  back by name, as Finder and Spotlight do. An empty list removes the attribute, as Finder leaves
+  an untagged item. A read-only or locked file refuses with `EACCES` or `EPERM`,
+  `permissionDenied`; a missing item is `sourceGone`. A symlink's tags are its target's, as with
+  `NSURL`.
+- **The operation.** `FileOperation.toggleTag(tag, on: paths)`, with a `FinderTag`. Its plan reads every item's
   tags (`OperationPlan.addsTag`): when some item it could read lacks the tag, the toggle adds it;
   when every one has it, the toggle takes it off each. Each item is read again as it runs and
   changed from what is there then, so a tag another app added since the plan stays. An item
-  that already has the tag, or lacks it, isn't written or recorded. An item whose tags can't be
-  read or written fails alone with its path and the others run, as for any operation. A
-  change records `.tagged(path, from: old list, to: new list)`, and the item's identity as any
-  change does.
+  that already has the tag, in any color, or lacks it, isn't written or recorded. An added tag
+  is the standard entry, `Red\n6`; a removal takes off every entry of that name. An item whose
+  tags can't be read or written fails alone with its path and the others run, as for any
+  operation. A change records `.tagged(path, from: old entries, to: new entries)`, each name
+  with its color, and the item's identity as any change does.
 - **Beside the lanes, not in a volume's lane.** The brief said the volume's lane; 0065 puts one
   quick call per item beside the lanes, and a tag write is one `setxattr`. In a lane, a click on
   a dot would wait behind a 20-minute copy to that disk, which 0065 rejected for rename. Items
   on two volumes need nothing more: each item is its own call. The toggle changes its items'
   paths for the refusal check, so it is refused while a copy reads one of them, and the reverse.
-- **Undo restores each list exactly.** The undo step `.retag(path, from: the list the change
-  left, to: the list before)` writes the whole earlier list, so order and every other tag come
-  back as they were, and an item that had the tag before keeps it: the toggle never recorded it.
-  Redo is the undo of the undo's record, as 0072 has it.
+- **Undo restores each list exactly.** The undo step `.retag(path, from: the entries the change
+  left, to: the entries before)` writes the whole earlier list, so order, colors and every other
+  tag come back as they were, and an item that had the tag before keeps it: the toggle never
+  recorded it. Redo is the undo of the undo's record, as 0072 has it, and checks the same way.
+  `UndoHistory.remainder` keys a `.tagged` change's reversal by its path in comparable form and
+  its two entry lists swapped, so a change matches only the undo that wrote its own lists back,
+  with each path read once.
 - **No silent clobbering.** Finder's undo of a tag doesn't say what it does when another app
   changed the tags since; 0072's check-first rule decides it. The undo's check reads each item's
-  tags, and if any isn't the list the change left, nothing runs and that item fails with the new
-  reason `tagsChanged`, naming it. The run checks again before each write, for a change made
+  entries, and if any isn't the list the change left, colors included, nothing runs and that item
+  fails with the new reason `tagsChanged`, naming it. The run checks again before each write, for a change made
   between the check and the write. `tagsChanged` can clear (`canClear`): the user may set the
   tags back. So the entry is kept once, as for `notTheSameItem`; the next try that fails drops
   it.
@@ -124,6 +137,14 @@ The records this has to fit:
   8. Items on two volumes, the startup disk and an HFS+ image: one toggle, one entry, undone
      and redone together (`itemsOnTwoVolumesToggleUndoAndRedoTogether`).
   9. A toggle that changed nothing makes no entry (`aToggleThatChangedNothingMakesNoEntry`).
+  10. A tag whose color only the item holds, `Work\n4`, keeps it through the toggle, undo and
+      redo (`aTagAddedToTwoFilesUndoesAndRedoesAsFinderNamesIt`); a color changed by another app
+      since fails the undo (`aColorChangedSinceFailsTheUndo`).
+  11. Redo after the tags changed since: it refuses as undo does, and runs once they are set
+      back (`tagsChangedSinceFailTheRedoAndChangeNothing`).
+  12. A 120-item toggle whose undo fails for every seventh item keeps exactly those to undo
+      again (`aLargeToggleUndoneInPartKeepsTheItemsThatFailed`); the remainder of a 400-item tag
+      entry reads each path once (`theRemainderOfALargeTagEntryReadsEachPathOnce`).
 - **Commands.** `TagCommands`, one command per standard tag: "Red Tag" and so on, ids
   `tag.red`…, no default chords, off where Move to Trash is off (`canChangeSelection`). Seven
   fixed tags make seven static commands, so the registry needs no per-tag dynamic commands, and
@@ -133,11 +154,14 @@ The records this has to fit:
   and its dots; each item shows its tag's color.
 - **The row menu.** After Share…, where Finder puts them, `ContextMenuBuilder.Item.tags` adds
   `TagDotsView`: the seven `TagDotButton`s and Finder's line under them, "Tags" at rest and the
-  hovered dot's action, "Add Tag “Red”" or "Remove Tag “Red”". The view reads the selection's
-  tags with `TagCommands.tags(of:)` on a `BlockingCallThread` as the menu is built; on a share
-  that stopped answering the read never lands and the dots stay plain, and a click still works,
-  since the toggle reads again. A click closes the menu and runs the tag's command on the
-  clicked table. The dots are turned on as the menu opens, while the command can run.
+  hovered dot's action, "Add Tag “Red”" or "Remove Tag “Red”". The view reads the
+  selection's tags with `TagCommands.tags(of:)` on a `BlockingCallThread` as the menu is built;
+  on a share that stopped answering the read never lands and the dots stay plain, and a click
+  still works, since the toggle reads again. A click closes the menu and runs the tag's command
+  on the clicked table. The dots are turned on as the menu opens, while the command can run,
+  and a press that reaches a dot turned off since does nothing (`aDisabledDotDoesNothing`).
+  The button's cell takes a press anywhere in it: AppKit's own button cell may take none on a
+  button with no title, image or bezel.
 - **Dot states** (0110): at rest a 12-point circle in the tag's color
   (`NSWorkspace.fileLabelColors`) with a darker rim, and a white check for all, a dash for some;
   under the mouse it grows to 16 points and shows + or ×; pressed, it darkens a quarter toward
@@ -166,8 +190,8 @@ The records this has to fit:
   item that had the tag from one the toggle gave it; restoring the recorded list can.
 - **Undo overwrites whatever tags are there** — rejected: it silently undoes another app's
   change, which 0072's check-first rule refuses for every other change.
-- **Write `_kMDItemUserTags` with `setxattr`** — rejected: not the supported API, and it would
-  need the label number of every custom tag.
+- **`NSURL`'s `tagNamesKey`** — dropped (TG.1 review): it writes names only, so a tag whose
+  color only the item held lost it on every toggle, and undo couldn't bring it back.
 - **Toggles in the destination volume's lane** — rejected (above, 0065).
 - **One command per action, Add and Remove, per tag** — rejected: fourteen commands for what
   Finder does with seven dots.
@@ -178,9 +202,11 @@ The tag names are English. On a Mac in another language the standard tags have t
 names, and "Red" written there would be a tag of its own without a color; when the app is
 localized, the names come from `NSWorkspace.fileLabels`. A dot's state is read once per menu,
 one `getxattr` per selected item on its own thread, and a click reads every item again in the
-plan and once more as it runs. Folder tagging conflicts, by path, with any operation inside the
+plan and once more as it runs. The attribute's format is Finder's, not a published API; if a
+later macOS changes it, a read that isn't a list of strings fails the item with `other`. Folder tagging conflicts, by path, with any operation inside the
 folder, as a rename of the folder would. Each patch keeps a set of the names it updated.
 
 **To check by hand:** in Finder, select two files, one tagged Red; right-click and compare the
 red dot (dash or check) and what a click does with the app's; tag a file from the app and see
-its color in Finder; Edit ▸ Undo in Finder after a tag click shows "Undo Add Tag “Red”".
+its color in Finder, and that a custom tag colored in Finder keeps its color when the app
+adds Red; Edit ▸ Undo in Finder after a tag click shows "Undo Add Tag “Red”".

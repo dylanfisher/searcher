@@ -18,9 +18,9 @@ public enum FileOperation: Equatable, Sendable {
     /// Deletes each item without the Trash. Issued only after the user answered a
     /// delete-immediately question.
     case deleteImmediately([String])
-    /// Adds the Finder tag named first to each item that lacks it or, when every item has it
-    /// already, takes it off each, as Finder's tag dots do. Each item keeps its other tags.
-    case toggleTag(String, on: [String])
+    /// Adds the Finder tag to each item that lacks it or, when every item has it already,
+    /// takes it off each, as Finder's tag dots do. Each item keeps its other tags as they were.
+    case toggleTag(FinderTag, on: [String])
     /// Files a drop promised into the folder: the source app writes them and a `move` puts them
     /// in place. `name` is the file's when one file is meant, and `app` the app the drop came
     /// from when known. The queue never runs it; it only shows one that failed
@@ -111,12 +111,12 @@ public enum FileOperation: Equatable, Sendable {
     }
 
     /// The steps that reverse `record`, last change first: a moved item moves back, a trashed
-    /// or replaced one comes back from the Trash, a tagged one gets back the tags it had, and an item a copy, a new folder or a drop
-    /// made, or an undo put back, goes to the Trash. An item an undo took away is made again
-    /// as it was made the first time, a copy from its source and a new folder empty; a drop's
-    /// file comes back from the Trash, since its app can't be asked again. A replace is listed
-    /// before the change that put the new item at its path, so the new item leaves before the
-    /// original comes back.
+    /// or replaced one comes back from the Trash, a tagged one gets back the tags it had, and
+    /// an item a copy, a new folder or a drop made, or an undo put back, goes to the Trash. An
+    /// item an undo took away is made again as it was made the first time, a copy from its
+    /// source and a new folder empty; a drop's file comes back from the Trash, since its app
+    /// can't be asked again. A replace is listed before the change that put the new item at its
+    /// path, so the new item leaves before the original comes back.
     static func steps(undoing record: OperationRecord) -> [UndoStep] {
         record.changes.reversed().map { change in
             switch change {
