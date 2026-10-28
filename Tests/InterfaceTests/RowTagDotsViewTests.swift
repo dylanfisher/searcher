@@ -106,3 +106,67 @@ func aTagChangeUpdatesTheRow(_ viewMode: ViewMode) async throws {
     cell.backgroundStyle = .normal
     #expect(!dots.isOnEmphasizedSelection)
 }
+
+/// Dylan, 2026-10-28: "make sure we use same colors as finder". Each tag is drawn in the system
+/// color Finder now draws it in, not the older, lighter label colors
+/// (docs/decisions/0127-tag-colors-and-pill-widths.md).
+@MainActor @Test func eachTagsColorIsTheSystemColorFinderDrawsItIn() {
+    #expect(
+        FinderTag.all.map { NSColor.tagLabel($0.label) } == [
+            .systemRed, .systemOrange, .systemYellow, .systemGreen, .systemBlue, .systemPurple,
+            .systemGray,
+        ])
+}
+
+/// A row's dot, drawn in light mode, has the fill of Finder's dot of its color: the middle of
+/// each of the seven in Dylan's screenshot of Finder's row menu, Display P3 0 to 255, whose
+/// fills match Finder's row dots. Within 4 a component, the screenshot's JPEG noise.
+@MainActor @Test func aRowsDotIsFilledAsFindersIs() throws {
+    let finder: [Int: [CGFloat]] = [
+        6: [240, 110, 108], 7: [244, 169, 104], 5: [248, 216, 104], 2: [131, 208, 131],
+        4: [99, 158, 249], 3: [201, 100, 226], 1: [165, 164, 169],
+    ]
+    for (label, expected) in finder {
+        let dots = RowTagDotsView()
+        dots.appearance = NSAppearance(named: .aqua)
+        dots.show([label])
+        let bitmap = try #require(dots.bitmapImageRepForCachingDisplay(in: dots.bounds))
+        dots.cacheDisplay(in: dots.bounds, to: bitmap)
+        let scale = CGFloat(bitmap.pixelsWide) / dots.bounds.width
+        let middle = dots.dotRect(at: 0)
+        let pixel = try #require(
+            bitmap.colorAt(x: Int(middle.midX * scale), y: Int(middle.midY * scale))?
+                .usingColorSpace(.displayP3))
+        let drawn = [pixel.redComponent, pixel.greenComponent, pixel.blueComponent].map {
+            $0 * 255
+        }
+        #expect(zip(drawn, expected).allSatisfy { abs($0 - $1) <= 4 }, "label \(label): \(drawn)")
+    }
+}
+
+/// A dot's fill is its tag's color lightened in each appearance, so dark mode's dots take dark
+/// mode's system colors.
+@MainActor @Test func aDotsFillFollowsTheAppearance() throws {
+    var fills: [NSColor] = []
+    for name in [NSAppearance.Name.aqua, .darkAqua] {
+        let appearance = try #require(NSAppearance(named: name))
+        var resolved: (dot: NSColor?, color: NSColor?)
+        appearance.performAsCurrentDrawingAppearance {
+            resolved = (
+                NSColor.tagLabelDot(6).usingColorSpace(.displayP3),
+                NSColor.tagLabel(6).usingColorSpace(.displayP3)
+            )
+        }
+        let dot = try #require(resolved.dot)
+        let color = try #require(resolved.color)
+        let lightening = NSColor.tagDotLightening
+        for (fill, base) in [
+            (dot.redComponent, color.redComponent), (dot.greenComponent, color.greenComponent),
+            (dot.blueComponent, color.blueComponent),
+        ] {
+            #expect(abs(fill - (base + lightening * (1 - base))) < 0.001)
+        }
+        fills.append(dot)
+    }
+    #expect(fills[0] != fills[1])
+}

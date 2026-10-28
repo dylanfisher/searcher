@@ -155,9 +155,10 @@ From Dylan's screenshot of Finder (2× pixels, measured on crops):
 
 Tags written straight into the attribute without the color label, which no app writing through
 `NSURL` leaves, show no dots until they are written again. A row shows at most three colors.
-The colors are the system's label colors, which are Finder's older, lighter ones. A tagged row
-measures its name once each time it is filled. A patch, and a listing's stat fallback, read each
-file's Finder info with one more `getattrlist`; a folder's was read already.
+The colors are the system's label colors, which are Finder's older, lighter ones (superseded
+2026-10-28: [0127](0127-tag-colors-and-pill-widths.md) draws the system colors Finder uses now).
+A tagged row measures its name once each time it is filled. A patch, and a listing's stat
+fallback, read each file's Finder info with one more `getattrlist`; a folder's was read already.
 
 **Benches to run** (not run in this step): `./scripts/bench` for B2.W2 and B5.W2, and
 `./scripts/bench --ui` for B2.W2 open → first rows frame; W2 has no tagged items, so each should

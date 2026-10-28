@@ -102,8 +102,8 @@ final class TagDotButton: NSButton {
         }
     }
 
-    /// The tag's color, as Finder draws it.
-    var color: NSColor { .tagLabel(finderTag.label) }
+    /// The dot's fill at rest, as Finder fills it.
+    var color: NSColor { .tagLabelDot(finderTag.label) }
 
     /// The mark drawn on the dot now.
     enum Mark: Equatable {
@@ -161,10 +161,8 @@ final class TagDotButton: NSButton {
         let circle = NSBezierPath(ovalIn: dot)
         fill.setFill()
         circle.fill()
-        (color.shadow(withLevel: 0.2) ?? color).withAlphaComponent(
-            isEnabled ? 1 : Self.disabledAlpha
-        )
-        .setStroke()
+        NSColor.tagLabel(finderTag.label).withAlphaComponent(isEnabled ? 1 : Self.disabledAlpha)
+            .setStroke()
         circle.lineWidth = 1
         circle.stroke()
         guard let mark else { return }
@@ -218,11 +216,10 @@ final class TagDotButton: NSButton {
     static func image(for tag: FinderTag) -> NSImage {
         let side = restDiameter
         let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
-            let color = NSColor.tagLabel(tag.label)
             let circle = NSBezierPath(ovalIn: rect.insetBy(dx: 0.5, dy: 0.5))
-            color.setFill()
+            NSColor.tagLabelDot(tag.label).setFill()
             circle.fill()
-            (color.shadow(withLevel: 0.2) ?? color).setStroke()
+            NSColor.tagLabel(tag.label).setStroke()
             circle.stroke()
             return true
         }
