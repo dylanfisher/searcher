@@ -20,17 +20,13 @@ private func menuItem(_ id: CommandID) throws -> NSMenuItem {
 }
 
 /// With no browser window's keys, as with only the Settings window open, App ▸ Open Config File
-/// reaches the app's responder, which has it on and makes and opens the file.
+/// reaches the app's responder, which has it on and opens the file.
 @MainActor @Test func openConfigFileWithNoBrowserWindowOpensTheFile() async throws {
-    let folder = try TemporaryFolder("AppMenuResponderTests")
-    let file = folder.url.appending(path: "searcher/config")
-    let settings = Settings(
-        defaults: temporarySuite(in: folder.url.path), configFile: file,
-        log: unexpectedSettingsLog)
+    let config = try await ConfigFixture("AppMenuResponderTests")
     let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
     let actions = StubSystemActions(defaultApplications: [.plainText: textEdit])
     let responder = AppMenuResponder(
-        settings: settings, systemActions: actions,
+        settings: config.settings, systemActions: actions,
         openWindow: { Issue.record("a window opened") })
     let item = try menuItem(SystemCommands.openConfigFile.id)
 
@@ -38,8 +34,7 @@ private func menuItem(_ id: CommandID) throws -> NSMenuItem {
     #expect(NSApplication.shared.sendAction(try #require(item.action), to: responder, from: item))
     await settle { !actions.openedWithApp.isEmpty }
 
-    #expect(actions.openedWithApp == [OpenedWithApp(urls: [file], application: textEdit)])
-    #expect(try String(contentsOf: file, encoding: .utf8) == ConfigTemplate.text)
+    #expect(actions.openedWithApp == [OpenedWithApp(urls: [config.file], application: textEdit)])
 }
 
 /// New Window opens a window; every other command's item is off without a browser window.

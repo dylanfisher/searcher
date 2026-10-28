@@ -1,9 +1,10 @@
 import AppKit
 import Browser
 
-/// The strip across the top of a browser window that shows while the config file has an error:
-/// the first error, which names its line, and a button that opens the file. It hides once a
-/// good file loads (docs/decisions/0120-config-format.md). The button is a bordered push button,
+/// The strip across the top of a browser window that shows while the config file has an error,
+/// or can't be saved: the first error, which names its line or key, and a button that opens the
+/// file. It hides once a good file loads or a save succeeds
+/// (docs/decisions/0123-config-is-the-settings.md). The button is a bordered push button,
 /// which AppKit draws in its hover, pressed, focused and disabled states
 /// (docs/decisions/0110-interaction-states.md).
 @MainActor
@@ -72,7 +73,8 @@ final class ConfigErrorBanner: NSView {
         openButton.isHidden = !canOpen
         guard let first = errors.first else { return }
         var text =
-            "Config file \(first). Searcher keeps the settings it had until the file is fixed."
+            "Config file \(first). Until it's fixed, Searcher keeps its settings as they are and"
+            + " can't save changes to the file."
         switch errors.count {
         case 1: break
         case 2: text += " The file has 1 more error."

@@ -16,15 +16,10 @@ final class ShortcutsSettings {
         let chords: KeyBindings.Chords
         /// Whether the primary is an Edit item's fixed chord, which can't be changed.
         let primaryIsFixed: Bool
-        /// Whether an override made in the app changes the command's chords, so Reset has
-        /// something to do (`Settings.shortcutOverrideChangesSlots(of:)`).
+        /// Whether the user changed the command's chords, so Reset has something to do.
         let isChanged: Bool
         /// Where the command's chords work, when that isn't everywhere.
         let note: String?
-        /// The slots whose chord, or lack of one, is the config file's, primary first.
-        let fileSlots: [ShortcutOverride.Position]
-        /// The slots set in the app to other than the config file sets them.
-        let configOverrides: [Browser.Settings.ShortcutConfigOverride]
     }
 
     struct Section: Identifiable, Equatable {
@@ -105,11 +100,7 @@ final class ShortcutsSettings {
         }
     }
 
-    /// Whether an app override changes a command's slots; one the config file's change left
-    /// doing nothing stays stored but has nothing to reset.
-    var canResetAll: Bool {
-        settings.shortcuts.keys.contains { settings.shortcutOverrideChangesSlots(of: $0) }
-    }
+    var canResetAll: Bool { !settings.shortcuts.isEmpty }
 
     /// Takes what a slot's recorder recorded.
     func record(
@@ -141,44 +132,16 @@ final class ShortcutsSettings {
         notices[id] = nil
     }
 
-    /// Removes the command's overrides made in the app, which gives it the config file's slots,
-    /// and its defaults for the others.
+    /// Gives the command its default chords back.
     func reset(_ id: CommandID) {
         notices[id] = nil
         settings.shortcuts[id] = nil
     }
 
-    /// Removes every override made in the app, which gives each command the config file's
-    /// slots, and its defaults for the others. The file is never written.
+    /// Gives every command its default chords back.
     func resetAll() {
         notices = [:]
         settings.shortcuts = [:]
-    }
-
-    /// Removes the app's override of `override`'s slot, so the config file's applies.
-    func useConfigValue(for override: Browser.Settings.ShortcutConfigOverride) {
-        notices[override.command] = nil
-        settings.useConfigShortcut(for: override)
-    }
-
-    /// What a row says of a slot the app sets over the config file's: "Searcher has ⌃⌥⌘L as
-    /// the alternate; the config file has ⌃⌥⌘J."
-    static func note(for override: Browser.Settings.ShortcutConfigOverride) -> String {
-        func spelled(_ slot: ShortcutOverride.Slot) -> String {
-            guard case .chord(let chord) = slot else { return "none" }
-            return chord.symbols
-        }
-        return "Searcher has \(spelled(override.appSlot)) as the \(override.position.rawValue);"
-            + " the config file has \(spelled(override.fileSlot))."
-    }
-
-    /// What a row says of the slots it has from the config file; nil for none.
-    static func fileNote(for row: Row) -> String? {
-        switch row.fileSlots.count {
-        case 0: nil
-        case 1: "The config file sets the \(row.fileSlots[0].rawValue) shortcut."
-        default: "The config file sets both shortcuts."
-        }
     }
 
     private func apply(
@@ -223,23 +186,10 @@ final class ShortcutsSettings {
             } else {
                 nil
             }
-        let app = settings.shortcuts[id] ?? ShortcutOverride()
-        let file = settings.configShortcuts[id] ?? ShortcutOverride()
-        // A file chord another command's app override took isn't the file's on this row.
-        let fileSlots = ShortcutOverride.Position.allCases.filter { position in
-            guard app[position] == .standard else { return false }
-            switch file[position] {
-            case .standard: return false
-            case .removed: return chords[position] == nil
-            case .chord(let chord): return chords[position] == chord
-            }
-        }
         return Row(
             id: id, title: command.title, chords: chords,
             primaryIsFixed: bindings.fixed.values.contains(id),
-            isChanged: settings.shortcutOverrideChangesSlots(of: id), note: note,
-            fileSlots: fileSlots,
-            configOverrides: settings.shortcutConfigOverrides(of: id))
+            isChanged: settings.shortcuts[id] != nil, note: note)
     }
 
     private func matches(_ row: Row, _ query: String) -> Bool {
@@ -322,18 +272,6 @@ private struct ShortcutRow: View {
             if row.primaryIsFixed {
                 Text("The primary shortcut is the Edit menu's and can't be changed.")
                     .font(.caption).foregroundStyle(.secondary)
-            }
-            if let fileNote = ShortcutsSettings.fileNote(for: row) {
-                Text(fileNote).font(.caption).foregroundStyle(.secondary)
-            }
-            ForEach(row.configOverrides, id: \.position) { override in
-                HStack {
-                    Text(ShortcutsSettings.note(for: override))
-                        .font(.caption).foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Use Config File Value") { model.useConfigValue(for: override) }
-                        .controlSize(.small)
-                }
             }
             if let notice {
                 HStack {

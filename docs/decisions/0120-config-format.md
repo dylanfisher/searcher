@@ -1,7 +1,7 @@
 # 0120. Config file: format, keys, precedence over the app's values, and errors
 
 - **Date:** 2026-10-27
-- **Status:** accepted
+- **Status:** superseded by [0123](0123-config-is-the-settings.md)
 
 ## Context
 
@@ -123,3 +123,11 @@ can turn a shortcut those chords refuse into an error on its line before anythin
 template appends every command's slots. The Shortcuts pane lists the app's shortcut overrides
 of the file under each row, with Use Config File Value; the General pane's list stays the
 preferences'.
+
+## Superseded (2026-10-27)
+
+[0123](0123-config-is-the-settings.md) replaces this record. The file is JSON at
+`~/.config/searcher/config.json`, or where the user chooses, and it is the settings: the app
+writes it and there is no override layer, so Precedence, Overrides, Template and the line format
+no longer hold. `Settings.preferences`, the error banner, Open Config File and the watched folder
+carry over as 0123 describes them.

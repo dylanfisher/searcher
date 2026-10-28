@@ -13,11 +13,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// Walks the windows' folders for their sizes; nil in a bench launch, which shows none.
     private let folderSizes: FolderSizeService?
     private let systemActions = WorkspaceSystemActions()
-    /// The user's own preferences, with their config file, made on first use so a bench launch
-    /// never reads them; the bench makes its own over a suite of its own, with no config file.
+    /// The user's own settings, made on first use so a bench launch never reads them; the bench
+    /// makes its own over a suite of its own, with no config file. Launch connects the config
+    /// file.
     private lazy var settings = Settings(
-        defaults: .standard, configFile: Settings.userConfigFile(home: NSHomeDirectory()),
-        log: { Logger(category: "settings").error("\($0)") })
+        defaults: .standard, log: { Logger(category: "settings").error("\($0)") })
     /// The browser windows, made on first use so a bench launch, which opens its own window,
     /// never makes them. They share the service's mount table, the app's one.
     private lazy var windows: WorkspaceWindows = {
@@ -52,9 +52,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// The store's read of the palette's folder history, started beside the session's; nil in
     /// a bench launch.
     private let folderHistory: Task<FolderHistory, Never>?
-    /// Reads the config file into `settings` and again after each change; nil until launch
-    /// finishes, and in a bench launch.
-    private var configWatcher: ConfigWatcher?
 
     init(bench: UIBench?) {
         self.bench = bench
@@ -131,6 +128,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 Logger(category: "workspaces").notice(
                     "quitting before the last session was restored; it stays as saved")
             }
+            // A setting changed in the last second is still waiting on its write's delay.
+            await settings.flushConfig()
             if !(await windows.saveBeforeQuit(by: deadline)) {
                 Logger(category: "workspaces").fault(
                     "the windows weren't saved in \(limit, privacy: .public); quitting anyway")
@@ -170,19 +169,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // Until the restore runs, a quit or a window opened meanwhile saves nothing over the
         // session being read.
         windows.holdSavesUntilRestore()
-        guard let configFile = settings.configFile else {
-            preconditionFailure("the user's settings have no config file")
-        }
         let configLogger = Logger(category: "config")
-        let config = ConfigWatcher(
-            file: configFile, reserved: MainMenuBuilder.reservedChords,
-            fixed: MainMenuBuilder.fixedChords, log: { configLogger.error("\($0)") })
-        configWatcher = config
         let settings = settings
         Task {
-            // The config file's values first, so the windows open with them. The watcher reads
-            // on its own actor, as the store does, so the main thread waits on no file.
-            await settings.follow(config)
+            // The config file's settings first, so the windows open with them. The store reads
+            // on its own actor, as the workspace store does, so the main thread waits on no file.
+            await settings.connectConfig(
+                defaultFile: Settings.userConfigFile(home: settings.home)
+            ) { file, isDefault in
+                ConfigStore(
+                    file: file, createsFolder: isDefault, reserved: MainMenuBuilder.reservedChords,
+                    fixed: MainMenuBuilder.fixedChords, log: { configLogger.error("\($0)") })
+            }
             // The store reads on its own actor, so the main thread waits on no file.
             let contents = await restoring.value
             let window = await windows.restore(contents)?.window ?? openHomeWindow()

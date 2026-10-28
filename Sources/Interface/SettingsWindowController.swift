@@ -55,7 +55,7 @@ public final class SettingsWindowController: NSWindowController, NSToolbarDelega
 
     /// The Shortcuts pane's size.
     nonisolated static let size = NSSize(width: 640, height: 560)
-    /// The General pane's size, with room for the config file's section and a few overrides.
+    /// The General pane's size, with room for the config file's section.
     nonisolated static let generalSize = NSSize(width: 520, height: 320)
 
     /// A window over `settings`, which the panes read and write, with Searcher's own login item.

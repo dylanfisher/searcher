@@ -216,12 +216,10 @@ private func albumsSize(_ pane: Pane) -> Listing.FolderSizeValue? {
     #expect(albumsSize(pane) == nil)
 }
 
-@MainActor @Test func calculateAllSizesTogglesThePersistedSettingAndStartsAndCancelsWalks()
+@MainActor @Test func calculateAllSizesTogglesTheSettingAndStartsAndCancelsWalks()
     async throws
 {
-    let temporary = try TemporaryFolder("SizeCommandsTests")
-    let defaults = temporarySuite(in: temporary.url.path)
-    let settings = Settings(defaults: defaults, log: unexpectedSettingsLog)
+    let settings = untouchedSettings()
     let walks = CountedWalks()
     walks.holdWalks()
     let pane = PaneFixture(
@@ -235,12 +233,10 @@ private func albumsSize(_ pane: Pane) -> Listing.FolderSizeValue? {
 
     toggle.run(CommandContext(pane: pane))
     #expect(isChecked(settings))
-    #expect(Settings(defaults: defaults, log: unexpectedSettingsLog).folderSizes)
     await settle { walks.count("/music/Albums") == 1 }
 
     toggle.run(CommandContext(pane: pane))
     #expect(!isChecked(settings))
-    #expect(!Settings(defaults: defaults, log: unexpectedSettingsLog).folderSizes)
     await settle { walks.cancelled == 1 }
     #expect(!pane.showsFolderSizes)
 }

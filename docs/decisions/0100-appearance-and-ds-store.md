@@ -76,3 +76,9 @@ recolor a focus ring already drawn until the appearance changes or the ring is d
 
 `appearance`, `hide-ds-store` and `columns-start-at-home` can be set in the config file
 ([0120](0120-config-format.md)). A value the app stored wins over the file's.
+
+## Amendment: the config file is the settings (2026-10-27)
+
+`appearance`, `hide-ds-store` and `columns-start-at-home` live in the config file
+([0123](0123-config-is-the-settings.md)); a save of it applies at once, and the app's changes are
+written to it. No stored value wins over the file.

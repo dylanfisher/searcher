@@ -230,3 +230,11 @@ Reset All remove the app's overrides, so a command goes back to the file's slots
 defaults. `KeyBindings` takes the file's slots as `fileOverrides` and claims the app's chords
 before the file's; `KeyBindings.refusals(of:reserved:fixed:)` checks the file's slots against
 the reserved and fixed chords, which make a file line an error instead of being dropped.
+
+## Amendment: shortcuts live in the config file (2026-10-27)
+
+[0123](0123-config-is-the-settings.md): `Settings.shortcuts` is kept in the config file under
+`"shortcuts"`, in the stored shape above, and is no longer read from `UserDefaults`. 0122's file
+layer is gone: a slot takes its override, then its default, as this record first said, and
+normalizing compares with the defaults only. An override read from the file is normalized the
+same way, so a slot equal to its default is dropped from the next write.

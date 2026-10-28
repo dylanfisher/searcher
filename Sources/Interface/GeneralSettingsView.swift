@@ -3,15 +3,16 @@ import Browser
 import Observation
 import ServiceManagement
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// What the General pane shows and does: Open at login, which the system's login items hold. The
 /// checkbox shows the status last read from them, never a stored copy, and is read again when
 /// the window shows and when the app becomes active, so a change made in System Settings shows
 /// (docs/decisions/0113-open-at-login.md).
 ///
-/// Under it, the config file: where it is, a button that opens it, and each setting changed in
-/// the app to another value than the file's, with a button that gives the file's value back
-/// (docs/decisions/0120-config-format.md).
+/// Under it, the config file, which holds the settings: where it is, and buttons that choose
+/// another place for it, open it in an editor, show it in Finder and put it back at the default
+/// place (docs/decisions/0123-config-is-the-settings.md).
 @MainActor @Observable
 final class GeneralSettings {
     /// What the pane says while the item waits for the user to allow it in System Settings.
@@ -37,44 +38,85 @@ final class GeneralSettings {
 
     @ObservationIgnored private let settings: Browser.Settings
     @ObservationIgnored private let systemActions: any SystemActions
-    /// The settings changed in the app to another value than the config file's, as
-    /// `Settings.configOverrides` last had them.
-    private(set) var configOverrides: [Browser.Settings.ConfigOverride]
+    /// Asks the user for a place to keep the config file: a file, or a folder to keep
+    /// `ConfigFile.name` in; nil when they cancel. Tests replace it so no panel shows.
+    @ObservationIgnored var chooseConfigLocation: @MainActor () async -> URL? = {
+        await GeneralSettings.runConfigLocationPanel()
+    }
+    /// The config file's path, as `Settings.configFile` last had it; nil for settings with
+    /// none, which hide its section.
+    private(set) var configFilePath: String?
+    /// Whether the config file is at the default place, which turns Use Default off.
+    private(set) var configFileIsDefault: Bool
+    /// The move to another place running, which tests wait for.
+    @ObservationIgnored private(set) var move: Task<Void, Never>?
 
     init(loginItem: any LoginItem, settings: Browser.Settings, systemActions: any SystemActions) {
         self.loginItem = loginItem
         loginItemStatus = loginItem.status
         self.settings = settings
         self.systemActions = systemActions
-        configOverrides = settings.configOverrides
+        configFilePath = settings.configFile?.path
+        configFileIsDefault = settings.configFileIsDefault
         settings.observe(for: self) { [weak self, weak settings] in
             guard let self, let settings else { return }
-            let overrides = settings.configOverrides
-            if overrides != configOverrides { configOverrides = overrides }
+            let path = settings.configFile?.path
+            if path != configFilePath { configFilePath = path }
+            if settings.configFileIsDefault != configFileIsDefault {
+                configFileIsDefault = settings.configFileIsDefault
+            }
         }
     }
 
-    /// The config file's path, or nil for settings with none, which hide its section.
-    var configFilePath: String? { settings.configFile?.path }
-
-    /// What the pane says of `override`: the value the app has, then the file's.
-    static func note(for override: Browser.Settings.ConfigOverride) -> String {
-        "Searcher has \(spelled(override.appValue)); the config file has"
-            + " \(spelled(override.fileValue))."
-    }
-
-    /// `value` as the file spells it, without quotes, which the note's sentence doesn't need.
-    private static func spelled(_ value: Browser.Settings.Value) -> String {
-        guard case .string(let string) = value else { return value.description }
-        return string
-    }
+    /// What the pane says under the config file's path.
+    static let configNote =
+        "Searcher keeps its settings in this file, and applies the file each time it's saved."
 
     func openConfigFile() {
         SystemCommands.openConfig(settings: settings, systemActions: systemActions)
     }
 
-    func useConfigValue(for override: Browser.Settings.ConfigOverride) {
-        settings.useConfigValue(for: override)
+    func revealConfigFile() {
+        guard let file = settings.configFile else { return }
+        systemActions.revealInFinder([file])
+    }
+
+    /// Asks for another place for the config file and moves the settings there: a file there
+    /// is read, and with none the settings are written there.
+    func changeConfigLocation() {
+        guard move == nil else { return }
+        move = Task {
+            defer { move = nil }
+            guard let chosen = await chooseConfigLocation() else { return }
+            await settings.moveConfig(to: chosen)
+        }
+    }
+
+    func useDefaultConfigLocation() {
+        guard move == nil else { return }
+        move = Task {
+            defer { move = nil }
+            await settings.useDefaultConfigFile()
+        }
+    }
+
+    /// The open panel for Change…: a JSON file, or a folder, which can be made from it.
+    private static func runConfigLocationPanel() async -> URL? {
+        let panel = NSOpenPanel()
+        panel.title = "Choose Config File Location"
+        panel.message =
+            "Choose a config file, or a folder to keep \(ConfigFile.name) in. Searcher reads a"
+            + " file that's there, and saves its settings to a place with none."
+        panel.prompt = "Choose"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.json]
+        let response = await withCheckedContinuation { continuation in
+            panel.begin { continuation.resume(returning: $0) }
+        }
+        return response == .OK ? panel.url : nil
     }
 
     /// Whether the checkbox is on: registered, or registered and waiting for approval.
@@ -166,37 +208,24 @@ struct GeneralSettingsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// Where the config file is, its button, and the settings the app overrides in it.
+    /// Where the config file is, and its buttons. Each is a bordered push button, which AppKit
+    /// draws in its hover, pressed, focused and disabled states
+    /// (docs/decisions/0110-interaction-states.md).
     @ViewBuilder
     private func configFile(_ path: String) -> some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Config file")
-                Text((path as NSString).abbreviatingWithTildeInPath)
-                    .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-            }
-            Spacer()
-            Button(SystemCommands.openConfigFile.title) { model.openConfigFile() }
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Config file")
+            Text((path as NSString).abbreviatingWithTildeInPath)
+                .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            Text(GeneralSettings.configNote).font(.caption).foregroundStyle(.secondary)
         }
-        if !model.configOverrides.isEmpty {
-            Text("Changed in Searcher, which wins over the config file:")
-                .font(.caption).foregroundStyle(.secondary).padding(.top, 8)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(model.configOverrides, id: \.name) { override in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(override.name).font(.body.monospaced())
-                                Text(GeneralSettings.note(for: override))
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Button("Use Config File Value") { model.useConfigValue(for: override) }
-                                .controlSize(.small)
-                        }
-                    }
-                }
-            }
+        HStack {
+            Button("Change…") { model.changeConfigLocation() }
+            Button("Open in Editor") { model.openConfigFile() }
+            Button(SystemCommands.revealInFinder.title) { model.revealConfigFile() }
+            Button("Use Default") { model.useDefaultConfigLocation() }
+                .disabled(model.configFileIsDefault)
         }
+        .padding(.top, 4)
     }
 }

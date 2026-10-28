@@ -1248,26 +1248,36 @@ private func escapePalette(in fixture: Fixture) throws {
     #expect(fixture.controller.palette == nil)
 }
 
-/// A shortcut the config file gives on a read after launch runs its command from the window's
-/// keys, shows in the palette and in Settings ▸ Shortcuts, with the menus' rules checked by the
-/// watcher as the app makes it.
-@MainActor @Test func aShortcutFromAReloadedConfigFileRunsAndShows() async throws {
+/// Settings over `defaults` connected to a config file in `folder`, with the menus' reserved and
+/// fixed chords checked as the app checks them, and the watch that reports its saves.
+@MainActor
+private func configuredSettings(
+    in folder: TemporaryFolder, defaults: UserDefaults? = nil
+) async -> (Settings, URL, ManualWatch) {
+    let file = folder.url.appending(path: ConfigFile.name)
+    let watch = ManualWatch()
+    let settings = Settings(
+        defaults: defaults ?? temporarySuite(in: folder.url.path), log: unexpectedSettingsLog)
+    await settings.connectTestConfig(
+        file, watch: watch, reserved: MainMenuBuilder.reservedChords,
+        fixed: MainMenuBuilder.fixedChords)
+    return (settings, file, watch)
+}
+
+/// A shortcut the config file gives in a save after launch runs its command from the window's
+/// keys, shows in the palette and in Settings ▸ Shortcuts, with the menus' rules checked as the
+/// app checks them.
+@MainActor @Test func aShortcutFromASavedConfigFileRunsAndShows() async throws {
     let folder = try TemporaryFolder("BrowserWindowControllerTests")
-    let file = folder.url.appending(path: "config")
-    try Data("show-hidden = false\n".utf8).write(to: file)
-    let settings = storedSettings(in: folder)
-    let watcher = ConfigWatcher(
-        file: file, reserved: MainMenuBuilder.reservedChords, fixed: MainMenuBuilder.fixedChords,
-        log: { _ in }, watch: { _, _ in {} })
-    await settings.follow(watcher)
+    let (settings, file, watch) = await configuredSettings(in: folder)
     let fixture = try await Fixture(settings: settings)
     let chord = KeyChord("t", modifiers: [.control, .option, .command])
     #expect(PaneViewController.registry(for: settings).command(for: chord) == nil)
 
-    try Data("shortcut.window.newTab.primary = ctrl+opt+cmd+t\n".utf8).write(
+    try Data(#"{"shortcuts": {"window.newTab": {"primary": "ctrl+opt+cmd+t"}}}"#.utf8).write(
         to: file, options: .atomic)
-    await watcher.reload()
-    await settle { !settings.configShortcuts.isEmpty }
+    watch.change()
+    await settle { !settings.shortcuts.isEmpty }
 
     try fixture.press(try keyEvent("t", modifiers: [.control, .option, .command]))
     #expect(fixture.workspace.tabs.count == 2)
@@ -1287,13 +1297,14 @@ private func escapePalette(in fixture: Fixture) throws {
             $0.id == WindowCommands.newTab.id
         })
     #expect(row.chords.primary == chord)
-    #expect(row.fileSlots == [.primary])
+    #expect(row.isChanged)
 
     // A reserved chord in the file is an error, and the shortcut from before stays.
-    try Data("shortcut.window.newTab.alternate = cmd+q\n".utf8).write(to: file, options: .atomic)
-    await watcher.reload()
+    try Data(#"{"shortcuts": {"window.newTab": {"alternate": "cmd+q"}}}"#.utf8).write(
+        to: file, options: .atomic)
+    watch.change()
     await settle { !settings.configErrors.isEmpty }
-    #expect(settings.configErrors.map(\.line) == [1])
+    #expect(settings.configErrors.map(\.key) == ["shortcuts.window.newTab.alternate"])
     #expect(
         PaneViewController.registry(for: settings).command(for: chord)?.id
             == WindowCommands.newTab.id)
@@ -1302,7 +1313,33 @@ private func escapePalette(in fixture: Fixture) throws {
     let outline = try #require(try keysToSidebar(in: fixture) as? SidebarOutline)
     #expect(outline.passKey(try keyEvent("t", modifiers: [.control, .option, .command])))
     #expect(fixture.workspace.tabs.count == 3)
-    await watcher.stop()
+}
+
+/// The user's report: "appearance": "dark" saved in the file turns a real window dark at once,
+/// with no relaunch, and "light" turns it light; the app gives NSApp the setting the same way.
+/// Their preferences held "appearance" = "auto" from the app, which won over the file while the
+/// app's values overrode it; it is no longer read.
+@MainActor @Test func anAppearanceSavedInTheConfigFileReachesTheWindow() async throws {
+    let folder = try TemporaryFolder("BrowserWindowControllerTests")
+    let defaults = temporarySuite(in: folder.url.path)
+    defaults.set("auto", forKey: "appearance")
+    let (settings, file, watch) = await configuredSettings(in: folder, defaults: defaults)
+    let fixture = try await Fixture(settings: settings)
+    settings.applyAppearance(to: fixture.window)
+    #expect(fixture.window.appearance == nil)
+
+    try Data(#"{"appearance": "dark"}"#.utf8).write(to: file, options: .atomic)
+    watch.change()
+    await settle {
+        fixture.window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+    }
+
+    try Data(#"{"appearance": "light"}"#.utf8).write(to: file, options: .atomic)
+    watch.change()
+    await settle {
+        fixture.window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .aqua
+            && fixture.window.appearance?.name == .aqua
+    }
 }
 
 /// Replaces the text in the palette's field with `query`, as typing would, waits until its rows

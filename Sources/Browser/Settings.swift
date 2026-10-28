@@ -1,18 +1,19 @@
+import Base
 import Foundation
 
 /// The app's preferences, and the only type that reads or writes them. Each is app-wide: every
-/// pane applies the same value, and a change reaches every pane. They live in a `UserDefaults`
-/// suite the owner passes in, so tests and the UI bench never touch the user's own.
+/// pane applies the same value, and a change reaches every pane.
 ///
-/// A key that is missing reads as the preference's default. A value of the wrong type is removed,
-/// logged, and reads as the default too: stored data has one shape, and UserDefaults' own readers would
-/// turn the string "YES" or the number 1 into true, and a number into a string.
+/// The user's preferences, those in `preferences`, and their shortcuts live in the config file
+/// (docs/decisions/0123-config-is-the-settings.md), which `connectConfig` reads, watches and
+/// writes: a change in the app is written to the file, and a save of the file applies at once.
+/// Until one is connected, as in the tests and the UI bench, they live in memory only.
 ///
-/// The user's preferences, those in `preferences`, can also be set in the config file
-/// (docs/decisions/0120-config-format.md). Each reads as the value the app stored, then the
-/// file's, then its default: a change made in the app is stored and wins over the file, which
-/// the app never writes. `configOverrides` lists the app's values that differ from the file's,
-/// and `useConfigValue(for:)` removes one.
+/// The state the app keeps by itself, such as the favorites, the window frame, the palette's
+/// place and where the config file is, lives in a `UserDefaults` suite the owner passes in, so
+/// tests and the UI bench never touch the user's own. A key that is missing reads as its
+/// default. A value of the wrong type is removed, logged, and reads as the default too: stored
+/// data has one shape.
 @MainActor
 public final class Settings {
     enum Key: String {
@@ -32,7 +33,7 @@ public final class Settings {
         case showsFavoritesInSidebar
         case showsLocationsInSidebar
         case showsWorkspacesInSidebar
-        case shortcuts
+        case configFile
     }
 
     /// Where the palette's panel sits on a screen, as Spotlight remembers where it was dragged
@@ -62,29 +63,22 @@ public final class Settings {
         case dark
     }
 
-    /// The preferences a user sets, each with its name in the config file, what it accepts and
-    /// its default: the one list the config file's parser and template are made from. State the
-    /// app keeps by itself, such as the favorites, window frames, the palette's place, and the
-    /// shortcuts, which have a syntax of their own, isn't in it.
+    /// The preferences a user sets, each with its key in the config file, what it accepts and
+    /// its default: the one list the config file's keys, its checks and what the app writes
+    /// are made from. The shortcuts, which have a shape of their own, and the state the app
+    /// keeps by itself, such as the favorites, window frames and the palette's place, aren't in
+    /// it.
     public nonisolated static let preferences: [Preference] = [
         Preference(
-            .showHidden, "show-hidden", .bool, default: .bool(false),
-            summary: "Whether panes list hidden files: names that start with a dot, and files"
-                + " with the hidden flag."),
+            .showHidden, "show-hidden", .bool, default: .bool(false)),
         Preference(
-            .hideDSStore, "hide-ds-store", .bool, default: .bool(true),
-            summary: "Whether panes leave out .DS_Store files even while hidden files show."),
+            .hideDSStore, "hide-ds-store", .bool, default: .bool(true)),
         Preference(
-            .foldersFirst, "folders-first", .bool, default: .bool(false),
-            summary: "Whether folders sort before every other item."),
+            .foldersFirst, "folders-first", .bool, default: .bool(false)),
         Preference(
-            .folderSizes, "folder-sizes", .bool, default: .bool(false),
-            summary: "Whether list view walks each folder for its size, as Finder's Calculate"
-                + " All Sizes does."),
+            .folderSizes, "folder-sizes", .bool, default: .bool(false)),
         Preference(
-            .columnsStartAtHome, "columns-start-at-home", .bool, default: .bool(true),
-            summary: "Whether column view starts a folder in your home folder at your home"
-                + " folder, as Finder does, rather than at the top of its volume."),
+            .columnsStartAtHome, "columns-start-at-home", .bool, default: .bool(true)),
         Preference(
             .columnWidth, "column-width",
             .number(
@@ -92,42 +86,34 @@ public final class Settings {
                 described:
                     "a whole number from \(Int(columnWidths.lowerBound)) to \(Int(columnWidths.upperBound))"
             ),
-            default: .number(defaultColumnWidth),
-            summary: "The width, in points, of each new column in column view."),
+            default: .number(defaultColumnWidth)),
         Preference(
             .appearance, "appearance", .choice(Appearance.allCases.map(\.rawValue)),
-            default: .string(Appearance.auto.rawValue),
-            summary: "Light, dark, or auto to follow the system."),
+            default: .string(Appearance.auto.rawValue)),
         Preference(
             .terminalBundleID, "terminal-bundle-id", .string,
-            default: .string("com.apple.Terminal"),
-            summary: "The bundle ID of the app Open Terminal Here opens a folder in."),
+            default: .string("com.apple.Terminal")),
         Preference(
-            .commanderFKeys, "commander-f-keys", .bool, default: .bool(false),
-            summary: "Whether F5 to F8 copy and move to the other pane, make a folder and move"
-                + " to the Trash, as in Total Commander."),
+            .commanderFKeys, "commander-f-keys", .bool, default: .bool(false)),
         Preference(
             .hideEmptyOperationsPanel, "hide-empty-operations-panel", .bool,
-            default: .bool(true),
-            summary: "Whether a window's operations panel hides once its operations are done."),
+            default: .bool(true)),
         Preference(
-            .showsFavoritesInSidebar, "sidebar-favorites", .bool, default: .bool(true),
-            summary: "Whether the sidebar shows Favorites."),
+            .showsFavoritesInSidebar, "sidebar-favorites", .bool, default: .bool(true)),
         Preference(
-            .showsLocationsInSidebar, "sidebar-locations", .bool, default: .bool(true),
-            summary: "Whether the sidebar shows Locations."),
+            .showsLocationsInSidebar, "sidebar-locations", .bool, default: .bool(true)),
         Preference(
-            .showsWorkspacesInSidebar, "sidebar-workspaces", .bool, default: .bool(true),
-            summary: "Whether the sidebar shows Workspaces."),
+            .showsWorkspacesInSidebar, "sidebar-workspaces", .bool, default: .bool(true)),
     ]
 
     /// `preferences` by key.
     nonisolated static let preferencesByKey = Dictionary(
         uniqueKeysWithValues: preferences.map { ($0.key, $0) })
 
-    /// The config file in `home`, where the app reads it.
+    /// The config file's default location in `home`.
     public nonisolated static func userConfigFile(home: String) -> URL {
-        URL(fileURLWithPath: home, isDirectory: true).appending(path: ".config/searcher/config")
+        URL(fileURLWithPath: home, isDirectory: true).appending(
+            path: ".config/searcher/\(ConfigFile.name)")
     }
 
     /// The width a new column of column view gets until one is set, and the width an
@@ -280,28 +266,20 @@ public final class Settings {
         set { set(.bool(newValue), for: .showsWorkspacesInSidebar) }
     }
 
-    /// The user's changes to the commands' chords made in the app, by command; empty by default.
-    /// A command missing from it keeps the config file's slots (`configShortcuts`), then its
-    /// defaults. Each override is set in one form: a slot set to what it has without the
-    /// override, the file's or else its default, is `.standard`, and an override with both
+    /// The user's changes to the commands' chords, by command; empty by default. Each override
+    /// is kept in one form: a slot set to its default is `.standard`, and an override with both
     /// slots `.standard` is left out, so it is never written
-    /// (docs/decisions/0106-primary-and-alternate-shortcuts.md,
-    /// docs/decisions/0122-config-shortcuts.md). Only the commands whose override changes are
-    /// set so: one set before the file changed keeps overriding it. `KeyBindings` applies them.
+    /// (docs/decisions/0106-primary-and-alternate-shortcuts.md). The config file holds them
+    /// under `shortcuts`. `KeyBindings` applies them.
     ///
     /// - Precondition: every ID is a command's in `AppCommands.commands`.
-    public var shortcuts: [CommandID: ShortcutOverride] {
+    public var shortcuts: [CommandID: ShortcutOverride] = [:] {
         didSet {
-            let normal = Self.normalized(shortcuts, changedFrom: oldValue, file: configShortcuts)
+            guard !isApplyingConfig else { return }
+            let normal = Self.normalized(shortcuts, changedFrom: oldValue)
             if normal != shortcuts { shortcuts = normal }
             guard shortcuts != oldValue else { return }
-            let key = Key.shortcuts.rawValue
-            if shortcuts.isEmpty {
-                defaults.removeObject(forKey: key)
-                notifyObservers()
-            } else {
-                store(Self.stored(shortcuts), for: .shortcuts, changed: true)
-            }
+            changed()
         }
     }
 
@@ -375,159 +353,212 @@ public final class Settings {
         let handler: @MainActor () -> Void
     }
 
-    /// The preferences' values the app stored, which win over the file's.
-    private var appValues: [Key: Value] = [:]
-    /// The preferences' values the config file last set without an error, which win over the
-    /// defaults.
-    private var fileValues: [Key: Value] = [:]
+    /// The preferences' values, the config file's or set in the app since; a preference
+    /// missing from it reads as its default.
+    private var values: [Key: Value] = [:]
+    /// Whether a read of the config file is being applied, which is no change to write back.
+    private var isApplyingConfig = false
 
-    /// The config file, which Open Config File opens; nil for settings that have none, as the
-    /// tests' and the UI bench's, where that command is off.
-    public let configFile: URL?
-
-    /// What is wrong with the config file as last read, which kept it from being applied; empty
-    /// while it applied, or there is none.
-    public private(set) var configErrors: [ConfigError] = []
-
-    /// The shortcut slots the config file last set without an error, by command, which win over
-    /// the defaults and lose to `shortcuts` (docs/decisions/0122-config-shortcuts.md).
-    public private(set) var configShortcuts: [CommandID: ShortcutOverride] = [:]
-
-    /// The watcher `follow(_:)` applies the loads of; its caller keeps it.
-    private weak var configWatcher: ConfigWatcher?
-
-    /// The settings stored in `defaults`, for the user whose home folder is `home`, with
-    /// `configFile` as the config file Open Config File opens. `log` gets each stored value
-    /// removed for its shape as the settings are read.
-    public init(
-        defaults: UserDefaults, home: String = NSHomeDirectory(), configFile: URL? = nil,
-        log: (String) -> Void
-    ) {
+    /// The settings stored in `defaults`, for the user whose home folder is `home`. `log` gets
+    /// each stored value removed for its shape as the settings are read.
+    public init(defaults: UserDefaults, home: String = NSHomeDirectory(), log: (String) -> Void) {
         self.defaults = defaults
         self.home = home
-        self.configFile = configFile
-        for preference in Self.preferences {
-            appValues[preference.key] = Self.stored(preference, in: defaults, log: log)
-        }
         palettePlace = Self.palettePlace(in: defaults, log: log)
         newWindowFrame = Self.windowFrame(in: defaults, log: log)
         favorites = Self.favorites(in: defaults, log: log) ?? Favorite.defaults(home: home)
-        shortcuts = Self.shortcuts(in: defaults, log: log)
+        chosenConfigFile = Self.chosenConfigFile(in: defaults, log: log)
     }
 
-    /// Applies what the config file holds: its values, every default when there is no file, or,
-    /// for a file with an error, the errors, which leave the values as they were. Tells the
-    /// observers when a value, the overrides or the errors changed: a file can change which
-    /// app values override it while every value reads as before.
-    public func applyConfig(_ load: ConfigLoad) {
-        let before = (
-            Self.preferences.map { value(of: $0.key) }, configOverrides, configErrors,
-            configShortcuts
-        )
+    // MARK: Config file
+
+    /// Makes the store of the config file at `file`; `isDefault` says whether it is the default
+    /// location, whose folder the store may make.
+    public typealias MakeConfigStore = @MainActor (_ file: URL, _ isDefault: Bool) -> ConfigStore
+
+    /// What `connectConfig` was given.
+    private struct Connection {
+        let defaultFile: URL
+        let startWait: DeadlineWait.Start
+        let makeStore: MakeConfigStore
+    }
+
+    private var connection: Connection?
+    /// The store of the config file in use.
+    private var configStore: ConfigStore?
+    /// The generation of the last read of the file applied, which a write is based on.
+    private var configGeneration = 0
+    /// Counts the writes, so the store drops one that arrives after a later one.
+    private var saveSequence = 0
+    /// The wait before the next write, which starts with the first change not yet written.
+    private var scheduledSave: Task<Void, Never>?
+    /// The config file the user chose, which `UserDefaults` keeps as a path, since it can't
+    /// live in the file it names; nil for the default location.
+    private var chosenConfigFile: URL?
+    /// What kept the last read of the file from being applied.
+    private var readErrors: [ConfigError] = []
+    /// Why the last write of the file failed; nil once one succeeds.
+    private var saveFailure: ConfigError?
+
+    /// The config file the settings are read from and written to; nil until `connectConfig`
+    /// runs, and for settings that never connect one, as the tests' and the UI bench's.
+    public var configFile: URL? { configStore?.file }
+
+    /// Whether `configFile` is at the default location rather than one the user chose.
+    public var configFileIsDefault: Bool { chosenConfigFile == nil }
+
+    /// What is wrong with the config file as last read, which kept it from being applied, and
+    /// why the last write of it failed; empty while it applies and saves, or there is none.
+    public var configErrors: [ConfigError] { readErrors + (saveFailure.map { [$0] } ?? []) }
+
+    /// Reads the config file at the location the user chose, or else at `defaultFile`, through
+    /// a store `makeStore` makes, and applies it before it returns, so windows opened after it
+    /// open with the file's settings; with no file there it writes one from the settings. Then
+    /// applies each later read as it comes, and writes each change made in the app
+    /// `WorkspaceStore.writeDelay` after the first one not yet written, timed on `clock`.
+    public func connectConfig<C: Clock<Duration>>(
+        defaultFile: URL, clock: C = ContinuousClock(), makeStore: @escaping MakeConfigStore
+    ) async {
+        precondition(connection == nil, "the config file is already connected")
+        connection = Connection(
+            defaultFile: defaultFile, startWait: DeadlineWait.make(on: clock),
+            makeStore: makeStore)
+        await use(chosenConfigFile ?? defaultFile)
+    }
+
+    /// Keeps the config file at `chosen`, or in it as `ConfigFile.name` when it is a folder,
+    /// from now on: a file there is read and applied, and with none the settings are written
+    /// there. A file there with an error is shown and not written over, and the settings stay
+    /// as they are.
+    public func moveConfig(to chosen: URL) async {
+        let file = await Task.detached { ConfigStore.file(forChosen: chosen) }.value
+        guard let connection else { preconditionFailure("no config file is connected") }
+        if file == connection.defaultFile {
+            await useDefaultConfigFile()
+            return
+        }
+        defaults.set(file.path, forKey: Key.configFile.rawValue)
+        chosenConfigFile = file
+        await use(file)
+    }
+
+    /// Keeps the config file at the default location from now on, as `moveConfig` does.
+    public func useDefaultConfigFile() async {
+        guard let connection else { preconditionFailure("no config file is connected") }
+        defaults.removeObject(forKey: Key.configFile.rawValue)
+        chosenConfigFile = nil
+        await use(connection.defaultFile)
+    }
+
+    /// Writes the change waiting for its delay now, as quitting needs. With none waiting it
+    /// writes nothing, so a file the app hasn't changed keeps the user's text.
+    public func flushConfig() async {
+        guard let scheduledSave else { return }
+        scheduledSave.cancel()
+        self.scheduledSave = nil
+        await saveConfig()
+    }
+
+    /// Makes the config file from the settings when there is none, as Open Config File needs,
+    /// and says whether there is a file to open.
+    func makeConfigFileIfMissing() async -> Bool {
+        guard let store = configStore else { preconditionFailure("no config file is connected") }
+        return await store.makeIfMissing(configContents, basedOn: configGeneration)
+    }
+
+    /// Applies `load`, read as `generation`: its values and shortcuts, every default when there
+    /// is no file, or, for a file with an error, the errors, which leave the settings as they
+    /// were. Tells the observers when anything changed. A change made in the app and not yet
+    /// written is dropped: the file wins.
+    func applyConfig(_ load: ConfigLoad, generation: Int) {
+        configGeneration = generation
+        scheduledSave?.cancel()
+        scheduledSave = nil
+        let before = (Self.preferences.map { value(of: $0.key) }, shortcuts, readErrors)
         switch load.outcome {
         case .missing:
-            fileValues = [:]
-            configShortcuts = [:]
-            configErrors = []
-        case .values(let values, _):
-            fileValues = values
-            configShortcuts = load.shortcuts
-            configErrors = []
+            replace(values: [:], shortcuts: [:])
+            readErrors = []
+        case .values(let values, let shortcuts):
+            replace(values: values, shortcuts: shortcuts)
+            readErrors = []
         case .failed(let errors):
-            configErrors = errors
+            readErrors = errors
         }
-        let after = (
-            Self.preferences.map { value(of: $0.key) }, configOverrides, configErrors,
-            configShortcuts
-        )
-        if before != after {
+        if before != (Self.preferences.map { value(of: $0.key) }, shortcuts, readErrors) {
             notifyObservers()
         }
     }
 
-    /// Applies `watcher`'s first read of the file before it returns, so windows opened after it
-    /// open with the file's values, then each later read as it comes, until the settings or the
-    /// watcher are gone. The caller keeps the watcher.
-    public func follow(_ watcher: ConfigWatcher) async {
-        configWatcher = watcher
-        applyConfig(await watcher.start())
-        let loads = watcher.loads
+    private func replace(values: [Key: Value], shortcuts: [CommandID: ShortcutOverride]) {
+        self.values = values
+        isApplyingConfig = true
+        self.shortcuts = Self.normalized(shortcuts, changedFrom: [:])
+        isApplyingConfig = false
+    }
+
+    /// Switches to the store of `file`, after writing what the last one has waiting: reads it,
+    /// and applies the read, or with no file writes the settings there.
+    private func use(_ file: URL) async {
+        guard let connection else { preconditionFailure("no config file is connected") }
+        if let old = configStore {
+            await flushConfig()
+            await old.stop()
+        }
+        let store = connection.makeStore(file, file == connection.defaultFile)
+        configStore = store
+        readErrors = []
+        saveFailure = nil
+        let updates = store.updates
+        let first = await store.start()
+        guard configStore === store else { return }
+        configGeneration = 0
+        if first == .missing {
+            await saveConfig()
+        } else {
+            applyConfig(first, generation: 0)
+        }
+        // The file, its errors or the settings may have changed.
+        notifyObservers()
         Task { [weak self] in
-            for await load in loads {
-                guard let self else { return }
-                applyConfig(load)
+            for await update in updates {
+                guard let self, configStore === store else { return }
+                switch update {
+                case .read(let load, let generation):
+                    applyConfig(load, generation: generation)
+                case .saved(let failure):
+                    guard failure != saveFailure else { continue }
+                    saveFailure = failure
+                    notifyObservers()
+                }
             }
         }
     }
 
-    /// Shows `error`, found with the config file outside a read of it, as one that came from a
-    /// read. With a watcher followed, it goes through the watcher, so the next read clears it
-    /// even when that read is the same as the one before, as no file is after a link to nothing
-    /// is removed; the error shows once the watcher's load is applied.
-    func reportConfigProblem(_ error: ConfigError) async {
-        if let configWatcher {
-            await configWatcher.report([error])
-        } else {
-            applyConfig(.failed([error]))
-        }
+    /// What a write of the config file holds now.
+    private var configContents: ConfigFile.Contents {
+        ConfigFile.Contents(values: values, shortcuts: shortcuts)
     }
 
-    /// The preferences whose value set in the app differs from the config file's, in
-    /// `preferences` order.
-    public var configOverrides: [ConfigOverride] {
-        Self.preferences.compactMap { preference in
-            guard let app = appValues[preference.key], let file = fileValues[preference.key],
-                app != file
-            else { return nil }
-            return ConfigOverride(
-                key: preference.key, name: preference.name, appValue: app, fileValue: file)
-        }
-    }
-
-    /// Removes the value the app set for `override`'s preference, so the config file's applies.
-    public func useConfigValue(for override: ConfigOverride) {
-        guard appValues.removeValue(forKey: override.key) != nil else { return }
-        defaults.removeObject(forKey: override.key.rawValue)
+    /// Tells the observers of a change made in the app, and writes it to the config file
+    /// `WorkspaceStore.writeDelay` after the first change not yet written, so a burst of
+    /// changes costs one write.
+    private func changed() {
         notifyObservers()
-    }
-
-    /// The shortcut slots set in the app to other than the config file sets them, by command
-    /// in `AppCommands.commands` order, primary first. A slot the file doesn't set isn't listed:
-    /// the app's override of a default is what Reset is for.
-    public var shortcutConfigOverrides: [ShortcutConfigOverride] {
-        AppCommands.commands.flatMap { shortcutConfigOverrides(of: $0.id) }
-    }
-
-    /// `shortcutConfigOverrides` of command `id` alone.
-    public func shortcutConfigOverrides(of id: CommandID) -> [ShortcutConfigOverride] {
-        guard let app = shortcuts[id], let file = configShortcuts[id] else { return [] }
-        return ShortcutOverride.Position.allCases.compactMap { position in
-            guard app[position] != .standard, file[position] != .standard,
-                app[position] != file[position]
-            else { return nil }
-            return ShortcutConfigOverride(
-                command: id, position: position, appSlot: app[position],
-                fileSlot: file[position])
+        guard let connection, configStore != nil, scheduledSave == nil else { return }
+        let wait = connection.startWait(WorkspaceStore.writeDelay)
+        scheduledSave = Task { [weak self] in
+            guard await DeadlineWait.reached(wait), let self, !Task.isCancelled else { return }
+            scheduledSave = nil
+            await saveConfig()
         }
     }
 
-    /// Whether the app's override of command `id` changes what its slots would be without it,
-    /// against the config file as now read. A stored override can stop doing so when the file
-    /// changes: a read of the file doesn't rewrite the app's values.
-    public func shortcutOverrideChangesSlots(of id: CommandID) -> Bool {
-        guard let override = shortcuts[id] else { return false }
-        guard let command = Self.commands[id] else {
-            preconditionFailure("no command has the ID \(id)")
-        }
-        return !override.normalized(
-            for: command, preset: FileCommands.commanderFKeys[id],
-            file: configShortcuts[id] ?? ShortcutOverride()
-        ).isStandard
-    }
-
-    /// Removes the app's override of `override`'s slot, so the config file's applies.
-    public func useConfigShortcut(for override: ShortcutConfigOverride) {
-        shortcuts[override.command]?[override.position] = .standard
+    /// Hands the settings to the store to write.
+    private func saveConfig() async {
+        guard let store = configStore else { return }
+        saveSequence += 1
+        await store.save(configContents, basedOn: configGeneration, sequence: saveSequence)
     }
 
     /// Runs `handler` after each change of a setting, for as long as `owner` exists.
@@ -545,12 +576,12 @@ public final class Settings {
         notifyObservers()
     }
 
-    /// The value of preference `key`: the app's, the file's, or the default.
-    private func value(of key: Key) -> Value {
+    /// The value of preference `key`, or its default.
+    func value(of key: Key) -> Value {
         guard let preference = Self.preferencesByKey[key] else {
             preconditionFailure("\(key) isn't a preference")
         }
-        return appValues[key] ?? fileValues[key] ?? preference.defaultValue
+        return values[key] ?? preference.defaultValue
     }
 
     private func bool(_ key: Key) -> Bool {
@@ -574,20 +605,12 @@ public final class Settings {
         return string
     }
 
-    /// Stores `value` as the app's for preference `key` when it changes what the preference
-    /// reads as, and tells the observers. The config file's own value removes the app's
-    /// instead, so the preference follows the file again rather than keep an override that
-    /// would outlast the next change of the file.
+    /// Sets preference `key` to `value` when that changes it, tells the observers and writes
+    /// the config file.
     private func set(_ value: Value, for key: Key) {
-        if value == fileValues[key] {
-            guard appValues.removeValue(forKey: key) != nil else { return }
-            defaults.removeObject(forKey: key.rawValue)
-            notifyObservers()
-            return
-        }
         guard value != self.value(of: key) else { return }
-        appValues[key] = value
-        store(value.stored, for: key, changed: true)
+        values[key] = value
+        changed()
     }
 
     private func notifyObservers() {
@@ -603,24 +626,15 @@ public final class Settings {
         CFGetTypeID(number) == CFBooleanGetTypeID()
     }
 
-    /// The value stored for `preference`; nil when there is none, or it has another type, a
-    /// Boolean for a number among them, or one the preference doesn't accept, which is removed.
-    private static func stored(
-        _ preference: Preference, in defaults: UserDefaults, log: (String) -> Void
-    ) -> Value? {
-        let key = preference.key.rawValue
-        guard let stored = defaults.object(forKey: key) else { return nil }
-        let value: Value? =
-            switch stored {
-            case let number as NSNumber where isBoolean(number): .bool(number.boolValue)
-            case let number as NSNumber: .number(number.doubleValue)
-            case let string as String: .string(string)
-            default: nil
-            }
-        if let value, preference.accepts(value) {
-            return value
+    /// The config file the user chose, stored under its key as an absolute path; nil when there
+    /// is none, or it is anything else, which is removed.
+    private static func chosenConfigFile(in defaults: UserDefaults, log: (String) -> Void) -> URL? {
+        let key = Key.configFile.rawValue
+        guard let value = defaults.object(forKey: key) else { return nil }
+        if let path = value as? String, path.hasPrefix("/") {
+            return URL(fileURLWithPath: path)
         }
-        discard(key, holding: stored, in: defaults, log: log)
+        discard(key, holding: value, in: defaults, log: log)
         return nil
     }
 
@@ -680,72 +694,26 @@ public final class Settings {
         return nil
     }
 
-    /// The shortcuts stored under their key: a dictionary of command IDs to overrides in their
-    /// stored shape. Empty when there is none, or when it or any override in it has another
-    /// shape, and the whole key is removed, as for `favorites`. An entry for an ID no command
-    /// has, as after a command is renamed, is a change of the code rather than bad data: only
-    /// that entry is removed. A slot equal to its default is kept: it may override a config
-    /// file that isn't read yet.
-    private static func shortcuts(in defaults: UserDefaults, log: (String) -> Void) -> [CommandID:
-        ShortcutOverride]
-    {
-        let key = Key.shortcuts.rawValue
-        guard let value = defaults.object(forKey: key) else { return [:] }
-        if let dictionary = value as? [String: Any] {
-            let overrides = dictionary.compactMapValues(ShortcutOverride.init(stored:))
-            if overrides.count == dictionary.count {
-                let read = Dictionary(
-                    uniqueKeysWithValues: overrides.map { (CommandID($0.key), $0.value) })
-                let known = read.filter { commands[$0.key] != nil }
-                if known != read {
-                    if known.isEmpty {
-                        defaults.removeObject(forKey: key)
-                    } else {
-                        defaults.set(stored(known), forKey: key)
-                    }
-                    let dropped = Set(read.keys).subtracting(known.keys).map(\.rawValue).sorted()
-                    log(
-                        "rewrote the setting \(key) without the overrides of \(dropped), which"
-                            + " no command has")
-                }
-                return known
-            }
-        }
-        discard(key, holding: value, in: defaults, log: log)
-        return [:]
-    }
-
     /// Every command by ID.
     private static let commands = Dictionary(
         AppCommands.commands.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
 
     /// `shortcuts` with each override that differs from `old`'s
-    /// `ShortcutOverride.normalized(for:preset:file:)` against the config file's slots in
-    /// `file`, and those that change nothing left out.
+    /// `ShortcutOverride.normalized(for:preset:)`, and those that change nothing left out.
     ///
     /// - Precondition: each ID whose override differs from `old`'s is a command's.
     private static func normalized(
-        _ shortcuts: [CommandID: ShortcutOverride], changedFrom old: [CommandID: ShortcutOverride],
-        file: [CommandID: ShortcutOverride]
+        _ shortcuts: [CommandID: ShortcutOverride], changedFrom old: [CommandID: ShortcutOverride]
     ) -> [CommandID: ShortcutOverride] {
         var normal = shortcuts
         for (id, override) in shortcuts where old[id] != override {
             guard let command = commands[id] else {
                 preconditionFailure("no command has the ID \(id)")
             }
-            let kept = override.normalized(
-                for: command, preset: FileCommands.commanderFKeys[id],
-                file: file[id] ?? ShortcutOverride())
+            let kept = override.normalized(for: command, preset: FileCommands.commanderFKeys[id])
             normal[id] = kept.isStandard ? nil : kept
         }
         return normal
-    }
-
-    /// `shortcuts` in their stored shape, by the IDs' raw values.
-    private static func stored(_ shortcuts: [CommandID: ShortcutOverride]) -> [String: [String:
-        String]]
-    {
-        Dictionary(uniqueKeysWithValues: shortcuts.map { ($0.key.rawValue, $0.value.stored) })
     }
 
     /// Removes `key`, whose stored `value` has another shape than its setting's, and logs it, so
