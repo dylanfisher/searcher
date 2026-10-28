@@ -90,3 +90,10 @@ in performance.md is expected to move; `./scripts/bench` wasn't run (other build
 Stored listing caches from before this change list packages as folders until the folder is
 listed again, which happens on the next visit. The column preview of an app shows the generic
 application icon, not the app's own, until icons are read per file.
+
+## Amendment: the color label (2026-10-27, TG.2)
+
+The listing also takes the color label from the Finder info it reads, and reads the tags
+attribute of an entry whose label isn't 0, for the row's tag dots. A folder or file read alone
+reads its Finder info with one `getattrlist` for the label
+([0124](0124-tags-in-rows-and-preview.md)).
