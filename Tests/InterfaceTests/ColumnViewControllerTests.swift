@@ -1226,16 +1226,17 @@ private let socket = DirectoryEntry(
     fixture.pane.itemInfoReader = reader
     await fixture.select(longName, inColumn: 0)
     let view = try #require(fixture.controller.previewView)
-    await settle { !view.tagsField.isHidden }
+    await settle { !view.tagPills.isHidden }
 
     view.summaryField.stringValue =
         "Portable Document Format (PDF) – 12.3 MB" + String(repeating: " and more", count: 6)
     fixture.controller.view.layoutSubtreeIfNeeded()
 
     let fields = try #require(view.accessibilityChildren() as? [NSTextField])
-    #expect(fields.count == 11)
-    // The tags wrap onto more than one line.
-    #expect(view.tagsField.frame.height > 2 * view.summaryField.frame.height)
+    // Ten fields, then each of the twelve tags' pills.
+    #expect(fields.count == 10 + tags.count)
+    // The pills wrap onto more than two rows.
+    #expect(view.tagPills.frame.height > 2 * view.summaryField.frame.height)
     // Laid out, and the name wrapped onto more than one line.
     #expect(view.summaryField.frame.width > 100)
     #expect(view.nameField.frame.height > 2 * view.summaryField.frame.height)
@@ -1725,7 +1726,7 @@ private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
     // Once the hold ends, the rows are there with no value, and there are no tags.
     #expect(view.createdField.stringValue == "")
     #expect(view.lastOpenedField.stringValue == "")
-    #expect(view.tagsField.isHidden)
+    #expect(view.tagPills.isHidden)
     #expect(
         try informationTitles(view) == [
             ColumnPreviewView.createdTitle, ColumnPreviewView.modifiedTitle,
@@ -1742,13 +1743,13 @@ private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
     fixture.controller.view.layoutSubtreeIfNeeded()
 
     #expect(view.lastOpenedField.stringValue == EntryCellFormatter().longDate(opened))
-    #expect(!view.tagsField.isHidden)
-    #expect(view.tagsField.stringValue == "Red, Work")
+    #expect(!view.tagPills.isHidden)
+    #expect(view.tagPills.names.joined(separator: ", ") == "Red, Work")
     #expect(try informationTitles(view).last == ColumnPreviewView.tagsTitle)
     #expect(places() == before)
     // Below Last opened, in the view's unflipped coordinates.
     let lastOpened = view.lastOpenedField.convert(view.lastOpenedField.bounds, to: view)
-    #expect(view.tagsField.convert(view.tagsField.bounds, to: view).maxY < lastOpened.minY)
+    #expect(view.tagPills.convert(view.tagPills.bounds, to: view).maxY < lastOpened.minY)
 }
 
 @MainActor @Test func aFileWithNoReadShowsNoValuesAndAFailedReadShowsDashes() async throws {
@@ -1769,12 +1770,12 @@ private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
     let view = try #require(fixture.controller.previewView)
     #expect(view.createdField.stringValue == "")
     #expect(view.lastOpenedField.stringValue == "")
-    #expect(view.tagsField.isHidden)
+    #expect(view.tagPills.isHidden)
 
     await fixture.select("a.txt", inColumn: 0)
     await settle { view.createdField.stringValue == ColumnPreviewView.noDate }
     #expect(view.lastOpenedField.stringValue == ColumnPreviewView.noDate)
-    #expect(view.tagsField.isHidden)
+    #expect(view.tagPills.isHidden)
     #expect(reader.calls.map(\.path) == ["/Volumes/r/a.txt"])
 }
 
@@ -1819,7 +1820,7 @@ private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
         shown.append([
             view.nameField.stringValue, view.createdField.stringValue,
             view.lastOpenedField.stringValue,
-            view.tagsField.isHidden ? "" : view.tagsField.stringValue,
+            view.tagPills.isHidden ? "" : view.tagPills.names.joined(separator: ", "),
         ])
     }
 
@@ -2448,7 +2449,7 @@ private let gripDrags: [[Double]] = [[-30.37, -60.81, -90.13], [-60.4, -20.77, 4
     fixture.pane.itemInfoReader = reader
     await fixture.select("a.txt", inColumn: 0)
     let view = try #require(fixture.controller.previewView)
-    await settle { !view.tagsField.isHidden }
+    await settle { !view.tagPills.isHidden }
     drag(try #require(fixture.controller.previewGrip), by: -1000)
     view.modifiedField.stringValue = "Wednesday, September 30, 2026 at 12:50 PM"
     fixture.controller.view.layoutSubtreeIfNeeded()
