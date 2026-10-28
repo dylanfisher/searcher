@@ -26,6 +26,20 @@ public final class Workspace {
             if showsSidebar != oldValue { onChange?() }
         }
     }
+    /// What the window showed before a saved workspace was opened into it, for Back, and what
+    /// Back left, for Forward (docs/decisions/0125-workspace-open-is-a-back-step.md).
+    public private(set) var history: WorkspaceHistory {
+        didSet {
+            if history != oldValue { onChange?() }
+        }
+    }
+    /// Rebuilds a tab from its state, with panes that list as the window's own do, for `open`
+    /// and the window's Back and Forward. Its window's owner sets it; a step taken without it
+    /// traps.
+    public var restoreTab: (@MainActor (TabState) -> Tab)?
+    /// Runs after the window's Back or Forward shows a step, for the window to show whether it
+    /// still matches its saved workspace.
+    public var onStep: (@MainActor () -> Void)?
     public private(set) var tabs: [Tab] {
         didSet { onChange?() }
     }
@@ -63,20 +77,26 @@ public final class Workspace {
     /// A new, unnamed workspace of one tab. A new window shows the sidebar as the window it
     /// opens from does, as in Finder, so its opener passes `showsSidebar`.
     public convenience init(tab: Tab, showsSidebar: Bool = false) {
-        self.init(id: UUID(), name: nil, tabs: [tab], selectedTab: 0, showsSidebar: showsSidebar)
+        self.init(
+            id: UUID(), name: nil, tabs: [tab], selectedTab: 0, showsSidebar: showsSidebar,
+            history: WorkspaceHistory())
     }
 
-    /// A workspace of `tabs`, in strip order, with the one at `selectedTab` selected, as
-    /// `WorkspaceState` keeps it.
+    /// A workspace of `tabs`, in strip order, with the one at `selectedTab` selected, and the
+    /// window's own Back and Forward, as `WorkspaceState` keeps it.
     ///
     /// - Precondition: `tabs` isn't empty and `selectedTab` is one of its indices.
-    public init(id: UUID, name: String?, tabs: [Tab], selectedTab: Int, showsSidebar: Bool) {
+    public init(
+        id: UUID, name: String?, tabs: [Tab], selectedTab: Int, showsSidebar: Bool,
+        history: WorkspaceHistory
+    ) {
         precondition(
             tabs.indices.contains(selectedTab),
             "selected tab \(selectedTab) isn't one of the \(tabs.count) tabs")
         self.id = id
         self.name = name
         self.showsSidebar = showsSidebar
+        self.history = history
         self.tabs = tabs
         self.selectedTab = tabs[selectedTab]
         for tab in tabs {
@@ -122,13 +142,66 @@ public final class Workspace {
 
     /// The workspace as `WorkspaceState` keeps it, in a window at `frame`.
     public func state(frame: Rect) -> WorkspaceState {
-        WorkspaceState(
-            id: id, name: name, frame: frame, tabs: tabs.map(\.state),
-            selectedTab: index(of: selectedTab.id), showsSidebar: showsSidebar)
+        let shown = step
+        return WorkspaceState(
+            id: id, name: name, frame: frame, tabs: shown.tabs, selectedTab: shown.selectedTab,
+            showsSidebar: shown.showsSidebar, history: history)
     }
 
-    /// Replaces every tab with `tabs`, selecting the one at `selectedTab`, as loading a saved
-    /// workspace's snapshot into its open window does. The tabs it had close, panes and all.
+    /// What the window shows, as a step of its Back and Forward.
+    private var step: WorkspaceHistory.Step {
+        WorkspaceHistory.Step(
+            tabs: tabs.map(\.state), selectedTab: index(of: selectedTab.id),
+            showsSidebar: showsSidebar)
+    }
+
+    /// Shows `shown`, a saved workspace's snapshot, in place of every tab, as opening the saved
+    /// workspace into its own window does. What the window showed becomes a step of its Back,
+    /// as a navigation is one of a pane's: its panes lose their way forward, and the window
+    /// loses its own. The new panes start with no Back or Forward, so Back in any of them
+    /// steps the window back.
+    public func open(_ shown: WorkspaceHistory.Step) {
+        history.leave(step.withHistories { History(back: $0.backEntries, forward: []) })
+        show(shown.withHistories { _ in History() })
+    }
+
+    /// Whether the window has a step to go back or forward to.
+    public var canStepBack: Bool { !history.back.isEmpty }
+    public var canStepForward: Bool { !history.forward.isEmpty }
+
+    /// Shows what the window showed before its last open or Forward, keeping what it shows now
+    /// as the way forward. Does nothing with no step back.
+    public func stepBack() {
+        guard let step = history.back(from: step) else { return }
+        show(step)
+        onStep?()
+    }
+
+    /// Shows the step Back last left, keeping what it shows now as the way back. Does nothing
+    /// with no step forward.
+    public func stepForward() {
+        guard let step = history.forward(from: step) else { return }
+        show(step)
+        onStep?()
+    }
+
+    /// Ends the window's way forward, as a navigation in one of its panes does.
+    private func paneDidNavigate() {
+        history.dropForward()
+    }
+
+    /// Rebuilds the tabs of `step` in place of every tab.
+    private func show(_ step: WorkspaceHistory.Step) {
+        guard let restoreTab else {
+            preconditionFailure("workspace \(id) can't rebuild a tab to show a step")
+        }
+        reload(
+            tabs: step.tabs.map(restoreTab), selectedTab: step.selectedTab,
+            showsSidebar: step.showsSidebar)
+    }
+
+    /// Replaces every tab with `tabs`, selecting the one at `selectedTab`. The tabs it had close,
+    /// panes and all.
     ///
     /// - Precondition: `tabs` isn't empty and `selectedTab` is one of its indices.
     public func reload(tabs newTabs: [Tab], selectedTab index: Int, showsSidebar: Bool) {
@@ -234,6 +307,7 @@ public final class Workspace {
     private func watchFocus(of tab: Tab) {
         tab.onFocusChange = { [weak self] in self?.updatePanes() }
         tab.onChange = { [weak self] in self?.onChange?() }
+        tab.onNavigate = { [weak self] in self?.paneDidNavigate() }
     }
 
     /// Shows the selected tab's panes and hides every other tab's, then tells the selected tab's

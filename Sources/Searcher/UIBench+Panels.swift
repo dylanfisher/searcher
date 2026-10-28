@@ -111,7 +111,7 @@ extension UIBench {
                 WorkspaceState(
                     id: UUID(), name: "Bench \(number)",
                     frame: Rect(x: 0, y: 0, width: 900, height: 600), tabs: tabs, selectedTab: 0,
-                    showsSidebar: false))
+                    showsSidebar: false, history: WorkspaceHistory()))
         }
         // The command's own chord, so the bench presses whatever the registry binds to it.
         guard let chord = WorkspaceCommands.toggleSidebar.chords.first else {
