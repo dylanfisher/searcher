@@ -921,36 +921,34 @@ private func expectKey(_ chord: KeyChord?, on item: NSMenuItem, _ comment: Comme
     expectKey(KeyChord("p", modifiers: [.command, .shift]), on: hidden)
 }
 
-/// A read of the config file changes the installed items as a change in the app does, and the
-/// app's shortcut wins over the file's.
-@MainActor @Test func aConfigFileShortcutUpdatesTheInstalledItems() throws {
+/// A save of the config file changes the installed items as a change in the app does, and its
+/// deletion gives the defaults back.
+@MainActor @Test func aConfigFileShortcutUpdatesTheInstalledItems() async throws {
     let app = NSApplication.shared
     let (mainMenu, windowsMenu, helpMenu) = (app.mainMenu, app.windowsMenu, app.helpMenu)
     defer { (app.mainMenu, app.windowsMenu, app.helpMenu) = (mainMenu, windowsMenu, helpMenu) }
-    let folder = try TemporaryFolder("MainMenuBuilderTests")
-    let settings = storedSettings(in: folder)
+    let config = try await ConfigFixture("MainMenuBuilderTests")
+    let settings = config.settings
     NSMenuItem.usesUserKeyEquivalents = false
     try MainMenuBuilder.install(in: app, appName: "Searcher", settings: settings)
     let menu = try #require(app.mainMenu)
     let fromFile = KeyChord("o", modifiers: [.command, .shift])
-    let fromApp = KeyChord("o", modifiers: [.command, .option])
 
-    settings.applyConfig(
-        ConfigParser.parse(
-            """
-            shortcut.window.showPalette.primary = cmd+shift+o
-            shortcut.window.showPalette.alternate = none
-            """))
+    try config.save(
+        #"{"shortcuts": {"window.showPalette": {"primary": "cmd+shift+o", "alternate": ""}}}"#)
+    await settle { !settings.shortcuts.isEmpty }
 
     let (shown, hidden) = try items(for: WindowCommands.showPalette.id, in: menu)
     expectKey(fromFile, on: shown)
     expectKey(nil, on: hidden)
 
-    settings.shortcuts = [WindowCommands.showPalette.id: ShortcutOverride(primary: .chord(fromApp))]
-    expectKey(fromApp, on: shown)
-
-    settings.applyConfig(.missing)
-    expectKey(fromApp, on: shown)
+    try FileManager.default.removeItem(at: config.file)
+    config.watch.change()
+    // A file found gone is read again a moment later before it counts as deleted.
+    await settle { config.clock.waitingSleeps > 0 }
+    config.clock.advance(by: ConfigStore.confirmDelay)
+    await settle { settings.shortcuts.isEmpty }
+    expectKey(KeyChord("k", modifiers: .command), on: shown)
     expectKey(KeyChord("p", modifiers: [.command, .shift]), on: hidden)
 }
 

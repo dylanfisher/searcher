@@ -1,7 +1,7 @@
 # 0122. Shortcuts in the config file
 
 - **Date:** 2026-10-27
-- **Status:** accepted
+- **Status:** superseded by [0123](0123-config-is-the-settings.md)
 - **Amends:** [0106](0106-primary-and-alternate-shortcuts.md), where it says how stored
   shortcuts are normalized and that they are read from `UserDefaults` only, and
   [0120](0120-config-format.md), where it says shortcuts wait for M5b.2.
@@ -109,3 +109,11 @@ that does nothing should say so.
 Browser's tests check the menus' rules with chords they give, and the app passes the real ones
 from `MainMenuBuilder`; a test of the walk over every command through the file passes no rules,
 as `KeyBindingsTests.everyCommandCanBeRebound` does.
+
+## Superseded (2026-10-27)
+
+[0123](0123-config-is-the-settings.md) replaces this record. Shortcuts sit in the JSON file under
+`"shortcuts"` in 0106's stored shape, and `Settings.shortcuts` is read from and written to the
+file, so there are no file and app layers, no `fileOverrides` in `KeyBindings`, and no file
+captions or Use Config File Value in the Shortcuts pane. The menus' reserved and fixed chords
+are still checked when the file is read, and are errors that name their key.

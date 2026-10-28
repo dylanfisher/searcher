@@ -1049,13 +1049,14 @@ private func menuItem(_ command: Command) -> NSMenuItem {
     withExtendedLifetime(controller) {}
 }
 
-/// Until the Settings window can change them, shortcuts are set with `defaults write`; the
-/// pane's keys follow what is stored (docs/decisions/0106-primary-and-alternate-shortcuts.md).
-@MainActor @Test func aShortcutWrittenToTheDefaultsChangesWhatAKeyRunsInThePane() async throws {
-    let folder = try TemporaryFolder("PaneViewControllerTests")
-    let defaults = temporarySuite(in: folder.url.path)
-    defaults.set(["view.toggleHidden": ["primary": "cmd+j"]], forKey: "shortcuts")
-    let settings = Settings(defaults: defaults, log: unexpectedSettingsLog)
+/// The pane's keys follow the settings' shortcuts
+/// (docs/decisions/0106-primary-and-alternate-shortcuts.md).
+@MainActor @Test func aShortcutInTheSettingsChangesWhatAKeyRunsInThePane() async throws {
+    let settings = untouchedSettings()
+    settings.shortcuts = [
+        ViewCommands.toggleHidden.id: ShortcutOverride(
+            primary: .chord(KeyChord("j", modifiers: .command)))
+    ]
     let pane = Pane(
         location: Location(path: "/root"),
         service: ListingService(lister: StubLister(Fixture.folders)),
@@ -1078,12 +1079,11 @@ private func menuItem(_ command: Command) -> NSMenuItem {
 /// ↓ in the filter field is the field's own key: it selects the next row even after the user
 /// took ↓ from Select Next Row and gave it to Open.
 @MainActor @Test func theFilterFieldsArrowsMoveTheRowWhateverTheShortcuts() async throws {
-    let folder = try TemporaryFolder("PaneViewControllerTests")
-    let defaults = temporarySuite(in: folder.url.path)
-    defaults.set(
-        ["selection.next": ["primary": ""], "navigation.open": ["alternate": "down"]],
-        forKey: "shortcuts")
-    let settings = Settings(defaults: defaults, log: unexpectedSettingsLog)
+    let settings = untouchedSettings()
+    settings.shortcuts = [
+        SelectionCommands.selectNext.id: ShortcutOverride(primary: .removed),
+        NavigationCommands.open.id: ShortcutOverride(alternate: .chord(KeyChord(.down))),
+    ]
     let pane = Pane(
         location: Location(path: "/root"),
         service: ListingService(lister: StubLister(Fixture.folders)),

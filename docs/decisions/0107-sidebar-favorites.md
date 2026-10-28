@@ -167,3 +167,9 @@ The favorites stay out of the config file ([0120](0120-config-format.md)): they 
 user left things in the sidebar, not a choice typed ahead of time. The sidebar's three groups
 can be shown or hidden from it, as `sidebar-favorites`, `sidebar-locations` and
 `sidebar-workspaces`.
+
+## Amendment: the config file is the settings (2026-10-27)
+
+The favorites stay in `UserDefaults` ([0123](0123-config-is-the-settings.md)). The three group
+toggles live in the config file as `sidebar-favorites`, `sidebar-locations` and
+`sidebar-workspaces`.

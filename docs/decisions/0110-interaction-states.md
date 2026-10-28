@@ -62,3 +62,10 @@ The config file's error banner ([0120](0120-config-format.md)) has one control, 
 File, a small bordered push button, and the General pane's Open Config File and Use Config File
 Value buttons are SwiftUI's bordered buttons. AppKit draws all four states for each, so none
 needs `HoverButton`.
+
+## Amendment: the config file's location buttons (2026-10-27)
+
+Settings ▸ General's Change…, Open in Editor, Reveal in Finder and Use Default
+([0123](0123-config-is-the-settings.md)) are SwiftUI bordered buttons; AppKit draws their hover,
+pressed, focused and disabled states, and Use Default is disabled at the default location. Use
+Config File Value is gone.

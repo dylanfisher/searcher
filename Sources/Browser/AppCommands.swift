@@ -35,9 +35,9 @@ public enum AppCommands {
 
     /// The bindings `settings` asks for: every command in `sets`, with the Commander F-keys
     /// (`FileCommands.commanderFKeys`) as default alternates while `Settings.commanderFKeys` is
-    /// on, the config file's `Settings.configShortcuts` over both, and `Settings.shortcuts` over
-    /// those. No command takes a chord in `reserved`, and each `fixed` chord stays its command's
-    /// primary. Throws only for a clash between defaults, as `registry()` does.
+    /// on, and `Settings.shortcuts` over both. No command takes a chord in `reserved`, and each
+    /// `fixed` chord stays its command's primary. Throws only for a clash between defaults, as
+    /// `registry()` does.
     @MainActor
     public static func keyBindings(
         settings: Settings, reserved: Set<KeyChord>, fixed: [KeyChord: CommandID]
@@ -45,7 +45,6 @@ public enum AppCommands {
         try KeyBindings(
             commands: commands,
             preset: settings.commanderFKeys ? FileCommands.commanderFKeys : [:],
-            overrides: settings.shortcuts, fileOverrides: settings.configShortcuts,
-            reserved: reserved, fixed: fixed)
+            overrides: settings.shortcuts, reserved: reserved, fixed: fixed)
     }
 }

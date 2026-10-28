@@ -36,51 +36,6 @@ private func settingsLogging(_ defaults: UserDefaults, home: String = NSHomeDire
     #expect(settings.showsWorkspacesInSidebar)
 }
 
-@MainActor @Test func aWrongTypedValueIsDiscardedNotCoerced() throws {
-    let folder = try TemporaryFolder("SettingsTests")
-    let defaults = temporarySuite(in: folder.url.path)
-    // UserDefaults' own `bool(forKey:)` reads both of these as true.
-    defaults.set("YES", forKey: Settings.Key.showHidden.rawValue)
-    defaults.set(1, forKey: Settings.Key.foldersFirst.rawValue)
-    defaults.set(1, forKey: Settings.Key.folderSizes.rawValue)
-    defaults.set(7, forKey: Settings.Key.terminalBundleID.rawValue)
-    defaults.set(0, forKey: Settings.Key.hideDSStore.rawValue)
-    defaults.set("NO", forKey: Settings.Key.columnsStartAtHome.rawValue)
-    defaults.set(0, forKey: Settings.Key.showsFavoritesInSidebar.rawValue)
-    defaults.set("NO", forKey: Settings.Key.showsLocationsInSidebar.rawValue)
-    defaults.set("NO", forKey: Settings.Key.showsWorkspacesInSidebar.rawValue)
-
-    let (settings, logged) = settingsLogging(defaults)
-
-    let keys: [Settings.Key] = [
-        .showHidden, .foldersFirst, .folderSizes, .terminalBundleID, .hideDSStore,
-        .columnsStartAtHome, .showsFavoritesInSidebar, .showsLocationsInSidebar,
-        .showsWorkspacesInSidebar,
-    ]
-    #expect(logged.count == keys.count)
-    for key in keys {
-        #expect(logged.contains { $0.contains("setting \(key.rawValue),") }, "\(key)")
-    }
-    #expect(!settings.showHidden)
-    #expect(!settings.foldersFirst)
-    #expect(!settings.folderSizes)
-    #expect(defaults.object(forKey: Settings.Key.folderSizes.rawValue) == nil)
-    #expect(defaults.object(forKey: Settings.Key.showHidden.rawValue) == nil)
-    #expect(defaults.object(forKey: Settings.Key.foldersFirst.rawValue) == nil)
-    #expect(settings.terminalBundleID == "com.apple.Terminal")
-    #expect(defaults.object(forKey: Settings.Key.terminalBundleID.rawValue) == nil)
-    #expect(settings.hideDSStore)
-    #expect(defaults.object(forKey: Settings.Key.hideDSStore.rawValue) == nil)
-    #expect(settings.columnsStartAtHome)
-    #expect(defaults.object(forKey: Settings.Key.columnsStartAtHome.rawValue) == nil)
-    #expect(settings.showsFavoritesInSidebar)
-    #expect(defaults.object(forKey: Settings.Key.showsFavoritesInSidebar.rawValue) == nil)
-    #expect(settings.showsLocationsInSidebar)
-    #expect(defaults.object(forKey: Settings.Key.showsLocationsInSidebar.rawValue) == nil)
-    #expect(settings.showsWorkspacesInSidebar)
-    #expect(defaults.object(forKey: Settings.Key.showsWorkspacesInSidebar.rawValue) == nil)
-}
-
 /// A favorites list of any other shape, or with any one item of another shape or a path twice,
 /// is removed whole and reads as the defaults.
 @MainActor @Test func favoritesOfAnotherShapeAreDiscardedWhole() throws {
@@ -117,108 +72,6 @@ private func settingsLogging(_ defaults: UserDefaults, home: String = NSHomeDire
         defaults: try #require(UserDefaults(suiteName: name)), log: unexpectedSettingsLog)
 
     #expect(relaunched.favorites == favorites)
-}
-
-/// An appearance that isn't one of the names `Settings.Appearance` has, or isn't a string,
-/// reads as Auto and is removed.
-@MainActor @Test func anAppearanceOfAnotherShapeIsDiscarded() throws {
-    let folder = try TemporaryFolder("SettingsTests")
-    let key = Settings.Key.appearance.rawValue
-    for stored: Any in ["purple", "Dark", "", 1, true] {
-        let defaults = temporarySuite(in: folder.url.path)
-        defaults.set(stored, forKey: key)
-
-        let (settings, logged) = settingsLogging(defaults)
-        #expect(logged.count == 1 && logged[0].contains(key), "\(stored)")
-
-        #expect(settings.appearance == .auto, "\(stored)")
-        #expect(defaults.object(forKey: key) == nil, "\(stored)")
-    }
-}
-
-@MainActor @Test func settingsSurviveARelaunch() throws {
-    let folder = try TemporaryFolder("SettingsTests")
-    let name = folder.url.appending(path: "preferences").path
-    let first = Settings(
-        defaults: try #require(UserDefaults(suiteName: name)), log: unexpectedSettingsLog)
-
-    first.showHidden = true
-    first.foldersFirst = true
-    first.folderSizes = true
-    first.terminalBundleID = "com.googlecode.iterm2"
-    first.commanderFKeys = true
-    first.hideEmptyOperationsPanel = false
-    first.columnWidth = 312
-    first.appearance = .dark
-    first.hideDSStore = false
-    first.columnsStartAtHome = false
-    first.showsFavoritesInSidebar = false
-    first.showsLocationsInSidebar = false
-    first.showsWorkspacesInSidebar = false
-
-    let relaunched = Settings(
-        defaults: try #require(UserDefaults(suiteName: name)), log: unexpectedSettingsLog)
-    #expect(relaunched.showHidden)
-    #expect(relaunched.foldersFirst)
-    #expect(relaunched.folderSizes)
-    #expect(relaunched.terminalBundleID == "com.googlecode.iterm2")
-    #expect(relaunched.commanderFKeys)
-    #expect(!relaunched.hideEmptyOperationsPanel)
-    #expect(relaunched.columnWidth == 312)
-    #expect(relaunched.appearance == .dark)
-    #expect(!relaunched.hideDSStore)
-    #expect(!relaunched.columnsStartAtHome)
-    #expect(!relaunched.showsFavoritesInSidebar)
-    #expect(!relaunched.showsLocationsInSidebar)
-    #expect(!relaunched.showsWorkspacesInSidebar)
-}
-
-@MainActor @Test func eachAppearanceSurvivesARelaunch() throws {
-    let folder = try TemporaryFolder("SettingsTests")
-    for appearance in Settings.Appearance.allCases {
-        let name = folder.url.appending(path: "preferences-\(appearance)").path
-        Settings(defaults: try #require(UserDefaults(suiteName: name)), log: unexpectedSettingsLog)
-            .appearance = appearance
-
-        let relaunched = Settings(
-            defaults: try #require(UserDefaults(suiteName: name)), log: unexpectedSettingsLog)
-
-        #expect(relaunched.appearance == appearance)
-    }
-}
-
-/// A width of another type, a Boolean among them, a fraction of a point, or one outside the range
-/// a grip can drag to reads as the default and is removed.
-@MainActor @Test func aColumnWidthOfAnotherShapeIsDiscarded() throws {
-    let folder = try TemporaryFolder("SettingsTests")
-    let key = Settings.Key.columnWidth.rawValue
-    for stored: Any in [
-        "300", true, Settings.columnWidths.lowerBound - 1, Settings.columnWidths.upperBound + 1,
-        Double.nan, 300.5,
-    ] {
-        let defaults = temporarySuite(in: folder.url.path)
-        defaults.set(stored, forKey: key)
-
-        let (settings, logged) = settingsLogging(defaults)
-        #expect(logged.count == 1 && logged[0].contains(key), "\(stored)")
-
-        #expect(settings.columnWidth == Settings.defaultColumnWidth)
-        #expect(defaults.object(forKey: key) == nil)
-    }
-}
-
-@MainActor @Test func aColumnWidthAtEitherEndOfTheRangeIsKept() throws {
-    let folder = try TemporaryFolder("SettingsTests")
-    for width in [Settings.columnWidths.lowerBound, Settings.columnWidths.upperBound] {
-        let name = folder.url.appending(path: "preferences-\(width)").path
-        Settings(defaults: try #require(UserDefaults(suiteName: name)), log: unexpectedSettingsLog)
-            .columnWidth = width
-
-        let relaunched = Settings(
-            defaults: try #require(UserDefaults(suiteName: name)), log: unexpectedSettingsLog)
-
-        #expect(relaunched.columnWidth == width)
-    }
 }
 
 @MainActor @Test func thePalettesPlaceSurvivesARelaunchAndClearingItRemovesIt() throws {
@@ -374,73 +227,16 @@ private func settingsLogging(_ defaults: UserDefaults, home: String = NSHomeDire
 
 // MARK: Shortcuts
 
-private let shortcutsKey = Settings.Key.shortcuts.rawValue
 private let showPalette = WindowCommands.showPalette.id
 
 @MainActor @Test func missingShortcutsReadAsNoOverrides() {
     #expect(untouchedSettings().shortcuts.isEmpty)
 }
 
-/// Shortcuts of any other shape, or with any one override of another shape, are removed whole.
-@MainActor @Test func shortcutsOfAnotherShapeAreDiscardedWhole() throws {
-    let folder = try TemporaryFolder("SettingsTests")
-    let good = ["alternate": "cmd+shift+o"]
-    let malformed: [Any] = [
-        "window.showPalette", 1, ["window.showPalette"], ["window.showPalette": "cmd+o"],
-        ["window.showPalette": [String: String]()],
-        ["window.showPalette": ["third": "cmd+o"]],
-        ["window.showPalette": ["primary": 1]],
-        ["window.showPalette": ["primary": "shift+cmd+o"]],
-        ["window.showPalette": good, "navigation.open": ["primary": "cmd+O"]],
-    ]
-    for stored in malformed {
-        let defaults = temporarySuite(in: folder.url.path)
-        defaults.set(stored, forKey: shortcutsKey)
-
-        let (settings, logged) = settingsLogging(defaults)
-        #expect(logged.count == 1 && logged[0].contains(shortcutsKey), "\(stored)")
-
-        #expect(settings.shortcuts.isEmpty, "\(stored)")
-        #expect(defaults.object(forKey: shortcutsKey) == nil, "\(stored)")
-    }
-}
-
-/// A renamed command is a change of the code, so its entry goes and the others stay.
-@MainActor @Test func anUnknownCommandIDDropsOnlyItsEntry() throws {
-    let folder = try TemporaryFolder("SettingsTests")
-    let defaults = temporarySuite(in: folder.url.path)
-    defaults.set(
-        [
-            "window.showPalette": ["alternate": "cmd+shift+o"],
-            "window.renamedLongAgo": ["primary": "cmd+j"],
-        ], forKey: shortcutsKey)
-
-    let (settings, logged) = settingsLogging(defaults)
-    #expect(logged.count == 1 && logged[0].contains("window.renamedLongAgo"))
-
-    let alternate = KeyChord("o", modifiers: [.command, .shift])
-    #expect(settings.shortcuts == [showPalette: ShortcutOverride(alternate: .chord(alternate))])
-    #expect(
-        defaults.object(forKey: shortcutsKey) as? [String: [String: String]]
-            == ["window.showPalette": ["alternate": "cmd+shift+o"]])
-}
-
-@MainActor @Test func anEmptyStringReadsAsARemovedChord() throws {
-    let folder = try TemporaryFolder("SettingsTests")
-    let defaults = temporarySuite(in: folder.url.path)
-    defaults.set(["window.showPalette": ["primary": ""]], forKey: shortcutsKey)
-
-    let settings = Settings(defaults: defaults, log: unexpectedSettingsLog)
-
-    #expect(settings.shortcuts == [showPalette: ShortcutOverride(primary: .removed)])
-}
-
-/// "Default" has one stored form: no entry. A chord equal to the slot's default, or a removed
-/// slot with no default, is the default.
-@MainActor @Test func anOverrideThatChangesNothingIsNotWritten() throws {
-    let folder = try TemporaryFolder("SettingsTests")
-    let defaults = temporarySuite(in: folder.url.path)
-    let settings = Settings(defaults: defaults, log: unexpectedSettingsLog)
+/// "Default" has one form: no entry. A chord equal to the slot's default, or a removed slot
+/// with no default, is the default.
+@MainActor @Test func anOverrideThatChangesNothingIsNotKept() {
+    let settings = untouchedSettings()
 
     settings.shortcuts = [
         showPalette: ShortcutOverride(primary: .chord(KeyChord("k", modifiers: .command))),
@@ -448,7 +244,6 @@ private let showPalette = WindowCommands.showPalette.id
     ]
 
     #expect(settings.shortcuts.isEmpty)
-    #expect(defaults.object(forKey: shortcutsKey) == nil)
 
     settings.shortcuts = [
         showPalette: ShortcutOverride(
@@ -456,13 +251,6 @@ private let showPalette = WindowCommands.showPalette.id
     ]
 
     #expect(settings.shortcuts == [showPalette: ShortcutOverride(alternate: .removed)])
-    #expect(
-        defaults.object(forKey: shortcutsKey) as? [String: [String: String]]
-            == ["window.showPalette": ["alternate": ""]])
-
-    settings.shortcuts = [:]
-
-    #expect(defaults.object(forKey: shortcutsKey) == nil)
 }
 
 /// The Commander preset gives these an alternate, so removing it means something even while
@@ -474,23 +262,6 @@ private let showPalette = WindowCommands.showPalette.id
     settings.shortcuts = [trash: ShortcutOverride(alternate: .removed)]
 
     #expect(settings.shortcuts == [trash: ShortcutOverride(alternate: .removed)])
-}
-
-@MainActor @Test func shortcutsSurviveARelaunch() throws {
-    let folder = try TemporaryFolder("SettingsTests")
-    let name = folder.url.appending(path: "preferences").path
-    let shortcuts = [
-        showPalette: ShortcutOverride(
-            primary: .removed, alternate: .chord(KeyChord("o", modifiers: [.command, .shift]))),
-        NavigationCommands.open.id: ShortcutOverride(primary: .chord(KeyChord(.function(3)))),
-    ]
-    Settings(defaults: try #require(UserDefaults(suiteName: name)), log: unexpectedSettingsLog)
-        .shortcuts = shortcuts
-
-    let relaunched = Settings(
-        defaults: try #require(UserDefaults(suiteName: name)), log: unexpectedSettingsLog)
-
-    #expect(relaunched.shortcuts == shortcuts)
 }
 
 /// Every pane observes the settings; one closed leaves no entry behind once another observes.
@@ -520,297 +291,750 @@ private let showPalette = WindowCommands.showPalette.id
 
 // MARK: Config file
 
-@MainActor @Test func aFileSettingFoldersFirstAndHiddenFilesGivesBoth() {
-    let settings = untouchedSettings()
-
-    settings.applyConfig(ConfigParser.parse("folders-first = true\nshow-hidden = true\n"))
-
-    #expect(settings.foldersFirst)
-    #expect(settings.showHidden)
-    #expect(settings.configErrors.isEmpty)
+/// Settings over a suite of their own in `folder`, connected to the config file at `file` as
+/// the app connects them, with `watch` and `clock` standing in for FSEvents and time.
+@MainActor
+private func connected(
+    _ file: URL, in folder: TemporaryFolder, defaults: UserDefaults? = nil,
+    clock: ManualClock = ManualClock(), watch: ManualWatch = ManualWatch(),
+    log: @escaping @Sendable (String) -> Void = { _ in }
+) async -> Settings {
+    let settings = Settings(
+        defaults: defaults ?? temporarySuite(in: folder.url.path), log: unexpectedSettingsLog)
+    await settings.connectTestConfig(file, clock: clock, watch: watch, log: log)
+    return settings
 }
 
-/// A file with an error isn't applied: the values from before stay, the defaults at launch, and
-/// the errors are kept for the banner until a good file loads.
-@MainActor @Test func aFileWithAnErrorIsNotApplied() {
-    let settings = untouchedSettings()
-
-    settings.applyConfig(ConfigParser.parse("show-hidden = true\nfolders-first = yes"))
-    #expect(!settings.showHidden)
-    #expect(!settings.foldersFirst)
-    #expect(settings.configErrors.map(\.line) == [2])
-
-    settings.applyConfig(ConfigParser.parse("show-hidden = true"))
-    settings.applyConfig(ConfigParser.parse("show-hidden = false\ncolumn-width = 1"))
-    #expect(settings.showHidden)
-    #expect(settings.configErrors.map(\.line) == [2])
-
-    settings.applyConfig(ConfigParser.parse("show-hidden = false"))
-    #expect(!settings.showHidden)
-    #expect(settings.configErrors.isEmpty)
+/// Writes `text` over `file` as an editor's atomic save does, and reports the change.
+private func save(_ text: String, to file: URL, watch: ManualWatch) throws {
+    try Data(text.utf8).write(to: file, options: .atomic)
+    watch.change()
 }
 
-/// No file, as after it is deleted, gives every default back.
-@MainActor @Test func noFileMeansEveryDefault() {
-    let settings = untouchedSettings()
-    settings.applyConfig(
-        ConfigParser.parse(
-            "show-hidden = true\ncolumn-width = 400\nappearance = dark\nhide-ds-store = false"))
-    #expect(settings.columnWidth == 400)
-
-    settings.applyConfig(.missing)
-
-    #expect(!settings.showHidden)
-    #expect(settings.columnWidth == Settings.defaultColumnWidth)
-    #expect(settings.appearance == .auto)
-    #expect(settings.hideDSStore)
-    #expect(settings.configErrors.isEmpty)
+/// A value for `preference` other than its default, of the kind it takes, as JSON spells it.
+private func changedValue(_ preference: Settings.Preference) -> (Settings.Value, String) {
+    switch preference.kind {
+    case .bool:
+        guard case .bool(let bool) = preference.defaultValue else { preconditionFailure() }
+        return (.bool(!bool), "\(!bool)")
+    case .number: return (.number(412), "412")
+    case .choice(let names):
+        guard let other = names.first(where: { .string($0) != preference.defaultValue }) else {
+            preconditionFailure("\(preference.name) has one choice")
+        }
+        return (.string(other), "\"\(other)\"")
+    case .string: return (.string("com.example.app"), "\"com.example.app\"")
+    }
 }
 
-/// A value the app sets is kept in its defaults over the file's, through a relaunch that reads
-/// the same file, and the file isn't touched.
-@MainActor @Test func aToggleInTheAppOverridesTheFileAndSurvivesARelaunch() async throws {
-    let folder = try TemporaryFolder("SettingsTests")
-    let file = folder.url.appending(path: "config")
-    let bytes = Data("folders-first = false\n".utf8)
-    try bytes.write(to: file)
-    let name = folder.url.appending(path: "preferences").path
-    let first = Settings(
-        defaults: try #require(UserDefaults(suiteName: name)), configFile: file,
-        log: unexpectedSettingsLog)
-    await first.follow(
-        ConfigWatcher(file: file, reserved: [], fixed: [:], log: { _ in }, watch: { _, _ in {} }))
-    #expect(!first.foldersFirst)
-
-    first.foldersFirst = true
-    #expect(first.foldersFirst)
-
-    let relaunched = Settings(
-        defaults: try #require(UserDefaults(suiteName: name)), configFile: file,
-        log: unexpectedSettingsLog)
-    await relaunched.follow(
-        ConfigWatcher(file: file, reserved: [], fixed: [:], log: { _ in }, watch: { _, _ in {} }))
-    #expect(relaunched.foldersFirst)
-    #expect(try Data(contentsOf: file) == bytes)
-}
-
-/// The file's value is what an app value overrides, so only a key both set, to different
-/// values, is listed; Use Config File Value removes the app's and gives the file's.
-@MainActor @Test func anOverrideOfADifferentFileValueIsListedAndCanBeCleared() throws {
-    let folder = try TemporaryFolder("SettingsTests")
-    let defaults = temporarySuite(in: folder.url.path)
-    let settings = Settings(defaults: defaults, log: unexpectedSettingsLog)
-    settings.applyConfig(ConfigParser.parse("show-hidden = true\nfolders-first = true"))
-    settings.showHidden = false
-    settings.foldersFirst = false
-    settings.foldersFirst = true
-    settings.folderSizes = true
-    var calls = 0
-    settings.observe(for: settings) { calls += 1 }
-
-    let overrides = settings.configOverrides
-    #expect(overrides.map(\.name) == ["show-hidden"])
-    #expect(overrides.first?.appValue == .bool(false))
-    #expect(overrides.first?.fileValue == .bool(true))
-
-    settings.useConfigValue(for: try #require(overrides.first))
-
-    #expect(settings.showHidden)
-    #expect(defaults.object(forKey: Settings.Key.showHidden.rawValue) == nil)
-    #expect(settings.configOverrides.isEmpty)
-    #expect(calls == 1)
-}
-
-/// Observers hear of a load that changes a value or the errors, and not of one that changes
-/// nothing.
-@MainActor @Test func aLoadNotifiesObserversOnlyOfAChange() {
-    let settings = untouchedSettings()
-    var calls = 0
-    settings.observe(for: settings) { calls += 1 }
-
-    settings.applyConfig(ConfigParser.parse("show-hidden = true"))
-    settings.applyConfig(ConfigParser.parse("show-hidden = true # again"))
-    #expect(calls == 1)
-    settings.applyConfig(ConfigParser.parse("show-hidden = maybe"))
-    #expect(calls == 2)
-    settings.applyConfig(ConfigParser.parse("show-hidden = maybe"))
-    #expect(calls == 2)
-    settings.applyConfig(.missing)
-    #expect(calls == 3)
-}
-
-/// Setting in the app the value the file has removes the app's value rather than storing it, so
-/// the preference follows the file again and no override is left behind to outlast it.
-@MainActor @Test func settingTheFilesValueInTheAppFollowsTheFileAgain() throws {
-    let folder = try TemporaryFolder("SettingsTests")
-    let defaults = temporarySuite(in: folder.url.path)
-    let settings = Settings(defaults: defaults, log: unexpectedSettingsLog)
-    settings.applyConfig(ConfigParser.parse("folders-first = true"))
-    settings.foldersFirst = false
-    var calls = 0
-    settings.observe(for: settings) { calls += 1 }
-
-    settings.foldersFirst = true
-
-    #expect(settings.foldersFirst)
-    #expect(defaults.object(forKey: Settings.Key.foldersFirst.rawValue) == nil)
-    #expect(calls == 1)
-    settings.applyConfig(ConfigParser.parse("folders-first = false"))
-    #expect(!settings.foldersFirst)
-}
-
-// MARK: Shortcuts in the config file
-
-private let cmdJ = KeyChord("j", modifiers: .command)
-private let cmdK = KeyChord("k", modifiers: .command)
-
-/// The bindings `settings` gives, with no reserved or fixed chords.
 @MainActor
 private func bindings(_ settings: Settings) throws -> KeyBindings {
     try AppCommands.keyBindings(settings: settings, reserved: [], fixed: [:])
 }
 
-/// The file's slot reaches the bindings; `none` takes a slot's chord away.
-@MainActor @Test func aFileSlotGivesItsChordAndNoneRemovesOne() throws {
-    let settings = untouchedSettings()
-
-    settings.applyConfig(
-        ConfigParser.parse(
-            """
-            shortcut.window.showPalette.alternate = cmd+j
-            shortcut.window.goToItem.primary = none
-            """))
-
-    #expect(
-        settings.configShortcuts == [
-            showPalette: ShortcutOverride(alternate: .chord(cmdJ)),
-            WindowCommands.goToItem.id: ShortcutOverride(primary: .removed),
-        ])
-    let bindings = try bindings(settings)
-    #expect(bindings.registry.command(for: cmdJ)?.id == showPalette)
-    #expect(bindings.chords(of: WindowCommands.goToItem.id).primary == nil)
-    #expect(settings.shortcuts.isEmpty)
-}
-
-/// A file with an error leaves the shortcuts of the last good read, and no file leaves none.
-@MainActor @Test func aFileWithAShortcutErrorKeepsTheLastBindings() throws {
-    let settings = untouchedSettings()
-    settings.applyConfig(ConfigParser.parse("shortcut.window.showPalette.alternate = cmd+j"))
-
-    settings.applyConfig(
-        ConfigParser.parse(
-            "shortcut.window.showPalette.alternate = cmd+l\nshortcut.window.nope.primary = cmd+m"))
-
-    #expect(settings.configErrors.map(\.line) == [2])
-    #expect(try bindings(settings).registry.command(for: cmdJ)?.id == showPalette)
-
-    settings.applyConfig(.missing)
-    #expect(settings.configShortcuts.isEmpty)
-    #expect(try bindings(settings).registry.command(for: cmdJ) == nil)
-}
-
-/// A shortcut set in the app wins over the file's for its slot, through a relaunch that reads
-/// the same file, even when it is the slot's default; the file isn't touched.
-@MainActor @Test func anAppShortcutOverridesTheFileAndSurvivesARelaunch() async throws {
-    let folder = try TemporaryFolder("SettingsTests")
-    let file = folder.url.appending(path: "config")
-    let bytes = Data("shortcut.window.showPalette.primary = cmd+j\n".utf8)
-    try bytes.write(to: file)
-    let name = folder.url.appending(path: "preferences").path
-    let first = Settings(
-        defaults: try #require(UserDefaults(suiteName: name)), configFile: file,
-        log: unexpectedSettingsLog)
-    await first.follow(
-        ConfigWatcher(file: file, reserved: [], fixed: [:], log: { _ in }, watch: { _, _ in {} }))
-    #expect(try bindings(first).chords(of: showPalette).primary == cmdJ)
-
-    // Cmd-K is the default; here it overrides the file's Cmd-J, so it is kept.
-    first.shortcuts = [showPalette: ShortcutOverride(primary: .chord(cmdK))]
-
-    let relaunched = Settings(
-        defaults: try #require(UserDefaults(suiteName: name)), configFile: file,
-        log: unexpectedSettingsLog)
-    await relaunched.follow(
-        ConfigWatcher(file: file, reserved: [], fixed: [:], log: { _ in }, watch: { _, _ in {} }))
-    #expect(relaunched.shortcuts == [showPalette: ShortcutOverride(primary: .chord(cmdK))])
-    #expect(try bindings(relaunched).chords(of: showPalette).primary == cmdK)
-    #expect(try Data(contentsOf: file) == bytes)
-}
-
-/// Setting in the app the chord the file gives a slot, or removing a slot the file removes,
-/// clears the app's override, so the slot follows the file again.
-@MainActor @Test func settingTheFilesShortcutInTheAppFollowsTheFileAgain() throws {
+/// The preferences UserDefaults held before the config file was the settings aren't read: the
+/// file is their one store.
+@MainActor @Test func preferencesInUserDefaultsAreNotRead() throws {
     let folder = try TemporaryFolder("SettingsTests")
     let defaults = temporarySuite(in: folder.url.path)
+    defaults.set(true, forKey: "showHidden")
+    defaults.set("dark", forKey: "appearance")
+    defaults.set(["window.showPalette": ["primary": ""]], forKey: "shortcuts")
+
     let settings = Settings(defaults: defaults, log: unexpectedSettingsLog)
-    settings.applyConfig(
-        ConfigParser.parse(
-            """
-            shortcut.window.showPalette.alternate = cmd+j
-            shortcut.window.goToItem.primary = none
-            """))
-    settings.shortcuts = [
-        showPalette: ShortcutOverride(alternate: .removed),
-        WindowCommands.goToItem.id: ShortcutOverride(
-            primary: .chord(KeyChord("j", modifiers: [.command, .shift]))),
-    ]
-    #expect(settings.shortcuts.count == 2)
 
-    settings.shortcuts[showPalette] = ShortcutOverride(alternate: .chord(cmdJ))
-    settings.shortcuts[WindowCommands.goToItem.id] = ShortcutOverride(primary: .removed)
-
+    #expect(!settings.showHidden)
+    #expect(settings.appearance == .auto)
     #expect(settings.shortcuts.isEmpty)
-    #expect(defaults.object(forKey: shortcutsKey) == nil)
 }
 
-/// Each slot the app sets differently from the file is listed, and Use Config File Value
-/// clears the app's slot alone.
-@MainActor @Test func anAppShortcutOverOneTheFileSetsIsListedAndCanBeCleared() throws {
-    let settings = untouchedSettings()
-    settings.applyConfig(
-        ConfigParser.parse(
-            """
-            shortcut.window.showPalette.alternate = cmd+j
-            shortcut.window.goToItem.primary = none
-            """))
-    settings.shortcuts = [
-        showPalette: ShortcutOverride(primary: .removed, alternate: .removed),
-        ViewCommands.filter.id: ShortcutOverride(
-            alternate: .chord(KeyChord("j", modifiers: [.option, .command]))),
-    ]
+/// With no file at launch, the settings are written to one, every preference in it, so the
+/// user can see each option.
+@MainActor @Test func connectingWithNoFileWritesOne() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "searcher/config.json")
 
-    let overrides = settings.shortcutConfigOverrides
+    let settings = await connected(file, in: folder)
+
+    #expect(settings.configFile == file)
+    #expect(settings.configFileIsDefault)
+    #expect(try Data(contentsOf: file) == ConfigFile.data(.init(values: [:], shortcuts: [:])))
+}
+
+/// The file's settings apply before `connectConfig` returns, so the windows open with them.
+@MainActor @Test func connectingAppliesTheFile() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config.json")
+    try Data(#"{"show-hidden": true, "appearance": "dark"}"#.utf8).write(to: file)
+
+    let settings = await connected(file, in: folder)
+
+    #expect(settings.showHidden)
+    #expect(settings.appearance == .dark)
+    #expect(settings.configErrors.isEmpty)
+}
+
+/// A change in the app is written at once, each into the file as it is: the file the connection
+/// made holds every preference, so the result is that file with the changes.
+@MainActor @Test func aChangeInTheAppIsWrittenAtOnce() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config.json")
+    let settings = await connected(file, in: folder)
+
+    settings.showHidden = true
+    settings.appearance = .dark
+    settings.shortcuts = [showPalette: ShortcutOverride(alternate: .removed)]
+    await settings.flushConfigBounded()
+
     #expect(
-        overrides == [
-            Settings.ShortcutConfigOverride(
-                command: showPalette, position: .alternate, appSlot: .removed,
-                fileSlot: .chord(cmdJ))
-        ])
-
-    settings.useConfigShortcut(for: try #require(overrides.first))
-
-    #expect(settings.shortcuts[showPalette] == ShortcutOverride(primary: .removed))
-    #expect(settings.shortcutConfigOverrides.isEmpty)
+        try Data(contentsOf: file)
+            == ConfigFile.data(
+                .init(
+                    values: [.showHidden: .bool(true), .appearance: .string("dark")],
+                    shortcuts: [showPalette: ShortcutOverride(alternate: .removed)])))
 }
 
-/// A load that changes only the shortcuts tells the observers.
-@MainActor @Test func aLoadChangingOnlyShortcutsNotifiesObservers() {
-    let settings = untouchedSettings()
+/// The app's settings, written to the file, are what the next launch reads from it.
+@MainActor @Test func settingsSurviveARelaunchThroughTheFile() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config.json")
+    let first = await connected(file, in: folder)
+    first.showHidden = true
+    first.foldersFirst = true
+    first.folderSizes = true
+    first.terminalBundleID = "com.googlecode.iterm2"
+    first.commanderFKeys = true
+    first.hideEmptyOperationsPanel = false
+    first.columnWidth = Settings.columnWidths.upperBound
+    first.appearance = .dark
+    first.hideDSStore = false
+    first.columnsStartAtHome = false
+    first.showsFavoritesInSidebar = false
+    first.showsLocationsInSidebar = false
+    first.showsWorkspacesInSidebar = false
+    let shortcuts = [
+        showPalette: ShortcutOverride(
+            primary: .removed, alternate: .chord(KeyChord("o", modifiers: [.command, .shift]))),
+        NavigationCommands.open.id: ShortcutOverride(primary: .chord(KeyChord(.function(3)))),
+    ]
+    first.shortcuts = shortcuts
+    await first.flushConfigBounded()
+
+    let relaunched = await connected(file, in: folder)
+
+    for preference in Settings.preferences {
+        #expect(
+            relaunched.value(of: preference.key) == first.value(of: preference.key),
+            "\(preference.name)")
+        #expect(relaunched.value(of: preference.key) != preference.defaultValue)
+    }
+    #expect(relaunched.shortcuts == shortcuts)
+}
+
+/// The walk the plan asks for: each preference changed in the file and saved applies at once,
+/// with no relaunch, and tells the observers.
+@MainActor @Test func everyPreferenceAppliesLiveFromTheFile() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config.json")
+    let watch = ManualWatch()
+    let settings = await connected(file, in: folder, watch: watch)
     var calls = 0
     settings.observe(for: settings) { calls += 1 }
 
-    settings.applyConfig(ConfigParser.parse("shortcut.window.showPalette.alternate = cmd+j"))
-    settings.applyConfig(ConfigParser.parse("shortcut.window.showPalette.alternate = cmd+j #"))
-    #expect(calls == 1)
-    settings.applyConfig(.missing)
-    #expect(calls == 2)
+    for preference in Settings.preferences {
+        let (value, json) = changedValue(preference)
+        let before = calls
+        try save("{\"\(preference.name)\": \(json)}", to: file, watch: watch)
+        await settle { settings.value(of: preference.key) == value }
+        #expect(calls > before, "\(preference.name)")
+    }
+    #expect(settings.configErrors.isEmpty)
 }
 
-/// Every command can be given a chord no command has through the file, one line each, all in
-/// one file: the plan's walk of the registry.
-@MainActor @Test func everyCommandCanBeReboundThroughTheFile() throws {
-    let settings = untouchedSettings()
-    let defaults = try bindings(settings)
+/// Shortcuts saved in the file apply at once too, and reach the bindings.
+@MainActor @Test func shortcutsApplyLiveFromTheFile() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config.json")
+    let watch = ManualWatch()
+    let settings = await connected(file, in: folder, watch: watch)
+    let chord = KeyChord("j", modifiers: [.control, .option, .command])
+
+    try save(
+        #"{"shortcuts": {"window.showPalette": {"alternate": "ctrl+opt+cmd+j", "primary": ""}}}"#,
+        to: file, watch: watch)
+    await settle { !settings.shortcuts.isEmpty }
+
+    #expect(try bindings(settings).chords(of: showPalette) == .init(primary: nil, alternate: chord))
+}
+
+/// A file with an error is shown and not applied, the last good settings stay, and a change
+/// made in the app meanwhile applies in memory but never writes over the user's broken edit.
+/// Once the file is fixed, the change is written on top of the fix, which keeps every other
+/// key as the user wrote it. Quitting meanwhile ends at its deadline without the change.
+@MainActor @Test func aBrokenFileIsShownAndNeverWrittenOver() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config.json")
+    try Data(#"{"show-hidden": true}"#.utf8).write(to: file)
+    let watch = ManualWatch()
+    let clock = ManualClock()
+    let settings = await connected(file, in: folder, clock: clock, watch: watch)
+    let broken = "{\n  \"show-hidden\": false,\n  \"folders-first\": tru\n"
+
+    try save(broken, to: file, watch: watch)
+    await settle { !settings.configErrors.isEmpty }
+    #expect(settings.configErrors.map(\.line) == [3])
+    #expect(settings.showHidden)
+
+    settings.foldersFirst = true
+    let deadline = clock.now.advanced(by: .seconds(2))
+    let flushed = Task { await settings.flushConfig(by: deadline, clock: clock) }
+    clock.advance(by: .seconds(2))
+    #expect(await bounded(flushed) == false)
+    #expect(settings.unwrittenConfigKeys == ["folders-first"])
+    #expect(settings.foldersFirst)
+    #expect(try String(contentsOf: file, encoding: .utf8) == broken)
+
+    try save(#"{"hide-ds-store": false}"#, to: file, watch: watch)
+    await settle { settings.configErrors.isEmpty }
+    #expect(!settings.hideDSStore)
+    #expect(!settings.showHidden)
+    #expect(settings.foldersFirst)
+    await settings.flushConfigBounded()
+    let load = configLoad(try String(contentsOf: file, encoding: .utf8))
+    #expect(load.values[.foldersFirst] == .bool(true))
+    #expect(load.values[.hideDSStore] == .bool(false))
+}
+
+/// A file deleted while the app runs means the defaults; the next change in the app writes a
+/// file again.
+@MainActor @Test func aDeletedFileMeansTheDefaults() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config.json")
+    try Data(#"{"show-hidden": true}"#.utf8).write(to: file)
+    let watch = ManualWatch()
+    let clock = ManualClock()
+    let settings = await connected(file, in: folder, clock: clock, watch: watch)
+
+    try FileManager.default.removeItem(at: file)
+    watch.change()
+    // A file found gone is read again a moment later before it counts as deleted.
+    await settle { clock.waitingSleeps > 0 }
+    clock.advance(by: ConfigStore.confirmDelay)
+    await settle { !settings.showHidden }
+    #expect(!FileManager.default.fileExists(atPath: file.path))
+
+    settings.foldersFirst = true
+    await settings.flushConfigBounded()
+    #expect(
+        try Data(contentsOf: file)
+            == ConfigFile.data(.init(values: [.foldersFirst: .bool(true)], shortcuts: [:])))
+}
+
+/// The app's own write reaching the watch reads back as nothing new, so it never undoes a
+/// change made after it.
+@MainActor @Test func theAppsOwnWriteDoesNotReload() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config.json")
+    let watch = ManualWatch()
+    var changes = 0
+    let settings = await connected(file, in: folder, watch: watch)
+    settings.observe(for: settings) { changes += 1 }
+
+    settings.showHidden = true
+    await settings.flushConfigBounded()
+    settings.foldersFirst = true
+    watch.change()
+    await settings.flushConfigBounded()
+    watch.change()
+    await settings.flushConfigBounded()
+
+    #expect(settings.showHidden && settings.foldersFirst)
+    #expect(changes == 2)
+    #expect(
+        try Data(contentsOf: file)
+            == ConfigFile.data(
+                .init(
+                    values: [.showHidden: .bool(true), .foldersFirst: .bool(true)], shortcuts: [:]
+                )))
+}
+
+/// Choosing a place that has a config file reads it: the settings come from it.
+@MainActor @Test func movingToAPlaceWithAFilePullsIt() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config.json")
+    let dropbox = folder.url.appending(path: "Dropbox")
+    try FileManager.default.createDirectory(at: dropbox, withIntermediateDirectories: true)
+    let chosen = dropbox.appending(path: "searcher.json")
+    try Data(#"{"show-hidden": true}"#.utf8).write(to: chosen)
+    let defaults = temporarySuite(in: folder.url.path)
+    let settings = await connected(file, in: folder, defaults: defaults)
+    settings.foldersFirst = true
+
+    await settings.moveConfig(to: chosen)
+
+    #expect(settings.configFile == chosen)
+    #expect(!settings.configFileIsDefault)
+    #expect(settings.showHidden)
+    #expect(!settings.foldersFirst)
+    #expect(try Data(contentsOf: chosen) == Data(#"{"show-hidden": true}"#.utf8))
+    // The default file got the change made before the move.
+    #expect(
+        configLoad(try String(contentsOf: file, encoding: .utf8)).values[.foldersFirst]
+            == .bool(true))
+
+    // The place outlives the app; Use Default goes back, and its file is read again.
+    let relaunched = await connected(file, in: folder, defaults: defaults)
+    #expect(relaunched.configFile == chosen)
+    #expect(relaunched.showHidden)
+    await relaunched.useDefaultConfigFile()
+    #expect(relaunched.configFile == file)
+    #expect(relaunched.configFileIsDefault)
+    #expect(relaunched.foldersFirst)
+    #expect(!relaunched.showHidden)
+}
+
+/// Choosing a folder with no config file in it saves the settings there, as `config.json`.
+@MainActor @Test func movingToAnEmptyFolderSavesThere() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config.json")
+    let dropbox = folder.url.appending(path: "Dropbox")
+    try FileManager.default.createDirectory(at: dropbox, withIntermediateDirectories: true)
+    let settings = await connected(file, in: folder)
+    settings.foldersFirst = true
+
+    await settings.moveConfig(to: dropbox)
+
+    let moved = dropbox.appending(path: "config.json")
+    #expect(settings.configFile == moved)
+    #expect(settings.foldersFirst)
+    #expect(
+        try Data(contentsOf: moved)
+            == ConfigFile.data(.init(values: [.foldersFirst: .bool(true)], shortcuts: [:])))
+}
+
+/// A place whose folder isn't there, as on a volume that isn't connected, is shown as an error,
+/// and the settings stay as they are; the default place isn't used in its stead, at once or at
+/// the next launch.
+@MainActor @Test func aPlaceOnAMissingVolumeIsReportedNotReplaced() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config.json")
+    let defaults = temporarySuite(in: folder.url.path)
+    let settings = await connected(file, in: folder, defaults: defaults)
+    settings.foldersFirst = true
+    let away = folder.url.appending(path: "Volumes/Backup/config.json")
+
+    await settings.moveConfig(to: away)
+
+    #expect(settings.configFile == away)
+    #expect(settings.configErrors.first?.reason.contains("isn't there") == true)
+    #expect(settings.foldersFirst)
+
+    let relaunched = await connected(file, in: folder, defaults: defaults)
+    #expect(relaunched.configFile == away)
+    #expect(!relaunched.configErrors.isEmpty)
+}
+
+/// A write that waits until the test opens the gate, as one to a share that hangs does. Once
+/// opened, every write after goes through.
+private final class HeldWrite: @unchecked Sendable {
+    private let gate = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var isOpen = false
+    /// One entry each time a write starts, and one in `finished` each time one ends.
+    let started = EventLog<Void>()
+    let finished = EventLog<Void>()
+
+    var write: ConfigStore.Write {
+        { data, url, check in
+            self.started.append(())
+            if !self.lock.withLock({ self.isOpen }) { self.gate.wait() }
+            try AtomicWrite.write(data, to: url, beforeRename: check)
+            self.finished.append(())
+        }
+    }
+
+    /// Lets the waiting write, and every one after, go on.
+    func open() {
+        lock.withLock { isOpen = true }
+        gate.signal()
+    }
+}
+
+/// Settings over a file in `folder`, which starts as `text`, whose writes wait on `held`.
+@MainActor
+private func heldSettings(
+    _ folder: TemporaryFolder, held: HeldWrite, clock: ManualClock = ManualClock(),
+    watch: ManualWatch = ManualWatch(), text: String = "{}"
+) async -> (Settings, URL) {
+    let file = folder.url.appending(path: "config.json")
+    try? Data(text.utf8).write(to: file)
+    let settings = Settings(
+        defaults: temporarySuite(in: folder.url.path), log: unexpectedSettingsLog)
+    await settings.connectTestConfig(file, clock: clock, watch: watch, write: held.write)
+    return (settings, file)
+}
+
+/// A flush while a write is running waits for it, rather than return with the change not yet
+/// on disk, as quitting would.
+@MainActor @Test func aFlushWaitsForTheWriteRunning() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let held = HeldWrite()
+    let (settings, file) = await heldSettings(folder, held: held)
+    settings.showHidden = true
+    await settle { held.started.all.count == 1 }
+
+    let flushStarted = EventLog<Void>()
+    let flush = Task { @MainActor in
+        flushStarted.append(())
+        await settings.flushConfigBounded()
+        return held.finished.all.count
+    }
+    await settle { !flushStarted.all.isEmpty }
+    held.open()
+
+    #expect(await bounded(flush) == 1)
+    #expect(
+        configLoad(try String(contentsOf: file, encoding: .utf8)).values[.showHidden]
+            == .bool(true))
+}
+
+/// A flush whose write hangs ends at its deadline, so quitting goes on without it, and names
+/// what didn't reach the file; the write keeps going.
+@MainActor @Test func aFlushThatHangsEndsAtItsDeadline() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let held = HeldWrite()
+    let clock = ManualClock()
+    let (settings, _) = await heldSettings(folder, held: held, clock: clock)
+    settings.showHidden = true
+
+    let deadline = clock.now.advanced(by: .seconds(2))
+    let flushed = Task { @MainActor in await settings.flushConfig(by: deadline, clock: clock) }
+    await settle { held.started.all.count == 1 }
+    clock.advance(by: .seconds(2))
+
+    // Bounded only to catch a flush that ignores its deadline, which would hang here.
+    #expect(await bounded(flushed) == false)
+    #expect(settings.unwrittenConfigKeys == ["show-hidden"])
+    #expect(held.finished.all.isEmpty)
+    held.open()
+    await settle { held.finished.all.count == 1 }
+}
+
+/// The review's first case: an editor's save of another key reaches the file while a change
+/// made in the app is on its way, as when the store's write would once have been refused for
+/// a read it hadn't seen. Quitting then still waits for the change, and both reach the file.
+@MainActor @Test func aQuitAfterAnEditOfAnotherKeyWritesTheChange() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config.json")
+    try Data("{}".utf8).write(to: file)
+    let watch = ManualWatch()
+    let clock = ManualClock()
+    let settings = await connected(file, in: folder, clock: clock, watch: watch)
+
+    // The editor's save is on disk before the change reaches the store, and its event after.
+    try Data(#"{"folders-first": true}"#.utf8).write(to: file, options: .atomic)
+    settings.showHidden = true
+    watch.change()
+    let deadline = clock.now.advanced(by: .seconds(2))
+    let flushed = Task { await settings.flushConfig(by: deadline, clock: clock) }
+
+    #expect(await bounded(flushed) == true)
+    let load = configLoad(try String(contentsOf: file, encoding: .utf8))
+    #expect(load.values == [.showHidden: .bool(true), .foldersFirst: .bool(true)])
+    await settle { settings.foldersFirst }
+    #expect(settings.showHidden)
+}
+
+/// The review's first case, for a file found empty while an editor saves it in place: the
+/// change waits for the file's new text and is written on top of it, and quitting waits for
+/// that.
+@MainActor @Test func aQuitDuringASaveInPlaceWritesTheChange() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config.json")
+    try Data("{}".utf8).write(to: file)
+    let watch = ManualWatch()
+    let clock = ManualClock()
+    let settings = await connected(file, in: folder, clock: clock, watch: watch)
+
+    try save("", to: file, watch: watch)
+    settings.showHidden = true
+    let deadline = clock.now.advanced(by: .seconds(2))
+    let flushed = Task { await settings.flushConfig(by: deadline, clock: clock) }
+    try save(#"{"appearance": "dark"}"#, to: file, watch: watch)
+
+    #expect(await bounded(flushed) == true)
+    let load = configLoad(try String(contentsOf: file, encoding: .utf8))
+    #expect(load.values == [.showHidden: .bool(true), .appearance: .string("dark")])
+    #expect(settings.configErrors.isEmpty)
+}
+
+/// The review's second case: a change made in the app while a write of an earlier one is
+/// running, then an editor's save of another key, as the write's rename is about to happen.
+/// The write starts over from the editor's file, and the file ends with the later change and
+/// the editor's key: K=2 never reverts to K=1.
+@MainActor @Test func aChangeDuringAWriteAndAnEditOfAnotherKeyBothStay() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let held = HeldWrite()
+    let watch = ManualWatch()
+    let (settings, file) = await heldSettings(folder, held: held, watch: watch)
+
+    settings.columnWidth = 300
+    await settle { held.started.all.count == 1 }
+    settings.columnWidth = 320
+    try save(#"{"folders-first": true}"#, to: file, watch: watch)
+    held.open()
+    await settings.flushConfigBounded()
+
+    let load = configLoad(try String(contentsOf: file, encoding: .utf8))
+    #expect(load.values == [.columnWidth: .number(320), .foldersFirst: .bool(true)])
+    await settle { settings.foldersFirst }
+    #expect(settings.columnWidth == 320)
+}
+
+/// A change in the app, an editor's save of the same key, then another change in the app: each
+/// later action wins in turn.
+@MainActor @Test func theLaterOfTheAppAndTheEditorWinsTheSameKey() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config.json")
+    try Data("{}".utf8).write(to: file)
+    let watch = ManualWatch()
+    let settings = await connected(file, in: folder, watch: watch)
+
+    settings.appearance = .light
+    await settings.flushConfigBounded()
+    try save(#"{"appearance": "dark"}"#, to: file, watch: watch)
+    await settle { settings.appearance == .dark }
+    settings.appearance = .light
+    await settings.flushConfigBounded()
+
+    #expect(
+        configLoad(try String(contentsOf: file, encoding: .utf8)).values == [
+            .appearance: .string("light")
+        ])
+}
+
+/// A change made in the app while the file is found gone waits for the deletion to be
+/// confirmed, then is written as a new file: the defaults with the change.
+@MainActor @Test func aChangeDuringADeletionIsWrittenAsANewFile() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config.json")
+    try Data(#"{"show-hidden": true}"#.utf8).write(to: file)
+    let watch = ManualWatch()
+    let clock = ManualClock()
+    let settings = await connected(file, in: folder, clock: clock, watch: watch)
+
+    try FileManager.default.removeItem(at: file)
+    watch.change()
+    await settle { clock.waitingSleeps > 0 }
+    settings.foldersFirst = true
+    clock.advance(by: ConfigStore.confirmDelay)
+    await settings.flushConfigBounded()
+
+    #expect(
+        try Data(contentsOf: file)
+            == ConfigFile.data(.init(values: [.foldersFirst: .bool(true)], shortcuts: [:])))
+    #expect(!settings.showHidden)
+    #expect(settings.foldersFirst)
+}
+
+/// A shortcut slot set in the app and another set in the file at the same time both stay.
+@MainActor @Test func shortcutsSetInTheAppAndTheFileBothStay() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config.json")
+    try Data("{}".utf8).write(to: file)
+    let watch = ManualWatch()
+    let settings = await connected(file, in: folder, watch: watch)
+    let alternate = KeyChord("o", modifiers: [.command, .shift, .option])
+
+    try Data(#"{"shortcuts": {"window.showPalette": {"primary": ""}}}"#.utf8).write(
+        to: file, options: .atomic)
+    settings.shortcuts = [showPalette: ShortcutOverride(alternate: .chord(alternate))]
+    watch.change()
+    await settings.flushConfigBounded()
+    await settle { settings.shortcuts[showPalette]?.primary == .removed }
+
+    let both = [showPalette: ShortcutOverride(primary: .removed, alternate: .chord(alternate))]
+    #expect(settings.shortcuts == both)
+    #expect(configLoad(try String(contentsOf: file, encoding: .utf8)).shortcuts == both)
+}
+
+/// Changes made in the app that can't reach the file at the old place, here one with an error,
+/// go with the move: pulled from a place with a file, they are written on top of it.
+@MainActor @Test func aMoveTakesTheChangesNotYetWrittenToAFileThere() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config.json")
+    try Data("{".utf8).write(to: file)
+    let chosen = folder.url.appending(path: "Dropbox/searcher.json")
+    try FileManager.default.createDirectory(
+        at: chosen.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data(#"{"appearance": "dark"}"#.utf8).write(to: chosen)
+    let clock = ManualClock()
+    let settings = await connected(file, in: folder, clock: clock)
+    settings.showHidden = true
+
+    let moving = Task { await settings.moveConfig(to: chosen) }
+    await settle { clock.waitingSleeps > 0 }
+    clock.advance(by: Settings.moveWait)
+    _ = await bounded(moving)
+    await settings.flushConfigBounded()
+
+    #expect(settings.appearance == .dark)
+    #expect(settings.showHidden)
+    #expect(
+        configLoad(try String(contentsOf: chosen, encoding: .utf8)).values == [
+            .appearance: .string("dark"), .showHidden: .bool(true),
+        ])
+    #expect(try Data(contentsOf: file) == Data("{".utf8))
+}
+
+/// Saved to a place with no file, the settings, those not yet written among them, make it.
+@MainActor @Test func aMoveTakesTheChangesNotYetWrittenToANewFile() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config.json")
+    try Data("{".utf8).write(to: file)
+    let dropbox = folder.url.appending(path: "Dropbox")
+    try FileManager.default.createDirectory(at: dropbox, withIntermediateDirectories: true)
+    let clock = ManualClock()
+    let settings = await connected(file, in: folder, clock: clock)
+    settings.showHidden = true
+
+    let moving = Task { await settings.moveConfig(to: dropbox) }
+    await settle { clock.waitingSleeps > 0 }
+    clock.advance(by: Settings.moveWait)
+    _ = await bounded(moving)
+    await settings.flushConfigBounded()
+
+    #expect(
+        try Data(contentsOf: dropbox.appending(path: "config.json"))
+            == ConfigFile.data(.init(values: [.showHidden: .bool(true)], shortcuts: [:])))
+}
+
+/// A change made while the store reads the file at launch isn't undone by that read: it is
+/// applied on top, and written.
+@MainActor @Test func aChangeMadeWhileConnectingStays() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config.json")
+    try Data(#"{"appearance": "dark"}"#.utf8).write(to: file)
+    let proceed = DispatchSemaphore(value: 0)
+    let watched = EventLog<Void>()
+    let settings = Settings(
+        defaults: temporarySuite(in: folder.url.path), log: unexpectedSettingsLog)
+    let connecting = Task {
+        await settings.connectConfig(defaultFile: file, clock: ManualClock()) { file, isDefault in
+            ConfigStore(
+                file: file, createsFolder: isDefault, reserved: [], fixed: [:], log: { _ in },
+                watch: { _, _ in
+                    watched.append(())
+                    proceed.wait()
+                    return {}
+                })
+        }
+    }
+    await settle { !watched.all.isEmpty }
+
+    settings.showHidden = true
+    proceed.signal()
+    _ = await bounded(connecting)
+    await settings.flushConfigBounded()
+
+    #expect(settings.showHidden)
+    #expect(settings.appearance == .dark)
+    #expect(
+        configLoad(try String(contentsOf: file, encoding: .utf8)).values == [
+            .appearance: .string("dark"), .showHidden: .bool(true),
+        ])
+}
+
+/// A move back to the default place waits only for what the store at the other place was sent.
+/// That store was sent nothing here, so a wait for every change the settings ever made would
+/// never end, and on the test's clock, which doesn't move, nor would the move. The changes made
+/// before and after reach their files.
+@MainActor @Test func aMoveBackWaitsOnlyForWhatTheOtherPlaceWasSent() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config.json")
+    let dropbox = folder.url.appending(path: "Dropbox")
+    try FileManager.default.createDirectory(at: dropbox, withIntermediateDirectories: true)
+    let settings = await connected(file, in: folder)
+
+    settings.showHidden = true
+    let away = Task { await settings.moveConfig(to: dropbox) }
+    #expect(await bounded(away, seconds: 10) != nil)
+    let back = Task { await settings.useDefaultConfigFile() }
+    #expect(await bounded(back, seconds: 10) != nil)
+    settings.foldersFirst = true
+    await settings.flushConfigBounded()
+
+    #expect(settings.configFile == file)
+    let load = configLoad(try String(contentsOf: file, encoding: .utf8))
+    #expect(load.values[.showHidden] == .bool(true))
+    #expect(load.values[.foldersFirst] == .bool(true))
+}
+
+/// A change whose write failed and waits for its retry, then an editor's save of the same key:
+/// the save came later and wins, in the settings and in the file, and the retry writes nothing
+/// over it.
+@MainActor @Test func anEditDuringARetryWinsOverTheHeldChange() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config.json")
+    try Data(#"{"appearance": "auto"}"#.utf8).write(to: file)
+    let fails = WriteSwitch()
+    let watch = ManualWatch()
+    let clock = ManualClock()
+    let settings = Settings(
+        defaults: temporarySuite(in: folder.url.path), log: unexpectedSettingsLog)
+    await settings.connectTestConfig(
+        file, clock: clock, watch: watch,
+        write: { data, url, check in
+            if fails.isOn { throw CocoaError(.fileWriteNoPermission) }
+            try AtomicWrite.write(data, to: url, beforeRename: check)
+        })
+
+    settings.appearance = .light
+    await settle { !settings.configErrors.isEmpty }
+    try save(#"{"appearance": "dark"}"#, to: file, watch: watch)
+    await settle { settings.appearance == .dark }
+    fails.isOn = false
+    clock.advance(by: ConfigStore.longestRetryDelay)
+    await settings.flushConfigBounded()
+
+    #expect(settings.appearance == .dark)
+    #expect(settings.unwrittenConfigKeys.isEmpty)
+    #expect(try String(contentsOf: file, encoding: .utf8) == #"{"appearance": "dark"}"#)
+}
+
+/// A switch a write closure reads, which the test flips.
+private final class WriteSwitch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var on = true
+
+    var isOn: Bool {
+        get { lock.withLock { on } }
+        set { lock.withLock { on = newValue } }
+    }
+}
+
+/// A file that can't be saved shows its error until a save succeeds.
+@MainActor @Test func aFailedSaveIsShown() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config.json")
+    try Data("{}".utf8).write(to: file)
+    let settings = Settings(
+        defaults: temporarySuite(in: folder.url.path), log: unexpectedSettingsLog)
+    await settings.connectTestConfig(
+        file, write: { _, _, _ in throw CocoaError(.fileWriteNoPermission) })
+
+    settings.showHidden = true
+
+    await settle { !settings.configErrors.isEmpty }
+    #expect(settings.configErrors.first?.reason.hasPrefix("couldn't be saved") == true)
+}
+
+/// Every command can be given a chord no command has through the file, all in one file: the
+/// plan's walk of the registry.
+@MainActor @Test func everyCommandCanBeReboundThroughTheFile() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config.json")
+    let defaults = try bindings(untouchedSettings())
     let modifiers: [KeyChord.Modifiers] = [
         [.control, .option, .shift], [.control, .option, .command, .shift],
         [.control, .option, .command],
@@ -823,11 +1047,12 @@ private func bindings(_ settings: Settings) throws -> KeyBindings {
     let commands = AppCommands.commands
     #expect(free.count >= commands.count)
     let given = Dictionary(uniqueKeysWithValues: zip(commands.map(\.id), free))
-    let text = commands.map { command in
-        "\(ConfigParser.shortcutPrefix)\(command.id).primary = \(given[command.id]?.stored ?? "")"
-    }.joined(separator: "\n")
+    let shortcuts = commands.map { command in
+        "\"\(command.id)\": {\"primary\": \"\(given[command.id]?.stored ?? "")\"}"
+    }.joined(separator: ",\n")
+    try Data("{\"shortcuts\": {\(shortcuts)}}".utf8).write(to: file)
 
-    settings.applyConfig(ConfigParser.parse(text))
+    let settings = await connected(file, in: folder)
 
     #expect(settings.configErrors.isEmpty, "\(settings.configErrors)")
     let rebound = try bindings(settings)
@@ -838,13 +1063,14 @@ private func bindings(_ settings: Settings) throws -> KeyBindings {
     }
 }
 
-/// Each preference is declared once: one file name and one stored key each. Only preferences a
-/// user sets are in the file; state the app keeps by itself is not.
+/// Each preference is declared once: one key in the file each. Only preferences a user sets
+/// are in the file; state the app keeps by itself is not.
 @MainActor @Test func eachPreferenceIsDeclaredOnce() {
     let names = Settings.preferences.map(\.name)
     let keys = Settings.preferences.map(\.key)
     #expect(Set(names).count == names.count)
     #expect(Set(keys).count == keys.count)
+    #expect(!names.contains(ConfigFile.shortcutsKey))
     #expect(
         Set(keys) == [
             .showHidden, .hideDSStore, .columnsStartAtHome, .foldersFirst, .folderSizes,

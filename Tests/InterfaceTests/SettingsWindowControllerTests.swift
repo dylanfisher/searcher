@@ -154,24 +154,86 @@ private func controller(
 
 // MARK: Config file
 
-/// The General pane names the config file, and its button makes the file from the template when
-/// there is none, then opens it in the default app for plain text.
-@MainActor @Test func theGeneralPaneOpensTheConfigFile() async throws {
-    let folder = try TemporaryFolder("SettingsWindowControllerTests")
-    let file = folder.url.appending(path: "searcher/config")
-    let settings = Settings(
-        defaults: temporarySuite(in: folder.url.path), configFile: file,
-        log: unexpectedSettingsLog)
-    let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
+private let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
+
+/// The General pane names the config file, opens it in the default app for plain text, and
+/// shows it in Finder.
+@MainActor @Test func theGeneralPaneOpensAndRevealsTheConfigFile() async throws {
+    let config = try await ConfigFixture("SettingsWindowControllerTests")
     let actions = StubSystemActions(defaultApplications: [.plainText: textEdit])
-    let (controller, _) = controller(settings, systemActions: actions)
-    #expect(controller.general.configFilePath == file.path)
+    let (controller, _) = controller(config.settings, systemActions: actions)
+    let model = controller.general
+    #expect(model.configFilePath == config.file.path)
+    #expect(model.configFileIsDefault)
 
-    controller.general.openConfigFile()
+    model.openConfigFile()
     await settle { !actions.openedWithApp.isEmpty }
+    model.revealConfigFile()
+    if let task = model.reveal { _ = await bounded(task) }
 
-    #expect(try String(contentsOf: file, encoding: .utf8) == ConfigTemplate.text)
-    #expect(actions.openedWithApp == [OpenedWithApp(urls: [file], application: textEdit)])
+    #expect(actions.openedWithApp == [OpenedWithApp(urls: [config.file], application: textEdit)])
+    #expect(actions.revealed == [[config.file]])
+}
+
+/// Reveal in Finder with no file at the config file's place, as on a volume that isn't
+/// connected, says so under the buttons rather than show Finder nothing.
+@MainActor @Test func revealingAConfigFileThatIsntThereSaysSo() async throws {
+    let config = try await ConfigFixture("SettingsWindowControllerTests")
+    let actions = StubSystemActions()
+    let (controller, _) = controller(config.settings, systemActions: actions)
+    let model = controller.general
+    var announced: [String] = []
+    model.postAccessibility = { _, _, info in
+        announced.append(info?[.announcement] as? String ?? "")
+    }
+    try FileManager.default.removeItem(at: config.file)
+
+    model.revealConfigFile()
+    if let task = model.reveal { _ = await bounded(task) }
+
+    #expect(actions.revealed.isEmpty)
+    #expect(model.configProblem == GeneralSettings.missingNote(config.file))
+    #expect(announced == [GeneralSettings.missingNote(config.file)])
+}
+
+/// Change… moves the settings to the place chosen, a folder with no file in it here, which gets
+/// them; Use Default moves them back, and is off at the default place.
+@MainActor @Test func changeMovesTheConfigFileAndUseDefaultMovesItBack() async throws {
+    let config = try await ConfigFixture("SettingsWindowControllerTests")
+    let dropbox = config.folder.url.appending(path: "Dropbox")
+    try FileManager.default.createDirectory(at: dropbox, withIntermediateDirectories: true)
+    let (controller, _) = controller(config.settings)
+    let model = controller.general
+    model.chooseConfigLocation = { dropbox }
+    config.settings.showHidden = true
+
+    model.changeConfigLocation()
+    if let task = model.move { _ = await bounded(task) }
+
+    let moved = dropbox.appending(path: ConfigFile.name)
+    #expect(model.configFilePath == moved.path)
+    #expect(!model.configFileIsDefault)
+    #expect(try String(contentsOf: moved, encoding: .utf8).contains(#""show-hidden" : true"#))
+    #expect(config.settings.showHidden)
+
+    model.useDefaultConfigLocation()
+    if let task = model.move { _ = await bounded(task) }
+
+    #expect(model.configFilePath == config.file.path)
+    #expect(model.configFileIsDefault)
+}
+
+/// Cancelling the panel leaves the config file where it is.
+@MainActor @Test func cancellingChangeLeavesTheConfigFile() async throws {
+    let config = try await ConfigFixture("SettingsWindowControllerTests")
+    let (controller, _) = controller(config.settings)
+    let model = controller.general
+    model.chooseConfigLocation = { nil }
+
+    model.changeConfigLocation()
+    if let task = model.move { _ = await bounded(task) }
+
+    #expect(model.configFilePath == config.file.path)
 }
 
 /// Settings with no config file, as the tests' and the bench's, show no config section.
@@ -179,54 +241,6 @@ private func controller(
     let (controller, _) = controller()
 
     #expect(controller.general.configFilePath == nil)
-}
-
-/// A value changed in the app that differs from the file's is listed, and Use Config File Value
-/// gives the file's back; the list follows the settings as they change.
-@MainActor @Test func theGeneralPaneListsOverridesAndUsesTheFilesValue() throws {
-    let settings = untouchedSettings()
-    let (controller, _) = controller(settings)
-    let model = controller.general
-    settings.applyConfig(ConfigParser.parse("folders-first = true\nappearance = dark"))
-    #expect(model.configOverrides.isEmpty)
-
-    settings.foldersFirst = false
-    settings.appearance = .light
-
-    #expect(model.configOverrides.map(\.name) == ["folders-first", "appearance"])
-    #expect(
-        model.configOverrides.map(GeneralSettings.note(for:)) == [
-            "Searcher has false; the config file has true.",
-            "Searcher has light; the config file has dark.",
-        ])
-
-    model.useConfigValue(for: try #require(model.configOverrides.first))
-
-    #expect(settings.foldersFirst)
-    #expect(model.configOverrides.map(\.name) == ["appearance"])
-}
-
-/// A file change that leaves the value the app has still changes what overrides it: the list
-/// follows when the file comes to agree, sets the other value again, and is deleted.
-@MainActor @Test func theOverrideListFollowsFileChangesThatLeaveTheValue() {
-    let settings = untouchedSettings()
-    let (controller, _) = controller(settings)
-    let model = controller.general
-    settings.applyConfig(ConfigParser.parse("show-hidden = true"))
-    settings.showHidden = false
-    #expect(model.configOverrides.map(\.name) == ["show-hidden"])
-
-    settings.applyConfig(ConfigParser.parse("show-hidden = false"))
-    #expect(!settings.showHidden)
-    #expect(model.configOverrides.isEmpty)
-
-    settings.applyConfig(ConfigParser.parse("show-hidden = true"))
-    #expect(!settings.showHidden)
-    #expect(model.configOverrides.map(\.name) == ["show-hidden"])
-
-    settings.applyConfig(.missing)
-    #expect(!settings.showHidden)
-    #expect(model.configOverrides.isEmpty)
 }
 
 /// Every registered command has one row, under its menu, with the registry's title and chords.
@@ -315,13 +329,16 @@ private func controller(
     #expect(model.settings.shortcuts.isEmpty)
 }
 
-@MainActor @Test func resetGivesARowItsDefaultsAndResetAllEveryRow() throws {
-    let defaults = temporarySuite(in: FileManager.default.temporaryDirectory.path)
-    let (controller, _) = controller(Settings(defaults: defaults, log: unexpectedSettingsLog))
+/// Reset and Reset All give rows their defaults, and the config file follows each change: the
+/// shortcuts recorded are written to it, and Reset All leaves it with none.
+@MainActor @Test func resetGivesARowItsDefaultsAndResetAllEveryRow() async throws {
+    let config = try await ConfigFixture("SettingsWindowControllerTests")
+    let (controller, _) = controller(config.settings)
     let model = controller.shortcuts
     let cmdJ = KeyChord("j", modifiers: [.command, .option, .control])
     let cmdL = KeyChord("l", modifiers: [.command, .option, .control])
     #expect(!model.canResetAll)
+    func text() throws -> String { try String(contentsOf: config.file, encoding: .utf8) }
 
     model.record(.chords([cmdJ]), for: palette.id, at: .alternate)
     model.record(.chords([cmdL]), for: goToItem.id, at: .alternate)
@@ -332,7 +349,9 @@ private func controller(
     #expect(try row(palette.id).isChanged)
     #expect(try row(goToItem.id).chords == KeyBindings.Chords(primary: nil, alternate: cmdL))
     #expect(model.canResetAll)
-    #expect(defaults.object(forKey: "shortcuts") != nil)
+    await config.settings.flushConfigBounded()
+    #expect(try text().contains(#""alternate" : "ctrl+opt+cmd+j""#))
+    #expect(try text().contains(#""primary" : """#))
 
     model.reset(goToItem.id)
     #expect(try !row(goToItem.id).isChanged)
@@ -341,129 +360,10 @@ private func controller(
 
     model.resetAll()
     #expect(model.settings.shortcuts.isEmpty)
-    // Reset All deletes the key, the one stored form of "every default".
-    #expect(defaults.object(forKey: "shortcuts") == nil)
     #expect(try row(palette.id).chords.alternate == palette.alternate)
     #expect(!model.canResetAll)
-}
-
-// MARK: Shortcuts from the config file
-
-private let ctrlOptCmdJ = KeyChord("j", modifiers: [.control, .option, .command])
-private let ctrlOptCmdL = KeyChord("l", modifiers: [.control, .option, .command])
-
-/// A slot the config file sets shows the file's chord and says it is the file's; it isn't a
-/// change Reset undoes.
-@MainActor @Test func aSlotFromTheConfigFileShowsItsChordAndSaysSo() throws {
-    let settings = untouchedSettings()
-    let (controller, _) = controller(settings)
-    let model = controller.shortcuts
-
-    settings.applyConfig(
-        ConfigParser.parse(
-            """
-            shortcut.window.showPalette.alternate = ctrl+opt+cmd+j
-            shortcut.window.goToItem.primary = none
-            shortcut.window.goToItem.alternate = ctrl+opt+cmd+l
-            """))
-
-    let row = try shortcutRow(palette.id, in: model)
-    #expect(row.chords == KeyBindings.Chords(primary: palette.primary, alternate: ctrlOptCmdJ))
-    #expect(row.fileSlots == [.alternate])
-    #expect(!row.isChanged)
-    #expect(ShortcutsSettings.fileNote(for: row) == "The config file sets the alternate shortcut.")
-    let both = try shortcutRow(goToItem.id, in: model)
-    #expect(both.chords == KeyBindings.Chords(alternate: ctrlOptCmdL))
-    #expect(ShortcutsSettings.fileNote(for: both) == "The config file sets both shortcuts.")
-    #expect(
-        ShortcutsSettings.fileNote(for: try shortcutRow(TilingCommands.closePane.id, in: model))
-            == nil)
-}
-
-/// A slot recorded in the app over one the file sets differently is listed on its row, and Use
-/// Config File Value gives the file's chord back; so do Reset and Reset All, which never touch
-/// the file's slots.
-@MainActor @Test func anAppSlotOverTheFilesIsListedAndEachWayBackGivesTheFiles() throws {
-    let settings = untouchedSettings()
-    let (controller, _) = controller(settings)
-    let model = controller.shortcuts
-    settings.applyConfig(
-        ConfigParser.parse("shortcut.window.showPalette.alternate = ctrl+opt+cmd+j"))
-    let fileShortcuts = settings.configShortcuts
-
-    model.record(.chords([ctrlOptCmdL]), for: palette.id, at: .alternate)
-
-    var row = try shortcutRow(palette.id, in: model)
-    #expect(row.chords.alternate == ctrlOptCmdL)
-    #expect(row.fileSlots.isEmpty)
-    #expect(row.isChanged)
-    let override = try #require(row.configOverrides.first)
-    #expect(row.configOverrides.count == 1)
-    #expect(
-        ShortcutsSettings.note(for: override)
-            == "Searcher has ⌃⌥⌘L as the alternate; the config file has ⌃⌥⌘J.")
-
-    model.useConfigValue(for: override)
-    row = try shortcutRow(palette.id, in: model)
-    #expect(row.chords.alternate == ctrlOptCmdJ)
-    #expect(row.configOverrides.isEmpty)
-    #expect(settings.shortcuts.isEmpty)
-
-    model.record(.removed, for: palette.id, at: .alternate)
-    #expect(try shortcutRow(palette.id, in: model).configOverrides.count == 1)
-    model.reset(palette.id)
-    #expect(try shortcutRow(palette.id, in: model).chords.alternate == ctrlOptCmdJ)
-
-    model.record(.removed, for: palette.id, at: .alternate)
-    model.resetAll()
-    #expect(try shortcutRow(palette.id, in: model).chords.alternate == ctrlOptCmdJ)
-    #expect(settings.configShortcuts == fileShortcuts)
-}
-
-/// An app override that the file's change leaves doing nothing turns Reset and Reset All off,
-/// though it stays stored: a read of the file never writes the app's defaults.
-@MainActor @Test func anOverrideTheFileLeftDoingNothingTurnsResetOff() throws {
-    let defaults = temporarySuite(in: FileManager.default.temporaryDirectory.path)
-    let settings = Settings(defaults: defaults, log: unexpectedSettingsLog)
-    let (controller, _) = controller(settings)
-    let model = controller.shortcuts
-    let filter = ViewCommands.filter
-    #expect(filter.alternate == nil)
-    settings.applyConfig(ConfigParser.parse("shortcut.\(filter.id).alternate = ctrl+opt+cmd+j"))
-    model.record(.removed, for: filter.id, at: .alternate)
-    #expect(try shortcutRow(filter.id, in: model).isChanged)
-    #expect(model.canResetAll)
-    let stored = defaults.object(forKey: "shortcuts") as? [String: [String: String]]
-    #expect(stored != nil)
-
-    settings.applyConfig(.missing)
-
-    #expect(try !shortcutRow(filter.id, in: model).isChanged)
-    #expect(!model.canResetAll)
-    #expect(defaults.object(forKey: "shortcuts") as? [String: [String: String]] == stored)
-}
-
-/// Recording the file's own chord in the app clears the app's override rather than storing it.
-@MainActor @Test func recordingTheFilesChordFollowsTheFileAgain() throws {
-    let settings = untouchedSettings()
-    let (controller, _) = controller(settings)
-    let model = controller.shortcuts
-    settings.applyConfig(
-        ConfigParser.parse("shortcut.window.showPalette.alternate = ctrl+opt+cmd+j"))
-    model.record(.removed, for: palette.id, at: .alternate)
-    #expect(model.canResetAll)
-
-    model.record(.chords([ctrlOptCmdJ]), for: palette.id, at: .alternate)
-
-    #expect(settings.shortcuts.isEmpty)
-    #expect(try shortcutRow(palette.id, in: model).fileSlots == [.alternate])
-}
-
-@MainActor
-private func shortcutRow(_ id: CommandID, in model: ShortcutsSettings) throws
-    -> ShortcutsSettings.Row
-{
-    try #require(model.sections.flatMap(\.rows).first { $0.id == id })
+    await config.settings.flushConfigBounded()
+    #expect(try text().contains(#""shortcuts" : {}"#))
 }
 
 /// Cmd-W closes the Settings window, though Close Pane is off outside the panes, and follows

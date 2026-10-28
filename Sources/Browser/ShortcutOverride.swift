@@ -44,29 +44,19 @@ public struct ShortcutOverride: Hashable, Sendable {
     /// Whether both slots keep their defaults, so the override changes nothing.
     public var isStandard: Bool { primary == .standard && alternate == .standard }
 
-    /// The override with each slot that names what the slot has without it set back to
-    /// `.standard`. That is `file`'s slot where the config file sets one
-    /// (docs/decisions/0122-config-shortcuts.md), and otherwise `command`'s default: a chord
-    /// equal to it, or `.removed` for a slot with none. `preset` is the alternate a preset can
-    /// add (`FileCommands.commanderFKeys`), so removing it isn't a no-op. A chord equal to
-    /// `preset` stays: the user chose it, and it keeps the chord after the preset is turned off.
-    /// Each meaning then has one stored form.
-    func normalized(for command: Command, preset: KeyChord?, file: ShortcutOverride)
-        -> ShortcutOverride
-    {
+    /// The override with each slot that names what its default already gives set back to
+    /// `.standard`: a chord equal to `command`'s default for the slot, and `.removed` for a slot
+    /// with no default. `preset` is the alternate a preset can add (`FileCommands.commanderFKeys`),
+    /// so removing it isn't a no-op. A chord equal to `preset` stays: the user chose it, and it
+    /// keeps the chord after the preset is turned off. Each meaning then has one stored form.
+    func normalized(for command: Command, preset: KeyChord?) -> ShortcutOverride {
         var normal = self
         for position in Position.allCases {
             let standard = position == .primary ? command.primary : command.alternate
             let removable = standard != nil || (position == .alternate && preset != nil)
-            switch (normal[position], file[position]) {
-            case (.chord(let chord), .chord(let fileChord)) where chord == fileChord:
-                normal[position] = .standard
-            case (.removed, .removed):
-                normal[position] = .standard
-            case (.chord(let chord), .standard) where chord == standard:
-                normal[position] = .standard
-            case (.removed, .standard) where !removable:
-                normal[position] = .standard
+            switch normal[position] {
+            case .chord(let chord) where chord == standard: normal[position] = .standard
+            case .removed where !removable: normal[position] = .standard
             default: break
             }
         }

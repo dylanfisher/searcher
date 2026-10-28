@@ -233,24 +233,27 @@ private func isEnabled(_ chord: KeyChord, on pane: Pane) throws -> Bool {
 
 private let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
 
-/// Settings whose config file is `file`, over a suite in the file's test folder.
+/// Settings connected to the config file `file`, over a suite in the file's test folder.
 @MainActor
-private func configured(_ folder: TemporaryFolder, file: URL) -> Settings {
-    Settings(
-        defaults: temporarySuite(in: folder.url.path), configFile: file,
-        log: unexpectedSettingsLog)
+private func configured(
+    _ folder: TemporaryFolder, file: URL, watch: ManualWatch = ManualWatch(),
+    clock: ManualClock = ManualClock()
+) async -> Settings {
+    let settings = Settings(
+        defaults: temporarySuite(in: folder.url.path), log: unexpectedSettingsLog)
+    await settings.connectTestConfig(file, clock: clock, watch: watch)
+    return settings
 }
 
 private func openConfigBinding() throws -> CommandBinding {
     try #require(AppCommands.bindings.first { $0.command == SystemCommands.openConfigFile })
 }
 
-/// With no file and no folder, the command makes both, the file from the template, and opens it
-/// in the default app for plain text.
-@MainActor @Test func openConfigFileWithNoFileCreatesItFromTheTemplate() async throws {
+/// The command opens the config file in the default app for plain text.
+@MainActor @Test func openConfigFileOpensItInThePlainTextEditor() async throws {
     let folder = try TemporaryFolder("SystemCommandsTests")
-    let file = folder.url.appending(path: "searcher/config")
-    let settings = configured(folder, file: file)
+    let file = folder.url.appending(path: "searcher/config.json")
+    let settings = await configured(folder, file: file)
     let fixture = await systemPane(settings: settings)
     fixture.actions.setApplications([:], defaultApplications: [.plainText: textEdit])
     let binding = try openConfigBinding()
@@ -259,39 +262,59 @@ private func openConfigBinding() throws -> CommandBinding {
     binding.run(CommandContext(pane: fixture.pane))
     await settle { !fixture.actions.openedWithApp.isEmpty }
 
-    #expect(try String(contentsOf: file, encoding: .utf8) == ConfigTemplate.text)
     #expect(fixture.actions.openedWithApp == [OpenedWithApp(urls: [file], application: textEdit)])
 }
 
 @MainActor @Test func openConfigFileWithAFileOpensItAndLeavesItsBytes() async throws {
     let folder = try TemporaryFolder("SystemCommandsTests")
-    let file = folder.url.appending(path: "config")
-    let bytes = Data("show-hidden = true\n".utf8)
+    let file = folder.url.appending(path: "config.json")
+    let bytes = Data(#"{"show-hidden": true}"#.utf8)
     try bytes.write(to: file)
     let actions = StubSystemActions(defaultApplications: [.plainText: textEdit])
 
-    await SystemCommands.openConfig(
-        settings: configured(folder, file: file), systemActions: actions
-    )
-    .value
+    let settings = await configured(folder, file: file)
+    _ = await bounded(SystemCommands.openConfig(settings: settings, systemActions: actions))
 
     #expect(try Data(contentsOf: file) == bytes)
     #expect(actions.openedWithApp == [OpenedWithApp(urls: [file], application: textEdit)])
 }
 
-/// A file that can't be made shows in the banner, and nothing opens.
-@MainActor @Test func aConfigFileThatCantBeCreatedIsReported() async throws {
+/// A file deleted while the app runs is written again from the settings, the defaults since
+/// the deletion, before it opens.
+@MainActor @Test func openConfigFileWritesADeletedFileAgain() async throws {
+    let folder = try TemporaryFolder("SystemCommandsTests")
+    let file = folder.url.appending(path: "config.json")
+    try Data(#"{"show-hidden": true}"#.utf8).write(to: file)
+    let watch = ManualWatch()
+    let clock = ManualClock()
+    let settings = await configured(folder, file: file, watch: watch, clock: clock)
+    try FileManager.default.removeItem(at: file)
+    watch.change()
+    // A file found gone is read again a moment later before it counts as deleted.
+    await settle { clock.waitingSleeps > 0 }
+    clock.advance(by: ConfigStore.confirmDelay)
+    await settle { !settings.showHidden }
+    let actions = StubSystemActions(defaultApplications: [.plainText: textEdit])
+
+    _ = await bounded(SystemCommands.openConfig(settings: settings, systemActions: actions))
+
+    #expect(try Data(contentsOf: file) == ConfigFile.data(.init(values: [:], shortcuts: [:])))
+    #expect(actions.openedWithApp == [OpenedWithApp(urls: [file], application: textEdit)])
+}
+
+/// A file whose folder can't be made shows in the banner, and nothing opens.
+@MainActor @Test func aConfigFileThatCantBeMadeIsReported() async throws {
     let folder = try TemporaryFolder("SystemCommandsTests")
     // The file's folder is a file, so neither can be made.
     try Data().write(to: folder.url.appending(path: "searcher"))
-    let file = folder.url.appending(path: "searcher/config")
-    let settings = configured(folder, file: file)
+    let file = folder.url.appending(path: "searcher/config.json")
+    let settings = await configured(folder, file: file)
     let actions = StubSystemActions(defaultApplications: [.plainText: textEdit])
 
-    await SystemCommands.openConfig(settings: settings, systemActions: actions).value
+    _ = await bounded(SystemCommands.openConfig(settings: settings, systemActions: actions))
 
-    #expect(settings.configErrors.count == 1)
-    #expect(settings.configErrors.first?.description.contains("couldn't be created") == true)
+    await settle { !settings.configErrors.isEmpty }
+    #expect(settings.configErrors.first?.description.contains("couldn't be") == true)
     #expect(actions.openedWithApp.isEmpty)
     #expect(actions.openedFiles.isEmpty)
 }
@@ -300,17 +323,17 @@ private func openConfigBinding() throws -> CommandBinding {
 /// or written through.
 @MainActor @Test func aConfigFileLinkToNothingIsReported() async throws {
     let folder = try TemporaryFolder("SystemCommandsTests")
-    let file = folder.url.appending(path: "config")
-    let target = folder.url.appending(path: "dotfiles/config")
+    let file = folder.url.appending(path: "config.json")
+    let target = folder.url.appending(path: "dotfiles/config.json")
     try FileManager.default.createSymbolicLink(at: file, withDestinationURL: target)
-    let settings = configured(folder, file: file)
+    let settings = await configured(folder, file: file)
     let actions = StubSystemActions(defaultApplications: [.plainText: textEdit])
 
-    await SystemCommands.openConfig(settings: settings, systemActions: actions).value
+    _ = await bounded(SystemCommands.openConfig(settings: settings, systemActions: actions))
 
     #expect(
         settings.configErrors.map(\.description) == [
-            "couldn't be created: it is a symbolic link to \(target.path), which doesn't exist"
+            "is a symbolic link to \(target.path), which doesn't exist"
         ])
     #expect(actions.openedWithApp.isEmpty)
     #expect(actions.openedFiles.isEmpty)
@@ -320,14 +343,14 @@ private func openConfigBinding() throws -> CommandBinding {
 /// A folder at the config file's path is reported, and the editor isn't asked to open it.
 @MainActor @Test func aFolderAtTheConfigFilesPathIsReported() async throws {
     let folder = try TemporaryFolder("SystemCommandsTests")
-    let file = folder.url.appending(path: "config")
+    let file = folder.url.appending(path: "config.json")
     try FileManager.default.createDirectory(at: file, withIntermediateDirectories: false)
-    let settings = configured(folder, file: file)
+    let settings = await configured(folder, file: file)
     let actions = StubSystemActions(defaultApplications: [.plainText: textEdit])
 
-    await SystemCommands.openConfig(settings: settings, systemActions: actions).value
+    _ = await bounded(SystemCommands.openConfig(settings: settings, systemActions: actions))
 
-    #expect(settings.configErrors.map(\.description) == ["couldn't be created: it is a folder"])
+    #expect(settings.configErrors.first?.description.hasPrefix("couldn't be read") == true)
     #expect(actions.openedWithApp.isEmpty)
     #expect(actions.openedFiles.isEmpty)
 }

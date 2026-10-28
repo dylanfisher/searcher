@@ -128,3 +128,9 @@ value the app stored, then the file's, then its default, and the defaults are de
 `UserDefaults`, and still only when it changes what the preference reads as. A stored value of
 another shape is still removed and logged; the shapes are the same checks the file's values
 pass.
+
+## Amendment: the config file is the settings (2026-10-27)
+
+[0123](0123-config-is-the-settings.md): these preferences now live in the config file only, which
+the app writes on each change; `UserDefaults` no longer holds them, and a value it holds from
+before is not read. The file's values are checked against `Settings.preferences`.

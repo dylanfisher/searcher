@@ -1,12 +1,14 @@
-/// Something wrong with the config file, which keeps it from being applied: on a line, with the
-/// key the line sets when it has one, or with the whole file, as one that can't be read.
+/// Something wrong with the config file, which keeps it from being applied: where its text
+/// isn't JSON, on a line; a key with a value it can't take, with the key; or with the whole
+/// file, as one that can't be read (docs/decisions/0123-config-is-the-settings.md).
 public struct ConfigError: Error, Equatable, Sendable, CustomStringConvertible {
-    /// The line it is on, counted from 1; nil for an error with the whole file.
+    /// The line it is on, counted from 1; nil for an error that isn't on a line.
     public let line: Int?
-    /// The key the line sets, as written; nil when the line has none, or the error isn't on a
-    /// line.
+    /// The key it is about, as `ConfigFile` spells it, such as `show-hidden` or
+    /// `shortcuts.window.showPalette.primary`; nil for an error with no key.
     public let key: String?
-    /// What is wrong, in a phrase: `folders-first must be true or false, not "yes"`.
+    /// What is wrong, in a phrase that names the key when there is one:
+    /// `folders-first must be true or false, not "yes"`.
     public let reason: String
 
     public init(line: Int?, key: String?, reason: String) {
@@ -15,7 +17,7 @@ public struct ConfigError: Error, Equatable, Sendable, CustomStringConvertible {
         self.reason = reason
     }
 
-    /// The reason after the line it is on: `line 3: unknown key "show-hiden"`.
+    /// The reason after the line it is on: `line 3: isn't valid JSON: …`.
     public var description: String {
         line.map { "line \($0): \(reason)" } ?? reason
     }
