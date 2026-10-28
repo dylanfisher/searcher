@@ -272,10 +272,8 @@ private func openConfigBinding() throws -> CommandBinding {
     try bytes.write(to: file)
     let actions = StubSystemActions(defaultApplications: [.plainText: textEdit])
 
-    await SystemCommands.openConfig(
-        settings: await configured(folder, file: file), systemActions: actions
-    )
-    .value
+    let settings = await configured(folder, file: file)
+    _ = await bounded(SystemCommands.openConfig(settings: settings, systemActions: actions))
 
     #expect(try Data(contentsOf: file) == bytes)
     #expect(actions.openedWithApp == [OpenedWithApp(urls: [file], application: textEdit)])
@@ -298,7 +296,7 @@ private func openConfigBinding() throws -> CommandBinding {
     await settle { !settings.showHidden }
     let actions = StubSystemActions(defaultApplications: [.plainText: textEdit])
 
-    await SystemCommands.openConfig(settings: settings, systemActions: actions).value
+    _ = await bounded(SystemCommands.openConfig(settings: settings, systemActions: actions))
 
     #expect(try Data(contentsOf: file) == ConfigFile.data(.init(values: [:], shortcuts: [:])))
     #expect(actions.openedWithApp == [OpenedWithApp(urls: [file], application: textEdit)])
@@ -313,7 +311,7 @@ private func openConfigBinding() throws -> CommandBinding {
     let settings = await configured(folder, file: file)
     let actions = StubSystemActions(defaultApplications: [.plainText: textEdit])
 
-    await SystemCommands.openConfig(settings: settings, systemActions: actions).value
+    _ = await bounded(SystemCommands.openConfig(settings: settings, systemActions: actions))
 
     await settle { !settings.configErrors.isEmpty }
     #expect(settings.configErrors.first?.description.contains("couldn't be") == true)
@@ -331,7 +329,7 @@ private func openConfigBinding() throws -> CommandBinding {
     let settings = await configured(folder, file: file)
     let actions = StubSystemActions(defaultApplications: [.plainText: textEdit])
 
-    await SystemCommands.openConfig(settings: settings, systemActions: actions).value
+    _ = await bounded(SystemCommands.openConfig(settings: settings, systemActions: actions))
 
     #expect(
         settings.configErrors.map(\.description) == [
@@ -350,7 +348,7 @@ private func openConfigBinding() throws -> CommandBinding {
     let settings = await configured(folder, file: file)
     let actions = StubSystemActions(defaultApplications: [.plainText: textEdit])
 
-    await SystemCommands.openConfig(settings: settings, systemActions: actions).value
+    _ = await bounded(SystemCommands.openConfig(settings: settings, systemActions: actions))
 
     #expect(settings.configErrors.first?.description.hasPrefix("couldn't be read") == true)
     #expect(actions.openedWithApp.isEmpty)

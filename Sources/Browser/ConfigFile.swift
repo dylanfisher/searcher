@@ -76,6 +76,11 @@ public enum ConfigFile {
     /// The file's text for `contents`: pretty-printed with its keys sorted, every preference
     /// present so the file shows each one, and a newline at the end.
     static func data(_ contents: Contents) -> Data {
+        data(object: object(contents))
+    }
+
+    /// `contents` as the file's JSON object: every preference, and the shortcuts.
+    static func object(_ contents: Contents) -> [String: Any] {
         var object: [String: Any] = [:]
         for preference in Settings.preferences {
             object[preference.name] = json(
@@ -83,6 +88,12 @@ public enum ConfigFile {
         }
         object[shortcutsKey] = Dictionary(
             uniqueKeysWithValues: contents.shortcuts.map { ($0.key.rawValue, $0.value.stored) })
+        return object
+    }
+
+    /// The file's text for `object`, a JSON object read from the file or made by `object(_:)`:
+    /// pretty-printed with its keys sorted, and a newline at the end.
+    static func data(object: [String: Any]) -> Data {
         let data: Data
         do {
             data = try JSONSerialization.data(
@@ -272,7 +283,7 @@ public enum ConfigFile {
     }
 
     /// `value` as JSON writes it.
-    private static func json(_ value: Settings.Value) -> Any {
+    static func json(_ value: Settings.Value) -> Any {
         switch value {
         case .bool(let bool): bool
         case .number(let number): number == number.rounded() ? Int(number) : number

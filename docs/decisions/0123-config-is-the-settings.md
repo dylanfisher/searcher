@@ -39,53 +39,45 @@ than adding a warning.
 - **One declaration per key.** `Settings.preferences` gives each preference its key, kind and
   default; the file's keys, its checks and what the app writes come from it. The template's
   one-line summaries went with the template: JSON has no comments.
-- **Writing.** A change in the app writes the whole file: pretty-printed, keys sorted, every
-  preference present at its value, so the file shows every option, and `"shortcuts"` with only
-  the commands the user changed (`{}` for none). The write goes through `AtomicWrite` on the
-  `ConfigStore` actor, `WorkspaceStore.writeDelay` after the first change not yet written, as
-  the workspace store times its writes. A file the app hasn't changed is never rewritten, so the
-  user's own formatting stays until the next change in the app. A write the store refuses for a
-  reason no read will follow, as a write that failed, is tried again after the same delay; one
-  refused for a file with an error waits for the edit that fixes it.
-- **Quitting.** A change waiting on its delay is written at quit beside the other quit steps,
-  not before them, with the same deadline (`Settings.flushConfig(by:clock:)` over
-  `FirstToFinish`, as the listing cache's flush runs): a config file on a share that hangs
-  delays no step, and the app quits without it once the deadline passes. A flush waits for a
-  write already running, so quitting never reports a write done that isn't.
-- **No echo, and no lost update.** The store keeps the file's bytes as last read or written; a
-  change event whose read gives the same bytes, or the same settings, sends nothing, so the
-  app's own write never comes back as a reload. Each read the store sends has the next
-  generation, and each write says which generation the settings had applied; a write based on an
-  older one is dropped, and so is one that arrives after a later write. Before writing, the store
-  reads the file once more, and an edit whose event hasn't arrived yet is sent instead. Just
-  before the rename it compares the file's bytes with that read again, through `AtomicWrite`'s
-  `beforeRename`, and on a difference drops the write and reads the file. What is left is the
-  few microseconds between that check and the rename, which no rename can close: `rename(2)`
-  can't be made conditional on the bytes it replaces.
-- **Merging a read with changes not yet written.** `Settings` keeps the preferences and shortcut
-  slots changed in the app since the file last held them, and what the file held then. A read
-  takes the file's settings, then puts each such change back on top where the file left that key
-  or slot as it was, and writes the result after the delay. Where the file changed the same key
-  or slot, the file wins and the app's change is dropped. A write that holds the changes clears
-  them. So a toggle in the app and an editor's save of another key, within the write's delay,
-  both survive. The same rule applies once a file with an error is fixed: the changes made in
-  the app meanwhile stay, except on the keys the fix changed.
-- **Reading.** A save applies at once, every key; `ConfigStore` watches the file's folder with
-  FSEvents as 0120's watcher did, since an editor's save and Dropbox's replace the file by
-  rename. Files beside it, such as Dropbox's conflicted copies and `AtomicWrite`'s partial file,
-  change nothing: the bytes of the config file are the same.
+- **Each change in the app is a patch, written by read-modify-write.** A change in the app sets
+  the setting in memory at once and hands the `ConfigStore` actor a `ConfigPatch`: one
+  preference and its value, or one shortcut slot and its chord, `""` for none, or its default.
+  The store takes patches in the order they were made and writes each by reading the file,
+  setting that one key in the file's JSON object, leaving every other key as the file has it,
+  and writing the object back through `AtomicWrite`, pretty-printed with sorted keys. Just before
+  the rename the file's bytes are compared with that read, through `AtomicWrite`'s
+  `beforeRename`, and on a difference the patch starts over from a new read. What is left is
+  the few microseconds between that check and the rename, which no rename can close:
+  `rename(2)` can't be made conditional on the bytes it replaces. Because each patch reads the
+  file first, an editor's change to another key is never overwritten, and an editor's change to
+  the same key is overwritten only by a later change in the app, the newer action. There is no
+  write delay: a toggle costs one small read and one write, off the main thread. Patches still
+  waiting are coalesced only by key, the latest winning. A patch whose value the file already
+  has writes nothing, so the user's spelling of the file stays.
+- **A new file holds every option.** When there is no file, at launch, at a newly chosen place,
+  or once a deletion is confirmed with patches waiting, the file is made with every preference
+  at its value and `"shortcuts"` with the commands the user changed (`{}` for none), so the user
+  can see each option.
+- **Reads.** A save in an editor, or any change in the file's folder, makes the store read the
+  file and send what it finds to `Settings`, which applies it at once, every key. The patches
+  not yet written go on top, in the store's read and again in `Settings`, which keeps those it
+  sent until the store says they are in the file, so a read sent before the store took a patch
+  doesn't undo it. `ConfigStore` watches the file's folder with FSEvents as 0120's watcher did.
+  The store keeps the file's bytes as last read or written, and a read that finds the same
+  settings sends nothing, so the app's own write never comes back as a reload; files beside the
+  config file, such as Dropbox's conflicted copies and `AtomicWrite`'s partial file, change
+  nothing.
 - **Reads that pass through.** An editor's save in place truncates the file and then writes it,
   and a sync tool may delete it and create it again. A read that finds the file empty or gone,
   where the last read didn't, isn't sent: the store reads again `ConfigStore.confirmDelay`
-  (200 ms) later, on its injected clock, and sends what that read finds; a change event before
-  then cancels the wait and reads at once. 200 ms covers a save in place and a delete and create,
-  which take milliseconds, and is short enough that a real deletion shows at once to a person. A
-  write meanwhile is refused rather than made over the empty file.
+  (200 ms) later, on its injected clock, and takes what that read finds; a change in the folder
+  before then cancels the wait and reads at once. 200 ms covers a save in place and a delete
+  and create, which take milliseconds, and is short enough that a real deletion shows at once to
+  a person. Patches meanwhile wait.
 - **A deleted file means the defaults.** The file is the settings, so a deletion while the app
-  runs, once confirmed, sets every preference and shortcut to its default, apart from changes
-  made in the app and not yet written, which the merge rule keeps. Nothing is written then; the next
-  change in the app, Open Config File, or the next launch writes a fresh file. A file missing at
-  launch, or at a newly chosen place, is written from the settings at once.
+  runs, once confirmed, sets every preference and shortcut to its default, with the patches
+  waiting on top; those are written as a new file. With none waiting nothing is written then;
+  the next change in the app, Open Config File, or the next launch writes a fresh file.
 - **Errors: simple, and the file isn't applied.** Text that isn't JSON is one error on the line
   Foundation stopped at (its error gives the byte offset; the line is counted from it), with
   Foundation's description: `line 3: isn't valid JSON: Something looked like a 'true' but
@@ -101,23 +93,37 @@ than adding a warning.
   override, because the Shortcuts pane could otherwise write a file the app then refused. Errors
   show in `ConfigErrorBanner` and are logged under `config`. A file with an error sets nothing;
   the last good settings stay.
-- **A broken file is never written over.** While the file has an error, changes in the app apply
-  in memory and the banner says they can't be saved to the file until it is fixed. When a good
-  file loads, they are merged with it as above. A write that fails (disk full, no permission) shows in the banner too,
-  until a write succeeds; the change stays in memory and the next change tries again.
+- **A broken file is never written over.** While the file has an error, or is found empty or
+  gone and not yet confirmed so, the patches wait in the store's queue, in order, and memory
+  already shows them; the banner says the changes can't be saved to the file until it is fixed.
+  When a good read arrives, the store writes the queued patches on top of it, in order. The
+  later action wins: a change in the app made while the file was broken was made after the
+  user's last save, and the user's fix keeps every key the queue doesn't touch.
+- **A write that fails** (no permission, a share that's down) keeps its patches at the head of
+  the queue and shows in the banner until a write succeeds. The store tries again on its clock
+  after `ConfigStore.firstRetryDelay` (1 s), doubling each time up to
+  `ConfigStore.longestRetryDelay` (30 s), so a failing write never loops fast.
+- **Quitting.** `Settings.flushConfig(by:clock:)` waits for the store's queue to drain, a
+  confirm read and its replay among it, up to the quit deadline, beside the other quit steps
+  rather than before them (`FirstToFinish`, as the listing cache's flush runs): a config file on
+  a share that hangs delays no step. At the deadline the app logs the keys that didn't reach the
+  file (`Settings.unwrittenConfigKeys`) and quits.
 - **Location.** The default is `~/.config/searcher/config.json`. Settings ▸ General shows the
   path, with Change… (an `NSOpenPanel` that takes a JSON file or a folder, in which the file is
   `config.json`), Open in Editor (Open Config File), Reveal in Finder and Use Default. The chosen
   location is the one thing kept outside the file, as a path in `UserDefaults` under
-  `configFile`; a value that isn't an absolute path is discarded and logged. Reveal in Finder
-  checks off the main thread that the file is there, and when it isn't, as on a volume that
-  isn't connected, says so under the buttons and to VoiceOver instead of showing Finder
-  nothing. A plain path is
+  `configFile`; a value that isn't an absolute path is discarded and logged. A plain path is
   enough: the app isn't sandboxed (`scripts/bundle` signs it with no entitlements), so no
-  security-scoped bookmark is needed, and a path, unlike a bookmark, stays at the place the user
-  chose when the file there is replaced by a sync. Choosing a place with a config file reads it
-  ("pull"); choosing one with none writes the settings there ("save"). A waiting change is
-  written to the old file first.
+  security-scoped bookmark is needed, and a path, unlike a bookmark, stays at the place the
+  user chose when the file there is replaced by a sync. Reveal in Finder checks off the main
+  thread that the file is there, and when it isn't, as on a volume that isn't connected, says
+  so under the buttons and to VoiceOver instead of showing Finder nothing.
+- **Moving.** Change… waits up to `Settings.moveWait` (2 s) for the old place's queue to drain,
+  so an old place on a share that hangs can't hold the move, then hands the patches not yet
+  written to the new place's store, which takes them after its first read. Choosing a place with
+  a config file reads it ("pull") and writes the handed-over patches on top; choosing one with
+  none writes the settings there ("save"), those patches among them. A change made while the
+  new store reads the file goes the same way, so the read doesn't undo it.
 - **A missing volume is an error, never a fallback.** The store makes the file's folder only at
   the default location. At a chosen one, a missing folder is an error ("is in …, which isn't
   there: is its volume connected?"), shown in the banner, with the settings kept in memory and
@@ -145,8 +151,11 @@ than adding a warning.
 - **A deleted file rewrites the current settings at once** — rejected: a sync tool that replaces
   the file by delete and create could have its new file raced by the app's write, and the user's
   model is that deleting the file resets it.
-- **The file wins whole on every read** — rejected in review: a toggle in the app was lost when
-  an editor saved another key within the write's delay.
+- **The whole file written after a delay, with reads merged against a snapshot** — what this
+  record first decided, rejected after two reviews: the bookkeeping that kept app and file in
+  step (keys changed since the last write, a snapshot of the file, generations of reads, a
+  delayed write) lost a change in two more interleavings, a quit after a refused write and an
+  editor's save during a write. A patch read-modify-written per change needs none of it.
 - **Apply an empty or missing read at once** — rejected in review: a save in place flashed the
   banner and a sync tool's delete and create reset the settings to their defaults.
 - **A security-scoped bookmark for the chosen location** — rejected: not sandboxed, and see above.
@@ -156,6 +165,7 @@ than adding a warning.
 ## Consequences
 
 Launch reads one small file before the windows restore, on the store's actor, and writes it
-when it is missing. Each change in the app costs one write of a few hundred bytes a second
-later. The user loses, on the first launch with this build, every preference and shortcut they
-had set in the app or in the line-format file: both start at their defaults until set again.
+when it is missing. Each change in the app costs one read and one write of a few hundred bytes
+at once, on the store's actor. The user loses, on the first launch with this build, every
+preference and shortcut they had set in the app or in the line-format file: both start at their
+defaults until set again.

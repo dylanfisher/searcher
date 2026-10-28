@@ -128,9 +128,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 Logger(category: "workspaces").notice(
                     "quitting before the last session was restored; it stays as saved")
             }
-            // A setting changed in the last second is still waiting on its write's delay. It
-            // runs beside the other steps, on the store's actor, so a config file on a share
-            // that hangs delays none of them, and is given the same deadline.
+            // A setting changed just now may still be on its way to the config file, or waiting
+            // on a file with an error or one found gone. The wait runs beside the other steps,
+            // since the store writes on its own actor, so a config file on a share that hangs
+            // delays none of them, and is given the same deadline.
             let settings = settings
             let configFlushed = Task {
                 await settings.flushConfig(by: deadline, clock: .continuous)
@@ -149,8 +150,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 )
             }
             if !(await configFlushed.value) {
+                let keys = settings.unwrittenConfigKeys.joined(separator: ", ")
                 Logger(category: "config").fault(
-                    "the config file wasn't written in \(limit, privacy: .public); quitting without it"
+                    "the config file wasn't written in \(limit, privacy: .public); quitting without \(keys, privacy: .public)"
                 )
             }
             sender.reply(toApplicationShouldTerminate: true)

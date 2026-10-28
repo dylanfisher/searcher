@@ -1,19 +1,21 @@
 import Base
 import Foundation
 
-/// Reads the config file, reads it again after each change in its folder, and writes what
-/// `Settings` hands it, all off the main actor (docs/decisions/0123-config-is-the-settings.md).
-/// It watches the folder rather than the file, since an editor's atomic save, and Dropbox's,
-/// replaces the file; and the folder may not exist yet: FSEvents matches the path of each
-/// change, so changes arrive once the folder is made.
+/// Reads the config file, reads it again after each change in its folder, and writes each
+/// change made in the app into it, all off the main actor
+/// (docs/decisions/0123-config-is-the-settings.md). It watches the folder rather than the file,
+/// since an editor's atomic save, and Dropbox's, replaces the file; and the folder may not exist
+/// yet: FSEvents matches the path of each change, so changes arrive once the folder is made.
 ///
-/// Each read is compared with the file as last read or written, byte for byte, so the store's
-/// own write, a save that changes nothing and another file changing in the folder send nothing.
-/// Each read it sends has the next generation; a write based on an earlier one is dropped, so
-/// a change made in the app never replaces an edit of the file it hadn't seen. A file that has
-/// an error is never written over. A read that finds the file empty or gone is sent only once a
-/// second read `confirmDelay` later still finds it so, since an editor's save in place and a
-/// sync tool's delete and create pass through both.
+/// A change made in the app comes as a `ConfigPatch`, and is written by reading the file,
+/// setting that one key in it and writing it back, so an edit of any other key is kept. The
+/// patches wait in a queue, the latest of each key only, while the file has an error, is
+/// empty or gone and not yet confirmed so, or can't be written; each read sent to the settings
+/// has them on top. A read is compared with the file as last read or written, byte for byte, so
+/// the store's own write, a save that changes nothing and another file changing in the folder
+/// send nothing. A read that finds the file empty or gone is believed only once a second read
+/// `confirmDelay` later still finds it so, since an editor's save in place and a sync tool's
+/// delete and create pass through both.
 public actor ConfigStore {
     /// Starts watching `folder`, calling `onChange` after each batch of changes in it, and
     /// returns what stops the watch.
@@ -26,26 +28,39 @@ public actor ConfigStore {
     public typealias Write =
         @Sendable (Data, URL, _ beforeRename: () throws -> Void) throws -> Void
 
-    /// How long after a read that finds the file empty or gone the store reads it again before
-    /// it believes it. An editor's save in place truncates then writes, and a sync tool may
-    /// delete then create; both take a few milliseconds.
-    public static let confirmDelay: Duration = .milliseconds(200)
-
     /// What the store tells its settings.
     public enum Update: Equatable, Sendable {
-        /// A read of the file that differs from the last, with its generation.
-        case read(ConfigLoad, generation: Int)
+        /// A read of the file that differs from the last, with the patches not yet written
+        /// on top of it.
+        case read(ConfigLoad)
+        /// Every patch up to this sequence number is in the file.
+        case wrote(through: Int)
         /// Why the last write failed, or nil once one succeeds after a failure.
         case saved(failure: ConfigError?)
     }
 
+    /// How long after a read that finds the file empty or gone the store reads it again before
+    /// it believes it. An editor's save in place truncates then writes, and a sync tool may
+    /// delete then create; both take a few milliseconds.
+    public static let confirmDelay: Duration = .milliseconds(200)
+    /// The wait before the first retry of a write that failed; each retry after one that
+    /// fails waits twice as long, up to `longestRetryDelay`.
+    public static let firstRetryDelay: Duration = .seconds(1)
+    public static let longestRetryDelay: Duration = .seconds(30)
+    /// How many times a write starts over because the file changed during it before it waits
+    /// for a retry.
+    static let attempts = 5
+
     /// The file, as the user chose it: a symbolic link is followed to read and write it, and
     /// stays a link.
     public nonisolated let file: URL
-    /// Each read after the first that differs from the one before, and each change in whether
-    /// the writes fail, in order.
+    /// Each read after the first that differs from the one before, each write of patches, and
+    /// each change in whether the writes fail, in order.
     public nonisolated let updates: AsyncStream<Update>
     private let feed: AsyncStream<Update>.Continuation
+    /// The patches `send` hands over, in order, which the store takes once it has started.
+    private let inbox: AsyncStream<(ConfigPatch, Int)>
+    private let inboxFeed: AsyncStream<(ConfigPatch, Int)>.Continuation
     /// Whether a write makes the file's folder when it isn't there: true for the default
     /// location, whose folder the app owns, and false for one the user chose, whose folder
     /// missing means its volume isn't connected.
@@ -56,17 +71,24 @@ public actor ConfigStore {
     private let write: Write
     private let startWait: DeadlineWait.Start
     private let log: @Sendable (String) -> Void
+    private var stopWatches: [@Sendable () -> Void] = []
+    private var started = false
+    private var stopped = false
+    /// The file as last read or written: its bytes, nil for no file, and what they load as.
+    private var last: Read?
+    /// The patches not yet written, the latest of each key, each with its sequence number.
+    private var queue: [ConfigPatch.Target: (patch: ConfigPatch, sequence: Int)] = [:]
+    /// The highest sequence number taken from the inbox, and the highest written.
+    private var received = 0
+    private var written = 0
+    /// Those waiting for `waitUntilWritten`, each with the sequence number it waits for.
+    private var waiters: [(sequence: Int, continuation: CheckedContinuation<Void, Never>)] = []
     /// The second read of a file found empty or gone, waiting for `confirmDelay`; a change in
     /// the folder before it ends cancels it and reads the file at once.
     private var confirming: Task<Void, Never>?
-    private var stopWatches: [@Sendable () -> Void] = []
-    private var started = false
-    /// The file as last read or written: its bytes, nil for no file, and what they load as.
-    private var last: Read?
-    private var generation = 0
-    /// The sequence number of the last write, so a write that arrives after a later one is
-    /// dropped.
-    private var lastSequence = 0
+    /// The wait before a failed write is tried again, and how long the next one waits.
+    private var retrying: Task<Void, Never>?
+    private var retryDelay: Duration?
     private var saveFailure: ConfigError?
 
     private struct Read: Equatable {
@@ -75,10 +97,10 @@ public actor ConfigStore {
     }
 
     /// A store of `file`, watched through `watch`, written through `write`, and timing its
-    /// second reads on `clock`. Each read checks the file's shortcuts against the menus'
-    /// `reserved` and `fixed` chords (`ConfigLoad.checked(reserved:fixed:)`), which Browser
-    /// can't see for itself. `log` gets each read's errors, each failed write and a watch that
-    /// couldn't start.
+    /// second reads and retries on `clock`. Each read checks the file's shortcuts against the
+    /// menus' `reserved` and `fixed` chords (`ConfigLoad.checked(reserved:fixed:)`), which
+    /// Browser can't see for itself. `log` gets each read's errors, each failed write and a
+    /// watch that couldn't start.
     public init<C: Clock<Duration>>(
         file: URL, createsFolder: Bool, reserved: Set<KeyChord>, fixed: [KeyChord: CommandID],
         log: @escaping @Sendable (String) -> Void, watch: @escaping Watch = fileEvents,
@@ -94,6 +116,7 @@ public actor ConfigStore {
         self.write = write
         startWait = DeadlineWait.make(on: clock)
         (updates, feed) = AsyncStream.makeStream(of: Update.self)
+        (inbox, inboxFeed) = AsyncStream.makeStream(of: (ConfigPatch, Int).self)
     }
 
     /// Watches a folder through FSEvents.
@@ -117,16 +140,26 @@ public actor ConfigStore {
         FileManager.default.fileExists(atPath: url.path)
     }
 
-    /// Reads the file and starts watching its folder, and the folder of the file a link at
-    /// its path leads to, and returns the read as generation 0; later reads go to `updates`.
+    /// Hands `patch`, the app's change number `sequence`, to the store to write. Patches are
+    /// taken in the order they are sent, and wait until `start` has read the file.
+    nonisolated func send(_ patch: ConfigPatch, sequence: Int) {
+        inboxFeed.yield((patch, sequence))
+    }
+
+    /// Reads the file, writes `contents` there when there is none, starts watching its folder
+    /// and the folder of the file a link at its path leads to, and returns the read; later
+    /// reads go to `updates`. Then takes the patches sent, those sent before it among them.
     /// The watch starts after the read, so a change made between the two is read again.
-    public func start() -> ConfigLoad {
+    public func start(writingIfMissing contents: ConfigFile.Contents) -> ConfigLoad {
         precondition(!started, "the config file is already watched")
         started = true
-        let first = read()
-        last = first
+        var first = read()
         for error in first.load.errors {
             log("the config file \(file.path) wasn't applied: \(error)")
+        }
+        last = first
+        if first.load == .missing {
+            first = writeNew(ConfigFile.data(contents)) ?? first
         }
         var folders = [file.deletingLastPathComponent().path]
         let target = Self.target(of: file).deletingLastPathComponent().path
@@ -142,93 +175,53 @@ public actor ConfigStore {
                 log("the config file's folder \(folder) isn't watched for changes: \(error)")
             }
         }
+        let inbox = inbox
+        Task { [weak self] in
+            for await (patch, sequence) in inbox {
+                guard let self else { return }
+                await receive(patch, sequence: sequence)
+            }
+        }
         reload()
         return first.load
     }
 
-    /// Stops watching and ends `updates`.
+    /// Stops watching, ends `updates`, and lets go of anyone waiting for a write.
     public func stop() {
+        stopped = true
         confirming?.cancel()
         confirming = nil
+        retrying?.cancel()
+        retrying = nil
         for stop in stopWatches { stop() }
         stopWatches = []
+        inboxFeed.finish()
         feed.finish()
+        for waiter in waiters { waiter.continuation.resume() }
+        waiters = []
     }
 
-    /// Writes `contents` over the file, and returns whether the file now holds them. It
-    /// doesn't when a read since generation `basedOn` changed what the file sets, which wins;
-    /// or the file has an error, which a write would destroy; or the file is empty or gone and
-    /// not yet confirmed so; or a write with a later `sequence` came first; or the write
-    /// failed. The file is read once more first, so an edit whose change hasn't arrived yet is
-    /// found and sent instead, and its bytes are compared again just before the rename, so an
-    /// edit saved during the write is kept and sent; what is left is the few microseconds
-    /// between that check and the rename, which no rename can close.
-    @discardableResult
-    public func save(_ contents: ConfigFile.Contents, basedOn: Int, sequence: Int) -> Bool {
-        guard sequence > lastSequence, basedOn == generation else { return false }
-        lastSequence = sequence
-        let current = read()
-        if isTransient(current) {
-            confirm()
-            return false
-        }
-        guard accept(current), let last, last.load.errors.isEmpty else { return false }
-        let data = ConfigFile.data(contents)
-        guard data != last.bytes else { return true }
-        let target = Self.target(of: file)
-        do {
-            if createsFolder {
-                try FileManager.default.createDirectory(
-                    at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-            }
-            try write(data, target) {
-                if Self.bytes(at: target) != last.bytes { throw ChangedDuringWrite() }
-            }
-            self.last = Read(bytes: data, load: load(data))
-            report(nil)
-            return true
-        } catch is ChangedDuringWrite {
-            reload()
-            return false
-        } catch {
-            report(
-                ConfigError(
-                    line: nil, key: nil,
-                    reason: "couldn't be saved: \(error.localizedDescription)"))
-            return false
-        }
+    /// Returns once every patch up to `sequence` is in the file, or the store has stopped.
+    public func waitUntilWritten(through sequence: Int) async {
+        guard written < sequence, !stopped else { return }
+        await withCheckedContinuation { waiters.append((sequence, $0)) }
     }
 
-    /// The file changed between the read a write was checked against and its rename.
-    private struct ChangedDuringWrite: Error {}
-
-    /// The bytes of the file at `url`; nil when it can't be read.
-    private static func bytes(at url: URL) -> Data? {
-        try? Data(contentsOf: url)
-    }
-
-    /// Makes the file from `contents`, the settings as of generation `basedOn`, when there is
-    /// none, as Open Config File needs, and says whether there is a file to open. A deletion
-    /// the settings haven't applied yet makes the file from the defaults, which they are about
-    /// to read as. The write is create-only, so a file an editor saves meanwhile is kept and
-    /// opened.
-    public func makeIfMissing(_ contents: ConfigFile.Contents, basedOn: Int) -> Bool {
+    /// Makes the file from `contents`, the settings as they are, when there is none, as Open
+    /// Config File needs, and says whether there is a file to open. The write is create-only,
+    /// so a file an editor saves meanwhile is kept and opened.
+    public func makeIfMissing(_ contents: ConfigFile.Contents) -> Bool {
         let found = read()
-        // A file just found gone isn't sent as a deletion here: the settings still have what
-        // it held, which the file is made from.
-        let transient = isTransient(found)
-        let current = (transient || accept(found)) && basedOn == generation
         guard found.bytes == nil else { return true }
         guard found.load == .missing else { return false }
-        let data = ConfigFile.data(
-            current ? contents : ConfigFile.Contents(values: [:], shortcuts: [:]))
+        let data = ConfigFile.data(contents)
         do {
             if createsFolder {
                 try FileManager.default.createDirectory(
                     at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
             }
             try AtomicWrite.create(data, at: Self.target(of: file))
-            self.last = Read(bytes: data, load: load(data))
+            last = Read(bytes: data, load: load(data))
             report(nil)
         } catch POSIXError.EEXIST {
             // Made since the read, by the user: that file is the one to open.
@@ -239,20 +232,154 @@ public actor ConfigStore {
                     reason: "couldn't be created: \(error.localizedDescription)"))
             return false
         }
+        drain()
         return true
     }
 
-    /// Reads the file again, and sends the read when it changes what the file sets. A read
-    /// that finds it empty or gone waits for `confirm`; this read cancels one waiting.
+    /// Reads the file again, sends the read when it changes what the file sets, and writes the
+    /// patches waiting. A read that finds it empty or gone waits for `confirm`; this read
+    /// cancels one waiting.
     func reload() {
         confirming?.cancel()
         confirming = nil
         let read = read()
         if isTransient(read) {
             confirm()
-        } else {
-            _ = accept(read)
+            return
         }
+        accept(read)
+        drain()
+    }
+
+    /// Takes the patch the app sent as change `sequence`, replacing one of the same key still
+    /// waiting, and writes it.
+    func receive(_ patch: ConfigPatch, sequence: Int) {
+        queue[patch.target] = (patch, sequence)
+        received = max(received, sequence)
+        drain()
+    }
+
+    /// Writes the patches waiting into the file as it is now, unless it has an error, is empty
+    /// or gone and not yet confirmed so, or a retry is waiting. Each attempt reads the file,
+    /// sets the patches' keys in it and writes it back; just before the rename the file's
+    /// bytes are compared with that read, and on a difference the attempt starts over. What
+    /// is left is the few microseconds between that check and the rename, which no rename can
+    /// close.
+    private func drain() {
+        guard started, !queue.isEmpty, confirming == nil, retrying == nil else { return }
+        for _ in 0..<Self.attempts {
+            let current = read()
+            if isTransient(current) {
+                confirm()
+                return
+            }
+            accept(current)
+            guard let base = object(of: current) else { return }
+            let patches = queue.values.map(\.patch).filter { !$0.isSatisfied(by: current.load) }
+            if patches.isEmpty {
+                wrote()
+                return
+            }
+            var object = base
+            for patch in patches { patch.apply(to: &object) }
+            let data = ConfigFile.data(object: object)
+            let target = Self.target(of: file)
+            do {
+                if createsFolder {
+                    try FileManager.default.createDirectory(
+                        at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                }
+                try write(data, target) {
+                    if Self.bytes(at: target) != current.bytes { throw ChangedDuringWrite() }
+                }
+                last = Read(bytes: data, load: load(data))
+                retryDelay = nil
+                report(nil)
+                wrote()
+                return
+            } catch is ChangedDuringWrite {
+                continue
+            } catch {
+                report(
+                    ConfigError(
+                        line: nil, key: nil,
+                        reason: "couldn't be saved: \(error.localizedDescription)"))
+                retry()
+                return
+            }
+        }
+        retry()
+    }
+
+    /// The file changed between the read a write was checked against and its rename.
+    private struct ChangedDuringWrite: Error {}
+
+    /// The JSON object the patches go into: the file's, or for no file every default; nil
+    /// while the file has an error, which a write would destroy.
+    private func object(of read: Read) -> [String: Any]? {
+        if read.load == .missing {
+            return ConfigFile.object(ConfigFile.Contents(values: [:], shortcuts: [:]))
+        }
+        guard read.load.errors.isEmpty, let bytes = read.bytes else { return nil }
+        return (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any]
+    }
+
+    /// Writes `data` as the file where there is none, and returns the read it makes; nil, with
+    /// the failure reported, when it can't.
+    private func writeNew(_ data: Data) -> Read? {
+        let target = Self.target(of: file)
+        do {
+            if createsFolder {
+                try FileManager.default.createDirectory(
+                    at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            }
+            try write(data, target) {
+                if Self.bytes(at: target) != nil { throw ChangedDuringWrite() }
+            }
+            let written = Read(bytes: data, load: load(data))
+            last = written
+            report(nil)
+            return written
+        } catch is ChangedDuringWrite {
+            // Made meanwhile, by the user: the watch reads it.
+            return nil
+        } catch {
+            report(
+                ConfigError(
+                    line: nil, key: nil,
+                    reason: "couldn't be saved: \(error.localizedDescription)"))
+            return nil
+        }
+    }
+
+    /// Marks every patch waiting as written, tells the settings, and lets go of those waiting
+    /// for it.
+    private func wrote() {
+        queue = [:]
+        written = received
+        feed.yield(.wrote(through: written))
+        let done = waiters.filter { $0.sequence <= written }
+        waiters.removeAll { $0.sequence <= written }
+        for waiter in done { waiter.continuation.resume() }
+    }
+
+    /// Tries the write again after a wait that doubles from `firstRetryDelay` with each
+    /// failure, up to `longestRetryDelay`.
+    private func retry() {
+        let delay = min(
+            retryDelay.map { $0 * 2 } ?? Self.firstRetryDelay, Self.longestRetryDelay)
+        retryDelay = delay
+        let wait = startWait(delay)
+        retrying = Task {
+            guard await DeadlineWait.reached(wait), !Task.isCancelled else { return }
+            retrying = nil
+            drain()
+        }
+    }
+
+    /// The bytes of the file at `url`; nil when it can't be read.
+    private static func bytes(at url: URL) -> Data? {
+        try? Data(contentsOf: url)
     }
 
     /// Whether `read` finds the file empty or gone where the last read didn't: a state a save
@@ -263,29 +390,36 @@ public actor ConfigStore {
         return read.load != last.load
     }
 
-    /// Reads the file again `confirmDelay` from now, and sends what it finds then, unless a
-    /// change in the folder reads it first.
+    /// Reads the file again `confirmDelay` from now, takes what it finds then and writes the
+    /// patches waiting, unless a change in the folder reads it first.
     private func confirm() {
         guard confirming == nil else { return }
         let wait = startWait(Self.confirmDelay)
         confirming = Task {
             guard await DeadlineWait.reached(wait), !Task.isCancelled else { return }
             confirming = nil
-            _ = accept(read())
+            accept(read())
+            drain()
         }
     }
 
-    /// Takes `read` as the file's state, and sends it with the next generation when it loads
-    /// differently from the last. Returns whether the load is the one the settings have.
-    private func accept(_ read: Read) -> Bool {
+    /// Takes `read` as the file's state, and sends it, with the patches waiting on top, when
+    /// it loads differently from the last.
+    private func accept(_ read: Read) {
         defer { last = read }
-        guard let last, read.load != last.load else { return true }
+        guard let last, read.load != last.load else { return }
         for error in read.load.errors {
             log("the config file \(file.path) wasn't applied: \(error)")
         }
-        generation += 1
-        feed.yield(.read(read.load, generation: generation))
-        return false
+        feed.yield(.read(withPatches(read.load)))
+    }
+
+    /// `load` with the patches waiting set in it; a load with an error as it is.
+    private func withPatches(_ load: ConfigLoad) -> ConfigLoad {
+        guard load.errors.isEmpty, !queue.isEmpty else { return load }
+        var contents = ConfigFile.Contents(values: load.values, shortcuts: load.shortcuts)
+        for (patch, _) in queue.values { patch.apply(to: &contents) }
+        return ConfigLoad(outcome: .values(contents.values, shortcuts: contents.shortcuts))
     }
 
     /// Sends a change in whether the writes fail, and logs a failure.

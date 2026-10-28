@@ -86,3 +86,19 @@ public final class ConfigFixture {
         watch.change()
     }
 }
+
+extension Settings {
+    /// `flushConfig`, failing the test instead of hanging when the changes never reach the
+    /// file within `patience`.
+    public func flushConfigBounded() async {
+        _ = await bounded(Task { await self.flushConfig() })
+    }
+}
+
+extension ConfigStore {
+    /// `waitUntilWritten(through:)`, failing the test instead of hanging when the patches never
+    /// reach the file within `patience`.
+    public func waitBounded(through sequence: Int) async {
+        _ = await bounded(Task { await self.waitUntilWritten(through: sequence) })
+    }
+}

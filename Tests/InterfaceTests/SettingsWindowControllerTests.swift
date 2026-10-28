@@ -169,7 +169,7 @@ private let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
     model.openConfigFile()
     await settle { !actions.openedWithApp.isEmpty }
     model.revealConfigFile()
-    await model.reveal?.value
+    if let task = model.reveal { _ = await bounded(task) }
 
     #expect(actions.openedWithApp == [OpenedWithApp(urls: [config.file], application: textEdit)])
     #expect(actions.revealed == [[config.file]])
@@ -189,7 +189,7 @@ private let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
     try FileManager.default.removeItem(at: config.file)
 
     model.revealConfigFile()
-    await model.reveal?.value
+    if let task = model.reveal { _ = await bounded(task) }
 
     #expect(actions.revealed.isEmpty)
     #expect(model.configProblem == GeneralSettings.missingNote(config.file))
@@ -208,7 +208,7 @@ private let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
     config.settings.showHidden = true
 
     model.changeConfigLocation()
-    await model.move?.value
+    if let task = model.move { _ = await bounded(task) }
 
     let moved = dropbox.appending(path: ConfigFile.name)
     #expect(model.configFilePath == moved.path)
@@ -217,7 +217,7 @@ private let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
     #expect(config.settings.showHidden)
 
     model.useDefaultConfigLocation()
-    await model.move?.value
+    if let task = model.move { _ = await bounded(task) }
 
     #expect(model.configFilePath == config.file.path)
     #expect(model.configFileIsDefault)
@@ -231,7 +231,7 @@ private let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
     model.chooseConfigLocation = { nil }
 
     model.changeConfigLocation()
-    await model.move?.value
+    if let task = model.move { _ = await bounded(task) }
 
     #expect(model.configFilePath == config.file.path)
 }
@@ -349,7 +349,7 @@ private let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
     #expect(try row(palette.id).isChanged)
     #expect(try row(goToItem.id).chords == KeyBindings.Chords(primary: nil, alternate: cmdL))
     #expect(model.canResetAll)
-    await config.settings.flushConfig()
+    await config.settings.flushConfigBounded()
     #expect(try text().contains(#""alternate" : "ctrl+opt+cmd+j""#))
     #expect(try text().contains(#""primary" : """#))
 
@@ -362,7 +362,7 @@ private let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
     #expect(model.settings.shortcuts.isEmpty)
     #expect(try row(palette.id).chords.alternate == palette.alternate)
     #expect(!model.canResetAll)
-    await config.settings.flushConfig()
+    await config.settings.flushConfigBounded()
     #expect(try text().contains(#""shortcuts" : {}"#))
 }
 
