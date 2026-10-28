@@ -203,12 +203,15 @@ public struct DirectoryLister: Lister {
         if returned.commonattr & attrgroup_t(ATTR_CMN_MODTIME) != 0 {
             modified = try fields.take(timespec.self)
         }
-        // The Finder info's bundle bit makes a folder a package whatever its name.
+        // The Finder info's bundle bit makes a folder a package whatever its name, and its color
+        // label says whether the item has colored tags to read.
         var hasBundleBit = false
+        var label = 0
         if returned.commonattr & attrgroup_t(ATTR_CMN_FNDRINFO) != 0 {
             let finderInfo = fields.next
             try fields.skip(PackageRule.finderInfoSize)
             hasBundleBit = PackageRule.hasBundleBit(finderInfo)
+            label = FinderTags.label(finderInfo: finderInfo)
         }
         // A file system without flags leaves them out, and XNU's `stat` reports 0 for it too, so
         // stat'ing the entry would cost a call per entry for the same answer. APFS, HFS+, FAT32,
@@ -242,7 +245,9 @@ public struct DirectoryLister: Lister {
         let entry = DirectoryEntry(
             name: name, type: type, size: type == .regular ? dataLength : nil,
             modified: date(modified), isHidden: flags & UInt32(UF_HIDDEN) != 0,
-            isDataless: flags & UInt32(SF_DATALESS) != 0)
+            isDataless: flags & UInt32(SF_DATALESS) != 0,
+            tagLabels: label == 0
+                ? TagLabels() : FinderTags.rowLabels(at: join(path, name), finderInfoLabel: label))
         return .entry(entry, isMountPoint: isMountPoint)
     }
 
@@ -276,10 +281,12 @@ public struct DirectoryLister: Lister {
     }
 
     /// The entry `info` describes, named `name`, at `path`; nil if it was removed since. A
-    /// folder whose name doesn't say it is a package has its Finder info read for the bundle bit.
+    /// folder whose name doesn't say it is a package has its Finder info read for the bundle bit,
+    /// and every item for its color label.
     private func entry(named name: String, at path: String, info: Darwin.stat) throws
         -> DirectoryEntry?
     {
+        guard let label = try finderInfoLabel(at: path) else { return nil }
         let type: DirectoryEntry.FileType
         switch info.st_mode & S_IFMT {
         case S_IFREG: type = .regular
@@ -294,7 +301,29 @@ public struct DirectoryLister: Lister {
         return DirectoryEntry(
             name: name, type: type, size: type == .regular ? info.st_size : nil,
             modified: date(info.st_mtimespec), isHidden: info.st_flags & UInt32(UF_HIDDEN) != 0,
-            isDataless: info.st_flags & UInt32(SF_DATALESS) != 0)
+            isDataless: info.st_flags & UInt32(SF_DATALESS) != 0,
+            tagLabels: FinderTags.rowLabels(at: path, finderInfoLabel: label))
+    }
+
+    /// The color label in the Finder info of the item at `path`, not following a symlink, as a
+    /// listing reads it; nil when the item is gone.
+    private func finderInfoLabel(at path: String) throws -> Int? {
+        var request = attrlist()
+        request.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
+        request.commonattr = attrgroup_t(ATTR_CMN_FNDRINFO)
+        // The reply is its UInt32 length, then the Finder info.
+        var reply = [UInt8](
+            repeating: 0, count: MemoryLayout<UInt32>.size + PackageRule.finderInfoSize)
+        let status = reply.withUnsafeMutableBytes { buffer in
+            getattrlist(path, &request, buffer.baseAddress, buffer.count, UInt32(FSOPT_NOFOLLOW))
+        }
+        if status != 0 {
+            if errno == ENOENT { return nil }
+            throw ListingError(path: path, code: errno)
+        }
+        return reply.withUnsafeBytes {
+            FinderTags.label(finderInfo: $0.baseAddress! + MemoryLayout<UInt32>.size)
+        }
     }
 
     private func fileType(_ objectType: fsobj_type_t) -> DirectoryEntry.FileType {

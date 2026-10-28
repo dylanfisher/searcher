@@ -64,13 +64,48 @@ enum ListingCellLayout {
         cellWidth - (chevronRoom ?? 0) - HoverButton.side
     }
 
-    /// Where the name ends in a name cell `cellWidth` wide: before the eject button when it
-    /// shows, else before the badge when it shows, else before a chevron that takes
-    /// `chevronRoom` when it shows one, else at the trailing padding. A row with an eject button
-    /// is a volume's, which has no badge.
-    static func nameEnd(
-        cellWidth: Double, chevronRoom: Double?, badge: Bool, eject: Bool = false
+    /// The space between a column's tag dots and the room its chevron takes, which puts the dots
+    /// where Finder's are: their middle about 13 points left of the chevron's
+    /// (docs/decisions/0124-tags-in-rows-and-preview.md).
+    static let tagDotsGap = 6.0
+
+    /// The furthest right a row's tag dots end in a name cell `cellWidth` wide: before the eject
+    /// button when it shows, else before the badge when it shows, else, in a column, before the
+    /// room a folder's chevron takes, `columnChevronRoom`, whether or not the row shows one, so
+    /// the dots of files and folders line up as Finder's do; else at the trailing padding. The
+    /// eject button and the badge sit left of a chevron that takes `chevronRoom` when it shows.
+    static func tagDotsEnd(
+        cellWidth: Double, columnChevronRoom: Double?, chevronRoom: Double?, badge: Bool,
+        eject: Bool
     ) -> Double {
+        if eject { return ejectX(cellWidth: cellWidth, chevronRoom: chevronRoom) }
+        if badge { return badgeX(cellWidth: cellWidth, chevronRoom: chevronRoom) - badgeGap }
+        return columnChevronRoom.map { cellWidth - $0 - tagDotsGap } ?? cellWidth - 2
+    }
+
+    /// Where a row's tag dots, `width` wide, start: a gap after the name, whose label is
+    /// `nameWidth` wide, as Finder puts them, or further left to end by `end`, the name
+    /// truncating before them.
+    static func tagDotsX(nameWidth: Double, width: Double, end: Double) -> Double {
+        min(nameX + nameWidth + badgeGap, end - width)
+    }
+
+    /// The width of the label showing `name` whole, in `ListingViewController.nameFont`.
+    static func nameWidth(_ name: String) -> Double {
+        let text = (name as NSString).size(withAttributes: [.font: ListingViewController.nameFont])
+        return (text.width + nameFieldPadding).rounded(.up)
+    }
+
+    /// Where the name ends in a name cell `cellWidth` wide: before tag dots that start at
+    /// `tagDotsX` when it shows them, else before the eject button when it shows, else before
+    /// the badge when it shows, else before a chevron that takes `chevronRoom` when it shows
+    /// one, else at the trailing padding. A row with an eject button is a volume's, which has no
+    /// badge.
+    static func nameEnd(
+        cellWidth: Double, chevronRoom: Double?, badge: Bool, eject: Bool = false,
+        tagDotsX: Double? = nil
+    ) -> Double {
+        if let tagDotsX { return tagDotsX - badgeGap }
         if eject { return ejectX(cellWidth: cellWidth, chevronRoom: chevronRoom) }
         if badge { return badgeX(cellWidth: cellWidth, chevronRoom: chevronRoom) - badgeGap }
         if let chevronRoom { return cellWidth - chevronRoom - badgeGap }
@@ -133,21 +168,53 @@ enum ListingCellLayout {
         chevron(in: cell).flatMap { $0.isHidden ? nil : chevronRoom }
     }
 
-    /// Sets the name's width from the cell's: up to the eject button when it shows, else up to
-    /// the badge when it shows, else up to the chevron, which takes `chevronRoom`, when it shows,
-    /// else up to the trailing padding. Set outright, since autoresizing clamps a width at zero
-    /// in a column narrower than the name and the badge, and widening the column doesn't give
-    /// that back.
+    /// Adds `dots`, tag dots, to the name cell `cell`, centered in its height, laid out with
+    /// frames and autoresizing as the cell's other views are. `fitName` places them across.
+    static func addTagDots(_ dots: RowTagDotsView, to cell: ListingNameCellView) {
+        dots.frame.origin.y = (cell.bounds.height - RowTagDotsView.size(count: 1).height) / 2
+        dots.autoresizingMask = [.minYMargin, .maxYMargin]
+        cell.addTagDots(dots)
+    }
+
+    /// The name cell's tag dots when it shows them, else nil.
+    static func shownTagDots(in cell: NSTableCellView) -> RowTagDotsView? {
+        guard let dots = (cell as? ListingNameCellView)?.tagDots, !dots.isHidden else {
+            return nil
+        }
+        return dots
+    }
+
+    /// Puts the name cell's tag dots, when it shows them, after the name or as far right as
+    /// `tagDotsEnd` lets them, and sets the name's width from the cell's: up to the dots when
+    /// they show, else up to the eject button when it shows, else up to the badge when it
+    /// shows, else up to the chevron, which takes `chevronRoom`, when it shows, else up to the
+    /// trailing padding. Set outright, since autoresizing clamps a width at zero in a column
+    /// narrower than the name and the badge, and widening the column doesn't give that back.
     static func fitName(in cell: NSTableCellView, chevronRoom: Double) {
         guard let textField = cell.textField else {
             preconditionFailure("the name cell has no text field: \(cell.subviews)")
         }
+        (cell as? ListingNameCellView)?.fittedChevronRoom = chevronRoom
+        let shownRoom = shownChevronRoom(cell, chevronRoom: chevronRoom)
+        let badge =
+            !badge(in: cell).isHidden || !ListingViewController.connectingSpinner(in: cell).isHidden
+        let eject = shownEjectButton(in: cell) != nil
+        var dotsX: Double?
+        if let dots = shownTagDots(in: cell) {
+            let end = tagDotsEnd(
+                cellWidth: cell.bounds.width,
+                columnChevronRoom: chevron(in: cell) == nil ? nil : chevronRoom,
+                chevronRoom: shownRoom, badge: badge, eject: eject)
+            let x = tagDotsX(
+                nameWidth: nameWidth(textField.stringValue), width: dots.frame.width, end: end)
+            if dots.frame.minX != x {
+                dots.frame.origin.x = x
+            }
+            dotsX = x
+        }
         let end = nameEnd(
-            cellWidth: cell.bounds.width,
-            chevronRoom: shownChevronRoom(cell, chevronRoom: chevronRoom),
-            badge: !badge(in: cell).isHidden
-                || !ListingViewController.connectingSpinner(in: cell).isHidden,
-            eject: shownEjectButton(in: cell) != nil)
+            cellWidth: cell.bounds.width, chevronRoom: shownRoom, badge: badge, eject: eject,
+            tagDotsX: dotsX)
         let width = max(end - textField.frame.minX, 0)
         if textField.frame.width != width {
             textField.frame.size.width = width

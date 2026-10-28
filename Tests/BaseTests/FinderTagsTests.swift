@@ -216,3 +216,25 @@ private typealias WriteOutcome = Result<FileOperationError?, FileOperationError>
 
     #expect(entries == [])
 }
+
+/// A row's tag colors are read with its folder's listing, off the main thread; a read on the main
+/// thread traps (docs/decisions/0124-tags-in-rows-and-preview.md).
+@Test func aRowsTagColorsAreNeverReadOnTheMainThread() async {
+    await #expect(processExitsWith: .failure) {
+        await MainActor.run { _ = FinderTags.rowLabels(at: "/", finderInfoLabel: 6) }
+    }
+}
+
+@Test func aRowWhoseTagsCantBeReadShowsItsLabelsColor() async throws {
+    let folder = try TemporaryFolder("FinderTagsTests")
+    let path = folder.url.appending(path: "notes.txt").path
+    try Data("x".utf8).write(to: URL(fileURLWithPath: path))
+    // Not a list of strings.
+    #expect(setxattr(path, "com.apple.metadata:_kMDItemUserTags", "x", 1, 0, 0) == 0)
+
+    let labels = await BlockingCallThread.run {
+        Array(FinderTags.rowLabels(at: path, finderInfoLabel: 5))
+    }
+
+    #expect(labels == [5])
+}

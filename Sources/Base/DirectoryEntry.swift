@@ -24,14 +24,17 @@ public struct DirectoryEntry: Equatable, Sendable {
 
     public let name: String
     public let type: FileType
-    // The flags sit next to `type`, where they fit in padding before `size`, so they add nothing
-    // to the entry's size.
+    // The flags and the tag labels sit next to `type`, where they fit in padding before `size`,
+    // so they add nothing to the entry's size.
     /// The `UF_HIDDEN` flag, as `chflags hidden` sets it. Names starting with a dot are hidden
     /// too, and this doesn't cover them.
     public let isHidden: Bool
     /// The `SF_DATALESS` flag: the file's contents aren't on this Mac, as with an iCloud file
     /// that isn't downloaded.
     public let isDataless: Bool
+    /// The colors of the item's Finder tags, for its row's dots; empty for an item without
+    /// colored tags.
+    public let tagLabels: TagLabels
     /// Logical size in bytes; nil for anything but a regular file, whose size has no meaning to a
     /// user.
     public let size: Int64?
@@ -39,12 +42,13 @@ public struct DirectoryEntry: Equatable, Sendable {
 
     public init(
         name: String, type: FileType, size: Int64?, modified: Date, isHidden: Bool,
-        isDataless: Bool
+        isDataless: Bool, tagLabels: TagLabels = TagLabels()
     ) {
         self.name = name
         self.type = type
         self.isHidden = isHidden
         self.isDataless = isDataless
+        self.tagLabels = tagLabels
         self.size = size
         self.modified = modified
     }
