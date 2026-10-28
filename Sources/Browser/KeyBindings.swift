@@ -94,8 +94,9 @@ public struct KeyBindings: Sendable {
 
     /// Bindings for `commands`, whose `chords` are their defaults. `preset` gives commands with
     /// no default alternate one, which an override of the alternate replaces. An override's
-    /// chord wins over a default or preset one: the other command loses its chord. A reserved chord is dropped wherever it comes from. A `fixed` chord is its command's
-    /// primary, which overrides don't change, and is dropped from any other command or slot.
+    /// chord wins over a default or preset one: the other command loses its chord. A reserved
+    /// chord is dropped wherever it comes from. A `fixed` chord is its command's primary, which
+    /// overrides don't change, and is dropped from any other command or slot.
     /// Stored data never makes this throw or trap; an override for a command not in `commands`
     /// is ignored.
     ///

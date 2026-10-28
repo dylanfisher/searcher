@@ -50,6 +50,10 @@ final class GeneralSettings {
     private(set) var configFileIsDefault: Bool
     /// The move to another place running, which tests wait for.
     @ObservationIgnored private(set) var move: Task<Void, Never>?
+    /// The check that the file is there before Reveal in Finder, which tests wait for.
+    @ObservationIgnored private(set) var reveal: Task<Void, Never>?
+    /// Why the last Reveal in Finder showed nothing, until OK dismisses it.
+    private(set) var configProblem: String?
 
     init(loginItem: any LoginItem, settings: Browser.Settings, systemActions: any SystemActions) {
         self.loginItem = loginItem
@@ -76,9 +80,37 @@ final class GeneralSettings {
         SystemCommands.openConfig(settings: settings, systemActions: systemActions)
     }
 
+    /// Shows the config file in Finder. A file that isn't there, as on a volume that isn't
+    /// connected, says so under the buttons instead, since Finder would show nothing.
     func revealConfigFile() {
         guard let file = settings.configFile else { return }
-        systemActions.revealInFinder([file])
+        reveal = Task {
+            defer { reveal = nil }
+            let isThere = await Task.detached { ConfigStore.fileIsThere(file) }.value
+            if isThere {
+                configProblem = nil
+                systemActions.revealInFinder([file])
+                return
+            }
+            let problem = Self.missingNote(file)
+            configProblem = problem
+            postAccessibility(
+                NSApp as Any, .announcementRequested,
+                [
+                    .announcement: problem,
+                    .priority: NSAccessibilityPriorityLevel.high.rawValue,
+                ])
+        }
+    }
+
+    /// What the pane says when the config file isn't there to show in Finder.
+    static func missingNote(_ file: URL) -> String {
+        "There's no file at \((file.path as NSString).abbreviatingWithTildeInPath) to show in"
+            + " Finder."
+    }
+
+    func dismissConfigProblem() {
+        configProblem = nil
     }
 
     /// Asks for another place for the config file and moves the settings there: a file there
@@ -227,5 +259,12 @@ struct GeneralSettingsView: View {
                 .disabled(model.configFileIsDefault)
         }
         .padding(.top, 4)
+        if let problem = model.configProblem {
+            HStack {
+                Text(problem).font(.caption).foregroundStyle(Color.red)
+                Spacer()
+                Button("OK") { model.dismissConfigProblem() }.controlSize(.small)
+            }
+        }
     }
 }

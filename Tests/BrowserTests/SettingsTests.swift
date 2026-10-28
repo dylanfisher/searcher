@@ -472,7 +472,8 @@ private func bindings(_ settings: Settings) throws -> KeyBindings {
 
 /// A file with an error is shown and not applied, the last good settings stay, and a change
 /// made in the app meanwhile applies in memory but never writes over the user's broken edit.
-/// Once the file is fixed it wins over that change.
+/// Once the file is fixed, that change stays, since the fixed file leaves its key as it was,
+/// and is written; the fixed file wins the keys it changed.
 @MainActor @Test func aBrokenFileIsShownAndNeverWrittenOver() async throws {
     let folder = try TemporaryFolder("SettingsTests")
     let file = folder.url.appending(path: "config.json")
@@ -495,7 +496,11 @@ private func bindings(_ settings: Settings) throws -> KeyBindings {
     await settle { settings.configErrors.isEmpty }
     #expect(!settings.hideDSStore)
     #expect(!settings.showHidden)
-    #expect(!settings.foldersFirst)
+    #expect(settings.foldersFirst)
+    await settings.flushConfig()
+    let load = configLoad(try String(contentsOf: file, encoding: .utf8))
+    #expect(load.values[.foldersFirst] == .bool(true))
+    #expect(load.values[.hideDSStore] == .bool(false))
 }
 
 /// A file deleted while the app runs means the defaults; the next change in the app writes a
@@ -505,10 +510,14 @@ private func bindings(_ settings: Settings) throws -> KeyBindings {
     let file = folder.url.appending(path: "config.json")
     try Data(#"{"show-hidden": true}"#.utf8).write(to: file)
     let watch = ManualWatch()
-    let settings = await connected(file, in: folder, watch: watch)
+    let clock = ManualClock()
+    let settings = await connected(file, in: folder, clock: clock, watch: watch)
 
     try FileManager.default.removeItem(at: file)
     watch.change()
+    // A file found gone is read again a moment later before it counts as deleted.
+    await settle { clock.waitingSleeps > 0 }
+    clock.advance(by: ConfigStore.confirmDelay)
     await settle { !settings.showHidden }
     #expect(!FileManager.default.fileExists(atPath: file.path))
 
@@ -623,6 +632,138 @@ private func bindings(_ settings: Settings) throws -> KeyBindings {
     #expect(!relaunched.configErrors.isEmpty)
 }
 
+/// A write that waits until the test opens it, as one to a share that hangs does.
+private final class HeldWrite: Sendable {
+    private let gate = DispatchSemaphore(value: 0)
+    /// One entry each time a write starts, and one in `finished` each time one ends.
+    let started = EventLog<Void>()
+    let finished = EventLog<Void>()
+
+    var write: ConfigStore.Write {
+        { data, url, check in
+            self.started.append(())
+            self.gate.wait()
+            try AtomicWrite.write(data, to: url, beforeRename: check)
+            self.finished.append(())
+        }
+    }
+
+    /// Lets one waiting write go on.
+    func open() { gate.signal() }
+}
+
+/// Settings over a file in `folder` whose writes wait on `held`.
+@MainActor
+private func heldSettings(_ folder: TemporaryFolder, held: HeldWrite, clock: ManualClock) async
+    -> (Settings, URL)
+{
+    let file = folder.url.appending(path: "config.json")
+    try? Data("{}".utf8).write(to: file)
+    let settings = Settings(
+        defaults: temporarySuite(in: folder.url.path), log: unexpectedSettingsLog)
+    await settings.connectTestConfig(file, clock: clock, write: held.write)
+    return (settings, file)
+}
+
+/// A flush while the delayed write is already running waits for it, rather than returning
+/// with the change not yet on disk, as quitting would.
+@MainActor @Test func aFlushWaitsForTheWriteRunning() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let held = HeldWrite()
+    let clock = ManualClock()
+    let (settings, file) = await heldSettings(folder, held: held, clock: clock)
+    settings.showHidden = true
+    clock.advance(by: WorkspaceStore.writeDelay)
+    await settle { held.started.all.count == 1 }
+
+    let flushStarted = EventLog<Void>()
+    let flush = Task { @MainActor in
+        flushStarted.append(())
+        await settings.flushConfig()
+        return held.finished.all.count
+    }
+    await settle { !flushStarted.all.isEmpty }
+    held.open()
+
+    #expect(await flush.value == 1)
+    #expect(
+        configLoad(try String(contentsOf: file, encoding: .utf8)).values[.showHidden] == .bool(true)
+    )
+}
+
+/// A flush whose write hangs ends at its deadline, so quitting goes on without it; the write
+/// keeps going.
+@MainActor @Test func aFlushThatHangsEndsAtItsDeadline() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let held = HeldWrite()
+    let clock = ManualClock()
+    let (settings, _) = await heldSettings(folder, held: held, clock: clock)
+    settings.showHidden = true
+
+    let flushed = Task { @MainActor in
+        await settings.flushConfig(by: clock.now.advanced(by: .seconds(2)), clock: clock)
+    }
+    await settle { held.started.all.count == 1 }
+    clock.advance(by: .seconds(2))
+
+    // Bounded only to catch a flush that ignores its deadline, which would hang here.
+    #expect(await bounded(flushed) == false)
+    #expect(held.finished.all.isEmpty)
+    held.open()
+    await settle { held.finished.all.count == 1 }
+}
+
+/// An edit of the file that changes another key, saved while a change made in the app waits
+/// on its write's delay, keeps that change: both are in the settings and then in the file.
+@MainActor @Test func anEditOfAnotherKeyKeepsAChangeNotYetWritten() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config.json")
+    try Data("{}".utf8).write(to: file)
+    let watch = ManualWatch()
+    let settings = await connected(file, in: folder, watch: watch)
+    let alternate = KeyChord("o", modifiers: [.command, .shift, .option])
+
+    settings.showHidden = true
+    settings.shortcuts = [showPalette: ShortcutOverride(alternate: .chord(alternate))]
+    try save(
+        #"{"folders-first": true, "shortcuts": {"window.showPalette": {"primary": ""}}}"#,
+        to: file, watch: watch)
+    await settle { settings.foldersFirst }
+
+    #expect(settings.showHidden)
+    #expect(
+        settings.shortcuts == [
+            showPalette: ShortcutOverride(primary: .removed, alternate: .chord(alternate))
+        ])
+    await settings.flushConfig()
+    let load = configLoad(try String(contentsOf: file, encoding: .utf8))
+    #expect(load.values[.showHidden] == .bool(true))
+    #expect(load.values[.foldersFirst] == .bool(true))
+    #expect(load.shortcuts == settings.shortcuts)
+}
+
+/// An edit of the same key, or the same shortcut slot, wins over the change made in the app.
+@MainActor @Test func anEditOfTheSameKeyWinsOverAChangeNotYetWritten() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config.json")
+    try Data("{}".utf8).write(to: file)
+    let watch = ManualWatch()
+    let settings = await connected(file, in: folder, watch: watch)
+
+    settings.appearance = .light
+    settings.shortcuts = [showPalette: ShortcutOverride(primary: .removed)]
+    try save(
+        #"{"appearance": "dark", "shortcuts": {"window.showPalette": {"primary": "cmd+j"}}}"#,
+        to: file, watch: watch)
+    await settle { settings.appearance == .dark }
+
+    let cmdJ = KeyChord("j", modifiers: .command)
+    #expect(settings.shortcuts == [showPalette: ShortcutOverride(primary: .chord(cmdJ))])
+    await settings.flushConfig()
+    let load = configLoad(try String(contentsOf: file, encoding: .utf8))
+    #expect(load.values == [.appearance: .string("dark")])
+}
+
 /// A file that can't be saved shows its error until a save succeeds.
 @MainActor @Test func aFailedSaveIsShown() async throws {
     let folder = try TemporaryFolder("SettingsTests")
@@ -631,7 +772,7 @@ private func bindings(_ settings: Settings) throws -> KeyBindings {
     let settings = Settings(
         defaults: temporarySuite(in: folder.url.path), log: unexpectedSettingsLog)
     await settings.connectTestConfig(
-        file, write: { _, _ in throw CocoaError(.fileWriteNoPermission) })
+        file, write: { _, _, _ in throw CocoaError(.fileWriteNoPermission) })
 
     settings.showHidden = true
     await settings.flushConfig()

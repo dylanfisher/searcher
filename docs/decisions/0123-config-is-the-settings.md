@@ -43,22 +43,47 @@ than adding a warning.
   preference present at its value, so the file shows every option, and `"shortcuts"` with only
   the commands the user changed (`{}` for none). The write goes through `AtomicWrite` on the
   `ConfigStore` actor, `WorkspaceStore.writeDelay` after the first change not yet written, as
-  the workspace store times its writes; quitting writes a waiting change at once. A file the app
-  hasn't changed is never rewritten, so the user's own formatting stays until the next change in
-  the app.
-- **No echo, and the file wins a race.** The store keeps the file's bytes as last read or
-  written; a change event whose read gives the same bytes, or the same settings, sends nothing,
-  so the app's own write never comes back as a reload. Each read the store sends has the next
+  the workspace store times its writes. A file the app hasn't changed is never rewritten, so the
+  user's own formatting stays until the next change in the app. A write the store refuses for a
+  reason no read will follow, as a write that failed, is tried again after the same delay; one
+  refused for a file with an error waits for the edit that fixes it.
+- **Quitting.** A change waiting on its delay is written at quit beside the other quit steps,
+  not before them, with the same deadline (`Settings.flushConfig(by:clock:)` over
+  `FirstToFinish`, as the listing cache's flush runs): a config file on a share that hangs
+  delays no step, and the app quits without it once the deadline passes. A flush waits for a
+  write already running, so quitting never reports a write done that isn't.
+- **No echo, and no lost update.** The store keeps the file's bytes as last read or written; a
+  change event whose read gives the same bytes, or the same settings, sends nothing, so the
+  app's own write never comes back as a reload. Each read the store sends has the next
   generation, and each write says which generation the settings had applied; a write based on an
   older one is dropped, and so is one that arrives after a later write. Before writing, the store
-  reads the file once more, and an edit whose event hasn't arrived yet is sent and wins. So an
-  edit saved in an editor is never overwritten by a change in the app that hadn't seen it.
+  reads the file once more, and an edit whose event hasn't arrived yet is sent instead. Just
+  before the rename it compares the file's bytes with that read again, through `AtomicWrite`'s
+  `beforeRename`, and on a difference drops the write and reads the file. What is left is the
+  few microseconds between that check and the rename, which no rename can close: `rename(2)`
+  can't be made conditional on the bytes it replaces.
+- **Merging a read with changes not yet written.** `Settings` keeps the preferences and shortcut
+  slots changed in the app since the file last held them, and what the file held then. A read
+  takes the file's settings, then puts each such change back on top where the file left that key
+  or slot as it was, and writes the result after the delay. Where the file changed the same key
+  or slot, the file wins and the app's change is dropped. A write that holds the changes clears
+  them. So a toggle in the app and an editor's save of another key, within the write's delay,
+  both survive. The same rule applies once a file with an error is fixed: the changes made in
+  the app meanwhile stay, except on the keys the fix changed.
 - **Reading.** A save applies at once, every key; `ConfigStore` watches the file's folder with
   FSEvents as 0120's watcher did, since an editor's save and Dropbox's replace the file by
   rename. Files beside it, such as Dropbox's conflicted copies and `AtomicWrite`'s partial file,
   change nothing: the bytes of the config file are the same.
+- **Reads that pass through.** An editor's save in place truncates the file and then writes it,
+  and a sync tool may delete it and create it again. A read that finds the file empty or gone,
+  where the last read didn't, isn't sent: the store reads again `ConfigStore.confirmDelay`
+  (200 ms) later, on its injected clock, and sends what that read finds; a change event before
+  then cancels the wait and reads at once. 200 ms covers a save in place and a delete and create,
+  which take milliseconds, and is short enough that a real deletion shows at once to a person. A
+  write meanwhile is refused rather than made over the empty file.
 - **A deleted file means the defaults.** The file is the settings, so a deletion while the app
-  runs sets every preference and shortcut to its default. Nothing is written then; the next
+  runs, once confirmed, sets every preference and shortcut to its default, apart from changes
+  made in the app and not yet written, which the merge rule keeps. Nothing is written then; the next
   change in the app, Open Config File, or the next launch writes a fresh file. A file missing at
   launch, or at a newly chosen place, is written from the settings at once.
 - **Errors: simple, and the file isn't applied.** Text that isn't JSON is one error on the line
@@ -69,21 +94,25 @@ than adding a warning.
   a typo such as `show-hiden` would otherwise do nothing silently, and the cost, a key from a
   newer build being refused, doesn't arise before release. Shortcut errors name their key
   (`shortcuts.window.showPalette.alternate`); the menus' reserved and fixed chords are still
-  checked by the store (0122's `ConfigLoad.checked(reserved:fixed:)`). Two slots given one chord
+  checked by the store (0122's `ConfigLoad.checked(reserved:fixed:)`). A key an object has twice,
+  which Foundation's parser would take the last of without a word, is an error on the line of
+  the second, found by a short scan of the text after it parses. Two slots given one chord
   is no error: `KeyBindings` gives it to the first command and logs the other, as for any
   override, because the Shortcuts pane could otherwise write a file the app then refused. Errors
   show in `ConfigErrorBanner` and are logged under `config`. A file with an error sets nothing;
   the last good settings stay.
 - **A broken file is never written over.** While the file has an error, changes in the app apply
   in memory and the banner says they can't be saved to the file until it is fixed. When a good
-  file loads, the file wins and those changes are dropped: the file is the settings, and the
-  user was editing it. A write that fails (disk full, no permission) shows in the banner too,
+  file loads, they are merged with it as above. A write that fails (disk full, no permission) shows in the banner too,
   until a write succeeds; the change stays in memory and the next change tries again.
 - **Location.** The default is `~/.config/searcher/config.json`. Settings ▸ General shows the
   path, with Change… (an `NSOpenPanel` that takes a JSON file or a folder, in which the file is
   `config.json`), Open in Editor (Open Config File), Reveal in Finder and Use Default. The chosen
   location is the one thing kept outside the file, as a path in `UserDefaults` under
-  `configFile`; a value that isn't an absolute path is discarded and logged. A plain path is
+  `configFile`; a value that isn't an absolute path is discarded and logged. Reveal in Finder
+  checks off the main thread that the file is there, and when it isn't, as on a volume that
+  isn't connected, says so under the buttons and to VoiceOver instead of showing Finder
+  nothing. A plain path is
   enough: the app isn't sandboxed (`scripts/bundle` signs it with no entitlements), so no
   security-scoped bookmark is needed, and a path, unlike a bookmark, stays at the place the user
   chose when the file there is replaced by a sync. Choosing a place with a config file reads it
@@ -116,8 +145,10 @@ than adding a warning.
 - **A deleted file rewrites the current settings at once** — rejected: a sync tool that replaces
   the file by delete and create could have its new file raced by the app's write, and the user's
   model is that deleting the file resets it.
-- **Keep the app's unsaved changes when a good file loads** — rejected: merging needs a rule per
-  key, and the user's edit is the newer intent.
+- **The file wins whole on every read** — rejected in review: a toggle in the app was lost when
+  an editor saved another key within the write's delay.
+- **Apply an empty or missing read at once** — rejected in review: a save in place flashed the
+  banner and a sync tool's delete and create reset the settings to their defaults.
 - **A security-scoped bookmark for the chosen location** — rejected: not sandboxed, and see above.
 - **NSSavePanel for a new file name** — rejected: one open panel that takes a folder covers the
   Dropbox case, and a file picked in it covers the rest.

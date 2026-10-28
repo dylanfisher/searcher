@@ -34,7 +34,8 @@ public func configLoad(_ text: String) -> ConfigLoad {
 
 extension Settings {
     /// Connects the config file at `file` as the app does, with no menu rules for its
-    /// shortcuts, `watch` in place of FSEvents and `clock` timing the writes. A file a test
+    /// shortcuts, `watch` in place of FSEvents and `clock` timing the writes and the second
+    /// reads. A file a test
     /// later moves the settings to is made the same way. The default location is `file`.
     /// `write` replaces `AtomicWrite`, for a test of a write that fails.
     public func connectTestConfig(
@@ -47,11 +48,11 @@ extension Settings {
             if let write {
                 ConfigStore(
                     file: file, createsFolder: isDefault, reserved: reserved, fixed: fixed,
-                    log: log, watch: watch.watch, write: write)
+                    log: log, watch: watch.watch, clock: clock, write: write)
             } else {
                 ConfigStore(
                     file: file, createsFolder: isDefault, reserved: reserved, fixed: fixed,
-                    log: log, watch: watch.watch)
+                    log: log, watch: watch.watch, clock: clock)
             }
         }
     }

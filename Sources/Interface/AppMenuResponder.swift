@@ -3,9 +3,10 @@ import Browser
 
 /// Runs the commands a menu item sends up the responder chain when no browser window has the
 /// keys, as when every window is closed or the Settings window has them: New Window opens a
-/// window, and Open Config File opens the config file (docs/decisions/0123-config-is-the-settings.md).
-/// Every other command's item is off. The app's delegate hands its items here; a browser
-/// window with the keys runs them itself, from its focused pane.
+/// window, and Open Config File opens the config file
+/// (docs/decisions/0123-config-is-the-settings.md). Every other command's item is off. The
+/// app's delegate hands its items here; a browser window with the keys runs them itself, from
+/// its focused pane.
 @MainActor
 public final class AppMenuResponder: NSObject, NSMenuItemValidation {
     private let settings: Settings

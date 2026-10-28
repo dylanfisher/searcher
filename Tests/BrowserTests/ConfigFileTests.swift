@@ -292,3 +292,26 @@ private func changedValue(_ preference: Settings.Preference) -> Settings.Value {
     #expect(failed.checked(reserved: [cmdQ], fixed: [:]) == failed)
     #expect(ConfigLoad.missing.checked(reserved: [cmdQ], fixed: [:]) == .missing)
 }
+
+/// A key given twice in one object, which Foundation would take the last of without a word, is
+/// an error on the line of the second, named by its path; the same key in two objects is not.
+@Test func aKeyGivenTwiceIsAnErrorOnItsLine() {
+    let load = configLoad(
+        """
+        {
+          "show-hidden": true,
+          "shortcuts": {
+            "window.showPalette": {"primary": "", "alternate": "cmd+j", "primary": "cmd+k"},
+            "clipboard.copy": {"alternate": ""}
+          },
+          "show-hidden": false
+        }
+        """)
+
+    #expect(load.errors.map(\.line) == [4, 7])
+    #expect(
+        load.errors.map(\.description) == [
+            "line 4: shortcuts.window.showPalette.primary is set twice, first on line 4",
+            "line 7: show-hidden is set twice, first on line 2",
+        ])
+}

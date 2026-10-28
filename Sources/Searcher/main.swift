@@ -128,8 +128,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 Logger(category: "workspaces").notice(
                     "quitting before the last session was restored; it stays as saved")
             }
-            // A setting changed in the last second is still waiting on its write's delay.
-            await settings.flushConfig()
+            // A setting changed in the last second is still waiting on its write's delay. It
+            // runs beside the other steps, on the store's actor, so a config file on a share
+            // that hangs delays none of them, and is given the same deadline.
+            let settings = settings
+            let configFlushed = Task {
+                await settings.flushConfig(by: deadline, clock: .continuous)
+            }
             if !(await windows.saveBeforeQuit(by: deadline)) {
                 Logger(category: "workspaces").fault(
                     "the windows weren't saved in \(limit, privacy: .public); quitting anyway")
@@ -143,13 +148,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                     "the listing cache didn't finish writing in \(limit, privacy: .public); quitting without it"
                 )
             }
+            if !(await configFlushed.value) {
+                Logger(category: "config").fault(
+                    "the config file wasn't written in \(limit, privacy: .public); quitting without it"
+                )
+            }
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
     }
 
-    /// How long quitting waits for the windows to be saved, file operations to stop and the
-    /// listing cache to write.
+    /// How long quitting waits for the windows to be saved, file operations to stop, and the
+    /// listing cache and the config file to write.
     private static let quitLimit: Duration = .seconds(2)
 
     func applicationDidFinishLaunching(_ notification: Notification) {

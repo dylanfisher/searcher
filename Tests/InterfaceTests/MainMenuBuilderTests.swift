@@ -944,6 +944,9 @@ private func expectKey(_ chord: KeyChord?, on item: NSMenuItem, _ comment: Comme
 
     try FileManager.default.removeItem(at: config.file)
     config.watch.change()
+    // A file found gone is read again a moment later before it counts as deleted.
+    await settle { config.clock.waitingSleeps > 0 }
+    config.clock.advance(by: ConfigStore.confirmDelay)
     await settle { settings.shortcuts.isEmpty }
     expectKey(KeyChord("k", modifiers: .command), on: shown)
     expectKey(KeyChord("p", modifiers: [.command, .shift]), on: hidden)

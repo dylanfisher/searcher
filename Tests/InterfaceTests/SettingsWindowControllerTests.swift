@@ -169,9 +169,31 @@ private let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
     model.openConfigFile()
     await settle { !actions.openedWithApp.isEmpty }
     model.revealConfigFile()
+    await model.reveal?.value
 
     #expect(actions.openedWithApp == [OpenedWithApp(urls: [config.file], application: textEdit)])
     #expect(actions.revealed == [[config.file]])
+}
+
+/// Reveal in Finder with no file at the config file's place, as on a volume that isn't
+/// connected, says so under the buttons rather than show Finder nothing.
+@MainActor @Test func revealingAConfigFileThatIsntThereSaysSo() async throws {
+    let config = try await ConfigFixture("SettingsWindowControllerTests")
+    let actions = StubSystemActions()
+    let (controller, _) = controller(config.settings, systemActions: actions)
+    let model = controller.general
+    var announced: [String] = []
+    model.postAccessibility = { _, _, info in
+        announced.append(info?[.announcement] as? String ?? "")
+    }
+    try FileManager.default.removeItem(at: config.file)
+
+    model.revealConfigFile()
+    await model.reveal?.value
+
+    #expect(actions.revealed.isEmpty)
+    #expect(model.configProblem == GeneralSettings.missingNote(config.file))
+    #expect(announced == [GeneralSettings.missingNote(config.file)])
 }
 
 /// Change… moves the settings to the place chosen, a folder with no file in it here, which gets

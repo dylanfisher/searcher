@@ -10,11 +10,12 @@ import Testing
 private func store(
     _ file: URL, watch: ManualWatch = ManualWatch(), createsFolder: Bool = true,
     log: @escaping @Sendable (String) -> Void = { _ in },
-    write: @escaping ConfigStore.Write = { try AtomicWrite.write($0, to: $1) }
+    clock: ManualClock = ManualClock(),
+    write: @escaping ConfigStore.Write = { try AtomicWrite.write($0, to: $1, beforeRename: $2) }
 ) -> ConfigStore {
     ConfigStore(
         file: file, createsFolder: createsFolder, reserved: [], fixed: [:], log: log,
-        watch: watch.watch, write: write)
+        watch: watch.watch, clock: clock, write: write)
 }
 
 /// The next update the store sends, or nil when the test waited `patience` for it.
@@ -70,7 +71,8 @@ private let foldersFirst = ConfigFile.Contents(
     let file = folder.url.appending(path: "config.json")
     try Data(#"{"show-hidden": true}"#.utf8).write(to: file)
     let watch = ManualWatch()
-    let store = store(file, watch: watch)
+    let clock = ManualClock()
+    let store = store(file, watch: watch, clock: clock)
     _ = await store.start()
 
     try Data(#"{ "show-hidden" : true }"#.utf8).write(to: file, options: .atomic)
@@ -90,7 +92,10 @@ private let foldersFirst = ConfigFile.Contents(
             == .read(configLoad(#"{"folders-first": false}"#), generation: 2))
 
     try FileManager.default.removeItem(at: file)
-    watch.change()
+    // Run here rather than through the watch, so the second read's wait starts before the
+    // clock moves.
+    await store.reload()
+    clock.advance(by: ConfigStore.confirmDelay)
     #expect(await nextUpdate(store.updates) == .read(.missing, generation: 3))
 }
 
@@ -111,6 +116,81 @@ private let foldersFirst = ConfigFile.Contents(
     try Data(#"{"folders-first": true}"#.utf8).write(to: file, options: .atomic)
     await store.reload()
 
+    #expect(
+        await nextUpdate(store.updates)
+            == .read(configLoad(#"{"folders-first": true}"#), generation: 1))
+}
+
+/// An editor's save in place passes through an empty file. A read that finds it empty waits
+/// for a second read; the change that brings the new text reads it at once, so the empty file
+/// is never sent, and a write meanwhile is held back rather than made over it.
+@Test func anEmptyReadWaitsAndTheNextChangeSupersedesIt() async throws {
+    let folder = try TemporaryFolder("ConfigStoreTests")
+    let file = folder.url.appending(path: "config.json")
+    try Data(#"{"show-hidden": true}"#.utf8).write(to: file)
+    let clock = ManualClock()
+    let store = store(file, clock: clock)
+    _ = await store.start()
+
+    try Data().write(to: file)
+    await store.reload()
+    #expect(!(await store.save(foldersFirst, basedOn: 0, sequence: 1)))
+    #expect(try Data(contentsOf: file).isEmpty)
+    try Data(#"{"folders-first": true}"#.utf8).write(to: file)
+    await store.reload()
+    clock.advance(by: ConfigStore.confirmDelay)
+
+    #expect(
+        await nextUpdate(store.updates)
+            == .read(configLoad(#"{"folders-first": true}"#), generation: 1))
+}
+
+/// A file found gone, as between a sync tool's delete and create, is sent as gone only when
+/// it is still gone `confirmDelay` later; one back by then sends nothing.
+@Test func aFileGoneIsSentOnlyWhenASecondReadAgrees() async throws {
+    let folder = try TemporaryFolder("ConfigStoreTests")
+    let file = folder.url.appending(path: "config.json")
+    let bytes = Data(#"{"show-hidden": true}"#.utf8)
+    try bytes.write(to: file)
+    let clock = ManualClock()
+    let store = store(file, clock: clock)
+    _ = await store.start()
+
+    try FileManager.default.removeItem(at: file)
+    await store.reload()
+    try bytes.write(to: file)
+    clock.advance(by: ConfigStore.confirmDelay)
+    try Data(#"{"folders-first": true}"#.utf8).write(to: file, options: .atomic)
+    await store.reload()
+    #expect(
+        await nextUpdate(store.updates)
+            == .read(configLoad(#"{"folders-first": true}"#), generation: 1))
+
+    try FileManager.default.removeItem(at: file)
+    await store.reload()
+    clock.advance(by: ConfigStore.confirmDelay)
+    #expect(await nextUpdate(store.updates) == .read(.missing, generation: 2))
+}
+
+/// An edit saved while a write is under way, after the store's last read and before its
+/// rename, is found by the check just before the rename: the write is dropped and the edit
+/// kept and sent.
+@Test func anEditSavedDuringAWriteIsKept() async throws {
+    let folder = try TemporaryFolder("ConfigStoreTests")
+    let file = folder.url.appending(path: "config.json")
+    try Data("{}".utf8).write(to: file)
+    let edit = Data(#"{"folders-first": true}"#.utf8)
+    let store = store(
+        file,
+        write: { data, url, check in
+            try edit.write(to: url, options: .atomic)
+            try AtomicWrite.write(data, to: url, beforeRename: check)
+        })
+    _ = await store.start()
+
+    #expect(!(await store.save(showHidden, basedOn: 0, sequence: 1)))
+
+    #expect(try Data(contentsOf: file) == edit)
     #expect(
         await nextUpdate(store.updates)
             == .read(configLoad(#"{"folders-first": true}"#), generation: 1))
@@ -241,9 +321,9 @@ private let foldersFirst = ConfigFile.Contents(
     let logged = EventLog<String>()
     let store = store(
         file, log: { logged.append($0) },
-        write: { data, url in
+        write: { data, url, check in
             if fails.isOn { throw CocoaError(.fileWriteOutOfSpace) }
-            try AtomicWrite.write(data, to: url)
+            try AtomicWrite.write(data, to: url, beforeRename: check)
         })
     _ = await store.start()
     let updates = store.updates

@@ -235,12 +235,13 @@ private let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
 
 /// Settings connected to the config file `file`, over a suite in the file's test folder.
 @MainActor
-private func configured(_ folder: TemporaryFolder, file: URL, watch: ManualWatch = ManualWatch())
-    async -> Settings
-{
+private func configured(
+    _ folder: TemporaryFolder, file: URL, watch: ManualWatch = ManualWatch(),
+    clock: ManualClock = ManualClock()
+) async -> Settings {
     let settings = Settings(
         defaults: temporarySuite(in: folder.url.path), log: unexpectedSettingsLog)
-    await settings.connectTestConfig(file, watch: watch)
+    await settings.connectTestConfig(file, clock: clock, watch: watch)
     return settings
 }
 
@@ -287,9 +288,13 @@ private func openConfigBinding() throws -> CommandBinding {
     let file = folder.url.appending(path: "config.json")
     try Data(#"{"show-hidden": true}"#.utf8).write(to: file)
     let watch = ManualWatch()
-    let settings = await configured(folder, file: file, watch: watch)
+    let clock = ManualClock()
+    let settings = await configured(folder, file: file, watch: watch, clock: clock)
     try FileManager.default.removeItem(at: file)
     watch.change()
+    // A file found gone is read again a moment later before it counts as deleted.
+    await settle { clock.waitingSleeps > 0 }
+    clock.advance(by: ConfigStore.confirmDelay)
     await settle { !settings.showHidden }
     let actions = StubSystemActions(defaultApplications: [.plainText: textEdit])
 

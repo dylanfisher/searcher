@@ -277,8 +277,20 @@ public final class Settings {
         didSet {
             guard !isApplyingConfig else { return }
             let normal = Self.normalized(shortcuts, changedFrom: oldValue)
-            if normal != shortcuts { shortcuts = normal }
+            if normal != shortcuts {
+                isApplyingConfig = true
+                shortcuts = normal
+                isApplyingConfig = false
+            }
             guard shortcuts != oldValue else { return }
+            for id in Set(shortcuts.keys).union(oldValue.keys) {
+                for position in ShortcutOverride.Position.allCases
+                where (shortcuts[id]?[position] ?? .standard)
+                    != (oldValue[id]?[position] ?? .standard)
+                {
+                    markUnsaved(.slot(id, position))
+                }
+            }
             changed()
         }
     }
@@ -392,6 +404,22 @@ public final class Settings {
     private var saveSequence = 0
     /// The wait before the next write, which starts with the first change not yet written.
     private var scheduledSave: Task<Void, Never>?
+    /// The write running now and those queued after it, which a flush waits for.
+    private var saving: Task<Void, Never>?
+
+    /// A preference or a shortcut slot.
+    private enum Change: Hashable {
+        case value(Key)
+        case slot(CommandID, ShortcutOverride.Position)
+    }
+
+    /// The changes made in the app that the file doesn't hold yet, each with the count of
+    /// changes when it was last made, so a write clears only the changes it carried.
+    private var unsaved: [Change: Int] = [:]
+    private var changeCount = 0
+    /// What the file held at the last read applied or write made: what a read is compared with
+    /// to tell the keys it changed from those it left.
+    private var fileContents = ConfigFile.Contents(values: [:], shortcuts: [:])
     /// The config file the user chose, which `UserDefaults` keeps as a path, since it can't
     /// live in the file it names; nil for the default location.
     private var chosenConfigFile: URL?
@@ -450,13 +478,24 @@ public final class Settings {
         await use(connection.defaultFile)
     }
 
-    /// Writes the change waiting for its delay now, as quitting needs. With none waiting it
-    /// writes nothing, so a file the app hasn't changed keeps the user's text.
+    /// Writes the changes waiting for their delay now, as quitting needs, after the write
+    /// running now. With none waiting it writes nothing, so a file the app hasn't changed keeps
+    /// the user's text.
     public func flushConfig() async {
-        guard let scheduledSave else { return }
-        scheduledSave.cancel()
-        self.scheduledSave = nil
-        await saveConfig()
+        scheduledSave?.cancel()
+        scheduledSave = nil
+        if unsaved.isEmpty {
+            await saving?.value
+        } else {
+            await saveConfig()
+        }
+    }
+
+    /// `flushConfig`, unless `deadline` on `clock` passes first, as when the app quits and the
+    /// file is on a share whose write hangs. Returns whether the flush finished; one that
+    /// didn't keeps going.
+    public func flushConfig<C: Clock<Duration>>(by deadline: C.Instant, clock: C) async -> Bool {
+        await FirstToFinish.run(by: deadline, clock: clock) { await self.flushConfig() }
     }
 
     /// Makes the config file from the settings when there is none, as Open Config File needs,
@@ -468,19 +507,21 @@ public final class Settings {
 
     /// Applies `load`, read as `generation`: its values and shortcuts, every default when there
     /// is no file, or, for a file with an error, the errors, which leave the settings as they
-    /// were. Tells the observers when anything changed. A change made in the app and not yet
-    /// written is dropped: the file wins.
+    /// were. Tells the observers when anything changed.
+    ///
+    /// A change made in the app and not yet written stays when the file left its key as it
+    /// was, and is written over the file's; the file wins a key both changed.
     func applyConfig(_ load: ConfigLoad, generation: Int) {
         configGeneration = generation
-        scheduledSave?.cancel()
-        scheduledSave = nil
         let before = (Self.preferences.map { value(of: $0.key) }, shortcuts, readErrors)
         switch load.outcome {
         case .missing:
-            replace(values: [:], shortcuts: [:])
+            merge(ConfigFile.Contents(values: [:], shortcuts: [:]))
             readErrors = []
         case .values(let values, let shortcuts):
-            replace(values: values, shortcuts: shortcuts)
+            merge(
+                ConfigFile.Contents(
+                    values: values, shortcuts: Self.normalized(shortcuts, changedFrom: [:])))
             readErrors = []
         case .failed(let errors):
             readErrors = errors
@@ -490,11 +531,46 @@ public final class Settings {
         }
     }
 
-    private func replace(values: [Key: Value], shortcuts: [CommandID: ShortcutOverride]) {
+    /// Takes `file`'s settings, with the changes the app hasn't written on top of them where
+    /// `file` left their keys as `fileContents` had them, and schedules the write of those.
+    private func merge(_ file: ConfigFile.Contents) {
+        var values = file.values
+        var shortcuts = file.shortcuts
+        for change in unsaved.keys {
+            switch change {
+            case .value(let key):
+                if Self.value(of: key, in: file) == Self.value(of: key, in: fileContents) {
+                    values[key] = self.values[key]
+                } else {
+                    unsaved[change] = nil
+                }
+            case .slot(let id, let position):
+                if (file.shortcuts[id]?[position] ?? .standard)
+                    == (fileContents.shortcuts[id]?[position] ?? .standard)
+                {
+                    shortcuts[id, default: ShortcutOverride()][position] =
+                        self.shortcuts[id]?[position] ?? .standard
+                } else {
+                    unsaved[change] = nil
+                }
+            }
+        }
+        fileContents = file
         self.values = values
         isApplyingConfig = true
         self.shortcuts = Self.normalized(shortcuts, changedFrom: [:])
         isApplyingConfig = false
+        if unsaved.isEmpty {
+            scheduledSave?.cancel()
+            scheduledSave = nil
+        } else {
+            scheduleSave()
+        }
+    }
+
+    /// Preference `key` as `contents` sets it, or its default.
+    private static func value(of key: Key, in contents: ConfigFile.Contents) -> Value? {
+        contents.values[key] ?? preferencesByKey[key]?.defaultValue
     }
 
     /// Switches to the store of `file`, after writing what the last one has waiting: reads it,
@@ -509,6 +585,9 @@ public final class Settings {
         configStore = store
         readErrors = []
         saveFailure = nil
+        // A file at the new place wins whole; with none, the settings are written there.
+        unsaved = [:]
+        fileContents = configContents
         let updates = store.updates
         let first = await store.start()
         guard configStore === store else { return }
@@ -540,11 +619,21 @@ public final class Settings {
         ConfigFile.Contents(values: values, shortcuts: shortcuts)
     }
 
-    /// Tells the observers of a change made in the app, and writes it to the config file
-    /// `WorkspaceStore.writeDelay` after the first change not yet written, so a burst of
-    /// changes costs one write.
+    /// Records `change` as made in the app and not yet in the file.
+    private func markUnsaved(_ change: Change) {
+        changeCount += 1
+        unsaved[change] = changeCount
+    }
+
+    /// Tells the observers of a change made in the app, and schedules its write.
     private func changed() {
         notifyObservers()
+        scheduleSave()
+    }
+
+    /// Writes the settings to the config file `WorkspaceStore.writeDelay` after the first
+    /// change not yet written, so a burst of changes costs one write.
+    private func scheduleSave() {
         guard let connection, configStore != nil, scheduledSave == nil else { return }
         let wait = connection.startWait(WorkspaceStore.writeDelay)
         scheduledSave = Task { [weak self] in
@@ -554,11 +643,39 @@ public final class Settings {
         }
     }
 
-    /// Hands the settings to the store to write.
+    /// Writes the settings, after any write already running, and returns once it is done.
     private func saveConfig() async {
+        let previous = saving
+        let write = Task { [weak self] in
+            await previous?.value
+            await self?.writeConfig()
+        }
+        saving = write
+        await write.value
+        if saving == write { saving = nil }
+    }
+
+    /// Hands the settings to the store to write. A write that holds them clears the changes
+    /// it carried; one the store refuses keeps them. A read on its way merges them then; with
+    /// none, as when the file was found gone and not yet confirmed so or the write failed, the
+    /// write is tried again after the delay, unless the file has an error, which only an edit
+    /// of it clears.
+    private func writeConfig() async {
         guard let store = configStore else { return }
         saveSequence += 1
-        await store.save(configContents, basedOn: configGeneration, sequence: saveSequence)
+        let contents = configContents
+        let carried = unsaved
+        let generation = configGeneration
+        let saved = await store.save(contents, basedOn: generation, sequence: saveSequence)
+        guard configStore === store, configGeneration == generation else { return }
+        if saved {
+            fileContents = contents
+            for (change, count) in carried where unsaved[change] == count {
+                unsaved[change] = nil
+            }
+        } else if !unsaved.isEmpty, readErrors.isEmpty {
+            scheduleSave()
+        }
     }
 
     /// Runs `handler` after each change of a setting, for as long as `owner` exists.
@@ -610,6 +727,7 @@ public final class Settings {
     private func set(_ value: Value, for key: Key) {
         guard value != self.value(of: key) else { return }
         values[key] = value
+        markUnsaved(.value(key))
         changed()
     }
 

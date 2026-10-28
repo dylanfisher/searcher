@@ -7,7 +7,7 @@ import Foundation
 ///
 /// A file with any error sets nothing. Text that isn't JSON is one error, on its line; a key
 /// with a value it can't take is an error that names the key, and so is a key the file can't
-/// have.
+/// have, and a key an object has twice, on the line of the second.
 public enum ConfigFile {
     /// The file's name in a folder chosen to keep it in, and at the default location.
     public static let name = "config.json"
@@ -46,6 +46,9 @@ public enum ConfigFile {
         guard let dictionary = object as? [String: Any] else {
             return failed("must be a JSON object, its keys and values in braces")
         }
+        // Foundation keeps the last of a key given twice and says nothing.
+        let duplicates = duplicateKeys(in: data)
+        if !duplicates.isEmpty { return .failed(duplicates) }
         var values: [Settings.Key: Settings.Value] = [:]
         var shortcuts: [CommandID: ShortcutOverride] = [:]
         var errors: [ConfigError] = []
@@ -106,6 +109,68 @@ public enum ConfigFile {
         init(_ errors: [ConfigError]) {
             self.errors = errors
         }
+    }
+
+    /// An error for each key an object in `data`, valid JSON, has a second time, on that line,
+    /// named by its path: `shortcuts.window.showPalette.primary`. A key is compared as written,
+    /// escapes and all.
+    private static func duplicateKeys(in data: Data) -> [ConfigError] {
+        struct Object {
+            let path: String?
+            var lines: [String: Int] = [:]
+        }
+        // nil for an array, whose items have no keys.
+        var open: [Object?] = []
+        var errors: [ConfigError] = []
+        var line = 1
+        var lastKey: String?
+        let quote = UInt8(ascii: "\"")
+        let backslash = UInt8(ascii: "\\")
+        var index = data.startIndex
+        while index < data.endIndex {
+            let byte = data[index]
+            switch byte {
+            case 0x0A:
+                line += 1
+            case quote:
+                // JSON escapes a line break in a string, so the string ends on this line.
+                var end = data.index(after: index)
+                while end < data.endIndex, data[end] != quote {
+                    if data[end] == backslash { end = data.index(after: end) }
+                    end = data.index(after: end)
+                }
+                let text = String(decoding: data[data.index(after: index)..<end], as: UTF8.self)
+                index = end
+                var next = data.index(after: end)
+                while next < data.endIndex, [0x20, 0x09, 0x0D, 0x0A].contains(data[next]) {
+                    next = data.index(after: next)
+                }
+                guard next < data.endIndex, data[next] == UInt8(ascii: ":"),
+                    let object = open.last ?? nil
+                else { break }
+                let path = object.path.map { "\($0).\(text)" } ?? text
+                if let first = object.lines[text] {
+                    errors.append(
+                        ConfigError(
+                            line: line, key: path,
+                            reason: "\(path) is set twice, first on line \(first)"))
+                } else {
+                    open[open.count - 1]?.lines[text] = line
+                }
+                lastKey = path
+            case UInt8(ascii: "{"):
+                open.append(Object(path: open.isEmpty ? nil : lastKey))
+                lastKey = nil
+            case UInt8(ascii: "["):
+                open.append(nil)
+            case UInt8(ascii: "}"), UInt8(ascii: "]"):
+                open.removeLast()
+            default:
+                break
+            }
+            index = data.index(after: index)
+        }
+        return errors
     }
 
     /// The error for text that isn't JSON, on the line Foundation's error points into.
