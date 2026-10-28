@@ -215,11 +215,11 @@ public actor WorkspaceStore {
     /// The session, every window's workspace and every snapshot: the latest saves, written or
     /// not. A file that isn't in the one stored shape, a workspace file not named for its
     /// workspace's ID, and a snapshot without a name or with window steps are deleted and
-    /// reported, and load as
-    /// missing. In the workspaces and snapshots folders, an unfinished write left by a crash is
-    /// deleted without a report, and other dot-files are left alone. The session is returned as
-    /// saved, even when it names a workspace that didn't load; with no session file, or one that
-    /// didn't load, it is rebuilt from the window files that loaded.
+    /// reported, and load as missing. In the workspaces and snapshots folders, an unfinished
+    /// write left by a crash is deleted without a report, and other dot-files are left alone.
+    /// The session is returned as saved, even when it names a workspace that didn't load; with
+    /// no session file, or one that didn't load, it is rebuilt from the window files that
+    /// loaded.
     public func load() -> Contents {
         dispatchPrecondition(condition: .notOnQueue(.main))
         let workspaces = readWorkspaces(in: folder, at: url(for:))

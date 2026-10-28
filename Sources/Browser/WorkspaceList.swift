@@ -129,10 +129,10 @@ public final class WorkspaceList {
     }
 
     /// Saves `workspace`, open in a window at `frame`: its state, without the window's own Back
-    /// and Forward, becomes its snapshot. An
-    /// unsaved one takes `name`, trimmed of white space at both ends; a name that is empty, or
-    /// that another saved workspace has in any case, is refused and leaves the workspace as it
-    /// was, as is any name while `awaitsRestore`. A saved one keeps its name, so `name` is nil.
+    /// and Forward, becomes its snapshot. An unsaved one takes `name`, trimmed of white space at
+    /// both ends; a name that is empty, or that another saved workspace has in any case, is
+    /// refused and leaves the workspace as it was, as is any name while `awaitsRestore`. A saved
+    /// one keeps its name, so `name` is nil.
     public func save(_ workspace: Workspace, as name: String? = nil, frame: Rect)
         throws(NameRefusal)
     {
