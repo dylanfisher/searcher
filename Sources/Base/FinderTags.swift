@@ -1,62 +1,114 @@
 import Darwin
 import Foundation
 
-/// Reads and writes an item's Finder tags by name, through `NSURL`'s `tagNamesKey`, the
-/// supported way to change them. The system keeps each name's color: "Red" is stored as Finder
-/// stores it, `Red\n6` in the item's `_kMDItemUserTags`, and shows red in Finder. An item that is
-/// a symlink has the tags of the item it points to, which both calls follow
-/// (docs/decisions/0121-tag-commands.md).
+/// Reads and writes an item's Finder tags as Finder stores them: the entries of the
+/// `com.apple.metadata:_kMDItemUserTags` extended attribute, a binary property list of strings,
+/// each a tag's name and, after a newline, its color's label number, "Red\n6" or "Work\n4". A
+/// tag without a color may have no number. Entries are written back exactly, so a tag that stays
+/// keeps its color, which `NSURL`'s `tagNamesKey` doesn't do: it takes names only and writes
+/// each with the color the user's tag list gives it, 0 for a tag that isn't in it. As `NSURL`
+/// does, a write also sets the legacy color label in `com.apple.FinderInfo` to the last colored
+/// entry's, or clears it. An item that is a symlink has the tags of the item it points to, as
+/// with `NSURL` (docs/decisions/0121-tag-commands.md).
 public enum FinderTags {
-    /// The tags of the item at `path`, in the order Finder lists them, read from the disk each
-    /// time rather than from a cached `URL`. Blocks the calling thread; call it off the main
+    static let attribute = "com.apple.metadata:_kMDItemUserTags"
+    static let finderInfo = "com.apple.FinderInfo"
+    /// The bits of `FinderInfo`'s `fdFlags`, in its tenth byte, that hold the color label.
+    static let colorBits: UInt8 = 0x0E
+
+    /// The name of `entry`, before its newline.
+    public static func name(of entry: String) -> String {
+        entry.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first
+            .map(String.init) ?? entry
+    }
+
+    /// The color label number of `entry`, 1 to 7, or 0 for a tag without a color.
+    public static func label(of entry: String) -> Int {
+        let parts = entry.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2, let label = Int(parts[1]), (0...7).contains(label) else {
+            return 0
+        }
+        return label
+    }
+
+    /// The entries of the item at `path`, in the order Finder lists them; none when it has no
+    /// tags. Blocks the calling thread; call it off the main thread.
+    ///
+    /// - Throws: `FileOperationError` when the item can't be read, or its attribute isn't a list
+    ///   of strings (`other`).
+    public static func entries(at path: String) throws(FileOperationError) -> [String] {
+        preconditionOffMain("FinderTags")
+        let size = getxattr(path, attribute, nil, 0, 0, 0)
+        if size < 0 {
+            if errno == ENOATTR { return [] }
+            throw FileOperationError(errno: errno, path: path)
+        }
+        var data = Data(count: size)
+        let read = data.withUnsafeMutableBytes {
+            getxattr(path, attribute, $0.baseAddress, size, 0, 0)
+        }
+        if read < 0 {
+            if errno == ENOATTR { return [] }
+            throw FileOperationError(errno: errno, path: path)
+        }
+        guard
+            let entries = try? PropertyListSerialization.propertyList(
+                from: data.prefix(read), format: nil) as? [String]
+        else {
+            throw FileOperationError(reason: .other, path: path, errno: nil)
+        }
+        return entries
+    }
+
+    /// The names of the item's tags, in order. Blocks the calling thread; call it off the main
     /// thread.
     public static func names(at path: String) throws(FileOperationError) -> [String] {
-        preconditionOffMain("FinderTags")
-        var names: AnyObject?
-        do {
-            try NSURL(fileURLWithPath: path).getResourceValue(&names, forKey: .tagNamesKey)
-        } catch {
-            throw operationError(error, path: path)
-        }
-        // An item without tags reads as nil.
-        return names as? [String] ?? []
+        try entries(at: path).map(name(of:))
     }
 
-    /// Gives the item at `path` the tags `names`, in that order, in place of the ones it has.
-    /// Blocks the calling thread; call it off the main thread.
-    public static func set(_ names: [String], at path: String) throws(FileOperationError) {
+    /// Gives the item at `path` the tag entries `entries`, exactly and in that order, in place of
+    /// the ones it has; none removes the attribute, as Finder leaves an untagged item. Blocks the
+    /// calling thread; call it off the main thread.
+    public static func set(entries: [String], at path: String) throws(FileOperationError) {
         preconditionOffMain("FinderTags")
-        do {
-            try NSURL(fileURLWithPath: path).setResourceValue(names, forKey: .tagNamesKey)
-        } catch {
-            throw operationError(error, path: path)
-        }
-    }
-
-    /// The `FileOperationError` for an error `NSURL` threw on `path`. A refused write and a
-    /// missing item come as Carbon `OSStatus` codes, not errnos: `afpAccessDenied` (-5000) for a
-    /// read-only or locked file, `fnfErr` (-43) for an item that is gone.
-    private static func operationError(_ error: any Error, path: String) -> FileOperationError {
-        let error = error as NSError
-        let posix =
-            error.domain == NSPOSIXErrorDomain
-            ? error : error.userInfo[NSUnderlyingErrorKey] as? NSError
-        if let posix, posix.domain == NSPOSIXErrorDomain {
-            return FileOperationError(errno: Int32(posix.code), path: path)
-        }
-        let reason: FileOperationError.Reason =
-            switch (error.domain, error.code) {
-            case (NSOSStatusErrorDomain, -5000): .permissionDenied
-            case (NSOSStatusErrorDomain, -43): .sourceGone
-            case (NSCocoaErrorDomain, CocoaError.fileNoSuchFile.rawValue),
-                (NSCocoaErrorDomain, CocoaError.fileReadNoSuchFile.rawValue):
-                .sourceGone
-            case (NSCocoaErrorDomain, CocoaError.fileReadNoPermission.rawValue),
-                (NSCocoaErrorDomain, CocoaError.fileWriteNoPermission.rawValue),
-                (NSCocoaErrorDomain, CocoaError.fileWriteVolumeReadOnly.rawValue):
-                .permissionDenied
-            default: .other
+        if entries.isEmpty {
+            guard removexattr(path, attribute, 0) == 0 || errno == ENOATTR else {
+                throw FileOperationError(errno: errno, path: path)
             }
-        return FileOperationError(reason: reason, path: path, errno: nil)
+        } else {
+            let data: Data
+            do {
+                data = try PropertyListSerialization.data(
+                    fromPropertyList: entries, format: .binary, options: 0)
+            } catch {
+                preconditionFailure("a list of strings didn't encode: \(error)")
+            }
+            let result = data.withUnsafeBytes {
+                setxattr(path, attribute, $0.baseAddress, data.count, 0, 0)
+            }
+            guard result == 0 else { throw FileOperationError(errno: errno, path: path) }
+        }
+        try setColorLabel(entries.last { label(of: $0) != 0 }.map(label(of:)) ?? 0, at: path)
+    }
+
+    /// Sets the legacy color label in the item's `FinderInfo`, which older APIs such as
+    /// `URLResourceValues.labelNumber` read, keeping its other bytes. A `FinderInfo` left all
+    /// zero is removed, as `NSURL` leaves it.
+    private static func setColorLabel(_ label: Int, at path: String) throws(FileOperationError) {
+        var info = [UInt8](repeating: 0, count: 32)
+        let read = getxattr(path, finderInfo, &info, info.count, 0, 0)
+        if read < 0, errno != ENOATTR { throw FileOperationError(errno: errno, path: path) }
+        let flags = (info[9] & ~colorBits) | (UInt8(label) << 1 & colorBits)
+        guard flags != info[9] else { return }
+        info[9] = flags
+        if info.allSatisfy({ $0 == 0 }) {
+            guard removexattr(path, finderInfo, 0) == 0 || errno == ENOATTR else {
+                throw FileOperationError(errno: errno, path: path)
+            }
+            return
+        }
+        guard setxattr(path, finderInfo, info, info.count, 0, 0) == 0 else {
+            throw FileOperationError(errno: errno, path: path)
+        }
     }
 }

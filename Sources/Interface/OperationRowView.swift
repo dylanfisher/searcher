@@ -91,7 +91,7 @@ final class OperationRowView: NSView {
             "Deleting \(items(paths))"
         case .toggleTag(let tag, let paths):
             // Whether it adds or removes the tag is read as it is planned.
-            "Changing the tag “\(tag)” of \(items(paths))"
+            "Changing the tag “\(tag.name)” of \(items(paths))"
         case .receive(let name?, _, let folder):
             "Drop of “\(name)” into \(quoted(folder))"
         case .receive(nil, let app?, let folder):

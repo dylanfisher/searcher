@@ -35,7 +35,8 @@ public struct OperationRecord: Equatable, Sendable {
         /// An undo moved an item a change `created` to its volume's Trash at the URL. Redo
         /// makes it again from its origin rather than from the Trash, as Finder does.
         case uncreated(String, from: Origin, trashedTo: URL)
-        /// The item at the path had the Finder tags `from`, in that order, and has `to`.
+        /// The item at the path had the Finder tag entries `from`, in that order, and has `to`:
+        /// each a name and its color, as `FinderTags.entries` reads them.
         case tagged(String, from: [String], to: [String])
 
         /// Where the item the change is about is once it is done; nil for a delete.

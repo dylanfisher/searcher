@@ -8,7 +8,18 @@ import Testing
 @testable import Browser
 
 // Tag toggles through the queue and their undo and redo, on the real file system
-// (docs/decisions/0121-tag-commands.md).
+// (docs/decisions/0121-tag-commands.md). Tags are compared as Finder stores them, each name
+// with its color.
+
+private let red = FinderTag.all[0]
+private let blue = FinderTag.all[4]
+private let redEntry = red.entry
+private let blueEntry = blue.entry
+private let greenEntry = FinderTag.all[3].entry
+/// A tag of the user's own whose color, 4, only the item's entry holds: no tag list need know it.
+private let work = "Work\n4"
+/// A tag with no color, stored without a number.
+private let home = "Home"
 
 /// A queue over the real file system and the history that follows it, as the app's windows
 /// make them.
@@ -53,41 +64,43 @@ private func file(_ name: String, in folder: TemporaryFolder, tags: [String] = [
 
 private func tags(_ path: String) async throws -> [String] {
     try await BlockingCallThread.run { () throws(FileOperationError) -> [String] in
-        try FinderTags.names(at: path)
+        try FinderTags.entries(at: path)
     }
 }
 
 /// Sets the tags as another app would, outside the queue.
 private func setTags(_ tags: [String], _ path: String) async throws {
     try await BlockingCallThread.run { () throws(FileOperationError) in
-        try FinderTags.set(tags, at: path)
+        try FinderTags.set(entries: tags, at: path)
     }
 }
 
+/// The item that holds `Work\n4` keeps that entry, color and all, through the toggle, its
+/// undo and its redo.
 @MainActor @Test func aTagAddedToTwoFilesUndoesAndRedoesAsFinderNamesIt() async throws {
     let folder = try TemporaryFolder("FileOperationTagTests")
-    let a = try await file("a.txt", in: folder, tags: ["Work"])
+    let a = try await file("a.txt", in: folder, tags: [work])
     let b = try await file("b.txt", in: folder)
     let harness = Harness()
 
-    let state = await harness.perform(.toggleTag("Red", on: [a, b]))
+    let state = await harness.perform(.toggleTag(red, on: [a, b]))
 
     #expect(state.phase == .done)
-    #expect(try await tags(a) == ["Work", "Red"])
-    #expect(try await tags(b) == ["Red"])
+    #expect(try await tags(a) == [work, redEntry])
+    #expect(try await tags(b) == [redEntry])
     #expect(harness.history.undoTitle == "Undo Add Tag “Red”")
 
     let undone = try await harness.undo()
     #expect(undone.phase == .done)
-    #expect(try await tags(a) == ["Work"])
+    #expect(try await tags(a) == [work])
     #expect(try await tags(b) == [])
     #expect(harness.history.undoTitle == "Undo")
     #expect(harness.history.redoTitle == "Redo Add Tag “Red”")
 
     let redone = try await harness.redo()
     #expect(redone.phase == .done)
-    #expect(try await tags(a) == ["Work", "Red"])
-    #expect(try await tags(b) == ["Red"])
+    #expect(try await tags(a) == [work, redEntry])
+    #expect(try await tags(b) == [redEntry])
     #expect(harness.history.undoTitle == "Undo Add Tag “Red”")
     #expect(!harness.history.canRedo)
 }
@@ -96,36 +109,37 @@ private func setTags(_ tags: [String], _ path: String) async throws {
 /// and the items that had it are left as they are, so undo leaves them with it.
 @MainActor @Test func aMixedSelectionGetsTheTagAndUndoLeavesItOnItemsThatHadIt() async throws {
     let folder = try TemporaryFolder("FileOperationTagTests")
-    let had = try await file("had.txt", in: folder, tags: ["Red", "Work"])
-    let lacked = try await file("lacked.txt", in: folder, tags: ["Blue"])
+    let had = try await file("had.txt", in: folder, tags: [redEntry, work])
+    let lacked = try await file("lacked.txt", in: folder, tags: [blueEntry])
     let harness = Harness()
 
-    let state = await harness.perform(.toggleTag("Red", on: [had, lacked]))
+    let state = await harness.perform(.toggleTag(red, on: [had, lacked]))
 
-    #expect(state.record.changes == [.tagged(lacked, from: ["Blue"], to: ["Blue", "Red"])])
-    #expect(try await tags(had) == ["Red", "Work"])
-    #expect(try await tags(lacked) == ["Blue", "Red"])
+    #expect(
+        state.record.changes == [.tagged(lacked, from: [blueEntry], to: [blueEntry, redEntry])])
+    #expect(try await tags(had) == [redEntry, work])
+    #expect(try await tags(lacked) == [blueEntry, redEntry])
 
     _ = try await harness.undo()
-    #expect(try await tags(had) == ["Red", "Work"])
-    #expect(try await tags(lacked) == ["Blue"])
+    #expect(try await tags(had) == [redEntry, work])
+    #expect(try await tags(lacked) == [blueEntry])
 }
 
 @MainActor @Test func aTagEveryItemHasIsTakenOffEachAndUndoPutsBackTheExactList() async throws {
     let folder = try TemporaryFolder("FileOperationTagTests")
-    let a = try await file("a.txt", in: folder, tags: ["Work", "Red", "Home"])
-    let b = try await file("b.txt", in: folder, tags: ["Red"])
+    let a = try await file("a.txt", in: folder, tags: [work, redEntry, home])
+    let b = try await file("b.txt", in: folder, tags: [redEntry])
     let harness = Harness()
 
-    await harness.perform(.toggleTag("Red", on: [a, b]))
+    await harness.perform(.toggleTag(red, on: [a, b]))
 
-    #expect(try await tags(a) == ["Work", "Home"])
+    #expect(try await tags(a) == [work, home])
     #expect(try await tags(b) == [])
     #expect(harness.history.undoTitle == "Undo Remove Tag “Red”")
 
     _ = try await harness.undo()
-    #expect(try await tags(a) == ["Work", "Red", "Home"])
-    #expect(try await tags(b) == ["Red"])
+    #expect(try await tags(a) == [work, redEntry, home])
+    #expect(try await tags(b) == [redEntry])
     #expect(harness.history.redoTitle == "Redo Remove Tag “Red”")
 }
 
@@ -139,12 +153,12 @@ private func setTags(_ tags: [String], _ path: String) async throws {
     defer { chmod(locked, 0o644) }
     let harness = Harness()
 
-    let state = await harness.perform(.toggleTag("Red", on: [locked, open]))
+    let state = await harness.perform(.toggleTag(red, on: [locked, open]))
 
     #expect(state.phase == .failed)
     #expect(state.errors.map(\.reason) == [.permissionDenied])
     #expect(state.errors.map(\.path) == [locked])
-    #expect(try await tags(open) == ["Red"])
+    #expect(try await tags(open) == [redEntry])
     #expect(harness.history.undoTitle == "Undo Add Tag “Red”")
 
     _ = try await harness.undo()
@@ -159,19 +173,19 @@ private func setTags(_ tags: [String], _ path: String) async throws {
     let a = try await file("a.txt", in: folder)
     let b = try await file("b.txt", in: folder)
     let harness = Harness()
-    await harness.perform(.toggleTag("Red", on: [a, b]))
-    try await setTags(["Red", "Green"], b)
+    await harness.perform(.toggleTag(red, on: [a, b]))
+    try await setTags([redEntry, greenEntry], b)
 
     let undone = try await harness.undo()
 
     #expect(undone.phase == .failed)
     #expect(undone.errors == [FileOperationError(reason: .tagsChanged, path: b, errno: nil)])
-    #expect(try await tags(a) == ["Red"])
-    #expect(try await tags(b) == ["Red", "Green"])
+    #expect(try await tags(a) == [redEntry])
+    #expect(try await tags(b) == [redEntry, greenEntry])
     #expect(harness.history.undoTitle == "Undo Add Tag “Red”")
 
     // Set back, the kept entry undoes.
-    try await setTags(["Red"], b)
+    try await setTags([redEntry], b)
     _ = try await harness.undo()
     #expect(try await tags(a) == [])
     #expect(try await tags(b) == [])
@@ -184,7 +198,7 @@ private func setTags(_ tags: [String], _ path: String) async throws {
     let a = try await file("a.txt", in: folder)
     let b = try await file("b.txt", in: folder)
     let harness = Harness()
-    await harness.perform(.toggleTag("Red", on: [a, b]))
+    await harness.perform(.toggleTag(red, on: [a, b]))
     let renamed = folder.url.appending(path: "c.txt").path
     #expect(rename(b, renamed) == 0)
 
@@ -192,8 +206,8 @@ private func setTags(_ tags: [String], _ path: String) async throws {
 
     #expect(undone.phase == .failed)
     #expect(undone.errors.map(\.reason) == [.sourceGone])
-    #expect(try await tags(a) == ["Red"])
-    #expect(try await tags(renamed) == ["Red"])
+    #expect(try await tags(a) == [redEntry])
+    #expect(try await tags(renamed) == [redEntry])
     #expect(!harness.history.canUndo)
 }
 
@@ -204,7 +218,7 @@ private func setTags(_ tags: [String], _ path: String) async throws {
     let a = try await file("a.txt", in: folder)
     let b = try await file("b.txt", in: folder)
     let harness = Harness()
-    await harness.perform(.toggleTag("Red", on: [a, b]))
+    await harness.perform(.toggleTag(red, on: [a, b]))
     #expect(chmod(b, 0o444) == 0)
     defer { chmod(b, 0o644) }
 
@@ -213,7 +227,7 @@ private func setTags(_ tags: [String], _ path: String) async throws {
     #expect(undone.phase == .failed)
     #expect(undone.errors.map(\.path) == [b])
     #expect(try await tags(a) == [])
-    #expect(try await tags(b) == ["Red"])
+    #expect(try await tags(b) == [redEntry])
     #expect(harness.history.undoTitle == "Undo Add Tag “Red”")
     #expect(harness.history.redoTitle == "Redo Add Tag “Red”")
 
@@ -223,8 +237,8 @@ private func setTags(_ tags: [String], _ path: String) async throws {
     // Redo puts back both halves, the later undo first.
     _ = try await harness.redo()
     _ = try await harness.redo()
-    #expect(try await tags(a) == ["Red"])
-    #expect(try await tags(b) == ["Red"])
+    #expect(try await tags(a) == [redEntry])
+    #expect(try await tags(b) == [redEntry])
 }
 
 /// Items on two volumes are one toggle and one entry, undone and redone together.
@@ -236,17 +250,17 @@ private func setTags(_ tags: [String], _ path: String) async throws {
     try Data("other".utf8).write(to: URL(fileURLWithPath: other))
     let harness = Harness()
 
-    let state = await harness.perform(.toggleTag("Blue", on: [local, other]))
+    let state = await harness.perform(.toggleTag(blue, on: [local, other]))
 
     #expect(state.phase == .done)
-    #expect(try await tags(local) == ["Blue"])
-    #expect(try await tags(other) == ["Blue"])
+    #expect(try await tags(local) == [blueEntry])
+    #expect(try await tags(other) == [blueEntry])
     _ = try await harness.undo()
     #expect(try await tags(local) == [])
     #expect(try await tags(other) == [])
     _ = try await harness.redo()
-    #expect(try await tags(local) == ["Blue"])
-    #expect(try await tags(other) == ["Blue"])
+    #expect(try await tags(local) == [blueEntry])
+    #expect(try await tags(other) == [blueEntry])
     try await image.detach()
 }
 
@@ -256,9 +270,91 @@ private func setTags(_ tags: [String], _ path: String) async throws {
     let gone = folder.url.appending(path: "gone.txt").path
     let harness = Harness()
 
-    let state = await harness.perform(.toggleTag("Red", on: [gone]))
+    let state = await harness.perform(.toggleTag(red, on: [gone]))
 
     #expect(state.phase == .failed)
     #expect(state.errors.map(\.reason) == [.sourceGone])
     #expect(harness.history.undoTitle == "Undo")
+}
+
+/// Another app changing only a tag's color counts as a change: the undo would write the old
+/// color back over it, so it refuses as for any other change since.
+@MainActor @Test func aColorChangedSinceFailsTheUndo() async throws {
+    let folder = try TemporaryFolder("FileOperationTagTests")
+    let a = try await file("a.txt", in: folder, tags: [work])
+    let harness = Harness()
+    await harness.perform(.toggleTag(red, on: [a]))
+    try await setTags(["Work\n1", redEntry], a)
+
+    let undone = try await harness.undo()
+
+    #expect(undone.errors == [FileOperationError(reason: .tagsChanged, path: a, errno: nil)])
+    #expect(try await tags(a) == ["Work\n1", redEntry])
+}
+
+/// Redo checks as undo does: tags changed since the undo fail it, nothing changes, and the
+/// entry is kept once.
+@MainActor @Test func tagsChangedSinceFailTheRedoAndChangeNothing() async throws {
+    let folder = try TemporaryFolder("FileOperationTagTests")
+    let a = try await file("a.txt", in: folder, tags: [work])
+    let harness = Harness()
+    await harness.perform(.toggleTag(red, on: [a]))
+    _ = try await harness.undo()
+    try await setTags([work, blueEntry], a)
+
+    let redone = try await harness.redo()
+
+    #expect(redone.phase == .failed)
+    #expect(redone.errors == [FileOperationError(reason: .tagsChanged, path: a, errno: nil)])
+    #expect(try await tags(a) == [work, blueEntry])
+    #expect(harness.history.redoTitle == "Redo Add Tag “Red”")
+
+    try await setTags([work], a)
+    _ = try await harness.redo()
+    #expect(try await tags(a) == [work, redEntry])
+}
+
+/// A toggle of many items whose undo fails for some keeps exactly those to undo again.
+@MainActor @Test func aLargeToggleUndoneInPartKeepsTheItemsThatFailed() async throws {
+    let folder = try TemporaryFolder("FileOperationTagTests")
+    var paths: [String] = []
+    for index in 0..<120 {
+        paths.append(try await file("\(index).txt", in: folder, tags: [work]))
+    }
+    let harness = Harness()
+    await harness.perform(.toggleTag(red, on: paths))
+    let locked = paths.indices.filter { $0 % 7 == 0 }.map { paths[$0] }
+    for path in locked { #expect(chmod(path, 0o444) == 0) }
+    defer { for path in locked { chmod(path, 0o644) } }
+
+    let undone = try await harness.undo()
+
+    #expect(Set(undone.errors.map(\.path)) == Set(locked))
+    for path in paths {
+        #expect(try await tags(path) == (locked.contains(path) ? [work, redEntry] : [work]))
+    }
+    for path in locked { #expect(chmod(path, 0o644) == 0) }
+    _ = try await harness.undo()
+    for path in locked { #expect(try await tags(path) == [work]) }
+}
+
+/// The remainder of a large tag entry reads each path once, as for a move
+/// (`theRemainderOfALargeEntryReadsEachPathOnce`).
+@MainActor @Test func theRemainderOfALargeTagEntryReadsEachPathOnce() {
+    let changes = (0..<400).map {
+        OperationRecord.Change.tagged("/A/\($0)", from: [work], to: [work, redEntry])
+    }
+    // Last first; every third failed.
+    let done = changes.indices.reversed().filter { $0 % 3 != 0 }.map {
+        OperationRecord.Change.tagged("/A/\($0)", from: [work, redEntry], to: [work])
+    }
+    var reads = 0
+
+    let left = UndoHistory.remainder(of: changes, after: done) { path in
+        reads += 1
+        return FileOperation.comparable(path)
+    }
+
+    #expect(left == changes.indices.filter { $0 % 3 == 0 }.map { changes[$0] })
+    #expect(reads <= 2 * (changes.count + done.count))
 }

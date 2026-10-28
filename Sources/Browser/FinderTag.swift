@@ -7,6 +7,9 @@ public struct FinderTag: Hashable, Sendable {
     /// `NSWorkspace.fileLabelColors`, and the number after the name in `_kMDItemUserTags`.
     public let label: Int
 
+    /// The tag as Finder stores it on an item (`FinderTags.entries`): "Red\n6".
+    public var entry: String { "\(name)\n\(label)" }
+
     /// The seven in the order Finder's menus show them.
     public static let all = [
         FinderTag(name: "Red", label: 6), FinderTag(name: "Orange", label: 7),

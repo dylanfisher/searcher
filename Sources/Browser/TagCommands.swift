@@ -39,7 +39,7 @@ public enum TagCommands: CommandSet {
                         let queue = context.fileOperations,
                         let paths = FileCommands.selectedPaths(in: context.pane)
                     else { return }
-                    queue.submit(.toggleTag(tag.name, on: paths))
+                    queue.submit(.toggleTag(tag, on: paths))
                 })
         }
     }
