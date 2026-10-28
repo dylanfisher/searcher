@@ -98,3 +98,20 @@ private func exit(_ view: NSView) throws {
     #expect(dot.focusRingMaskBounds == dot.bounds)
     #expect(dot.focusRingType != .none)
 }
+
+/// A press that reaches a dot turned off since, as a VoiceOver press can, toggles nothing.
+@MainActor @Test func aDisabledDotDoesNothing() throws {
+    @MainActor final class Commands {
+        var toggled: [FinderTag] = []
+    }
+    let commands = Commands()
+    let view = TagDotsView(isEnabled: { _ in false }, toggle: { commands.toggled.append($0) })
+    view.validate()
+    let dot = try #require(view.dots.first { $0.finderTag == red })
+    #expect(!dot.isEnabled)
+
+    _ = NSApplication.shared
+    _ = dot.sendAction(dot.action, to: dot.target)
+
+    #expect(commands.toggled.isEmpty)
+}

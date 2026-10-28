@@ -97,6 +97,8 @@ final class TagDotsView: NSView {
     }
 
     @objc private func click(_ sender: TagDotButton) {
+        // A press can reach a dot turned off since, as from VoiceOver.
+        guard sender.isEnabled else { return }
         enclosingMenuItem?.menu?.cancelTracking()
         toggle(sender.finderTag)
     }
