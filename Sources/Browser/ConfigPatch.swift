@@ -38,6 +38,11 @@ enum ConfigPatch: Equatable, Sendable {
         return Self.effective(target, in: contents) == before
     }
 
+    /// `target` as `load` sets it, a missing value or slot at its default.
+    static func value(of target: Target, in load: ConfigLoad) -> String {
+        effective(target, in: ConfigFile.Contents(values: load.values, shortcuts: load.shortcuts))
+    }
+
     /// `target` as `contents` sets it, a missing value or slot at its default.
     private static func effective(_ target: Target, in contents: ConfigFile.Contents)
         -> String

@@ -412,6 +412,8 @@ public final class Settings {
     /// The highest sequence number sent to the store in use, 0 for none: what a wait for its
     /// writes waits for. A store counts only what it was sent, so a new one starts at 0.
     private var sentToStore = 0
+    /// Whether `use` is switching stores, which a second call must not overlap.
+    private var isSwitchingStore = false
     /// The config file the user chose, which `UserDefaults` keeps as a path, since it can't
     /// live in the file it names; nil for the default location.
     private var chosenConfigFile: URL?
@@ -538,6 +540,10 @@ public final class Settings {
     /// with no file writes the settings there.
     private func use(_ file: URL) async {
         guard let connection else { preconditionFailure("no config file is connected") }
+        // Not re-entrant: the General pane runs one move at a time.
+        precondition(!isSwitchingStore, "a move of the config file is already running")
+        isSwitchingStore = true
+        defer { isSwitchingStore = false }
         if let old = configStore {
             let through = sentToStore
             if await connection.within(
@@ -574,6 +580,13 @@ public final class Settings {
                     applyConfig(load)
                 case .wrote(let through):
                     unwritten.removeAll { $0.sequence <= through }
+                case .superseded(let sequences):
+                    let dropped = unwritten.filter { sequences.contains($0.sequence) }
+                    unwritten.removeAll { entry in
+                        dropped.contains {
+                            $0.patch.target == entry.patch.target && entry.sequence <= $0.sequence
+                        }
+                    }
                 case .saved(let failure):
                     guard failure != saveFailure else { continue }
                     saveFailure = failure

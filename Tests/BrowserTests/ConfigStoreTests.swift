@@ -424,6 +424,68 @@ private func object(_ file: URL) throws -> [String: Any] {
     #expect(await next(updates, matching: { $0 == .saved(failure: nil) }) == .saved(failure: nil))
 }
 
+/// A patch whose write failed waits for its retry; an editor's save of the same key meanwhile
+/// came later, so it drops the patch, and the retry writes nothing over the save.
+@Test func anEditDuringARetryDropsTheHeldPatch() async throws {
+    let folder = try TemporaryFolder("ConfigStoreTests")
+    let file = folder.url.appending(path: "config.json")
+    try Data(#"{"appearance": "auto"}"#.utf8).write(to: file)
+    let fails = Flag(true)
+    let clock = ManualClock()
+    let store = store(
+        file, clock: clock,
+        write: { data, url, check in
+            if fails.isOn { throw CocoaError(.fileWriteNoPermission) }
+            try AtomicWrite.write(data, to: url, beforeRename: check)
+        })
+    _ = await store.start(writingIfMissing: none)
+    let updates = store.updates
+
+    await store.receive(.value(.appearance, .string("light")), sequence: 1)
+    let edit = Data(#"{"appearance": "dark"}"#.utf8)
+    try edit.write(to: file, options: .atomic)
+    await store.reload()
+    fails.isOn = false
+    clock.advance(by: ConfigStore.longestRetryDelay)
+    await store.waitBounded(through: 1)
+
+    #expect(try Data(contentsOf: file) == edit)
+    #expect(
+        await next(updates, matching: { if case .superseded = $0 { true } else { false } })
+            == .superseded(sequences: [1]))
+}
+
+/// A write whose file changes during every attempt shows that it couldn't be saved while it
+/// waits for its retry.
+@Test func aWriteThatKeepsMeetingEditsShowsItCouldntBeSaved() async throws {
+    let folder = try TemporaryFolder("ConfigStoreTests")
+    let file = folder.url.appending(path: "config.json")
+    try Data("{}".utf8).write(to: file)
+    let edits = EventLog<Void>()
+    let store = store(
+        file,
+        write: { data, url, check in
+            edits.append(())
+            try Data("{\(String(repeating: " ", count: edits.all.count))}".utf8).write(
+                to: url, options: .atomic)
+            try AtomicWrite.write(data, to: url, beforeRename: check)
+        })
+    _ = await store.start(writingIfMissing: none)
+    let updates = store.updates
+
+    await store.receive(showHidden, sequence: 1)
+
+    guard
+        case .saved(let failure?) = await next(
+            updates, matching: { if case .saved = $0 { true } else { false } })
+    else {
+        Issue.record("no failure was sent")
+        return
+    }
+    #expect(failure.reason.contains("changed during each of"))
+    #expect(edits.all.count == ConfigStore.attempts)
+}
+
 /// Open Config File makes the file from the settings only when there is none, and says whether
 /// there is one to open.
 @Test func makingTheFileWritesOnlyWhenThereIsNone() async throws {

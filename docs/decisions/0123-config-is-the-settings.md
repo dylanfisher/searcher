@@ -102,7 +102,13 @@ than adding a warning.
 - **A write that fails** (no permission, a share that's down) keeps its patches at the head of
   the queue and shows in the banner until a write succeeds. The store tries again on its clock
   after `ConfigStore.firstRetryDelay` (1 s), doubling each time up to
-  `ConfigStore.longestRetryDelay` (30 s), so a failing write never loops fast.
+  `ConfigStore.longestRetryDelay` (30 s), so a failing write never loops fast. A write whose
+  file changes under it on each of `ConfigStore.attempts` tries waits for its retry the same
+  way, and shows so in the banner. While a patch waits for its retry, or for the second read of
+  a file found empty or gone, an edit of the file that changes the patch's key from one good
+  read to the next drops the patch, in the store and in `Settings`: the edit came later, and
+  the later action wins. A patch held by a file with an error is kept instead, since the user
+  may be fixing something else, and goes on top of the fix as above.
 - **Quitting.** `Settings.flushConfig(by:clock:)` waits for the store's queue to drain, a
   confirm read and its replay among it, up to the quit deadline, beside the other quit steps
   rather than before them (`FirstToFinish`, as the listing cache's flush runs): a config file on

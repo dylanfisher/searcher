@@ -35,6 +35,9 @@ public actor ConfigStore {
         case read(ConfigLoad)
         /// Every patch up to this sequence number is in the file.
         case wrote(through: Int)
+        /// The patches with these sequence numbers, and any earlier ones of the same keys, are
+        /// dropped: an edit of the file set those keys after them, and wins.
+        case superseded(sequences: [Int])
         /// Why the last write failed, or nil once one succeeds after a failure.
         case saved(failure: ConfigError?)
     }
@@ -247,7 +250,7 @@ public actor ConfigStore {
             confirm()
             return
         }
-        accept(read)
+        accept(read, superseding: true)
         drain()
     }
 
@@ -308,6 +311,10 @@ public actor ConfigStore {
                 return
             }
         }
+        report(
+            ConfigError(
+                line: nil, key: nil,
+                reason: "couldn't be saved: it changed during each of \(Self.attempts) tries"))
         retry()
     }
 
@@ -398,18 +405,31 @@ public actor ConfigStore {
         confirming = Task {
             guard await DeadlineWait.reached(wait), !Task.isCancelled else { return }
             confirming = nil
-            accept(read())
+            accept(read(), superseding: true)
             drain()
         }
     }
 
     /// Takes `read` as the file's state, and sends it, with the patches waiting on top, when
-    /// it loads differently from the last.
-    private func accept(_ read: Read) {
+    /// it loads differently from the last. A patch waiting, as while a failed write waits for
+    /// its retry, whose key a good read changes from the good read before is dropped: that edit
+    /// came after it, and the later action wins.
+    private func accept(_ read: Read, superseding: Bool = false) {
         defer { last = read }
         guard let last, read.load != last.load else { return }
         for error in read.load.errors {
             log("the config file \(file.path) wasn't applied: \(error)")
+        }
+        if superseding, case .values = last.load.outcome, case .values = read.load.outcome {
+            let superseded = queue.filter { target, _ in
+                ConfigPatch.value(of: target, in: last.load)
+                    != ConfigPatch.value(of: target, in: read.load)
+            }
+            if !superseded.isEmpty {
+                for target in superseded.keys { queue[target] = nil }
+                feed.yield(.superseded(sequences: superseded.values.map(\.sequence).sorted()))
+                if queue.isEmpty { wrote() }
+            }
         }
         feed.yield(.read(withPatches(read.load)))
     }

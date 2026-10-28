@@ -945,6 +945,74 @@ private func heldSettings(
         ])
 }
 
+/// A move back to the default place waits only for what the store at the other place was sent.
+/// That store was sent nothing here, so a wait for every change the settings ever made would
+/// never end, and on the test's clock, which doesn't move, nor would the move. The changes made
+/// before and after reach their files.
+@MainActor @Test func aMoveBackWaitsOnlyForWhatTheOtherPlaceWasSent() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config.json")
+    let dropbox = folder.url.appending(path: "Dropbox")
+    try FileManager.default.createDirectory(at: dropbox, withIntermediateDirectories: true)
+    let settings = await connected(file, in: folder)
+
+    settings.showHidden = true
+    let away = Task { await settings.moveConfig(to: dropbox) }
+    #expect(await bounded(away, seconds: 10) != nil)
+    let back = Task { await settings.useDefaultConfigFile() }
+    #expect(await bounded(back, seconds: 10) != nil)
+    settings.foldersFirst = true
+    await settings.flushConfigBounded()
+
+    #expect(settings.configFile == file)
+    let load = configLoad(try String(contentsOf: file, encoding: .utf8))
+    #expect(load.values[.showHidden] == .bool(true))
+    #expect(load.values[.foldersFirst] == .bool(true))
+}
+
+/// A change whose write failed and waits for its retry, then an editor's save of the same key:
+/// the save came later and wins, in the settings and in the file, and the retry writes nothing
+/// over it.
+@MainActor @Test func anEditDuringARetryWinsOverTheHeldChange() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config.json")
+    try Data(#"{"appearance": "auto"}"#.utf8).write(to: file)
+    let fails = WriteSwitch()
+    let watch = ManualWatch()
+    let clock = ManualClock()
+    let settings = Settings(
+        defaults: temporarySuite(in: folder.url.path), log: unexpectedSettingsLog)
+    await settings.connectTestConfig(
+        file, clock: clock, watch: watch,
+        write: { data, url, check in
+            if fails.isOn { throw CocoaError(.fileWriteNoPermission) }
+            try AtomicWrite.write(data, to: url, beforeRename: check)
+        })
+
+    settings.appearance = .light
+    await settle { !settings.configErrors.isEmpty }
+    try save(#"{"appearance": "dark"}"#, to: file, watch: watch)
+    await settle { settings.appearance == .dark }
+    fails.isOn = false
+    clock.advance(by: ConfigStore.longestRetryDelay)
+    await settings.flushConfigBounded()
+
+    #expect(settings.appearance == .dark)
+    #expect(settings.unwrittenConfigKeys.isEmpty)
+    #expect(try String(contentsOf: file, encoding: .utf8) == #"{"appearance": "dark"}"#)
+}
+
+/// A switch a write closure reads, which the test flips.
+private final class WriteSwitch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var on = true
+
+    var isOn: Bool {
+        get { lock.withLock { on } }
+        set { lock.withLock { on = newValue } }
+    }
+}
+
 /// A file that can't be saved shows its error until a save succeeds.
 @MainActor @Test func aFailedSaveIsShown() async throws {
     let folder = try TemporaryFolder("SettingsTests")
