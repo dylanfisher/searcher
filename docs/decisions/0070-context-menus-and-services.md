@@ -114,9 +114,3 @@ the registry again only when the setting or the shortcuts change, not per key.
 The row menu has Finder's tag dots after Share…, an item with a view of its own
 (`ContextMenuBuilder.Item.tags`), and the File menu ends with a Tags submenu
 ([0121](0121-tag-commands.md)).
-
-## Amendment: a right-click on a name (2026-10-27, TG.2)
-
-The Name cell takes a right-click or a Control-click on its label or icon and passes it on to
-the table, which builds the menu; before, those views took the press and no menu opened
-([0124](0124-tags-in-rows-and-preview.md)).
