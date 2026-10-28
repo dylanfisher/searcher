@@ -206,6 +206,29 @@ private func controller(
     #expect(model.configOverrides.map(\.name) == ["appearance"])
 }
 
+/// A file change that leaves the value the app has still changes what overrides it: the list
+/// follows when the file comes to agree, sets the other value again, and is deleted.
+@MainActor @Test func theOverrideListFollowsFileChangesThatLeaveTheValue() {
+    let settings = untouchedSettings()
+    let (controller, _) = controller(settings)
+    let model = controller.general
+    settings.applyConfig(ConfigParser.parse("show-hidden = true"))
+    settings.showHidden = false
+    #expect(model.configOverrides.map(\.name) == ["show-hidden"])
+
+    settings.applyConfig(ConfigParser.parse("show-hidden = false"))
+    #expect(!settings.showHidden)
+    #expect(model.configOverrides.isEmpty)
+
+    settings.applyConfig(ConfigParser.parse("show-hidden = true"))
+    #expect(!settings.showHidden)
+    #expect(model.configOverrides.map(\.name) == ["show-hidden"])
+
+    settings.applyConfig(.missing)
+    #expect(!settings.showHidden)
+    #expect(model.configOverrides.isEmpty)
+}
+
 /// Every registered command has one row, under its menu, with the registry's title and chords.
 @MainActor @Test func theRowsComeFromTheRegistryGroupedAsTheMenus() throws {
     let (controller, _) = controller()
