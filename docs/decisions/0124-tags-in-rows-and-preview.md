@@ -69,7 +69,8 @@ From Dylan's screenshot of Finder (2× pixels, measured on crops):
   (`aListingReadsTheColorsOfEachTaggedItemsTags`). A volume that refuses that read with
   `ENOTSUP` or `EINVAL` has no Finder info to give: the entry reads as having none, no tags and
   no bundle bit, rather than failing the listing over a decoration; any other error fails it, as
-  before (`aFinderInfoAVolumeCantGiveReadsAsNone`, `aFinderInfoReadThatFailsOtherwiseFailsTheEntry`).
+  before (`aFinderInfoAVolumeCantGiveReadsAsNone`,
+  `aFinderInfoReadThatFailsOtherwiseFailsTheEntry`).
 - **What a label without readable tags shows.** No tags attribute: the label's color, as
   `NSURL` reports that tag. A tags attribute that can't be read or isn't a list of strings: the
   label's color too, the one color the item is known to have, rather than failing the listing
