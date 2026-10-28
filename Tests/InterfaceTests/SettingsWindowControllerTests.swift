@@ -213,7 +213,7 @@ private let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
     let moved = dropbox.appending(path: ConfigFile.name)
     #expect(model.configFilePath == moved.path)
     #expect(!model.configFileIsDefault)
-    #expect(try String(contentsOf: moved, encoding: .utf8).contains(#""show-hidden" : true"#))
+    #expect(try String(contentsOf: moved, encoding: .utf8).contains(#""show-hidden": true"#))
     #expect(config.settings.showHidden)
 
     model.useDefaultConfigLocation()
@@ -338,7 +338,10 @@ private let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
     let cmdJ = KeyChord("j", modifiers: [.command, .option, .control])
     let cmdL = KeyChord("l", modifiers: [.command, .option, .control])
     #expect(!model.canResetAll)
-    func text() throws -> String { try String(contentsOf: config.file, encoding: .utf8) }
+    /// The file's text without its spaces and newlines: a patch keeps the layout the file has.
+    func text() throws -> String {
+        String(try String(contentsOf: config.file, encoding: .utf8).filter { !$0.isWhitespace })
+    }
 
     model.record(.chords([cmdJ]), for: palette.id, at: .alternate)
     model.record(.chords([cmdL]), for: goToItem.id, at: .alternate)
@@ -350,8 +353,10 @@ private let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
     #expect(try row(goToItem.id).chords == KeyBindings.Chords(primary: nil, alternate: cmdL))
     #expect(model.canResetAll)
     await config.settings.flushConfigBounded()
-    #expect(try text().contains(#""alternate" : "ctrl+opt+cmd+j""#))
-    #expect(try text().contains(#""primary" : """#))
+    #expect(try text().contains(#""\#(palette.id.rawValue)":{"alternate":"ctrl+opt+cmd+j"}"#))
+    #expect(
+        try text().contains(
+            #""\#(goToItem.id.rawValue)":{"alternate":"ctrl+opt+cmd+l","primary":""}"#))
 
     model.reset(goToItem.id)
     #expect(try !row(goToItem.id).isChanged)
@@ -363,7 +368,7 @@ private let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
     #expect(try row(palette.id).chords.alternate == palette.alternate)
     #expect(!model.canResetAll)
     await config.settings.flushConfigBounded()
-    #expect(try text().contains(#""shortcuts" : {}"#))
+    #expect(try text().contains(#""shortcuts":{}"#))
 }
 
 /// Cmd-W closes the Settings window, though Close Pane is off outside the panes, and follows
