@@ -453,7 +453,7 @@ private struct TextFieldWindow {
             "Copy to Other Pane", "Move to Other Pane", "", "Open With",
             "Show Package Contents", "Quick Look",
             "Reveal in Finder",
-            "Open Terminal Here", "", "Move to Trash", "", "Filter",
+            "Open Terminal Here", "", "Move to Trash", "", "Filter", "", TagCommands.menuTitle,
         ])
     let edit = try #require(menu.items.first { $0.title == "Edit" }?.submenu)
     #expect(edit.items.filter { !$0.isHidden }.map(\.title).contains("Copy Path"))

@@ -66,6 +66,8 @@ public final class ColumnTrail {
     /// The entry, as the preview's column lists it, that the preview's info was read for or is
     /// being read for; nil when there is no read.
     private var readEntry: DirectoryEntry?
+    /// The preview's pane's `landedPatches` when its info read started.
+    private var readPatches = 0
     /// The making of the preview's thumbnail, while it runs.
     private var thumbnailMaking: Task<Void, Never>?
     /// The entry the preview's thumbnail was made or is being made for, or found kept for; nil
@@ -887,11 +889,17 @@ public final class ColumnTrail {
             next.info = .unread
         }
         updateThumbnail(of: &next, in: pane)
-        guard readEntry != next.entry else {
+        // A patch that named the file since its read started, such as for a change to its
+        // tags, which leaves its entry as it was, reads it again.
+        let isPatched =
+            pane.landedPatches != readPatches && pane.lastPatchedNames.contains(next.entry.name)
+        guard readEntry != next.entry || isPatched else {
             preview = next
             return
         }
         cancelInfoRead()
+        // Taken whether or not a read starts, so the patch isn't taken again at each change.
+        readPatches = pane.landedPatches
         if !next.entry.isDataless, pane.state.isAnswered {
             if next.info == .unread { next.info = .reading }
             startInfoRead(of: next.location, entry: next.entry)

@@ -89,6 +89,9 @@ final class OperationRowView: NSView {
             "Duplicating \(items(paths))"
         case .deleteImmediately(let paths):
             "Deleting \(items(paths))"
+        case .toggleTag(let tag, let paths):
+            // Whether it adds or removes the tag is read as it is planned.
+            "Changing the tag “\(tag.name)” of \(items(paths))"
         case .receive(let name?, _, let folder):
             "Drop of “\(name)” into \(quoted(folder))"
         case .receive(nil, let app?, let folder):
@@ -165,6 +168,7 @@ final class OperationRowView: NSView {
         case .noTrash: "The volume of \(path) has no Trash."
         case .invalidName: "\(path) isn’t a name a file can have."
         case .notTheSameItem: "\(path) is another item now, so it was left as it is."
+        case .tagsChanged: "The tags of \(path) changed since, so they were left as they are."
         case .changedDuringMove:
             "\(path) changed while it was copied, so it was kept, and the copy may be older."
         case .other:

@@ -352,6 +352,7 @@ public final class UndoHistory {
         case created(String)
         case putBack(URL, String)
         case moved(from: String, to: String)
+        case tagged(String, from: [String], to: [String])
 
         /// The key of `change`, made by an undo; nil for a kind no undo makes.
         init?(made change: OperationRecord.Change, comparable: (String) -> String) {
@@ -361,6 +362,8 @@ public final class UndoHistory {
             case .created(let path, _): self = .created(comparable(path))
             case .putBack(let url, let path): self = .putBack(url, comparable(path))
             case .moved(let from, let to): self = .moved(from: comparable(from), to: comparable(to))
+            case .tagged(let path, let from, let to):
+                self = .tagged(comparable(path), from: from, to: to)
             case .replaced, .deleted: return nil
             }
         }
@@ -376,6 +379,8 @@ public final class UndoHistory {
                 .replaced(let path, let url):
                 self = .putBack(url, comparable(path))
             case .moved(let from, let to): self = .moved(from: comparable(to), to: comparable(from))
+            case .tagged(let path, let from, let to):
+                self = .tagged(comparable(path), from: to, to: from)
             case .deleted: return nil
             }
         }

@@ -1,3 +1,5 @@
+import Base
+
 /// Undo and Redo of file changes, app-wide, through the context's `UndoHistory`. Each runs as a
 /// queued operation, so the main actor never waits for one. Their menu items name the change:
 /// "Undo Move 3 Items", "Undo Rename", "Undo Copy", "Undo New Folder", naming the newest
@@ -39,7 +41,8 @@ public enum UndoCommands: CommandSet {
 
     /// What `operation` did, by its `record`, as the Undo and Redo items name it, after Finder:
     /// "Move 3 Items", "Rename", "Move to Trash", "Copy", or "Replace" for a copy that replaced
-    /// an item, "Duplicate", "New Folder", and "Delete" for an operation that deleted an item.
+    /// an item, "Duplicate", "New Folder", "Add Tag “Red”" or "Remove Tag “Red”", and
+    /// "Delete" for an operation that deleted an item.
     static func name(of operation: FileOperation, record: OperationRecord) -> String {
         let deletes = record.changes.contains { change in
             if case .deleted = change { true } else { false }
@@ -57,10 +60,21 @@ public enum UndoCommands: CommandSet {
         case .deleteImmediately: return "Delete"
         case .newFolder: return FileCommands.newFolder.title
         case .duplicate: return FileCommands.duplicate.title
+        case .toggleTag(let tag, _): return tagName(tag, record: record)
         case .undo(_, let title, _): return title
         // Never run, so its record is empty and it makes no entry.
         case .receive: return "Drop"
         }
+    }
+
+    /// A tag toggle's name, as Finder's Edit menu has it: "Add Tag “Red”" when `record` gave
+    /// items the tag, "Remove Tag “Red”" when it took it off. Finder doesn't count the items.
+    static func tagName(_ tag: FinderTag, record: OperationRecord) -> String {
+        let adds = record.changes.contains { change in
+            guard case .tagged(_, _, let to) = change else { return false }
+            return to.contains { FinderTags.name(of: $0) == tag.name }
+        }
+        return adds ? "Add Tag “\(tag.name)”" : "Remove Tag “\(tag.name)”"
     }
 
     /// A move's name, "Move 3 Items", by the items `record` holds: those a move put in the
@@ -69,7 +83,7 @@ public enum UndoCommands: CommandSet {
         let items = record.changes.filter { change in
             switch change {
             case .moved, .created, .uncreated: true
-            case .trashed, .deleted, .replaced, .putBack: false
+            case .trashed, .deleted, .replaced, .putBack, .tagged: false
             }
         }
         return items.count == 1 ? "Move 1 Item" : "Move \(items.count) Items"

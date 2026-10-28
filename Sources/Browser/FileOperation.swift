@@ -18,6 +18,9 @@ public enum FileOperation: Equatable, Sendable {
     /// Deletes each item without the Trash. Issued only after the user answered a
     /// delete-immediately question.
     case deleteImmediately([String])
+    /// Adds the Finder tag to each item that lacks it or, when every item has it already,
+    /// takes it off each, as Finder's tag dots do. Each item keeps its other tags as they were.
+    case toggleTag(FinderTag, on: [String])
     /// Files a drop promised into the folder: the source app writes them and a `move` puts them
     /// in place. `name` is the file's when one file is meant, and `app` the app the drop came
     /// from when known. The queue never runs it; it only shows one that failed
@@ -57,7 +60,7 @@ public enum FileOperation: Equatable, Sendable {
         return !errors.isEmpty
             && errors.allSatisfy { error in
                 switch error.reason {
-                case .exists, .notTheSameItem, .unreachable: true
+                case .exists, .notTheSameItem, .tagsChanged, .unreachable: true
                 case .sourceGone: !items.contains(comparable(error.path, foldsCase: false))
                 case .noSpace, .permissionDenied, .crossVolume, .noTrash, .invalidName,
                     .changedDuringMove, .other:
@@ -79,6 +82,8 @@ public enum FileOperation: Equatable, Sendable {
         /// Makes the item at the path, which must be free, again: copies the origin's source
         /// to it, or makes an empty folder there.
         case make(String, from: OperationRecord.Origin)
+        /// Gives the item at the path, whose tags must be the first list, the second.
+        case retag(String, from: [String], to: [String])
 
         /// The item the step changes or, for a copy it makes again, reads; nil for a new
         /// folder it makes again.
@@ -86,7 +91,7 @@ public enum FileOperation: Equatable, Sendable {
             switch self {
             case .move(let from, _): from
             case .putBack(let url, _): url.path
-            case .trash(let path), .unmake(let path, _): path
+            case .trash(let path), .unmake(let path, _), .retag(let path, _, _): path
             case .make(_, .copy(let source)): source
             case .make(_, .newFolder), .make(_, .drop): nil
             }
@@ -100,18 +105,18 @@ public enum FileOperation: Equatable, Sendable {
         var destination: String? {
             switch self {
             case .move(_, let to), .putBack(_, let to), .make(let to, _): to
-            case .trash, .unmake: nil
+            case .trash, .unmake, .retag: nil
             }
         }
     }
 
     /// The steps that reverse `record`, last change first: a moved item moves back, a trashed
-    /// or replaced one comes back from the Trash, and an item a copy, a new folder or a drop
-    /// made, or an undo put back, goes to the Trash. An item an undo took away is made again
-    /// as it was made the first time, a copy from its source and a new folder empty; a drop's
-    /// file comes back from the Trash, since its app can't be asked again. A replace is listed
-    /// before the change that put the new item at its path, so the new item leaves before the
-    /// original comes back.
+    /// or replaced one comes back from the Trash, a tagged one gets back the tags it had, and
+    /// an item a copy, a new folder or a drop made, or an undo put back, goes to the Trash. An
+    /// item an undo took away is made again as it was made the first time, a copy from its
+    /// source and a new folder empty; a drop's file comes back from the Trash, since its app
+    /// can't be asked again. A replace is listed before the change that put the new item at its
+    /// path, so the new item leaves before the original comes back.
     static func steps(undoing record: OperationRecord) -> [UndoStep] {
         record.changes.reversed().map { change in
             switch change {
@@ -121,6 +126,7 @@ public enum FileOperation: Equatable, Sendable {
             case .uncreated(let path, let origin, _): .make(path, from: origin)
             case .moved(let from, let to): .move(from: to, to: from)
             case .trashed(let path, let url), .replaced(let path, let url): .putBack(url, to: path)
+            case .tagged(let path, let from, let to): .retag(path, from: to, to: from)
             case .deleted(let path):
                 preconditionFailure("an undo can't bring back \(path), which was deleted")
             }
@@ -133,7 +139,7 @@ public enum FileOperation: Equatable, Sendable {
         case .copy(let sources, _), .duplicate(let sources): sources
         case .undo(let record, _, _):
             Self.steps(undoing: record).compactMap { $0.readsSource ? $0.source : nil }
-        case .move, .trash, .rename, .newFolder, .deleteImmediately, .receive: []
+        case .move, .trash, .rename, .newFolder, .deleteImmediately, .receive, .toggleTag: []
         }
     }
 
@@ -145,7 +151,7 @@ public enum FileOperation: Equatable, Sendable {
             sources.map { Self.path(of: $0, in: folder) }
         case .move(let sources, let folder):
             sources + sources.map { Self.path(of: $0, in: folder) }
-        case .trash(let paths), .deleteImmediately(let paths):
+        case .trash(let paths), .deleteImmediately(let paths), .toggleTag(_, let paths):
             paths
         case .rename(let path, let name):
             [path, Self.renamed(path, to: name)]
