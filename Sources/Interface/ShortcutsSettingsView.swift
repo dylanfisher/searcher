@@ -16,8 +16,8 @@ final class ShortcutsSettings {
         let chords: KeyBindings.Chords
         /// Whether the primary is an Edit item's fixed chord, which can't be changed.
         let primaryIsFixed: Bool
-        /// Whether the user changed the command's chords in the app, so Reset has something to
-        /// do.
+        /// Whether an override made in the app changes the command's chords, so Reset has
+        /// something to do (`Settings.shortcutOverrideChangesSlots(of:)`).
         let isChanged: Bool
         /// Where the command's chords work, when that isn't everywhere.
         let note: String?
@@ -105,7 +105,11 @@ final class ShortcutsSettings {
         }
     }
 
-    var canResetAll: Bool { !settings.shortcuts.isEmpty }
+    /// Whether an app override changes a command's slots; one the config file's change left
+    /// doing nothing stays stored but has nothing to reset.
+    var canResetAll: Bool {
+        settings.shortcuts.keys.contains { settings.shortcutOverrideChangesSlots(of: $0) }
+    }
 
     /// Takes what a slot's recorder recorded.
     func record(
@@ -233,7 +237,8 @@ final class ShortcutsSettings {
         return Row(
             id: id, title: command.title, chords: chords,
             primaryIsFixed: bindings.fixed.values.contains(id),
-            isChanged: settings.shortcuts[id] != nil, note: note, fileSlots: fileSlots,
+            isChanged: settings.shortcutOverrideChangesSlots(of: id), note: note,
+            fileSlots: fileSlots,
             configOverrides: settings.shortcutConfigOverrides(of: id))
     }
 

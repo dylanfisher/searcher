@@ -1296,6 +1296,11 @@ private func escapePalette(in fixture: Fixture) throws {
     #expect(
         PaneViewController.registry(for: settings).command(for: chord)?.id
             == WindowCommands.newTab.id)
+
+    // The sidebar passes the file's chord on to the pane.
+    let outline = try #require(try keysToSidebar(in: fixture) as? SidebarOutline)
+    #expect(outline.passKey(try keyEvent("t", modifiers: [.control, .option, .command])))
+    #expect(fixture.workspace.tabs.count == 3)
     await watcher.stop()
 }
 

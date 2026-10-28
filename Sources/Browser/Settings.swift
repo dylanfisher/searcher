@@ -511,6 +511,20 @@ public final class Settings {
         }
     }
 
+    /// Whether the app's override of command `id` changes what its slots would be without it,
+    /// against the config file as now read. A stored override can stop doing so when the file
+    /// changes: a read of the file doesn't rewrite the app's values.
+    public func shortcutOverrideChangesSlots(of id: CommandID) -> Bool {
+        guard let override = shortcuts[id] else { return false }
+        guard let command = Self.commands[id] else {
+            preconditionFailure("no command has the ID \(id)")
+        }
+        return !override.normalized(
+            for: command, preset: FileCommands.commanderFKeys[id],
+            file: configShortcuts[id] ?? ShortcutOverride()
+        ).isStandard
+    }
+
     /// Removes the app's override of `override`'s slot, so the config file's applies.
     public func useConfigShortcut(for override: ShortcutConfigOverride) {
         shortcuts[override.command]?[override.position] = .standard
