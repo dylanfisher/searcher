@@ -1247,6 +1247,58 @@ private func escapePalette(in fixture: Fixture) throws {
     #expect(fixture.controller.palette == nil)
 }
 
+/// A shortcut the config file gives on a read after launch runs its command from the window's
+/// keys, shows in the palette and in Settings ▸ Shortcuts, with the menus' rules checked by the
+/// watcher as the app makes it.
+@MainActor @Test func aShortcutFromAReloadedConfigFileRunsAndShows() async throws {
+    let folder = try TemporaryFolder("BrowserWindowControllerTests")
+    let file = folder.url.appending(path: "config")
+    try Data("show-hidden = false\n".utf8).write(to: file)
+    let settings = storedSettings(in: folder)
+    let watcher = ConfigWatcher(
+        file: file, reserved: MainMenuBuilder.reservedChords, fixed: MainMenuBuilder.fixedChords,
+        log: { _ in }, watch: { _, _ in {} })
+    await settings.follow(watcher)
+    let fixture = try await Fixture(settings: settings)
+    let chord = KeyChord("t", modifiers: [.control, .option, .command])
+    #expect(PaneViewController.registry(for: settings).command(for: chord) == nil)
+
+    try Data("shortcut.window.newTab.primary = ctrl+opt+cmd+t\n".utf8).write(
+        to: file, options: .atomic)
+    await watcher.reload()
+    await settle { !settings.configShortcuts.isEmpty }
+
+    try fixture.press(try keyEvent("t", modifiers: [.control, .option, .command]))
+    #expect(fixture.workspace.tabs.count == 2)
+
+    fixture.controller.showPalette()
+    _ = try await typeInPalette("New Tab", in: fixture)
+    let results = try #require(fixture.controller.palette).viewController.palette.results
+    let newTab = try #require(results.first { $0.item.id == .command(WindowCommands.newTab.id) })
+    #expect(newTab.item.chord == chord)
+    fixture.controller.palette?.close()
+
+    let settingsWindow = SettingsWindowController(
+        settings: settings, loginItem: StubLoginItem(), systemActions: StubSystemActions())
+    settingsWindow.shortcuts.postAccessibility = { _, _, _ in }
+    let row = try #require(
+        settingsWindow.shortcuts.sections.flatMap(\.rows).first {
+            $0.id == WindowCommands.newTab.id
+        })
+    #expect(row.chords.primary == chord)
+    #expect(row.fileSlots == [.primary])
+
+    // A reserved chord in the file is an error, and the shortcut from before stays.
+    try Data("shortcut.window.newTab.alternate = cmd+q\n".utf8).write(to: file, options: .atomic)
+    await watcher.reload()
+    await settle { !settings.configErrors.isEmpty }
+    #expect(settings.configErrors.map(\.line) == [1])
+    #expect(
+        PaneViewController.registry(for: settings).command(for: chord)?.id
+            == WindowCommands.newTab.id)
+    await watcher.stop()
+}
+
 /// Replaces the text in the palette's field with `query`, as typing would, waits until its rows
 /// show, and returns the field's editor.
 @MainActor

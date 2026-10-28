@@ -578,7 +578,8 @@ private let showPalette = WindowCommands.showPalette.id
     let first = Settings(
         defaults: try #require(UserDefaults(suiteName: name)), configFile: file,
         log: unexpectedSettingsLog)
-    await first.follow(ConfigWatcher(file: file, log: { _ in }, watch: { _, _ in {} }))
+    await first.follow(
+        ConfigWatcher(file: file, reserved: [], fixed: [:], log: { _ in }, watch: { _, _ in {} }))
     #expect(!first.foldersFirst)
 
     first.foldersFirst = true
@@ -587,7 +588,8 @@ private let showPalette = WindowCommands.showPalette.id
     let relaunched = Settings(
         defaults: try #require(UserDefaults(suiteName: name)), configFile: file,
         log: unexpectedSettingsLog)
-    await relaunched.follow(ConfigWatcher(file: file, log: { _ in }, watch: { _, _ in {} }))
+    await relaunched.follow(
+        ConfigWatcher(file: file, reserved: [], fixed: [:], log: { _ in }, watch: { _, _ in {} }))
     #expect(relaunched.foldersFirst)
     #expect(try Data(contentsOf: file) == bytes)
 }
@@ -655,6 +657,185 @@ private let showPalette = WindowCommands.showPalette.id
     #expect(calls == 1)
     settings.applyConfig(ConfigParser.parse("folders-first = false"))
     #expect(!settings.foldersFirst)
+}
+
+// MARK: Shortcuts in the config file
+
+private let cmdJ = KeyChord("j", modifiers: .command)
+private let cmdK = KeyChord("k", modifiers: .command)
+
+/// The bindings `settings` gives, with no reserved or fixed chords.
+@MainActor
+private func bindings(_ settings: Settings) throws -> KeyBindings {
+    try AppCommands.keyBindings(settings: settings, reserved: [], fixed: [:])
+}
+
+/// The file's slot reaches the bindings; `none` takes a slot's chord away.
+@MainActor @Test func aFileSlotGivesItsChordAndNoneRemovesOne() throws {
+    let settings = untouchedSettings()
+
+    settings.applyConfig(
+        ConfigParser.parse(
+            """
+            shortcut.window.showPalette.alternate = cmd+j
+            shortcut.window.goToItem.primary = none
+            """))
+
+    #expect(
+        settings.configShortcuts == [
+            showPalette: ShortcutOverride(alternate: .chord(cmdJ)),
+            WindowCommands.goToItem.id: ShortcutOverride(primary: .removed),
+        ])
+    let bindings = try bindings(settings)
+    #expect(bindings.registry.command(for: cmdJ)?.id == showPalette)
+    #expect(bindings.chords(of: WindowCommands.goToItem.id).primary == nil)
+    #expect(settings.shortcuts.isEmpty)
+}
+
+/// A file with an error leaves the shortcuts of the last good read, and no file leaves none.
+@MainActor @Test func aFileWithAShortcutErrorKeepsTheLastBindings() throws {
+    let settings = untouchedSettings()
+    settings.applyConfig(ConfigParser.parse("shortcut.window.showPalette.alternate = cmd+j"))
+
+    settings.applyConfig(
+        ConfigParser.parse(
+            "shortcut.window.showPalette.alternate = cmd+l\nshortcut.window.nope.primary = cmd+m"))
+
+    #expect(settings.configErrors.map(\.line) == [2])
+    #expect(try bindings(settings).registry.command(for: cmdJ)?.id == showPalette)
+
+    settings.applyConfig(.missing)
+    #expect(settings.configShortcuts.isEmpty)
+    #expect(try bindings(settings).registry.command(for: cmdJ) == nil)
+}
+
+/// A shortcut set in the app wins over the file's for its slot, through a relaunch that reads
+/// the same file, even when it is the slot's default; the file isn't touched.
+@MainActor @Test func anAppShortcutOverridesTheFileAndSurvivesARelaunch() async throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let file = folder.url.appending(path: "config")
+    let bytes = Data("shortcut.window.showPalette.primary = cmd+j\n".utf8)
+    try bytes.write(to: file)
+    let name = folder.url.appending(path: "preferences").path
+    let first = Settings(
+        defaults: try #require(UserDefaults(suiteName: name)), configFile: file,
+        log: unexpectedSettingsLog)
+    await first.follow(
+        ConfigWatcher(file: file, reserved: [], fixed: [:], log: { _ in }, watch: { _, _ in {} }))
+    #expect(try bindings(first).chords(of: showPalette).primary == cmdJ)
+
+    // Cmd-K is the default; here it overrides the file's Cmd-J, so it is kept.
+    first.shortcuts = [showPalette: ShortcutOverride(primary: .chord(cmdK))]
+
+    let relaunched = Settings(
+        defaults: try #require(UserDefaults(suiteName: name)), configFile: file,
+        log: unexpectedSettingsLog)
+    await relaunched.follow(
+        ConfigWatcher(file: file, reserved: [], fixed: [:], log: { _ in }, watch: { _, _ in {} }))
+    #expect(relaunched.shortcuts == [showPalette: ShortcutOverride(primary: .chord(cmdK))])
+    #expect(try bindings(relaunched).chords(of: showPalette).primary == cmdK)
+    #expect(try Data(contentsOf: file) == bytes)
+}
+
+/// Setting in the app the chord the file gives a slot, or removing a slot the file removes,
+/// clears the app's override, so the slot follows the file again.
+@MainActor @Test func settingTheFilesShortcutInTheAppFollowsTheFileAgain() throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let defaults = temporarySuite(in: folder.url.path)
+    let settings = Settings(defaults: defaults, log: unexpectedSettingsLog)
+    settings.applyConfig(
+        ConfigParser.parse(
+            """
+            shortcut.window.showPalette.alternate = cmd+j
+            shortcut.window.goToItem.primary = none
+            """))
+    settings.shortcuts = [
+        showPalette: ShortcutOverride(alternate: .removed),
+        WindowCommands.goToItem.id: ShortcutOverride(
+            primary: .chord(KeyChord("j", modifiers: [.command, .shift]))),
+    ]
+    #expect(settings.shortcuts.count == 2)
+
+    settings.shortcuts[showPalette] = ShortcutOverride(alternate: .chord(cmdJ))
+    settings.shortcuts[WindowCommands.goToItem.id] = ShortcutOverride(primary: .removed)
+
+    #expect(settings.shortcuts.isEmpty)
+    #expect(defaults.object(forKey: shortcutsKey) == nil)
+}
+
+/// Each slot the app sets differently from the file is listed, and Use Config File Value
+/// clears the app's slot alone.
+@MainActor @Test func anAppShortcutOverOneTheFileSetsIsListedAndCanBeCleared() throws {
+    let settings = untouchedSettings()
+    settings.applyConfig(
+        ConfigParser.parse(
+            """
+            shortcut.window.showPalette.alternate = cmd+j
+            shortcut.window.goToItem.primary = none
+            """))
+    settings.shortcuts = [
+        showPalette: ShortcutOverride(primary: .removed, alternate: .removed),
+        ViewCommands.filter.id: ShortcutOverride(
+            alternate: .chord(KeyChord("j", modifiers: [.option, .command]))),
+    ]
+
+    let overrides = settings.shortcutConfigOverrides
+    #expect(
+        overrides == [
+            Settings.ShortcutConfigOverride(
+                command: showPalette, position: .alternate, appSlot: .removed,
+                fileSlot: .chord(cmdJ))
+        ])
+
+    settings.useConfigShortcut(for: try #require(overrides.first))
+
+    #expect(settings.shortcuts[showPalette] == ShortcutOverride(primary: .removed))
+    #expect(settings.shortcutConfigOverrides.isEmpty)
+}
+
+/// A load that changes only the shortcuts tells the observers.
+@MainActor @Test func aLoadChangingOnlyShortcutsNotifiesObservers() {
+    let settings = untouchedSettings()
+    var calls = 0
+    settings.observe(for: settings) { calls += 1 }
+
+    settings.applyConfig(ConfigParser.parse("shortcut.window.showPalette.alternate = cmd+j"))
+    settings.applyConfig(ConfigParser.parse("shortcut.window.showPalette.alternate = cmd+j #"))
+    #expect(calls == 1)
+    settings.applyConfig(.missing)
+    #expect(calls == 2)
+}
+
+/// Every command can be given a chord no command has through the file, one line each, all in
+/// one file: the plan's walk of the registry.
+@MainActor @Test func everyCommandCanBeReboundThroughTheFile() throws {
+    let settings = untouchedSettings()
+    let defaults = try bindings(settings)
+    let modifiers: [KeyChord.Modifiers] = [
+        [.control, .option, .shift], [.control, .option, .command, .shift],
+        [.control, .option, .command],
+    ]
+    let keys: [KeyChord.Key] =
+        "abcdefghijklmnopqrstuvwxyz0123456789".map { .character($0) }
+        + KeyChord.functionKeys.map { .function($0) }
+    let free = modifiers.flatMap { held in keys.map { KeyChord($0, modifiers: held) } }
+        .filter { defaults.registry.command(for: $0) == nil }
+    let commands = AppCommands.commands
+    #expect(free.count >= commands.count)
+    let given = Dictionary(uniqueKeysWithValues: zip(commands.map(\.id), free))
+    let text = commands.map { command in
+        "\(ConfigParser.shortcutPrefix)\(command.id).primary = \(given[command.id]?.stored ?? "")"
+    }.joined(separator: "\n")
+
+    settings.applyConfig(ConfigParser.parse(text))
+
+    #expect(settings.configErrors.isEmpty, "\(settings.configErrors)")
+    let rebound = try bindings(settings)
+    for command in commands {
+        let chord = try #require(given[command.id])
+        #expect(rebound.registry.command(for: chord)?.id == command.id)
+        #expect(rebound.chords(of: command.id).primary == chord)
+    }
 }
 
 /// Each preference is declared once: one file name and one stored key each. Only preferences a

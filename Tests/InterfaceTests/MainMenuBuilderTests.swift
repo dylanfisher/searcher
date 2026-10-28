@@ -921,6 +921,39 @@ private func expectKey(_ chord: KeyChord?, on item: NSMenuItem, _ comment: Comme
     expectKey(KeyChord("p", modifiers: [.command, .shift]), on: hidden)
 }
 
+/// A read of the config file changes the installed items as a change in the app does, and the
+/// app's shortcut wins over the file's.
+@MainActor @Test func aConfigFileShortcutUpdatesTheInstalledItems() throws {
+    let app = NSApplication.shared
+    let (mainMenu, windowsMenu, helpMenu) = (app.mainMenu, app.windowsMenu, app.helpMenu)
+    defer { (app.mainMenu, app.windowsMenu, app.helpMenu) = (mainMenu, windowsMenu, helpMenu) }
+    let folder = try TemporaryFolder("MainMenuBuilderTests")
+    let settings = storedSettings(in: folder)
+    NSMenuItem.usesUserKeyEquivalents = false
+    try MainMenuBuilder.install(in: app, appName: "Searcher", settings: settings)
+    let menu = try #require(app.mainMenu)
+    let fromFile = KeyChord("o", modifiers: [.command, .shift])
+    let fromApp = KeyChord("o", modifiers: [.command, .option])
+
+    settings.applyConfig(
+        ConfigParser.parse(
+            """
+            shortcut.window.showPalette.primary = cmd+shift+o
+            shortcut.window.showPalette.alternate = none
+            """))
+
+    let (shown, hidden) = try items(for: WindowCommands.showPalette.id, in: menu)
+    expectKey(fromFile, on: shown)
+    expectKey(nil, on: hidden)
+
+    settings.shortcuts = [WindowCommands.showPalette.id: ShortcutOverride(primary: .chord(fromApp))]
+    expectKey(fromApp, on: shown)
+
+    settings.applyConfig(.missing)
+    expectKey(fromApp, on: shown)
+    expectKey(KeyChord("p", modifiers: [.command, .shift]), on: hidden)
+}
+
 /// Copy's alternate is a hidden Edit item sending `copy:`, so a text field copies on it too.
 @MainActor @Test func anEditCommandsAlternateIsAHiddenItemSendingTheEditAction() throws {
     let alternate = KeyChord("c", modifiers: [.control, .command])

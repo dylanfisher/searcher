@@ -81,8 +81,11 @@ public struct KeyBindings: Sendable {
 
     /// Every command with its effective chords, primary first: what the keys and menus use.
     public let registry: CommandRegistry
-    /// The overrides these bindings applied.
+    /// The app's overrides these bindings applied (`Settings.shortcuts`).
     public let overrides: [CommandID: ShortcutOverride]
+    /// The config file's slots these bindings applied (`Settings.configShortcuts`), under the
+    /// app's overrides.
+    public let fileOverrides: [CommandID: ShortcutOverride]
     /// The chords no command may have.
     public let reserved: Set<KeyChord>
     /// Chords that are always one command's primary, whatever the overrides say, and no other
@@ -93,11 +96,14 @@ public struct KeyBindings: Sendable {
     private let slots: [CommandID: Chords]
 
     /// Bindings for `commands`, whose `chords` are their defaults. `preset` gives commands with
-    /// no default alternate one, which an override of the alternate replaces. An override's
-    /// chord wins over a default or preset one: the other command loses its chord. A reserved
-    /// chord is dropped wherever it comes from. A `fixed` chord is its command's primary, which
-    /// overrides don't change, and is dropped from any other command or slot. Stored data never
-    /// makes this throw or trap; an override for a command not in `commands` is ignored.
+    /// no default alternate one, which an override of the alternate replaces. Each slot takes
+    /// the app's override (`overrides`), then the config file's (`fileOverrides`), then its
+    /// default (docs/decisions/0122-config-shortcuts.md). An override's chord wins over a
+    /// default or preset one, and the app's over the file's: the other command loses its chord.
+    /// A reserved chord is dropped wherever it comes from. A `fixed` chord is its command's
+    /// primary, which overrides don't change, and is dropped from any other command or slot.
+    /// Stored data never makes this throw or trap; an override for a command not in `commands`
+    /// is ignored.
     ///
     /// Throws if two of `commands` share an ID, or their defaults and `preset` share a chord: a
     /// mistake in the code, not in stored data.
@@ -106,7 +112,8 @@ public struct KeyBindings: Sendable {
     ///   its command's default primary.
     public init(
         commands: [Command], preset: [CommandID: KeyChord] = [:],
-        overrides: [CommandID: ShortcutOverride] = [:], reserved: Set<KeyChord> = [],
+        overrides: [CommandID: ShortcutOverride] = [:],
+        fileOverrides: [CommandID: ShortcutOverride] = [:], reserved: Set<KeyChord> = [],
         fixed: [KeyChord: CommandID] = [:]
     ) throws(CommandRegistry.Conflict) {
         var defaults = CommandRegistry()
@@ -120,25 +127,29 @@ public struct KeyBindings: Sendable {
             try defaults.register(Command(id: command.id, title: command.title, chords: chords))
         }
 
-        // Each slot's chord and whether the user chose it.
-        typealias Wanted = (chord: KeyChord, isUsers: Bool)
+        // Each slot's chord and the layer it comes from.
+        typealias Wanted = (chord: KeyChord, layer: Layer)
         var wanted: [(command: Command, slots: [ShortcutOverride.Position: Wanted])] = []
         for command in defaults.commands {
-            let override = overrides[command.id] ?? ShortcutOverride()
+            let app = overrides[command.id] ?? ShortcutOverride()
+            let file = fileOverrides[command.id] ?? ShortcutOverride()
             var slots: [ShortcutOverride.Position: Wanted] = [:]
             for position in ShortcutOverride.Position.allCases {
                 let standard = position == .primary ? command.primary : command.alternate
-                switch override[position] {
-                case .standard: slots[position] = standard.map { ($0, false) }
+                let (slot, layer): (ShortcutOverride.Slot, Layer) =
+                    app[position] != .standard
+                    ? (app[position], .app) : (file[position], .file)
+                switch slot {
+                case .standard: slots[position] = standard.map { ($0, .standard) }
                 case .removed: slots[position] = nil
-                case .chord(let chord): slots[position] = (chord, true)
+                case .chord(let chord): slots[position] = (chord, layer)
                 }
             }
             wanted.append((command, slots))
         }
 
-        // The fixed chords are taken first; then the user's chords claim theirs, in command
-        // order; then the defaults take what is left.
+        // The fixed chords are taken first; then the app's chords claim theirs, in command
+        // order, then the file's; then the defaults take what is left.
         var owners: [KeyChord: CommandID] = [:]
         var slots: [CommandID: Chords] = [:]
         var dropped: [Dropped] = []
@@ -151,33 +162,26 @@ public struct KeyBindings: Sendable {
             owners[chord] = id
             slots[id, default: Chords()].primary = chord
         }
-        for pass in [true, false] {
+        for pass in Layer.allCases {
             for (command, wantedSlots) in wanted {
                 for position in ShortcutOverride.Position.allCases {
                     if position == .primary, let fixedChord = fixedPrimaries[command.id] {
                         // Looked at once, in the first pass; the slot has its chord already.
-                        guard pass else { continue }
-                        switch wantedSlots[position] {
-                        case nil:
-                            dropped.append(
-                                Dropped(
-                                    chord: fixedChord, command: command.id, position: position,
-                                    reason: .fixedPrimaryKept))
-                        case let slot? where slot.isUsers && slot.chord != fixedChord:
-                            dropped.append(
-                                Dropped(
-                                    chord: slot.chord, command: command.id, position: position,
-                                    reason: .fixedPrimary))
-                        default: break
+                        guard pass == .app else { continue }
+                        if let refused = Self.refusal(
+                            of: wantedSlots[position].map { .chord($0.chord) } ?? .removed,
+                            fixedPrimary: fixedChord, command: command.id)
+                        {
+                            dropped.append(refused)
                         }
                         continue
                     }
-                    guard let slot = wantedSlots[position], slot.isUsers == pass else { continue }
+                    guard let slot = wantedSlots[position], slot.layer == pass else { continue }
                     let reason: Dropped.Reason? =
-                        if reserved.contains(slot.chord) {
-                            .reserved
-                        } else if let fixedOwner = fixed[slot.chord] {
-                            .fixedTo(fixedOwner)
+                        if let refused = Self.refusal(
+                            of: slot.chord, reserved: reserved, fixed: fixed)
+                        {
+                            refused
                         } else if let owner = owners[slot.chord] {
                             .takenBy(owner)
                         } else {
@@ -210,10 +214,74 @@ public struct KeyBindings: Sendable {
         }
         self.registry = registry
         self.overrides = overrides
+        self.fileOverrides = fileOverrides
         self.reserved = reserved
         self.fixed = fixed
         self.dropped = dropped
         self.slots = slots
+    }
+
+    /// Where a slot's chord comes from, in the order each claims its chords: the app's
+    /// override wins over the file's, and both over a default.
+    private enum Layer: CaseIterable {
+        case app
+        case file
+        case standard
+    }
+
+    /// The slots in `overrides` that the menus' rules refuse whatever else has which chord: a
+    /// chord in `reserved`, a `fixed` chord on another command or slot, or a fixed primary
+    /// changed or removed. The config file's slots are checked so, and each one is an error
+    /// on its line (`ConfigLoad.checked(reserved:fixed:)`), in no particular order.
+    public static func refusals(
+        of overrides: [CommandID: ShortcutOverride], reserved: Set<KeyChord>,
+        fixed: [KeyChord: CommandID]
+    ) -> [Dropped] {
+        let fixedPrimaries = Dictionary(
+            fixed.map { ($0.value, $0.key) }, uniquingKeysWith: { first, _ in first })
+        var refused: [Dropped] = []
+        for (id, override) in overrides {
+            for position in ShortcutOverride.Position.allCases {
+                if position == .primary, let fixedChord = fixedPrimaries[id] {
+                    let slot = override[position]
+                    if slot != .standard,
+                        let refusal = refusal(of: slot, fixedPrimary: fixedChord, command: id)
+                    {
+                        refused.append(refusal)
+                    }
+                    continue
+                }
+                guard case .chord(let chord) = override[position],
+                    let reason = refusal(of: chord, reserved: reserved, fixed: fixed)
+                else { continue }
+                refused.append(
+                    Dropped(chord: chord, command: id, position: position, reason: reason))
+            }
+        }
+        return refused
+    }
+
+    /// Why the menus refuse `chord` on any slot but its fixed command's primary; nil when they
+    /// don't.
+    private static func refusal(
+        of chord: KeyChord, reserved: Set<KeyChord>, fixed: [KeyChord: CommandID]
+    ) -> Dropped.Reason? {
+        if reserved.contains(chord) { return .reserved }
+        return fixed[chord].map { .fixedTo($0) }
+    }
+
+    /// Why the primary of `id`, fixed to `fixedChord`, can't be `slot`; nil for its fixed
+    /// chord, which changes nothing.
+    private static func refusal(
+        of slot: ShortcutOverride.Slot, fixedPrimary fixedChord: KeyChord, command id: CommandID
+    ) -> Dropped? {
+        switch slot {
+        case .removed:
+            Dropped(chord: fixedChord, command: id, position: .primary, reason: .fixedPrimaryKept)
+        case .chord(let chord) where chord != fixedChord:
+            Dropped(chord: chord, command: id, position: .primary, reason: .fixedPrimary)
+        case .chord, .standard: nil
+        }
     }
 
     /// `id`'s two slots as they apply. A removed primary leaves the primary slot empty, though

@@ -194,6 +194,105 @@ private func bindings(
     #expect(current.dropped.isEmpty)
 }
 
+// MARK: The config file's layer
+
+/// Bindings with `file` from the config file and `app` from the app, over the defaults.
+private func layered(
+    file: [CommandID: ShortcutOverride], app: [CommandID: ShortcutOverride] = [:]
+) throws -> KeyBindings {
+    try KeyBindings(
+        commands: AppCommands.commands, overrides: app, fileOverrides: file, reserved: [cmdQ])
+}
+
+/// The file's slot replaces the default, and the other slot keeps its own.
+@Test func aFileSlotReplacesTheDefault() throws {
+    let bindings = try layered(file: [palette.id: ShortcutOverride(alternate: .chord(cmdJ))])
+
+    #expect(bindings.chords(of: palette.id) == KeyBindings.Chords(primary: cmdK, alternate: cmdJ))
+    #expect(bindings.registry.command(for: cmdShiftP) == nil)
+    #expect(bindings.overrides.isEmpty)
+    #expect(bindings.dropped.isEmpty)
+}
+
+/// A file chord that a default gives another command takes it, as the app's does, and the loss
+/// is listed for the log.
+@Test func aFileChordTakenFromADefaultIsListed() throws {
+    let bindings = try layered(file: [palette.id: ShortcutOverride(alternate: .chord(cmdP))])
+
+    #expect(bindings.registry.command(for: cmdP)?.id == palette.id)
+    #expect(bindings.chords(of: goToItem.id) == KeyBindings.Chords(alternate: cmdShiftK))
+    #expect(
+        bindings.dropped == [
+            KeyBindings.Dropped(
+                chord: cmdP, command: goToItem.id, position: .primary,
+                reason: .takenBy(palette.id))
+        ])
+}
+
+/// The app's slot wins over the file's for the same slot, and the app's chord wins over a file
+/// chord of another command.
+@Test func theAppWinsOverTheFile() throws {
+    let bindings = try layered(
+        file: [
+            palette.id: ShortcutOverride(alternate: .chord(cmdJ)),
+            goToItem.id: ShortcutOverride(alternate: .chord(cmdShiftP)),
+        ],
+        app: [
+            palette.id: ShortcutOverride(alternate: .removed),
+            ViewCommands.filter.id: ShortcutOverride(alternate: .chord(cmdShiftP)),
+        ])
+
+    #expect(bindings.chords(of: palette.id) == KeyBindings.Chords(primary: cmdK))
+    #expect(bindings.registry.command(for: cmdJ) == nil)
+    #expect(bindings.registry.command(for: cmdShiftP)?.id == ViewCommands.filter.id)
+    #expect(
+        bindings.dropped == [
+            KeyBindings.Dropped(
+                chord: cmdShiftP, command: goToItem.id, position: .alternate,
+                reason: .takenBy(ViewCommands.filter.id))
+        ])
+}
+
+/// Assigning in the app over a file chord takes it from the file's command in the app's
+/// overrides, which never hold the file's.
+@Test func assigningAFileChordReplacesItInTheAppsOverrides() throws {
+    let bindings = try layered(file: [palette.id: ShortcutOverride(alternate: .chord(cmdJ))])
+
+    let owner = try #require(bindings.registry.command(for: palette.id))
+    #expect(bindings.assign([cmdJ], to: goToItem.id, at: .alternate) == .taken(by: owner))
+    #expect(
+        bindings.assign([cmdJ], to: goToItem.id, at: .alternate, replacing: true)
+            == .assigned([
+                palette.id: ShortcutOverride(alternate: .removed),
+                goToItem.id: ShortcutOverride(alternate: .chord(cmdJ)),
+            ]))
+}
+
+/// The rules the menus set, checked on the file's slots alone: the config file turns each into
+/// an error on its line.
+@Test func theMenusRulesAreCheckedOnTheFilesSlots() {
+    let refused = KeyBindings.refusals(
+        of: [
+            palette.id: ShortcutOverride(alternate: .chord(cmdQ)),
+            goToItem.id: ShortcutOverride(primary: .chord(cmdC), alternate: .chord(cmdJ)),
+            copy.id: ShortcutOverride(primary: .removed),
+        ],
+        reserved: [cmdQ], fixed: [cmdC: copy.id])
+
+    #expect(
+        Set(refused.map(\.description)) == [
+            KeyBindings.Dropped(
+                chord: cmdQ, command: palette.id, position: .alternate, reason: .reserved
+            ).description,
+            KeyBindings.Dropped(
+                chord: cmdC, command: goToItem.id, position: .primary, reason: .fixedTo(copy.id)
+            ).description,
+            KeyBindings.Dropped(
+                chord: cmdC, command: copy.id, position: .primary, reason: .fixedPrimaryKept
+            ).description,
+        ])
+}
+
 private let cmdC = KeyChord("c", modifiers: .command)
 private let copy = ClipboardCommands.copy
 

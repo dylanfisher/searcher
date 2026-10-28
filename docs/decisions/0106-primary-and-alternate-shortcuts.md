@@ -216,3 +216,17 @@ from `cmd+shift+.`, so a clash between the two goes unnoticed.
 The config file ([0120](0120-config-format.md)) has no shortcut lines yet; M5b.2 adds them, on
 the parser's second step, where 0120 says a key family goes. Until then `Settings.shortcuts`
 is read from `UserDefaults` only.
+
+## Amendment: shortcuts in the config file (2026-10-27)
+
+M5b.2 added them ([0122](0122-config-shortcuts.md)). Each slot now takes the app's override,
+then the config file's, then its default. "Default" in the stored shape above means the slot as
+it is without the app's override: a chord equal to the file's slot, or a removal of a slot the
+file removes, is stored as no override, and a chord equal to the code's default is kept while
+the file sets that slot otherwise. That comparison runs only when a command's override is set,
+not when the stored key is read at launch, which drops only the entries of IDs no command has:
+the file isn't read yet, and a slot equal to its default may be what overrides it. Reset and
+Reset All remove the app's overrides, so a command goes back to the file's slots, then its
+defaults. `KeyBindings` takes the file's slots as `fileOverrides` and claims the app's chords
+before the file's; `KeyBindings.refusals(of:reserved:fixed:)` checks the file's slots against
+the reserved and fixed chords, which make a file line an error instead of being dropped.

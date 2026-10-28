@@ -347,6 +347,102 @@ private func controller(
     #expect(!model.canResetAll)
 }
 
+// MARK: Shortcuts from the config file
+
+private let ctrlOptCmdJ = KeyChord("j", modifiers: [.control, .option, .command])
+private let ctrlOptCmdL = KeyChord("l", modifiers: [.control, .option, .command])
+
+/// A slot the config file sets shows the file's chord and says it is the file's; it isn't a
+/// change Reset undoes.
+@MainActor @Test func aSlotFromTheConfigFileShowsItsChordAndSaysSo() throws {
+    let settings = untouchedSettings()
+    let (controller, _) = controller(settings)
+    let model = controller.shortcuts
+
+    settings.applyConfig(
+        ConfigParser.parse(
+            """
+            shortcut.window.showPalette.alternate = ctrl+opt+cmd+j
+            shortcut.window.goToItem.primary = none
+            shortcut.window.goToItem.alternate = ctrl+opt+cmd+l
+            """))
+
+    let row = try shortcutRow(palette.id, in: model)
+    #expect(row.chords == KeyBindings.Chords(primary: palette.primary, alternate: ctrlOptCmdJ))
+    #expect(row.fileSlots == [.alternate])
+    #expect(!row.isChanged)
+    #expect(ShortcutsSettings.fileNote(for: row) == "The config file sets the alternate shortcut.")
+    let both = try shortcutRow(goToItem.id, in: model)
+    #expect(both.chords == KeyBindings.Chords(alternate: ctrlOptCmdL))
+    #expect(ShortcutsSettings.fileNote(for: both) == "The config file sets both shortcuts.")
+    #expect(
+        ShortcutsSettings.fileNote(for: try shortcutRow(TilingCommands.closePane.id, in: model))
+            == nil)
+}
+
+/// A slot recorded in the app over one the file sets differently is listed on its row, and Use
+/// Config File Value gives the file's chord back; so do Reset and Reset All, which never touch
+/// the file's slots.
+@MainActor @Test func anAppSlotOverTheFilesIsListedAndEachWayBackGivesTheFiles() throws {
+    let settings = untouchedSettings()
+    let (controller, _) = controller(settings)
+    let model = controller.shortcuts
+    settings.applyConfig(
+        ConfigParser.parse("shortcut.window.showPalette.alternate = ctrl+opt+cmd+j"))
+    let fileShortcuts = settings.configShortcuts
+
+    model.record(.chords([ctrlOptCmdL]), for: palette.id, at: .alternate)
+
+    var row = try shortcutRow(palette.id, in: model)
+    #expect(row.chords.alternate == ctrlOptCmdL)
+    #expect(row.fileSlots.isEmpty)
+    #expect(row.isChanged)
+    let override = try #require(row.configOverrides.first)
+    #expect(row.configOverrides.count == 1)
+    #expect(
+        ShortcutsSettings.note(for: override)
+            == "Searcher has ⌃⌥⌘L as the alternate; the config file has ⌃⌥⌘J.")
+
+    model.useConfigValue(for: override)
+    row = try shortcutRow(palette.id, in: model)
+    #expect(row.chords.alternate == ctrlOptCmdJ)
+    #expect(row.configOverrides.isEmpty)
+    #expect(settings.shortcuts.isEmpty)
+
+    model.record(.removed, for: palette.id, at: .alternate)
+    #expect(try shortcutRow(palette.id, in: model).configOverrides.count == 1)
+    model.reset(palette.id)
+    #expect(try shortcutRow(palette.id, in: model).chords.alternate == ctrlOptCmdJ)
+
+    model.record(.removed, for: palette.id, at: .alternate)
+    model.resetAll()
+    #expect(try shortcutRow(palette.id, in: model).chords.alternate == ctrlOptCmdJ)
+    #expect(settings.configShortcuts == fileShortcuts)
+}
+
+/// Recording the file's own chord in the app clears the app's override rather than storing it.
+@MainActor @Test func recordingTheFilesChordFollowsTheFileAgain() throws {
+    let settings = untouchedSettings()
+    let (controller, _) = controller(settings)
+    let model = controller.shortcuts
+    settings.applyConfig(
+        ConfigParser.parse("shortcut.window.showPalette.alternate = ctrl+opt+cmd+j"))
+    model.record(.removed, for: palette.id, at: .alternate)
+    #expect(model.canResetAll)
+
+    model.record(.chords([ctrlOptCmdJ]), for: palette.id, at: .alternate)
+
+    #expect(settings.shortcuts.isEmpty)
+    #expect(try shortcutRow(palette.id, in: model).fileSlots == [.alternate])
+}
+
+@MainActor
+private func shortcutRow(_ id: CommandID, in model: ShortcutsSettings) throws
+    -> ShortcutsSettings.Row
+{
+    try #require(model.sections.flatMap(\.rows).first { $0.id == id })
+}
+
 /// Cmd-W closes the Settings window, though Close Pane is off outside the panes, and follows
 /// Close Pane's chords.
 @MainActor @Test func closePanesChordClosesTheWindow() throws {

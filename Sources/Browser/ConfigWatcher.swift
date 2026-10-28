@@ -16,17 +16,24 @@ public actor ConfigWatcher {
     public nonisolated let loads: AsyncStream<ConfigLoad>
     private let feed: AsyncStream<ConfigLoad>.Continuation
     private let file: URL
+    private let reserved: Set<KeyChord>
+    private let fixed: [KeyChord: CommandID]
     private let watch: Watch
     private let log: @Sendable (String) -> Void
     private var stopWatch: (@Sendable () -> Void)?
     private var last: ConfigLoad?
 
-    /// A watcher of `file`, through `watch`. `log` gets each read's errors and a watch that
-    /// couldn't start.
+    /// A watcher of `file`, through `watch`. Each read checks the file's shortcuts against the
+    /// menus' `reserved` and `fixed` chords (`ConfigLoad.checked(reserved:fixed:)`), which
+    /// Browser can't see for itself. `log` gets each read's errors and a watch that couldn't
+    /// start.
     public init(
-        file: URL, log: @escaping @Sendable (String) -> Void, watch: @escaping Watch = fileEvents
+        file: URL, reserved: Set<KeyChord>, fixed: [KeyChord: CommandID],
+        log: @escaping @Sendable (String) -> Void, watch: @escaping Watch = fileEvents
     ) {
         self.file = file
+        self.reserved = reserved
+        self.fixed = fixed
         self.log = log
         self.watch = watch
         (loads, feed) = AsyncStream.makeStream(of: ConfigLoad.self)
@@ -89,7 +96,7 @@ public actor ConfigWatcher {
         do {
             let data = try Data(contentsOf: file)
             if let text = String(data: data, encoding: .utf8) {
-                load = ConfigParser.parse(text)
+                load = ConfigParser.parse(text).checked(reserved: reserved, fixed: fixed)
             } else {
                 load = .failed([ConfigError(line: nil, key: nil, reason: "isn't UTF-8 text")])
             }
