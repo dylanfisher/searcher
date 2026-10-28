@@ -45,9 +45,10 @@ private let none = ConfigFile.Contents(values: [:], shortcuts: [:])
 private let showHidden = ConfigPatch.value(.showHidden, .bool(true))
 private let foldersFirst = ConfigPatch.value(.foldersFirst, .bool(true))
 
-/// The file's text as JSON, for a test that checks what a write kept.
+/// The file's text as JSON, its comments left out, for a test that checks what a write kept.
 private func object(_ file: URL) throws -> [String: Any] {
-    try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+    let json = try #require(ConfigFile.plainJSON(Data(contentsOf: file)))
+    return try #require(try JSONSerialization.jsonObject(with: json) as? [String: Any])
 }
 
 @Test func startingWithNoFileWritesTheContentsAndWatchesTheFolder() async throws {
@@ -139,8 +140,8 @@ private func object(_ file: URL) throws -> [String: Any] {
     #expect(await nextRead(store.updates) == configLoad(#"{"folders-first": true}"#))
 }
 
-/// The text a patch writes: the file's other keys as they were, the patched key set, sorted
-/// and pretty-printed.
+/// The text a patch writes: the file's other keys as they were, and in an object on one line, a
+/// key it doesn't have put in on that line, with no comment.
 @Test func aPatchKeepsTheFilesOtherKeys() async throws {
     let folder = try TemporaryFolder("ConfigStoreTests")
     let file = folder.url.appending(path: "config.json")
@@ -160,7 +161,10 @@ private func object(_ file: URL) throws -> [String: Any] {
     let shortcuts = try #require(object["shortcuts"] as? [String: [String: String]])
     #expect(
         shortcuts == ["clipboard.copy": ["alternate": ""], "window.showPalette": ["primary": ""]])
-    #expect(String(decoding: try Data(contentsOf: file), as: UTF8.self).hasSuffix("}\n"))
+    #expect(
+        String(decoding: try Data(contentsOf: file), as: UTF8.self)
+            == #"{"appearance": "dark", "shortcuts": {"clipboard.copy": {"alternate": ""}, "#
+            + #""window.showPalette": {"primary": ""}}, "show-hidden": true}"#)
 }
 
 /// A patch the file already holds writes nothing, so the user's spelling of the file stays.
@@ -191,6 +195,204 @@ private func object(_ file: URL) throws -> [String: Any] {
 
     #expect(try object(file)["shortcuts"] as? [String: Any] != nil)
     #expect((try object(file)["shortcuts"] as? [String: Any])?.isEmpty == true)
+}
+
+/// The file's text after the store writes each of `patches`, in turn, into a file of `text`.
+private func patched(_ text: String, _ patches: [ConfigPatch]) async throws -> String {
+    let folder = try TemporaryFolder("ConfigStoreTests")
+    let file = folder.url.appending(path: "config.json")
+    try Data(text.utf8).write(to: file)
+    let store = store(file)
+    #expect(await store.start(writingIfMissing: none).errors.isEmpty)
+    for (index, patch) in patches.enumerated() {
+        await store.receive(patch, sequence: index + 1)
+        await store.waitBounded(through: index + 1)
+    }
+    return String(decoding: try Data(contentsOf: file), as: UTF8.self)
+}
+
+/// A patch changes only its value's text: every comment, blank line, space and key order
+/// around it stays as the user wrote it.
+@Test func aPatchKeepsTheFilesComments() async throws {
+    let text = """
+        // My settings.
+        {
+          // Dark, always.
+          "appearance": "dark", // not auto
+          /* hidden files */
+          "show-hidden" :   false ,
+
+          "shortcuts": {
+            // The palette.
+            "window.showPalette": {"primary": "cmd+k"}, // mine
+          },
+        }
+
+        """
+
+    let written = try await patched(
+        text,
+        [
+            showHidden, .value(.appearance, .string("light")),
+            .slot(CommandID("window.showPalette"), .primary, .chord(cmdJ)),
+        ])
+
+    #expect(
+        written
+            == text.replacingOccurrences(of: "false ,", with: "true ,")
+            .replacingOccurrences(of: #""dark""#, with: #""light""#)
+            .replacingOccurrences(of: #""cmd+k""#, with: #""cmd+j""#))
+}
+
+private let cmdJ = KeyChord("j", modifiers: .command)
+
+/// A key the file doesn't have goes in before the object's closing brace, at the indent of the
+/// keys before it, with its comment above it.
+@Test func aMissingKeyGoesInWithItsComment() async throws {
+    let text = """
+        {
+            // Dark.
+            "appearance": "dark"
+        }
+
+        """
+    let comment = ConfigFile.comment(try #require(Settings.preferencesByKey[.foldersFirst]))
+
+    let written = try await patched(text, [foldersFirst])
+
+    #expect(
+        written == """
+            {
+                // Dark.
+                "appearance": "dark",
+
+            \(comment.map { "    // \($0)\n" }.joined())    "folders-first": true
+            }
+
+            """)
+}
+
+/// A key goes into an empty object on lines of its own, and the shortcuts, missing, go in with
+/// their comment.
+@Test func aKeyGoesIntoAnEmptyObject() async throws {
+    let comment = ConfigFile.shortcutsComment.map { "  // \($0)\n" }.joined()
+
+    let written = try await patched(
+        "{}\n", [.slot(CommandID("window.showPalette"), .alternate, .removed)])
+
+    #expect(
+        written == """
+            {
+            \(comment)  "shortcuts": {
+                "window.showPalette": {"alternate": ""}
+              }
+            }
+
+            """)
+}
+
+/// A byte order mark, which some editors write, stays at the start of the file, and the patch
+/// goes into the object after it.
+@Test func aPatchKeepsAByteOrderMark() async throws {
+    let comment = ConfigFile.comment(try #require(Settings.preferencesByKey[.showHidden]))
+
+    #expect(
+        try await patched("\u{FEFF}{\"show-hidden\": false}", [showHidden])
+            == "\u{FEFF}{\"show-hidden\": true}")
+    #expect(
+        try await patched("\u{FEFF}{}", [showHidden])
+            == "\u{FEFF}{\n\(comment.map { "  // \($0)\n" }.joined())  \"show-hidden\": true\n}")
+}
+
+/// A file whose lines end in CR LF keeps them: a key put in ends its lines the same way, and a
+/// key taken out takes its whole line, leaving no line of spaces.
+@Test func aPatchKeepsCRLFLineEndings() async throws {
+    let comment = ConfigFile.comment(try #require(Settings.preferencesByKey[.foldersFirst]))
+    let inserted = try await patched(
+        "{\r\n  \"appearance\": \"dark\"\r\n}\r\n", [foldersFirst])
+    #expect(
+        inserted
+            == "{\r\n  \"appearance\": \"dark\",\r\n\r\n"
+            + comment.map { "  // \($0)\r\n" }.joined() + "  \"folders-first\": true\r\n}\r\n")
+
+    let removed = try await patched(
+        "{\r\n  \"shortcuts\": {\r\n    \"window.showPalette\": {\r\n      \"primary\": \"\"\r\n"
+            + "    },\r\n    \"clipboard.copy\": {\"alternate\": \"\"}\r\n  }\r\n}\r\n",
+        [.slot(CommandID("window.showPalette"), .primary, .standard)])
+    #expect(
+        removed
+            == "{\r\n  \"shortcuts\": {\r\n    \"clipboard.copy\": {\"alternate\": \"\"}\r\n  }\r\n"
+            + "}\r\n")
+}
+
+/// Patches waiting together go into the file in the order they were made.
+@Test func waitingPatchesGoInInTheOrderMade() async throws {
+    let folder = try TemporaryFolder("ConfigStoreTests")
+    let file = folder.url.appending(path: "config.json")
+    try Data("{\n  \"show-hidden\": tr\n".utf8).write(to: file)
+    let store = store(file)
+    _ = await store.start(writingIfMissing: none)
+    let preferences = Settings.preferences.filter {
+        if case .bool = $0.kind { true } else { false }
+    }.reversed().prefix(6)
+    for (index, preference) in preferences.enumerated() {
+        guard case .bool(let value) = preference.defaultValue else { continue }
+        await store.receive(.value(preference.key, .bool(!value)), sequence: index + 1)
+    }
+
+    try Data("{\n  \"appearance\": \"dark\"\n}\n".utf8).write(to: file, options: .atomic)
+    await store.reload()
+    await store.waitBounded(through: preferences.count)
+
+    let lines = String(decoding: try Data(contentsOf: file), as: UTF8.self)
+        .split(separator: "\n").filter { $0.hasPrefix("  \"") }
+    #expect(
+        lines.map { String($0.dropFirst(3).prefix { $0 != "\"" }) }
+            == ["appearance"] + preferences.map(\.name))
+}
+
+/// Shortcut slots in a file with comments: a slot set, a slot added to a command, a command
+/// added and a command whose last slot goes back to its default taken out, each leaving the
+/// comments.
+@Test func aShortcutPatchKeepsTheFilesComments() async throws {
+    let text = """
+        {
+          // Mine.
+          "shortcuts": {
+            // The palette.
+            "window.showPalette": {"primary": "cmd+k"}, // was cmd+p
+            /* copy */
+            "clipboard.copy": {
+              "alternate": "" // none
+            }
+          }
+        }
+
+        """
+    let palette = CommandID("window.showPalette")
+
+    let written = try await patched(
+        text,
+        [
+            .slot(palette, .alternate, .chord(cmdJ)),
+            .slot(palette, .primary, .removed),
+            .slot(CommandID("clipboard.copy"), .alternate, .standard),
+            .slot(CommandID("clipboard.paste"), .primary, .chord(cmdJ)),
+        ])
+
+    #expect(
+        written == """
+            {
+              // Mine.
+              "shortcuts": {
+                // The palette.
+                "window.showPalette": {"primary": "", "alternate": "cmd+j"}, // was cmd+p
+                "clipboard.paste": {"primary": "cmd+j"}
+                /* copy */
+              }
+            }
+
+            """)
 }
 
 /// A file that doesn't load is never written over: the patches wait, and the read sent shows

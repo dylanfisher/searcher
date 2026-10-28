@@ -79,12 +79,15 @@ final class TagPillsView: NSView {
 /// one.
 @MainActor
 final class TagPillView: NSView {
-    /// The space between the name and the pill's edge, across and down.
-    static let padding = NSSize(width: 5, height: 1)
+    /// The space between the label and the pill's edge, across and down. The label's cell keeps
+    /// 2 points either side of the name, so the name is 4 from the edge, as in Finder's pills
+    /// (docs/decisions/0127-tag-colors-and-pill-widths.md).
+    static let padding = NSSize(width: 2, height: 0)
     static let cornerRadius: CGFloat = 4
-    /// How strong the tag's color is under the name, which keeps the name readable on the
-    /// darker colors and in dark mode, as Finder's pills are.
-    static let fillAlpha: CGFloat = 0.65
+    /// How strong the tag's color is under the name: Finder's yellow and orange pills measure as
+    /// their system color at 63% over white. It keeps the name readable on the darker colors,
+    /// and dark mode darkens the fill under white text.
+    static let fillAlpha: CGFloat = 0.63
 
     let label: NSTextField
     /// The tag's color label, 0 for none.
@@ -113,8 +116,12 @@ final class TagPillView: NSView {
             : NSColor.tagLabel(colorLabel).withAlphaComponent(Self.fillAlpha)
     }
 
+    /// The name's size with its padding. The label's cell measures it: a truncating label's
+    /// intrinsic width leaves out the cell's own 2 points either side, so a pill sized by it cuts
+    /// the name short.
     override var fittingSize: NSSize {
-        let text = label.intrinsicContentSize
+        // A text field always has a cell.
+        let text = label.cell!.cellSize
         return NSSize(
             width: (text.width + 2 * Self.padding.width).rounded(.up),
             height: (text.height + 2 * Self.padding.height).rounded(.up))

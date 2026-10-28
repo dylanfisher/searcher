@@ -79,35 +79,43 @@ private func changedValue(_ preference: Settings.Preference) -> Settings.Value {
     #expect(load.shortcuts == shortcuts)
 }
 
-/// The app writes every preference, at its default when it is one, pretty-printed with sorted
-/// keys, so the file shows each option; and only the shortcuts the user changed, in 0106's shape.
-@Test func theFileHoldsEveryPreferencePrettyPrinted() throws {
+/// The app writes every preference, at its default when it is one, in the order
+/// `Settings.preferences` gives them, so the file shows each option; then only the shortcuts the
+/// user changed, in 0106's shape, a command to a line, sorted by ID.
+@Test func theFileHoldsEveryPreferenceInOrder() throws {
     let data = ConfigFile.data(
         .init(
             values: [.showHidden: .bool(true), .columnWidth: .number(320)],
-            shortcuts: [palette: ShortcutOverride(primary: .removed)]))
+            shortcuts: [
+                palette: ShortcutOverride(primary: .removed, alternate: .chord(cmdC)),
+                copy: ShortcutOverride(alternate: .removed),
+            ]))
     let text = String(decoding: data, as: UTF8.self)
 
-    let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    #expect(text.contains("\n  \"show-hidden\": true,\n"))
+    #expect(text.contains("\n  \"column-width\": 320,\n"))
+    #expect(text.contains("\n  \"appearance\": \"auto\",\n"))
     #expect(
-        Set(object.keys) == Set(Settings.preferences.map(\.name) + [ConfigFile.shortcutsKey]))
-    #expect(text.contains(#"  "show-hidden" : true,"#))
-    #expect(text.contains(#"  "column-width" : 320,"#))
-    #expect(text.contains(#"  "appearance" : "auto","#))
-    #expect(text.contains(#""window.showPalette" : {"#))
-    #expect(text.contains(#""primary" : """#))
-    #expect(text.hasSuffix("}\n"))
+        text.hasSuffix(
+            """
+              "shortcuts": {
+                "clipboard.copy": {"alternate": ""},
+                "window.showPalette": {"primary": "", "alternate": "cmd+c"}
+              }
+            }
+
+            """))
     let keys = text.split(separator: "\n").filter { $0.hasPrefix("  \"") }.map {
         String($0.dropFirst(3).prefix { $0 != "\"" })
     }
-    #expect(keys == keys.sorted())
+    #expect(keys == Settings.preferences.map(\.name) + [ConfigFile.shortcutsKey])
 }
 
 /// No changed shortcuts still writes the key, as `{}`, so the user sees where they go.
 @Test func noShortcutsWritesAnEmptyObject() {
     let text = String(decoding: ConfigFile.data(.init(values: [:], shortcuts: [:])), as: UTF8.self)
 
-    #expect(text.contains(#""shortcuts" : {}"#))
+    #expect(text.contains("\n  \"shortcuts\": {}\n}\n"))
 }
 
 /// Text that isn't JSON is one error on the line Foundation stopped at, counted from 1.
@@ -173,7 +181,7 @@ private func changedValue(_ preference: Settings.Preference) -> Settings.Value {
         ])
     #expect(
         errors.map(\.description) == [
-            #"appearance must be one of "auto", "light", "dark", not "purple""#,
+            #"appearance must be "auto", "light" or "dark", not "purple""#,
             "column-width must be a whole number from 100 to 1000, not 300.5",
             #"folders-first must be true or false, not "yes""#,
             "hide-ds-store must be true or false, not null",
@@ -314,4 +322,137 @@ private func changedValue(_ preference: Settings.Preference) -> Settings.Value {
             "line 4: shortcuts.window.showPalette.primary is set twice, first on line 4",
             "line 7: show-hidden is set twice, first on line 2",
         ])
+}
+
+/// The file takes `//` and `/* */` comments, as Sublime Text's settings do, and a comma after an
+/// object's last key. A `//` or `/*` inside a string is part of the string.
+@Test func commentsAndATrailingCommaAreAllowed() {
+    let text = """
+        // Searcher's settings.
+        {
+          // Shows "hidden" files.
+          "show-hidden": true, // on
+          /* A block comment, with a " in it,
+             over two lines. */
+          "terminal-bundle-id": "com.example//not/*a comment*/",
+          "shortcuts": {
+            "window.showPalette": {"alternate": "",},
+          },
+        }
+        /* The end. */
+        """
+
+    let load = configLoad(text)
+
+    #expect(
+        values(load) == [
+            "show-hidden": .bool(true),
+            "terminal-bundle-id": .string("com.example//not/*a comment*/"),
+        ])
+    #expect(load.shortcuts == [palette: ShortcutOverride(alternate: .removed)])
+}
+
+/// An error after comments is on the line the file has it on: a comment shifts no line, a
+/// block comment's line breaks included.
+@Test func anErrorAfterCommentsNamesItsLine() {
+    let syntax = """
+        {
+          // one
+          /* two
+             three */
+          "show-hidden": tru
+        }
+        """
+    #expect(configLoad(syntax).errors.map(\.line) == [5])
+
+    let twice = """
+        {
+          /* "show-hidden": false, */
+          "show-hidden": true,
+          // "show-hidden": false,
+          "show-hidden": false
+        }
+        """
+    #expect(configLoad(twice).errors.map(\.line) == [5])
+}
+
+/// A block comment that isn't closed is an error on the line it opens on.
+@Test func anUnclosedBlockCommentIsAnError() {
+    let errors = configLoad("{\n  \"show-hidden\": true\n  /* left open\n}\n").errors
+
+    #expect(errors.map(\.description) == ["line 3: has a /* comment that isn't closed with */"])
+}
+
+/// A file of comments alone is empty.
+@Test func aFileOfCommentsIsEmpty() {
+    #expect(
+        configLoad("// nothing\n/* here */\n").errors.map(\.reason) == [
+            "is empty: it needs a JSON object, such as {}"
+        ])
+}
+
+/// A comma with no item before it isn't a trailing comma: `{,}` is an error on its line, at the
+/// top or in the shortcuts.
+@Test func aCommaWithNoItemBeforeItIsAnError() {
+    for text in ["{\n  ,\n}", "{\n  \"shortcuts\": {,}\n}", "{\n  \"show-hidden\": true,,\n}"] {
+        let errors = configLoad(text).errors
+        #expect(errors.map(\.line) == [2], "\(text)")
+        #expect(errors.first?.reason.hasPrefix("isn't valid JSON") == true, "\(text)")
+    }
+}
+
+/// A byte order mark before the object, which some editors write, is no error.
+@Test func aByteOrderMarkIsAllowed() {
+    #expect(values(configLoad("\u{FEFF}{\"show-hidden\": true}")) == ["show-hidden": .bool(true)])
+}
+
+/// A U+FEFF inside a key is an error on its line: Foundation drops it from the name, so a patch
+/// would miss the key and add it a second time.
+@Test func aByteOrderMarkInAKeyIsAnError() {
+    for text in ["{\n  \"\u{FEFF}shortcuts\": {}\n}", "{\n  \"show-\u{FEFF}hidden\": true\n}"] {
+        let errors = configLoad(text).errors
+        #expect(errors.map(\.line) == [2], "\(text)")
+        #expect(errors.first?.reason.contains("U+FEFF") == true, "\(text)")
+    }
+}
+
+/// A new file reads back as the defaults, and each preference, and the shortcuts, has its
+/// comment on the lines above it, taken from where the key is declared.
+@Test func aNewFileCommentsEveryKey() {
+    let data = ConfigFile.data(.init(values: [:], shortcuts: [:]))
+    let lines = String(decoding: data, as: UTF8.self).split(
+        separator: "\n", omittingEmptySubsequences: false)
+
+    let load = ConfigFile.parse(data)
+    #expect(load.errors.isEmpty, "\(load.errors)")
+    #expect(
+        load.values
+            == Dictionary(
+                uniqueKeysWithValues: Settings.preferences.map { ($0.key, $0.defaultValue) }))
+    #expect(load.shortcuts.isEmpty)
+    var keys = Settings.preferences.map { ($0.name, ConfigFile.comment($0)) }
+    keys.append((ConfigFile.shortcutsKey, ConfigFile.shortcutsComment))
+    for (name, comment) in keys {
+        #expect(!comment.isEmpty, "\(name) has no comment")
+        let index = lines.firstIndex { $0.hasPrefix("  \"\(name)\": ") }
+        #expect(index != nil, "\(name) isn't in the file")
+        guard let index, index >= comment.count else { continue }
+        let above = lines[(index - comment.count)..<index].map(String.init)
+        #expect(above == comment.map { "  // \($0)" }, "\(name)")
+    }
+}
+
+/// A preference's comment is its summary, declared beside its key and default in
+/// `Settings.preferences`, then what it takes, in the words its error uses.
+@Test func aPreferencesCommentIsItsSummary() throws {
+    let appearance = try #require(Settings.preferencesByKey[.appearance])
+    let width = try #require(Settings.preferencesByKey[.columnWidth])
+
+    #expect(
+        ConfigFile.comment(appearance) == [
+            appearance.summary, #"Takes "auto", "light" or "dark"."#,
+        ])
+    #expect(
+        ConfigFile.comment(width) == [width.summary, "Takes a whole number from 100 to 1000."])
+    #expect(Settings.preferences.allSatisfy { !$0.summary.isEmpty })
 }

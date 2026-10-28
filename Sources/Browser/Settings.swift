@@ -63,22 +63,27 @@ public final class Settings {
         case dark
     }
 
-    /// The preferences a user sets, each with its key in the config file, what it accepts and
-    /// its default: the one list the config file's keys, its checks and what the app writes
-    /// are made from. The shortcuts, which have a shape of their own, and the state the app
-    /// keeps by itself, such as the favorites, window frames and the palette's place, aren't in
-    /// it.
+    /// The preferences a user sets, each with its key in the config file, what it accepts, its
+    /// default and what it does: the one list the config file's keys, its checks, its comments
+    /// and what the app writes are made from. The shortcuts, which have a shape of their own,
+    /// and the state the app keeps by itself, such as the favorites, window frames and the
+    /// palette's place, aren't in it.
     public nonisolated static let preferences: [Preference] = [
         Preference(
-            .showHidden, "show-hidden", .bool, default: .bool(false)),
+            .showHidden, "show-hidden", .bool, default: .bool(false),
+            "Show hidden items: names that start with a dot, and items flagged hidden."),
         Preference(
-            .hideDSStore, "hide-ds-store", .bool, default: .bool(true)),
+            .hideDSStore, "hide-ds-store", .bool, default: .bool(true),
+            "Leave .DS_Store files out of the lists, even while hidden items show."),
         Preference(
-            .foldersFirst, "folders-first", .bool, default: .bool(false)),
+            .foldersFirst, "folders-first", .bool, default: .bool(false),
+            "Sort folders before every other item."),
         Preference(
-            .folderSizes, "folder-sizes", .bool, default: .bool(false)),
+            .folderSizes, "folder-sizes", .bool, default: .bool(false),
+            "Show each folder's size in list view, as Finder's Calculate All Sizes does."),
         Preference(
-            .columnsStartAtHome, "columns-start-at-home", .bool, default: .bool(true)),
+            .columnsStartAtHome, "columns-start-at-home", .bool, default: .bool(true),
+            "Start column view at your home folder, not the volume, for a folder inside it."),
         Preference(
             .columnWidth, "column-width",
             .number(
@@ -86,24 +91,32 @@ public final class Settings {
                 described:
                     "a whole number from \(Int(columnWidths.lowerBound)) to \(Int(columnWidths.upperBound))"
             ),
-            default: .number(defaultColumnWidth)),
+            default: .number(defaultColumnWidth),
+            "The width of a new column in column view, in points."),
         Preference(
             .appearance, "appearance", .choice(Appearance.allCases.map(\.rawValue)),
-            default: .string(Appearance.auto.rawValue)),
+            default: .string(Appearance.auto.rawValue),
+            "Light or dark. auto follows the system's setting."),
         Preference(
             .terminalBundleID, "terminal-bundle-id", .string,
-            default: .string("com.apple.Terminal")),
+            default: .string("com.apple.Terminal"),
+            "The bundle ID of the app Open Terminal Here opens a folder in."),
         Preference(
-            .commanderFKeys, "commander-f-keys", .bool, default: .bool(false)),
+            .commanderFKeys, "commander-f-keys", .bool, default: .bool(false),
+            "Make F5 to F8 copy and move to the other pane, make a folder and move to the Trash."),
         Preference(
             .hideEmptyOperationsPanel, "hide-empty-operations-panel", .bool,
-            default: .bool(true)),
+            default: .bool(true),
+            "Hide a window's operations panel while it has no operations."),
         Preference(
-            .showsFavoritesInSidebar, "sidebar-favorites", .bool, default: .bool(true)),
+            .showsFavoritesInSidebar, "sidebar-favorites", .bool, default: .bool(true),
+            "Show the Favorites group in the sidebar."),
         Preference(
-            .showsLocationsInSidebar, "sidebar-locations", .bool, default: .bool(true)),
+            .showsLocationsInSidebar, "sidebar-locations", .bool, default: .bool(true),
+            "Show the Locations group in the sidebar."),
         Preference(
-            .showsWorkspacesInSidebar, "sidebar-workspaces", .bool, default: .bool(true)),
+            .showsWorkspacesInSidebar, "sidebar-workspaces", .bool, default: .bool(true),
+            "Show the Workspaces group in the sidebar."),
     ]
 
     /// `preferences` by key.

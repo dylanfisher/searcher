@@ -3,9 +3,10 @@ import AppKit
 /// The dots after a tagged item's name in a list or a column, one per color of its tags, as
 /// Finder draws them: 10-point circles in each tag's color, overlapping by half when there are
 /// several, the first tag's on top, at most three. On an emphasized selection each has a white
-/// outline, as Finder's does; elsewhere a thin rim of a darker shade of its color. The row's
-/// VoiceOver label names the colors, so the dots aren't an element of their own
-/// (docs/decisions/0124-tags-in-rows-and-preview.md).
+/// outline, as Finder's does; elsewhere a thin rim of the tag's color, the fill being a lighter
+/// shade of it. The row's VoiceOver label names the colors, so the dots aren't an element of
+/// their own (docs/decisions/0124-tags-in-rows-and-preview.md,
+/// docs/decisions/0127-tag-colors-and-pill-widths.md).
 @MainActor
 final class RowTagDotsView: NSView {
     /// A dot's diameter, and how far each dot after the first starts from the one before.
@@ -61,15 +62,14 @@ final class RowTagDotsView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         // The first tag's dot is drawn last, so it is on top.
         for (index, label) in labels.enumerated().reversed() {
-            let color = NSColor.tagLabel(label)
             let circle = NSBezierPath(ovalIn: dotRect(at: index))
-            color.setFill()
+            NSColor.tagLabelDot(label).setFill()
             circle.fill()
             if isOnEmphasizedSelection {
                 NSColor.white.setStroke()
                 circle.lineWidth = Self.outline
             } else {
-                (color.shadow(withLevel: 0.2) ?? color).setStroke()
+                NSColor.tagLabel(label).setStroke()
                 circle.lineWidth = Self.outline / 2
             }
             circle.stroke()

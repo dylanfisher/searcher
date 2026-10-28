@@ -277,15 +277,15 @@ public actor ConfigStore {
                 return
             }
             accept(current)
-            guard let base = object(of: current) else { return }
-            let patches = queue.values.map(\.patch).filter { !$0.isSatisfied(by: current.load) }
+            guard var text = text(of: current) else { return }
+            let patches = queue.values.sorted { $0.sequence < $1.sequence }.map(\.patch)
+                .filter { !$0.isSatisfied(by: current.load) }
             if patches.isEmpty {
                 wrote()
                 return
             }
-            var object = base
-            for patch in patches { patch.apply(to: &object) }
-            let data = ConfigFile.data(object: object)
+            for patch in patches { patch.apply(to: &text) }
+            let data = Data(text.bytes)
             let target = Self.target(of: file)
             do {
                 if createsFolder {
@@ -321,14 +321,15 @@ public actor ConfigStore {
     /// The file changed between the read a write was checked against and its rename.
     private struct ChangedDuringWrite: Error {}
 
-    /// The JSON object the patches go into: the file's, or for no file every default; nil
-    /// while the file has an error, which a write would destroy.
-    private func object(of read: Read) -> [String: Any]? {
+    /// The text the patches go into: the file's, or for no file a new file of every default;
+    /// nil while the file has an error, which a write would destroy.
+    private func text(of read: Read) -> ConfigText? {
         if read.load == .missing {
-            return ConfigFile.object(ConfigFile.Contents(values: [:], shortcuts: [:]))
+            return ConfigText(
+                Array(ConfigFile.data(ConfigFile.Contents(values: [:], shortcuts: [:]))))
         }
         guard read.load.errors.isEmpty, let bytes = read.bytes else { return nil }
-        return (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any]
+        return ConfigText(Array(bytes))
     }
 
     /// Writes `data` as the file where there is none, and returns the read it makes; nil, with
