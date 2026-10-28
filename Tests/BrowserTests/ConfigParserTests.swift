@@ -125,8 +125,8 @@ private func values(_ text: String) -> [String: Settings.Value] {
 /// Each preference is in the template once, commented out at its default, so removing the "#"
 /// of every setting line gives every default.
 @Test func theTemplateHoldsEveryPreferenceAtItsDefault() {
-    let settingLines = ConfigTemplate.text.split(separator: "\n").filter {
-        $0.hasPrefix("# ") && $0.contains(" = ")
+    let settingLines = ConfigTemplate.text.split(separator: "\n").filter { line in
+        Settings.preferences.contains { line.hasPrefix("# \($0.name) = ") }
     }
     let uncommented = settingLines.map { $0.dropFirst(2) }.joined(separator: "\n")
 
@@ -135,4 +135,140 @@ private func values(_ text: String) -> [String: Settings.Value] {
         values(uncommented)
             == Dictionary(
                 uniqueKeysWithValues: Settings.preferences.map { ($0.name, $0.defaultValue) }))
+}
+
+// MARK: Shortcuts
+
+private let palette = WindowCommands.showPalette.id
+private let trash = FileCommands.moveToTrash.id
+private let copy = ClipboardCommands.copy.id
+private let cmdC = KeyChord("c", modifiers: .command)
+private let cmdQ = KeyChord("q", modifiers: .command)
+private let cmdShiftO = KeyChord("o", modifiers: [.command, .shift])
+
+/// A slot is set by the command's ID and the slot's name, to a chord's stored spelling or none.
+@Test func aShortcutLineSetsOneSlotOfACommand() {
+    let load = ConfigParser.parse(
+        """
+        shortcut.window.showPalette.alternate = cmd+shift+o
+        shortcut.file.moveToTrash.primary = none
+        shortcut.window.newTab.alternate = "cmd+#"  # quoted for the hash
+        """)
+
+    #expect(load.errors.isEmpty, "\(load.errors)")
+    #expect(
+        load.shortcuts == [
+            palette: ShortcutOverride(alternate: .chord(cmdShiftO)),
+            trash: ShortcutOverride(primary: .removed),
+            WindowCommands.newTab.id: ShortcutOverride(
+                alternate: .chord(KeyChord("#", modifiers: .command))),
+        ])
+    #expect(load.values.isEmpty)
+}
+
+/// Each kind of mistake in a shortcut line names its line and key, and the file sets nothing.
+@Test func eachShortcutErrorNamesItsLine() {
+    let text = """
+        shortcut.window.showPalete.primary = cmd+j
+        shortcut.window.showPalette.third = cmd+j
+        shortcut.window.showPalette = cmd+j
+        shortcut.window.showPalette.primary = shift+cmd+j
+        shortcut.window.showPalette.alternate = cmd+j
+        shortcut.window.goToItem.alternate = cmd+j
+        shortcut.window.showPalette.alternate = cmd+l
+        show-hidden = true
+        """
+    let load = ConfigParser.parse(text)
+
+    #expect(load.errors.map(\.line) == [1, 2, 3, 4, 6, 7])
+    #expect(load.errors.allSatisfy { $0.key?.hasPrefix("shortcut.") == true })
+    #expect(
+        load.errors.map(\.reason) == [
+            #"no command has the ID "window.showPalete""#,
+            "shortcut.window.showPalette.third names no slot: end it with .primary or .alternate",
+            "shortcut.window.showPalette names no slot: end it with .primary or .alternate",
+            "shortcut.window.showPalette.primary must be a shortcut such as cmd+shift+k, or"
+                + #" none, not "shift+cmd+j""#,
+            "cmd+j is given to shortcut.window.showPalette.alternate on line 5 too",
+            "shortcut.window.showPalette.alternate is already set on line 5",
+        ])
+    #expect(load.shortcuts.isEmpty)
+    #expect(load.values.isEmpty)
+}
+
+/// Two slots of one command can't share a chord either.
+@Test func oneChordInBothSlotsOfACommandIsAnError() {
+    let load = ConfigParser.parse(
+        """
+        shortcut.window.showPalette.primary = cmd+j
+        shortcut.window.showPalette.alternate = cmd+j
+        """)
+
+    #expect(load.errors.map(\.line) == [2])
+}
+
+/// The menus' rules, which Browser can't see, are checked once the menus give them: a standard
+/// item's chord, an Edit item's chord on another command or slot, and a changed or removed Edit
+/// primary are errors on their lines.
+@Test func aShortcutTheMenusKeepIsAnErrorOnItsLine() {
+    let text = """
+        shortcut.window.showPalette.alternate = cmd+q
+        shortcut.window.goToItem.alternate = cmd+c
+        shortcut.clipboard.copy.primary = cmd+j
+        shortcut.clipboard.cut.primary = none
+        shortcut.clipboard.copy.alternate = cmd+shift+o
+        """
+    let parsed = ConfigParser.parse(text)
+    #expect(parsed.errors.isEmpty)
+    let cmdX = KeyChord("x", modifiers: .command)
+
+    let load = parsed.checked(
+        reserved: [cmdQ], fixed: [cmdC: copy, cmdX: ClipboardCommands.cut.id])
+
+    #expect(load.errors.map(\.line) == [1, 2, 3, 4])
+    #expect(
+        load.errors.map(\.reason) == [
+            "cmd+q belongs to a menu item that can't be changed, such as Quit",
+            "cmd+c stays with Copy so text fields keep it",
+            "the primary shortcut of Copy stays cmd+c so text fields keep it",
+            "the primary shortcut of Cut stays cmd+x so text fields keep it",
+        ])
+    #expect(load.shortcuts.isEmpty)
+}
+
+/// The fixed chord itself, on its own command's primary, changes nothing and is no error.
+@Test func anEditPrimaryAtItsOwnChordIsNoError() {
+    let load = ConfigParser.parse("shortcut.clipboard.copy.primary = cmd+c")
+        .checked(reserved: [cmdQ], fixed: [cmdC: copy])
+
+    #expect(load.errors.isEmpty)
+    #expect(load.shortcuts == [copy: ShortcutOverride(primary: .chord(cmdC))])
+}
+
+/// Checking a file that already failed, or found none, leaves it as it was.
+@Test func checkingAFailedOrMissingLoadChangesNothing() {
+    let failed = ConfigParser.parse("show-hidden = maybe")
+
+    #expect(failed.checked(reserved: [cmdQ], fixed: [:]) == failed)
+    #expect(ConfigLoad.missing.checked(reserved: [cmdQ], fixed: [:]) == .missing)
+}
+
+/// The template lists every command's two slots at their defaults, commented out, so removing
+/// the "#" of each gives the defaults and sets nothing new.
+@Test func theTemplateHoldsEveryCommandsSlotsAtTheirDefaults() {
+    let shortcutLines = ConfigTemplate.text.split(separator: "\n").filter {
+        $0.hasPrefix("# \(ConfigParser.shortcutPrefix)")
+    }
+    let load = ConfigParser.parse(shortcutLines.map { $0.dropFirst(2) }.joined(separator: "\n"))
+
+    #expect(load.errors.isEmpty, "\(load.errors)")
+    #expect(shortcutLines.count == AppCommands.commands.count * 2)
+    for command in AppCommands.commands {
+        #expect(
+            load.shortcuts[command.id]
+                == ShortcutOverride(
+                    primary: command.primary.map(ShortcutOverride.Slot.chord) ?? .removed,
+                    alternate: command.alternate.map(ShortcutOverride.Slot.chord) ?? .removed),
+            "\(command.id)")
+    }
 }

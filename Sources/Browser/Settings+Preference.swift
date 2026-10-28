@@ -84,4 +84,15 @@ extension Settings {
         public let appValue: Value
         public let fileValue: Value
     }
+
+    /// A shortcut slot set in the app to other than the config file sets it, which the app's
+    /// wins over (docs/decisions/0122-config-shortcuts.md).
+    public struct ShortcutConfigOverride: Equatable, Sendable {
+        public let command: CommandID
+        public let position: ShortcutOverride.Position
+        /// `.chord` or `.removed`; never `.standard`.
+        public let appSlot: ShortcutOverride.Slot
+        /// `.chord` or `.removed`; never `.standard`.
+        public let fileSlot: ShortcutOverride.Slot
+    }
 }

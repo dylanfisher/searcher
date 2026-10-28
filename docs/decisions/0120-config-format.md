@@ -111,3 +111,15 @@ watcher's actor, beside the store's read. The FSEvents stream costs no file desc
 by an editor that writes in place can be read half written, which shows an error until the
 write's own event brings the whole file. Every preference is now a computed property over the
 app's and the file's values, so `UserDefaults` holds only what the app changed, as before.
+
+## Amendment: shortcuts (2026-10-27)
+
+M5b.2 added shortcut lines ([0122](0122-config-shortcuts.md)): `shortcut.<command ID>.<slot> =
+<chord>` or `= none`, matched by the `shortcut.` prefix in the second step, as Adding a key
+family planned. Their keys keep the command IDs' own spelling, dots and capitals, rather than
+this record's lowercase dashes. `ConfigLoad` carries them beside the preference values, each
+with its line, and `ConfigWatcher` now takes the menus' reserved and fixed chords, so a read
+can turn a shortcut those chords refuse into an error on its line before anything applies. The
+template appends every command's slots. The Shortcuts pane lists the app's shortcut overrides
+of the file under each row, with Use Config File Value; the General pane's list stays the
+preferences'.

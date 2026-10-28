@@ -54,7 +54,8 @@ private func nextLoad(_ loads: AsyncStream<ConfigLoad>) async -> ConfigLoad? {
     let folder = try TemporaryFolder("ConfigWatcherTests")
     let watch = ManualWatch()
     let watcher = ConfigWatcher(
-        file: folder.url.appending(path: "searcher/config"), log: { _ in }, watch: watch.watch)
+        file: folder.url.appending(path: "searcher/config"), reserved: [], fixed: [:],
+        log: { _ in }, watch: watch.watch)
 
     #expect(await watcher.start() == .missing)
     #expect(watch.folders.all == [folder.url.appending(path: "searcher").path])
@@ -64,9 +65,24 @@ private func nextLoad(_ loads: AsyncStream<ConfigLoad>) async -> ConfigLoad? {
     let folder = try TemporaryFolder("ConfigWatcherTests")
     let file = folder.url.appending(path: "config")
     try Data("show-hidden = true".utf8).write(to: file)
-    let watcher = ConfigWatcher(file: file, log: { _ in }, watch: ManualWatch().watch)
+    let watcher = ConfigWatcher(
+        file: file, reserved: [], fixed: [:], log: { _ in }, watch: ManualWatch().watch)
 
     #expect(await watcher.start() == ConfigParser.parse("show-hidden = true"))
+}
+
+/// The watcher checks the file's shortcuts against the menus' reserved and fixed chords it was
+/// given, so a reserved chord is an error on its line like any other.
+@Test func aReadChecksTheShortcutsAgainstTheMenusRules() async throws {
+    let folder = try TemporaryFolder("ConfigWatcherTests")
+    let file = folder.url.appending(path: "config")
+    try Data("show-hidden = true\nshortcut.window.showPalette.alternate = cmd+q".utf8).write(
+        to: file)
+    let watcher = ConfigWatcher(
+        file: file, reserved: [KeyChord("q", modifiers: .command)], fixed: [:], log: { _ in },
+        watch: ManualWatch().watch)
+
+    #expect(await watcher.start().errors.map(\.line) == [2])
 }
 
 /// An edit on disk, a replacement by an editor's atomic save and a deletion each send the load
@@ -76,7 +92,8 @@ private func nextLoad(_ loads: AsyncStream<ConfigLoad>) async -> ConfigLoad? {
     let file = folder.url.appending(path: "config")
     try Data("show-hidden = true".utf8).write(to: file)
     let watch = ManualWatch()
-    let watcher = ConfigWatcher(file: file, log: { _ in }, watch: watch.watch)
+    let watcher = ConfigWatcher(
+        file: file, reserved: [], fixed: [:], log: { _ in }, watch: watch.watch)
     _ = await watcher.start()
 
     // Atomic, so a read the first change starts can't find the file half written.
@@ -104,7 +121,8 @@ private func nextLoad(_ loads: AsyncStream<ConfigLoad>) async -> ConfigLoad? {
     try Data("show-hidden = maybe".utf8).write(to: file)
     let logged = EventLog<String>()
     let watch = ManualWatch()
-    let watcher = ConfigWatcher(file: file, log: { logged.append($0) }, watch: watch.watch)
+    let watcher = ConfigWatcher(
+        file: file, reserved: [], fixed: [:], log: { logged.append($0) }, watch: watch.watch)
 
     let load = await watcher.start()
     watch.change()
@@ -122,7 +140,8 @@ private func nextLoad(_ loads: AsyncStream<ConfigLoad>) async -> ConfigLoad? {
     let folder = try TemporaryFolder("ConfigWatcherTests")
     let file = folder.url.appending(path: "config")
     try Data([0xFF, 0xFE, 0x00]).write(to: file)
-    let watcher = ConfigWatcher(file: file, log: { _ in }, watch: ManualWatch().watch)
+    let watcher = ConfigWatcher(
+        file: file, reserved: [], fixed: [:], log: { _ in }, watch: ManualWatch().watch)
 
     let errors = await watcher.start().errors
 
@@ -134,7 +153,8 @@ private func nextLoad(_ loads: AsyncStream<ConfigLoad>) async -> ConfigLoad? {
     let folder = try TemporaryFolder("ConfigWatcherTests")
     let watch = ManualWatch()
     let watcher = ConfigWatcher(
-        file: folder.url.appending(path: "config"), log: { _ in }, watch: watch.watch)
+        file: folder.url.appending(path: "config"), reserved: [], fixed: [:], log: { _ in },
+        watch: watch.watch)
     _ = await watcher.start()
 
     await watcher.stop()
@@ -155,7 +175,8 @@ private func nextLoad(_ loads: AsyncStream<ConfigLoad>) async -> ConfigLoad? {
     let settings = Settings(
         defaults: temporarySuite(in: folder.url.path), configFile: file,
         log: unexpectedSettingsLog)
-    let watcher = ConfigWatcher(file: file, log: { _ in }, watch: watch.watch)
+    let watcher = ConfigWatcher(
+        file: file, reserved: [], fixed: [:], log: { _ in }, watch: watch.watch)
     await settings.follow(watcher)
     #expect(settings.configErrors.isEmpty)
 
@@ -176,7 +197,8 @@ private func nextLoad(_ loads: AsyncStream<ConfigLoad>) async -> ConfigLoad? {
     let watch = ManualWatch()
     let settings = untouchedSettings()
 
-    let watcher = ConfigWatcher(file: file, log: { _ in }, watch: watch.watch)
+    let watcher = ConfigWatcher(
+        file: file, reserved: [], fixed: [:], log: { _ in }, watch: watch.watch)
 
     await settings.follow(watcher)
     #expect(settings.showHidden)
@@ -194,7 +216,7 @@ private func nextLoad(_ loads: AsyncStream<ConfigLoad>) async -> ConfigLoad? {
 @Test func anEditOnDiskReachesTheWatcher() async throws {
     let folder = try TemporaryFolder("ConfigWatcherTests")
     let file = folder.url.appending(path: "searcher/config")
-    let watcher = ConfigWatcher(file: file, log: { _ in })
+    let watcher = ConfigWatcher(file: file, reserved: [], fixed: [:], log: { _ in })
     #expect(await watcher.start() == .missing)
     let expected = ConfigParser.parse("show-hidden = true")
     let loads = watcher.loads

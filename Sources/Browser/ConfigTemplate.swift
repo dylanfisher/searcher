@@ -18,8 +18,35 @@ public enum ConfigTemplate {
         let settings = Settings.preferences.map { preference in
             "# \(preference.summary)\n# \(preference.name) = \(spelled(preference.defaultValue))"
         }
-        return ([header] + settings).joined(separator: "\n\n") + "\n"
+        return ([header] + settings + [shortcutsHeader] + shortcuts).joined(separator: "\n\n")
+            + "\n"
     }()
+
+    private static let shortcutsHeader = """
+        # Shortcuts. Each command has two: its primary, which its menu item shows, and an
+        # alternate. A line gives one of them a shortcut, or takes it away with none. A shortcut
+        # is the modifiers held, in the order ctrl, opt, cmd, shift, then the key, joined by
+        # "+": cmd+shift+k, ctrl+opt+f5, cmd++, pageup. Put one with a "#" in double quotes. A
+        # shortcut given here to one command is taken from any other that has it by default.
+        # Shortcuts set in Settings ▸ Shortcuts win over these lines.
+        """
+
+    /// Every command's two slots at their defaults, a block of commands for each set in
+    /// `AppCommands.sets`, each command after its title. The presets' alternates aren't
+    /// defaults, so a slot they fill reads `none`.
+    private static var shortcuts: [String] {
+        AppCommands.sets.map { set in
+            set.bindings.map { binding in
+                let command = binding.command
+                let slots = ShortcutOverride.Position.allCases.map { position in
+                    let chord = position == .primary ? command.primary : command.alternate
+                    let value = chord.map(spelled) ?? ConfigParser.noShortcut
+                    return "# \(ConfigParser.shortcutKey(command.id, position)) = \(value)"
+                }
+                return (["# \(command.title)"] + slots).joined(separator: "\n")
+            }.joined(separator: "\n")
+        }
+    }
 
     /// `value` as a line of the template writes it: a choice unquoted, as `appearance = auto`.
     private static func spelled(_ value: Settings.Value) -> String {
@@ -27,6 +54,14 @@ public enum ConfigTemplate {
             return value.description
         }
         return string
+    }
+
+    /// `chord` as a line of the template writes it: bare, unless a "#" would start a comment or
+    /// a first quote would start a string.
+    private static func spelled(_ chord: KeyChord) -> String {
+        let stored = chord.stored
+        return stored.contains("#") || stored.hasPrefix("\"")
+            ? Settings.Value.string(stored).description : stored
     }
 
     /// Makes the file at `url` from `text`, and its folder when there is none, unless a file is
