@@ -34,9 +34,21 @@ extension Lister {
 public struct DirectoryLister: Lister {
     /// Bytes per `getattrlistbulk` call. 256 KB holds about 2,000 entries.
     public let bufferSize: Int
+    /// Reads the Finder info of the item at a path, not following a symlink, into the buffer
+    /// given, as `getattrlist` replies: its length, then the 32 bytes. Returns 0, or the `errno`
+    /// it failed with. Tests fail it.
+    let readFinderInfo: @Sendable (String, UnsafeMutableRawBufferPointer) -> Int32
 
     public init(bufferSize: Int = 256 * 1024) {
+        self.init(bufferSize: bufferSize, readFinderInfo: Self.getFinderInfo)
+    }
+
+    init(
+        bufferSize: Int = 256 * 1024,
+        readFinderInfo: @escaping @Sendable (String, UnsafeMutableRawBufferPointer) -> Int32
+    ) {
         self.bufferSize = bufferSize
+        self.readFinderInfo = readFinderInfo
     }
 
     public func list(_ path: String, onBatch: ([DirectoryEntry]) throws -> Void) throws {
@@ -280,24 +292,25 @@ public struct DirectoryLister: Lister {
         return try entry(named: name, at: join(path, name), info: info)
     }
 
-    /// The entry `info` describes, named `name`, at `path`; nil if it was removed since. A
-    /// folder whose name doesn't say it is a package has its Finder info read for the bundle bit,
-    /// and every item for its color label.
+    /// The entry `info` describes, named `name`, at `path`; nil if it was removed since. Its
+    /// Finder info is read once, for its color label and, for a folder whose name doesn't say it
+    /// is a package, the bundle bit.
     private func entry(named name: String, at path: String, info: Darwin.stat) throws
         -> DirectoryEntry?
     {
-        guard let label = try finderInfoLabel(at: path) else { return nil }
+        guard let finderInfo = try finderInfo(at: path) else { return nil }
         let type: DirectoryEntry.FileType
         switch info.st_mode & S_IFMT {
         case S_IFREG: type = .regular
         case S_IFDIR:
-            guard let isPackage = try PackageRule.isPackage(folderAt: path, named: name) else {
-                return nil
-            }
+            let isPackage =
+                PackageRule.isPackage(named: name)
+                || finderInfo.withUnsafeBytes { PackageRule.hasBundleBit($0.baseAddress!) }
             type = isPackage ? .package : .directory
         case S_IFLNK: type = .symbolicLink
         default: type = .other
         }
+        let label = finderInfo.withUnsafeBytes { FinderTags.label(finderInfo: $0.baseAddress!) }
         return DirectoryEntry(
             name: name, type: type, size: type == .regular ? info.st_size : nil,
             modified: date(info.st_mtimespec), isHidden: info.st_flags & UInt32(UF_HIDDEN) != 0,
@@ -305,25 +318,34 @@ public struct DirectoryLister: Lister {
             tagLabels: FinderTags.rowLabels(at: path, finderInfoLabel: label))
     }
 
-    /// The color label in the Finder info of the item at `path`, not following a symlink, as a
-    /// listing reads it; nil when the item is gone.
-    private func finderInfoLabel(at path: String) throws -> Int? {
-        var request = attrlist()
-        request.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
-        request.commonattr = attrgroup_t(ATTR_CMN_FNDRINFO)
+    /// The 32 bytes of Finder info of the item at `path`, not following a symlink, as a listing
+    /// reads them; nil when the item is gone. A volume that refuses the read with `ENOTSUP` or
+    /// `EINVAL` has none to give, so the entry reads as one with all zeros, no color label and
+    /// no bundle bit, rather than failing over its tags
+    /// (docs/decisions/0124-tags-in-rows-and-preview.md).
+    private func finderInfo(at path: String) throws -> [UInt8]? {
         // The reply is its UInt32 length, then the Finder info.
         var reply = [UInt8](
             repeating: 0, count: MemoryLayout<UInt32>.size + PackageRule.finderInfoSize)
-        let status = reply.withUnsafeMutableBytes { buffer in
-            getattrlist(path, &request, buffer.baseAddress, buffer.count, UInt32(FSOPT_NOFOLLOW))
+        let code = reply.withUnsafeMutableBytes { readFinderInfo(path, $0) }
+        switch code {
+        case 0: return Array(reply.dropFirst(MemoryLayout<UInt32>.size))
+        case ENOENT: return nil
+        case ENOTSUP, EINVAL: return [UInt8](repeating: 0, count: PackageRule.finderInfoSize)
+        default: throw ListingError(path: path, code: code)
         }
-        if status != 0 {
-            if errno == ENOENT { return nil }
-            throw ListingError(path: path, code: errno)
-        }
-        return reply.withUnsafeBytes {
-            FinderTags.label(finderInfo: $0.baseAddress! + MemoryLayout<UInt32>.size)
-        }
+    }
+
+    /// `readFinderInfo` through `getattrlist`.
+    private static func getFinderInfo(_ path: String, into reply: UnsafeMutableRawBufferPointer)
+        -> Int32
+    {
+        var request = attrlist()
+        request.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
+        request.commonattr = attrgroup_t(ATTR_CMN_FNDRINFO)
+        let status = getattrlist(
+            path, &request, reply.baseAddress, reply.count, UInt32(FSOPT_NOFOLLOW))
+        return status == 0 ? 0 : errno
     }
 
     private func fileType(_ objectType: fsobj_type_t) -> DirectoryEntry.FileType {

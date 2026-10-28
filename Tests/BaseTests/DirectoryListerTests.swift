@@ -569,3 +569,32 @@ private func tag(_ path: String, entries: [String], label: Int) throws {
         #expect(try lister.entry(named: entry.name, inDirectory: path) == entry)
     }
 }
+
+/// An entry read alone, for a patch or the stat fallback, reads its Finder info for its color
+/// label and a folder's bundle bit. A volume that has no Finder info to give, refusing the read
+/// with `ENOTSUP` or `EINVAL`, lists the entry with no tags and as a plain folder, as it listed
+/// before tags; any other error fails the read (docs/decisions/0124-tags-in-rows-and-preview.md).
+@Test(arguments: [ENOTSUP, EINVAL])
+func aFinderInfoAVolumeCantGiveReadsAsNone(_ code: Int32) throws {
+    let folder = try TemporaryFolder("DirectoryListerTests")
+    try Data("x".utf8).write(to: folder.url.appending(path: "file.txt"))
+    try FileManager.default.createDirectory(
+        at: folder.url.appending(path: "folder"), withIntermediateDirectories: false)
+    let lister = DirectoryLister(readFinderInfo: { _, _ in code })
+
+    let file = try #require(try lister.entry(named: "file.txt", inDirectory: folder.url.path))
+    let folderEntry = try #require(try lister.entry(named: "folder", inDirectory: folder.url.path))
+
+    #expect(file.type == .regular && file.tagLabels.isEmpty)
+    #expect(folderEntry.type == .directory && folderEntry.tagLabels.isEmpty)
+}
+
+@Test func aFinderInfoReadThatFailsOtherwiseFailsTheEntry() throws {
+    let folder = try TemporaryFolder("DirectoryListerTests")
+    try Data("x".utf8).write(to: folder.url.appending(path: "file.txt"))
+    let lister = DirectoryLister(readFinderInfo: { _, _ in EIO })
+
+    #expect(throws: ListingError.self) {
+        try lister.entry(named: "file.txt", inDirectory: folder.url.path)
+    }
+}
