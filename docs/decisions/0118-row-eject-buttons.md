@@ -67,3 +67,9 @@ sidebar had the button.
 A double-click on a column's grip fits the column to its longest name without room for the
 button, so a volume's long name in a fitted column truncates before the glyph. A volume mounted
 outside /Volumes shows the button in its parent folder's listing too, wherever that is.
+
+## Amendment: tag dots (2026-10-27, TG.2)
+
+A tagged row's dots follow its name and end before the eject button when it shows, else before
+the badge, else, in a column, before the chevron's room; the name ends before the dots
+([0124](0124-tags-in-rows-and-preview.md)).

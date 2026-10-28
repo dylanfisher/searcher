@@ -85,3 +85,9 @@ read, is logged and skipped, and the least recently written files after it are s
 until the folder fits 50 MB. A file whose size can't be read isn't counted. Before, the first
 such failure ended the trim, so one undeletable file let the folder grow past the cap for good.
 Files whose names aren't a volume file's are deleted before any attributes are read.
+
+## Amendment: tag colors (2026-10-27, TG.2)
+
+An entry with colored tags has a `tags` key, its color labels, and an entry without has none,
+as `size` is there for a regular file only. An empty list, a repeated label or one outside 1 to
+7 fails the decode ([0124](0124-tags-in-rows-and-preview.md)).
