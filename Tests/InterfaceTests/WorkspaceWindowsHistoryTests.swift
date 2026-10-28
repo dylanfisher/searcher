@@ -339,6 +339,85 @@ private func shown(_ controller: BrowserWindowController) throws -> [TabState] {
     #expect(try shown(restored) == before)
 }
 
+/// A Forward step is saved too: after Back and a relaunch, Forward re-applies the workspace.
+@MainActor @Test func aForwardStepOutlivesARelaunch() async throws {
+    let folder = try TemporaryFolder("WorkspaceWindowsHistoryTests")
+    let windows = makeWindows(store: diskStore(folder))
+    let controller = try await savedWindow(in: windows)
+    try await drift(controller)
+    let before = try shown(controller)
+    try openFromSidebar("Project 1", in: controller)
+    let opened = try shown(controller)
+    try keyTable(controller).run(NavigationCommands.back.id)
+    _ = await loadedPane(of: controller)
+    #expect(await windows.saveBeforeQuit(by: .now + .seconds(3600)))
+
+    let relaunched = makeWindows()
+    let restored = try #require(await relaunched.restore(await diskStore(folder).load()))
+    _ = await loadedPane(of: restored)
+    #expect(try shown(restored) == before)
+    #expect(restored.workspace.canStepForward && !restored.workspace.canStepBack)
+
+    try keyTable(restored).run(NavigationCommands.forward.id)
+
+    #expect(try shown(restored) == opened)
+    #expect(restored.workspace.canStepBack && !restored.workspace.canStepForward)
+}
+
+/// After the window's Back, a navigation in one of its panes, run as a command, ends the way
+/// forward: Forward's item turns off, and Back's stays on for the folder left.
+@MainActor @Test func aNavigationAfterBackTurnsForwardOff() async throws {
+    let windows = makeWindows()
+    let controller = try await savedWindow(in: windows)
+    try await drift(controller)
+    try openFromSidebar("Project 1", in: controller)
+    try keyTable(controller).run(NavigationCommands.back.id)
+    _ = await loadedPane(of: controller)
+    #expect(try backAndForward(controller) == [false, true])
+
+    try keyTable(controller).run(NavigationCommands.goToParent.id)
+
+    let pane = await loadedPane(of: controller)
+    #expect(pane.location == Location(path: "/"))
+    #expect(!controller.workspace.canStepForward)
+    #expect(try backAndForward(controller) == [true, false])
+    try keyTable(controller).run(NavigationCommands.back.id)
+    #expect(controller.workspace.tabs.count == 2)
+    #expect(controller.workspace.selectedTab.focusedPane.location == Location(path: "/root"))
+}
+
+/// A pane torn out after the open keeps its ID in its new window, and Back rebuilds a pane under
+/// the same ID in the old one. Each window's view of that ID shows its own pane: the rebuilt
+/// one takes no views from the torn one, and the torn one keeps its own.
+@MainActor @Test func backAfterATearOutLeavesTheTornPaneAndItsViewsInItsWindow() async throws {
+    let windows = makeWindows()
+    let controller = try await savedWindow(in: windows)
+    _ = try #require(controller.workspace.selectedTab.split(.horizontal, in: Rect(savedFrame)))
+    controller.showWorkspace()
+    try controller.saveWorkspace()
+    controller.workspace.selectedTab.focusedPane.navigate(to: Location(path: "/root/docs"))
+    _ = await loadedPane(of: controller)
+    let before = try shown(controller)
+    try openFromSidebar("Project 1", in: controller)
+    let tornID = controller.workspace.selectedTab.layout.focused
+
+    try keyTable(controller).run(WindowCommands.movePaneToNewWindow.id)
+    let torn = try #require(windows.controllers.first { $0 !== controller })
+    let tornPane = torn.workspace.selectedTab.focusedPane
+    let tornView = try #require(torn.paneViewController(for: tornID))
+    #expect(tornView.pane === tornPane)
+    try keyTable(controller).run(NavigationCommands.back.id)
+
+    #expect(try shown(controller) == before)
+    let rebuilt = try #require(controller.workspace.selectedTab.panes[tornID])
+    #expect(rebuilt !== tornPane && !tornPane.isClosed)
+    #expect(controller.paneViewController(for: tornID)?.pane === rebuilt)
+    #expect(controller.paneViewController(for: tornID) !== tornView)
+    #expect(torn.paneViewController(for: tornID) === tornView)
+    #expect(tornView.view.window === torn.window)
+    #expect(torn.workspace.selectedTab.focusedPane === tornPane)
+}
+
 /// Column view's trail, rebuilt from the root as a step comes back, records nothing of its own:
 /// Forward is still the window's.
 @MainActor @Test func backToAColumnViewKeepsTheWayForward() async throws {
