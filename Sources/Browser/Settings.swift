@@ -407,9 +407,10 @@ public final class Settings {
 
     /// Applies what the config file holds: its values, every default when there is no file, or,
     /// for a file with an error, the errors, which leave the values as they were. Tells the
-    /// observers when a value or the errors changed.
+    /// observers when a value, the overrides or the errors changed: a file can change which
+    /// app values override it while every value reads as before.
     public func applyConfig(_ load: ConfigLoad) {
-        let before = (Self.preferences.map { value(of: $0.key) }, configErrors)
+        let before = (Self.preferences.map { value(of: $0.key) }, configOverrides, configErrors)
         switch load.outcome {
         case .missing:
             fileValues = [:]
@@ -420,7 +421,7 @@ public final class Settings {
         case .failed(let errors):
             configErrors = errors
         }
-        if before != (Self.preferences.map { value(of: $0.key) }, configErrors) {
+        if before != (Self.preferences.map { value(of: $0.key) }, configOverrides, configErrors) {
             notifyObservers()
         }
     }
@@ -503,8 +504,16 @@ public final class Settings {
     }
 
     /// Stores `value` as the app's for preference `key` when it changes what the preference
-    /// reads as, and tells the observers.
+    /// reads as, and tells the observers. The config file's own value removes the app's
+    /// instead, so the preference follows the file again rather than keep an override that
+    /// would outlast the next change of the file.
     private func set(_ value: Value, for key: Key) {
+        if value == fileValues[key] {
+            guard appValues.removeValue(forKey: key) != nil else { return }
+            defaults.removeObject(forKey: key.rawValue)
+            notifyObservers()
+            return
+        }
         guard value != self.value(of: key) else { return }
         appValues[key] = value
         store(value.stored, for: key, changed: true)

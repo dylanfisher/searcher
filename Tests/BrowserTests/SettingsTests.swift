@@ -637,6 +637,26 @@ private let showPalette = WindowCommands.showPalette.id
     #expect(calls == 3)
 }
 
+/// Setting in the app the value the file has removes the app's value rather than storing it, so
+/// the preference follows the file again and no override is left behind to outlast it.
+@MainActor @Test func settingTheFilesValueInTheAppFollowsTheFileAgain() throws {
+    let folder = try TemporaryFolder("SettingsTests")
+    let defaults = temporarySuite(in: folder.url.path)
+    let settings = Settings(defaults: defaults, log: unexpectedSettingsLog)
+    settings.applyConfig(ConfigParser.parse("folders-first = true"))
+    settings.foldersFirst = false
+    var calls = 0
+    settings.observe(for: settings) { calls += 1 }
+
+    settings.foldersFirst = true
+
+    #expect(settings.foldersFirst)
+    #expect(defaults.object(forKey: Settings.Key.foldersFirst.rawValue) == nil)
+    #expect(calls == 1)
+    settings.applyConfig(ConfigParser.parse("folders-first = false"))
+    #expect(!settings.foldersFirst)
+}
+
 /// Each preference is declared once: one file name and one stored key each. Only preferences a
 /// user sets are in the file; state the app keeps by itself is not.
 @MainActor @Test func eachPreferenceIsDeclaredOnce() {
