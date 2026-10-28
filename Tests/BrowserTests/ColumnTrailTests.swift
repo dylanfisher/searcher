@@ -2658,6 +2658,31 @@ private func info(_ seconds: Double, tags: [String] = []) -> ItemInfo {
     #expect(reader.calls.count == 1)
 }
 
+/// A change to the file's tags leaves its entry as it was; the folder's monitor still patches
+/// it, and the preview reads its info again, so its tags show the change
+/// (docs/decisions/0121-tag-commands.md).
+@MainActor @Test func aPatchNamingTheFileWithItsEntryUnchangedReadsItAgain() async throws {
+    let fixture = await columnPane()
+    let reader = GatedItemInfoReader(["/r/a.txt": info(1)])
+    reader.releaseAll()
+    fixture.pane.itemInfoReader = reader
+    let first = trail(fixture.pane).columns[1].pane
+    select("a.txt", in: trail(fixture.pane).columns[1])
+    await settle { trail(fixture.pane).preview?.info == .read(info(1)) }
+    let tagged = GatedItemInfoReader(["/r/a.txt": info(1, tags: ["Red"])])
+    tagged.releaseAll()
+    fixture.pane.itemInfoReader = tagged
+
+    first.apply(.patches([.update(file("a.txt"))]), at: first.location)
+
+    await settle { trail(fixture.pane).preview?.info == .read(info(1, tags: ["Red"])) }
+    // Read once for the patch, not again for every later change.
+    first.apply(.patches([.update(file("b.txt"))]), at: first.location)
+    await settle { first.state.names.contains("b.txt") }
+    for _ in 0..<3 { await drainMainQueue() }
+    #expect(tagged.calls.count == 1)
+}
+
 @MainActor @Test func aPackagesPreviewReadsItsInfoToo() async throws {
     var folders = tree
     folders["/r"] = [package("App.app")]
