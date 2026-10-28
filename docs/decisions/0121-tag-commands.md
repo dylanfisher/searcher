@@ -85,13 +85,31 @@ The records this has to fit:
   written back exactly as read, so a tag that stays keeps its color, whether or not the user's
   tag list has it (`entriesAreWrittenExactlySoEachTagKeepsItsColor`); `NSURL` reads the result
   back by name, as Finder and Spotlight do. An empty list removes the attribute, as Finder leaves
-  an untagged item. A read-only or locked file refuses with `EACCES` or `EPERM`,
-  `permissionDenied`; a missing item is `sourceGone`. A symlink's tags are its target's, as with
-  `NSURL`.
-- **The operation.** `FileOperation.toggleTag(tag, on: paths)`, with a `FinderTag`. Its plan reads every item's
-  tags (`OperationPlan.addsTag`): when some item it could read lacks the tag, the toggle adds it;
-  when every one has it, the toggle takes it off each. Each item is read again as it runs and
-  changed from what is there then, so a tag another app added since the plan stays. An item
+  an untagged item, and an empty attribute reads as no tags.
+- **Errors.** A read-only or locked file refuses with `EACCES` or `EPERM`, `permissionDenied`;
+  a missing item is `ENOENT`, `sourceGone`; a volume without extended attributes gives
+  `ENOTSUP`, `other`. A read whose size changed between asking and reading, `ERANGE`, as when
+  another app wrote the tags in between, is tried once more; a second `ERANGE` is `other`. An
+  attribute that isn't a list of strings is `other`.
+- **Symlinks, as `NSURL` does them.** A symlink's tags are its target's: the attribute is read
+  and written through the link. Its color label goes in the link's own `FinderInfo`, which
+  `NSURL` writes with the alias flag a symlink reports, `kIsAlias` (0x8000), so a link tagged
+  Blue has `fdFlags` 0x8008 and the target has none; cleared, the link keeps 0x8000. Found by
+  setting `tagNamesKey` on a link in a scratch run
+  (`aSymlinksTagsAreItsTargetsAndItsLabelIsItsOwn`).
+- **A label that can't be set.** The tags are written first, then the label. If the label
+  fails, the tags are put back as their bytes were and the item fails with the label's error,
+  having changed nothing, so nothing goes unrecorded. If the tags can't be put back either,
+  they stay written: the item fails with the label's error and its change is recorded, so undo
+  can still reverse it (`aLabelThatCantBeSetPutsTheTagsBack`,
+  `aLabelThatCantBeSetWithTagsThatCantBePutBackReturnsItsError`,
+  `tagsWrittenWithoutTheirLabelAreRecordedAndUndone`). Either way no change on disk is left
+  out of the record.
+- **The operation.** `FileOperation.toggleTag(tag, on: paths)`, with a `FinderTag`. Its plan
+  reads every item's tags (`OperationPlan.addsTag`): when some item it could read lacks the tag,
+  the toggle adds it; when every one has it, the toggle takes it off each. Each item is read
+  again as it runs and changed from what is there then, so a tag another app added after the
+  plan read it stays, unless it lands in the moment between that read and the write. An item
   that already has the tag, in any color, or lacks it, isn't written or recorded. An added tag
   is the standard entry, `Red\n6`; a removal takes off every entry of that name. An item whose
   tags can't be read or written fails alone with its path and the others run, as for any
@@ -112,8 +130,10 @@ The records this has to fit:
 - **No silent clobbering.** Finder's undo of a tag doesn't say what it does when another app
   changed the tags since; 0072's check-first rule decides it. The undo's check reads each item's
   entries, and if any isn't the list the change left, colors included, nothing runs and that item
-  fails with the new reason `tagsChanged`, naming it. The run checks again before each write, for a change made
-  between the check and the write. `tagsChanged` can clear (`canClear`): the user may set the
+  fails with the new reason `tagsChanged`, naming it. The run reads each item again just
+  before its write, which narrows the time another app's change could be overwritten to the
+  moment between that read and the write; it doesn't close it, since no call reads and writes
+  an extended attribute as one step. `tagsChanged` can clear (`canClear`): the user may set the
   tags back. So the entry is kept once, as for `notTheSameItem`; the next try that fails drops
   it.
 - **Edge cases**, each with its test in `FileOperationTagTests` unless named:
@@ -160,8 +180,10 @@ The records this has to fit:
   still works, since the toggle reads again. A click closes the menu and runs the tag's command
   on the clicked table. The dots are turned on as the menu opens, while the command can run,
   and a press that reaches a dot turned off since does nothing (`aDisabledDotDoesNothing`).
-  The button's cell takes a press anywhere in it: AppKit's own button cell may take none on a
-  button with no title, image or bezel.
+  A dot takes a press inside the circle it grows to under the mouse, 16 points, or within 2
+  points of it, and not in the button's corners, both where the window looks for the view under
+  the mouse and in the button's cell, since AppKit's own cell may take none on a button with no
+  title, image or bezel (`aPressTakesTheDotInItsCircleAndNotInACorner`).
 - **Dot states** (0110): at rest a 12-point circle in the tag's color
   (`NSWorkspace.fileLabelColors`) with a darker rim, and a white check for all, a dash for some;
   under the mouse it grows to 16 points and shows + or ×; pressed, it darkens a quarter toward
@@ -203,8 +225,9 @@ names, and "Red" written there would be a tag of its own without a color; when t
 localized, the names come from `NSWorkspace.fileLabels`. A dot's state is read once per menu,
 one `getxattr` per selected item on its own thread, and a click reads every item again in the
 plan and once more as it runs. The attribute's format is Finder's, not a published API; if a
-later macOS changes it, a read that isn't a list of strings fails the item with `other`. Folder tagging conflicts, by path, with any operation inside the
-folder, as a rename of the folder would. Each patch keeps a set of the names it updated.
+later macOS changes it, a read that isn't a list of strings fails the item with `other`.
+Folder tagging conflicts, by path, with any operation inside the folder, as a rename of the
+folder would. Each patch keeps a set of the names it updated.
 
 **To check by hand:** in Finder, select two files, one tagged Red; right-click and compare the
 red dot (dash or check) and what a click does with the app's; tag a file from the app and see

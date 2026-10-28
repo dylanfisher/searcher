@@ -34,9 +34,11 @@ private struct TaggingWindow {
             let path = folder.url.appending(path: file.name).path
             try Data(file.name.utf8).write(to: URL(fileURLWithPath: path))
             let tags = file.tags
-            try await BlockingCallThread.run { () throws(FileOperationError) in
+            let unlabeled = try await BlockingCallThread.run {
+                () throws(FileOperationError) -> FileOperationError? in
                 try FinderTags.set(entries: tags, at: path)
             }
+            #expect(unlabeled == nil)
         }
         let settings = untouchedSettings()
         let pane = Pane(

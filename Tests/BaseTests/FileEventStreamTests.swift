@@ -56,9 +56,11 @@ import Testing
             for write in 1... {
                 // Each write differs from the last, so each is a change on disk.
                 let entries = write % 2 == 0 ? ["Red\n6"] : ["Red\n6", "Blue\n4"]
-                try await BlockingCallThread.run { () throws(FileOperationError) in
+                let unlabeled = try await BlockingCallThread.run {
+                    () throws(FileOperationError) -> FileOperationError? in
                     try FinderTags.set(entries: entries, at: path)
                 }
+                #expect(unlabeled == nil)
                 try await Task.sleep(for: .milliseconds(100))
             }
         }

@@ -113,3 +113,106 @@ private func run<T: Sendable>(_ body: @escaping @Sendable () throws(FileOperatio
 
     #expect(error?.reason == .sourceGone)
 }
+
+/// The bytes of the item's own `FinderInfo`, not following a symlink; nil when it has none.
+private func finderInfo(_ path: String) -> [UInt8]? {
+    var info = [UInt8](repeating: 0, count: 32)
+    let read = getxattr(path, "com.apple.FinderInfo", &info, 32, 0, XATTR_NOFOLLOW)
+    return read < 0 ? nil : info
+}
+
+/// What a write with injected failures came to: the error it returned, or the one it threw.
+private typealias WriteOutcome = Result<FileOperationError?, FileOperationError>
+
+/// A color label that can't be set puts the tags back as they were, and the write fails having
+/// changed nothing.
+@Test func aLabelThatCantBeSetPutsTheTagsBack() async throws {
+    let folder = try TemporaryFolder("FinderTagsTests")
+    let path = folder.url.appending(path: "notes.txt").path
+    try Data("x".utf8).write(to: URL(fileURLWithPath: path))
+    let refusal = FileOperationError(reason: .permissionDenied, path: path, errno: EPERM)
+
+    let outcome = await BlockingCallThread.run { () -> WriteOutcome in
+        do throws(FileOperationError) {
+            try FinderTags.set(entries: ["Work\n4"], at: path)
+            return .success(
+                try FinderTags.set(
+                    entries: ["Work\n4", "Red\n6"], at: path,
+                    writeAttribute: FinderTags.writeAttribute(_:at:),
+                    setLabel: { _, _ throws(FileOperationError) in throw refusal }))
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    #expect(outcome == .failure(refusal))
+    #expect(try storedTags(path) == ["Work\n4"])
+}
+
+/// When the tags can't be put back either, they stay written and the label's error is
+/// returned, for the caller to record the change.
+@Test func aLabelThatCantBeSetWithTagsThatCantBePutBackReturnsItsError() async throws {
+    let folder = try TemporaryFolder("FinderTagsTests")
+    let path = folder.url.appending(path: "notes.txt").path
+    try Data("x".utf8).write(to: URL(fileURLWithPath: path))
+    let refusal = FileOperationError(reason: .permissionDenied, path: path, errno: EPERM)
+
+    let outcome = await BlockingCallThread.run { () -> WriteOutcome in
+        var writes = 0
+        do throws(FileOperationError) {
+            return .success(
+                try FinderTags.set(
+                    entries: ["Red\n6"], at: path,
+                    writeAttribute: { data, path throws(FileOperationError) in
+                        writes += 1
+                        guard writes == 1 else { throw refusal }
+                        try FinderTags.writeAttribute(data, at: path)
+                    },
+                    setLabel: { _, _ throws(FileOperationError) in throw refusal }))
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    #expect(outcome == .success(refusal))
+    #expect(try storedTags(path) == ["Red\n6"])
+}
+
+/// As `NSURL` does: a symlink's tags are its target's, and its color label goes in the link's
+/// own `FinderInfo`, with the alias flag a symlink reports.
+@Test func aSymlinksTagsAreItsTargetsAndItsLabelIsItsOwn() async throws {
+    let folder = try TemporaryFolder("FinderTagsTests")
+    let target = folder.url.appending(path: "target.txt").path
+    let link = folder.url.appending(path: "link.txt").path
+    try Data("x".utf8).write(to: URL(fileURLWithPath: target))
+    #expect(symlink(target, link) == 0)
+
+    let read = try await run { () throws(FileOperationError) -> [String] in
+        try FinderTags.set(entries: ["Blue\n4"], at: link)
+        return try FinderTags.entries(at: link)
+    }
+
+    #expect(read == ["Blue\n4"])
+    #expect(try storedTags(target) == ["Blue\n4"])
+    #expect(getxattr(link, "com.apple.metadata:_kMDItemUserTags", nil, 0, 0, XATTR_NOFOLLOW) < 0)
+    #expect(finderInfo(target) == nil)
+    #expect(finderInfo(link).map { Array($0[8...9]) } == [0x80, 0x08])
+
+    _ = try await run { () throws(FileOperationError) -> FileOperationError? in
+        try FinderTags.set(entries: [], at: link)
+    }
+    #expect(finderInfo(link).map { Array($0[8...9]) } == [0x80, 0x00])
+}
+
+@Test func anEmptyAttributeIsNoTags() async throws {
+    let folder = try TemporaryFolder("FinderTagsTests")
+    let path = folder.url.appending(path: "notes.txt").path
+    try Data("x".utf8).write(to: URL(fileURLWithPath: path))
+    #expect(setxattr(path, "com.apple.metadata:_kMDItemUserTags", nil, 0, 0, 0) == 0)
+
+    let entries = try await run { () throws(FileOperationError) -> [String] in
+        try FinderTags.entries(at: path)
+    }
+
+    #expect(entries == [])
+}
