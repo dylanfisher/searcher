@@ -18,6 +18,21 @@ final class TagDotButton: NSButton {
     static let pressedShade: CGFloat = 0.25
     static let disabledAlpha: CGFloat = 0.35
 
+    /// A cell that takes a press anywhere in the button. AppKit's own takes none on a button with
+    /// no title, image or bezel, so a click would pass the dot by.
+    private final class Cell: NSButtonCell {
+        override func hitTest(for event: NSEvent, in cellFrame: NSRect, of controlView: NSView)
+            -> NSCell.HitResult
+        {
+            [.contentArea, .trackableArea]
+        }
+    }
+
+    override class var cellClass: AnyClass? {
+        get { Cell.self }
+        set {}
+    }
+
     let finderTag: FinderTag
     /// Runs when the mouse enters or leaves the button.
     var onHover: @MainActor (TagDotButton) -> Void = { _ in }
@@ -41,9 +56,9 @@ final class TagDotButton: NSButton {
     init(_ tag: FinderTag) {
         finderTag = tag
         super.init(frame: NSRect(x: 0, y: 0, width: Self.side, height: Self.side))
+        bezelStyle = .accessoryBarAction
         isBordered = false
-        title = ""
-        setButtonType(.momentaryChange)
+        imagePosition = .imageOnly
         // Menus track the mouse while the app isn't active, so the area is always on.
         addTrackingArea(
             NSTrackingArea(
