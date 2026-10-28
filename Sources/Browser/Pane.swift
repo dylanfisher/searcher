@@ -216,6 +216,11 @@ public final class Pane {
     /// Folder change patches not yet applied, in the order they arrived.
     var waitingPatches: [FolderChange.Patch] = []
     var patchIsRunning = false
+    /// How many patches have landed, and the names the last one updated, whether or not their
+    /// entries changed: a change to an item's tags or other extended attributes leaves its entry
+    /// as it was, and column view's preview reads the item's info again for it.
+    private(set) var landedPatches = 0
+    private(set) var lastPatchedNames: Set<String> = []
     /// A change arrived while a load was running; list the folder again when it ends.
     var relistAfterLoad = false
     /// Sorts started off the main actor: one per sort change over rows, and one per listing that
@@ -1164,6 +1169,10 @@ public final class Pane {
         let patches = waitingPatches
         waitingPatches = []
         patchIsRunning = true
+        let updated = Set(
+            patches.compactMap { patch in
+                if case .update(let entry) = patch { entry.name } else { nil }
+            })
         let version = stateVersion
         let selection = selection
         let selectionVersion = selectionVersion
@@ -1188,7 +1197,7 @@ public final class Pane {
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self?.finishPatch(
-                        listing, after: change, from: version,
+                        listing, updating: updated, after: change, from: version,
                         resolved: resolved, from: selectionVersion)
                 }
             }
@@ -1207,8 +1216,8 @@ public final class Pane {
     }
 
     private func finishPatch(
-        _ listing: Listing, after change: Selection.Change, from version: Int,
-        resolved: Selection, from selectionVersion: Int
+        _ listing: Listing, updating updated: Set<String>, after change: Selection.Change,
+        from version: Int, resolved: Selection, from selectionVersion: Int
     ) {
         patchIsRunning = false
         guard version == stateVersion else {
@@ -1219,6 +1228,8 @@ public final class Pane {
             startSizeBatch()
             return
         }
+        landedPatches += 1
+        lastPatchedNames = updated
         show(.loaded(listing), after: change, resolved: resolved, from: selectionVersion)
         selectNamesIfListed()
         selectNextIfTrashLanded()
