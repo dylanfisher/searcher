@@ -48,9 +48,8 @@ No history spans a window.
 - **A window's own Back and Forward.** `Workspace.history` (`WorkspaceHistory`) holds steps,
   each what the window showed: every tab as `TabState`, which keeps the layout and split,
   folders, view modes, sorts, selections by name, column widths and each pane's own Back and
-  Forward, plus the selected tab and whether the sidebar shows. Each way keeps its nearest 10
-  steps (`WorkspaceHistory.limit`); each step holds up to 1,000 history entries per pane, so the
-  limit bounds the window file. Panes' own histories keep their 500 each way inside a step.
+  Forward, plus the selected tab and whether the sidebar shows. See "Bounds" for how much a step
+  keeps.
 - **Opening a saved workspace into its window is a step.** When `showSnapshot` rebuilds the
   window's tabs, `Workspace.open` first keeps what the window showed as a Back step and ends the
   window's way forward. That covers a click in the window's own sidebar or palette, and a click
@@ -89,6 +88,32 @@ No history spans a window.
 - **The dot after a step.** The window's Back or Forward sets the edited dot at once
   (`Workspace.onStep`), as a reload does.
 
+### Bounds
+
+Every save writes the window file whole, and every launch decodes it, encodes it again and
+compares the two (0078), inside B1. A step therefore keeps much less than the window does:
+
+- **Steps:** each way keeps its nearest 10 (`WorkspaceHistory.limit`), the farthest going first.
+- **Pane history inside a step:** each pane keeps only its nearest entry each way
+  (`WorkspaceHistory.paneEntries`), not the 500 a live pane keeps (`History.limit`). The bound
+  is applied as each step is kept: by `open`, by the window's Back, which keeps what the window
+  shows as the way forward, and by its Forward.
+- **Measured:** `aWindowFileWithTheMostStepsStaysUnderAMegabyte` builds the worst case. That is
+  8 tabs of a 2 × 2 grid, every pane at a 100-character path, every live pane with its full 500
+  entries each way, and 10 steps each way of the same tabs. Encoded as the store writes it
+  (sorted keys), the window file is 4,583,798 bytes without steps and 5,061,056 with them. The
+  20 steps add 477,258 bytes, about 750 bytes per pane per step. With 3 entries each way they
+  added 843,338 bytes, and with the full 500 they added 91.7 MB. The 4.6 MB without steps is the
+  live panes' own Back and Forward, which 0033's cap allows.
+- **Checked on load:** a stored history over either bound is rejected and the window file
+  discarded and reported, as any file of another shape is. It isn't trimmed: only a file edited
+  by hand or written by another build holds one.
+- **What the bound leaves out:** selections by name. A step keeps a pane's selection as the
+  window does, so a Select All of a large folder is copied into each step that holds it. It was
+  already unbounded in the window's own state (0078).
+- **B1:** the `restored-session` scenario's windows each hold 10 steps each way at these bounds
+  ([performance.md](../performance.md)).
+
 ### Edge cases
 
 - **A folder of a step was deleted, or is on an ejected volume or share.** The pane comes back at
@@ -125,6 +150,8 @@ No history spans a window.
 - **The snapshot's own pane histories** in the window it opens into (above).
 - **Forward after a new navigation.** A new navigation ends it, as it ends a pane's.
 - **More than 10 steps each way.** The farthest go.
+- **A pane's history beyond its nearest entry, once its window steps away.** After the window's
+  Back or Forward, each pane has one entry each way of its own; Back then steps the window.
 
 ## Alternatives considered
 
@@ -148,7 +175,8 @@ No history spans a window.
 
 ## Consequences
 
-- A window file grows by its steps: usually a few kilobytes, at most 10 steps each way.
+- A window file grows by its steps: at most 477 KB in the worst case measured above, and about
+  750 bytes per pane per step otherwise.
 - `Workspace.restoreTab`, set by `WorkspaceWindows` for every window it makes, rebuilds tabs for
   `open` and for the window's Back and Forward.
 - Back after opening a workspace in its own window returns to what the window showed, and Forward
