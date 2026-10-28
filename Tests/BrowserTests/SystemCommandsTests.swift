@@ -296,6 +296,27 @@ private func openConfigBinding() throws -> CommandBinding {
     #expect(actions.openedFiles.isEmpty)
 }
 
+/// A symbolic link at the config file's path to a file that isn't there is reported, not opened
+/// or written through.
+@MainActor @Test func aConfigFileLinkToNothingIsReported() async throws {
+    let folder = try TemporaryFolder("SystemCommandsTests")
+    let file = folder.url.appending(path: "config")
+    let target = folder.url.appending(path: "dotfiles/config")
+    try FileManager.default.createSymbolicLink(at: file, withDestinationURL: target)
+    let settings = configured(folder, file: file)
+    let actions = StubSystemActions(defaultApplications: [.plainText: textEdit])
+
+    await SystemCommands.openConfig(settings: settings, systemActions: actions).value
+
+    #expect(
+        settings.configErrors.map(\.description) == [
+            "couldn't be created: it is a symbolic link to \(target.path), which doesn't exist"
+        ])
+    #expect(actions.openedWithApp.isEmpty)
+    #expect(actions.openedFiles.isEmpty)
+    #expect(!FileManager.default.fileExists(atPath: target.path))
+}
+
 /// Settings with no config file, as the tests' and the bench's, leave the command off.
 @MainActor @Test func openConfigFileIsOffWithoutAConfigFile() async throws {
     let fixture = await systemPane()

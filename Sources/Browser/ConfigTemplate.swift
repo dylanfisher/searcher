@@ -35,12 +35,26 @@ public enum ConfigTemplate {
     static func create(at url: URL) throws {
         let files = FileManager.default
         if files.fileExists(atPath: url.path) { return }
+        // `fileExists` follows a link, so a link to a missing file reads as no file; the
+        // create-only write would then fail on the link and the open would open nothing.
+        if let target = try? files.destinationOfSymbolicLink(atPath: url.path) {
+            throw DanglingLink(target: target)
+        }
         try files.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         do {
             try AtomicWrite.create(Data(text.utf8), at: url)
         } catch POSIXError.EEXIST {
             // Made since the check, by the user: that file is the one to open.
+        }
+    }
+
+    /// A symbolic link at the config file's path to a file that isn't there.
+    struct DanglingLink: LocalizedError {
+        let target: String
+
+        var errorDescription: String? {
+            "it is a symbolic link to \(target), which doesn't exist"
         }
     }
 }
