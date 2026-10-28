@@ -144,6 +144,31 @@ private func nextLoad(_ loads: AsyncStream<ConfigLoad>) async -> ConfigLoad? {
 
 /// The settings take the first load before `follow` returns, so the windows open with it, and
 /// each later one as it comes.
+/// A config file Open Config File couldn't make is an error until the next read of the file,
+/// even one that reads as no file, as before: removing a link to nothing clears the banner.
+@MainActor @Test func aFailedCreateClearsOnTheNextRead() async throws {
+    let folder = try TemporaryFolder("ConfigWatcherTests")
+    let file = folder.url.appending(path: "config")
+    try FileManager.default.createSymbolicLink(
+        at: file, withDestinationURL: folder.url.appending(path: "missing"))
+    let watch = ManualWatch()
+    let settings = Settings(
+        defaults: temporarySuite(in: folder.url.path), configFile: file,
+        log: unexpectedSettingsLog)
+    let watcher = ConfigWatcher(file: file, log: { _ in }, watch: watch.watch)
+    await settings.follow(watcher)
+    #expect(settings.configErrors.isEmpty)
+
+    await SystemCommands.openConfig(settings: settings, systemActions: StubSystemActions())
+        .value
+    await settle { !settings.configErrors.isEmpty }
+
+    try FileManager.default.removeItem(at: file)
+    watch.change()
+    await settle { settings.configErrors.isEmpty }
+    await watcher.stop()
+}
+
 @MainActor @Test func settingsFollowTheWatchersLoads() async throws {
     let folder = try TemporaryFolder("ConfigWatcherTests")
     let file = folder.url.appending(path: "config")

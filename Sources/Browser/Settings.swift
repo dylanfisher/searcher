@@ -386,6 +386,9 @@ public final class Settings {
     /// while it applied, or there is none.
     public private(set) var configErrors: [ConfigError] = []
 
+    /// The watcher `follow(_:)` applies the loads of; its caller keeps it.
+    private weak var configWatcher: ConfigWatcher?
+
     /// The settings stored in `defaults`, for the user whose home folder is `home`, with
     /// `configFile` as the config file Open Config File opens. `log` gets each stored value
     /// removed for its shape as the settings are read.
@@ -430,6 +433,7 @@ public final class Settings {
     /// open with the file's values, then each later read as it comes, until the settings or the
     /// watcher are gone. The caller keeps the watcher.
     public func follow(_ watcher: ConfigWatcher) async {
+        configWatcher = watcher
         applyConfig(await watcher.start())
         let loads = watcher.loads
         Task { [weak self] in
@@ -437,6 +441,18 @@ public final class Settings {
                 guard let self else { return }
                 applyConfig(load)
             }
+        }
+    }
+
+    /// Shows `error`, found with the config file outside a read of it, as one that came from a
+    /// read. With a watcher followed, it goes through the watcher, so the next read clears it
+    /// even when that read is the same as the one before, as no file is after a link to nothing
+    /// is removed; the error shows once the watcher's load is applied.
+    func reportConfigProblem(_ error: ConfigError) async {
+        if let configWatcher {
+            await configWatcher.report([error])
+        } else {
+            applyConfig(.failed([error]))
         }
     }
 

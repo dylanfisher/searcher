@@ -94,12 +94,10 @@ public enum SystemCommands: CommandSet {
                 // No app opens plain text by default, so the system picks one for the file.
                 systemActions.openFile(file)
             case .failure(let error):
-                settings.applyConfig(
-                    .failed([
-                        ConfigError(
-                            line: nil, key: nil,
-                            reason: "couldn't be created: \(error.localizedDescription)")
-                    ]))
+                await settings.reportConfigProblem(
+                    ConfigError(
+                        line: nil, key: nil,
+                        reason: "couldn't be created: \(error.localizedDescription)"))
             }
         }
     }

@@ -75,7 +75,9 @@ and adds shortcut lines to the same file and parser.
   the banner; that includes a volume whose rename can't take `RENAME_EXCL` (`ENOTSUP`), which
   fails loudly rather than fall back to a rename that could replace a file. A symbolic link at
   the path to a file that isn't there is reported in the banner and not opened or written
-  through; the watcher reads such a link as no file. With no browser window open, or the
+  through; the watcher reads such a link as no file. A folder at the path is reported the same
+  way. Such an error goes through the watcher as if a read had found it, so the next read of
+  the file clears it, even one that reads as no file again. With no browser window open, or the
   Settings window in front, the item reaches the app delegate, which hands it to
   `AppMenuResponder` in Interface, as it does New Window.
 - **Template.** A header on how the file reads and that the app's values win, then each

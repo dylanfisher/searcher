@@ -317,6 +317,21 @@ private func openConfigBinding() throws -> CommandBinding {
     #expect(!FileManager.default.fileExists(atPath: target.path))
 }
 
+/// A folder at the config file's path is reported, and the editor isn't asked to open it.
+@MainActor @Test func aFolderAtTheConfigFilesPathIsReported() async throws {
+    let folder = try TemporaryFolder("SystemCommandsTests")
+    let file = folder.url.appending(path: "config")
+    try FileManager.default.createDirectory(at: file, withIntermediateDirectories: false)
+    let settings = configured(folder, file: file)
+    let actions = StubSystemActions(defaultApplications: [.plainText: textEdit])
+
+    await SystemCommands.openConfig(settings: settings, systemActions: actions).value
+
+    #expect(settings.configErrors.map(\.description) == ["couldn't be created: it is a folder"])
+    #expect(actions.openedWithApp.isEmpty)
+    #expect(actions.openedFiles.isEmpty)
+}
+
 /// Settings with no config file, as the tests' and the bench's, leave the command off.
 @MainActor @Test func openConfigFileIsOffWithoutAConfigFile() async throws {
     let fixture = await systemPane()
