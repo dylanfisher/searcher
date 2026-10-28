@@ -43,12 +43,34 @@ extension Settings {
         public let name: String
         let kind: Kind
         public let defaultValue: Value
+        /// What the preference does, in a sentence: the comment above its key in the config
+        /// file the app writes, as in Sublime Text's settings
+        /// (docs/decisions/0126-config-comments.md).
+        public let summary: String
 
-        init(_ key: Key, _ name: String, _ kind: Kind, default: Value) {
+        init(_ key: Key, _ name: String, _ kind: Kind, default: Value, _ summary: String) {
             self.key = key
             self.name = name
             self.kind = kind
             defaultValue = `default`
+            self.summary = summary
+        }
+
+        /// What the preference takes, in words: `true or false`, `"auto", "light" or "dark"`.
+        /// Its error and its comment in the file both say it.
+        var takes: String {
+            switch kind {
+            case .bool:
+                return "true or false"
+            case .number(_, let described):
+                return described
+            case .choice(let names):
+                let quoted = names.map { "\"\($0)\"" }
+                guard let last = quoted.last, quoted.count > 1 else { return quoted.joined() }
+                return quoted.dropLast().joined(separator: ", ") + " or " + last
+            case .string:
+                return "a string that isn't empty"
+            }
         }
 
         /// Whether the preference can hold `value`.

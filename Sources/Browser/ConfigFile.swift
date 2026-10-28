@@ -3,7 +3,9 @@ import Foundation
 /// The config file's format: one JSON object that holds every preference in
 /// `Settings.preferences` under its name, and the shortcuts the user changed under `shortcuts`,
 /// each command's in the shape `Settings` keeps them: `{"primary": "cmd+k", "alternate": ""}`,
-/// where "" takes the slot's chord away (docs/decisions/0123-config-is-the-settings.md).
+/// where "" takes the slot's chord away (docs/decisions/0123-config-is-the-settings.md). It may
+/// have `//` and `/* */` comments and a comma after an object's last key, and a file the app
+/// writes has a comment above each key (docs/decisions/0126-config-comments.md).
 ///
 /// A file with any error sets nothing. Text that isn't JSON is one error, on its line; a key
 /// with a value it can't take is an error that names the key, and so is a key the file can't
@@ -34,20 +36,29 @@ public enum ConfigFile {
         guard String(data: data, encoding: .utf8) != nil else {
             return failed("isn't UTF-8 text")
         }
+        let uncommented: [UInt8]
+        switch ConfigText.blankingComments(Array(data)) {
+        case .success(let blanked): uncommented = blanked.bytes
+        case .failure(let unclosed):
+            return failed("has a /* comment that isn't closed with */", line: unclosed.line)
+        }
+        if uncommented.allSatisfy(ConfigText.isWhitespace) {
+            return failed("is empty: it needs a JSON object, such as {}")
+        }
+        // Each comment and trailing comma is blanked byte for byte, so an offset in `json` is
+        // the same in `data`, and so is its line.
+        let json = Data(ConfigText.blankingTrailingCommas(uncommented))
         let object: Any
         do {
-            object = try JSONSerialization.jsonObject(with: data)
+            object = try JSONSerialization.jsonObject(with: json)
         } catch let error as NSError {
-            if data.allSatisfy({ [0x20, 0x09, 0x0A, 0x0D].contains($0) }) {
-                return failed("is empty: it needs a JSON object, such as {}")
-            }
             return .failed([syntaxError(error, in: data)])
         }
         guard let dictionary = object as? [String: Any] else {
             return failed("must be a JSON object, its keys and values in braces")
         }
         // Foundation keeps the last of a key given twice and says nothing.
-        let duplicates = duplicateKeys(in: data)
+        let duplicates = duplicateKeys(in: json)
         if !duplicates.isEmpty { return .failed(duplicates) }
         var values: [Settings.Key: Settings.Value] = [:]
         var shortcuts: [CommandID: ShortcutOverride] = [:]
@@ -73,40 +84,73 @@ public enum ConfigFile {
             ? ConfigLoad(outcome: .values(values, shortcuts: shortcuts)) : .failed(errors)
     }
 
-    /// The file's text for `contents`: pretty-printed with its keys sorted, every preference
-    /// present so the file shows each one, and a newline at the end.
+    /// What the comment above `shortcuts` says, a line to each item.
+    static let shortcutsComment = [
+        "The shortcuts you changed, by command ID. \"primary\" and \"alternate\" each take a",
+        "shortcut such as \"cmd+shift+k\", or \"\" for none. A slot left out keeps its default.",
+    ]
+
+    /// What the comment above `preference`'s key says, a line to each item: what it does, and
+    /// what it takes.
+    static func comment(_ preference: Settings.Preference) -> [String] {
+        [preference.summary, "Takes \(preference.takes)."]
+    }
+
+    /// The text of a new file for `contents`: every preference, in the order
+    /// `Settings.preferences` gives them, so the file shows each one, then the shortcuts the
+    /// user changed, a command to a line; each key with its comment above it, as in Sublime
+    /// Text's settings, and a newline at the end.
     static func data(_ contents: Contents) -> Data {
-        data(object: object(contents))
+        var entries = Settings.preferences.map { preference in
+            (
+                comment(preference),
+                "\"\(preference.name)\": "
+                    + text(contents.values[preference.key] ?? preference.defaultValue)
+            )
+        }
+        let commands = contents.shortcuts.sorted { $0.key.rawValue < $1.key.rawValue }.map {
+            id, override in
+            let slots = ShortcutOverride.Position.allCases.compactMap { position in
+                override.stored[position.rawValue].map { "\"\(position.rawValue)\": \(text($0))" }
+            }
+            return "    \(text(id.rawValue)): {\(slots.joined(separator: ", "))}"
+        }
+        entries.append(
+            (
+                shortcutsComment,
+                "\"\(shortcutsKey)\": "
+                    + (commands.isEmpty ? "{}" : "{\n\(commands.joined(separator: ",\n"))\n  }")
+            ))
+        let body = entries.map { comment, member in
+            comment.map { "  // \($0)\n" }.joined() + "  \(member)"
+        }
+        return Data(("{\n" + body.joined(separator: ",\n\n") + "\n}\n").utf8)
     }
 
-    /// `contents` as the file's JSON object: every preference, and the shortcuts.
-    static func object(_ contents: Contents) -> [String: Any] {
-        var object: [String: Any] = [:]
-        for preference in Settings.preferences {
-            object[preference.name] = json(
-                contents.values[preference.key] ?? preference.defaultValue)
+    /// `value` as JSON text.
+    static func text(_ value: Settings.Value) -> String {
+        switch value {
+        case .bool, .number: value.description
+        case .string(let string): text(string)
         }
-        object[shortcutsKey] = Dictionary(
-            uniqueKeysWithValues: contents.shortcuts.map { ($0.key.rawValue, $0.value.stored) })
-        return object
     }
 
-    /// The file's text for `object`, a JSON object read from the file or made by `object(_:)`:
-    /// pretty-printed with its keys sorted, and a newline at the end.
-    static func data(object: [String: Any]) -> Data {
-        let data: Data
-        do {
-            data = try JSONSerialization.data(
-                withJSONObject: object,
-                options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
-        } catch {
-            preconditionFailure("the settings didn't encode as JSON: \(error)")
+    /// `string` as a JSON string, its quotes, backslashes and control characters escaped.
+    static func text(_ string: String) -> String {
+        guard
+            let data = try? JSONSerialization.data(
+                withJSONObject: string, options: [.fragmentsAllowed, .withoutEscapingSlashes])
+        else { preconditionFailure("a string didn't encode as JSON") }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    /// `data`, a config file's text, as plain JSON, its comments and trailing commas made
+    /// spaces; nil when a block comment isn't closed.
+    static func plainJSON(_ data: Data) -> Data? {
+        guard case .success(let blanked) = ConfigText.blankingComments(Array(data)) else {
+            return nil
         }
-        // JSONSerialization prints an empty object over three lines. No string in the text can
-        // hold a line break, which JSON escapes, so the pattern matches only an empty object.
-        let text = String(decoding: data, as: UTF8.self).replacingOccurrences(
-            of: #"\{\n\s*\n\s*\}"#, with: "{}", options: .regularExpression)
-        return Data((text + "\n").utf8)
+        return Data(ConfigText.blankingTrailingCommas(blanked.bytes))
     }
 
     /// Errors found in one part of the file.
@@ -203,31 +247,22 @@ public enum ConfigFile {
     private static func value(_ json: Any, for preference: Settings.Preference)
         -> Result<Settings.Value, Failure>
     {
-        let name = preference.name
-        let written = "not \(spelled(json))"
         let number = json as? NSNumber
         switch preference.kind {
         case .bool:
             if let number, isBoolean(number) { return .success(.bool(number.boolValue)) }
-            return .failure(Failure(key: name, "\(name) must be true or false, \(written)"))
-        case .number(_, let described):
+        case .number:
             if let number, !isBoolean(number), preference.accepts(.number(number.doubleValue)) {
                 return .success(.number(number.doubleValue))
             }
-            return .failure(Failure(key: name, "\(name) must be \(described), \(written)"))
-        case .choice(let names):
+        case .choice, .string:
             if let string = json as? String, preference.accepts(.string(string)) {
                 return .success(.string(string))
             }
-            let choices = names.map { "\"\($0)\"" }.joined(separator: ", ")
-            return .failure(Failure(key: name, "\(name) must be one of \(choices), \(written)"))
-        case .string:
-            if let string = json as? String, preference.accepts(.string(string)) {
-                return .success(.string(string))
-            }
-            return .failure(
-                Failure(key: name, "\(name) must be a string that isn't empty, \(written)"))
         }
+        let name = preference.name
+        return .failure(
+            Failure(key: name, "\(name) must be \(preference.takes), not \(spelled(json))"))
     }
 
     /// The shortcuts `json` sets, by command, or every error in them.
@@ -280,15 +315,6 @@ public enum ConfigFile {
             if !override.isStandard { shortcuts[id] = override }
         }
         return errors.isEmpty ? .success(shortcuts) : .failure(Failure(errors))
-    }
-
-    /// `value` as JSON writes it.
-    static func json(_ value: Settings.Value) -> Any {
-        switch value {
-        case .bool(let bool): bool
-        case .number(let number): number == number.rounded() ? Int(number) : number
-        case .string(let string): string
-        }
     }
 
     /// `json` as the file would spell it, for an error that quotes it.

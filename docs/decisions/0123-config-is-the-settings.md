@@ -1,7 +1,8 @@
 # 0123. The config file is the settings: one JSON file the app reads and writes
 
 - **Date:** 2026-10-27
-- **Status:** accepted
+- **Status:** accepted; amended by [0126](0126-config-comments.md) (comments in the file, and
+  patches that keep the user's text)
 - **Supersedes:** [0120](0120-config-format.md) and [0122](0122-config-shortcuts.md)
 - **Amends:** [0031](0031-view-settings.md), [0100](0100-appearance-and-ds-store.md),
   [0106](0106-primary-and-alternate-shortcuts.md), [0107](0107-sidebar-favorites.md),

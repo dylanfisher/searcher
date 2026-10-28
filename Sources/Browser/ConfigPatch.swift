@@ -72,26 +72,73 @@ enum ConfigPatch: Equatable, Sendable {
         contents = ConfigFile.Contents(values: values, shortcuts: shortcuts)
     }
 
-    /// Sets what the patch sets in `object`, the file's JSON object as read, leaving every other
-    /// key as the file has it. A slot at its default is taken out, and a command left with no
-    /// slot with it.
-    func apply(to object: inout [String: Any]) {
+    /// Sets what the patch sets in `text`, the file's text as read, changing only that key's
+    /// value and leaving every other key, comment and space as the file has it
+    /// (docs/decisions/0126-config-comments.md). A key the file doesn't have goes in with its
+    /// comment. A slot at its default is taken out, and a command left with no slot with it.
+    func apply(to text: inout ConfigText) {
         switch self {
         case .value(let key, let value):
-            guard let name = Settings.preferencesByKey[key]?.name else {
+            guard let preference = Settings.preferencesByKey[key] else {
                 preconditionFailure("\(key) isn't a preference")
             }
-            object[name] = ConfigFile.json(value)
-        case .slot(let id, let position, let slot):
-            var shortcuts = object[ConfigFile.shortcutsKey] as? [String: Any] ?? [:]
-            var slots = shortcuts[id.rawValue] as? [String: Any] ?? [:]
-            switch slot {
-            case .standard: slots[position.rawValue] = nil
-            case .removed: slots[position.rawValue] = ""
-            case .chord(let chord): slots[position.rawValue] = chord.stored
+            let root = text.root
+            if let member = root.member(preference.name) {
+                text.replace(member, with: ConfigFile.text(value))
+            } else {
+                text.insert(
+                    "\(ConfigFile.text(preference.name)): \(ConfigFile.text(value))",
+                    comment: ConfigFile.comment(preference), into: root)
             }
-            shortcuts[id.rawValue] = slots.isEmpty ? nil : slots
-            object[ConfigFile.shortcutsKey] = shortcuts
+        case .slot(let id, let position, let slot):
+            let chord: String? =
+                switch slot {
+                case .standard: nil
+                case .removed: ConfigFile.text("")
+                case .chord(let chord): ConfigFile.text(chord.stored)
+                }
+            guard let commands = shortcuts(in: &text, adding: chord != nil) else { return }
+            let command = commands.member(id.rawValue)?.object
+            if let chord {
+                let slotMember = "\(ConfigFile.text(position.rawValue)): \(chord)"
+                if let command, let member = command.member(position.rawValue) {
+                    text.replace(member, with: chord)
+                } else if let command {
+                    text.insert(slotMember, comment: [], into: command)
+                } else {
+                    text.insert(
+                        "\(ConfigFile.text(id.rawValue)): {\(slotMember)}", comment: [],
+                        into: commands)
+                }
+                return
+            }
+            guard let command,
+                let index = command.members.firstIndex(where: { $0.name == position.rawValue })
+            else { return }
+            text.remove(index, from: command)
+            // The command's place moved by what was taken out, so it is found again.
+            if let commands = shortcuts(in: &text, adding: false),
+                let index = commands.members.firstIndex(where: { $0.name == id.rawValue }),
+                commands.members[index].object?.members.isEmpty == true
+            {
+                text.remove(index, from: commands)
+            }
         }
+    }
+
+    /// The `shortcuts` object in `text`; when there is none, nil, or with `adding` an empty one
+    /// put in with its comment.
+    private func shortcuts(in text: inout ConfigText, adding: Bool) -> ConfigText.Object? {
+        if let member = text.root.member(ConfigFile.shortcutsKey) {
+            guard let object = member.object else {
+                preconditionFailure("\(ConfigFile.shortcutsKey) isn't an object")
+            }
+            return object
+        }
+        guard adding else { return nil }
+        text.insert(
+            "\(ConfigFile.text(ConfigFile.shortcutsKey)): {}",
+            comment: ConfigFile.shortcutsComment, into: text.root)
+        return text.root.member(ConfigFile.shortcutsKey)?.object
     }
 }
