@@ -83,7 +83,8 @@ private final class Fixture {
         try list.save(alpha, as: "Alpha", frame: frame)
         gamma = WorkspaceState(
             id: UUID(), name: "Gamma", frame: frame,
-            tabs: alpha.tabs.map(\.state), selectedTab: 0, showsSidebar: false)
+            tabs: alpha.tabs.map(\.state), selectedTab: 0, showsSidebar: false,
+            history: WorkspaceHistory())
         try list.addSaved(gamma)
         let resolver = resolver
         favorites = Favorites(settings: settings) { resolver.resolve($0) }

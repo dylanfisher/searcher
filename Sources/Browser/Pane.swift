@@ -456,7 +456,7 @@ public final class Pane {
             reload()
             return
         }
-        history.leave(here)
+        recordLeaving(here)
         move(to: location, selecting: name.map(ExactName.init))
     }
 
@@ -472,6 +472,13 @@ public final class Pane {
         guard selection.isEmpty else { return }
         selectsFirstRowAt = selectionVersion
         selectFirstRowIfWanted()
+    }
+
+    /// Records `entry` as the folder the pane left, which ends the way forward of the pane and
+    /// of its window (docs/decisions/0125-workspace-open-is-a-back-step.md).
+    private func recordLeaving(_ entry: History.Entry) {
+        history.leave(entry)
+        tab?.onNavigate?()
     }
 
     /// A column's pane answers for its trail's owner, whose history it is.
@@ -522,7 +529,7 @@ public final class Pane {
     func trailWillMoveFocus(from column: Pane, recordingAs source: SelectionHistory.Source?) {
         guard !isSteppingHistory, !isSpringing else { return }
         if let source { tab?.keysWillMove(by: source) }
-        history.leave(History.Entry(location: column.location, selected: column.selection.cursor))
+        recordLeaving(History.Entry(location: column.location, selected: column.selection.cursor))
     }
 
     // MARK: - Spring-loaded folders
@@ -787,7 +794,7 @@ public final class Pane {
             finish(error)
             return
         }
-        history.leave(here)
+        recordLeaving(here)
         leave(for: pending.load.location, selection: Selection())
         if columnTrail != nil {
             // The new column lists the folder itself.

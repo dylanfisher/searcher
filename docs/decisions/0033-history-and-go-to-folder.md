@@ -2,6 +2,8 @@
 
 - **Date:** 2026-10-22
 - **Status:** accepted
+- **2026-10-27:** Back and Forward go on to the window's own steps; see
+  [0125](0125-workspace-open-is-a-back-step.md).
 
 ## Context
 
@@ -77,3 +79,11 @@ symbolic link and `..` is taken apart by its text, so `link/..` is the folder ho
 not the link target's parent, as in Terminal's `cd` rather than `cd -P`. `CommandContext(pane:)`
 without `askForFolder` traps if Go to folder runs on it; the UI bench and tests build it that
 way for other commands.
+
+## Amendment: the window's steps (2026-10-27)
+
+Opening a saved workspace into its window keeps what the window showed as a step of the
+window's own Back and Forward ([0125](0125-workspace-open-is-a-back-step.md)). Back runs on the
+focused pane while its history has a step, and on the window once it hasn't; Forward is the
+same. Each item is on when either can step. Every folder a pane leaves, the `History.leave` of
+the Decision, now also ends the window's way forward.

@@ -64,6 +64,19 @@ public struct TabState: Codable, Equatable, Sendable {
                 }))
     }
 
+    /// The same tab with each pane's Back and Forward passed through `transform`.
+    public func withHistories(_ transform: (History) -> History) -> TabState {
+        TabState(
+            layout: layout,
+            panes: panes.mapValues { pane in
+                PaneState(
+                    location: pane.location, viewMode: pane.viewMode,
+                    history: transform(pane.history), selection: pane.selection,
+                    cursor: pane.cursor, sortColumn: pane.sortColumn,
+                    sortAscending: pane.sortAscending, columnWidths: pane.columnWidths)
+            })
+    }
+
     // MARK: Coding
 
     private enum CodingKeys: String, CodingKey {

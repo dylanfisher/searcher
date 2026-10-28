@@ -156,6 +156,10 @@ public struct CommandContext {
         return givenWorkspace
     }
 
+    /// The window's tabs, or nil in a context built for one pane, for the commands that also
+    /// work without a window, such as Back and Forward.
+    public var windowWorkspace: Workspace? { givenWorkspace }
+
     /// Every open window's workspace, for the commands that open, move or merge windows. A
     /// context built without it traps when one of those asks.
     public var workspaces: WorkspaceList {

@@ -266,7 +266,7 @@ private func savingList(_ count: Int) async -> (
     list.windowClosed(named)
     let rebuilt = Workspace(
         id: named.id, name: "Project 1", tabs: [Tab(pane: await PaneFixture.loaded().pane)],
-        selectedTab: 0, showsSidebar: false)
+        selectedTab: 0, showsSidebar: false, history: WorkspaceHistory())
     var given: [WorkspaceState] = []
 
     let opened = list.open(named.id) { state in
@@ -345,7 +345,8 @@ private func savingList(_ count: Int) async -> (
     let (list, workspaces, _, snapshots) = await savingList(1)
     let closed = WorkspaceState(
         id: UUID(), name: "Project 1", frame: Rect(x: 0, y: 0, width: 800, height: 500),
-        tabs: workspaces[0].tabs.map(\.state), selectedTab: 0, showsSidebar: false)
+        tabs: workspaces[0].tabs.map(\.state), selectedTab: 0, showsSidebar: false,
+        history: WorkspaceHistory())
 
     try list.addSaved(closed)
 
@@ -364,7 +365,7 @@ private func savingList(_ count: Int) async -> (
     let (open, _) = await loadedWorkspace()
     let linked = Workspace(
         id: open.id, name: "Project 1", tabs: open.removeAllTabs(), selectedTab: 0,
-        showsSidebar: false)
+        showsSidebar: false, history: WorkspaceHistory())
     list.add(linked)
 
     try list.addSaved(linked.state(frame: frame))
@@ -391,7 +392,8 @@ private func savingList(_ count: Int) async -> (
     try list.save(workspaces[0], as: "Project 1", frame: frame)
     let closed = WorkspaceState(
         id: UUID(), name: "project 1", frame: Rect(x: 0, y: 0, width: 800, height: 500),
-        tabs: workspaces[0].tabs.map(\.state), selectedTab: 0, showsSidebar: false)
+        tabs: workspaces[0].tabs.map(\.state), selectedTab: 0, showsSidebar: false,
+        history: WorkspaceHistory())
 
     #expect(throws: WorkspaceList.NameRefusal.taken("Project 1")) {
         try list.addSaved(closed)

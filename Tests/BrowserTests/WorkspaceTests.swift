@@ -393,7 +393,7 @@ private func openPath(_ descriptor: Int32) -> String? {
         state
             == WorkspaceState(
                 id: workspace.id, name: nil, frame: frame, tabs: workspace.tabs.map(\.state),
-                selectedTab: 0, showsSidebar: true))
+                selectedTab: 0, showsSidebar: true, history: WorkspaceHistory()))
     workspace.closeAllTabs()
 }
 
@@ -427,5 +427,198 @@ private func openPath(_ descriptor: Int32) -> String? {
     expectChange { workspace.append(moved, selecting: moved[0].id) }
     expectChange { moved[0].focusedPane.navigate(to: Location(path: "/s")) }
     expectChange { workspace.close(added.id) }
+    workspace.closeAllTabs()
+}
+
+// MARK: The window's Back and Forward
+
+/// A workspace of one tab at `/r`, whose tabs rebuild from their states on a released lister of
+/// `/r`, `/r/a` and `/r/b`, as a window's owner rebuilds them.
+@MainActor
+private func steppingWorkspace() -> Workspace {
+    let lister = GatedLister([
+        "/r": .batches([[folder("a"), folder("b")]]), "/r/a": .batches([[file("x.txt")]]),
+        "/r/b": .batches([[]]), "/": .batches([[folder("r")]]),
+    ])
+    lister.releaseAll()
+    let service = ListingService(lister: lister, clock: ManualClock())
+    func pane(_ state: TabState.PaneState) -> Pane {
+        Pane(
+            restoring: state, service: service, systemActions: StubSystemActions(),
+            settings: untouchedSettings())
+    }
+    let workspace = Workspace(
+        tab: Tab(
+            pane: Pane(
+                location: Location(path: "/r"), service: service,
+                systemActions: StubSystemActions(), settings: untouchedSettings())))
+    workspace.restoreTab = { state in Tab(restoring: state, panes: pane) }
+    return workspace
+}
+
+/// A saved workspace's snapshot: one tab at `/r/b`, whose pane has a Back entry of its own.
+private let snapshot: WorkspaceHistory.Step = {
+    let layout = Layout()
+    return WorkspaceHistory.Step(
+        tabs: [
+            TabState(
+                layout: layout,
+                panes: [
+                    layout.focused: TabState.PaneState(
+                        location: Location(path: "/r/b"), viewMode: .list,
+                        history: History(
+                            back: [History.Entry(location: Location(path: "/"), selected: nil)],
+                            forward: []),
+                        selection: [], cursor: nil, sortColumn: .name, sortAscending: true,
+                        columnWidths: ColumnWidths())
+                ])
+        ], selectedTab: 0, showsSidebar: true)
+}()
+
+/// The context a window's focused pane gives its commands.
+@MainActor
+private func context(of workspace: Workspace) -> CommandContext {
+    CommandContext(pane: workspace.selectedTab.focusedPane.commandPane, workspace: workspace)
+}
+
+@MainActor
+private func run(_ command: Command, in workspace: Workspace) throws {
+    try #require(AppCommands.bindings.first { $0.command == command }).run(context(of: workspace))
+}
+
+/// Whether `command`'s menu item is on in `workspace`'s window.
+@MainActor
+private func isEnabled(_ command: Command, in workspace: Workspace) throws -> Bool {
+    let binding = try #require(AppCommands.bindings.first { $0.command == command })
+    return binding.isEnabled?(context(of: workspace)) ?? true
+}
+
+/// Opening a snapshot into the window keeps what it showed, tabs, folders, selection and the
+/// panes' own Back, as one step: Back shows it again and Forward the snapshot.
+@MainActor @Test func openingASnapshotIsOneStepOfTheWindowsBackAndForward() async throws {
+    let workspace = steppingWorkspace()
+    let first = workspace.selectedTab.focusedPane
+    first.navigate(to: Location(path: "/r/a"), selecting: "x.txt")
+    await settle { first.state.isLoaded && first.selection.isSettled }
+    workspace.add(Tab(pane: first.newPane(at: Location(path: "/r/b"))))
+    workspace.select(workspace.tabs[0].id)
+    let before = workspace.state(frame: bounds)
+
+    workspace.open(snapshot)
+
+    #expect(workspace.tabs.count == 1 && workspace.showsSidebar)
+    let opened = workspace.selectedTab.focusedPane
+    #expect(opened.location == Location(path: "/r/b"))
+    // The snapshot's own Back is not the way back: the window's step is.
+    #expect(!opened.canGoBack && !opened.canGoForward)
+    #expect(workspace.canStepBack && !workspace.canStepForward)
+    #expect(try isEnabled(NavigationCommands.back, in: workspace))
+    #expect(try !isEnabled(NavigationCommands.forward, in: workspace))
+
+    try run(NavigationCommands.back, in: workspace)
+
+    #expect(workspace.tabs.count == 2 && !workspace.showsSidebar)
+    let back = workspace.selectedTab.focusedPane
+    await settle { back.state.isLoaded && back.selection.isSettled }
+    #expect(workspace.state(frame: bounds) == before.withHistory(workspace.history))
+    #expect(back.selection.cursor == ExactName("x.txt"))
+    #expect(back.history.backEntries.map(\.location) == [Location(path: "/r")])
+    #expect(!workspace.canStepBack && workspace.canStepForward)
+    #expect(try isEnabled(NavigationCommands.forward, in: workspace))
+
+    try run(NavigationCommands.forward, in: workspace)
+
+    #expect(workspace.tabs.count == 1)
+    #expect(workspace.selectedTab.focusedPane.location == Location(path: "/r/b"))
+    #expect(workspace.canStepBack && !workspace.canStepForward)
+    workspace.closeAllTabs()
+}
+
+/// Back walks the pane's own steps first, then the window's; a navigation ends the window's way
+/// forward, as it ends a pane's.
+@MainActor @Test func backTakesThePanesStepsBeforeTheWindowsAndANavigationEndsForward() throws {
+    let workspace = steppingWorkspace()
+    workspace.open(snapshot)
+    let pane = workspace.selectedTab.focusedPane
+    pane.navigate(to: Location(path: "/r/a"))
+
+    try run(NavigationCommands.back, in: workspace)
+    #expect(workspace.selectedTab.focusedPane === pane)
+    #expect(pane.location == Location(path: "/r/b"))
+
+    try run(NavigationCommands.back, in: workspace)
+    #expect(workspace.selectedTab.focusedPane.location == Location(path: "/r"))
+    #expect(workspace.canStepForward)
+
+    workspace.selectedTab.focusedPane.navigate(to: Location(path: "/r/a"))
+
+    #expect(!workspace.canStepForward)
+    #expect(try !isEnabled(NavigationCommands.forward, in: workspace))
+    workspace.closeAllTabs()
+}
+
+/// What the window showed loses its panes' way forward as it becomes a step, so Forward after
+/// the window's Back goes to the snapshot, not to a folder a pane had stepped back from.
+@MainActor @Test func openingEndsThePanesWayForward() throws {
+    let workspace = steppingWorkspace()
+    let pane = workspace.selectedTab.focusedPane
+    pane.navigate(to: Location(path: "/r/a"))
+    pane.goBack()
+    #expect(pane.canGoForward)
+
+    workspace.open(snapshot)
+    workspace.stepBack()
+
+    #expect(!workspace.selectedTab.focusedPane.canGoForward)
+    try run(NavigationCommands.forward, in: workspace)
+    #expect(workspace.selectedTab.focusedPane.location == Location(path: "/r/b"))
+    workspace.closeAllTabs()
+}
+
+@MainActor @Test func theWindowKeepsItsNearestStepsUpToTheLimit() {
+    let workspace = steppingWorkspace()
+    for _ in 0...WorkspaceHistory.limit {
+        workspace.open(snapshot)
+    }
+
+    #expect(workspace.history.back.count == WorkspaceHistory.limit)
+    workspace.closeAllTabs()
+}
+
+/// Fifty opens, navigations, Backs and Forwards in mixed order leave a window state that the
+/// store writes and loads again as it was, every step within its bounds.
+@MainActor @Test func aWindowAfterManyStepsLoadsAgainFromTheStore() async throws {
+    let workspace = steppingWorkspace()
+    for turn in 0..<50 {
+        switch turn % 7 {
+        case 0, 4:
+            for path in ["/r/a", "/r/b", "/r/a"] {
+                workspace.selectedTab.focusedPane.navigate(to: Location(path: path))
+            }
+            workspace.open(snapshot)
+        case 1, 2, 5: workspace.stepBack()
+        case 3: workspace.stepForward()
+        default: workspace.selectedTab.focusedPane.navigate(to: Location(path: "/r"))
+        }
+    }
+    let state = workspace.state(frame: bounds)
+    #expect(!state.history.isEmpty)
+    let folder = try TemporaryFolder("WorkspaceTests")
+    let writer = WorkspaceStore(roots: roots(folder), report: { Issue.record("\($0)") })
+    await writer.save(state)
+    await writer.flush()
+
+    let problems = EventLog<StoreProblem>()
+    let loaded = await WorkspaceStore(roots: roots(folder), report: { problems.append($0) }).load()
+
+    #expect(problems.all.isEmpty)
+    #expect(loaded.workspaces[state.id] == state)
+    let steps = state.history.back + state.history.forward
+    #expect(state.history.back.count <= WorkspaceHistory.limit)
+    #expect(state.history.forward.count <= WorkspaceHistory.limit)
+    for pane in steps.flatMap(\.tabs).flatMap(\.panes.values) {
+        #expect(pane.history.backEntries.count <= WorkspaceHistory.paneEntries)
+        #expect(pane.history.forwardEntries.count <= WorkspaceHistory.paneEntries)
+    }
     workspace.closeAllTabs()
 }

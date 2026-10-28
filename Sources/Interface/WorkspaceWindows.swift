@@ -488,9 +488,11 @@ public final class WorkspaceWindows {
     /// from it. Only the frame differing moves the window to the snapshot's frame, moved onto a
     /// display if it is on none, and leaves the panes as they are. Only the frame and the
     /// column widths differing gives the panes the snapshot's widths too, and keeps them
-    /// (0098-column-widths-per-window.md). Anything else loads the snapshot's tabs, panes and
-    /// sidebar as well: the tabs it had close, and the new panes start with no selection
-    /// history. A window in full screen keeps its frame.
+    /// (0098-column-widths-per-window.md). Anything else opens the snapshot's tabs, panes and
+    /// sidebar as well: the tabs it had close, what they showed becomes a step of the window's
+    /// Back, and the new panes start with no Back, Forward or selection history
+    /// (docs/decisions/0125-workspace-open-is-a-back-step.md). A window in full screen keeps its
+    /// frame. Back and Forward, the window's or its panes', count as no difference.
     private func showSnapshot(in controller: BrowserWindowController) {
         let workspace = controller.workspace
         guard let snapshot = list.snapshots[workspace.id], let window = controller.window else {
@@ -498,13 +500,15 @@ public final class WorkspaceWindows {
         }
         let state = workspace.state(frame: Rect(window.frame))
         guard differs(state, in: window, from: snapshot) else { return }
-        let shown = state.moved(to: snapshot.frame)
-        if shown != snapshot, shown.withColumnWidths(of: snapshot) == snapshot {
+        let shown = state.moved(to: snapshot.frame).withoutHistories
+        let saved = snapshot.withoutHistories
+        if shown != saved, shown.withColumnWidths(of: saved) == saved {
             workspace.showColumnWidths(of: snapshot)
-        } else if shown != snapshot {
-            workspace.reload(
-                tabs: restoredTabs(snapshot), selectedTab: snapshot.selectedTab,
-                showsSidebar: snapshot.showsSidebar)
+        } else if shown != saved {
+            workspace.open(
+                WorkspaceHistory.Step(
+                    tabs: snapshot.tabs, selectedTab: snapshot.selectedTab,
+                    showsSidebar: snapshot.showsSidebar))
             controller.showWorkspace()
         }
         if !window.styleMask.contains(.fullScreen) {
@@ -516,12 +520,15 @@ public final class WorkspaceWindows {
 
     /// Whether `state`, the workspace of `window`, differs from its snapshot. Its frame counts as
     /// the snapshot's while the window is in full screen, or where showing the snapshot put it.
+    /// Back and Forward, the window's and its panes', don't count: neither shows, and opening the
+    /// snapshot into the window leaves its panes none.
     private func differs(
         _ state: WorkspaceState, in window: NSWindow, from snapshot: WorkspaceState
     ) -> Bool {
         let asShown =
             window.styleMask.contains(.fullScreen) || snapshotFramesShown[state.id] == state.frame
-        return (asShown ? state.moved(to: snapshot.frame) : state) != snapshot
+        return (asShown ? state.moved(to: snapshot.frame) : state).withoutHistories
+            != snapshot.withoutHistories
     }
 
     /// `state`, renamed to the next free name if one of `names` is its name, which is logged.
@@ -548,21 +555,28 @@ public final class WorkspaceWindows {
 
     private func restoredWorkspace(_ state: WorkspaceState) -> Workspace {
         Workspace(
-            id: state.id, name: state.name, tabs: restoredTabs(state),
-            selectedTab: state.selectedTab, showsSidebar: state.showsSidebar)
+            id: state.id, name: state.name, tabs: state.tabs.map(restoredTab),
+            selectedTab: state.selectedTab, showsSidebar: state.showsSidebar,
+            history: state.history)
     }
 
-    private func restoredTabs(_ state: WorkspaceState) -> [Tab] {
-        state.tabs.map { tab in
-            Tab(restoring: tab) { saved in
-                let pane = Pane(
-                    restoring: saved, service: service, systemActions: systemActions,
-                    settings: settings)
-                pane.folderSizes = folderSizes
-                pane.countVisits(in: folderVisits, countingThisFolder: false)
-                return pane
-            }
+    private func restoredTab(_ tab: TabState) -> Tab {
+        Tab(restoring: tab) { saved in
+            let pane = Pane(
+                restoring: saved, service: service, systemActions: systemActions,
+                settings: settings)
+            pane.folderSizes = folderSizes
+            pane.countVisits(in: folderVisits, countingThisFolder: false)
+            return pane
         }
+    }
+
+    /// Shows whether `controller`'s window, after a step of its Back or Forward, still matches
+    /// its saved workspace's snapshot.
+    private func showEdited(_ controller: BrowserWindowController) {
+        guard let window = controller.window, let state = state(of: controller) else { return }
+        window.isDocumentEdited =
+            list.snapshots[state.id].map { differs(state, in: window, from: $0) } ?? false
     }
 
     /// The height of a window's title bar that must be on a display for the window to stay
@@ -901,6 +915,13 @@ public final class WorkspaceWindows {
             takePaneController: { [weak self] id, pane in self?.takePaneController(id, of: pane) },
             openSavedWorkspace: { [weak self] id in self?.open(savedWorkspace: id) })
         controller.onCommand = { [weak self] in self?.showList() }
+        workspace.restoreTab = { [weak self] tab in
+            guard let self else { preconditionFailure("the windows are gone") }
+            return restoredTab(tab)
+        }
+        workspace.onStep = { [weak self, weak controller] in
+            if let self, let controller { showEdited(controller) }
+        }
         controller.onClose = { [weak self] closed in self?.didClose(closed) }
         controller.operations.onClear = { [weak self] id in self?.clearOperation(id) }
         controllers.append(controller)

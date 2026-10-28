@@ -259,7 +259,7 @@ private func folder(of count: Int, at seconds: Double) -> ListingCache.Folder {
     let saved = WorkspaceState(
         id: UUID(), name: "Albums", frame: Rect(x: 0, y: 0, width: 800, height: 600),
         tabs: [TabState(layout: layout, panes: [layout.focused: pane])], selectedTab: 0,
-        showsSidebar: false)
+        showsSidebar: false, history: WorkspaceHistory())
 
     await cache.restore(
         WorkspaceStore.Contents(session: nil, workspaces: [saved.id: saved], snapshots: [:]),
@@ -286,7 +286,7 @@ private func folder(of count: Int, at seconds: Double) -> ListingCache.Folder {
     let saved = WorkspaceState(
         id: UUID(), name: nil, frame: Rect(x: 0, y: 0, width: 800, height: 600),
         tabs: [tab(.server(server)), tab(Location(path: "/fake/a/kept"))], selectedTab: 0,
-        showsSidebar: false)
+        showsSidebar: false, history: WorkspaceHistory())
 
     #expect(ListingCache.folders(of: [saved]) == ["/fake/a/kept"])
 }

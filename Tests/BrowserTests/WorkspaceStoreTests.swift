@@ -74,7 +74,7 @@ private func workspace(
     let tabs = try tabs ?? [fourPaneTab(), onePaneTab()]
     return WorkspaceState(
         id: id, name: name, frame: Rect(x: 120, y: 80.5, width: 1400, height: 900),
-        tabs: tabs, selectedTab: tabs.count - 1, showsSidebar: true)
+        tabs: tabs, selectedTab: tabs.count - 1, showsSidebar: true, history: WorkspaceHistory())
 }
 
 /// A one-pane tab at `/Users/d/Downloads`.
@@ -415,6 +415,87 @@ private func editJSON(_ data: Data, _ edit: (inout [String: Any]) throws -> Void
 
 @Test func aSelectedTabPastTheLastTabIsDeletedAndReported() async throws {
     try await expectDiscarded { try editJSON($0) { $0["selectedTab"] = 2 } }
+}
+
+// MARK: The window's Back and Forward steps
+
+/// A window file written before windows kept steps has no `history` key.
+@Test func aWindowFileWithoutItsStepsIsDeletedAndReported() async throws {
+    try await expectDiscarded { try editJSON($0) { $0["history"] = nil } }
+}
+
+/// The window file `data` with one Back step of its own tabs, the step changed by `edit`, and
+/// `steps` of it.
+private func withStep(
+    _ data: Data, count steps: Int = 1, _ edit: (inout [String: Any]) -> Void = { _ in }
+) throws -> Data {
+    try editJSON(data) { object in
+        // A step's panes keep their nearest entries each way.
+        let tabs = try #require(object["tabs"] as? [[String: Any]]).map { tab in
+            var tab = tab
+            tab["panes"] = (tab["panes"] as? [[String: Any]])?.map { pane in
+                var pane = pane
+                for key in ["back", "forward"] {
+                    pane[key] = (pane[key] as? [Any])?.suffix(WorkspaceHistory.paneEntries)
+                        .map { $0 }
+                }
+                return pane
+            }
+            return tab
+        }
+        var step: [String: Any] = ["tabs": tabs, "selectedTab": 0, "showsSidebar": false]
+        edit(&step)
+        object["history"] = [
+            "back": Array(repeating: step, count: steps), "forward": [[String: Any]](),
+        ]
+    }
+}
+
+/// A step of the right shape loads, so the cases below fail for their change alone.
+@Test func aWindowFileWithAWellShapedStepLoadsIt() async throws {
+    let folder = try TemporaryFolder("WorkspaceStoreTests")
+    let saved = try workspace(name: "Stepped")
+    let writer = store(folder)
+    await writer.save(saved)
+    await writer.flush()
+    let url = file(of: saved.id, in: folder)
+    try withStep(try Data(contentsOf: url), count: WorkspaceHistory.limit).write(to: url)
+
+    let problems = EventLog<StoreProblem>()
+    let loaded = await store(folder, problems: problems).load()
+    #expect(loaded.workspaces[saved.id]?.history.back.count == WorkspaceHistory.limit)
+    #expect(problems.all.isEmpty)
+}
+
+@Test func aStepWithoutAKeyIsDeletedAndReported() async throws {
+    try await expectDiscarded { try withStep($0) { $0["showsSidebar"] = nil } }
+}
+
+@Test func aStepWithAnExtraKeyIsDeletedAndReported() async throws {
+    try await expectDiscarded { try withStep($0) { $0["frame"] = 1 } }
+}
+
+@Test func aStepWithAValueOfTheWrongTypeIsDeletedAndReported() async throws {
+    try await expectDiscarded { try withStep($0) { $0["selectedTab"] = "first" } }
+}
+
+@Test func moreStepsThanTheLimitAreDeletedAndReported() async throws {
+    try await expectDiscarded { try withStep($0, count: WorkspaceHistory.limit + 1) }
+}
+
+/// The four-pane tab keeps more than a step's panes do (`WorkspaceHistory.paneEntries`).
+@Test func aStepWhosePaneKeepsTooManyEntriesIsDeletedAndReported() async throws {
+    try await expectDiscarded { data in
+        try withStep(data) { step in
+            guard var tabs = step["tabs"] as? [[String: Any]],
+                var panes = tabs[0]["panes"] as? [[String: Any]]
+            else { return }
+            panes[0]["back"] = Array(
+                repeating: ["path": "/Users/d"], count: WorkspaceHistory.paneEntries + 1)
+            tabs[0]["panes"] = panes
+            step["tabs"] = tabs
+        }
+    }
 }
 
 @Test func aWorkspaceFileNamedForAnotherIDIsDeletedAndReported() async throws {
@@ -1109,4 +1190,24 @@ private func snapshotsFolder(_ folder: TemporaryFolder) -> URL {
     #expect(problems.all.map(\.file) == [url])
     #expect(problems.all.map(\.kind) == [.discarded])
     #expect(!FileManager.default.fileExists(atPath: url.path))
+}
+
+/// Only a window goes back to what it showed before a workspace was opened into it; a snapshot
+/// with Back or Forward steps is a file of another shape. A window's file keeps them.
+@Test func aSnapshotWithWindowStepsIsDeletedAndReportedAndAWindowKeepsThem() async throws {
+    let folder = try TemporaryFolder("WorkspaceStoreTests")
+    let step = WorkspaceHistory.Step(tabs: [onePaneTab()], selectedTab: 0, showsSidebar: false)
+    let stepped = try workspace().withHistory(WorkspaceHistory(back: [step], forward: [step]))
+    let writer = store(folder)
+    await writer.saveSnapshot(stepped)
+    await writer.save(stepped)
+    await writer.flush()
+
+    let problems = EventLog<StoreProblem>()
+    let loaded = await store(folder, problems: problems).load()
+    let url = snapshotsFolder(folder).appending(path: "\(stepped.id.uuidString).json")
+    #expect(loaded.snapshots.isEmpty)
+    #expect(loaded.workspaces[stepped.id] == stepped)
+    #expect(problems.all.map(\.file) == [url])
+    #expect(problems.all.map(\.kind) == [.discarded])
 }

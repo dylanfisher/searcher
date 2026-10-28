@@ -370,7 +370,7 @@ private func shiftedBracket(_ typed: String, keyCode: UInt16) throws -> NSEvent 
         settings: settings)
     let workspace = Workspace(
         id: UUID(), name: nil, tabs: [Tab(pane: serverPane), Tab(pane: folderPane)],
-        selectedTab: 0, showsSidebar: false)
+        selectedTab: 0, showsSidebar: false, history: WorkspaceHistory())
     let controller = BrowserWindowController(
         workspace: workspace, workspaces: WorkspaceList(), favorites: Favorites(settings: settings),
         volumes: StubSidebarVolumes().list(), settings: settings,
@@ -963,7 +963,8 @@ private func sidebarKey() throws -> NSEvent {
         service: ListingService(lister: StubLister(Fixture.folders)) { "Test Disk" },
         systemActions: StubSystemActions(), settings: untouchedSettings())
     let workspace = Workspace(
-        id: UUID(), name: nil, tabs: [Tab(pane: pane)], selectedTab: 0, showsSidebar: true)
+        id: UUID(), name: nil, tabs: [Tab(pane: pane)], selectedTab: 0, showsSidebar: true,
+        history: WorkspaceHistory())
     let list = WorkspaceList()
     list.add(workspace)
 
