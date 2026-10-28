@@ -391,6 +391,21 @@ private func changedValue(_ preference: Settings.Preference) -> Settings.Value {
         ])
 }
 
+/// A comma with no item before it isn't a trailing comma: `{,}` is an error on its line, at the
+/// top or in the shortcuts.
+@Test func aCommaWithNoItemBeforeItIsAnError() {
+    for text in ["{\n  ,\n}", "{\n  \"shortcuts\": {,}\n}", "{\n  \"show-hidden\": true,,\n}"] {
+        let errors = configLoad(text).errors
+        #expect(errors.map(\.line) == [2], "\(text)")
+        #expect(errors.first?.reason.hasPrefix("isn't valid JSON") == true, "\(text)")
+    }
+}
+
+/// A byte order mark before the object, which some editors write, is no error.
+@Test func aByteOrderMarkIsAllowed() {
+    #expect(values(configLoad("\u{FEFF}{\"show-hidden\": true}")) == ["show-hidden": .bool(true)])
+}
+
 /// A new file reads back as the defaults, and each preference, and the shortcuts, has its
 /// comment on the lines above it, taken from where the key is declared.
 @Test func aNewFileCommentsEveryKey() {

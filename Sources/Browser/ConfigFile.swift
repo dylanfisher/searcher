@@ -57,6 +57,14 @@ public enum ConfigFile {
         guard let dictionary = object as? [String: Any] else {
             return failed("must be a JSON object, its keys and values in braces")
         }
+        // A patch edits the text through the same scan, so text it can't read is refused here
+        // rather than reaching the patch.
+        do {
+            _ = try ConfigText.scan(Array(data))
+        } catch {
+            let line = data.prefix(error.offset).count(where: { $0 == 0x0A }) + 1
+            return failed("isn't valid JSON: \(error.reason)", line: line)
+        }
         // Foundation keeps the last of a key given twice and says nothing.
         let duplicates = duplicateKeys(in: json)
         if !duplicates.isEmpty { return .failed(duplicates) }

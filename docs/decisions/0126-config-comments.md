@@ -20,8 +20,15 @@ would have been lost at the next patch.
   blanks each comment's bytes, and each trailing comma, to spaces, keeping line breaks, and
   Foundation parses what is left. Every byte keeps its offset, so an error's line and the
   duplicate-key scan's lines are the file's own. A `/*` with no `*/` is an error on the line it
-  opens on; a file of comments alone is empty. Nothing else from JSON5 (unquoted keys, single
-  quotes) is accepted.
+  opens on; a file of comments alone is empty. A comma is blanked only when an item comes before
+  it, so `{,}` is an error on its line. A UTF-8 byte order mark, which some editors write, is
+  allowed and kept. Nothing else from JSON5 (unquoted keys, single quotes) is accepted.
+- **`parse` takes only text the patch's scan can read.** After Foundation parses it, `parse`
+  runs `ConfigText.scan`, the scan every patch uses, and reports what it can't read as an
+  error on its line. A file the app patches therefore never reaches the scan's
+  `preconditionFailure`. A seeded property test patches random files (LF and CRLF, comments with
+  quotes and markers in them, trailing commas, escaped strings, a byte order mark, an empty
+  item) and checks that each result reads back as the settings with the patches on top.
 - **A new file has a comment above each key.** Every preference, in the order
   `Settings.preferences` gives them, then `"shortcuts"`, a blank line between entries:
 
@@ -57,7 +64,8 @@ would have been lost at the next patch.
   matched. A slot set back to its default is taken out with its comma, and its line when nothing
   else is on it; a command left with no slot goes the same way. Comments outside the text taken
   out stay, even when the key they described is gone. Every other byte of the file is kept, its
-  final newline or lack of one included.
+  final newline or lack of one included. Text put in ends its lines as the file's first line
+  ends, `\r\n` or `\n`, so a CRLF file stays CRLF.
 - **Patches apply in the order they were made**, so the text a set of patches makes doesn't
   depend on a dictionary's order. Every other rule of 0123 holds unchanged: the byte check before
   the rename, the coalescing by key, the no-op rule (a patch the file already holds writes

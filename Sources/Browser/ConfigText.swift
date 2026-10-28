@@ -5,8 +5,8 @@ import Foundation
 /// order around it (docs/decisions/0126-config-comments.md).
 ///
 /// The text is JSON with `//` and `/* */` comments and a comma allowed after an object's last
-/// key, as Sublime Text's settings are. Only text that `ConfigFile.parse` took without an error
-/// is changed, so the scan assumes it is well formed.
+/// key, as Sublime Text's settings are. `ConfigFile.parse` refuses text that `scan` can't read,
+/// and only text it took without an error is changed.
 struct ConfigText {
     private(set) var bytes: [UInt8]
 
@@ -75,24 +75,28 @@ struct ConfigText {
     }
 
     /// `bytes`, its comments already blanked, with each comma after an object's or array's last
-    /// item made a space, so Foundation's parser takes it.
+    /// item made a space, so Foundation's parser takes it. A comma with no item before it, as in
+    /// `{,}`, stays, and is an error.
     static func blankingTrailingCommas(_ bytes: [UInt8]) -> [UInt8] {
         var blanked = bytes
-        var lastItem: Int?
+        // The last two bytes that aren't whitespace, the later one last.
+        var previous: Int?
+        var last: Int?
         var index = 0
         while index < bytes.count {
             let byte = bytes[index]
             if byte == quote {
                 index = stringEnd(bytes, from: index)
-                lastItem = index - 1
+                (previous, last) = (last, index - 1)
                 continue
             }
-            if byte == UInt8(ascii: "}") || byte == UInt8(ascii: "]"), let last = lastItem,
-                bytes[last] == comma
+            if byte == UInt8(ascii: "}") || byte == UInt8(ascii: "]"), let last,
+                bytes[last] == comma, let previous,
+                ![comma, UInt8(ascii: "{"), UInt8(ascii: "[")].contains(bytes[previous])
             {
                 blanked[last] = space
             }
-            if !isWhitespace(byte) { lastItem = index }
+            if !isWhitespace(byte) { (previous, last) = (last, index) }
             index += 1
         }
         return blanked
@@ -126,44 +130,86 @@ struct ConfigText {
         let object: Object?
     }
 
-    /// The text's top-level object.
-    var root: Object {
-        let blanked = Self.comments(bytes).bytes
-        var index = Self.skippingWhitespace(blanked, from: 0)
-        guard index < blanked.count, blanked[index] == UInt8(ascii: "{") else {
-            preconditionFailure("the config file's text isn't an object")
+    /// Why the scan can't read the text's shape: what it found, at an offset.
+    struct ScanError: Error {
+        let offset: Int
+        let reason: String
+    }
+
+    /// The top-level object of `bytes`, a config file's text, or where its shape isn't one the
+    /// edits can read. `ConfigFile.parse` refuses text this refuses, so a file the app patches
+    /// always scans.
+    static func scan(_ bytes: [UInt8]) throws(ScanError) -> Object {
+        let blanked: [UInt8]
+        switch blankingComments(bytes) {
+        case .success(let result): blanked = result.bytes
+        case .failure: throw ScanError(offset: 0, reason: "a /* comment isn't closed")
         }
-        return Self.object(blanked, at: &index)
+        // An editor may start the file with a byte order mark; it stays where it is.
+        let start = blanked.starts(with: byteOrderMark) ? byteOrderMark.count : 0
+        var index = skippingWhitespace(blanked, from: start)
+        guard index < blanked.count, blanked[index] == UInt8(ascii: "{") else {
+            throw ScanError(offset: index, reason: "the text doesn't start with {")
+        }
+        let root = try object(blanked, at: &index)
+        index = skippingWhitespace(blanked, from: index)
+        guard index == blanked.count else {
+            throw ScanError(offset: index, reason: "there is text after the closing }")
+        }
+        return root
+    }
+
+    /// The text's top-level object. The text is one `ConfigFile.parse` took, or one an edit
+    /// made from it, so it scans.
+    var root: Object {
+        do {
+            return try Self.scan(bytes)
+        } catch {
+            preconditionFailure("the config file's text didn't scan: \(error.reason)")
+        }
     }
 
     /// The object whose `{` is at `index`, in text whose comments are blanked; moves `index`
     /// past its `}`.
-    private static func object(_ text: [UInt8], at index: inout Int) -> Object {
+    private static func object(_ text: [UInt8], at index: inout Int) throws(ScanError) -> Object {
         let open = index
         index += 1
         var members: [Member] = []
         while true {
             index = skippingWhitespace(text, from: index)
-            guard index < text.count else { preconditionFailure("an object isn't closed") }
+            guard index < text.count else {
+                throw ScanError(offset: open, reason: "a { isn't closed")
+            }
             if text[index] == UInt8(ascii: "}") { break }
+            guard text[index] == quote else {
+                throw ScanError(offset: index, reason: "a key isn't a string in quotes")
+            }
             let keyStart = index
             index = stringEnd(text, from: index)
-            let name = Self.name(Array(text[keyStart..<index]))
+            let name = try Self.name(Array(text[keyStart..<index]), at: keyStart)
             index = skippingWhitespace(text, from: index)
             guard index < text.count, text[index] == UInt8(ascii: ":") else {
-                preconditionFailure("a key has no colon after it")
+                throw ScanError(offset: keyStart, reason: "a key has no : after it")
             }
             let valueStart = skippingWhitespace(text, from: index + 1)
             index = valueStart
+            guard index < text.count else {
+                throw ScanError(offset: keyStart, reason: "a key has no value")
+            }
             let object: Object? =
-                text[index] == UInt8(ascii: "{") ? Self.object(text, at: &index) : nil
+                text[index] == UInt8(ascii: "{") ? try Self.object(text, at: &index) : nil
             if object == nil { index = valueEnd(text, from: index) }
             let valueEnd = index
+            guard valueEnd > valueStart else {
+                throw ScanError(offset: keyStart, reason: "a key has no value")
+            }
             index = skippingWhitespace(text, from: index)
             var separator: Int?
             if index < text.count, text[index] == comma {
                 separator = index
                 index += 1
+            } else if index >= text.count || text[index] != UInt8(ascii: "}") {
+                throw ScanError(offset: valueEnd, reason: "a value has no , or } after it")
             }
             members.append(
                 Member(
@@ -175,15 +221,18 @@ struct ConfigText {
         return Object(open: open, close: close, members: members)
     }
 
-    /// A key's name from its text, quotes and all, escapes read as JSON reads them.
-    private static func name(_ quoted: [UInt8]) -> String {
+    /// A key's name from its text at `offset`, quotes and all, escapes read as JSON reads them.
+    private static func name(_ quoted: [UInt8], at offset: Int) throws(ScanError) -> String {
+        guard quoted.count >= 2, quoted.last == quote else {
+            throw ScanError(offset: offset, reason: "a key's string isn't closed")
+        }
         guard quoted.contains(backslash) else {
             return String(decoding: quoted.dropFirst().dropLast(), as: UTF8.self)
         }
         guard
             let name = try? JSONSerialization.jsonObject(
                 with: Data(quoted), options: .fragmentsAllowed) as? String
-        else { preconditionFailure("a key isn't a JSON string") }
+        else { throw ScanError(offset: offset, reason: "a key isn't a JSON string") }
         return name
     }
 
@@ -232,18 +281,26 @@ struct ConfigText {
         let keyIndent =
             last.flatMap { startsLine($0.keyStart) ? indent(of: $0.keyStart) : nil }
             ?? indent(of: object.open) + indentUnit
-        let commentLines = comment.map { "\(keyIndent)// \($0)\n" }.joined()
+        let nl = lineEnding
+        let commentLines = comment.map { "\(keyIndent)// \($0)\(nl)" }.joined()
         let lineBreak = (anchor..<object.close).first { bytes[$0] == newline && !inComment[$0] }
-        if let lineBreak {
-            let gap = comment.isEmpty || last == nil ? "" : "\n"
-            insert("\n\(gap)\(commentLines)\(keyIndent)\(member)\(trailing)", at: lineBreak)
+        if var lineBreak {
+            if lineBreak > anchor, bytes[lineBreak - 1] == carriageReturn { lineBreak -= 1 }
+            let gap = comment.isEmpty || last == nil ? "" : nl
+            insert("\(nl)\(gap)\(commentLines)\(keyIndent)\(member)\(trailing)", at: lineBreak)
             if let last, last.comma == nil { insert(",", at: last.valueEnd) }
         } else if last != nil {
             insert(trailing.isEmpty ? ", \(member)" : " \(member),", at: anchor)
         } else {
             let closing = indent(of: object.open)
-            insert("\n\(commentLines)\(keyIndent)\(member)\n\(closing)", at: object.close)
+            insert("\(nl)\(commentLines)\(keyIndent)\(member)\(nl)\(closing)", at: object.close)
         }
+    }
+
+    /// The file's line break: `\r\n` when its first line ends with one, else `\n`.
+    private var lineEnding: String {
+        guard let first = bytes.firstIndex(of: newline) else { return "\n" }
+        return first > 0 && bytes[first - 1] == carriageReturn ? "\r\n" : "\n"
     }
 
     /// Takes `object`'s member at `index` out, with the comma that separates it from the next
@@ -263,7 +320,9 @@ struct ConfigText {
         let lineStart = self.lineStart(start)
         let lineEnd = bytes[end...].firstIndex(of: newline) ?? bytes.count
         let blankBefore = bytes[lineStart..<start].allSatisfy { $0 == space || $0 == tab }
-        let blankAfter = bytes[end..<lineEnd].allSatisfy { $0 == space || $0 == tab }
+        let blankAfter = bytes[end..<lineEnd].allSatisfy {
+            $0 == space || $0 == tab || $0 == carriageReturn
+        }
         if blankBefore, blankAfter, lineEnd < bytes.count {
             start = lineStart
             end = lineEnd + 1
@@ -341,3 +400,4 @@ private let space = UInt8(ascii: " ")
 private let tab = UInt8(ascii: "\t")
 private let newline = UInt8(ascii: "\n")
 private let carriageReturn = UInt8(ascii: "\r")
+private let byteOrderMark: [UInt8] = [0xEF, 0xBB, 0xBF]

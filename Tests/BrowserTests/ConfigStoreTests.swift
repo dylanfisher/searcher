@@ -291,6 +291,66 @@ private let cmdJ = KeyChord("j", modifiers: .command)
             """)
 }
 
+/// A byte order mark, which some editors write, stays at the start of the file, and the patch
+/// goes into the object after it.
+@Test func aPatchKeepsAByteOrderMark() async throws {
+    let comment = ConfigFile.comment(try #require(Settings.preferencesByKey[.showHidden]))
+
+    #expect(
+        try await patched("\u{FEFF}{\"show-hidden\": false}", [showHidden])
+            == "\u{FEFF}{\"show-hidden\": true}")
+    #expect(
+        try await patched("\u{FEFF}{}", [showHidden])
+            == "\u{FEFF}{\n\(comment.map { "  // \($0)\n" }.joined())  \"show-hidden\": true\n}")
+}
+
+/// A file whose lines end in CR LF keeps them: a key put in ends its lines the same way, and a
+/// key taken out takes its whole line, leaving no line of spaces.
+@Test func aPatchKeepsCRLFLineEndings() async throws {
+    let comment = ConfigFile.comment(try #require(Settings.preferencesByKey[.foldersFirst]))
+    let inserted = try await patched(
+        "{\r\n  \"appearance\": \"dark\"\r\n}\r\n", [foldersFirst])
+    #expect(
+        inserted
+            == "{\r\n  \"appearance\": \"dark\",\r\n\r\n"
+            + comment.map { "  // \($0)\r\n" }.joined() + "  \"folders-first\": true\r\n}\r\n")
+
+    let removed = try await patched(
+        "{\r\n  \"shortcuts\": {\r\n    \"window.showPalette\": {\r\n      \"primary\": \"\"\r\n"
+            + "    },\r\n    \"clipboard.copy\": {\"alternate\": \"\"}\r\n  }\r\n}\r\n",
+        [.slot(CommandID("window.showPalette"), .primary, .standard)])
+    #expect(
+        removed
+            == "{\r\n  \"shortcuts\": {\r\n    \"clipboard.copy\": {\"alternate\": \"\"}\r\n  }\r\n"
+            + "}\r\n")
+}
+
+/// Patches waiting together go into the file in the order they were made.
+@Test func waitingPatchesGoInInTheOrderMade() async throws {
+    let folder = try TemporaryFolder("ConfigStoreTests")
+    let file = folder.url.appending(path: "config.json")
+    try Data("{\n  \"show-hidden\": tr\n".utf8).write(to: file)
+    let store = store(file)
+    _ = await store.start(writingIfMissing: none)
+    let preferences = Settings.preferences.filter {
+        if case .bool = $0.kind { true } else { false }
+    }.reversed().prefix(6)
+    for (index, preference) in preferences.enumerated() {
+        guard case .bool(let value) = preference.defaultValue else { continue }
+        await store.receive(.value(preference.key, .bool(!value)), sequence: index + 1)
+    }
+
+    try Data("{\n  \"appearance\": \"dark\"\n}\n".utf8).write(to: file, options: .atomic)
+    await store.reload()
+    await store.waitBounded(through: preferences.count)
+
+    let lines = String(decoding: try Data(contentsOf: file), as: UTF8.self)
+        .split(separator: "\n").filter { $0.hasPrefix("  \"") }
+    #expect(
+        lines.map { String($0.dropFirst(3).prefix { $0 != "\"" }) }
+            == ["appearance"] + preferences.map(\.name))
+}
+
 /// Shortcut slots in a file with comments: a slot set, a slot added to a command, a command
 /// added and a command whose last slot goes back to its default taken out, each leaving the
 /// comments.
