@@ -424,7 +424,8 @@ private struct StoredFolder: Codable {
 }
 
 /// A `DirectoryEntry`. `size` is there for a regular file and for nothing else, as the lister
-/// reports it.
+/// reports it, and `tags`, its tags' color labels, for an entry with colored tags and for nothing
+/// else, so an untagged entry takes no more room than it did.
 private struct StoredEntry: Codable {
     enum FileType: String, Codable {
         case regular, directory, package, symbolicLink, other
@@ -436,9 +437,10 @@ private struct StoredEntry: Codable {
     let modified: Date
     let hidden: Bool
     let dataless: Bool
+    let tags: [Int]?
 
     enum CodingKeys: String, CodingKey, CaseIterable {
-        case name, type, size, modified, hidden, dataless
+        case name, type, size, modified, hidden, dataless, tags
     }
 
     init(_ entry: DirectoryEntry) {
@@ -460,6 +462,7 @@ private struct StoredEntry: Codable {
         modified = entry.modified
         hidden = entry.isHidden
         dataless = entry.isDataless
+        tags = entry.tagLabels.isEmpty ? nil : Array(entry.tagLabels)
     }
 
     init(from decoder: any Decoder) throws {
@@ -467,12 +470,25 @@ private struct StoredEntry: Codable {
         type = try container.decode(FileType.self, forKey: .type)
         var keys = Set(CodingKeys.allCases.map(\.stringValue))
         if type != .regular { keys.remove(CodingKeys.size.stringValue) }
+        if !container.contains(.tags) { keys.remove(CodingKeys.tags.stringValue) }
         try requireKeys(keys, in: decoder)
         name = try container.decode(String.self, forKey: .name)
         size = type == .regular ? try container.decode(Int64.self, forKey: .size) : nil
         modified = try container.decode(Date.self, forKey: .modified)
         hidden = try container.decode(Bool.self, forKey: .hidden)
         dataless = try container.decode(Bool.self, forKey: .dataless)
+        if container.contains(.tags) {
+            let tags = try container.decode([Int].self, forKey: .tags)
+            // As written: at least one color label, each 1 to 7 and once.
+            guard !tags.isEmpty, Set(tags).count == tags.count, tags.allSatisfy((1...7).contains)
+            else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .tags, in: container, debugDescription: "\(tags) aren't tag colors")
+            }
+            self.tags = tags
+        } else {
+            tags = nil
+        }
     }
 
     var entry: DirectoryEntry {
@@ -486,7 +502,7 @@ private struct StoredEntry: Codable {
             }
         return DirectoryEntry(
             name: name, type: fileType, size: size, modified: modified, isHidden: hidden,
-            isDataless: dataless)
+            isDataless: dataless, tagLabels: TagLabels(tags ?? []))
     }
 }
 

@@ -27,6 +27,9 @@ private let album = ListingCache.Folder(
         DirectoryEntry(
             name: "fifo", type: .other, size: nil, modified: testDate, isHidden: false,
             isDataless: false),
+        DirectoryEntry(
+            name: "Tagged.txt", type: .regular, size: 3, modified: testDate, isHidden: false,
+            isDataless: false, tagLabels: TagLabels([7, 6])),
     ],
     listedAt: Date(timeIntervalSinceReferenceDate: 780_000_000.5))
 
@@ -104,7 +107,7 @@ private func store(
 
 enum StoreDamage: CaseIterable, Sendable {
     case missingField, extraField, randomBytes, versionField, sizeOnFolder, missingSizes,
-        extraFieldInASize
+        extraFieldInASize, tagWithoutAColor, emptyTags
 }
 
 @Test(arguments: StoreDamage.allCases)
@@ -141,6 +144,11 @@ func aFileThatDoesNotDecodeIsDeletedAndLoggedAndMisses(_ damage: StoreDamage) as
         size["physicalBytes"] = Int64(1)
         sizes["/Music/Album"] = size
         plist["sizes"] = sizes
+    case .tagWithoutAColor:
+        // `album`'s last entry is the tagged file.
+        entries[6]["tags"] = [7, 0]
+    case .emptyTags:
+        entries[6]["tags"] = [Int]()
     case .randomBytes:
         break
     }

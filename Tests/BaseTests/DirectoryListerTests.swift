@@ -515,3 +515,57 @@ private func fileManagerListing(_ folder: URL) throws -> [DirectoryEntry] {
     }
     .sorted { $0.name < $1.name }
 }
+
+/// Writes `entries` as the item's tags and `label` as the color label in its `FinderInfo`, raw,
+/// so a test can set the two apart.
+private func tag(_ path: String, entries: [String], label: Int) throws {
+    if !entries.isEmpty {
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: entries, format: .binary, options: 0)
+        let written = data.withUnsafeBytes {
+            setxattr(path, "com.apple.metadata:_kMDItemUserTags", $0.baseAddress, data.count, 0, 0)
+        }
+        #expect(written == 0)
+    }
+    var info = [UInt8](repeating: 0, count: 32)
+    info[9] = UInt8(label) << 1
+    #expect(setxattr(path, "com.apple.FinderInfo", &info, info.count, 0, XATTR_NOFOLLOW) == 0)
+}
+
+/// A row shows the colors of its item's tags, so the listing reads them with the entries: each
+/// colored tag's label in order, each color once, none for a tag without a color. An item whose
+/// `FinderInfo` holds a label and that has no tags attribute has that color, as `NSURL` reports
+/// a tag for it. An item with no label isn't read for tags at all, which keeps a listing of
+/// untagged items to the bulk call (docs/decisions/0124-tags-in-rows-and-preview.md).
+@Test func aListingReadsTheColorsOfEachTaggedItemsTags() throws {
+    let folder = try TemporaryFolder("DirectoryListerTests")
+    let path = folder.url.path
+    for name in ["tagged.txt", "plain.txt", "uncolored.txt", "labelOnly.txt", "unlabeled.txt"] {
+        try Data(name.utf8).write(to: folder.url.appending(path: name))
+    }
+    try FileManager.default.createDirectory(
+        at: folder.url.appending(path: "folder"), withIntermediateDirectories: false)
+    try tag(path + "/tagged.txt", entries: ["Orange\n7", "Work", "Red\n6", "Home\n7"], label: 6)
+    try tag(path + "/uncolored.txt", entries: ["Work\n0"], label: 0)
+    try tag(path + "/labelOnly.txt", entries: [], label: 4)
+    // Tags written without the label, as no app that writes through NSURL leaves them: not read.
+    try tag(path + "/unlabeled.txt", entries: ["Green\n2"], label: 0)
+    try tag(path + "/folder", entries: ["Purple\n3"], label: 3)
+
+    var listed: [String: DirectoryEntry] = [:]
+    try DirectoryLister().list(path) { batch in
+        for entry in batch { listed[entry.name] = entry }
+    }
+
+    #expect(listed["tagged.txt"].map { Array($0.tagLabels) } == [7, 6])
+    #expect(listed["plain.txt"]?.tagLabels.isEmpty == true)
+    #expect(listed["uncolored.txt"]?.tagLabels.isEmpty == true)
+    #expect(listed["labelOnly.txt"].map { Array($0.tagLabels) } == [4])
+    #expect(listed["unlabeled.txt"]?.tagLabels.isEmpty == true)
+    #expect(listed["folder"].map { Array($0.tagLabels) } == [3])
+    // A patch reads one entry the same way, so a tag change shows on its row.
+    let lister = DirectoryLister()
+    for entry in listed.values {
+        #expect(try lister.entry(named: entry.name, inDirectory: path) == entry)
+    }
+}

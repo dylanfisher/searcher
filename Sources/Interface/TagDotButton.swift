@@ -103,7 +103,7 @@ final class TagDotButton: NSButton {
     }
 
     /// The tag's color, as Finder draws it.
-    var color: NSColor { NSWorkspace.shared.fileLabelColors[finderTag.label] }
+    var color: NSColor { .tagLabel(finderTag.label) }
 
     /// The mark drawn on the dot now.
     enum Mark: Equatable {
@@ -218,7 +218,7 @@ final class TagDotButton: NSButton {
     static func image(for tag: FinderTag) -> NSImage {
         let side = restDiameter
         let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
-            let color = NSWorkspace.shared.fileLabelColors[tag.label]
+            let color = NSColor.tagLabel(tag.label)
             let circle = NSBezierPath(ovalIn: rect.insetBy(dx: 0.5, dy: 0.5))
             color.setFill()
             circle.fill()
