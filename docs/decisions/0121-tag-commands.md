@@ -234,11 +234,10 @@ red dot (dash or check) and what a click does with the app's; tag a file from th
 its color in Finder, and that a custom tag colored in Finder keeps its color when the app
 adds Red; Edit ▸ Undo in Finder after a tag click shows "Undo Add Tag “Red”".
 
-## Amendment: the dots open and show (2026-10-27, TG.2)
+## Amendment: the dots, tested from a press (2026-10-27, TG.2)
 
-A right-click on a row's name or icon opened no menu: the name's label or the icon's image
-view took the press and passed it to nothing, so the dots were seen only from a press on a
-row's empty part. The name cell now passes a right-click on it to the table
+Tests now build the menu from a press sent through the app's queue, onto every part of a
+row's name cell, and find the dots shown and colored; why Dylan saw none wasn't found
 ([0124](0124-tags-in-rows-and-preview.md)). The check showed upside down, since a button is
 flipped; it points down now. The dots' colors come from `NSColor.tagLabel`, which a row's dots
 and the preview's pills share.
