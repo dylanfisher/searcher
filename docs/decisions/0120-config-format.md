@@ -41,13 +41,17 @@ and adds shortcut lines to the same file and parser.
   and `ConfigTemplate` all come from it, and the default is nowhere else.
 - **Precedence.** A preference reads as the value the app stored, then the file's, then its
   default. A change made in the app is stored in `UserDefaults` as before and wins over the
-  file. The app never writes the file.
+  file. A change in the app to the value the file has removes the app's value instead of
+  storing it, so the preference follows the file again; stored, it would become an override
+  the next edit of the file couldn't change. The app never writes the file.
 - **Overrides are shown and can be undone.** A key the app set to a value other than the file's
   would keep overriding the file with no sign of it, so Settings ▸ General lists each one under
   the config file's section: the key, "Searcher has false; the config file has true.", and a
   Use Config File Value button, which removes the app's value so the file's applies. An app
   value equal to the file's isn't listed: it changes nothing until the file changes, and then
-  it is. The list follows `Settings.configOverrides` as either side changes.
+  it is. The list follows `Settings.configOverrides` as either side changes: a read of the
+  file tells the observers when the overrides change, even when every value reads as before,
+  as when the file comes to agree with the app or is deleted.
 - **Reading.** `ConfigWatcher`, an actor, reads the file and watches its folder with
   `FileEventStream`. It watches the folder, not the file, because an editor's atomic save
   replaces the file, and a deletion is a change like any other: no file reads as every default.
@@ -68,8 +72,12 @@ and adds shortcut lines to the same file and parser.
   file, then opens the file in the default app for plain text through `SystemActions`. The write
   is `AtomicWrite.create`, whose rename is `renamex_np` with `RENAME_EXCL`, so a file an editor
   saves between the check and the write is kept and opened. A file that can't be made shows in
-  the banner. With no browser window open, or the Settings window in front, the item reaches the
-  app delegate, which runs it as it runs New Window.
+  the banner; that includes a volume whose rename can't take `RENAME_EXCL` (`ENOTSUP`), which
+  fails loudly rather than fall back to a rename that could replace a file. A symbolic link at
+  the path to a file that isn't there is reported in the banner and not opened or written
+  through; the watcher reads such a link as no file. With no browser window open, or the
+  Settings window in front, the item reaches the app delegate, which hands it to
+  `AppMenuResponder` in Interface, as it does New Window.
 - **Template.** A header on how the file reads and that the app's values win, then each
   preference's summary and its line commented out at its default, so a new file sets nothing.
 - **Adding a key family (M5b.2).** The parser reads in two steps: each line into a key and a
