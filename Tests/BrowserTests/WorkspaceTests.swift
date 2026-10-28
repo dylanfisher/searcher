@@ -584,3 +584,41 @@ private func isEnabled(_ command: Command, in workspace: Workspace) throws -> Bo
     #expect(workspace.history.back.count == WorkspaceHistory.limit)
     workspace.closeAllTabs()
 }
+
+/// Fifty opens, navigations, Backs and Forwards in mixed order leave a window state that the
+/// store writes and loads again as it was, every step within its bounds.
+@MainActor @Test func aWindowAfterManyStepsLoadsAgainFromTheStore() async throws {
+    let workspace = steppingWorkspace()
+    for turn in 0..<50 {
+        switch turn % 7 {
+        case 0, 4:
+            for path in ["/r/a", "/r/b", "/r/a"] {
+                workspace.selectedTab.focusedPane.navigate(to: Location(path: path))
+            }
+            workspace.open(snapshot)
+        case 1, 2, 5: workspace.stepBack()
+        case 3: workspace.stepForward()
+        default: workspace.selectedTab.focusedPane.navigate(to: Location(path: "/r"))
+        }
+    }
+    let state = workspace.state(frame: bounds)
+    #expect(!state.history.isEmpty)
+    let folder = try TemporaryFolder("WorkspaceTests")
+    let writer = WorkspaceStore(roots: roots(folder), report: { Issue.record("\($0)") })
+    await writer.save(state)
+    await writer.flush()
+
+    let problems = EventLog<StoreProblem>()
+    let loaded = await WorkspaceStore(roots: roots(folder), report: { problems.append($0) }).load()
+
+    #expect(problems.all.isEmpty)
+    #expect(loaded.workspaces[state.id] == state)
+    let steps = state.history.back + state.history.forward
+    #expect(state.history.back.count <= WorkspaceHistory.limit)
+    #expect(state.history.forward.count <= WorkspaceHistory.limit)
+    for pane in steps.flatMap(\.tabs).flatMap(\.panes.values) {
+        #expect(pane.history.backEntries.count <= WorkspaceHistory.paneEntries)
+        #expect(pane.history.forwardEntries.count <= WorkspaceHistory.paneEntries)
+    }
+    workspace.closeAllTabs()
+}
