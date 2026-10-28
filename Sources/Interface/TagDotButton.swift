@@ -103,7 +103,7 @@ final class TagDotButton: NSButton {
     }
 
     /// The tag's color, as Finder draws it.
-    var color: NSColor { NSWorkspace.shared.fileLabelColors[finderTag.label] }
+    var color: NSColor { .tagLabel(finderTag.label) }
 
     /// The mark drawn on the dot now.
     enum Mark: Equatable {
@@ -182,9 +182,9 @@ final class TagDotButton: NSButton {
             path.move(to: NSPoint(x: inset.minX, y: inset.maxY))
             path.line(to: NSPoint(x: inset.maxX, y: inset.minY))
         case .check:
-            path.move(to: NSPoint(x: inset.minX, y: inset.midY))
-            path.line(to: NSPoint(x: inset.minX + inset.width * 0.4, y: inset.minY))
-            path.line(to: NSPoint(x: inset.maxX, y: inset.maxY))
+            let points = checkPoints(in: inset)
+            path.move(to: points[0])
+            for point in points.dropFirst() { path.line(to: point) }
         case .dash:
             path.move(to: NSPoint(x: inset.minX, y: inset.midY))
             path.line(to: NSPoint(x: inset.maxX, y: inset.midY))
@@ -194,6 +194,18 @@ final class TagDotButton: NSButton {
         path.lineJoinStyle = .round
         NSColor.white.withAlphaComponent(isEnabled ? 1 : Self.disabledAlpha).setStroke()
         path.stroke()
+    }
+
+    /// The check's three points in `rect`: from the middle of its left edge down to its point,
+    /// then up to its top right. A button is flipped, so down is toward a larger y.
+    func checkPoints(in rect: NSRect) -> [NSPoint] {
+        let bottom = isFlipped ? rect.maxY : rect.minY
+        let top = isFlipped ? rect.minY : rect.maxY
+        return [
+            NSPoint(x: rect.minX, y: rect.midY),
+            NSPoint(x: rect.minX + rect.width * 0.4, y: bottom),
+            NSPoint(x: rect.maxX, y: top),
+        ]
     }
 
     override var focusRingMaskBounds: NSRect { bounds }
@@ -206,7 +218,7 @@ final class TagDotButton: NSButton {
     static func image(for tag: FinderTag) -> NSImage {
         let side = restDiameter
         let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
-            let color = NSWorkspace.shared.fileLabelColors[tag.label]
+            let color = NSColor.tagLabel(tag.label)
             let circle = NSBezierPath(ovalIn: rect.insetBy(dx: 0.5, dy: 0.5))
             color.setFill()
             circle.fill()

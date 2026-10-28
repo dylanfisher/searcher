@@ -155,3 +155,10 @@ download, is read again at each patch, one read at a time on a share. Tag colors
 later step. The selection's highlight still moves at once; the preview follows when the read
 lands, up to 100 ms later on a slow share, and during that time it shows the file selected
 before.
+
+## Amendment: tags as pills in their colors (2026-10-27, TG.2)
+
+The Tags section shows each tag as a pill filled with its color, and `ItemInfo.tags` holds each
+tag's entry with its color label, "Orange\n7", read from the tags attribute
+([0124](0124-tags-in-rows-and-preview.md)). The pills aren't selectable text. A tag change
+made elsewhere reads the tags again through the patch that names the file (0121).

@@ -2307,7 +2307,7 @@ extension PressFixture {
 }
 
 /// Dylan: "the text in finder's preview is selectable - ours should be too." The name, the kind
-/// line, the Information values and the tags select their text on a press, as Finder's do, and
+/// line and the Information values select their text on a press, as Finder's do, and
 /// can't be edited; the press takes the keys into the text and focuses its pane. A press on the
 /// image or a title, which aren't selectable, gives the focused column the keys.
 @MainActor @Test func aPressOnEveryFieldOfThePreviewFocusesItsPane() async throws {
@@ -2318,7 +2318,7 @@ extension PressFixture {
     let container = controller.view
     let selectable = [preview.nameField, preview.summaryField] + preview.rows.map(\.value)
     let plain: [NSView] = [preview.iconView] + preview.rows.map(\.titleField)
-    for field in selectable + [preview.tagsField] {
+    for field in selectable {
         #expect(field.isSelectable && !field.isEditable, "\(field.stringValue)")
     }
     for title in preview.rows.map(\.titleField) {

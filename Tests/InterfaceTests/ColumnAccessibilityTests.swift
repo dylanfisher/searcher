@@ -230,7 +230,7 @@ private final class Fixture {
     await fixture.select("x.txt", inColumn: 1)
 
     let view = try #require(fixture.controller.previewView)
-    await settle { !view.tagsField.isHidden }
+    await settle { !view.tagPills.isHidden }
     let kind = try #require(fixture.trail.preview?.kind.text)
     #expect(view.isAccessibilityElement())
     #expect(view.accessibilityRole() == .group)

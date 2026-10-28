@@ -64,6 +64,29 @@ public enum FinderTags {
         try entries(at: path).map(name(of:))
     }
 
+    /// The color label in `finderInfo`, an item's 32 bytes of `FinderInfo`: 0 for none.
+    static func label(finderInfo: UnsafeRawPointer) -> Int {
+        Int((finderInfo.load(fromByteOffset: 9, as: UInt8.self) & colorBits) >> 1)
+    }
+
+    /// The colors of the tags of the item at `path` for its row, given `label`, the color label
+    /// its own `FinderInfo` holds, which a listing reads with the entries. Every write through
+    /// `NSURL`, Finder's included, and through `set(entries:at:)` sets that label to the last
+    /// colored tag's, so an item with label 0 has no colored tags and isn't read: a folder of
+    /// untagged items costs no call beyond its listing. An item with a label and no tags
+    /// attribute has the label's color, as `NSURL` reports a tag of that color for it; one whose
+    /// tags can't be read, or aren't a list of strings, shows the label's color too, the one
+    /// color it is known to have. Blocks the calling thread; call it off the main thread
+    /// (docs/decisions/0124-tags-in-rows-and-preview.md).
+    public static func rowLabels(at path: String, finderInfoLabel label: Int) -> TagLabels {
+        preconditionOffMain("FinderTags")
+        guard label != 0 else { return TagLabels() }
+        guard let entries = try? self.entries(at: path), !entries.isEmpty else {
+            return TagLabels([label])
+        }
+        return TagLabels(entries.map(self.label(of:)))
+    }
+
     /// Gives the item at `path` the tag entries `entries`, exactly and in that order, in place of
     /// the ones it has, and then the color label; no entries removes the attribute, as Finder
     /// leaves an untagged item. Blocks the calling thread; call it off the main thread.

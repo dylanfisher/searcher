@@ -8,7 +8,8 @@ public struct ItemInfo: Equatable, Sendable {
     /// Spotlight's `kMDItemLastUsedDate`, the date Finder shows as Last opened. Nil when
     /// Spotlight has none, as for a file it hasn't indexed.
     public let lastOpened: Date?
-    /// The Finder tags' names, in the order Finder lists them.
+    /// The Finder tags' entries, each a name and its color label as `FinderTags` reads them,
+    /// "Red\n6", in the order Finder lists them.
     public let tags: [String]
 
     public init(created: Date?, lastOpened: Date?, tags: [String]) {

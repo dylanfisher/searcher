@@ -748,6 +748,28 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         button.setAccessibilityLabel(WorkspaceSidebarViewController.ejectTitle(volume.name))
     }
 
+    /// Shows the colors `labels` of an entry's tags as dots in `cell`, its Name cell, or hides
+    /// them for an entry without colored tags. The dots are made the first time the cell shows
+    /// some. The caller fits the name to them (docs/decisions/0124-tags-in-rows-and-preview.md).
+    private func showTagDots(_ labels: TagLabels, in cell: NSTableCellView) {
+        guard !labels.isEmpty else {
+            ListingCellLayout.shownTagDots(in: cell)?.isHidden = true
+            return
+        }
+        guard let cell = cell as? ListingNameCellView else {
+            preconditionFailure("the name cell can't show tag dots: \(cell)")
+        }
+        let dots =
+            cell.tagDots
+            ?? {
+                let dots = RowTagDotsView()
+                ListingCellLayout.addTagDots(dots, to: cell)
+                return dots
+            }()
+        dots.show(labels)
+        dots.isHidden = false
+    }
+
     /// The sidebar's eject button, at the size the sidebar's medium rows draw it, whose symbols
     /// have the name's font size, added to `cell`.
     private func makeEjectButton(in cell: ListingNameCellView) -> HoverButton {
@@ -865,6 +887,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     private func configure(
         _ cell: NSTableCellView, column: SortColumn, row: Int, in listing: Listing
     ) {
+        // Before the name cell's views are fitted, which measures the name for tag dots.
+        cell.textField?.stringValue = text(column, row: row, in: listing)
         if column == .name {
             cell.imageView?.image =
                 showsShares
@@ -873,11 +897,11 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
                     ?? iconCache.icon(for: listing.kind(atRow: row).type)
             showFolderChevron(Self.showsChevron(listing[row]), in: cell)
             showEjectButton(for: listing[row], in: cell)
+            showTagDots(listing[row].tagLabels, in: cell)
             showConnectingSpinner(listing[row].name == shownConnecting, in: cell)
             showNotDownloadedBadge(listing[row].isDataless, in: cell)
             cell.textField?.isHidden = listing[row].name == coveredName
         }
-        cell.textField?.stringValue = text(column, row: row, in: listing)
         cell.alphaValue = cutNames.contains(listing[row].name) ? Self.cutAlpha : 1
     }
 
@@ -949,6 +973,10 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             parts.append(text(.size))
         }
         parts.append("modified \(text(.dateModified))")
+        if !entry.tagLabels.isEmpty {
+            let colors = entry.tagLabels.map { NSWorkspace.shared.fileLabels[$0] }
+            parts.append("tags " + colors.joined(separator: ", "))
+        }
         if entry.isDataless {
             parts.append(Self.notDownloadedLabel)
         }
@@ -1053,10 +1081,20 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         precondition(column >= 0, "the table has no Name column")
         let cell = tableView.frameOfCell(atColumn: column, row: row)
         let entry = listing[row]
+        let shownRoom = showsNamesOnly && Self.showsChevron(entry) ? chevronRoom : nil
+        let eject = ejectableVolume(entry) != nil
+        var tagDotsX: Double?
+        if !entry.tagLabels.isEmpty {
+            let end = ListingCellLayout.tagDotsEnd(
+                cellWidth: cell.width, columnChevronRoom: showsNamesOnly ? chevronRoom : nil,
+                chevronRoom: shownRoom, badge: entry.isDataless, eject: eject)
+            tagDotsX = ListingCellLayout.tagDotsX(
+                nameWidth: ListingCellLayout.nameWidth(entry.name),
+                width: RowTagDotsView.size(count: entry.tagLabels.count).width, end: end)
+        }
         let end = ListingCellLayout.nameEnd(
-            cellWidth: cell.width,
-            chevronRoom: showsNamesOnly && Self.showsChevron(entry) ? chevronRoom : nil,
-            badge: entry.isDataless, eject: ejectableVolume(entry) != nil)
+            cellWidth: cell.width, chevronRoom: shownRoom, badge: entry.isDataless,
+            eject: eject, tagDotsX: tagDotsX)
         let nameX = ListingCellLayout.nameX
         let labelHeight = ListingCellLayout.labelHeight
         return NSRect(

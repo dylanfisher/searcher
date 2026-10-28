@@ -303,6 +303,43 @@ func aPressOnAVolumesEjectButtonEjectsItWithoutSelectingTheRow(_ viewMode: ViewM
     #expect(list.tableView.selectedRowIndexes == selected)
 }
 
+/// A press on the eject button sent through the app's queue, as a click the user makes, reaches
+/// the button, not the table: it ejects the volume, builds no row menu and leaves the selection
+/// (docs/decisions/0124-tags-in-rows-and-preview.md).
+@MainActor @Test(arguments: [ViewMode.list, .column])
+func aPressThroughTheWindowOnAnEjectButtonEjectsAndBuildsNoMenu(_ viewMode: ViewMode)
+    async throws
+{
+    let window = try await VolumesWindow(viewMode: viewMode)
+    let nsWindow = try #require(window.controller.window)
+    SecondDisplay.orderFront(nsWindow)
+    defer { nsWindow.orderOut(nil) }
+    nsWindow.contentView?.layoutSubtreeIfNeeded()
+    let list = try window.list
+    list.pane.select(Selection([ExactName("main")], cursor: ExactName("main")))
+    let selected = list.tableView.selectedRowIndexes
+    let eject = try #require(try window.ejectButton("USB"))
+    let point = eject.convert(NSPoint(x: eject.bounds.midX, y: eject.bounds.midY), to: nil)
+    let now = ProcessInfo.processInfo.systemUptime
+    let build = list.tableView.contextMenu
+    defer { list.tableView.contextMenu = build }
+    nonisolated(unsafe) var menuRows: [Int] = []
+    list.tableView.contextMenu = { row in
+        menuRows.append(row)
+        return nil
+    }
+
+    try sendThroughTheQueue(
+        try mouseEvent(.leftMouseDown, at: point, in: nsWindow, timestamp: now),
+        releasedBy: try mouseEvent(.leftMouseUp, at: point, in: nsWindow, timestamp: now + 0.05))
+
+    await settle { window.mounts.ejects.count == 1 }
+    #expect(window.mounts.ejects.map(\.mountPoint) == ["/Volumes/USB"])
+    #expect(menuRows.isEmpty)
+    #expect(list.pane.selection.cursor == ExactName("main"))
+    #expect(list.tableView.selectedRowIndexes == selected)
+}
+
 /// On an emphasized selection the glyph takes the selected row's text color, as the chevron
 /// and the name do.
 @MainActor @Test(arguments: [ViewMode.list, .column])
