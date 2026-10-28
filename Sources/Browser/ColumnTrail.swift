@@ -898,9 +898,10 @@ public final class ColumnTrail {
             return
         }
         cancelInfoRead()
+        // Taken whether or not a read starts, so the patch isn't taken again at each change.
+        readPatches = pane.landedPatches
         if !next.entry.isDataless, pane.state.isAnswered {
             if next.info == .unread { next.info = .reading }
-            readPatches = pane.landedPatches
             startInfoRead(of: next.location, entry: next.entry)
         } else {
             next.info = .unread
