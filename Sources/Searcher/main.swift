@@ -34,6 +34,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// The one Settings window, made the first time App ▸ Settings… asks for it.
     private lazy var settingsWindow = SettingsWindowController(
         settings: settings, systemActions: systemActions)
+    /// Runs the menu items that reach the delegate, made on first use so a bench launch, whose
+    /// items are off, never makes it.
+    private lazy var appMenu = AppMenuResponder(
+        settings: settings, systemActions: systemActions,
+        openWindow: { [unowned self] in openHomeWindow() })
     private let bench: UIBench?
     /// The windows' workspaces and the session, in the user's application support folder; nil
     /// in a bench launch.
@@ -220,19 +225,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         return false
     }
 
-    /// New Window and Open Config File when no browser window has the keys, as when every
-    /// window is closed or the Settings window has them: the menu item reaches the app's
-    /// delegate, which opens a window on the home folder, or the config file. A browser window
-    /// with the keys runs the command itself, from its focused pane.
+    /// A menu item that reaches the app's delegate, as when no browser window has the keys, goes
+    /// to `appMenu`: New Window opens a window on the home folder, and Open Config File opens
+    /// the config file.
     @objc func runMenuCommand(_ sender: NSMenuItem) {
-        switch sender.representedObject as? CommandID {
-        case WindowCommands.newWindow.id:
-            openHomeWindow()
-        case SystemCommands.openConfigFile.id:
-            SystemCommands.openConfig(settings: settings, systemActions: systemActions)
-        default:
-            preconditionFailure("menu item \"\(sender.title)\" reached the app without a window")
-        }
+        appMenu.runMenuCommand(sender)
     }
 
     /// App ▸ Settings… brings the one Settings window to the front, making it the first time.
@@ -242,9 +239,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         guard item.action == #selector(runMenuCommand(_:)) else { return true }
-        let id = item.representedObject as? CommandID
-        return bench == nil
-            && (id == WindowCommands.newWindow.id || id == SystemCommands.openConfigFile.id)
+        return bench == nil && appMenu.validateMenuItem(item)
     }
 
     private func installMainMenu() {
