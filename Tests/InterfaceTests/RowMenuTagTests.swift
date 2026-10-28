@@ -63,59 +63,107 @@ import Testing
     #expect(try await tags(window.path("a.txt")) == ["Green\n2"])
 }
 
-/// The menu a right-click on the name of `name`'s row builds, the press sent through the app as
-/// one the user makes: the window hit-tests it and the view it hits passes it on until the
-/// table builds its menu (`ListingTableView.menu(for:)`). Nil when the press built none. The
-/// menu is kept, not shown, so the test tracks no menu and takes no input from the user. The
-/// window is on the second display for the press, then ordered out
+/// Where on a row a test presses: the name's label, the icon, the first tag dot, the cell's
+/// empty end, and a folder's chevron in a column.
+enum RowSpot: String, CaseIterable, Sendable {
+    case name, icon, dot, emptyEnd, chevron
+}
+
+/// The presses that open a context menu.
+enum MenuPress: String, CaseIterable, Sendable {
+    case rightClick, controlClick
+}
+
+/// The window point of `spot` on `name`'s row.
+@MainActor
+private func windowPoint(of spot: RowSpot, onRowOf name: String, in window: TaggingWindow)
+    throws -> NSPoint
+{
+    let list = try window.list
+    let table = list.tableView
+    let row = try window.row(of: name)
+    let cell = try window.nameCell(of: name)
+    let cellFrame = table.frameOfCell(
+        atColumn: table.column(withIdentifier: SortColumn.name.identifier), row: row)
+    let point: NSPoint
+    switch spot {
+    case .name:
+        let name = list.nameFrame(atRow: row)
+        point = NSPoint(x: name.minX + 4, y: name.midY)
+    case .icon:
+        let icon = try #require(cell.imageView)
+        point = table.convert(NSPoint(x: icon.frame.midX, y: icon.frame.midY), from: cell)
+    case .dot:
+        let dots = try #require(try window.rowDots(of: name))
+        let dot = dots.dotRect(at: 0)
+        point = table.convert(NSPoint(x: dot.midX, y: dot.midY), from: dots)
+    case .emptyEnd:
+        point = NSPoint(x: cellFrame.maxX - 2, y: cellFrame.midY)
+    case .chevron:
+        let chevron = try #require(ListingCellLayout.chevron(in: cell))
+        try #require(!chevron.isHidden)
+        point = table.convert(NSPoint(x: chevron.frame.midX, y: chevron.frame.midY), from: cell)
+    }
+    return table.convert(point, to: nil)
+}
+
+/// What the table did with a press: the rows it built a menu for, and the menu it built last.
+@MainActor
+private final class TablePresses {
+    var menuRows: [Int] = []
+    var menu: NSMenu?
+}
+
+/// Sends a `type` press with `modifiers` at `spot` on `name`'s row through the app's queue
+/// (`sendThroughTheQueue`), a left press released at once, and records the menus the table
+/// builds, keeping each rather than showing it, so the test tracks no menu and takes no input
+/// from the user. The window is on the second display for the press, then ordered out
 /// (docs/decisions/0091-test-windows-on-second-display.md).
 @MainActor
-private func menuARightClickBuilds(onNameOf name: String, in window: TaggingWindow) throws
-    -> NSMenu?
-{
+private func press(
+    _ type: NSEvent.EventType, modifiers: NSEvent.ModifierFlags = [], at spot: RowSpot,
+    onRowOf name: String, in window: TaggingWindow
+) throws -> TablePresses {
     let shown = try #require(window.controller.window)
     shown.setFrame(NSRect(x: 0, y: 0, width: 900, height: 600), display: false)
     SecondDisplay.orderFront(shown)
     defer { shown.orderOut(nil) }
     shown.contentView?.layoutSubtreeIfNeeded()
-    let list = try window.list
-    let nameFrame = list.nameFrame(atRow: try window.row(of: name))
-    let point = list.tableView.convert(
-        NSPoint(x: nameFrame.minX + 4, y: nameFrame.midY), to: nil)
-    let press = try mouseEvent(
-        .rightMouseDown, at: point, in: shown, timestamp: ProcessInfo.processInfo.systemUptime)
-    let table = list.tableView
+    let point = try windowPoint(of: spot, onRowOf: name, in: window)
+    let now = ProcessInfo.processInfo.systemUptime
+    let down = try mouseEvent(type, at: point, in: shown, modifiers: modifiers, timestamp: now)
+    let up =
+        type == .leftMouseDown
+        ? try mouseEvent(
+            .leftMouseUp, at: point, in: shown, modifiers: modifiers, timestamp: now + 0.05)
+        : nil
+    let table = try window.list.tableView
     let build = table.contextMenu
     defer { table.contextMenu = build }
-    var built: NSMenu?
+    let presses = TablePresses()
     table.contextMenu = { row in
-        built = build(row)
+        presses.menuRows.append(row)
+        presses.menu = build(row)
         return nil
     }
-    // Taken from the queue, as the app's event loop takes a press, so it is the app's current
-    // event while the window hit-tests it. After `nextEvent`, HIToolbox may stop the outermost
-    // main run loop, which would end the test process (`performRealPress`).
-    dropStrayMainRunLoopStops()
-    while NSApp.nextEvent(matching: .any, until: .distantPast, inMode: .default, dequeue: true)
-        != nil
-    {}
-    NSApp.postEvent(press, atStart: true)
-    let taken = try #require(
-        NSApp.nextEvent(
-            matching: .rightMouseDown, until: .distantPast, inMode: .default, dequeue: true))
-    #expect(NSApp.currentEvent === taken)
-    NSApp.sendEvent(taken)
-    // The press stays the app's current event until another is taken, and the views of later
-    // tests, pressed without the queue, would see a right-click. An event of no kind replaces it.
-    let blank = try #require(
-        NSEvent.otherEvent(
-            with: .applicationDefined, location: .zero, modifierFlags: [], timestamp: 0,
-            windowNumber: 0, context: nil, subtype: 0, data1: 0, data2: 0))
-    NSApp.postEvent(blank, atStart: true)
-    _ = NSApp.nextEvent(
-        matching: .applicationDefined, until: .distantPast, inMode: .default, dequeue: true)
-    #expect(NSApp.currentEvent?.type == .applicationDefined)
-    return built
+    try sendThroughTheQueue(down, releasedBy: up)
+    return presses
+}
+
+/// A press that opens a context menu, at a spot of a row, in a view.
+struct MenuPressCase: Sendable, CustomTestStringConvertible {
+    let viewMode: ViewMode
+    let spot: RowSpot
+    let press: MenuPress
+
+    var testDescription: String { "\(viewMode) \(spot.rawValue) \(press.rawValue)" }
+
+    /// Every spot in both views with both presses; the chevron in a column only.
+    static let all: [MenuPressCase] = [ViewMode.list, .column].flatMap { viewMode in
+        RowSpot.allCases.filter { viewMode == .column || $0 != .chevron }.flatMap { spot in
+            MenuPress.allCases.map { MenuPressCase(viewMode: viewMode, spot: spot, press: $0) }
+        }
+    }
 }
 
 /// The names of the tags whose dot `dots` draws in its tag's color: drawn as the open menu draws
@@ -140,18 +188,32 @@ private func coloredDots(_ dots: TagDotsView) throws -> [String] {
     .map(\.finderTag.name)
 }
 
-/// Dylan: "what do you mean by the dots? the colors? these aren't displaying". A right-click on
-/// a row's name builds the row menu, in a list and in a column, and its dots show: an item that
-/// isn't hidden, at a size, each dot drawn in its tag's color, with the selection's tags on
-/// them. In a column the name's label and the icon took the right-click and no menu opened
+/// Dylan: "what do you mean by the dots? the colors? these aren't displaying". A right-click
+/// or a Control-click anywhere on a row's name cell, on its name, icon, tag dot or empty end or
+/// a folder's chevron, builds the menu for that row, in a list and in a column, and its dots
+/// show: an item that isn't hidden, at a size, each dot drawn in its tag's color, with the
+/// selection's tags on them. The press goes through the app's queue, as a click does: sent
+/// without being the app's current event, a right-click on the label or the icon reached no
+/// menu, which an earlier version of this test took for a bug in the app
 /// (docs/decisions/0124-tags-in-rows-and-preview.md).
-@MainActor @Test(arguments: [ViewMode.list, .column])
-func aRightClickOnARowsNameBuildsTheMenuWithItsTagDotsShown(_ viewMode: ViewMode) async throws {
+@MainActor @Test(arguments: MenuPressCase.all)
+func aMenuPressOnARowsNameCellBuildsTheMenuWithItsTagDotsShown(_ test: MenuPressCase)
+    async throws
+{
     let window = try await TaggingWindow(
-        [("a.txt", ["Orange\n7"]), ("b.txt", [])], viewMode: viewMode)
+        [("a.txt", ["Orange\n7"]), ("b.txt", [])], folders: ["f"], viewMode: test.viewMode)
+    let name = test.spot == .chevron ? "f" : "a.txt"
 
-    let menu = try #require(try menuARightClickBuilds(onNameOf: "a.txt", in: window))
+    let presses =
+        switch test.press {
+        case .rightClick: try press(.rightMouseDown, at: test.spot, onRowOf: name, in: window)
+        case .controlClick:
+            try press(
+                .leftMouseDown, modifiers: .control, at: test.spot, onRowOf: name, in: window)
+        }
 
+    #expect(presses.menuRows == [try window.row(of: name)])
+    let menu = try #require(presses.menu)
     let item = try #require(menu.items.first { $0.view is TagDotsView })
     let dots = try #require(item.view as? TagDotsView)
     #expect(!item.isHidden && !dots.isHidden)
@@ -164,7 +226,24 @@ func aRightClickOnARowsNameBuildsTheMenuWithItsTagDotsShown(_ viewMode: ViewMode
     #expect(dots.dots.count == FinderTag.all.count)
     await settle { dots.hasTags }
     dots.validate()
-    #expect(try window.dot("Orange", in: dots).coverage == .allItems)
+    let orange: FinderTag.Coverage = name == "a.txt" ? .allItems : .noItems
+    #expect(try window.dot("Orange", in: dots).coverage == orange)
     #expect(try window.dot("Red", in: dots).coverage == .noItems)
     #expect(try coloredDots(dots) == FinderTag.all.map(\.name))
+}
+
+/// A plain press on a name builds no menu and reaches the table, which selects the row, in a
+/// list and in a column.
+@MainActor @Test(arguments: [ViewMode.list, .column])
+func aPlainPressOnANameSelectsTheRowAndBuildsNoMenu(_ viewMode: ViewMode) async throws {
+    let window = try await TaggingWindow(
+        [("a.txt", ["Orange\n7"]), ("b.txt", [])], viewMode: viewMode)
+    let list = try window.list
+    list.pane.select(Selection([ExactName("b.txt")], cursor: ExactName("b.txt")))
+
+    let presses = try press(.leftMouseDown, at: .name, onRowOf: "a.txt", in: window)
+
+    #expect(presses.menuRows.isEmpty)
+    #expect(list.pane.selection.cursor == ExactName("a.txt"))
+    #expect(list.tableView.selectedRowIndexes == [try window.row(of: "a.txt")])
 }

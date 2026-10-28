@@ -45,22 +45,4 @@ class ListingNameCellView: NSTableCellView {
         addSubview(dots)
         tagDots = dots
     }
-
-    /// A right-click, or a Control-click, anywhere on the cell but its eject button goes to the
-    /// cell, which passes it on to the row and the table, whose menu opens. Left to the views
-    /// it hits, the icon's image view and the name's label took the press and passed it to
-    /// nothing, so no menu opened (docs/decisions/0124-tags-in-rows-and-preview.md).
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        let hit = super.hitTest(point)
-        guard let hit, hit !== self, hit !== ejectButton, let event = window?.currentEvent,
-            Self.opensMenu(event)
-        else { return hit }
-        return self
-    }
-
-    /// Whether `event` is a press that opens a context menu.
-    private static func opensMenu(_ event: NSEvent) -> Bool {
-        event.type == .rightMouseDown
-            || (event.type == .leftMouseDown && event.modifierFlags.contains(.control))
-    }
 }

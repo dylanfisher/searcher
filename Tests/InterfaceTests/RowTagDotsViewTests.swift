@@ -13,19 +13,6 @@ import Testing
 // (`TaggingWindow`); the tags come from the listing (docs/decisions/0124-tags-in-rows-and-
 // preview.md).
 
-extension TaggingWindow {
-    /// The Name cell of `name`'s row.
-    func nameCell(of name: String) throws -> ListingNameCellView {
-        let cell = try list.shownNameCell(atRow: try row(of: name))
-        return try #require(cell as? ListingNameCellView)
-    }
-
-    /// The tag dots `name`'s row shows, nil when it shows none.
-    func rowDots(of name: String) throws -> RowTagDotsView? {
-        try nameCell(of: name).tagDots.flatMap { $0.isHidden ? nil : $0 }
-    }
-}
-
 @MainActor @Test(arguments: [ViewMode.list, .column])
 func aTaggedRowShowsItsTagColorsAfterItsNameAndAnUntaggedRowNone(_ viewMode: ViewMode)
     async throws
