@@ -136,3 +136,19 @@ private func exit(_ view: NSView) throws {
         cell.hitTest(for: try event(at: center), in: dot.bounds, of: dot).contains(.contentArea))
     #expect(cell.hitTest(for: try event(at: corner), in: dot.bounds, of: dot).isEmpty)
 }
+
+/// A dot whose tag every selected item has shows a check, drawn the right way up: the button is
+/// flipped, as `NSButton` is, so its point lies below its two ends on screen.
+@MainActor @Test func aDotsCheckPointsDown() {
+    let dot = TagDotButton(FinderTag.all[0])
+    dot.coverage = .allItems
+
+    let points = dot.checkPoints(in: dot.bounds)
+
+    #expect(dot.isFlipped)
+    #expect(points.count == 3)
+    // In flipped coordinates the lower point has the larger y.
+    #expect(points[1].y > points[0].y)
+    #expect(points[1].y > points[2].y)
+    #expect(points[2].y < points[0].y)
+}
