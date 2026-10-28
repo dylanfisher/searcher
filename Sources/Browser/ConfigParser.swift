@@ -4,7 +4,9 @@ import Foundation
 /// comment from `#` to its end, or `key = value`, with a comment after the value if it likes. A
 /// value is `true` or `false`, a number, or a string, bare or in double quotes; in quotes, `\"`
 /// is a quote and `\\` a backslash, and `#` is part of the string. The keys and what each one
-/// accepts come from `Settings.preferences`.
+/// accepts come from `Settings.preferences`, apart from the shortcut lines, whose key is
+/// `shortcutPrefix`, a command's ID and a slot, and whose value is a chord's `KeyChord.stored`
+/// spelling or `none` (docs/decisions/0122-config-shortcuts.md).
 ///
 /// It reads in two steps: each line into a key and a value as written, then each key against
 /// what it names. A file with any error sets nothing.
@@ -28,9 +30,22 @@ public enum ConfigParser {
         let value: Token
     }
 
+    /// The start of every shortcut line's key, which goes on with the command's ID and the slot:
+    /// `shortcut.window.showPalette.alternate`.
+    public static let shortcutPrefix = "shortcut."
+
+    /// The key of `id`'s slot at `position`.
+    static func shortcutKey(_ id: CommandID, _ position: ShortcutOverride.Position) -> String {
+        "\(shortcutPrefix)\(id.rawValue).\(position.rawValue)"
+    }
+
+    /// The value that takes a slot's chord away.
+    static let noShortcut = "none"
+
     /// What `text` sets, or every error in it.
     public static func parse(_ text: String) -> ConfigLoad {
         var values: [Settings.Key: Settings.Value] = [:]
+        var shortcuts = Shortcuts()
         var errors: [ConfigError] = []
         var lineSetting: [Settings.Key: Int] = [:]
         // A Windows line ending is one Character, so it splits once.
@@ -47,6 +62,10 @@ public enum ConfigParser {
             func fail(_ reason: String) {
                 errors.append(ConfigError(line: entry.line, key: entry.key, reason: reason))
             }
+            if entry.key.hasPrefix(shortcutPrefix) {
+                if let reason = shortcuts.add(entry) { fail(reason) }
+                continue
+            }
             guard let preference = preferencesByName[entry.key] else {
                 fail("unknown key \"\(entry.key)\"")
                 continue
@@ -61,7 +80,64 @@ public enum ConfigParser {
             case .failure(let error): fail(error.reason)
             }
         }
-        return errors.isEmpty ? ConfigLoad(outcome: .values(values)) : .failed(errors)
+        return errors.isEmpty
+            ? ConfigLoad(outcome: .values(values, shortcuts: shortcuts.lines)) : .failed(errors)
+    }
+
+    /// The shortcut lines read so far, which check each new one against those before it.
+    private struct Shortcuts {
+        private(set) var lines: [ConfigLoad.Shortcut] = []
+        /// The line each slot was set on.
+        private var slotLines: [CommandID: [ShortcutOverride.Position: Int]] = [:]
+        /// The line each chord was given on, with its key.
+        private var chordLines: [KeyChord: ConfigLoad.Shortcut] = [:]
+
+        /// Adds the slot `entry` sets, or says why it can't. A command's ID has dots in it, so
+        /// the slot is what follows the last one.
+        mutating func add(_ entry: Entry) -> String? {
+            let name = entry.key.dropFirst(ConfigParser.shortcutPrefix.count)
+            let dot = name.lastIndex(of: ".")
+            let id = CommandID(String(dot.map { name[..<$0] } ?? name))
+            guard commandIDs.contains(id) else {
+                if commandIDs.contains(CommandID(String(name))) {
+                    return "\(entry.key) names no slot: end it with .primary or .alternate"
+                }
+                return "no command has the ID \"\(id)\""
+            }
+            guard let dot,
+                let position = ShortcutOverride.Position(
+                    rawValue: String(name[name.index(after: dot)...]))
+            else {
+                return "\(entry.key) names no slot: end it with .primary or .alternate"
+            }
+            if let first = slotLines[id]?[position] {
+                return "\(entry.key) is already set on line \(first)"
+            }
+            let slot: ShortcutOverride.Slot
+            if entry.value.text == ConfigParser.noShortcut {
+                slot = .removed
+            } else if let chord = KeyChord(stored: entry.value.text) {
+                slot = .chord(chord)
+            } else {
+                return "\(entry.key) must be a shortcut such as cmd+shift+k, or"
+                    + " \(ConfigParser.noShortcut), not \"\(entry.value.text)\""
+            }
+            let line = ConfigLoad.Shortcut(
+                line: entry.line, key: entry.key, command: id, position: position, slot: slot)
+            if case .chord(let chord) = slot {
+                if let other = chordLines[chord] {
+                    return "\(chord.stored) is given to \(other.key) on line \(other.line) too"
+                }
+                chordLines[chord] = line
+            }
+            slotLines[id, default: [:]][position] = entry.line
+            lines.append(line)
+            return nil
+        }
+
+        /// The ID of every command, which a shortcut line must name.
+        private static let commandIDs = Set(AppCommands.commands.map(\.id))
+        private var commandIDs: Set<CommandID> { Self.commandIDs }
     }
 
     /// `Settings.preferences` by their names in the file.

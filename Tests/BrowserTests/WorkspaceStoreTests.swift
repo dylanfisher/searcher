@@ -333,13 +333,17 @@ private func onePaneTab() -> TabState {
     full.append(false)
     clock.advance(by: WorkspaceStore.writeDelay)
     #expect(await attempts.wait { $0.count == 4 })
+    // The attempt is logged before its write; the store's actor is busy until the write ends.
+    _ = await writer.loadFolderHistory()
     #expect(problems.all.count == 1)
     #expect(await store(folder).load().workspaces == [saved.id: saved])
 
     // Written, so nothing is retried.
     _ = await writer.loadFolderHistory()
+    #expect(clock.waitingSleeps == 0)
     clock.advance(by: WorkspaceStore.writeDelay)
-    #expect(await !attempts.wait(timeout: 0.2) { $0.count > 4 })
+    _ = await writer.loadFolderHistory()
+    #expect(attempts.all.count == 4)
 
     full.append(true)
     await writer.save(try workspace(saved.id, name: "Later"))

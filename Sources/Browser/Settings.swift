@@ -280,16 +280,19 @@ public final class Settings {
         set { set(.bool(newValue), for: .showsWorkspacesInSidebar) }
     }
 
-    /// The user's changes to the commands' chords, by command; empty by default. A command
-    /// missing from it keeps its defaults. Each override is kept in one form: a slot set to
-    /// what its default gives is `.standard`, and an override with both slots `.standard` is
-    /// left out, so it is never written (docs/decisions/0106-primary-and-alternate-shortcuts.md).
-    /// `KeyBindings` applies them.
+    /// The user's changes to the commands' chords made in the app, by command; empty by default.
+    /// A command missing from it keeps the config file's slots (`configShortcuts`), then its
+    /// defaults. Each override is set in one form: a slot set to what it has without the
+    /// override, the file's or else its default, is `.standard`, and an override with both
+    /// slots `.standard` is left out, so it is never written
+    /// (docs/decisions/0106-primary-and-alternate-shortcuts.md,
+    /// docs/decisions/0122-config-shortcuts.md). Only the commands whose override changes are
+    /// set so: one set before the file changed keeps overriding it. `KeyBindings` applies them.
     ///
     /// - Precondition: every ID is a command's in `AppCommands.commands`.
     public var shortcuts: [CommandID: ShortcutOverride] {
         didSet {
-            let normal = Self.normalized(shortcuts, dropUnknown: false)
+            let normal = Self.normalized(shortcuts, changedFrom: oldValue, file: configShortcuts)
             if normal != shortcuts { shortcuts = normal }
             guard shortcuts != oldValue else { return }
             let key = Key.shortcuts.rawValue
@@ -386,6 +389,10 @@ public final class Settings {
     /// while it applied, or there is none.
     public private(set) var configErrors: [ConfigError] = []
 
+    /// The shortcut slots the config file last set without an error, by command, which win over
+    /// the defaults and lose to `shortcuts` (docs/decisions/0122-config-shortcuts.md).
+    public private(set) var configShortcuts: [CommandID: ShortcutOverride] = [:]
+
     /// The watcher `follow(_:)` applies the loads of; its caller keeps it.
     private weak var configWatcher: ConfigWatcher?
 
@@ -413,18 +420,27 @@ public final class Settings {
     /// observers when a value, the overrides or the errors changed: a file can change which
     /// app values override it while every value reads as before.
     public func applyConfig(_ load: ConfigLoad) {
-        let before = (Self.preferences.map { value(of: $0.key) }, configOverrides, configErrors)
+        let before = (
+            Self.preferences.map { value(of: $0.key) }, configOverrides, configErrors,
+            configShortcuts
+        )
         switch load.outcome {
         case .missing:
             fileValues = [:]
+            configShortcuts = [:]
             configErrors = []
-        case .values(let values):
+        case .values(let values, _):
             fileValues = values
+            configShortcuts = load.shortcuts
             configErrors = []
         case .failed(let errors):
             configErrors = errors
         }
-        if before != (Self.preferences.map { value(of: $0.key) }, configOverrides, configErrors) {
+        let after = (
+            Self.preferences.map { value(of: $0.key) }, configOverrides, configErrors,
+            configShortcuts
+        )
+        if before != after {
             notifyObservers()
         }
     }
@@ -473,6 +489,45 @@ public final class Settings {
         guard appValues.removeValue(forKey: override.key) != nil else { return }
         defaults.removeObject(forKey: override.key.rawValue)
         notifyObservers()
+    }
+
+    /// The shortcut slots set in the app to other than the config file sets them, by command
+    /// in `AppCommands.commands` order, primary first. A slot the file doesn't set isn't listed:
+    /// the app's override of a default is what Reset is for.
+    public var shortcutConfigOverrides: [ShortcutConfigOverride] {
+        AppCommands.commands.flatMap { shortcutConfigOverrides(of: $0.id) }
+    }
+
+    /// `shortcutConfigOverrides` of command `id` alone.
+    public func shortcutConfigOverrides(of id: CommandID) -> [ShortcutConfigOverride] {
+        guard let app = shortcuts[id], let file = configShortcuts[id] else { return [] }
+        return ShortcutOverride.Position.allCases.compactMap { position in
+            guard app[position] != .standard, file[position] != .standard,
+                app[position] != file[position]
+            else { return nil }
+            return ShortcutConfigOverride(
+                command: id, position: position, appSlot: app[position],
+                fileSlot: file[position])
+        }
+    }
+
+    /// Whether the app's override of command `id` changes what its slots would be without it,
+    /// against the config file as now read. A stored override can stop doing so when the file
+    /// changes: a read of the file doesn't rewrite the app's values.
+    public func shortcutOverrideChangesSlots(of id: CommandID) -> Bool {
+        guard let override = shortcuts[id] else { return false }
+        guard let command = Self.commands[id] else {
+            preconditionFailure("no command has the ID \(id)")
+        }
+        return !override.normalized(
+            for: command, preset: FileCommands.commanderFKeys[id],
+            file: configShortcuts[id] ?? ShortcutOverride()
+        ).isStandard
+    }
+
+    /// Removes the app's override of `override`'s slot, so the config file's applies.
+    public func useConfigShortcut(for override: ShortcutConfigOverride) {
+        shortcuts[override.command]?[override.position] = .standard
     }
 
     /// Runs `handler` after each change of a setting, for as long as `owner` exists.
@@ -629,7 +684,8 @@ public final class Settings {
     /// stored shape. Empty when there is none, or when it or any override in it has another
     /// shape, and the whole key is removed, as for `favorites`. An entry for an ID no command
     /// has, as after a command is renamed, is a change of the code rather than bad data: only
-    /// that entry is removed.
+    /// that entry is removed. A slot equal to its default is kept: it may override a config
+    /// file that isn't read yet.
     private static func shortcuts(in defaults: UserDefaults, log: (String) -> Void) -> [CommandID:
         ShortcutOverride]
     {
@@ -640,7 +696,7 @@ public final class Settings {
             if overrides.count == dictionary.count {
                 let read = Dictionary(
                     uniqueKeysWithValues: overrides.map { (CommandID($0.key), $0.value) })
-                let known = normalized(read, dropUnknown: true)
+                let known = read.filter { commands[$0.key] != nil }
                 if known != read {
                     if known.isEmpty {
                         defaults.removeObject(forKey: key)
@@ -650,7 +706,7 @@ public final class Settings {
                     let dropped = Set(read.keys).subtracting(known.keys).map(\.rawValue).sorted()
                     log(
                         "rewrote the setting \(key) without the overrides of \(dropped), which"
-                            + " no command has or which change nothing")
+                            + " no command has")
                 }
                 return known
             }
@@ -659,26 +715,28 @@ public final class Settings {
         return [:]
     }
 
-    /// `shortcuts` with each override `ShortcutOverride.normalized(for:preset:)` and those that
-    /// change nothing left out. With `dropUnknown`, an ID no command has is left out too;
-    /// without it, one stops at a precondition.
+    /// Every command by ID.
+    private static let commands = Dictionary(
+        AppCommands.commands.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+
+    /// `shortcuts` with each override that differs from `old`'s
+    /// `ShortcutOverride.normalized(for:preset:file:)` against the config file's slots in
+    /// `file`, and those that change nothing left out.
+    ///
+    /// - Precondition: each ID whose override differs from `old`'s is a command's.
     private static func normalized(
-        _ shortcuts: [CommandID: ShortcutOverride], dropUnknown: Bool
+        _ shortcuts: [CommandID: ShortcutOverride], changedFrom old: [CommandID: ShortcutOverride],
+        file: [CommandID: ShortcutOverride]
     ) -> [CommandID: ShortcutOverride] {
-        guard !shortcuts.isEmpty else { return shortcuts }
-        let commands = Dictionary(
-            AppCommands.commands.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        var normal: [CommandID: ShortcutOverride] = [:]
-        for (id, override) in shortcuts {
+        var normal = shortcuts
+        for (id, override) in shortcuts where old[id] != override {
             guard let command = commands[id] else {
-                precondition(dropUnknown, "no command has the ID \(id)")
-                continue
+                preconditionFailure("no command has the ID \(id)")
             }
             let kept = override.normalized(
-                for: command, preset: FileCommands.commanderFKeys[id])
-            if !kept.isStandard {
-                normal[id] = kept
-            }
+                for: command, preset: FileCommands.commanderFKeys[id],
+                file: file[id] ?? ShortcutOverride())
+            normal[id] = kept.isStandard ? nil : kept
         }
         return normal
     }

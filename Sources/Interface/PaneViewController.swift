@@ -141,7 +141,11 @@ public final class PaneViewController: NSViewController {
 
     /// The settings the last bindings were made for, and those bindings.
     private static var madeBindings:
-        (shortcuts: [CommandID: ShortcutOverride], commanderFKeys: Bool, bindings: KeyBindings)?
+        (
+            shortcuts: [CommandID: ShortcutOverride],
+            configShortcuts: [CommandID: ShortcutOverride],
+            commanderFKeys: Bool, bindings: KeyBindings
+        )?
 
     /// The app's commands with the chords `settings` gives them: `keyBindings(for:)`'s registry.
     /// The menus use the same one.
@@ -150,12 +154,15 @@ public final class PaneViewController: NSViewController {
     }
 
     /// The bindings `settings` gives the app's commands: the Commander F-key preset while it is
-    /// on and the user's shortcuts (`AppCommands.keyBindings(settings:reserved:fixed:)`), with
+    /// on, the config file's shortcuts and the app's
+    /// (`AppCommands.keyBindings(settings:reserved:fixed:)`), with
     /// `MainMenuBuilder.reservedChords` kept for the menus and the Edit items' chords
     /// (`MainMenuBuilder.fixedChords`) kept for their commands. Made again only when those
-    /// settings change, never per key; the Settings window records chords against the same ones.
+    /// settings change, as when the config file is read again, never per key; the Settings
+    /// window records chords against the same ones.
     public static func keyBindings(for settings: Settings) -> KeyBindings {
         if let made = madeBindings, made.shortcuts == settings.shortcuts,
+            made.configShortcuts == settings.configShortcuts,
             made.commanderFKeys == settings.commanderFKeys
         {
             return made.bindings
@@ -172,7 +179,9 @@ public final class PaneViewController: NSViewController {
         for dropped in bindings.dropped {
             logger.error("\(dropped.description, privacy: .public)")
         }
-        madeBindings = (settings.shortcuts, settings.commanderFKeys, bindings)
+        madeBindings = (
+            settings.shortcuts, settings.configShortcuts, settings.commanderFKeys, bindings
+        )
         return bindings
     }
 

@@ -175,7 +175,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
         let configLogger = Logger(category: "config")
         let config = ConfigWatcher(
-            file: configFile, log: { configLogger.error("\($0)") })
+            file: configFile, reserved: MainMenuBuilder.reservedChords,
+            fixed: MainMenuBuilder.fixedChords, log: { configLogger.error("\($0)") })
         configWatcher = config
         let settings = settings
         Task {
