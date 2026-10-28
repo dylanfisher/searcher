@@ -136,9 +136,7 @@ final class GeneralSettings {
     private static func runConfigLocationPanel() async -> URL? {
         let panel = NSOpenPanel()
         panel.title = "Choose Config File Location"
-        panel.message =
-            "Choose a config file, or a folder to keep \(ConfigFile.name) in. Searcher reads a"
-            + " file that's there, and saves its settings to a place with none."
+        panel.message = "Choose a config file, or a folder for one."
         panel.prompt = "Choose"
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
