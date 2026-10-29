@@ -39,6 +39,13 @@ Each pane's path bar (0026) sat in its own 28-point row along the pane's bottom,
   scrolls to the rows below, as one held at the bottom edge of Finder's list does. The table's
   own autoscroll never sees the drag there, since AppKit hands it to the glass. Over the
   preview a drag goes nowhere, as the preview takes no drops.
+  - A clip hears `draggingEntered` once, when the drag first reaches it; the glass entered
+    again while that clip holds the drag sends it an update. A drag that moves to another
+    column, onto the preview, or off the glass sends `draggingExited` to the clip it left, so
+    that table drops its highlight and its spring-loading wait.
+  - The glass is an `NSSpringLoadingDestination` too and hands each spring-loading call to the
+    table under the drag, so Space and a force click open the folder row under the glass as
+    they do on the table.
 - **The last row stays reachable.** `PaneViewController.pathBarCover`, the bar's height plus the
   gap, is how much of the pane's bottom the glass covers. The list's and each column's clip view
   add it to the bottom margin (`ListingViewController.keepMargins`), so the last row scrolls to
@@ -84,7 +91,9 @@ Each pane's path bar (0026) sat in its own 28-point row along the pane's bottom,
 ## Consequences
 
 - A drop below the last row still lands in the folder shown, in the margin above the capsule.
-  A drop on the capsule lands on the row under it, or in the folder shown where no row is.
+  A drop on the capsule lands on the row under it after the last scroll, or in the folder
+  shown where no row is: at the list's end no row is under the glass, so a drag held there
+  until the list stops drops into the folder.
 - A drag over the capsule scrolls the list a row at each update AppKit sends, at one speed
   however near the bottom it is, while Finder speeds up nearer the edge.
 - The column resize grips run the column's full height; their bottom 36 points are under the
