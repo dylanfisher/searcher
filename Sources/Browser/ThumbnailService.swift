@@ -110,6 +110,7 @@ public final class ThumbnailService: Sendable {
         let id = calls.makeID()
         let making = Making(freeSlot: { calls.finish(id, on: volume) })
         let onShare = volume.kind == .network
+        let isFolder = entry.type == .directory
         // Nil when cancelled before it ended; otherwise the thumbnail, nil if there is none.
         let outcome: CGImage?? = await withTaskCancellationHandler {
             await withCheckedContinuation {
@@ -132,7 +133,13 @@ public final class ThumbnailService: Sendable {
                     let stop = maker.makeThumbnail(
                         at: path, side: side, scale: Self.scale, framed: !forPreview
                     ) { image in
-                        making.answer(image) { cache.store(image, for: key) }
+                        making.answer(image) {
+                            // Quick Look has an icon for every folder, so a folder with none was
+                            // refused, as a volume mounted there before the mount table knew of
+                            // it is: not kept, so the folder asks again once it is unmounted
+                            // (docs/decisions/0129-row-icons-as-finder.md).
+                            if image != nil || !isFolder { cache.store(image, for: key) }
+                        }
                     }
                     making.started(stop: stop)
                 }

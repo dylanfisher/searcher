@@ -112,6 +112,24 @@ private let share = VolumeIdentity(
     #expect(service.cached(at: "/p/a.bin", entry: file("a.bin"), side: 16) == .some(nil))
 }
 
+/// A folder refused an icon, as a volume mounted there before the mount table read it is, isn't
+/// kept as having none: once the volume is unmounted, the folder asks again and gets its icon
+/// (docs/decisions/0129-row-icons-as-finder.md).
+@Test func aFolderRefusedAnIconIsNotKeptAsHavingNone() async throws {
+    let maker = GatedThumbnailMaker()
+    maker.answer("/p/music", with: nil)
+    let service = ThumbnailService(maker: maker)
+    let music = folder("music")
+
+    #expect(try await service.thumbnail(at: "/p/music", entry: music, side: 18, on: disk) == nil)
+    #expect(service.cached(at: "/p/music", entry: music, side: 18) == nil)
+
+    let icon = testThumbnail()
+    maker.answer("/p/music", with: icon)
+    #expect(try await service.thumbnail(at: "/p/music", entry: music, side: 18, on: disk) === icon)
+    #expect(maker.calls.count == 2)
+}
+
 /// A row's file is placed by the volume its folder's load read, not by its path's text: a folder
 /// reached through a link under `/` onto a share is on the share, and its rows get none.
 @Test func aRowOnANetworkVolumeIsNeverAskedForWhateverItsPathReads() async throws {
