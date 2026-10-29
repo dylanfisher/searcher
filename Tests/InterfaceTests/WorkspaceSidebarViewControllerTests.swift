@@ -604,30 +604,50 @@ private final class Fixture {
     #expect(downloads.textField?.textColor == .tertiaryLabelColor)
 }
 
-@MainActor @Test func favoritesAndVolumesShowFindersSidebarGlyphsOnceRead() async throws {
+/// As Finder's on macOS 26: thin outline symbols, not the filled `Sidebar*.icns` glyphs, which
+/// the stub reads as red squares; only Applications, which no public symbol draws, shows its
+/// file once read.
+@MainActor @Test func favoritesAndVolumesShowFindersOutlineSymbols() async throws {
     let fixture = try Fixture()
     await fixture.mount([usb, image, share])
     await fixture.icons.load()
-    await settle {
-        (try? fixture.favoriteCells.first?.imageView?.image) === fixture.icons.image(.applications)
-    }
+    let applications = try #require(fixture.favoriteCells.first?.imageView)
+    await settle { applications.image === fixture.icons.image(.applications) }
 
-    let glyphs = try fixture.favoriteCells.map(\.imageView?.image)
-    let favorite: [SidebarIcons.Glyph] = [.applications, .desktop, .documents, .downloads, .home]
-    for (glyph, image) in zip(favorite, glyphs) {
-        #expect(image === fixture.icons.image(glyph) && image?.isTemplate == true)
+    #expect(applications.image?.isTemplate == true)
+    #expect(String(describing: applications.image).contains("app.dashed") == false)
+    let favorites = try fixture.favoriteCells.dropFirst().map(\.imageView?.image)
+    let volumes = try fixture.volumeCells.map(\.imageView?.image)
+    let symbols = [
+        "dock.rectangle", "doc", "arrow.down.circle", "house", "externaldrive", "externaldrive",
+        "externaldrive.connected.to.line.below",
+    ]
+    for (symbol, image) in zip(symbols, favorites + volumes) {
+        let image = try #require(image)
+        #expect(image.isTemplate, "\(symbol)")
+        let description = String(describing: image)
+        #expect(description.hasSuffix("symbol = \(symbol)>"), "\(description)")
     }
-    let volumeGlyphs = try fixture.volumeCells.map(\.imageView?.image)
-    let volume: [SidebarIcons.Glyph] = [.externalDisk, .externalDisk, .server]
-    for (glyph, image) in zip(volume, volumeGlyphs) {
-        #expect(image === fixture.icons.image(glyph))
-    }
+}
+
+@Test func eachKindOfRowHasFindersSymbol() {
+    let symbols = Dictionary(
+        uniqueKeysWithValues: SidebarIcons.Glyph.allCases.map { ($0, $0.symbol) })
+    #expect(
+        symbols == [
+            .applications: "app.dashed", .desktop: "dock.rectangle", .documents: "doc",
+            .downloads: "arrow.down.circle", .home: "house", .folder: "folder",
+            .externalDisk: "externaldrive", .internalDisk: "internaldrive",
+            .removableDisk: "externaldrive", .server: "externaldrive.connected.to.line.below",
+            .genericFile: "doc",
+        ])
+    #expect(SidebarIcons.Glyph.allCases.filter { $0.coreTypesFile != nil } == [.applications])
 }
 
 /// As Finder's, in both appearances: a glyph is drawn in the label color at rest, in the accent
 /// on the selected row while the list doesn't have the keys, and white on the selected row while
 /// that row is emphasized, as AppKit draws it while the list has the keys of the key window. The
-/// stub glyphs are filled squares, so the pixel at a glyph's center is its color.
+/// rows measured are outline symbols, Desktop's, Documents' and a disk's.
 @MainActor @Test func glyphsTakeTheLabelColorAtRestAndTheSelectedRowsColor() async throws {
     let fixture = try Fixture()
     await fixture.mount([usb])
@@ -667,7 +687,9 @@ private final class Fixture {
     }
 }
 
-/// Draws `outline` and gives the color at the center of each of `rows`' icons, in sRGB.
+/// Draws `outline` and gives the color of each of `rows`' icons, in sRGB: the pixel in the icon
+/// that differs most from the one at its corner, which is the row's background. An outline
+/// symbol's center is often background, so the stroke's color is found by its contrast.
 @MainActor
 private func glyphColors(in outline: NSOutlineView, rows: [Int]) throws -> [NSColor] {
     let bitmap = try #require(outline.bitmapImageRepForCachingDisplay(in: outline.bounds))
@@ -677,10 +699,28 @@ private func glyphColors(in outline: NSOutlineView, rows: [Int]) throws -> [NSCo
         let cell = try #require(
             outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? NSTableCellView)
         let icon = try #require(cell.imageView)
-        let center = outline.convert(NSPoint(x: icon.bounds.midX, y: icon.bounds.midY), from: icon)
-        let color = try #require(bitmap.colorAt(x: Int(center.x * scale), y: Int(center.y * scale)))
-        return try #require(color.usingColorSpace(.sRGB))
+        let frame = outline.convert(icon.bounds, from: icon)
+        let pixels = try stride(from: Int(frame.minX * scale), to: Int(frame.maxX * scale), by: 1)
+            .flatMap { x in
+                try stride(from: Int(frame.minY * scale), to: Int(frame.maxY * scale), by: 1)
+                    .map { y in
+                        try #require(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+                    }
+            }
+        let background = try #require(pixels.first)
+        let ink = try #require(
+            pixels.max { inkContrast($0, background) < inkContrast($1, background) })
+        return ink
     }
+}
+
+/// How far apart two pixels are, premultiplied, so a clear pixel is far from an opaque one
+/// whatever their colors.
+private func inkContrast(_ one: NSColor, _ other: NSColor) -> CGFloat {
+    abs(one.redComponent * one.alphaComponent - other.redComponent * other.alphaComponent)
+        + abs(one.greenComponent * one.alphaComponent - other.greenComponent * other.alphaComponent)
+        + abs(one.blueComponent * one.alphaComponent - other.blueComponent * other.alphaComponent)
+        + abs(one.alphaComponent - other.alphaComponent)
 }
 
 /// Whether `color` is `other`, give or take what drawing does to it. The alpha isn't compared: a
@@ -719,7 +759,10 @@ private func hasHue(_ color: NSColor, of accent: NSColor) -> Bool {
         fixture.sidebar.view.layoutSubtreeIfNeeded()
         for cell in try fixture.favoriteCells + fixture.volumeCells {
             cell.layoutSubtreeIfNeeded()
-            #expect(cell.imageView?.frame.size == NSSize(width: side, height: side), "\(style)")
+            // A symbol's frame takes in its alignment insets; the box laid out is the side.
+            let icon = try #require(cell.imageView)
+            let laidOut = icon.alignmentRect(forFrame: icon.frame).size
+            #expect(laidOut == NSSize(width: side, height: side), "\(style)")
         }
         let volume = try #require(fixture.volumeCells.first)
         let symbolSize = try #require(volume.imageView?.symbolConfiguration)
@@ -765,12 +808,15 @@ private func hasHue(_ color: NSColor, of accent: NSColor) -> Bool {
     #expect(eject.glyphTint == .secondaryLabelColor)
 }
 
-@MainActor @Test func aGlyphTheBundleLacksStaysNilSoTheRowKeepsItsSymbol() async {
+@MainActor @Test func aGlyphTheBundleLacksShowsItsSymbol() async {
     let icons = SidebarIcons { _ in [:] }
 
     await icons.load()
 
-    #expect(SidebarIcons.Glyph.allCases.allSatisfy { icons.image($0) == nil })
+    for glyph in SidebarIcons.Glyph.allCases {
+        let description = String(describing: icons.image(glyph))
+        #expect(description.hasSuffix("symbol = \(glyph.symbol)>"), "\(description)")
+    }
 }
 
 @Test func finderPicksTheGlyphForEachKindOfFolderAndVolume() {
