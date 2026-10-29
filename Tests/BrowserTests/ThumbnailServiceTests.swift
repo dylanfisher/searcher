@@ -23,7 +23,8 @@ private func link(_ name: String) -> DirectoryEntry {
 }
 
 /// Quick Look makes a folder's icon too, as Finder draws it for that folder: a sheet of paper in a
-/// folder with items, its tag's color, its custom icon (docs/decisions/0129-row-icons-as-finder.md).
+/// folder with items, its tag's color, its custom icon
+/// (docs/decisions/0129-row-icons-as-finder.md).
 @Test func onlyAFileWhoseContentsAreHereAndArentTextOrAFolderShowsAThumbnail() async {
     let jpeg = await kind(.regular, "jpg")
     #expect(ThumbnailService.shows(file("a.jpg"), kind: jpeg))
