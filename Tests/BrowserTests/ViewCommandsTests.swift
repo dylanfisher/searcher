@@ -188,6 +188,27 @@ func aSortKeySortsByItsColumnAndTheSameKeyAgainReverses(
     }
 }
 
+/// Hide Toolbar turns the app-wide setting off and its title then says Show Toolbar; it has
+/// no check mark, as Finder's item has none.
+@MainActor @Test func theToolbarToggleTogglesItsSettingAndNamesWhatItWouldDo() throws {
+    let pane = PaneFixture(at: "/r", folders: ["/r": []]).pane
+    let binding = try #require(
+        AppCommands.bindings.first { $0.command == ViewCommands.toggleToolbar })
+    let title = try #require(binding.title)
+    #expect(binding.isChecked == nil)
+    #expect(pane.settings.showsToolbar)
+    #expect(title(CommandContext(pane: pane)) == "Hide Toolbar")
+
+    try run(ViewCommands.toggleToolbar, on: pane)
+
+    #expect(!pane.settings.showsToolbar)
+    #expect(title(CommandContext(pane: pane)) == "Show Toolbar")
+
+    try run(ViewCommands.toggleToolbar, on: pane)
+
+    #expect(pane.settings.showsToolbar)
+}
+
 /// Select All, type-to-select and the status bar's counts read the rows, so a hidden .DS_Store
 /// is in none of them.
 @MainActor @Test func selectAllAndTypeToSelectSkipAHiddenDSStore() async throws {

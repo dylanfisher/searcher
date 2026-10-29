@@ -2,7 +2,8 @@ import AppKit
 import Browser
 
 /// Shows a workspace's tabs in a `TabStripView`, each titled as the window is while it is
-/// selected, after its focused pane's `titleLocation`, and selects the tab clicked. Hidden while the workspace has one tab.
+/// selected, after its focused pane's `titleLocation`, and selects the tab clicked. Hidden while
+/// the workspace has one tab.
 @MainActor
 final class TabStripViewController: NSViewController {
     let workspace: Workspace

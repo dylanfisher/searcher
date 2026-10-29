@@ -34,6 +34,7 @@ private func settingsLogging(_ defaults: UserDefaults, home: String = NSHomeDire
     #expect(settings.showsFavoritesInSidebar)
     #expect(settings.showsLocationsInSidebar)
     #expect(settings.showsWorkspacesInSidebar)
+    #expect(settings.showsToolbar)
 }
 
 /// A favorites list of any other shape, or with any one item of another shape or a path twice,

@@ -55,6 +55,17 @@ item (0086), and the title set to the focused pane's folder only when its locati
   safe area, so the panes start under the toolbar, or under the title bar while it is hidden.
   Content doesn't scroll under the glass as Finder's does (`fb-1028b-3`); that needs the lists
   to take the bar as a scroll inset, which goes with the path bar's glass look (CH.2).
+- **The title with the toolbar hidden stays where AppKit puts it: leading, not centred.** On
+  macOS 26 AppKit left-aligns a title-bar title in this window in every arrangement measured on
+  the second display (the title field's frame in the window): with the toolbar hidden in the
+  unified, expanded, automatic and compact styles, without the full-size content view, and
+  with no toolbar at all. It sits right of the sidebar while the sidebar shows (x 161 in a
+  1,100-point window) and right of the window buttons while it doesn't (x 82). The centred
+  title of `fb-1028b-4` came from the old plain title bar. Finder is an AppKit toolbar window,
+  so its hidden-toolbar title should land the same way, but that wasn't checked: hiding
+  Finder's toolbar would change Dylan's own Finder, and the agents can't capture the screen.
+  Centring by hand would mean a title view of our own over the title bar. **Dylan to compare
+  with Finder after ⌥⌘T there.**
 - **Corners.** Measured in a window on the second display: the corner radius is 26 points with
   the toolbar and 16 without, AppKit's radii for a toolbar window and a title-bar window, as in
   Finder. The window's frame stays the same when the toolbar hides or shows; only the content

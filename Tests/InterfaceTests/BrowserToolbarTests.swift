@@ -259,3 +259,57 @@ private func mainMenu() throws -> NSMenu {
     #expect(fixture.window.title == "root")
     #expect(!fixture.toolbar.back.isEnabled)
 }
+
+/// In column view the title follows the focused column as To Parent Column and Back move the
+/// keys: the folder selected there, else the column's own.
+@MainActor @Test func theTitleFollowsToParentAndBackInColumnView() async throws {
+    let fixture = try await Fixture()
+    try fixture.chooseViewMode(1)
+    let pane = fixture.tab.focusedPane
+    await settle { pane.commandPane !== pane && pane.commandPane.state.isLoaded }
+    let trail = try #require(pane.columnTrail)
+    pane.commandPane.select(Selection([ExactName("docs")], cursor: ExactName("docs")))
+    try fixture.keyTable.run(ColumnCommands.intoFolder.id)
+    await settle { trail.focused.pane.location == Location(path: "/root/docs") }
+    await settle { trail.focused.pane.state.isLoaded }
+    trail.focused.pane.select(
+        Selection([ExactName("inside.txt")], cursor: ExactName("inside.txt")))
+    #expect(fixture.window.title == "docs")
+    #expect(fixture.toolbar.back.isEnabled)
+
+    try fixture.keyTable.run(ColumnCommands.toParent.id)
+    try fixture.keyTable.run(ColumnCommands.toParent.id)
+
+    #expect(trail.focused.pane.location == Location(path: "/"))
+    // The root's column lists only once the keys reach it; its selection of root, by name,
+    // titles the window once its rows are there.
+    await settle { trail.focused.pane.state.isLoaded }
+    #expect(fixture.window.title == "root")
+
+    try fixture.goInHistory(0)
+
+    #expect(trail.focused.pane.location == Location(path: "/root"))
+    #expect(fixture.window.title == "docs")
+}
+
+/// Switching tabs shows the new tab's title and its focused pane's Back and Forward.
+@MainActor @Test func theTitleAndButtonsFollowATabSwitch() async throws {
+    let fixture = try await Fixture()
+    let first = fixture.tab.focusedPane
+    first.navigate(to: Location(path: "/root/docs"))
+    try fixture.goInHistory(0)
+    #expect(fixture.window.title == "root")
+    #expect(!fixture.toolbar.back.isEnabled && fixture.toolbar.forward.isEnabled)
+    try fixture.keyTable.run(WindowCommands.newTab.id)
+    let second = fixture.tab.focusedPane
+    #expect(second !== first)
+    second.navigate(to: Location(path: "/root/docs"))
+    #expect(fixture.window.title == "docs")
+    #expect(fixture.toolbar.back.isEnabled && !fixture.toolbar.forward.isEnabled)
+
+    try fixture.keyTable.run(WindowCommands.previousTab.id)
+
+    #expect(fixture.tab.focusedPane === first)
+    #expect(fixture.window.title == "root")
+    #expect(!fixture.toolbar.back.isEnabled && fixture.toolbar.forward.isEnabled)
+}
