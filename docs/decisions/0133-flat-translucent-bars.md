@@ -24,8 +24,8 @@ panes hung below it from the content's safe area (0128), so nothing scrolled und
   pane's full width and flush with its bottom, square, as 0026's row was. The list and the
   columns still run to the pane's bottom under it, so the rows show through it blurred. It holds
   the path bar and the status as 0132's capsule did. `pathBarGap` is gone, and
-  `pathBarCover`, the part of the pane's bottom the row covers, is the bar's 28 points. The old
-  row drew no line above it, and the row draws none.
+  `pathBarCover`, the part of the pane's bottom the row covers, is the bar's 28 points. The row
+  draws no line above it.
 - **What 0132 keeps.** Drags over the row go on to the list or the column under it, with
   spring loading and the row-at-a-time scroll; the last row scrolls to `Margin.standard` above
   the row; the scrollers, the preview's end and the centered messages stay above it; Go to Item
@@ -46,7 +46,11 @@ panes hung below it from the content's safe area (0128), so nothing scrolled und
   `ColumnPreviewView.topCover`). The list sets its scroll view's top inset to the cover, which
   moves the header and the scroller below the bars, and its clip's top inset to the cover, the
   header and the margin, so at rest the first row is where it was and `scrollRowToVisible` keeps
-  a row clear of the bars. A list at its top stays at its top when the cover changes. The
+  a row clear of the bars. A list at its top stays at its top when the cover changes.
+- **Dragging up.** The clip's top edge lies under the toolbar, which takes a drag there, so
+  AppKit's autoscroll never sees a drag past it. A drag held within a row's height below the bars
+  and the header scrolls a covered list up a row each update, as one held over the path bar's
+  row scrolls it down (0132). The
   scroll views no longer take AppKit's automatic insets: the pane says how much is covered.
 - **Only what is under the bars.** A pane below another in a split is not under them: its safe
   area starts at its top and its cover is 0. With the filter bar shown, the bar sits at the safe
