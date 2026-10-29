@@ -333,3 +333,31 @@ private let available = ", 789.74 GB available"
     }
     #expect(fixture.text == "")
 }
+
+/// A click on a folder's row in column view counts that folder once its column lists, though
+/// the click's selection isn't settled when the column opens and the bar asks which pane to
+/// count (0131).
+@MainActor @Test func aClickOnAFolderInColumnViewCountsItBeforeItsSelectionSettles() async throws {
+    let fixture = try await Fixture()
+    try fixture.keyTable.keyDown(with: try keyEvent("3", modifiers: .command))
+    let pane = fixture.tab.focusedPane
+    await settle { pane.commandPane !== pane && pane.commandPane.state.isLoaded }
+    let rootColumn = pane.commandPane
+    let listing = try #require(rootColumn.state.listing)
+    let table = try fixture.keyTable
+    await fixture.waitForText("4 items" + available)
+
+    table.selectRowIndexes(
+        [try #require(listing.row(named: "docs"))], byExtendingSelection: false)
+
+    #expect(!rootColumn.selection.isSettled)
+    #expect(fixture.window.title == "docs")
+    await fixture.waitForText("1 item" + available)
+
+    table.selectRowIndexes(
+        [try #require(listing.row(named: "empty"))], byExtendingSelection: false)
+
+    #expect(!rootColumn.selection.isSettled)
+    #expect(fixture.window.title == "empty")
+    await fixture.waitForText("0 items" + available)
+}

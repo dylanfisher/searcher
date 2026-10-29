@@ -519,16 +519,19 @@ public final class ColumnTrail {
         owner.trailDidChange()
     }
 
+    /// The pane of the column right of the focused one, whatever it shows; nil when none is.
+    public var nextColumnPane: Pane? {
+        focusedIndex + 1 < columns.count ? columns[focusedIndex + 1].pane : nil
+    }
+
     /// The pane of the column right of the focused one, while it shows the folder selected
     /// alone there: the folder Go to Item lists after the focused column's rows, and the one
     /// New Folder, Paste and Move Items Here act in (0111-column-view-target-folder.md). Nil
     /// when no column is right of it, as after a selection of a file, a link, a package without
-    /// Show Package Contents, or several rows.
+    /// Show Package Contents, or several rows. A click's selection, not settled yet, answers by
+    /// the rows it highlights.
     public var selectedFolderColumn: Pane? {
-        guard focusedIndex + 1 < columns.count else { return nil }
-        let next = columns[focusedIndex + 1].pane
-        guard case .only(let names) = focused.pane.selection.members,
-            names == [ExactName(next.location.name)]
+        guard let next = nextColumnPane, focused.pane.selectsOnly(ExactName(next.location.name))
         else { return nil }
         return next
     }

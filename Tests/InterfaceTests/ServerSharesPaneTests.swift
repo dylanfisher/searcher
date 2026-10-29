@@ -901,9 +901,10 @@ func aClickMountsAShareOnlyInColumnView(_ viewMode: ViewMode) async throws {
 }
 
 /// What lets go of a mount before it ends: the mount is cancelled, and a share that mounts
-/// anyway, as the kernel may finish it, is a mounted row and nothing moves.
+/// anyway, as the kernel may finish it, is a mounted row and nothing moves. A click on another
+/// row lets go of it before the click's selection settles.
 enum LettingGo: CaseIterable, Sendable {
-    case back, anotherSelection, escape, closingThePane
+    case back, anotherSelection, aClickOnAnotherRow, escape, closingThePane
 }
 
 @MainActor @Test(arguments: LettingGo.allCases)
@@ -924,6 +925,10 @@ func aMountLetGoOfMovesNothingWhenTheShareMounts(_ how: LettingGo) async throws 
     switch how {
     case .back: window.pane.goBack()
     case .anotherSelection: window.select(["music"])
+    case .aClickOnAnotherRow:
+        let row = try #require(window.pane.state.listing?.row(named: "music"))
+        list.tableView.selectRowIndexes([row], byExtendingSelection: false)
+        #expect(!window.pane.selection.isSettled)
     case .escape: list.tableView.keyDown(with: try keyEvent("\u{1B}"))
     case .closingThePane: window.pane.close()
     }
