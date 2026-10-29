@@ -81,12 +81,17 @@ color, and a folder with a custom icon in that icon. Measured on this Mac:
   entry's date is a new cache key, so the row asks again and its icon follows.
 - **A child folder is walked for its size once at a time.** With folder sizes on, a child whose
   items come and go has a new date at each batch, and a new date is walked again
-  (`Pane.startSizeScan`). A folder whose walk hasn't landed (`Pane.walkingSizes`) isn't asked for
-  again; the dates that come meanwhile mark it (`Pane.trailingSizes`), and once the walk lands
-  the folder is walked once more, at the date it has then. So an install into `node_modules`
-  under the folder shown has one walk of it running and at most one waiting, back to back, and
-  the size shown ends at the latest date, as Finder's does. No minimum gap between walks: one at
-  a time already bounds them to the disk's pace.
+  (`Pane.startSizeScan`). A folder whose walk is pending isn't asked for again; the dates that
+  come meanwhile mark it (`Pane.trailingSizes`), and once the walk lands the folder is walked
+  once more, at the date it has then. So an install into `node_modules` under the folder shown
+  has one walk of it running and at most one waiting, back to back, and the size shown ends at
+  the latest date, as Finder's does. No minimum gap between walks: one at a time already bounds
+  them to the disk's pace. The mark is the walk itself (`Pane.walkingSizes` keeps each folder's
+  `FolderSizeService.Walk`), and a folder counts as walking only while its walk `isPending`:
+  not finished, cancelled or left. A walk stopped without a result, by the pane or by the
+  service, as `VolumeEvents` stops the walks under a volume at an unmount or an eject, delivers
+  nothing and the pane isn't told, but each scan drops marks whose walks aren't pending, so no
+  cancel can leave a folder that is never walked again.
 - **No icon for a volume mounted in a local folder**, as a share in `/Volumes` is: the folder's
   volume says local, but Quick Look would read the share. A row skips a folder its service's
   `MountTable` has a volume mounted at, and asks for no folder before the table's first read,
