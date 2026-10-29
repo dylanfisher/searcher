@@ -49,4 +49,6 @@ on purpose:
   before ا, و and ي.
 
 Folders with custom icons show the generic folder icon. Revisit if the gallery or a "show
-previews" setting moves thumbnails into lists.
+previews" setting moves thumbnails into lists. (Amended 2026-10-28: on a local volume a folder's
+row shows Quick Look's icon of it, as Finder draws it, custom icon included; see
+[0129](0129-row-icons-as-finder.md).)

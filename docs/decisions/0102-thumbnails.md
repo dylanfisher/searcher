@@ -46,7 +46,10 @@ A probe on this Mac (local APFS, generated 2000×1500 JPEGs, `QLThumbnailGenerat
 - **Which files.** `ThumbnailService.shows`: a regular file whose contents are on this Mac and
   which isn't text. Folders, packages, links, special files and dataless files keep their icons;
   custom folder icons stay out of scope. Rows and the preview ask only for files in rows the
-  volume answered with (`ListingState.isAnswered`), not cached, slow or offline rows.
+  volume answered with (`ListingState.isAnswered`), not cached, slow or offline rows. (Amended
+  2026-10-28: a folder that isn't dataless is asked for too, and Quick Look gives its `.icon`,
+  Finder's drawing of that folder, under the same rules; see
+  [0129](0129-row-icons-as-finder.md).)
 - **Not downloaded, checked again.** The listing's `SF_DATALESS` flag can be stale, so
   `QuickLookThumbnailer` reads the flag with `lstat`, which doesn't download, on the request's
   thread just before asking Quick Look, and gives a dataless file none. A file evicted in the
