@@ -118,6 +118,9 @@ public final class WorkspaceWindows {
     public let favorites: Favorites
     /// The mounted volumes the sidebar's Locations lists, shared by every window.
     let volumes = SidebarVolumes()
+    /// The space free on each volume, for every window's status bar. A finished file operation
+    /// has it read again.
+    let freeSpace: FreeSpace
     /// The unfinished operations in the queue's latest snapshots, for a window that takes over
     /// another's operations as it closes.
     private var unfinished: [FileOperationQueue.Snapshot] = []
@@ -137,11 +140,12 @@ public final class WorkspaceWindows {
 
     /// Windows whose workspaces and session are saved to `store`; nil saves nothing.
     /// `mountTable` is the app's one table: the one `service` lists servers from, when it has
-    /// one, since each table made reads the mounts again on every mount event.
+    /// one, since each table made reads the mounts again on every mount event. `freeSpace`
+    /// reads the volumes' free space for the status bars.
     public init(
         service: ListingService, mountTable: MountTable, systemActions: any SystemActions,
         settings: Settings, folderSizes: FolderSizeService?, clipboard: any FileClipboard,
-        store: WorkspaceStore?, cache: ListingCache? = nil
+        store: WorkspaceStore?, cache: ListingCache? = nil, freeSpace: FreeSpace = FreeSpace()
     ) {
         precondition(
             service.mounts.map { $0 === mountTable } ?? true,
@@ -153,6 +157,7 @@ public final class WorkspaceWindows {
         self.settings = settings
         self.folderSizes = folderSizes
         self.cache = cache
+        self.freeSpace = freeSpace
         folderVisits = FolderVisits(store: store)
         favorites = Favorites(settings: settings)
         self.clipboard = CutState(clipboard: clipboard)
@@ -908,7 +913,7 @@ public final class WorkspaceWindows {
         }?.window
         let controller = BrowserWindowController(
             workspace: workspace, workspaces: list, favorites: favorites, volumes: volumes,
-            settings: settings,
+            freeSpace: freeSpace, settings: settings,
             fileOperations: fileOperations,
             clipboard: clipboard, mountTable: mountTable, undoHistory: undoHistory,
             openWith: openWith, folderVisits: folderVisits,
@@ -1006,6 +1011,10 @@ public final class WorkspaceWindows {
             owners[snapshot.id] = (queuedIn ?? frontController)?.workspace.id
         }
         unfinished = snapshots.filter { !$0.state.phase.isFinished }
+        // A copy, move, trash or delete that ended changed the space free on its volumes.
+        if snapshots.contains(where: { $0.state.phase.isFinished }) {
+            freeSpace.refresh()
+        }
         troubled += snapshots.filter {
             $0.state.phase.isFinished && OperationRowView.isTrouble($0.state.phase)
         }

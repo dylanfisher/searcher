@@ -1,11 +1,12 @@
 import Base
 import Foundation
 
-/// What panes, operation queues, mount tables, recent listings and the sidebar's volumes do when
-/// a volume mounts or unmounts. The app forwards the system's mount notifications here, with the
-/// volume's mount point, and every pane, queue, mount table, `RecentListings` and sidebar volume
-/// list adds itself when it is made. A pane is on a volume when its folder is the mount point or
-/// under it, by the path's text. See docs/decisions/0049-volume-events.md.
+/// What panes, operation queues, mount tables, recent listings, the sidebar's volumes and the
+/// free space do when a volume mounts or unmounts. The app forwards the system's mount
+/// notifications here, with the volume's mount point, and every pane, queue, mount table,
+/// `RecentListings`, sidebar volume list and `FreeSpace` adds itself when it is made. A pane is
+/// on a volume when its folder is the mount point or under it, by the path's text. See
+/// docs/decisions/0049-volume-events.md.
 @MainActor
 public enum VolumeEvents {
     /// Every pane made, weakly, so a released pane leaves no entry behind once it is pruned.
@@ -19,6 +20,8 @@ public enum VolumeEvents {
     private static var sidebarVolumes: [WeakSidebarVolumes] = []
     /// Every `RecentListings` made, weakly.
     private static var recentListings: [WeakRecentListings] = []
+    /// Every `FreeSpace` made, weakly.
+    private static var freeSpaces: [WeakFreeSpace] = []
 
     static func add(_ pane: Pane) {
         panes.removeAll { $0.pane == nil }
@@ -37,6 +40,11 @@ public enum VolumeEvents {
     static func add(_ volumes: SidebarVolumes) {
         sidebarVolumes.removeAll { $0.volumes == nil }
         sidebarVolumes.append(WeakSidebarVolumes(volumes: volumes))
+    }
+
+    static func add(_ freeSpace: FreeSpace) {
+        freeSpaces.removeAll { $0.freeSpace == nil }
+        freeSpaces.append(WeakFreeSpace(freeSpace: freeSpace))
     }
 
     static func add(_ recent: RecentListings) {
@@ -95,19 +103,23 @@ public enum VolumeEvents {
     }
 
     /// The volume at `mountPoint` is gone: panes on it go offline with the rows they show,
-    /// recent listings of its folders are dropped, and mount tables and the sidebar's volumes
-    /// read the mounts again.
+    /// recent listings of its folders and its free space are dropped, and mount tables and the
+    /// sidebar's volumes read the mounts again.
     public static func didUnmount(at mountPoint: String) {
         for pane in panes(on: mountPoint) {
             pane.volumeDidUnmount(at: mountPoint)
         }
         dropRecentListings(under: mountPoint)
+        for freeSpace in freeSpaces.compactMap(\.freeSpace) {
+            freeSpace.volumeDidUnmount(at: mountPoint)
+        }
         readMountsAgain()
     }
 
     /// A volume mounted at `mountPoint`: panes on it list their folders again and are watched
     /// again, recent listings at or under it are dropped, since they are of what was there
-    /// before, and mount tables and the sidebar's volumes read the mounts again.
+    /// before, its free space is read afresh, and mount tables and the sidebar's volumes read
+    /// the mounts again.
     public static func didMount(at mountPoint: String) {
         for pane in panes(on: mountPoint) {
             pane.volumeDidMount()
@@ -115,6 +127,9 @@ public enum VolumeEvents {
         dropRecentListings(under: mountPoint)
         for volumes in sidebarVolumes.compactMap(\.volumes) {
             volumes.volumeDidMount(at: mountPoint)
+        }
+        for freeSpace in freeSpaces.compactMap(\.freeSpace) {
+            freeSpace.volumeDidMount(at: mountPoint)
         }
         readMountsAgain()
     }
@@ -155,6 +170,10 @@ private struct WeakMountTable {
 
 private struct WeakSidebarVolumes {
     weak var volumes: SidebarVolumes?
+}
+
+private struct WeakFreeSpace {
+    weak var freeSpace: FreeSpace?
 }
 
 private struct WeakRecentListings {

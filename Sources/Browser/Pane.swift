@@ -142,6 +142,15 @@ public final class Pane {
     /// else the focused column's, as Finder titles its windows
     /// (docs/decisions/0128-finder-window-chrome.md).
     public var titleLocation: Location { columnTrail?.selectedFolder ?? location }
+    /// The pane whose rows and selection the window's status bar counts: the folder
+    /// `titleLocation` names, as Finder's status bar counts the folder its window is titled
+    /// after. In column mode with a folder selected alone, that is the column showing it, and
+    /// nil while that column hasn't opened (docs/decisions/0131-status-bar.md).
+    public var statusPane: Pane? {
+        guard let trail = columnTrail else { return self }
+        guard let folder = trail.selectedFolder else { return trail.focused.pane }
+        return trail.selectedFolderColumn.flatMap { $0.location == folder ? $0 : nil }
+    }
     /// Closed for good: a column that was truncated or a trail that was dropped.
     var isClosed = false
     /// The share of this server whose mount the pane waits for, by its row's name, and whether

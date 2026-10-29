@@ -34,6 +34,7 @@ public final class Settings {
         case showsLocationsInSidebar
         case showsWorkspacesInSidebar
         case showsToolbar
+        case showsStatusBar
         case configFile
     }
 
@@ -121,6 +122,9 @@ public final class Settings {
         Preference(
             .showsToolbar, "show-toolbar", .bool, default: .bool(true),
             "Show the toolbar in each window: Back, Forward, the title and the view buttons."),
+        Preference(
+            .showsStatusBar, "show-status-bar", .bool, default: .bool(true),
+            "Show the status bar at the bottom of each window: the item count and the free space."),
     ]
 
     /// `preferences` by key.
@@ -289,6 +293,14 @@ public final class Settings {
     public var showsToolbar: Bool {
         get { bool(.showsToolbar) }
         set { set(.bool(newValue), for: .showsToolbar) }
+    }
+
+    /// Whether each window shows its status bar, the focused pane's item count and the space
+    /// available on its volume, as Finder's Show Status Bar sets
+    /// (docs/decisions/0131-status-bar.md). On by default.
+    public var showsStatusBar: Bool {
+        get { bool(.showsStatusBar) }
+        set { set(.bool(newValue), for: .showsStatusBar) }
     }
 
     /// The user's changes to the commands' chords, by command; empty by default. Each override

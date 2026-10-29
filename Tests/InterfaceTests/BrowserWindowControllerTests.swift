@@ -874,7 +874,8 @@ private func copySnapshot(_ id: Int, _ phase: OperationState.Phase) -> FileOpera
 
     #expect(panel.isHidden)
     let host = try #require(fixture.controller.layoutView(for: fixture.tab.id)?.superview)
-    #expect(host.frame.minY == 0)
+    // Down to the status bar.
+    #expect(host.frame.minY == StatusBarView.height)
 
     // Cmd-Opt-L still shows the empty panel.
     try fixture.press(try keyEvent("l", characters: "¬", modifiers: [.command, .option]))

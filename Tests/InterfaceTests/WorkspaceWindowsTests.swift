@@ -4,6 +4,7 @@ import BrowserTestSupport
 import Foundation
 import TestSupport
 import Testing
+import os
 
 @testable import Browser
 @testable import Interface
@@ -452,6 +453,52 @@ private func stopEverything(_ windows: WorkspaceWindows) async {
             Issue.record("quitting asked with nothing running")
             return false
         }))
+}
+
+/// A file operation that finished reads the volumes' free space again, and every window's
+/// status bar shows the new value; one still running reads nothing.
+@MainActor @Test func aFinishedOperationReadsTheFreeSpaceAgain() async throws {
+    let bytes = OSAllocatedUnfairLock<Int64>(initialState: 1_000_000_000)
+    let reads = OSAllocatedUnfairLock(initialState: 0)
+    let windows = WorkspaceWindows(
+        service: ListingService(lister: CountingLister()) { "Test Disk" },
+        mountTable: MountTable(), systemActions: StubSystemActions(),
+        settings: untouchedSettings(), folderSizes: nil, clipboard: MemoryClipboard(),
+        store: nil,
+        freeSpace: FreeSpace(read: { _ in
+            reads.withLock { $0 += 1 }
+            return bytes.withLock { $0 }
+        }))
+    windows.showsWindows = false
+    let controller = windows.open(at: Location(path: "/root"))
+    try #require(controller.window).contentView?.layoutSubtreeIfNeeded()
+    let bar = controller.statusBar
+    await settle { bar.text == "3 items, 1 GB available" }
+    await settle { windows.freeSpace.readsInFlight == 0 }
+    let readsBefore = reads.withLock { $0 }
+    bytes.withLock { $0 = 2_000_000_000 }
+
+    windows.operationsChanged([runningCopy(1, in: controller.workspace.id)])
+
+    #expect(windows.freeSpace.readsInFlight == 0)
+    #expect(reads.withLock { $0 } == readsBefore)
+
+    windows.operationsChanged([failedTrash(2, in: controller.workspace.id)])
+
+    #expect(windows.freeSpace.readsInFlight == 1)
+    await settle { bar.text == "3 items, 2 GB available" }
+}
+
+/// Hide Status Bar runs from the filter field, as Hide Toolbar does, and the field keeps the
+/// keys.
+@MainActor @Test func hideStatusBarRunsFromTheFilterField() async throws {
+    let fixture = try await Fixture()
+    let controller = try #require(fixture.windows.controllers.first)
+
+    try fixture.runFromFilterField(ViewCommands.toggleStatusBar.id, in: controller)
+
+    #expect(!fixture.settings.showsStatusBar)
+    #expect(controller.window?.firstResponder is NSTextView)
 }
 
 /// The copy is counted the moment it is queued, before any snapshot shows it.
