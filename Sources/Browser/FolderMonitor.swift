@@ -106,12 +106,12 @@ public final class FolderMonitor: FolderMonitoring, @unchecked Sendable {
 
     /// The change a batch of events means for `folder`, or nil if none of them concerns its
     /// entries. Events name paths at any depth; only direct children matter, since a pane shows
-    /// one level, and an event for an item inside a child folder reads that child again, whose
-    /// modification date it changed; deeper events are dropped. Each named child is read once,
-    /// as it is now, however many events it and its items had, so a
-    /// create followed by a delete patches as a delete. More named children than
-    /// `FolderChange.patchLimit` relist, without reading any. `folder` is a resolved path, as
-    /// FSEvents reports them.
+    /// one level. An item created, removed or renamed one level inside a child folder changes
+    /// that folder's modification date, so it reads the child again; an item only modified there
+    /// changes neither, and deeper events are dropped. Each named child is read once, as it is
+    /// now, however many events it and its items had, so a create followed by a delete patches
+    /// as a delete. More named children than `FolderChange.patchLimit` relist, without reading
+    /// any. `folder` is a resolved path, as FSEvents reports them.
     public static func change(for events: [FileEvent], in folder: String) -> FolderChange? {
         let prefix = folderPrefix(folder)
         if events.contains(where: { relists($0, prefix: prefix) }) { return .relist }
@@ -119,11 +119,12 @@ public final class FolderMonitor: FolderMonitoring, @unchecked Sendable {
         var seen: Set<String> = []
         for event in events where event.path.utf8.starts(with: prefix.utf8) {
             let rest = Substring(event.path.utf8.dropFirst(prefix.utf8.count))
-            // A child, or an item one level inside a child folder, whose coming or going changes
-            // that folder's modification date and so its icon
-            // (docs/decisions/0129-row-icons-as-finder.md). Deeper items change neither.
+            // A child, or an item one level inside a child folder that came, went or was renamed,
+            // which changes that folder's modification date and so its icon; a write to the item
+            // changes neither (docs/decisions/0129-row-icons-as-finder.md).
             let parts = rest.split(separator: "/", maxSplits: 2, omittingEmptySubsequences: false)
             guard parts.count <= 2, let first = parts.first, !first.isEmpty else { continue }
+            if parts.count == 2, event.flags.isDisjoint(with: Self.itemComesOrGoes) { continue }
             let name = String(first)
             if seen.insert(name).inserted {
                 names.append(name)
@@ -147,6 +148,9 @@ public final class FolderMonitor: FolderMonitoring, @unchecked Sendable {
         }
         return patches.isEmpty ? nil : .patches(patches)
     }
+
+    /// The flags of an event inside a child folder that change the child's modification date.
+    private static let itemComesOrGoes: FileEvent.Flags = [.created, .removed, .renamed]
 
     /// Whether `event` leaves the listing of the folder whose `folderPrefix` is `prefix` in doubt,
     /// so it has to be read again. Dropped events and a change on the path to the folder do,

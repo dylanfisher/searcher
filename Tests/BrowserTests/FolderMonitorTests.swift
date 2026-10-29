@@ -208,6 +208,24 @@ private func freshListing(of folder: String) throws -> Listing {
         #expect(change == .patches([.update(try #require(entry))]))
     }
 
+    /// A write to an item inside a child folder, as a log appended to or a download being
+    /// written, changes neither the child's modification date nor its icon, so it reads nothing;
+    /// a direct child's write still patches it.
+    @Test func aWriteInsideAChildFolderIsIgnored() throws {
+        let folder = try TemporaryFolder("FolderMonitorTests")
+        let sub = folder.url.appending(path: "sub")
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: false)
+        try Data().write(to: folder.url.appending(path: "log"))
+        let write = FileEvent(path: sub.appending(path: "x").path, flags: [.modified])
+
+        #expect(FolderMonitor.change(for: [write], in: folder.url.path) == nil)
+        let direct = FileEvent(path: folder.url.appending(path: "log").path, flags: [.modified])
+        let entry = try DirectoryLister().entry(named: "log", inDirectory: folder.url.path)
+        #expect(
+            FolderMonitor.change(for: [write, direct], in: folder.url.path)
+                == .patches([.update(try #require(entry))]))
+    }
+
     @Test func rescanAndRootChangeRequestRelist() throws {
         let folder = try TemporaryFolder("FolderMonitorTests")
         let named = FileEvent(path: folder.url.appending(path: "a").path, flags: [.created])
