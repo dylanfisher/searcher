@@ -92,17 +92,17 @@ and saw `["two.flac", "", "", ""]` before this change.
   shows an unknown value. A file that gets no read keeps its rows empty. The one exception: a
   read that lands after the hold, on a slow share, with a date too long for one line beside its
   title, makes that row two lines tall and moves the rows below it down.
-- **The rows are drawn as Finder's.** Taken from Dylan's screenshot of Finder's preview, not from
-  a Finder window on this Mac, which would have shown on the main display: below the icon, the
-  name in bold 15 pt and the kind and size under it, both left-aligned with the header and the
-  row titles; the kind and size in secondary text at the small system size (11 pt); an
-  Information header in bold 13 pt; then the Created, Modified and Last opened rows, with no
-  Size row, since the size is in the line under the name, as in Finder's screenshot. Each row
-  has its title at the left in secondary text and its value at the right in the label color,
-  both 11 pt, 4 pt of space above and below the text and a one-point separator rule under the
-  row, none above the first. Dates are written in
-  full, "Friday, October 16, 2026 at 12:50 PM", or "Today at 12:50 PM". A value that doesn't
-  fit beside its title wraps, right-aligned, instead of losing its time: at the default
+- **The rows are drawn as Finder's.** (The type, spacing, rules and date forms below are replaced by
+  the PV.1 amendment at the end.) Taken from Dylan's screenshot of Finder's preview, not from a
+  Finder window on this Mac, which would have shown on the main display: below the icon, the name in
+  bold 15 pt and the kind and size under it, both left-aligned with the header and the row titles;
+  the kind and size in secondary text at the small system size (11 pt); an Information header in
+  bold 13 pt; then the Created, Modified and Last opened rows, with no Size row, since the size is
+  in the line under the name, as in Finder's screenshot. Each row has its title at the left in
+  secondary text and its value at the right in the label color, both 11 pt, 4 pt of space above and
+  below the text and a one-point separator rule under the row, none above the first. Dates are
+  written in full, "Friday, October 16, 2026 at 12:50 PM", or "Today at 12:50 PM". A value that
+  doesn't fit beside its title wraps, right-aligned, instead of losing its time: at the default
   column width a full date doesn't fit beside Last opened.
 - **Tags are plain text**, joined with ", " in Finder's order, wrapping to the column's width.
   Finder draws each tag's color; `tagNames` has no colors, and reading them takes the label
@@ -162,3 +162,49 @@ The Tags section shows each tag as a pill filled with its color, and `ItemInfo.t
 tag's entry with its color label, "Orange\n7", read from the tags attribute
 ([0124](0124-tags-in-rows-and-preview.md)). The pills aren't selectable text. A tag change
 made elsewhere reads the tags again through the patch that names the file (0121).
+
+## Amendment: Finder's macOS 26 type, spacing and dates (2026-10-29, PV.1)
+
+Linked against the current SDK ([0134](0134-link-against-the-current-sdk.md)), the app gets
+macOS 26 metrics. Dylan's screenshot fb-1029-4.jpg has our preview above Finder's macOS 26 one,
+at the same scale, 2 pixels to the point; tags-finder-row-dots-and-preview-pills.jpg is a wider
+Finder preview. Sizes come from cap heights and ink widths compared with each font's advance
+width, weights from ink width and summed darkness of the same words ("Created", "Modified",
+"at"), colors from the darkest pixels of the text:
+
+- **Name:** 15 pt semibold, not bold. Same cap height as ours (22 px); "DSC01637.jpg" is 200 px
+  of ink, about 3 px inside its advance: semibold's is 203 px, bold's 208.
+- **Kind and size:** 13 pt regular (`systemFontSize`), not 11: cap height 19 px against our 16,
+  "JPEG" 62 px against 53. Finder writes a hyphen between them, "JPEG image - 7.8 MB", in both
+  screenshots: its dash is 9 px wide, an en dash at 13 pt would be about 13. Secondary label
+  color, as before.
+- **Information and Tags:** 13 pt semibold, not bold; "Information" is 143 px of ink against our
+  bold 147.
+- **Row titles and values:** 11 pt medium, in the secondary label color and the label color as
+  before. Finder's "Created" is 83 px of ink to our 80 and 17% darker in sum, "Last opened" 128
+  to 125, and the same words' strokes are visibly heavier when zoomed; 12 pt would be 7 px
+  wider. The darkest pixels match ours: titles at about 120 of 255, values at about 31. Dylan
+  read Finder's titles as lighter and its values as lighter than ours; the screenshot shows the
+  same colors and a heavier weight, and the medium weight is what matches it.
+- **Spacing:** baselines 20 pt apart from the name to the kind line (ours were 17), 24 to
+  Information (32), 22 to the first row (20), 23 between rows (unchanged: 4 pt above and below
+  the text and a one-point rule), and 33 from the last row to Tags (37). The stack's spacings
+  after the name, the kind line, Information and the rows are 3, 8, 4 and 12.
+- **Rules only between rows.** Finder draws none under the last row in either screenshot. The
+  last row's rule is hidden and keeps its point, so the rows stay one height.
+- **Dates in the longest form that fits.** Finder's wide preview writes "Thursday, October 22,
+  2026 at 9:17 PM"; its narrow one "June 22, 2024 at 8:38 AM", on one line beside Last opened
+  where ours wrapped. The rows take the longest of the full, long, medium and short date styles
+  at which every date shown fits on one line beside its title, all in the same style, picked
+  again when the preview's width changes; when even the short one doesn't fit, it wraps as
+  before. Only the full and long forms are seen in Finder's screenshots; the medium and short
+  steps follow Finder's list view, which steps its dates down the same way. A read that lands
+  after the hold can change the style of the Modified row's date, on a slow share, as a long
+  date already could make a row two lines tall.
+- **Dark mode** needs nothing more: every color is a semantic one (`labelColor`,
+  `secondaryLabelColor`, the separator box), which AppKit resolves for the appearance.
+
+Left as they were: the tags' pills ([0127](0127-tag-colors-and-pill-widths.md)), which neither
+screenshot shows at a size to compare; the space between the image and the name, which in
+Finder's preview depends on a square image area this step doesn't take on; Finder's Show More
+button and its "Add Tags…" field when a file has no tags.
