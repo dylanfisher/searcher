@@ -2,6 +2,8 @@
 
 - **Date:** 2026-10-27
 - **Status:** accepted
+- **2026-10-28:** The toolbar's Back and Forward buttons run the same commands; see
+  [0128](0128-finder-window-chrome.md).
 - **Amends:** [0033](0033-history-and-go-to-folder.md) (what Back and Forward step through),
   [0078](0078-workspace-store.md) (what a window file keeps),
   [0088](0088-workspace-snapshots.md) (going to a saved workspace, the edited dot)
