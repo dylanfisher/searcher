@@ -519,7 +519,9 @@ public final class ColumnTrail {
         owner.trailDidChange()
     }
 
-    /// The pane of the column right of the focused one, whatever it shows; nil when none is.
+    /// The pane of the column right of the focused one, whatever folder it shows, whatever the
+    /// focused column selects; nil when none is. It reads no selection, so it is safe before a
+    /// click's selection settles: `Pane.statusPane` compares its location with `selectedFolder`.
     public var nextColumnPane: Pane? {
         focusedIndex + 1 < columns.count ? columns[focusedIndex + 1].pane : nil
     }
