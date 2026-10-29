@@ -26,6 +26,21 @@ source scripts/gentle
 swift_cmd build -c "$config" --product Searcher >&2
 bin="$(swift_cmd build -c "$config" --show-bin-path)"
 
+# AppKit draws the app as the SDK recorded in it says: one linked before SDKROOT was set reads
+# as a macOS 14 app, with no Liquid Glass. A change to the environment alone doesn't relink, so
+# a stale executable is removed and linked again
+# (docs/decisions/0134-link-against-the-current-sdk.md).
+linked_sdk() { vtool -show-build "$bin/Searcher" | awk '$1 == "sdk" { print $2 }'; }
+if [ "$(linked_sdk)" != "$(xcrun --show-sdk-version)" ]; then
+  rm "$bin/Searcher"
+  swift_cmd build -c "$config" --product Searcher >&2
+  if [ "$(linked_sdk)" != "$(xcrun --show-sdk-version)" ]; then
+    printf 'Searcher is linked against SDK %s, not the current %s.\n' \
+      "$(linked_sdk)" "$(xcrun --show-sdk-version)" >&2
+    exit 1
+  fi
+fi
+
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS"
 # The plist is copied as is: it is the only place the bundle ID is written.

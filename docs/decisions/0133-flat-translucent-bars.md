@@ -87,3 +87,6 @@ panes hung below it from the content's safe area (0128), so nothing scrolled und
   and material, the toolbar's style, the covers, the insets and where the first row lies with
   the toolbar shown and hidden, with a tab strip, the banner, a split and the filter bar. The
   look needs a check by hand.
+- None of it shows in an app linked against an older SDK, which AppKit draws with the old look.
+  The first build of this step was, and showed opaque bars
+  ([0134](0134-link-against-the-current-sdk.md)).
