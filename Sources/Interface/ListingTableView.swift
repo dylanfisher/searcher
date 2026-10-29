@@ -149,7 +149,9 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
     /// the sort indicator stay AppKit's. The column it heads is the one under its frame at each
     /// draw, so the title follows a column the user moves. Drawn anywhere but in a table's
     /// header, as AppKit may draw it for a dragged column's image, the title stays where AppKit
-    /// puts it: no table's ends are there to move it from.
+    /// puts it: no table's ends are there to move it from. The sorted column's title keeps
+    /// AppKit's color and bold, and the others are the secondary label color, as Finder's are
+    /// (docs/decisions/0135-list-rows-as-finder.md).
     final class HeaderCell: NSTableHeaderCell {
         override func drawInterior(withFrame cellFrame: NSRect, in controlView: NSView) {
             guard let header = controlView as? NSTableHeaderView, let table = header.tableView
@@ -158,6 +160,14 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
                 return
             }
             let column = header.column(at: NSPoint(x: cellFrame.midX, y: cellFrame.midY))
+            let sortKey = table.sortDescriptors.first?.key
+            let isSorted =
+                column >= 0 && sortKey != nil
+                && table.tableColumns[column].sortDescriptorPrototype?.key == sortKey
+            let color: NSColor = isSorted ? .controlTextColor : .secondaryLabelColor
+            if textColor != color {
+                textColor = color
+            }
             super.drawInterior(
                 withFrame: ListingTableView.inset(
                     cellFrame, column: column, of: table.numberOfColumns),
