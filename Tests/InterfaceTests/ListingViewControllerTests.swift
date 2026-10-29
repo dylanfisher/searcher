@@ -440,9 +440,9 @@ private func rowEdges(of controller: ListingViewController) throws -> (
 
 /// At the top of the list the first row sits the shared margin below the column header, and at
 /// the end the last row sits it above the path bar's glass, where the horizontal scroller shows
-/// (docs/decisions/0132-glass-path-bar.md). A
-/// key that scrolls a row into view keeps it clear of the margin too (Dylan, 2026-10-26: "apply
-/// top and bottom margin around all list and column items").
+/// (docs/decisions/0132-glass-path-bar.md). A key that scrolls a row into view keeps it clear of
+/// the margin too (Dylan, 2026-10-26: "apply top and bottom margin around all list and column
+/// items").
 @MainActor @Test func theRowsKeepTheSharedMarginFromTheHeaderAndTheBottomEdge() async throws {
     let entries = (0..<2_000).map { file(String(format: "e%04d", $0)) }
     let controller = await controller(showing: entries)

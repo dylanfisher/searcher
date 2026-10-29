@@ -20,7 +20,8 @@ final class StubDraggingInfo: NSObject, @preconcurrency NSDraggingInfo {
     }
 
     var draggingDestinationWindow: NSWindow? { nil }
-    var draggingLocation: NSPoint { .zero }
+    /// Where the drag is, in the window's coordinates.
+    var draggingLocation = NSPoint.zero
     var draggedImageLocation: NSPoint { .zero }
     var draggedImage: NSImage? { nil }
     var draggingSequenceNumber: Int { 1 }

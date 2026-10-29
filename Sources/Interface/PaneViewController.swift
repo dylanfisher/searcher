@@ -30,7 +30,7 @@ public final class PaneViewController: NSViewController {
     /// (docs/decisions/0132-glass-path-bar.md).
     let pathBarGlass: NSView
     /// The view in `pathBarGlass` that holds the path bar and the status.
-    private let pathBarContent: NSView
+    let pathBarContent: PathBarGlassContent
     /// How far the path bar's glass floats from the pane's sides and bottom.
     static let pathBarGap: CGFloat = 8
     /// How much of the pane's bottom the path bar's glass covers, from the pane's bottom edge to
@@ -302,6 +302,16 @@ public final class PaneViewController: NSViewController {
             view.translatesAutoresizingMaskIntoConstraints = false
             pathBarContent.addSubview(view)
         }
+        // A drag over the glass goes on to the list or the column under it.
+        pathBarContent.takeDrags(like: listingViewController.tableView)
+        pathBarContent.listClip = { [weak self] location in
+            guard let self else { return nil }
+            if pane.viewMode == .list {
+                return (listingViewController.view as? NSScrollView)?.contentView
+                    as? ListingClipView
+            }
+            return columnViewController.listClip(under: location)
+        }
         addChild(listingViewController)
         addChild(columnViewController)
         for overlay in [messageLabel, accessDeniedView] {
@@ -368,8 +378,8 @@ public final class PaneViewController: NSViewController {
     /// The path bar's capsule and the content view filling it. From macOS 26 the system's glass,
     /// as the toolbar's items are (0128), rounded to a capsule; before that a blur in the same
     /// shape.
-    private static func makePathBarGlass() -> (glass: NSView, content: NSView) {
-        let content = NSView()
+    private static func makePathBarGlass() -> (glass: NSView, content: PathBarGlassContent) {
+        let content = PathBarGlassContent()
         if #available(macOS 26, *) {
             let glass = NSGlassEffectView()
             glass.style = .regular

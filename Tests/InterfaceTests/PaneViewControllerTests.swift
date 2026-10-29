@@ -542,6 +542,168 @@ private func manyRowsWindow(_ count: Int) async -> BrowserWindowController {
     #expect(controller.pane.location == Location(path: "/root"))
 }
 
+/// A press on the glass over a row lands on the glass, not on the row under it.
+@MainActor @Test func aPointOnTheGlassOverARowHitsTheGlass() async throws {
+    let window = await manyRowsWindow(200)
+    let controller = window.paneViewController
+    let table = controller.listingViewController.tableView
+    let glass = controller.pathBarGlass.frame
+    let point = NSPoint(x: glass.minX + 40, y: glass.midY)
+    #expect(table.row(at: table.convert(point, from: controller.view)) != -1)
+    let container = try #require(controller.view.superview)
+
+    let hit = try #require(controller.view.hitTest(controller.view.convert(point, to: container)))
+
+    #expect(hit.isDescendant(of: controller.pathBarGlass))
+}
+
+/// Go to Item centers the row in the room between the header and the glass.
+@MainActor @Test func goToItemCentersTheRowAboveTheGlass() async throws {
+    let window = await manyRowsWindow(200)
+    let controller = window.paneViewController
+    let table = controller.listingViewController.tableView
+    let header = try #require(table.headerView)
+    let headerBottom = header.convert(header.bounds, to: controller.view).minY
+    let glassTop = controller.pathBarGlass.frame.maxY
+
+    controller.pane.jump(to: "file 0100")
+
+    let row = try #require(controller.pane.state.listing?.row(named: "file 0100"))
+    let shown = table.convert(table.rect(ofRow: row), to: controller.view)
+    #expect(abs(shown.midY - (headerBottom + glassTop) / 2) <= 1)
+}
+
+/// The preview runs under the glass, and its end scrolls clear of it.
+@MainActor @Test func thePreviewsEndIsClearOfTheGlass() async throws {
+    let window = await manyRowsWindow(200)
+    let controller = window.paneViewController
+    controller.pane.setViewMode(.column)
+    let trail = try #require(controller.pane.columnTrail)
+    await settle { trail.columns.allSatisfy { $0.pane.state.isLoaded } }
+    trail.focused.pane.selectLastRow()
+    await settle {
+        trail.preview != nil && controller.columnViewController.previewView?.isHidden == false
+    }
+    window.window?.contentView?.layoutSubtreeIfNeeded()
+    let preview = try #require(controller.columnViewController.previewView)
+    let scrollView = preview.scrollView
+    #expect(scrollView.contentInsets.bottom == PaneViewController.pathBarCover)
+
+    let clip = scrollView.contentView
+    var end = clip.bounds
+    end.origin.y = 100_000
+    clip.scroll(to: clip.constrainBoundsRect(end).origin)
+    scrollView.reflectScrolledClipView(clip)
+
+    let document = try #require(scrollView.documentView)
+    let shown = document.convert(document.bounds, to: controller.view)
+    #expect(shown.minY >= controller.pathBarGlass.frame.maxY - 0.5)
+}
+
+/// A table that logs the drag calls it gets and takes every drag.
+@MainActor
+private final class DragLogTable: ListingTableView {
+    var calls: [String] = []
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        calls.append("entered")
+        return .copy
+    }
+
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        calls.append("updated")
+        return .copy
+    }
+
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+        calls.append("exited")
+    }
+
+    override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        calls.append("prepare")
+        return true
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        calls.append("perform")
+        return true
+    }
+}
+
+/// A drag held over the glass scrolls the list under it down, a row each update, as a drag at
+/// the bottom of Finder's list does, and the list's table gets the drag and the drop there.
+@MainActor @Test func aDragOverTheGlassScrollsTheListAndDropsOnIt() async throws {
+    var folders = Fixture.folders
+    folders["/root"] = (0..<200).map { file(String(format: "file %04d", $0)) }
+    let pane = Pane(
+        location: Location(path: "/root"),
+        service: ListingService(lister: StubLister(folders)) { "Test Disk" },
+        systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true)
+    let table = DragLogTable()
+    let controller = PaneViewController(
+        pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
+        tableView: table, monitorsFolders: false)
+    let window = testWindow(size: NSSize(width: 600, height: 400))
+    controller.view.frame = window.contentView?.bounds ?? .zero
+    window.contentView?.addSubview(controller.view)
+    await settle { pane.state.isLoaded && table.numberOfRows == 200 }
+    window.contentView?.layoutSubtreeIfNeeded()
+    let clip = try #require((controller.listingViewController.view as? NSScrollView)?.contentView)
+    let content = controller.pathBarContent
+    #expect(Set(content.registeredDraggedTypes) == Set(table.registeredDraggedTypes))
+    let pasteboard = testPasteboard()
+    defer { pasteboard.releaseGlobally() }
+    let info = StubDraggingInfo(pasteboard: pasteboard)
+    info.draggingLocation = content.convert(
+        NSPoint(x: content.bounds.midX, y: content.bounds.midY), to: nil)
+    let top = clip.bounds.origin.y
+
+    #expect(content.draggingEntered(info) == .copy)
+    #expect(content.draggingUpdated(info) == .copy)
+
+    #expect(clip.bounds.origin.y == top + 2 * table.rowHeight)
+    #expect(content.prepareForDragOperation(info))
+    #expect(content.performDragOperation(info))
+    #expect(table.calls == ["entered", "updated", "prepare", "perform"])
+}
+
+/// In column view a drag over the glass goes to the column under it, and scrolls that column.
+@MainActor @Test func aDragOverTheGlassScrollsTheColumnUnderIt() async throws {
+    let window = await manyRowsWindow(200)
+    let controller = window.paneViewController
+    controller.pane.setViewMode(.column)
+    let trail = try #require(controller.pane.columnTrail)
+    await settle {
+        trail.columns.allSatisfy { $0.pane.state.isLoaded }
+            && controller.columnViewController.columnControllers.contains {
+                $0.pane.location == Location(path: "/root") && $0.tableView.numberOfRows == 201
+            }
+    }
+    window.window?.contentView?.layoutSubtreeIfNeeded()
+    let column = try #require(
+        controller.columnViewController.columnControllers.first {
+            $0.pane.location == Location(path: "/root")
+        })
+    let scrollView = try #require(column.view as? NSScrollView)
+    let clip = scrollView.contentView
+    let middle = scrollView.convert(
+        NSPoint(x: scrollView.bounds.midX, y: scrollView.bounds.midY), to: nil)
+    let location = NSPoint(
+        x: middle.x,
+        y: controller.pathBarGlass.convert(controller.pathBarGlass.bounds, to: nil).midY)
+    #expect(controller.columnViewController.listClip(under: location) === clip)
+    let pasteboard = testPasteboard()
+    defer { pasteboard.releaseGlobally() }
+    let info = StubDraggingInfo(pasteboard: pasteboard)
+    info.draggingLocation = location
+    let top = clip.bounds.origin.y
+
+    _ = controller.pathBarContent.draggingEntered(info)
+    controller.pathBarContent.draggingExited(info)
+
+    #expect(clip.bounds.origin.y == top + column.tableView.rowHeight)
+}
+
 @MainActor @Test func clickingAPathBarSegmentGoesThereWithTheChildSelected() async throws {
     let fixture = Fixture()
     await settle { fixture.pane.state.isLoaded }

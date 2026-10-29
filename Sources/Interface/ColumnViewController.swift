@@ -430,6 +430,13 @@ final class ColumnViewController: NSViewController {
         return views.first { $0.frame.minX <= x && x < $0.frame.maxX + 1 }?.scrollView
     }
 
+    /// The clip view of the column at `location`, in the window's coordinates, for a drag over
+    /// the pane's path bar glass; nil over the preview, which takes no drops, or past the
+    /// columns.
+    func listClip(under location: NSPoint) -> ListingClipView? {
+        (scrollView(under: location) as? NSScrollView)?.contentView as? ListingClipView
+    }
+
     /// `width` as `target`'s grip sets it: whole points, so the columns right of it stay on the
     /// pixel grid and AppKit doesn't move a column's rows off its left edge to align them, within
     /// the widths a column, or the preview, can have.
