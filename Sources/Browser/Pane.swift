@@ -293,6 +293,19 @@ public final class Pane {
             viewMode: viewMode, rows: nil)
     }
 
+    /// Starts listing `location` in list mode, sorted by Name, with `selection` to be selected
+    /// once it's listed: the items a reveal from another app names
+    /// (docs/decisions/0137-default-file-viewer.md).
+    public convenience init(
+        location: Location, service: ListingService, systemActions: any SystemActions,
+        settings: Settings, selection: Selection
+    ) {
+        self.init(
+            location: location, service: service, systemActions: systemActions,
+            settings: settings, sortedBy: .name, ascending: true, isFocused: false,
+            selection: selection, viewMode: .list, rows: nil)
+    }
+
     /// A column's pane at `location`, sorted by Name ascending as every column opens, with
     /// `selection` to be selected once it's listed, listing it right away, ahead of other panes'
     /// loads if `isFocused`.
@@ -463,17 +476,24 @@ public final class Pane {
     /// In column mode the pane is in the focused column's folder, and a navigation starts the
     /// trail again at `location`, from its volume's root (`ColumnTrail`).
     public func navigate(to location: Location, selecting name: String? = nil) {
+        navigate(
+            to: location, selection: name.map { Selection([ExactName($0)], cursor: ExactName($0)) })
+    }
+
+    /// Shows `location` as `navigate(to:selecting:)` does, with `selection` to be selected once
+    /// it's listed: several entries, as a reveal from another app names
+    /// (docs/decisions/0137-default-file-viewer.md). Nil keeps the selection of the folder the
+    /// pane is in.
+    public func navigate(to location: Location, selection: Selection?) {
         precondition(containingTrail == nil, "a column navigates through its trail's owner")
         guard location != self.location else {
             cancelGoToFolder()
-            if let name {
-                commandPane.select(Selection([ExactName(name)], cursor: ExactName(name)))
-            }
+            if let selection { commandPane.select(selection) }
             reload()
             return
         }
         recordLeaving(here)
-        move(to: location, selecting: name.map(ExactName.init))
+        move(to: location, selection: selection ?? Selection())
     }
 
     /// Shows `location` as `navigate(to:)` does, then selects its first row alone, in the sort,

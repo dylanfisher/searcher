@@ -1291,7 +1291,8 @@ private func configuredSettings(
     fixture.controller.palette?.close()
 
     let settingsWindow = SettingsWindowController(
-        settings: settings, loginItem: StubLoginItem(), systemActions: StubSystemActions())
+        settings: settings, loginItem: StubLoginItem(), fileViewer: StubFileViewerSetting(),
+        systemActions: StubSystemActions())
     settingsWindow.shortcuts.postAccessibility = { _, _, _ in }
     let row = try #require(
         settingsWindow.shortcuts.sections.flatMap(\.rows).first {

@@ -5,6 +5,7 @@ import TestSupport
 import Testing
 import UniformTypeIdentifiers
 
+import class SwiftUI.NSHostingController
 import class SwiftUI.NSHostingView
 
 @testable import Interface
@@ -19,10 +20,12 @@ private let goToItem = WindowCommands.goToItem
 @MainActor
 private func controller(
     _ settings: Settings = untouchedSettings(), loginItem: StubLoginItem = StubLoginItem(),
+    fileViewer: StubFileViewerSetting = StubFileViewerSetting(),
     systemActions: any SystemActions = StubSystemActions()
 ) -> (SettingsWindowController, () -> [NSWindow]) {
     let controller = SettingsWindowController(
-        settings: settings, loginItem: loginItem, systemActions: systemActions)
+        settings: settings, loginItem: loginItem, fileViewer: fileViewer,
+        systemActions: systemActions)
     var shown: [NSWindow] = []
     controller.bringForward = { shown.append($0) }
     controller.shortcuts.postAccessibility = { _, _, _ in }
@@ -152,6 +155,53 @@ private func controller(
     loginItem.status = .notRegistered
     NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
     #expect(!controller.general.opensAtLogin)
+}
+
+/// The file viewer checkbox reads the global key each time the window shows and each time the
+/// app becomes active, as `defaults` or another app may change it meanwhile.
+@MainActor @Test func showingOrActivatingReadsTheFileViewerAgain() {
+    let fileViewer = StubFileViewerSetting()
+    let (controller, _) = controller(fileViewer: fileViewer)
+    controller.show()
+    #expect(!controller.general.showsFilesInSearcher)
+
+    fileViewer.viewer = StubFileViewerSetting.searcher
+    controller.show()
+    #expect(controller.general.showsFilesInSearcher)
+
+    fileViewer.viewer = nil
+    NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+    #expect(!controller.general.showsFilesInSearcher)
+}
+
+/// The General pane, with every note and problem its checkboxes and config file can show at
+/// once, fits the pane's height.
+@MainActor @Test func theGeneralPaneFitsItsHeight() async throws {
+    let config = try await ConfigFixture("SettingsWindowControllerTests")
+    let loginItem = StubLoginItem()
+    loginItem.statusAfterRegister = .requiresApproval
+    let fileViewer = StubFileViewerSetting("com.example.gone")
+    let (controller, _) = controller(
+        config.settings, loginItem: loginItem, fileViewer: fileViewer)
+    controller.general.setOpensAtLogin(true)
+    loginItem.failure = CocoaError(.featureUnsupported)
+    controller.general.setOpensAtLogin(true)
+    fileViewer.failsNextWrite = true
+    controller.general.useDefaultFileViewer()
+    try FileManager.default.removeItem(at: config.file)
+    controller.general.revealConfigFile()
+    if let task = controller.general.reveal { _ = await bounded(task) }
+    #expect(controller.general.needsApproval)
+    #expect(controller.general.loginItemProblem != nil)
+    #expect(controller.general.fileViewerNote != nil)
+    #expect(controller.general.fileViewerProblem != nil)
+    #expect(controller.general.configProblem != nil)
+    let pane = NSHostingController(rootView: GeneralSettingsView(model: controller.general))
+    let size = SettingsWindowController.generalSize
+
+    // The least height it takes: the spacer at the bottom takes any height given.
+    let fitted = pane.sizeThatFits(in: CGSize(width: size.width, height: 0))
+    #expect(fitted.height <= size.height)
 }
 
 // MARK: Config file

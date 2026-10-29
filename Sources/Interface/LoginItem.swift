@@ -24,7 +24,11 @@ final class MainAppLoginItem: LoginItem {
 
     /// `SMAppService.mainApp` registers the app bundle the process runs from. A bare executable,
     /// as `swift run` starts, has none: the status reads `.notFound` and register fails.
-    var isAvailable: Bool {
+    var isAvailable: Bool { Self.runsFromAppBundle }
+
+    /// Whether the process runs from an app bundle with a bundle ID, which the file viewer
+    /// setting needs too (docs/decisions/0137-default-file-viewer.md).
+    static var runsFromAppBundle: Bool {
         Bundle.main.bundleIdentifier != nil && Bundle.main.bundleURL.pathExtension == "app"
     }
 

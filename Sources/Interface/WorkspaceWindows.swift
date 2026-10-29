@@ -76,6 +76,8 @@ public final class WorkspaceWindows {
     /// Set from `holdSavesUntilRestore` until `restore` runs: nothing is saved meanwhile, so a
     /// quit or a window opened before the last session is read can't write over it.
     public private(set) var awaitsRestore = false
+    /// What `reveal` was asked to show while `awaitsRestore`, shown once `restore` has run.
+    private var heldReveals: [URL] = []
     /// The saves handed to the store, each after the one before it, so an older state never
     /// lands after a newer one.
     private var saving: Task<Void, Never>?
@@ -274,11 +276,15 @@ public final class WorkspaceWindows {
     }
 
     /// Opens a window of one tab at `location`, in list view, as the app does at launch and when
-    /// no window has the keys. It shows the sidebar if the most recently active window does.
+    /// no window has the keys, with `selection` to be selected once the folder is listed. It
+    /// shows the sidebar if the most recently active window does.
     @discardableResult
-    public func open(at location: Location) -> BrowserWindowController {
+    public func open(at location: Location, selection: Selection = Selection())
+        -> BrowserWindowController
+    {
         let pane = Pane(
-            location: location, service: service, systemActions: systemActions, settings: settings)
+            location: location, service: service, systemActions: systemActions, settings: settings,
+            selection: selection)
         pane.folderSizes = folderSizes
         pane.countVisits(in: folderVisits)
         let workspace = Workspace(
@@ -286,6 +292,69 @@ public final class WorkspaceWindows {
         list.add(workspace)
         showList()
         return controller(for: workspace)
+    }
+
+    // MARK: Revealing
+
+    /// Shows each of `urls` selected in its parent folder, a folder too, as another app's Show in
+    /// Finder asks once Searcher is the file viewer (docs/decisions/0137-default-file-viewer.md).
+    /// Items in one folder share a window with all of them selected. A window whose focused pane
+    /// shows the folder, the most recently active one first, is brought to the front and selects
+    /// them; otherwise a window opens at the folder. Before `restore` runs, the reveal waits for
+    /// it. Returns the window brought to the front last, nil while the reveal waits.
+    @discardableResult
+    public func reveal(_ urls: [URL]) -> BrowserWindowController? {
+        guard !awaitsRestore else {
+            heldReveals += urls
+            return nil
+        }
+        var front: BrowserWindowController?
+        for (folder, names) in Self.folders(of: urls) {
+            front = reveal(names, in: folder)
+        }
+        return front
+    }
+
+    /// `urls`' parent folders, in the order first named, each with the names of its items in
+    /// it, from the paths alone, so no file is read on the main thread. The root, which has no
+    /// parent, is shown with nothing selected.
+    static func folders(of urls: [URL]) -> [(Location, [ExactName])] {
+        var folders: [(Location, [ExactName])] = []
+        for url in urls {
+            guard url.isFileURL else {
+                let scheme = url.scheme ?? "none"
+                Logger(category: "reveal").fault(
+                    "a reveal named a URL that isn't a file's, scheme \(scheme, privacy: .public)")
+                continue
+            }
+            // Not standardized, which drops the `/private` of a resolved temporary folder.
+            let path = url.path
+            let folder = Location(path: (path as NSString).deletingLastPathComponent)
+            let names = path == "/" ? [] : [ExactName((path as NSString).lastPathComponent)]
+            if let index = folders.firstIndex(where: { $0.0 == folder }) {
+                folders[index].1 += names
+            } else {
+                folders.append((folder, names))
+            }
+        }
+        return folders
+    }
+
+    private func reveal(_ names: [ExactName], in folder: Location) -> BrowserWindowController {
+        let selection = Selection(Set(names), cursor: names.first)
+        guard
+            let workspace = list.workspaces.first(where: {
+                $0.selectedTab.focusedPane.location == folder
+            })
+        else { return open(at: folder, selection: selection) }
+        // The folder again, as Finder's reveal shows a file that arrived since it was listed.
+        workspace.selectedTab.focusedPane.navigate(to: folder, selection: selection)
+        list.activate(workspace)
+        let controller = controller(for: workspace)
+        if showsWindows {
+            controller.window?.makeKeyAndOrderFront(nil)
+        }
+        return controller
     }
 
     // MARK: Restoring
@@ -304,7 +373,8 @@ public final class WorkspaceWindows {
     /// back. The windows are made once the panes of their selected tabs have the rows the
     /// listing cache keeps for them and the mount table's first read has landed, so those rows
     /// and a share's server column are in each window's first frame, or once `cachedRowsLimit`
-    /// passes on `restoreClock`; saves stay held meanwhile.
+    /// passes on `restoreClock`; saves stay held meanwhile. A reveal that came while the restore
+    /// was awaited opens after it, in front, and its front window is the one returned.
     @discardableResult
     public func restore(_ contents: WorkspaceStore.Contents) async -> BrowserWindowController? {
         let saved = contents.session?.workspaces.compactMap { contents.workspaces[$0] } ?? []
@@ -349,7 +419,10 @@ public final class WorkspaceWindows {
                 key.window?.makeKeyAndOrderFront(nil)
             }
         }
-        return key
+        // A reveal that came meanwhile, in front of the restored windows.
+        let reveals = heldReveals
+        heldReveals = []
+        return (reveals.isEmpty ? nil : reveal(reveals)) ?? key
     }
 
     /// Every snapshot in `snapshots`, a name another one has replaced by the next free name,
