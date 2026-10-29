@@ -69,19 +69,35 @@ color, and a folder with a custom icon in that icon. Measured on this Mac:
 - **Tags are part of the cache key.** A folder's icon follows its tag colors, which change no
   modification date, so `ThumbnailCache.Key` holds the entry's `tagLabels`. A folder whose items
   come or go has a new modification date, so it is asked for again too.
-- **The folder's watch reads a child folder again when its items change.** FSEvents names the
-  item, `parent/sub/f.txt`, never `parent/sub`, so `FolderMonitor.change(for:in:)` takes an
-  event one level inside a child as a change of that child, by the path's first component, and
-  reads its entry through the usual patch: once per batch however many of its items had events,
-  so a folder being downloaded into costs one `lstat` of it per batch. Deeper events change
-  neither the child's entry nor its date, and are dropped as before. The new entry's date is a
-  new cache key, so the row asks again and its icon follows.
+- **The folder's watch reads a child folder again when its items come or go.** FSEvents names
+  the item, `parent/sub/f.txt`, never `parent/sub`, so `FolderMonitor.change(for:in:)` takes an
+  event one level inside a child whose flags include created, removed or renamed as a change of
+  that child, by the path's first component, and reads its entry through the usual patch: once
+  per batch however many of its items had events. An event there that is only modified, as a log
+  appended to or a download being written (`foo/x.part`), changes neither the child's date nor
+  its icon, and is dropped, so it starts no patch, which would copy the listing, refresh every
+  row on screen and restart a running sort or load. Direct children keep every flag. Deeper
+  events change neither the child's entry nor its date, and are dropped as before. The new
+  entry's date is a new cache key, so the row asks again and its icon follows.
+- **A child folder is walked for its size once at a time.** With folder sizes on, a child whose
+  items come and go has a new date at each batch, and a new date is walked again
+  (`Pane.startSizeScan`). A folder whose walk hasn't landed (`Pane.walkingSizes`) isn't asked for
+  again; the dates that come meanwhile mark it (`Pane.trailingSizes`), and once the walk lands
+  the folder is walked once more, at the date it has then. So an install into `node_modules`
+  under the folder shown has one walk of it running and at most one waiting, back to back, and
+  the size shown ends at the latest date, as Finder's does. No minimum gap between walks: one at
+  a time already bounds them to the disk's pace.
 - **No icon for a volume mounted in a local folder**, as a share in `/Volumes` is: the folder's
   volume says local, but Quick Look would read the share. A row skips a folder its service's
   `MountTable` has a volume mounted at, and asks for no folder before the table's first read,
   which asks again once it lands. Without a table, as in tests, `QuickLookThumbnailer` gives none
   to a directory on another device than its parent. 0118's eject code knows only the volumes the
   sidebar can eject, so the mount table, which knows every mount, decides here.
+- **A folder refused an icon isn't kept as having none.** Quick Look has an icon for every
+  folder, so a folder answered with none was refused, as by the device check for a volume
+  mounted there before the mount table read it. `ThumbnailService` keeps no "none" for a folder,
+  so once the volume is unmounted the folder asks again and gets its icon, where a kept "none"
+  would show the type icon until the folder's date changed.
 - **Packages, links, volumes and shares keep their type icons**, as 0093 and 0114 have them; an
   alias is a file and gets the thumbnail 0102 gives it.
 
