@@ -1,13 +1,13 @@
 /// What the panes show and in what order: the hidden files, `.DS_Store`, columns from home and
 /// folders first toggles, which are app-wide `Settings`, as are the toggles of the sidebar's
-/// groups and the toolbar, and the sort keys, which sort the focused pane by a column. A sort
-/// key for the column already sorted by reverses it; Sort by Next Column moves to the next
-/// column in the header's order, and Reverse Sort Direction reverses the column sorted by. A
-/// column of column view shows names only, so it sorts by Name only: the other sort keys and
-/// Sort by Next Column are off there. The item of the column sorted by is checked. Space opens
-/// and closes Quick Look on the selection, Cmd-F opens the pane's filter field, and Cmd-1 and
-/// Cmd-3 show the pane as a list or as columns. The appearance commands make the app light,
-/// dark or follow the system.
+/// groups, the toolbar and the status bar, and the sort keys, which sort the focused pane by a
+/// column. A sort key for the column already sorted by reverses it; Sort by Next Column moves
+/// to the next column in the header's order, and Reverse Sort Direction reverses the column
+/// sorted by. A column of column view shows names only, so it sorts by Name only: the other
+/// sort keys and Sort by Next Column are off there. The item of the column sorted by is
+/// checked. Space opens and closes Quick Look on the selection, Cmd-F opens the pane's filter
+/// field, and Cmd-1 and Cmd-3 show the pane as a list or as columns. The appearance commands
+/// make the app light, dark or follow the system.
 public enum ViewCommands: CommandSet {
     public static let toggleHidden = Command(
         id: CommandID("view.toggleHidden"), title: "Show Hidden Files",
@@ -30,6 +30,11 @@ public enum ViewCommands: CommandSet {
     /// would do, as Finder's does (docs/decisions/0128-finder-window-chrome.md).
     public static let toggleToolbar = Command(
         id: CommandID("view.toggleToolbar"), title: "Show Toolbar", chords: [])
+    /// Shows or hides every window's status bar, an app-wide setting, on Finder's Cmd-/; its
+    /// menu item says which it would do, as Finder's does (docs/decisions/0131-status-bar.md).
+    public static let toggleStatusBar = Command(
+        id: CommandID("view.toggleStatusBar"), title: "Show Status Bar",
+        chords: [KeyChord("/", modifiers: .command)])
     public static let toggleFoldersFirst = Command(
         id: CommandID("view.toggleFoldersFirst"), title: "Folders First", chords: [])
     public static let sortByName = Command(
@@ -95,6 +100,12 @@ public enum ViewCommands: CommandSet {
                 toggleToolbar,
                 title: { $0.pane.settings.showsToolbar ? "Hide Toolbar" : toggleToolbar.title },
                 run: { $0.pane.settings.showsToolbar.toggle() }),
+            CommandBinding(
+                toggleStatusBar,
+                title: {
+                    $0.pane.settings.showsStatusBar ? "Hide Status Bar" : toggleStatusBar.title
+                },
+                run: { $0.pane.settings.showsStatusBar.toggle() }),
             CommandBinding(
                 toggleFoldersFirst, isChecked: { $0.foldersFirst },
                 run: { $0.pane.settings.foldersFirst.toggle() }),

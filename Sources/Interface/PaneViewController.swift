@@ -128,6 +128,9 @@ public final class PaneViewController: NSViewController {
     /// title and toolbar. In column view that is on the selection of a folder itself, before
     /// its column opens or lists (docs/decisions/0128-finder-window-chrome.md).
     public var onTitleChange: (@MainActor () -> Void)?
+    /// Runs after every change of the pane or its columns, for the window's status bar, which
+    /// counts the rows and the selection (docs/decisions/0131-status-bar.md).
+    var onStatusChange: (@MainActor () -> Void)?
     /// Runs each time the views have been updated for a change of the pane, in the same run loop
     /// pass, so the UI bench can time the frame that shows it.
     public var onShow: (@MainActor () -> Void)?
@@ -531,6 +534,7 @@ public final class PaneViewController: NSViewController {
             }
         }
         announceFilterResult()
+        onStatusChange?()
         onShow?()
     }
 

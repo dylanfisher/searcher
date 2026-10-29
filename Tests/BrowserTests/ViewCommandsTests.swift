@@ -209,6 +209,30 @@ func aSortKeySortsByItsColumnAndTheSameKeyAgainReverses(
     #expect(pane.settings.showsToolbar)
 }
 
+/// Cmd-/ hides the status bar, an app-wide setting, as Finder's Cmd-/ does, and its title then
+/// says Show Status Bar; it has no check mark, as Finder's item has none. Cmd-/ is its own: no
+/// other command has it.
+@MainActor @Test func cmdSlashTogglesTheStatusBarAndItsTitleNamesWhatItWouldDo() throws {
+    let pane = PaneFixture(at: "/r", folders: ["/r": []]).pane
+    let slash = KeyChord("/", modifiers: .command)
+    let binding = try #require(
+        AppCommands.bindings.first { $0.command == ViewCommands.toggleStatusBar })
+    let title = try #require(binding.title)
+    #expect(binding.isChecked == nil)
+    #expect(try AppCommands.registry().command(for: slash) == ViewCommands.toggleStatusBar)
+    #expect(pane.settings.showsStatusBar)
+    #expect(title(CommandContext(pane: pane)) == "Hide Status Bar")
+
+    try run(slash, on: pane)
+
+    #expect(!pane.settings.showsStatusBar)
+    #expect(title(CommandContext(pane: pane)) == "Show Status Bar")
+
+    try run(slash, on: pane)
+
+    #expect(pane.settings.showsStatusBar)
+}
+
 /// Select All, type-to-select and the status bar's counts read the rows, so a hidden .DS_Store
 /// is in none of them.
 @MainActor @Test func selectAllAndTypeToSelectSkipAHiddenDSStore() async throws {

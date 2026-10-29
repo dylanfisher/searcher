@@ -17,6 +17,8 @@ import Quartz
 /// the focused pane (docs/decisions/0087-palette-window.md). Over it all, the unified toolbar has
 /// Back, Forward, the title and the view mode buttons while `Settings.showsToolbar` is on; the
 /// title follows the focused pane's `titleLocation` (docs/decisions/0128-finder-window-chrome.md).
+/// Along the bottom, the status bar counts the focused pane's `statusPane` and says the space
+/// free on its volume while `Settings.showsStatusBar` is on (docs/decisions/0131-status-bar.md).
 ///
 /// Commands change the workspace, and the window shows the result after each one. The window's
 /// first responder stays in the selected tab's focused pane: a command that moves the focus moves
@@ -92,6 +94,16 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     private var isDraggingWindow = false
     /// Back, Forward, the title and the view mode buttons, over the window.
     let toolbar: BrowserToolbar
+    /// The item count and free space along the window's bottom edge.
+    let statusBar = StatusBarView()
+    /// The space free on each volume, for the status bar.
+    let freeSpace: FreeSpace
+    /// Holds the status bar in the window: on macOS 26 a bottom accessory of the panes' split
+    /// view item, which the system draws as its bottom bar; before that, nil, and the bar is a
+    /// view at the bottom of the panes' content.
+    private var statusBarAccessory: NSViewController?
+    /// The volume the status bar last gave the space of, so moving to another reads it again.
+    private var statusVolume: VolumeIdentity?
     /// The favorites and the saved workspaces, left of the panes.
     let sidebar: WorkspaceSidebarViewController
     /// The sidebar's place in the window's split view, collapsed while it is hidden.
@@ -141,7 +153,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     public convenience init(
         location: Location, service: ListingService, systemActions: any SystemActions,
         settings: Settings, favorites: Favorites, volumes: SidebarVolumes,
-        fileOperations: FileOperationQueue? = nil
+        freeSpace: FreeSpace = FreeSpace(), fileOperations: FileOperationQueue? = nil
     ) {
         let pane = Pane(
             location: location, service: service, systemActions: systemActions, settings: settings)
@@ -150,11 +162,11 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         workspaces.add(workspace)
         self.init(
             workspace: workspace, workspaces: workspaces, favorites: favorites, volumes: volumes,
-            settings: settings, fileOperations: fileOperations)
+            freeSpace: freeSpace, settings: settings, fileOperations: fileOperations)
     }
 
     /// A window showing `workspace`, one of `workspaces`, under the app's `settings`, with the
-    /// app's `favorites` and `volumes` in its sidebar.
+    /// app's `favorites` and `volumes` in its sidebar and `freeSpace` in its status bar.
     /// `takePaneController` hands over another
     /// window's view controller for a pane that moved into `workspace`. `fileOperations` runs
     /// the file commands, which are off without it; the clipboard commands are off without
@@ -163,7 +175,8 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     /// workspace with `openSavedWorkspace`; the palette lists the folders in `folderVisits`.
     init(
         workspace: Workspace, workspaces: WorkspaceList, favorites: Favorites,
-        volumes: SidebarVolumes, settings: Settings, fileOperations: FileOperationQueue? = nil,
+        volumes: SidebarVolumes, freeSpace: FreeSpace = FreeSpace(), settings: Settings,
+        fileOperations: FileOperationQueue? = nil,
         clipboard: CutState? = nil,
         mountTable: MountTable? = nil, undoHistory: UndoHistory? = nil, openWith: OpenWith? = nil,
         folderVisits: FolderVisits? = nil,
@@ -189,13 +202,16 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         self.openWith = openWith
         self.folderVisits = folderVisits
         self.settings = settings
+        self.freeSpace = freeSpace
         hidesEmptyOperations = settings.hideEmptyOperationsPanel
         operations = OperationsViewController(
             control: fileOperations.map(OperationsViewController.Control.sending(to:)) ?? .none)
         operations.view.isHidden = true
         let content = NSView()
         panesOverOperations = tabHost.bottomAnchor.constraint(equalTo: operations.view.topAnchor)
-        panesToBottom = tabHost.bottomAnchor.constraint(equalTo: content.bottomAnchor)
+        // Above the status bar.
+        panesToBottom = tabHost.bottomAnchor.constraint(
+            equalTo: content.safeAreaLayoutGuide.bottomAnchor)
         stripUnderBanner = strip.view.topAnchor.constraint(equalTo: configBanner.bottomAnchor)
         stripToTop = strip.view.topAnchor.constraint(
             equalTo: content.safeAreaLayoutGuide.topAnchor)
@@ -264,13 +280,16 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             panesToBottom,
             operations.view.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             operations.view.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            operations.view.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            operations.view.bottomAnchor.constraint(
+                equalTo: content.safeAreaLayoutGuide.bottomAnchor),
         ])
         let main = NSViewController()
         main.view = content
         sidebarItem.isCollapsed = !workspace.showsSidebar
         let split = NSSplitViewController()
-        split.splitViewItems = [sidebarItem, NSSplitViewItem(viewController: main)]
+        let panesItem = NSSplitViewItem(viewController: main)
+        split.splitViewItems = [sidebarItem, panesItem]
+        placeStatusBar(in: panesItem)
         window.contentViewController = split
         // Setting the content view controller sizes the window to it.
         window.setContentSize(settings.newWindowSize)
@@ -326,7 +345,9 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             self?.settingsChanged()
             self?.showConfigErrors()
             self?.showToolbar()
+            self?.showStatusBar()
         }
+        freeSpace.observe(for: self) { [weak self] in self?.showStatus() }
         tabStrip.didSelectTab = { [weak self] in self?.showWorkspace() }
         window.didChangeFirstResponder = { [weak self] in self?.firstResponderDidChange() }
         workspace.onActiveChange = { [weak self] in self?.markFocusedPane() }
@@ -352,6 +373,86 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         if toolbar.toolbar.isVisible != settings.showsToolbar {
             toolbar.toolbar.isVisible = settings.showsToolbar
         }
+    }
+
+    /// Puts the status bar along the bottom of `item`, the panes' side of the split view, as
+    /// `settings` says: on macOS 26 as the item's bottom accessory, which the system draws as
+    /// Finder's bottom bar and takes out of the content's safe area; before, as a view at the
+    /// content's bottom with the content's safe area ending above it.
+    private func placeStatusBar(in item: NSSplitViewItem) {
+        if #available(macOS 26, *) {
+            let accessory = NSSplitViewItemAccessoryViewController()
+            accessory.view = statusBar
+            // The standard insets pad the bar to 46 points; Finder's is 28 points tall.
+            accessory.automaticallyAppliesContentInsets = false
+            item.addBottomAlignedAccessoryViewController(accessory)
+            statusBarAccessory = accessory
+        } else {
+            let content = item.viewController.view
+            statusBar.translatesAutoresizingMaskIntoConstraints = false
+            content.addSubview(statusBar)
+            NSLayoutConstraint.activate([
+                statusBar.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+                statusBar.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+                statusBar.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            ])
+        }
+        showStatusBar()
+    }
+
+    /// Shows the status bar or hides it, as `settings` says, and fills it while it shows.
+    private func showStatusBar() {
+        let shows = settings.showsStatusBar
+        if #available(macOS 26, *), let accessory = statusBarAccessory {
+            guard let accessory = accessory as? NSSplitViewItemAccessoryViewController else {
+                preconditionFailure("the status bar's holder isn't a split view accessory")
+            }
+            if accessory.isHidden == shows { accessory.isHidden = !shows }
+        } else {
+            statusBar.isHidden = !shows
+            let inset = shows ? StatusBarView.height : 0
+            let content = statusBar.superview
+            if content?.additionalSafeAreaInsets.bottom != inset {
+                content?.additionalSafeAreaInsets.bottom = inset
+            }
+        }
+        showStatus()
+    }
+
+    /// Writes the status bar's line for the selected tab's focused pane: the rows of its
+    /// `statusPane` and how many are selected, as the pane shows them, and the space free on its
+    /// folder's volume once known. While the folder loads, or its column hasn't opened yet, or
+    /// its selection is still settling, the line stays as it was, as the path bar keeps its
+    /// folder while the next one loads.
+    func showStatus() {
+        guard !isClosed, !workspace.isClosed, settings.showsStatusBar,
+            let pane = workspace.selectedTab.focusedPane.statusPane
+        else { return }
+        guard let listing = pane.state.listing else {
+            if case .loading = pane.state { return }
+            statusBar.text = ""
+            return
+        }
+        guard !pane.selection.isProvisional else { return }
+        statusBar.text = StatusBarText.text(
+            items: listing.count, selected: pane.selection.rows(in: listing).count,
+            available: available(for: pane))
+    }
+
+    /// The space free on `pane`'s volume as last read, or nil while unknown. A folder whose
+    /// volume is slow or offline gets none, and its volume isn't asked. Moving onto another
+    /// volume reads it again.
+    private func available(for pane: Pane) -> Int64? {
+        switch pane.state {
+        case .slow, .offline: return nil
+        default: break
+        }
+        guard let volume = pane.folderVolume else { return nil }
+        if volume != statusVolume {
+            statusVolume = volume
+            freeSpace.refresh(volume)
+        }
+        return freeSpace.available(on: volume)
     }
 
     /// The controller's window, which `init` makes; a controller never loses it.
@@ -550,6 +651,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         WorkspaceCommands.delete.id, WorkspaceCommands.toggleSidebar.id,
         WorkspaceCommands.focusSidebar.id, WindowCommands.showPalette.id,
         WindowCommands.goToItem.id, ViewCommands.toggleToolbar.id,
+        ViewCommands.toggleStatusBar.id,
     ]
 
     /// Whether a text field, such as the filter or rename field, has the keys, through its field
@@ -760,6 +862,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
                 self?.showWorkspace()
             })
         controller.onTitleChange = { [weak self] in self?.showTitles() }
+        controller.onStatusChange = { [weak self] in self?.showStatus() }
         return controller
     }
 
@@ -817,6 +920,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         let tab = workspace.selectedTab
         let title = tab.focusedPane.titleLocation.name
         if window?.title != title { window?.title = title }
+        showStatus()
         // A pane's first change reaches here while its view loads, before the window keeps its
         // controller; `showWorkspace` shows the buttons once it does.
         guard let controller = tabViews[tab.id]?.paneControllers[tab.layout.focused],

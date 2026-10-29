@@ -280,7 +280,7 @@ private struct TextFieldWindow {
         view.items.filter { !$0.isHidden }.map(\.title) == [
             "as List", "as Columns", "Columns Start at Home Folder", "", "Show Sidebar",
             "Focus Sidebar", "Show Favorites in Sidebar", "Show Locations in Sidebar",
-            "Show Workspaces in Sidebar", "Show Toolbar", "",
+            "Show Workspaces in Sidebar", "Show Toolbar", "Show Status Bar", "",
             "Show Hidden Files",
             "Always Hide .DS_Store", "Folders First", "", "Sort by Name", "Sort by Size",
             "Sort by Date Modified", "Sort by Kind", "Sort by Next Column",
@@ -304,6 +304,7 @@ private struct TextFieldWindow {
         try keyEvent("P", characters: "∏", modifiers: [.option, .command, .shift]),
         try keyEvent("s", modifiers: [.option, .command]),
         try keyEvent("s", modifiers: [.control, .command]),
+        try keyEvent("/", modifiers: .command, keyCode: 44),
     ]
     for press in presses {
         let item = try item(for: press, in: menu)
@@ -315,6 +316,7 @@ private struct TextFieldWindow {
             ViewCommands.toggleHidden.id, ViewCommands.sortBySize.id,
             ViewCommands.sortByNextColumn.id, ViewCommands.reverseSortDirection.id,
             SizeCommands.calculateSizes.id, WorkspaceCommands.toggleSidebar.id,
+            ViewCommands.toggleStatusBar.id,
         ])
 }
 

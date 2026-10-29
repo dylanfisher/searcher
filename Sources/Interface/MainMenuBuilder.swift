@@ -338,8 +338,9 @@ public enum MainMenuBuilder {
                 .command(ViewCommands.toggleSidebarFavorites.id),
                 .command(ViewCommands.toggleSidebarLocations.id),
                 .command(ViewCommands.toggleSidebarWorkspaces.id),
-                // After the sidebar's items, as in Finder.
+                // After the sidebar's items, the toolbar then the status bar, as in Finder.
                 .command(ViewCommands.toggleToolbar.id),
+                .command(ViewCommands.toggleStatusBar.id),
                 .separator,
                 .command(ViewCommands.toggleHidden.id),
                 .command(ViewCommands.toggleHideDSStore.id),
