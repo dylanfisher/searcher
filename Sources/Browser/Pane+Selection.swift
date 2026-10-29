@@ -76,6 +76,16 @@ extension Pane {
         return selectedRows.map { listing[$0] }
     }
 
+    /// Whether `name` is selected and nothing else. A settled selection answers by its members;
+    /// one a click or a move made, not settled yet, by its rows, since its members aren't known
+    /// until it settles.
+    func selectsOnly(_ name: ExactName) -> Bool {
+        guard selection.isSettled else {
+            return selection.contains(name) && selectedRows.count == 1
+        }
+        return selection.members == .only([name])
+    }
+
     /// The selection by name alone, for a pane that lists this folder again, as a split's copy
     /// in column view or a switch of view mode makes: rows resolved in this pane's listing would
     /// point at other entries in a listing of another sort.
@@ -138,13 +148,8 @@ extension Pane {
         self.selection = selection
         selectionVersion += 1
         selectionIsFromKeys = byKey
-        // A mount goes on only while its share stays selected alone. A click's selection isn't
-        // settled yet, so its rows say what it selects.
-        if let name = connectingShare.map({ ExactName($0.name) }),
-            selection.isSettled
-                ? selection.members != .only([name])
-                : !selection.contains(name) || selectedRows.count != 1
-        {
+        // A mount goes on only while its share stays selected alone.
+        if let name = connectingShare?.name, !selectsOnly(ExactName(name)) {
             stopShareMount()
         }
         startSettlingIfNeeded()

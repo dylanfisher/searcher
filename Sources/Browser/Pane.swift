@@ -149,8 +149,6 @@ public final class Pane {
     public var statusPane: Pane? {
         guard let trail = columnTrail else { return self }
         guard let folder = trail.selectedFolder else { return trail.focused.pane }
-        // `selectedFolderColumn` reads the selection's members, which trap while a click's
-        // selection settles; the location says the same here.
         return trail.nextColumnPane.flatMap { $0.location == folder ? $0 : nil }
     }
     /// Closed for good: a column that was truncated or a trail that was dropped.

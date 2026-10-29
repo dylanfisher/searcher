@@ -2898,3 +2898,40 @@ private func columnTable(_ index: Int, in fixture: Fixture) throws -> ListingTab
     #expect(trail.preview == preview)
     #expect(try fixture.keyTable === table)
 }
+
+/// New Folder pressed right after a click on a folder's row in column view, before the click's
+/// selection settles, makes the folder in the highlighted folder, as it does once it settles
+/// (0111-column-view-target-folder.md).
+@MainActor @Test func newFolderRightAfterAClickInColumnViewGoesIntoTheClickedFolder() async throws {
+    let folder = try TemporaryFolder("BrowserWindowControllerTests")
+    try FileManager.default.createDirectory(
+        at: folder.url.appending(path: "docs"), withIntermediateDirectories: false)
+    let settings = untouchedSettings()
+    let controller = BrowserWindowController(
+        location: Location(path: folder.url.path), service: ListingService(),
+        systemActions: StubSystemActions(), settings: settings,
+        favorites: Favorites(settings: settings), volumes: StubSidebarVolumes().list(),
+        fileOperations: FileOperationQueue(prompts: .unexpected) { _ in })
+    let window = try #require(controller.window)
+    window.contentView?.layoutSubtreeIfNeeded()
+    let pane = controller.workspace.selectedTab.focusedPane
+    await settle { pane.state.isLoaded }
+    let keys = { try #require(window.firstResponder as? ListingTableView) }
+    try keys().keyDown(with: try keyEvent("3", modifiers: .command))
+    await settle { pane.commandPane !== pane && pane.commandPane.state.isLoaded }
+    let column = pane.commandPane
+    let docs = try #require(column.state.listing?.row(named: "docs"))
+    let table = try keys()
+
+    table.selectRowIndexes([docs], byExtendingSelection: false)
+    #expect(!column.selection.isSettled)
+    table.keyDown(with: try keyEvent("N", modifiers: [.command, .shift]))
+
+    let made = folder.url.appending(path: "docs/untitled folder").path
+    await settle { FileManager.default.fileExists(atPath: made) }
+    let outside = folder.url.appending(path: "untitled folder").path
+    #expect(!FileManager.default.fileExists(atPath: outside))
+    for column in pane.columnTrail?.columns ?? [] {
+        column.pane.monitor?.stop()
+    }
+}
