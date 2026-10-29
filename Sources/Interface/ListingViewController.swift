@@ -370,6 +370,26 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         scrollView.reflectScrolledClipView(clip)
     }
 
+    /// Scrolls the list up a row when a drag is held within a row's height below the window's
+    /// bars over its top and the header, as a drag held over the path bar's row scrolls it down
+    /// (`PathBarGlassContent`). AppKit's own autoscroll wants the drag past the clip's top edge,
+    /// which lies under the toolbar, where no list takes the drag
+    /// (docs/decisions/0133-flat-translucent-bars.md).
+    private func scrollUpUnderTheBars(at location: NSPoint) {
+        guard topCover > 0, let scrollView = view as? NSScrollView else { return }
+        let clip = scrollView.contentView
+        // The clip is flipped, as the table is: y grows down from the visible top.
+        let top = clip.bounds.minY + topCover + headerOverlap(in: scrollView)
+        let point = clip.convert(location, from: nil)
+        guard point.y >= top, point.y < top + tableView.rowHeight else { return }
+        var bounds = clip.bounds
+        bounds.origin.y -= tableView.rowHeight
+        let origin = clip.constrainBoundsRect(bounds).origin
+        guard origin != clip.bounds.origin else { return }
+        clip.scroll(to: origin)
+        scrollView.reflectScrolledClipView(clip)
+    }
+
     /// The height of the column header over the top of the rows; 0 in column view, which has
     /// none.
     private func headerOverlap(in scrollView: NSScrollView) -> CGFloat {
@@ -588,6 +608,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             springLoader?.dragExited(pane)
         }
         tableView.dragEnded = { [weak self] in self?.springLoader?.dragEnded() }
+        tableView.dragUpdated = { [weak self] location in self?.scrollUpUnderTheBars(at: location) }
         tableView.selectionShapeChanged = { [weak self] in self?.placeChevrons() }
     }
 

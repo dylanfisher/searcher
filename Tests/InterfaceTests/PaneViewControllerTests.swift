@@ -654,6 +654,37 @@ private func countExits(of table: ListingTableView) -> () -> Int {
     #expect(exits() == 1)
 }
 
+/// A drag held just below the header, under the toolbar the list runs up under, scrolls the
+/// list up a row each update, since AppKit's own autoscroll would want the drag over the
+/// toolbar; lower down it scrolls nothing (docs/decisions/0133-flat-translucent-bars.md).
+@MainActor @Test func aDragHeldJustBelowTheBarsScrollsTheListUp() async throws {
+    let window = await manyRowsWindow(200)
+    let controller = window.paneViewController
+    let table = controller.listingViewController.tableView
+    let scrollView = try #require(controller.listingViewController.view as? NSScrollView)
+    let clip = scrollView.contentView
+    #expect(controller.listingViewController.topCover > 0)
+    clip.scroll(to: NSPoint(x: 0, y: 40 * table.rowHeight))
+    scrollView.reflectScrolledClipView(clip)
+    let header = try #require(table.headerView)
+    let headerBottom = header.convert(header.bounds, to: nil).minY
+    let (info, pasteboard) = glassDrag(at: NSPoint(x: 100, y: headerBottom - 4))
+    defer { pasteboard.releaseGlobally() }
+    let start = clip.bounds.origin.y
+
+    _ = table.draggingEntered(info)
+    _ = table.draggingUpdated(info)
+    _ = table.draggingUpdated(info)
+
+    #expect(clip.bounds.origin.y == start - 2 * table.rowHeight)
+
+    info.draggingLocation.y = headerBottom - 4 * table.rowHeight
+    _ = table.draggingUpdated(info)
+
+    #expect(clip.bounds.origin.y == start - 2 * table.rowHeight)
+    table.draggingExited(info)
+}
+
 /// The columns of `/root` and of its last file's preview, in a window, with the drag's exits
 /// from the `/` and `/root` columns counted.
 @MainActor
