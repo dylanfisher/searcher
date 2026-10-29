@@ -77,11 +77,13 @@ extension Pane {
     }
 
     /// Whether `name` is selected and nothing else. A settled selection answers by its members;
-    /// one a click or a move made, not settled yet, by its rows, since its members aren't known
-    /// until it settles.
+    /// one a click, a move or a racing load left unsettled answers by the one row it highlights,
+    /// since its members aren't known until it settles, and a name it still holds from Select
+    /// All's baseline may have no row.
     func selectsOnly(_ name: ExactName) -> Bool {
         guard selection.isSettled else {
-            return selection.contains(name) && selectedRows.count == 1
+            let entries = selectedEntries
+            return entries.count == 1 && ExactName(entries[0].name) == name
         }
         return selection.members == .only([name])
     }

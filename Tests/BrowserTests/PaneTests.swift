@@ -2139,3 +2139,22 @@ private func paneGoingIn() async -> PaneFixture {
     #expect(pane.selection == Selection([ExactName("b.txt")], cursor: ExactName("b.txt")))
     #expect(!fixture.tab.canUndoSelection)
 }
+
+/// Before a selection settles, `selectsOnly` names the entry its one row shows. After Select
+/// All, a load that dropped an entry leaves that entry in the baseline Select All saw, but it
+/// isn't the row highlighted.
+@MainActor @Test func selectsOnlyNamesTheHighlightedRowBeforeTheSelectionSettles() async throws {
+    let fixture = PaneFixture(
+        at: "/one", folders: ["/one": [folder("docs")], "/one/docs": [], "/": [folder("one")]])
+    let pane = fixture.pane
+    await settle { pane.state.isLoaded }
+    let listing = try #require(pane.state.listing)
+    let sawAll = await Task.detached { Listing([folder("docs"), file("gone.txt")]) }.value
+    let docs = ExactName("docs")
+    pane.selection = Selection([docs], cursor: docs).all(in: sawAll)
+        .provisional(in: listing, after: .loaded(complete: true), radius: 1)
+    #expect(!pane.selection.isSettled)
+
+    #expect(!pane.selectsOnly(ExactName("gone.txt")))
+    #expect(pane.selectsOnly(docs))
+}

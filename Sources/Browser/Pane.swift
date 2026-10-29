@@ -144,8 +144,10 @@ public final class Pane {
     public var titleLocation: Location { columnTrail?.selectedFolder ?? location }
     /// The pane whose rows and selection the window's status bar counts: the folder
     /// `titleLocation` names, as Finder's status bar counts the folder its window is titled
-    /// after. In column mode with a folder selected alone, that is the column showing it, and
-    /// nil while that column hasn't opened (docs/decisions/0131-status-bar.md).
+    /// after. In column mode with a folder selected alone, that is the column right of the
+    /// focused one when its location is `selectedFolder`'s, and nil while that column hasn't
+    /// opened. It compares locations, not the selection's members, which aren't known until a
+    /// click's selection settles (docs/decisions/0131-status-bar.md).
     public var statusPane: Pane? {
         guard let trail = columnTrail else { return self }
         guard let folder = trail.selectedFolder else { return trail.focused.pane }
