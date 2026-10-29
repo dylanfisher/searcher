@@ -55,6 +55,13 @@ public final class MountTable {
         return byLongestMountPoint.first { isPath(path, atOrUnder: $0.mountPoint) }?.volume
     }
 
+    /// Whether a volume is mounted at `path`, by the path's text; false before the first read
+    /// lands.
+    public func isMountPoint(_ path: String) -> Bool {
+        let path = FileOperation.comparable(path)
+        return byLongestMountPoint.contains { $0.mountPoint == path }
+    }
+
     /// The server whose share holds `path`, by the path's text (`VolumeIdentity.server`); nil
     /// before the first read lands, or when the volume holding it is no server's share.
     public func server(holding path: String) -> Server? {

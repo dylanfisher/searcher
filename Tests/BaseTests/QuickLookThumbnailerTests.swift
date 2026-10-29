@@ -38,6 +38,13 @@ private func pixels(_ image: CGImage) throws -> [UInt8] {
     return bytes
 }
 
+/// A folder on another device than its parent is a volume's mount point, as a share in /Volumes
+/// is, and gets no icon: Quick Look would read it over the network. `/dev`, devfs mounted under
+/// the root volume, stands in for the share (docs/decisions/0129-row-icons-as-finder.md).
+@Test func aMountPointGetsNoIcon() async throws {
+    #expect(await rowImage("/dev") == nil)
+}
+
 /// A folder's row shows the icon Finder draws for that folder, which Quick Look makes: a folder
 /// with items in it shows a sheet of paper between its flaps where an empty one shows none, and a
 /// tagged one takes its tag's color. The type's icon is the same for all three

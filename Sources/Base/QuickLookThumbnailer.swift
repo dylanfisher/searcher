@@ -32,6 +32,17 @@ public struct QuickLookThumbnailer: ThumbnailMaking {
         // type's icon isn't: a sheet of paper in a folder with items, its tag's color, its custom
         // icon (docs/decisions/0129-row-icons-as-finder.md).
         let isFolder = info.st_mode & S_IFMT == S_IFDIR
+        if isFolder {
+            // A volume mounted here, as a share in /Volumes is: its icon would be read over the
+            // network, which rows never do (0102-thumbnails.md). Callers that know the mount
+            // table skip mount points before asking, so this stat doesn't reach a share.
+            var parent = stat()
+            let parentPath = (path as NSString).deletingLastPathComponent
+            guard lstat(parentPath, &parent) == 0, parent.st_dev == info.st_dev else {
+                done(nil)
+                return {}
+            }
+        }
         let request = QLThumbnailGenerator.Request(
             fileAt: URL(fileURLWithPath: path, isDirectory: isFolder),
             size: CGSize(width: side, height: side), scale: scale,

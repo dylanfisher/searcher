@@ -1716,6 +1716,38 @@ private func rowImage(_ controller: ListingViewController, row: Int) -> NSImage?
     await settle { rowImage(controller, row: 1).map { $0 !== typeIcon } ?? false }
 }
 
+/// A share mounted in a local folder, as one in /Volumes is, keeps the folder icon and asks
+/// for nothing: Quick Look would read its icon over the network. The folder beside it asks
+/// (docs/decisions/0129-row-icons-as-finder.md).
+@MainActor @Test func aVolumeMountedInALocalFolderAsksForNoIcon() async throws {
+    let share = VolumeIdentity(
+        device: "//nas/music", mountPoint: "/folder/music", kind: .network)
+    let disk = VolumeIdentity(device: "/dev/disk3s1", mountPoint: "/", kind: .local)
+    let mounts = MountTable(read: { [disk, share] })
+    await mounts.firstRead()
+    let maker = GatedThumbnailMaker()
+    maker.answer("/folder/docs", with: testThumbnail())
+    let pane = Pane(
+        location: Location(path: "/folder"),
+        service: ListingService(
+            lister: StubLister(["/folder": [folder("docs"), folder("music")]]),
+            thumbnails: ThumbnailService(maker: maker), mounts: mounts),
+        systemActions: StubSystemActions(), settings: untouchedSettings())
+    let controller = ListingViewController(
+        pane: pane, iconCache: TypeIconCache { _ in typeIcon }, formatter: .init(),
+        tableView: ListingTableView())
+    pane.onChange = { [weak controller] in controller?.paneDidChange() }
+    controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 400)
+    await settle { pane.state.isLoaded }
+    controller.view.layoutSubtreeIfNeeded()
+
+    await settle { rowImage(controller, row: 0).map { $0 !== typeIcon } ?? false }
+    let service = try #require(pane.service.thumbnails)
+    await settle { service.calls.isIdle }
+    #expect(maker.paths == ["/folder/docs"])
+    #expect(rowImage(controller, row: 1) === typeIcon)
+}
+
 /// A file on a network volume keeps its icon: making its thumbnail would read it over the
 /// network (0004-listing-view.md). The folder's volume is the one its load read with `statfs`,
 /// so `/folder`, a path under `/` reached through a link onto a share, is on the share.

@@ -210,6 +210,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             self, selector: changed, name: NSView.frameDidChangeNotification, object: clip)
         center.addObserver(
             self, selector: changed, name: NSView.frameDidChangeNotification, object: tableView)
+        // A mount or unmount, and the table's first read, change which folders ask for icons.
+        pane.service.mounts?.observe(for: self) { [weak self] in self?.updateThumbnails() }
     }
 
     /// Keeps `Margin.standard` between the rows and the edges at the ends of the list: above the
