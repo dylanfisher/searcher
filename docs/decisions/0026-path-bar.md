@@ -51,7 +51,9 @@ name can't ride in the listing itself.
 - **Layout.** The list and the bar are pinned with constraints, the bar 28 points tall along the
   pane's bottom (24 until 2026-10-23, when Dylan asked for more room above and below). The pane's
   container starts at zero size, where frames set for autoresizing can't hold the bar's height,
-  and the list ended up 24 points taller than the pane.
+  and the list ended up 24 points taller than the pane. (Amended 2026-10-28: the bar floats in a
+  glass capsule over the list's bottom, which scrolls under it; see
+  [0132](0132-glass-path-bar.md).)
 - **Separators.** Each is the SF Symbol `chevron.right` at the titles' point size, small scale,
   in the tertiary label color, as in Finder's path bar. It is centered on the middle of a capital
   letter, measured from the first segment's baseline, rather than on the bar, so it stays level
