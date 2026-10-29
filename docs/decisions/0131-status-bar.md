@@ -28,9 +28,11 @@ space the system can purge; `df` and plain free space don't.
 ## Decision
 
 - **What it says**, in Finder's words: "6 items", "1 item", "0 items", or "2 of 6 selected"
-  while rows are selected, then ", 789.74 GB available" once the space is known.
-  `StatusBarText` holds the words. Counts use the system's locale, as Finder's do; the space is
-  `ByteCountFormatter`'s file style, decimal with two decimals ("789.74 GB", "2 TB").
+  while rows are selected, then ", 789.74 GB available" once the space is known. Finder's own
+  `LocalizableMerged.strings` gives "^0 items" for a count of 0 ("=0"), so an empty folder
+  reads "0 items". `StatusBarText` holds the words. Counts use the system's locale, as
+  Finder's do; the space is `ByteCountFormatter`'s file style, decimal with two decimals
+  ("789.74 GB", "2 TB").
 - **Which folder it counts: the one the window is titled after.** `Pane.statusPane` follows
   `titleLocation`: in list view the pane; in column view, with a folder selected alone in the
   focused column, the column showing that folder, as Finder counts "images" in the screenshot;
@@ -39,7 +41,10 @@ space the system can purge; `df` and plain free space don't.
   as it was.
 - **It counts the rows the pane shows.** `Listing.count` already leaves out hidden files while
   they are hidden, `.DS_Store` while Always Hide .DS_Store is on, and the names a filter
-  doesn't match, so the count is the list's. The selection is
+  doesn't match, so the count is the list's, a filter's selection of its first row
+  included. Only the selection the keys act on counts: the column of a folder selected in the
+  focused column counts its rows alone, as Finder's "6 items" does for "images", even when
+  that column keeps a selection from before, as after ← out of it. The selection is
   `Selection.rows(in:).count`; a provisional selection, which knows only the rows near the
   cursor, leaves the line as it was until it settles, which reports a change.
 - **When it's written.** On every change of the focused pane or its columns
@@ -50,10 +55,15 @@ space the system can purge; `df` and plain free space don't.
 - **The free space** is `FreeSpace`, one per app. A volume is read the first time a bar asks
   for it, again when a bar moves onto it from another volume, and every known volume after
   any file operation finishes (`WorkspaceWindows.operationsChanged`), whichever way it ended.
-  Nothing polls. Each read runs `availableCapacity(atPath:)` at the volume's mount point on a
-  `BlockingCallThread` ([0038](0038-slow-volumes.md)), and the last value shows until the next
-  lands. The value is the larger of the two measures in the table: the first on APFS, the
-  second on an SMB share, which reports 0 for the first.
+  Nothing polls. A volume unmounted or mounted at a mount point is forgotten there
+  (`VolumeEvents`), and one mounted is read afresh, since another disk mounted at the same
+  `/Volumes/Backup` has the same `VolumeIdentity`. Each read is numbered: one that lands after
+  its volume was forgotten, such as a read hung on a share that went away, is dropped, so it
+  can't overwrite the new volume's value and doesn't keep the new volume from being read; it
+  keeps its one thread until the call returns. Each read runs `availableCapacity(atPath:)` at
+  the volume's mount point on a `BlockingCallThread` ([0038](0038-slow-volumes.md)), and the
+  last value shows until the next lands. The value is the larger of the two measures in the
+  table: the first on APFS, the second on an SMB share, which reports 0 for the first.
 - **A share never blocks it.** A volume has one read in flight at most; asking again while it
   hangs starts nothing and the bar shows the count alone. A pane that is slow or offline asks
   for no read at all, and a folder whose volume a load hasn't read yet (`Pane.folderVolume`,
@@ -101,15 +111,13 @@ space the system can purge; `df` and plain free space don't.
 ## Consequences
 
 Each change of a pane writes one short line; nothing else runs on the main thread for it. A
-volume read once is read again only on a move onto it or after a file operation, so space freed
-by another app shows late until then. Every test window reads its stub volume's space from
-`/` unless it passes a `FreeSpace` of its own. The look can't be checked in tests (0128): the
-frames, the safe area and the text are; the bar's background, separator and the label's size
-against Finder's need a look by hand.
+volume read once is read again only on a move onto it, a mount there or after a file
+operation, so space freed by another app shows late until then. Every test window reads its
+stub volume's space from `/` unless it passes a `FreeSpace` of its own. The look can't be
+checked in tests (0128): the frames, the safe area and the text are; the bar's background,
+separator and the label's size against Finder's need a look by hand.
 
 ## Open questions for Dylan
 
 - **Finder's number for a share.** The larger-of rule gives an SMB share its free space; that
   Finder shows the same for `main` wasn't checked.
-- **Finder's text for an empty folder.** This bar says "0 items", from memory of Finder;
-  compare with an empty folder in Finder.
