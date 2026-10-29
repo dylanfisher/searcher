@@ -24,18 +24,16 @@ public final class PaneViewController: NSViewController {
     let messageLabel = NSTextField(wrappingLabelWithString: "")
     let accessDeniedView: AccessDeniedView
     let pathBar = PathBarView()
-    /// The capsule the path bar and the status float in, over the bottom of the list or the
-    /// columns: the system's Liquid Glass from macOS 26, a blur before it. One per pane, made
-    /// once; a new location changes only the segments in it
-    /// (docs/decisions/0132-glass-path-bar.md).
-    let pathBarGlass: NSView
+    /// The translucent row the path bar and the status sit in, flush along the pane's bottom
+    /// over the end of the list or the columns, which show through it blurred. One per pane,
+    /// made once; a new location changes only the segments in it
+    /// (docs/decisions/0133-flat-translucent-bars.md).
+    let pathBarGlass: NSVisualEffectView
     /// The view in `pathBarGlass` that holds the path bar and the status.
     let pathBarContent: PathBarGlassContent
-    /// How far the path bar's glass floats from the pane's sides and bottom.
-    static let pathBarGap: CGFloat = 8
-    /// How much of the pane's bottom the path bar's glass covers, from the pane's bottom edge to
-    /// the glass's top. A list or a column keeps its last row and its scrollers above it.
-    static let pathBarCover = PathBarView.height + pathBarGap
+    /// How much of the pane's bottom the path bar's row covers. A list or a column keeps its
+    /// last row and its scrollers above it.
+    static let pathBarCover = PathBarView.height
     let filterBar = FilterBarView()
     /// The filter bar's height: `FilterBarView.height` while it shows, else 0.
     private var filterBarHeight: NSLayoutConstraint?
@@ -331,19 +329,16 @@ public final class PaneViewController: NSViewController {
             list.topAnchor.constraint(equalTo: filterBar.bottomAnchor),
             list.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             list.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            // Under the glass to the pane's bottom: the rows scroll under it, and the list keeps
-            // its last row above it (`ListingViewController.keepMargins`).
+            // Under the path bar to the pane's bottom: the rows scroll under it, and the list
+            // keeps its last row above it (`ListingViewController.keepMargins`).
             list.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             columns.topAnchor.constraint(equalTo: list.topAnchor),
             columns.leadingAnchor.constraint(equalTo: list.leadingAnchor),
             columns.trailingAnchor.constraint(equalTo: list.trailingAnchor),
             columns.bottomAnchor.constraint(equalTo: list.bottomAnchor),
-            pathBarGlass.leadingAnchor.constraint(
-                equalTo: container.leadingAnchor, constant: Self.pathBarGap),
-            pathBarGlass.trailingAnchor.constraint(
-                equalTo: container.trailingAnchor, constant: -Self.pathBarGap),
-            pathBarGlass.bottomAnchor.constraint(
-                equalTo: container.bottomAnchor, constant: -Self.pathBarGap),
+            pathBarGlass.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            pathBarGlass.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            pathBarGlass.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             pathBarGlass.heightAnchor.constraint(equalToConstant: PathBarView.height),
             pathBar.leadingAnchor.constraint(equalTo: pathBarContent.leadingAnchor),
             pathBar.trailingAnchor.constraint(equalTo: status.leadingAnchor),
@@ -375,25 +370,17 @@ public final class PaneViewController: NSViewController {
         view = container
     }
 
-    /// The path bar's capsule and the content view filling it. From macOS 26 the system's glass,
-    /// as the toolbar's items are (0128), rounded to a capsule; before that a blur in the same
-    /// shape.
-    private static func makePathBarGlass() -> (glass: NSView, content: PathBarGlassContent) {
+    /// The path bar's row and the content view filling it: a flat, square material that blurs
+    /// the rows scrolling under it, as Finder's bottom bars do, rather than a floating glass
+    /// capsule (docs/decisions/0133-flat-translucent-bars.md).
+    private static func makePathBarGlass() -> (
+        glass: NSVisualEffectView, content: PathBarGlassContent
+    ) {
         let content = PathBarGlassContent()
-        if #available(macOS 26, *) {
-            let glass = NSGlassEffectView()
-            glass.style = .regular
-            glass.cornerRadius = PathBarView.height / 2
-            glass.contentView = content
-            return (glass, content)
-        }
         let blur = NSVisualEffectView()
         blur.material = .headerView
         blur.blendingMode = .withinWindow
         blur.state = .followsWindowActiveState
-        blur.wantsLayer = true
-        blur.layer?.cornerRadius = PathBarView.height / 2
-        blur.layer?.masksToBounds = true
         content.translatesAutoresizingMaskIntoConstraints = false
         blur.addSubview(content)
         NSLayoutConstraint.activate([

@@ -416,7 +416,7 @@ private final class VolumeName: @unchecked Sendable {
     #expect(fixture.controller.pathBar.segments.map(\.title) == ["New Disk", "root"])
 }
 
-/// A window showing `/root` with `count` files, each pane's path bar floating in its glass.
+/// A window showing `/root` with `count` files, each pane's path bar in its translucent row.
 @MainActor
 private func manyRowsWindow(_ count: Int) async -> BrowserWindowController {
     var folders = Fixture.folders
@@ -432,38 +432,37 @@ private func manyRowsWindow(_ count: Int) async -> BrowserWindowController {
     return window
 }
 
-/// The path bar and the status float in one glass capsule over the pane's bottom, the system's
-/// Liquid Glass from macOS 26 (docs/decisions/0132-glass-path-bar.md).
-@MainActor @Test func thePathBarAndStatusFloatInGlassOverThePanesBottom() async throws {
+/// The path bar and the status sit in one flat translucent row, the pane's full width and flush
+/// with its bottom, over the end of the list: square, with no gap and no capsule
+/// (docs/decisions/0133-flat-translucent-bars.md).
+@MainActor @Test func thePathBarAndStatusSitInAFlatTranslucentRowAlongThePanesBottom()
+    async throws
+{
     let window = await manyRowsWindow(3)
     let controller = window.paneViewController
     let glass = controller.pathBarGlass
 
-    if #available(macOS 26, *) {
-        let system = try #require(glass as? NSGlassEffectView)
-        #expect(system.cornerRadius == PathBarView.height / 2)
-        #expect(system.style == .regular)
-    }
+    #expect(glass.material == .headerView)
+    #expect(glass.blendingMode == .withinWindow)
+    #expect(glass.layer?.cornerRadius ?? 0 == 0)
     #expect(controller.pathBar.isDescendant(of: glass))
     #expect(controller.status.isDescendant(of: glass))
-    // VoiceOver reads the bar's group, not the glass around it.
+    // VoiceOver reads the bar's group, not the row around it.
     #expect(!glass.isAccessibilityElement())
     #expect(controller.pathBar.isAccessibilityElement())
     let pane = controller.view.bounds
     #expect(pane.width > 0 && pane.height > PathBarView.height)
-    let gap = PaneViewController.pathBarGap
-    #expect(
-        glass.frame
-            == NSRect(x: gap, y: gap, width: pane.width - 2 * gap, height: PathBarView.height))
+    #expect(glass.frame == NSRect(x: 0, y: 0, width: pane.width, height: PathBarView.height))
+    #expect(PaneViewController.pathBarCover == PathBarView.height)
     let bar = controller.pathBar.convert(controller.pathBar.bounds, to: controller.view)
     let status = controller.status.convert(controller.status.bounds, to: controller.view)
     #expect(bar.minX == glass.frame.minX && bar.maxX == status.minX)
     #expect(status.maxX == glass.frame.maxX)
     #expect(bar.minY == glass.frame.minY && bar.height == PathBarView.height)
     #expect(status.minY == bar.minY && status.height == bar.height)
-    // The list runs under the glass to the pane's bottom.
+    // The list runs under the row to the pane's bottom.
     let list = controller.listingViewController.view.frame
-    #expect(list.minY == 0 && list.maxY == pane.maxY)
+    #expect(list.minY == 0)
     #expect(list.contains(glass.frame))
 }
 

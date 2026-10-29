@@ -2083,9 +2083,9 @@ private func emphasizesPath(_ id: PaneID?, in fixture: Fixture) throws -> Bool {
     #expect(try emphasizesPath(left, in: fixture))
 }
 
-/// In a split each pane's path bar floats in its own glass, and the focused pane's titles are the
-/// label color while the other's are the secondary one, so the two still differ on the glass
-/// (docs/decisions/0132-glass-path-bar.md).
+/// In a split each pane's path bar has its own translucent row, and the focused pane's titles are
+/// the label color while the other's are the secondary one, so the two still differ on it
+/// (docs/decisions/0133-flat-translucent-bars.md).
 @MainActor @Test func eachPanesPathBarHasItsGlassAndOnlyTheFocusedOnesTitlesAreDark()
     async throws
 {
@@ -2098,9 +2098,6 @@ private func emphasizesPath(_ id: PaneID?, in fixture: Fixture) throws -> Bool {
     #expect(focused.pathBarGlass !== other.pathBarGlass)
     for controller in [focused, other] {
         #expect(controller.pathBar.isDescendant(of: controller.pathBarGlass))
-        if #available(macOS 26, *) {
-            #expect(controller.pathBarGlass is NSGlassEffectView)
-        }
     }
     #expect(focused.pathBar.segments.allSatisfy { $0.contentTintColor == .labelColor })
     #expect(
@@ -2692,7 +2689,9 @@ extension PressFixture {
     press.show()
     defer { press.fixture.window.orderOut(nil) }
     let scrollView = try #require(press.table.enclosingScrollView)
-    let margin = NSPoint(x: 20, y: scrollView.contentView.frame.maxY - 2)
+    // Just above the path bar's row, which lies over the list's bottom.
+    let margin = NSPoint(
+        x: 20, y: scrollView.contentView.frame.maxY - PaneViewController.pathBarCover - 2)
     #expect(press.table.row(at: press.table.convert(margin, from: scrollView)) == -1)
     let presses = press.table.pressCount
 
