@@ -1,7 +1,7 @@
 # 0107. Sidebar Favorites: bookmarks in Settings, kept while missing, and group toggles
 
 - **Date:** 2026-10-25
-- **Status:** accepted
+- **Status:** accepted; the row glyphs amended by [0138](0138-sidebar-outline-symbols.md)
 - **2026-10-25:** The Locations group and its toggle came with
   [0108](0108-sidebar-locations.md).
 

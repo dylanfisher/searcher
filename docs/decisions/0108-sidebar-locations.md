@@ -1,7 +1,7 @@
 # 0108. Sidebar Locations: Finder's default volumes, followed live, with eject
 
 - **Date:** 2026-10-25
-- **Status:** accepted
+- **Status:** accepted; the row glyphs amended by [0138](0138-sidebar-outline-symbols.md)
 
 ## Context
 
