@@ -2046,6 +2046,52 @@ private func aligned(_ view: NSView, in ancestor: NSView) -> NSRect {
     }
 }
 
+/// The rows' dates step down through every form as the preview narrows and back up as it
+/// widens, and wrap only when even the short form doesn't fit. The formatter is pinned to
+/// en_US in UTC, so the widths below pick the same forms on any Mac.
+@MainActor @Test func theRowsDatesTakeTheLongestFormThatFitsAtEachWidth() async throws {
+    let formatter = EntryCellFormatter(
+        locale: Locale(identifier: "en_US"), timeZone: TimeZone(identifier: "UTC")!)
+    let view = ColumnPreviewView(iconCache: TypeIconCache { _ in NSImage() }, formatter: formatter)
+    let entry = file("a.txt")
+    // A kind is described off the main thread.
+    let kind = await Task.detached { EntryKind(entry.type, pathExtension: "txt") }.value
+    var preview = ColumnPreview(
+        location: Location(path: "/Volumes/r/a.txt"), entry: entry, kind: kind)
+    preview.info = .read(ItemInfo(created: testDate, lastOpened: testDate, tags: []))
+    view.show(preview)
+
+    // Each width's form, and whether the dates wrap there. The full date fits from about 320
+    // points, the long one from 280, the medium one from 240; the short one fits down to at
+    // least 210 and wraps at 120.
+    func expect(
+        _ style: DateFormatter.Style, wrapping: Bool = false, atWidth width: Double,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) {
+        view.setFrameSize(NSSize(width: width, height: 600))
+        view.layoutSubtreeIfNeeded()
+        #expect(view.dateStyle == style, "\(width)", sourceLocation: sourceLocation)
+        for row in view.rows {
+            #expect(
+                row.value.stringValue == formatter.longDate(testDate, style: style),
+                sourceLocation: sourceLocation)
+        }
+        let wrapped = view.rows.contains {
+            $0.value.frame.height > $0.titleField.frame.height
+        }
+        #expect(wrapped == wrapping, "\(width)", sourceLocation: sourceLocation)
+    }
+    expect(.full, atWidth: 1000)
+    expect(.long, atWidth: 300)
+    expect(.medium, atWidth: 260)
+    expect(.short, atWidth: 210)
+    expect(.short, wrapping: true, atWidth: 120)
+    // And back up, then down again from the widest.
+    expect(.medium, atWidth: 260)
+    expect(.full, atWidth: 1000)
+    expect(.long, atWidth: 300)
+}
+
 /// A date too long for the row beside its title wraps, right-aligned, rather than losing its
 /// time.
 @MainActor @Test func aLongDateWrapsInsideItsRow() async throws {
