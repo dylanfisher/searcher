@@ -1525,6 +1525,28 @@ private func goBackWithBatchesHeld(_ pane: Pane, to root: String) async -> Listi
     #expect(pane.requestedSizes[ExactName("big")] == latest)
 }
 
+/// A walk the service stops from outside the pane, as `VolumeEvents` does at an unmount or an
+/// eject under the folder, delivers nothing, and the pane doesn't hear of it. The folder isn't
+/// left marked as walking: its next date is walked (docs/decisions/0129-row-icons-as-finder.md).
+@MainActor @Test func aWalkCancelledFromOutsideThePaneDoesntStopTheFoldersNextWalk() async throws {
+    let root = sizedRoot
+    let walks = GatedWalks()
+    let pane = sizedPane(walks, clock: ManualClock())
+    await settle { walks.startedPaths == [root + "/big"] }
+    await settle { !pane.sizeScanIsRunning }
+    let service = try #require(pane.folderSizes)
+
+    service.cancelWalks(under: root + "/big")
+    let changed = DirectoryEntry(
+        name: "big", type: .directory, size: nil, modified: testDate.addingTimeInterval(1),
+        isHidden: false, isDataless: false)
+    pane.apply(.patches([.update(changed)]), at: pane.location)
+
+    await settle { walks.startedPaths.count == 2 }
+    #expect(walks.startedPaths == [root + "/big", root + "/big"])
+    walks.release()
+}
+
 // MARK: Spring-loaded folders
 
 /// `/root` holds the folders `docs` and `more` and the files `a.txt` and `b.txt`; `/root/docs`

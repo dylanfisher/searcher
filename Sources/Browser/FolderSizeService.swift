@@ -42,6 +42,8 @@ public final class FolderSizeService: Sendable {
         private var running = false
         /// Left running by `leave()`: it finishes and keeps its size, delivering nothing.
         private var left = false
+        /// The service is done with it: it delivered its result, or stopped without one.
+        private var finished = false
         private var storedVolume: VolumeIdentity?
 
         init(
@@ -67,6 +69,17 @@ public final class FolderSizeService: Sendable {
         /// Whether its result goes to the caller: it wasn't cancelled or left.
         var delivers: Bool {
             lock.withLock { !cancelled && !left }
+        }
+
+        /// Whether the caller still waits for its result: it hasn't finished, and wasn't
+        /// cancelled or left. Whatever stopped it, by the caller or by the service, as
+        /// `cancelWalks(under:)` at an unmount does, it is pending no more.
+        public var isPending: Bool {
+            lock.withLock { !finished && !cancelled && !left }
+        }
+
+        func markFinished() {
+            lock.withLock { finished = true }
         }
 
         /// Notes that the walk started reading.
@@ -375,6 +388,7 @@ public final class FolderSizeService: Sendable {
     private func finish(
         _ walk: Walk, with result: Result<FolderSize, ListingError>?, started: Bool
     ) {
+        walk.markFinished()
         unfinished.remove(walk)
         scheduler.async {
             if started {
