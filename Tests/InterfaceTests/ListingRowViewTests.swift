@@ -142,6 +142,36 @@ private func alpha(of row: NSView, at point: NSPoint) throws -> Double {
     #expect(text.frame.midY == 10)
 }
 
+/// The name is the label color and the Size, Date Modified and Kind text the secondary label
+/// color, as Finder's list view draws them; on the emphasized selection the muted text is drawn
+/// near white, as Finder's is (fb-1029-2.jpg; docs/decisions/0135-list-rows-as-finder.md).
+@MainActor @Test func aListRowsMetadataIsMutedBesideItsName() async throws {
+    let list = await controller(showing: [file("a.txt", size: 500)])
+    list.view.appearance = NSAppearance(named: .aqua)
+    list.view.layoutSubtreeIfNeeded()
+    let row = try #require(list.tableView.rowView(atRow: 0, makeIfNecessary: true))
+    let cells = try (0..<list.tableView.numberOfColumns).map {
+        try #require(row.view(atColumn: $0) as? NSTableCellView)
+    }
+    let fields = try cells.map { try #require($0.textField) }
+
+    #expect(fields[0].textColor == .labelColor)
+    #expect(fields.dropFirst().allSatisfy { $0.textColor == .secondaryLabelColor })
+
+    let size = cells[1]
+    size.backgroundStyle = .emphasized
+    let bitmap = try #require(size.bitmapImageRepForCachingDisplay(in: size.bounds))
+    size.cacheDisplay(in: size.bounds, to: bitmap)
+    let brightest = (0..<bitmap.pixelsWide).flatMap { x in
+        (0..<bitmap.pixelsHigh).compactMap { y in
+            bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB).flatMap {
+                $0.alphaComponent > 0.5 ? min($0.redComponent, $0.blueComponent) : nil
+            }
+        }
+    }.max()
+    #expect(try #require(brightest) > 0.85)
+}
+
 /// One row of nothing, for a table of AppKit's own.
 @MainActor
 private final class OneRow: NSObject, NSTableViewDataSource {

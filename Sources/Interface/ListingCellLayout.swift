@@ -288,6 +288,11 @@ enum ListingCellLayout {
             textX = rows.nameX
         }
         let textField = NSTextField(labelWithString: "")
+        // Muted beside the name, as Finder draws them. AppKit draws both near white on an
+        // emphasized selection.
+        if column != .name {
+            textField.textColor = .secondaryLabelColor
+        }
         textField.lineBreakMode = column == .name ? .byTruncatingMiddle : .byTruncatingTail
         textField.alignment = column.alignment
         textField.frame = NSRect(
