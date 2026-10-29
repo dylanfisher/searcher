@@ -164,7 +164,9 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
             let isSorted =
                 column >= 0 && sortKey != nil
                 && table.tableColumns[column].sortDescriptorPrototype?.key == sortKey
-            let color: NSColor = isSorted ? .controlTextColor : .secondaryLabelColor
+            // AppKit draws an untouched title in the header text color, though the cell's
+            // `textColor` reads the control text color, which draws lighter once set.
+            let color: NSColor = isSorted ? .headerTextColor : .secondaryLabelColor
             if textColor != color {
                 textColor = color
             }

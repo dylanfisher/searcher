@@ -57,11 +57,19 @@ in both apps.
   default, and asks for thumbnails at its own icon size, 32 pixels in a list.
 - **The Size, Date Modified and Kind text is `secondaryLabelColor`**, the name `labelColor`, as
   Finder's are. On an emphasized selection AppKit draws both near white.
-- **The header's unsorted titles are `secondaryLabelColor`; the sorted title keeps AppKit's
-  `controlTextColor`.** `ListingTableView.HeaderCell` picks the color at each draw from the
-  table's first sort descriptor. `labelColor` would draw the sorted title lighter than AppKit's
-  own color does (a darkest pixel of 0.37 against 0.30 at 1×). AppKit's bold for the sorted
-  title, and the header's hover, press and resize drawing, stay its own.
+- **The header's unsorted titles are `secondaryLabelColor`; the sorted title is
+  `headerTextColor`, as AppKit's own header cell draws it.** `ListingTableView.HeaderCell`
+  picks the color at each draw from the table's first sort descriptor. An untouched header
+  cell's `textColor` reads `controlTextColor`, but AppKit draws its title darker than a cell
+  set to that color: in a test window on the second display, a darkest pixel of 0.20 against
+  0.37 in the light appearance, and a lightest of 1.00 against 0.92 in the dark. Set to
+  `headerTextColor`, the
+  sorted title draws as AppKit's in both. AppKit's bold for the sorted title, and the header's
+  hover, press and resize drawing, stay its own.
+- **The header looks the same in a window that isn't key, as AppKit's does.** A plain
+  `NSTableHeaderCell` draws its title the same in a window whose `isKeyWindow` and
+  `isMainWindow` say true or false, in both appearances, and so does Searcher's header. A
+  window that really is inactive wasn't drawn: the tests may not take focus.
 
 ## Alternatives considered
 
