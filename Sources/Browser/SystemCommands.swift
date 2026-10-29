@@ -8,7 +8,9 @@ import UniformTypeIdentifiers
 /// and Get Info act on the pane's folder. At a server, which has no folder, they act only on
 /// the selected shares, and Open Terminal Here is off (docs/decisions/0114-server-location.md).
 /// Open Config File opens the config file, writing it from the settings first when there is none
-/// (docs/decisions/0123-config-is-the-settings.md).
+/// (docs/decisions/0123-config-is-the-settings.md), and Copy Default Config puts a new config
+/// file's text, every setting at its default, on the pasteboard
+/// (docs/decisions/0130-copy-default-config.md).
 public enum SystemCommands: CommandSet {
     public static let copyPath = Command(
         id: CommandID("system.copyPath"), title: "Copy Path",
@@ -24,6 +26,8 @@ public enum SystemCommands: CommandSet {
         chords: [KeyChord("t", modifiers: [.option, .command])])
     public static let openConfigFile = Command(
         id: CommandID("system.openConfigFile"), title: "Open Config File", chords: [])
+    public static let copyDefaultConfig = Command(
+        id: CommandID("system.copyDefaultConfig"), title: "Copy Default Config", chords: [])
 
     // A key runs its command whether or not it is enabled, so each one checks again and does
     // nothing when it is off.
@@ -63,6 +67,9 @@ public enum SystemCommands: CommandSet {
                     guard pane.settings.configFile != nil else { return }
                     openConfig(settings: pane.settings, systemActions: pane.systemActions)
                 }),
+            CommandBinding(
+                copyDefaultConfig,
+                run: { context in copyDefault(systemActions: context.pane.systemActions) }),
         ]
     }
 
@@ -92,6 +99,12 @@ public enum SystemCommands: CommandSet {
                 systemActions.openFile(file)
             }
         }
+    }
+
+    /// Puts `ConfigFile.defaultText` on the pasteboard as plain text.
+    @MainActor
+    public static func copyDefault(systemActions: any SystemActions) {
+        systemActions.copyToPasteboard(ConfigFile.defaultText)
     }
 
     /// Whether Copy Path, Reveal in Finder and Get Info have something to act on: the pane's

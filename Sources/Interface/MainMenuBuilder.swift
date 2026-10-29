@@ -495,6 +495,7 @@ public enum MainMenuBuilder {
                         title: "Settings…", action: #selector(SettingsShowing.showSettings(_:)),
                         chord: KeyChord(",", modifiers: .command))),
                 .command(SystemCommands.openConfigFile.id),
+                .command(SystemCommands.copyDefaultConfig.id),
                 .separator,
                 .submenu(servicesMenu),
                 .separator,

@@ -83,6 +83,8 @@ public final class WorkspaceSystemActions: SystemActions {
     private let sendToFinder: @Sendable ([URL]) throws -> Void
     /// Opens a URL, for the Automation list.
     private let openURL: @Sendable (URL) -> Void
+    /// What `copyToPasteboard` writes to: the general pasteboard, or in a test one of its own.
+    private let pasteboard: NSPasteboard
     /// A Get Info request is waiting for Finder.
     private(set) var isShowingInfo = false
 
@@ -96,12 +98,12 @@ public final class WorkspaceSystemActions: SystemActions {
                     Logger(category: "workspace").error(
                         "NSWorkspace couldn't open \(url.absoluteString)")
                 }
-            })
+            }, pasteboard: .general)
     }
 
     /// Tests pass a lookup that finds nothing and a `presentError` that records, so nothing opens
     /// and no alert shows, and a `sendToFinder` that records, since a test never sends Finder an
-    /// Apple Event.
+    /// Apple Event. A test's copies go to a pasteboard of its own, never the general one.
     init(
         applicationURL: @escaping @MainActor (String) -> URL?,
         presentError: @escaping @MainActor (any Error) -> Void,
@@ -110,12 +112,14 @@ public final class WorkspaceSystemActions: SystemActions {
         },
         openURL: @escaping @Sendable (URL) -> Void = { url in
             preconditionFailure("a test asked to open \(url)")
-        }
+        },
+        pasteboard: NSPasteboard = .withUniqueName()
     ) {
         self.applicationURL = applicationURL
         self.presentError = presentError
         self.sendToFinder = sendToFinder
         self.openURL = openURL
+        self.pasteboard = pasteboard
     }
 
     public func openFile(_ url: URL) {
@@ -127,7 +131,6 @@ public final class WorkspaceSystemActions: SystemActions {
     }
 
     public func copyToPasteboard(_ text: String) {
-        let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         if !pasteboard.setString(text, forType: .string) {
             logger.error("couldn't write \(text.count) characters to the pasteboard")

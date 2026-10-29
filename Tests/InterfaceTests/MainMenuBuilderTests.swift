@@ -1036,14 +1036,19 @@ private func expectKey(_ chord: KeyChord?, on item: NSMenuItem, _ comment: Comme
     #expect(MainMenuBuilder.reservedChords.contains(KeyChord(",", modifiers: .command)))
 }
 
-/// Open Config File sits under Settings…, the other way to change the settings.
+/// Open Config File sits under Settings…, the other way to change the settings, and Copy
+/// Default Config under it.
 @MainActor @Test func theAppMenuHasOpenConfigFileUnderSettings() throws {
     let menu = try buildMenu(try AppCommands.registry())
     let appMenu = try #require(menu.items.first?.submenu)
-    let settings = try #require(appMenu.items.firstIndex { $0.title == "Settings…" })
+    let shown = appMenu.items.filter { !$0.isHidden }
+    let settings = try #require(shown.firstIndex { $0.title == "Settings…" })
 
-    let next = appMenu.items[settings + 1]
+    let next = shown[settings + 1]
+    let copy = shown[settings + 2]
 
     #expect(next.title == "Open Config File")
     #expect(next.representedObject as? CommandID == SystemCommands.openConfigFile.id)
+    #expect(copy.title == "Copy Default Config")
+    #expect(copy.representedObject as? CommandID == SystemCommands.copyDefaultConfig.id)
 }

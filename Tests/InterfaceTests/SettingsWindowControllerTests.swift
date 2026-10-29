@@ -5,6 +5,8 @@ import TestSupport
 import Testing
 import UniformTypeIdentifiers
 
+import class SwiftUI.NSHostingView
+
 @testable import Interface
 
 private let cmdP = KeyChord("p", modifiers: .command)
@@ -17,7 +19,7 @@ private let goToItem = WindowCommands.goToItem
 @MainActor
 private func controller(
     _ settings: Settings = untouchedSettings(), loginItem: StubLoginItem = StubLoginItem(),
-    systemActions: StubSystemActions = StubSystemActions()
+    systemActions: any SystemActions = StubSystemActions()
 ) -> (SettingsWindowController, () -> [NSWindow]) {
     let controller = SettingsWindowController(
         settings: settings, loginItem: loginItem, systemActions: systemActions)
@@ -241,6 +243,79 @@ private let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
     let (controller, _) = controller()
 
     #expect(controller.general.configFilePath == nil)
+}
+
+/// The General pane's config buttons, as the pane shows them, Copy Default Config last.
+@MainActor @Test func theConfigButtonsIncludeCopyDefaultConfig() {
+    let (controller, _) = controller()
+    let model = controller.general
+
+    #expect(
+        GeneralSettings.ConfigButton.allCases.map { model.title(of: $0) } == [
+            "Change…", "Open in Editor", "Reveal in Finder", "Use Default", "Copy Default Config",
+        ])
+    #expect(model.isEnabled(.copyDefault))
+}
+
+/// Copy Default Config puts the text of a new config file on the pasteboard, every setting at
+/// its default, and the button says Copied for a moment, then its title again.
+@MainActor @Test func copyDefaultConfigCopiesTheDefaultTextAndSaysCopied() async throws {
+    let config = try await ConfigFixture("SettingsWindowControllerTests")
+    let pasteboard = testPasteboard()
+    let actions = WorkspaceSystemActions(
+        applicationURL: { _ in nil }, presentError: { Issue.record($0) }, pasteboard: pasteboard)
+    let (controller, _) = controller(config.settings, systemActions: actions)
+    let model = controller.general
+    let clock = ManualClock()
+    model.clock = clock
+    var announced: [String] = []
+    model.postAccessibility = { _, _, info in
+        announced.append(info?[.announcement] as? String ?? "")
+    }
+
+    model.press(.copyDefault)
+
+    #expect(pasteboard.string(forType: .string) == ConfigFile.defaultText)
+    #expect(model.title(of: .copyDefault) == GeneralSettings.copiedTitle)
+    #expect(announced == [GeneralSettings.copiedTitle])
+    await settle { clock.waitingSleeps > 0 }
+    clock.advance(by: GeneralSettings.copiedDuration)
+    if let task = model.copiedReset { _ = await bounded(task) }
+
+    #expect(model.title(of: .copyDefault) == SystemCommands.copyDefaultConfig.title)
+}
+
+/// A second copy while the button says Copied starts the moment again.
+@MainActor @Test func copyingAgainKeepsCopiedForTheFullMoment() async throws {
+    let actions = StubSystemActions()
+    let (controller, _) = controller(systemActions: actions)
+    let model = controller.general
+    let clock = ManualClock()
+    model.clock = clock
+
+    model.press(.copyDefault)
+    await settle { clock.waitingSleeps == 1 }
+    clock.advance(by: .milliseconds(1000))
+    model.press(.copyDefault)
+    await settle { clock.waitingSleeps == 1 }
+    clock.advance(by: .milliseconds(1000))
+    #expect(model.defaultConfigCopied)
+    clock.advance(by: .milliseconds(500))
+    if let task = model.copiedReset { _ = await bounded(task) }
+
+    #expect(!model.defaultConfigCopied)
+    #expect(actions.copiedTexts == [ConfigFile.defaultText, ConfigFile.defaultText])
+}
+
+/// The config file's buttons fit the General pane at its narrowest, each at its widest title,
+/// so none is cut short.
+@MainActor @Test func theConfigButtonsFitTheGeneralPane() {
+    let (controller, _) = controller()
+    let row = NSHostingView(rootView: ConfigFileButtons(model: controller.general))
+    let room =
+        SettingsWindowController.generalSize.width - 2 * GeneralSettingsView.padding
+
+    #expect(row.fittingSize.width <= room)
 }
 
 /// Every registered command has one row, under its menu, with the registry's title and chords.

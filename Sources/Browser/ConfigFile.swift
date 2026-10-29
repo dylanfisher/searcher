@@ -135,6 +135,12 @@ public enum ConfigFile {
         return Data(("{\n" + body.joined(separator: ",\n\n") + "\n}\n").utf8)
     }
 
+    /// A new file's text with every preference at its default and no shortcut changed: what
+    /// Copy Default Config puts on the pasteboard.
+    public static var defaultText: String {
+        String(decoding: data(Contents(values: [:], shortcuts: [:])), as: UTF8.self)
+    }
+
     /// `value` as JSON text.
     static func text(_ value: Settings.Value) -> String {
         switch value {

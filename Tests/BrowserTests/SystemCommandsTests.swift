@@ -361,3 +361,28 @@ private func openConfigBinding() throws -> CommandBinding {
 
     #expect(try openConfigBinding().isEnabled?(CommandContext(pane: fixture.pane)) == false)
 }
+
+// MARK: Copy Default Config
+
+/// The command copies a new config file's text, every setting at its default, with no config
+/// file needed: the tests' settings have none.
+@MainActor @Test func copyDefaultConfigCopiesTheDefaultText() async throws {
+    let fixture = await systemPane()
+    let binding = try #require(
+        AppCommands.bindings.first { $0.command == SystemCommands.copyDefaultConfig })
+    #expect(binding.isEnabled?(CommandContext(pane: fixture.pane)) ?? true)
+
+    binding.run(CommandContext(pane: fixture.pane))
+
+    #expect(fixture.actions.copiedTexts == [ConfigFile.defaultText])
+}
+
+/// The text is the file the app writes where there is none, byte for byte.
+@MainActor @Test func theDefaultTextIsTheFileANewConfigGets() async throws {
+    let folder = try TemporaryFolder("SystemCommandsTests")
+    let file = folder.url.appending(path: "searcher/config.json")
+
+    _ = await configured(folder, file: file)
+
+    #expect(try String(contentsOf: file, encoding: .utf8) == ConfigFile.defaultText)
+}

@@ -12,7 +12,8 @@ import UniformTypeIdentifiers
 ///
 /// Under it, the config file, which holds the settings: where it is, and buttons that choose
 /// another place for it, open it in an editor, show it in Finder and put it back at the default
-/// place (docs/decisions/0123-config-is-the-settings.md).
+/// place (docs/decisions/0123-config-is-the-settings.md), and one that copies a new file's text,
+/// every setting at its default (docs/decisions/0130-copy-default-config.md).
 @MainActor @Observable
 final class GeneralSettings {
     /// What the pane says while the item waits for the user to allow it in System Settings.
@@ -54,6 +55,13 @@ final class GeneralSettings {
     @ObservationIgnored private(set) var reveal: Task<Void, Never>?
     /// Why the last Reveal in Finder showed nothing, until OK dismisses it.
     private(set) var configProblem: String?
+    /// Whether Copy Default Config's button says `copiedTitle`, as it does for `copiedDuration`
+    /// after a copy.
+    private(set) var defaultConfigCopied = false
+    /// Times how long the button says `copiedTitle`. Tests replace it.
+    @ObservationIgnored var clock: any Clock<Duration> = ContinuousClock()
+    /// The wait that turns the button's title back, which tests wait for.
+    @ObservationIgnored private(set) var copiedReset: Task<Void, Never>?
 
     init(loginItem: any LoginItem, settings: Browser.Settings, systemActions: any SystemActions) {
         self.loginItem = loginItem
@@ -100,6 +108,72 @@ final class GeneralSettings {
                     .announcement: problem,
                     .priority: NSAccessibilityPriorityLevel.high.rawValue,
                 ])
+        }
+    }
+
+    /// A button under the config file's path, in the order the pane shows them. Each is a
+    /// bordered push button, which AppKit draws in its hover, pressed, focused and disabled
+    /// states (docs/decisions/0110-interaction-states.md).
+    enum ConfigButton: CaseIterable, Identifiable {
+        case change, openInEditor, revealInFinder, useDefault, copyDefault
+
+        var id: Self { self }
+
+        /// Every title the button can have, the usual one first.
+        var titles: [String] {
+            switch self {
+            case .change: ["Change…"]
+            case .openInEditor: ["Open in Editor"]
+            case .revealInFinder: [SystemCommands.revealInFinder.title]
+            case .useDefault: ["Use Default"]
+            case .copyDefault:
+                [SystemCommands.copyDefaultConfig.title, GeneralSettings.copiedTitle]
+            }
+        }
+    }
+
+    /// What `button` says now.
+    func title(of button: ConfigButton) -> String {
+        button == .copyDefault && defaultConfigCopied ? Self.copiedTitle : button.titles[0]
+    }
+
+    /// Whether `button` is on: Use Default is off at the default place.
+    func isEnabled(_ button: ConfigButton) -> Bool {
+        button != .useDefault || !configFileIsDefault
+    }
+
+    func press(_ button: ConfigButton) {
+        switch button {
+        case .change: changeConfigLocation()
+        case .openInEditor: openConfigFile()
+        case .revealInFinder: revealConfigFile()
+        case .useDefault: useDefaultConfigLocation()
+        case .copyDefault: copyDefaultConfig()
+        }
+    }
+
+    /// What Copy Default Config's button says for a moment after a copy, as a Copy button in
+    /// macOS does.
+    nonisolated static let copiedTitle = "Copied"
+    static let copiedDuration: Duration = .milliseconds(1500)
+
+    /// Puts a new config file's text, every setting at its default, on the pasteboard, and has
+    /// the button say `copiedTitle` for `copiedDuration`; a copy meanwhile starts it again.
+    func copyDefaultConfig() {
+        SystemCommands.copyDefault(systemActions: systemActions)
+        defaultConfigCopied = true
+        postAccessibility(
+            NSApp as Any, .announcementRequested,
+            [
+                .announcement: Self.copiedTitle,
+                .priority: NSAccessibilityPriorityLevel.medium.rawValue,
+            ])
+        copiedReset?.cancel()
+        copiedReset = Task { [clock] in
+            try? await clock.sleep(for: Self.copiedDuration)
+            guard !Task.isCancelled else { return }
+            defaultConfigCopied = false
+            copiedReset = nil
         }
     }
 
@@ -203,6 +277,9 @@ final class GeneralSettings {
 
 /// The General pane of the Settings window.
 struct GeneralSettingsView: View {
+    /// The room between the pane's edges and what it shows.
+    static let padding: CGFloat = 20
+
     @Bindable var model: GeneralSettings
 
     var body: some View {
@@ -234,13 +311,11 @@ struct GeneralSettingsView: View {
             }
             Spacer()
         }
-        .padding(20)
+        .padding(Self.padding)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// Where the config file is, and its buttons. Each is a bordered push button, which AppKit
-    /// draws in its hover, pressed, focused and disabled states
-    /// (docs/decisions/0110-interaction-states.md).
+    /// Where the config file is, and its buttons.
     @ViewBuilder
     private func configFile(_ path: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -249,19 +324,35 @@ struct GeneralSettingsView: View {
                 .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
             Text(GeneralSettings.configNote).font(.caption).foregroundStyle(.secondary)
         }
-        HStack {
-            Button("Change…") { model.changeConfigLocation() }
-            Button("Open in Editor") { model.openConfigFile() }
-            Button(SystemCommands.revealInFinder.title) { model.revealConfigFile() }
-            Button("Use Default") { model.useDefaultConfigLocation() }
-                .disabled(model.configFileIsDefault)
-        }
-        .padding(.top, 4)
+        ConfigFileButtons(model: model).padding(.top, 4)
         if let problem = model.configProblem {
             HStack {
                 Text(problem).font(.caption).foregroundStyle(Color.red)
                 Spacer()
                 Button("OK") { model.dismissConfigProblem() }.controlSize(.small)
+            }
+        }
+    }
+}
+
+/// The config file's buttons in a row, as `GeneralSettings.ConfigButton` lists them. A button
+/// whose title changes takes the room of its widest title, so the row doesn't move.
+struct ConfigFileButtons: View {
+    let model: GeneralSettings
+
+    var body: some View {
+        HStack {
+            ForEach(GeneralSettings.ConfigButton.allCases) { button in
+                let title = model.title(of: button)
+                Button {
+                    model.press(button)
+                } label: {
+                    ZStack {
+                        ForEach(button.titles, id: \.self) { Text($0).opacity($0 == title ? 1 : 0) }
+                    }
+                }
+                .disabled(!model.isEnabled(button))
+                .accessibilityLabel(title)
             }
         }
     }
