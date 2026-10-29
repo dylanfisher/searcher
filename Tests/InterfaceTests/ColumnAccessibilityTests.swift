@@ -236,10 +236,10 @@ private final class Fixture {
     #expect(view.accessibilityRole() == .group)
     #expect(view.accessibilityLabel() == "x.txt")
     let fields = try #require(view.accessibilityChildren() as? [NSTextField])
-    let date = formatter.longDate(testDate)
+    let date = formatter.longDate(testDate, style: view.dateStyle)
     #expect(
         fields.map(\.stringValue) == [
-            "x.txt", "\(kind) – 2 MB", "Information", "Created", date,
+            "x.txt", "\(kind) - 2 MB", "Information", "Created", date,
             "Modified", date, "Last opened", date, "Tags", "Red",
         ])
 }

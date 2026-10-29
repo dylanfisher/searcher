@@ -10,9 +10,10 @@ import Browser
 /// `ColumnTrail.previewHold`, filling in later without moving the rows above. The icon or
 /// thumbnail is scaled, as Finder's, to the width inside the insets, its edges on the fields',
 /// or down from that to keep the fields below it in view; a thumbnail is the image alone, with
-/// Finder's small rounded corners and no shadow. The rows are drawn as Finder's: title left, value right, a rule
-/// under each; the tags are pills in their colors. The name, the kind line and the values can be
-/// selected, not edited.
+/// Finder's small rounded corners and no shadow. The rows are drawn as Finder's: title left,
+/// value right, a rule between each two, each date in the longest form that fits on its line;
+/// the tags are pills in their colors. The name, the kind line and the values can be selected,
+/// not edited.
 /// Built once and refilled for each file (0090-preview-column.md, 0095-preview-metadata.md,
 /// 0102-thumbnails.md).
 ///
@@ -20,8 +21,9 @@ import Browser
 /// preview as a group named for the file, its text fields in reading order. It takes no keys.
 @MainActor
 final class ColumnPreviewView: NSView {
-    /// Between the kind and the size under the name, as Finder writes it.
-    static let summarySeparator = " – "
+    /// Between the kind and the size under the name, as Finder writes it on macOS 26: a hyphen
+    /// (fb-1029-4.jpg).
+    static let summarySeparator = " - "
     static let informationTitle = "Information"
     static let createdTitle = "Created"
     static let modifiedTitle = "Modified"
@@ -30,12 +32,16 @@ final class ColumnPreviewView: NSView {
     /// A date that was read and isn't there, or a read that failed, as Finder shows an unknown
     /// value.
     static let noDate = "--"
-    /// The name's type, as Finder's preview sets it: bold, larger than the rest.
-    static let nameFont = NSFont.boldSystemFont(ofSize: 15)
+    // The type is Finder's macOS 26 preview's, measured beside ours in one screenshot
+    // (fb-1029-4.jpg; 0095-preview-metadata.md).
+    /// The name's type: semibold, larger than the rest.
+    static let nameFont = NSFont.systemFont(ofSize: 15, weight: .semibold)
+    /// The kind and size under the name.
+    static let summaryFont = NSFont.systemFont(ofSize: NSFont.systemFontSize)
     /// The section headers', Information and Tags.
-    static let headerFont = NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)
-    /// The kind and size under the name, and each Information row's title and value.
-    static let detailFont = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+    static let headerFont = NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
+    /// Each Information row's title and value.
+    static let detailFont = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
     /// The space above and below an Information row's text, inside the rules between rows.
     static let rowPadding = 4.0
     /// The least the image is scaled down to in a window too short for it and the fields; the
@@ -68,6 +74,10 @@ final class ColumnPreviewView: NSView {
     let rows: [InformationRow]
     /// The file last shown, so a change that leaves it as it was sets no field.
     private(set) var shown: ColumnPreview?
+    /// The form the rows' dates take: the longest of `EntryCellFormatter.longDateStyles` at
+    /// which each fits on one line beside its title, the same for every row, or the shortest,
+    /// wrapping, when none does.
+    private(set) var dateStyle = DateFormatter.Style.full
     /// Gives the keys back to the focused column, from the preview's text: Esc, Tab and
     /// Shift-Tab pass nil, ↑ and ↓ their key press, which the column then takes as its own.
     var returnKeys: @MainActor (NSEvent?) -> Void = { _ in }
@@ -107,6 +117,14 @@ final class ColumnPreviewView: NSView {
     private let tagsTitleField: NSTextField
     /// The image and the fields under it, top to bottom.
     private let stack = NSStackView()
+    /// Each Information row's date, in `rows`' order, or nil for a row that shows none.
+    private var rowDates: [Date?] = []
+    /// Measures a date on one line in the rows' type.
+    private let measuringField: NSTextField = {
+        let field = NSTextField(labelWithString: "")
+        field.font = detailFont
+        return field
+    }()
     /// The Information rows, in `stack`.
     private let rowStack = NSStackView()
     private lazy var imageWidth = iconView.widthAnchor.constraint(
@@ -151,22 +169,25 @@ final class ColumnPreviewView: NSView {
         let hasSize = entry.size != nil
         summaryField.stringValue =
             hasSize ? preview.kind.text + Self.summarySeparator + size : preview.kind.text
-        modifiedField.stringValue = formatter.longDate(entry.modified)
         let tags: [String]
         switch preview.info {
         case .unread, .reading:
             createdField.stringValue = ""
             lastOpenedField.stringValue = ""
+            rowDates = [nil, entry.modified, nil]
             tags = []
         case .read(let info):
-            createdField.stringValue = info.created.map(formatter.longDate) ?? Self.noDate
-            lastOpenedField.stringValue = info.lastOpened.map(formatter.longDate) ?? Self.noDate
+            if info.created == nil { createdField.stringValue = Self.noDate }
+            if info.lastOpened == nil { lastOpenedField.stringValue = Self.noDate }
+            rowDates = [info.created, entry.modified, info.lastOpened]
             tags = info.tags
         case .failed:
             createdField.stringValue = Self.noDate
             lastOpenedField.stringValue = Self.noDate
+            rowDates = [nil, entry.modified, nil]
             tags = []
         }
+        writeDates()
         tagPills.show(tags)
         tagsTitleField.isHidden = tags.isEmpty
         tagPills.isHidden = tags.isEmpty
@@ -180,12 +201,34 @@ final class ColumnPreviewView: NSView {
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         let wrapWidth = max(newSize.width - 2 * Self.inset, 0)
-        if nameField.preferredMaxLayoutWidth != wrapWidth {
+        let widthChanged = nameField.preferredMaxLayoutWidth != wrapWidth
+        if widthChanged {
             nameField.preferredMaxLayoutWidth = wrapWidth
         }
         tagPills.wrapWidth = wrapWidth
         for row in rows { row.wrapValue(at: wrapWidth) }
+        if widthChanged { writeDates() }
         sizeImage()
+    }
+
+    /// Writes the rows' dates in `dateStyle`, picked again for the width each row's value has.
+    /// Before the preview has a width, the dates are written in full.
+    private func writeDates() {
+        let pairs = zip(rows, rowDates).compactMap { row, date in date.map { (row, $0) } }
+        let styles = EntryCellFormatter.longDateStyles
+        let style =
+            styles.first { style in
+                pairs.allSatisfy { row, date in
+                    let room = row.value.preferredMaxLayoutWidth
+                    measuringField.stringValue = formatter.longDate(date, style: style)
+                    return room == 0 || measuringField.intrinsicContentSize.width <= room
+                }
+            } ?? styles[styles.count - 1]
+        dateStyle = style
+        for (row, date) in pairs {
+            let text = formatter.longDate(date, style: style)
+            if row.value.stringValue != text { row.value.stringValue = text }
+        }
     }
 
     /// Sizes the image as Finder's preview does: as wide as the fields, at the image's aspect,
@@ -231,7 +274,7 @@ final class ColumnPreviewView: NSView {
         iconView.layer?.masksToBounds = true
         iconView.setAccessibilityElement(false)
         nameField.font = Self.nameFont
-        summaryField.font = Self.detailFont
+        summaryField.font = Self.summaryFont
         summaryField.textColor = .secondaryLabelColor
         summaryField.lineBreakMode = .byTruncatingMiddle
         for header in [informationField, tagsTitleField] {
@@ -250,6 +293,9 @@ final class ColumnPreviewView: NSView {
         tagPills.translatesAutoresizingMaskIntoConstraints = false
 
         for row in rows { rowStack.addArrangedSubview(row) }
+        // Finder draws rules only between the rows. The last row keeps its rule's point of
+        // height, so every row is as tall as the others.
+        rows.last?.rule.isHidden = true
         rowStack.orientation = .vertical
         rowStack.alignment = .leading
         rowStack.spacing = 0
@@ -262,11 +308,14 @@ final class ColumnPreviewView: NSView {
         stack.orientation = .vertical
         stack.alignment = .centerX
         stack.spacing = 6
+        // Finder's baselines on macOS 26 are 20 points apart from the name to the kind line, 24
+        // from it to Information, 22 from there to the first row and 33 from the last row to
+        // Tags (fb-1029-4.jpg).
         stack.setCustomSpacing(12, after: iconView)
-        stack.setCustomSpacing(2, after: nameField)
-        stack.setCustomSpacing(16, after: summaryField)
-        stack.setCustomSpacing(2, after: informationField)
-        stack.setCustomSpacing(16, after: rowStack)
+        stack.setCustomSpacing(3, after: nameField)
+        stack.setCustomSpacing(8, after: summaryField)
+        stack.setCustomSpacing(4, after: informationField)
+        stack.setCustomSpacing(12, after: rowStack)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         let document = FlippedView()
@@ -394,7 +443,7 @@ extension ColumnPreviewView: NSTextFieldDelegate {
 
 /// One row of the preview's Information section, as Finder draws it: its title at the left in
 /// secondary text, its value at the right, wrapping when the two don't fit on a line, and a thin
-/// rule in the separator color under the row.
+/// rule in the separator color under the row, hidden under the preview's last row.
 @MainActor
 final class InformationRow: NSView {
     /// Between the title and the value.
