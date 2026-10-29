@@ -357,8 +357,8 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
         }
     }
 
-    /// Shows Finder's glyphs on the rows that show symbols, once they are read; the rows, their
-    /// selection and their views stay.
+    /// Shows Finder's glyphs on the rows that show stand-in symbols, once they are read; the
+    /// rows, their selection and their views stay.
     private func refreshIcons() {
         for row in 0..<outlineView.numberOfRows {
             guard
@@ -890,24 +890,18 @@ final class WorkspaceSidebarViewController: NSViewController, NSOutlineViewDataS
     /// disk.
     private func icon(for item: Favorites.Item) -> NSImage {
         guard item.state == .file else {
-            return glyph(.forFolder(at: item.path, home: settings.home), description: item.name)
+            return icons.image(.forFolder(at: item.path, home: settings.home))
         }
         let pathExtension = (item.path as NSString).pathExtension
         return TypeIconCache.shared.icon(for: UTType(filenameExtension: pathExtension) ?? .data)
     }
 
     private func icon(for volume: SidebarVolume) -> NSImage {
-        let kind = SidebarIcons.Glyph.forVolume(volume)
-        return glyph(kind, description: volume.kind == .network ? "Server" : "Disk")
+        icons.image(.forVolume(volume))
     }
 
     private var serverIcon: NSImage {
-        glyph(.genericFile, description: "Server")
-    }
-
-    /// Finder's glyph, or its symbol while the glyphs aren't read or the bundle lacks it.
-    private func glyph(_ glyph: SidebarIcons.Glyph, description: String) -> NSImage {
-        icons.image(glyph) ?? symbol(glyph.symbol, description: description)
+        icons.image(.genericFile)
     }
 
     private func groupCell(_ title: String) -> NSView {
