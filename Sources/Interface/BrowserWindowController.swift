@@ -256,7 +256,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         // Finder's window: the toolbar and the title share one bar, and the sidebar's glass runs
         // up to the window's top with the window buttons in it. AppKit runs a sidebar up past the
         // toolbar only in the unified style; in the compact one it starts below the bar
-        // (docs/decisions/0137-sidebar-glass-to-the-top.md).
+        // (docs/decisions/0136-sidebar-glass-to-the-top.md).
         window.toolbarStyle = .unified
         window.tabbingMode = .disallowed
         window.isReleasedWhenClosed = false
@@ -292,7 +292,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         window.setContentSize(settings.newWindowSize)
         // Collapsed only now: a sidebar collapsed when the window takes the split view gets a
         // hard scroll edge effect over its part of the toolbar, which stays once it shows and
-        // covers the top of its glass (docs/decisions/0137-sidebar-glass-to-the-top.md).
+        // covers the top of its glass (docs/decisions/0136-sidebar-glass-to-the-top.md).
         sidebarItem.isCollapsed = !workspace.showsSidebar
         window.center()
         return split.splitView

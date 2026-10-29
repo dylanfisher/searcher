@@ -2,7 +2,7 @@
 
 - **Date:** 2026-10-28
 - **Status:** accepted; amended by [0133](0133-flat-translucent-bars.md) (the compact
-  toolbar, and the panes running under it) and [0137](0137-sidebar-glass-to-the-top.md) (the
+  toolbar, and the panes running under it) and [0136](0136-sidebar-glass-to-the-top.md) (the
   unified toolbar again, and the sidebar collapsed only after the window takes the split view)
 - **Amends:** [0086](0086-workspace-sidebar.md) (the sidebar's look),
   [0125](0125-workspace-open-is-a-back-step.md) ("the window has no Back or Forward toolbar
@@ -60,7 +60,9 @@ item (0086), and the title set to the focused pane's folder only when its locati
   (2026-10-28: [0132](0132-glass-path-bar.md) floats the path bar over the rows; the rows still
   stop below the tab strip. Amended the same day by [0133](0133-flat-translucent-bars.md): the
   toolbar is `.unifiedCompact`, the banner and the strip are the panes' top accessories on
-  macOS 26, and the panes run up under them and the toolbar.)
+  macOS 26, and the panes run up under them and the toolbar. 2026-10-29:
+  [0136](0136-sidebar-glass-to-the-top.md) makes the toolbar `.unified` again, so the sidebar's
+  glass runs up to the window's top.)
 - **The title with the toolbar hidden stays where AppKit puts it: leading, not centred.** On
   macOS 26 AppKit left-aligns a title-bar title in this window in every arrangement measured on
   the second display (the title field's frame in the window): with the toolbar hidden in the

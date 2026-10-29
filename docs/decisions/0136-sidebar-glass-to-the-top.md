@@ -1,4 +1,4 @@
-# 0137. The sidebar's glass runs to the window's top: the unified toolbar again
+# 0136. The sidebar's glass runs to the window's top: the unified toolbar again
 
 - **Date:** 2026-10-29
 - **Status:** accepted
@@ -41,7 +41,8 @@ Measured in windows on the second display, by the frame of the sidebar's glass v
 - **The toolbar is `.unified` again**, the style Finder's window has on macOS 26: 52 points tall
   as 0128 measured it, with the sidebar's glass running up beside the toolbar's items and the
   window buttons in it. The compact style of 0133 is dropped: it stops the sidebar below the bar,
-  and Finder's bar is the unified one's height. Everything else of 0133 stays: the banner, the
+  and Finder's bar is the unified one's height. Dylan chose the full-height sidebar over the
+  compact bar on 2026-10-29. Everything else of 0133 stays: the banner, the
   tab strip and the status bar as the panes' accessories, the rows under the toolbar, and each
   pane's `topCover`, which reads the taller bar from the safe area.
 - **The sidebar is collapsed after the window takes the split view**, not before, so a sidebar

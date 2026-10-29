@@ -228,7 +228,7 @@ private func showSidebarOnScreen(_ fixture: Fixture) async throws {
 /// Shown after the window opened without it, the sidebar has nothing over its glass, as Finder's
 /// hasn't: no material in the toolbar's band over it. AppKit gives a sidebar collapsed when the
 /// window takes its split view a hard scroll edge effect there, an opaque band over the top of the
-/// card with the window buttons in it (docs/decisions/0137-sidebar-glass-to-the-top.md).
+/// card with the window buttons in it (docs/decisions/0136-sidebar-glass-to-the-top.md).
 @MainActor @Test func aSidebarShownLaterHasNoMaterialOverItsGlass() async throws {
     let fixture = try await Fixture()
     defer { fixture.window.close() }
