@@ -405,13 +405,14 @@ func aTrashedRowHandsItsSelectionOnInThePassThatDropsIt(
     #expect(table.visibleRect.contains(table.rect(ofRow: 40)))
 }
 
-/// The part of the table's visible rect the rows show in, below the column header.
+/// The part of the table's visible rect the rows show in, below the column header and above the
+/// path bar's glass.
 @MainActor
 func rowArea(of table: NSTableView) -> NSRect {
     var area = table.visibleRect
     let header = table.headerView?.frame.height ?? 0
     area.origin.y += header
-    area.size.height -= header
+    area.size.height -= header + PaneViewController.pathBarCover
     return area
 }
 
@@ -433,14 +434,15 @@ private func rowEdges(of controller: ListingViewController) throws -> (
     let header = try #require(controller.tableView.headerView)
     return (
         scrollView.convert(header.bounds, from: header).maxY + Margin.standard,
-        scrollView.contentView.frame.maxY - Margin.standard
+        scrollView.contentView.frame.maxY - Margin.standard - PaneViewController.pathBarCover
     )
 }
 
 /// At the top of the list the first row sits the shared margin below the column header, and at
-/// the end the last row sits it above the bottom edge, where the horizontal scroller shows. A
-/// key that scrolls a row into view keeps it clear of the margin too (Dylan, 2026-10-26: "apply
-/// top and bottom margin around all list and column items").
+/// the end the last row sits it above the path bar's glass, where the horizontal scroller shows
+/// (docs/decisions/0132-glass-path-bar.md). A key that scrolls a row into view keeps it clear of
+/// the margin too (Dylan, 2026-10-26: "apply top and bottom margin around all list and column
+/// items").
 @MainActor @Test func theRowsKeepTheSharedMarginFromTheHeaderAndTheBottomEdge() async throws {
     let entries = (0..<2_000).map { file(String(format: "e%04d", $0)) }
     let controller = await controller(showing: entries)
@@ -489,7 +491,10 @@ private func rowEdges(of controller: ListingViewController) throws -> (
     #expect(table.visibleRect == top)
 
     controller.pane.jump(to: "e1999")
-    #expect(abs(table.visibleRect.maxY - Margin.standard - table.bounds.maxY) <= 1)
+    #expect(
+        abs(
+            table.visibleRect.maxY - Margin.standard - PaneViewController.pathBarCover
+                - table.bounds.maxY) <= 1)
 }
 
 /// A jump to the row the cursor is on, already in view, still centers it.
@@ -1661,7 +1666,7 @@ private func rowImage(_ controller: ListingViewController, row: Int) -> NSImage?
     #expect(await maker.waitForCalls(4 + scrolled.count))
     #expect(Set(maker.paths.dropFirst(4)) == Set(scrolled))
     #expect(maker.calls.allSatisfy { !$0.onMainThread && $0.onBlockingCallThread })
-    #expect(maker.calls.allSatisfy { $0.side == 16 && $0.scale == 2 })
+    #expect(maker.calls.allSatisfy { $0.side == 18 && $0.scale == 2 })
     let rows = table.rows(in: table.visibleRect)
     await settle {
         (rows.lowerBound..<rows.upperBound).allSatisfy { row in
@@ -1693,24 +1698,59 @@ private func rowImage(_ controller: ListingViewController, row: Int) -> NSImage?
     await settle { rowImage(controller, row: 0).map { $0 !== typeIcon } ?? false }
 }
 
-/// A file that isn't downloaded, a folder, a package and text keep their icons and ask for
-/// nothing; a photo beside them is asked for.
-@MainActor @Test func onlyFilesThatMayShowAThumbnailAskForOne() async throws {
+/// A file that isn't downloaded, a package and text keep their icons and ask for nothing; a
+/// photo beside them is asked for, and so is a folder, whose icon Quick Look makes as Finder
+/// draws it (docs/decisions/0129-row-icons-as-finder.md).
+@MainActor @Test func onlyFilesThatMayShowAThumbnailAndFoldersAskForOne() async throws {
     let notDownloaded = DirectoryEntry(
         name: "a.jpg", type: .regular, size: 9, modified: testDate, isHidden: false,
         isDataless: true)
     let maker = GatedThumbnailMaker()
+    maker.answer("/folder/b.jpg", with: testThumbnail())
     maker.answer("/folder/e.jpg", with: testThumbnail())
     let controller = await photoController(
         [notDownloaded, folder("b.jpg"), package("C.app"), file("d.json"), file("e.jpg")],
         maker: maker)
     let service = try #require(controller.pane.service.thumbnails)
 
-    await settle { service.cached(at: "/folder/e.jpg", entry: file("e.jpg"), side: 16) != nil }
+    await settle { service.cached(at: "/folder/e.jpg", entry: file("e.jpg"), side: 18) != nil }
     await settle { service.calls.isIdle }
 
-    #expect(maker.paths == ["/folder/e.jpg"])
-    for row in 0..<4 { #expect(rowImage(controller, row: row) === typeIcon) }
+    #expect(Set(maker.paths) == ["/folder/b.jpg", "/folder/e.jpg"])
+    for row in [0, 2, 3] { #expect(rowImage(controller, row: row) === typeIcon) }
+    await settle { rowImage(controller, row: 1).map { $0 !== typeIcon } ?? false }
+}
+
+/// A share mounted in a local folder, as one in /Volumes is, keeps the folder icon and asks
+/// for nothing: Quick Look would read its icon over the network. The folder beside it asks
+/// (docs/decisions/0129-row-icons-as-finder.md).
+@MainActor @Test func aVolumeMountedInALocalFolderAsksForNoIcon() async throws {
+    let share = VolumeIdentity(
+        device: "//nas/music", mountPoint: "/folder/music", kind: .network)
+    let disk = VolumeIdentity(device: "/dev/disk3s1", mountPoint: "/", kind: .local)
+    let mounts = MountTable(read: { [disk, share] })
+    await mounts.firstRead()
+    let maker = GatedThumbnailMaker()
+    maker.answer("/folder/docs", with: testThumbnail())
+    let pane = Pane(
+        location: Location(path: "/folder"),
+        service: ListingService(
+            lister: StubLister(["/folder": [folder("docs"), folder("music")]]),
+            thumbnails: ThumbnailService(maker: maker), mounts: mounts),
+        systemActions: StubSystemActions(), settings: untouchedSettings())
+    let controller = ListingViewController(
+        pane: pane, iconCache: TypeIconCache { _ in typeIcon }, formatter: .init(),
+        tableView: ListingTableView())
+    pane.onChange = { [weak controller] in controller?.paneDidChange() }
+    controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 400)
+    await settle { pane.state.isLoaded }
+    controller.view.layoutSubtreeIfNeeded()
+
+    await settle { rowImage(controller, row: 0).map { $0 !== typeIcon } ?? false }
+    let service = try #require(pane.service.thumbnails)
+    await settle { service.calls.isIdle }
+    #expect(maker.paths == ["/folder/docs"])
+    #expect(rowImage(controller, row: 1) === typeIcon)
 }
 
 /// A file on a network volume keeps its icon: making its thumbnail would read it over the

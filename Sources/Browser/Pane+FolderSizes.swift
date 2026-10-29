@@ -66,6 +66,8 @@ extension Pane {
         sizeGeneration += 1
         if !lettingLocalWalksFinish { runningSizeWalksCancelledAt = sizeGeneration }
         requestedSizes = [:]
+        walkingSizes = [:]
+        trailingSizes = []
         calculatesSizesOnce = false
         calculatingSizes = []
     }
@@ -104,7 +106,11 @@ extension Pane {
     /// Finds, off the main actor, the folder rows not yet walked at their current date and asks
     /// for those walks there, while the setting is on or `calculateSizes()` asked, and finds the
     /// known sizes the rows lack and queues them. Runs after each change of the rows, one scan at
-    /// a time.
+    /// a time. A folder whose walk is pending isn't asked for again: its new date is walked once
+    /// that walk lands, so a folder whose items keep coming and going, as during a download or an
+    /// install, has one walk running and at most one more after it. A walk stopped without a
+    /// result, from wherever, isn't pending, so the next scan asks for the folder again
+    /// (docs/decisions/0129-row-icons-as-finder.md).
     func startSizeScan() {
         guard walksFolders, let folderSizes, let listing = state.listing else { return }
         guard !sizeScanIsRunning else {
@@ -112,16 +118,20 @@ extension Pane {
             return
         }
         sizeScanIsRunning = true
+        walkingSizes = walkingSizes.filter { $0.value.isPending }
+        trailingSizes.formIntersection(walkingSizes.keys)
         let once = calculatesSizesOnce && !settings.folderSizes
         let asksForWalks = settings.folderSizes || once
         let requested = requestedSizes
         let known = knownSizes
         let failed = failedSizes
+        let walking = Set(walkingSizes.keys)
         let generation = sizeGeneration
         let folder = location
         let owner = sizeWalkOwner
         sizeScanQueue.async { [weak self] in
             var found: [(name: ExactName, modified: Date)] = []
+            var deferred: [ExactName] = []
             var missing: [ExactName: Listing.FolderSizeUpdate] = [:]
             for row in 0..<listing.count {
                 let entry = listing[row]
@@ -130,7 +140,11 @@ extension Pane {
                 if let update = known[name], update.modified == entry.modified {
                     if listing.folderSize(atRow: row) != update.value { missing[name] = update }
                 } else if asksForWalks, requested[name] != entry.modified, !failed.contains(name) {
-                    found.append((name, entry.modified))
+                    if walking.contains(name) {
+                        deferred.append(name)
+                    } else {
+                        found.append((name, entry.modified))
+                    }
                 }
             }
             let asked = found
@@ -149,20 +163,31 @@ extension Pane {
                         return
                     }
                     self.finishSizeScan(
-                        asked: asked, walks: walks, missing: missing, once: once,
-                        from: generation)
+                        asked: asked, deferred: deferred, walks: walks, missing: missing,
+                        once: once, from: generation)
                 }
             }
         }
     }
 
     private func finishSizeScan(
-        asked: [(name: ExactName, modified: Date)], walks: [FolderSizeService.Walk],
-        missing: [ExactName: Listing.FolderSizeUpdate], once: Bool, from generation: Int
+        asked: [(name: ExactName, modified: Date)], deferred: [ExactName],
+        walks: [FolderSizeService.Walk], missing: [ExactName: Listing.FolderSizeUpdate],
+        once: Bool, from generation: Int
     ) {
         sizeScanIsRunning = false
         if generation == sizeGeneration, walksFolders {
             for folder in asked { requestedSizes[folder.name] = folder.modified }
+            // A walk can finish before its scan lands; that one isn't pending any more.
+            for (folder, walk) in zip(asked, walks) where walk.isPending {
+                walkingSizes[folder.name] = walk
+                trailingSizes.remove(folder.name)
+            }
+            // A deferred folder whose walk stopped since the scan started has nothing to trail:
+            // scan again, which asks for the new date.
+            let pending = deferred.filter { walkingSizes[$0]?.isPending == true }
+            trailingSizes.formUnion(pending)
+            if pending.count < deferred.count { sizeScanIsStale = true }
             if once {
                 // A walk can land before its scan does; those already have their size or failed.
                 calculatingSizes = Set(
@@ -196,6 +221,14 @@ extension Pane {
         // A walk the scan asked for can land before the scan does, after a cancel it missed.
         guard generation == sizeGeneration else { return }
         calculatingSizes.remove(name)
+        // A walk is finished before its result lands, so one still pending is a newer walk of
+        // the folder, asked for after this one stopped, whose mark stays.
+        if walkingSizes[name]?.isPending != true, walkingSizes.removeValue(forKey: name) != nil,
+            trailingSizes.remove(name) != nil
+        {
+            // The folder's date changed while it was walked: walk the date it has now.
+            startSizeScan()
+        }
         let value: Listing.FolderSizeValue
         switch result {
         case .success(let size):

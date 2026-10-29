@@ -7,7 +7,10 @@ import Foundation
 /// view doesn't ask again. Safe to use from any thread.
 final class ThumbnailCache: @unchecked Sendable {
     /// One version of a file at one size, framed as a row's or not as the preview's. A file saved
-    /// again has a new modification date or size, so its old thumbnail is never shown for it.
+    /// again has a new modification date or size, so its old thumbnail is never shown for it. A
+    /// folder whose items come or go has a new modification date, and a retagged one new tag
+    /// colors; each changes the icon Finder draws for it
+    /// (docs/decisions/0129-row-icons-as-finder.md).
     struct Key: Hashable {
         let path: String
         let modified: Date
@@ -16,9 +19,12 @@ final class ThumbnailCache: @unchecked Sendable {
         let framed: Bool
         /// The side asked for, in pixels.
         let pixels: Int
+        var tags = TagLabels()
 
         /// The file version and framing, without the size asked for.
-        var file: File { File(path: path, modified: modified, size: size, framed: framed) }
+        var file: File {
+            File(path: path, modified: modified, size: size, framed: framed, tags: tags)
+        }
     }
 
     /// One version of a file, framed or not, at any size.
@@ -27,6 +33,7 @@ final class ThumbnailCache: @unchecked Sendable {
         let modified: Date
         let size: Int64?
         let framed: Bool
+        var tags = TagLabels()
     }
 
     /// What one kept entry costs beyond its pixels: the key, the node and the dictionary slot.
@@ -84,7 +91,7 @@ final class ThumbnailCache: @unchecked Sendable {
                     let node = nodes[
                         Key(
                             path: file.path, modified: file.modified, size: file.size,
-                            framed: file.framed, pixels: pixels)],
+                            framed: file.framed, pixels: pixels, tags: file.tags)],
                     let image = node.image
                 else { continue }
                 unlink(node)

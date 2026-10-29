@@ -12,17 +12,21 @@ FSEvents batch can't be trusted for, which path to match events against, and how
 ## Decision
 
 `FolderMonitor` turns each FSEvents batch into at most one `FolderChange`. It keeps only events for
-the folder's direct children, reads each named child once with `lstat`, and emits `update` with the
-entry as it is now, or `remove` if it is gone. The event flags aren't used for this, since one path
-can report create, modify and delete in the same batch. A `lstat` that fails for any reason but
-"not found", dropped events (`UserDropped`, `KernelDropped`) and a change on the path to the watched
-folder (`RootChanged`) each emit `relist` instead, whatever path the event names: FSEvents says a
-drop means rescanning every folder the stream watches, and a `RootChanged` event names the watched
-path, not the folder that moved. A coalesced `MustScanSubDirs` event emits `relist` only when its
-path is the folder, one of its ancestors, or one of its direct children, whose own entry may be
-stale. The stream watches everything under the folder, so a deeper one (a build folder or
-`node_modules` churning below a child) can't change what the folder lists and is ignored; the
-other events of its batch still patch. A vnode watch emits `relist` for every event.
+the folder's direct children, reads each named child once with `lstat`, and emits `update` with
+the entry as it is now, or `remove` if it is gone. The event flags aren't used for this, since one
+path can report create, modify and delete in the same batch. (Amended 2026-10-28: an item created,
+removed or renamed one level inside a child folder counts as a change of that child, whose
+modification date and icon it changes; one only modified there changes neither and is dropped,
+as are deeper events. A child folder whose date moves this way is walked for its size once at a
+time, as 0129 says. See [0129](0129-row-icons-as-finder.md).) A `lstat` that fails for any
+reason but "not found", dropped events (`UserDropped`, `KernelDropped`) and a change on the path
+to the watched folder (`RootChanged`) each emit `relist` instead, whatever path the event names:
+FSEvents says a drop means rescanning every folder the stream watches, and a `RootChanged` event
+names the watched path, not the folder that moved. A coalesced `MustScanSubDirs` event emits
+`relist` only when its path is the folder, one of its ancestors, or one of its direct children,
+whose own entry may be stale. The stream watches everything under the folder, so a deeper one (a
+build folder or `node_modules` churning below a child) can't change what the folder lists and is
+ignored; the other events of its batch still patch. A vnode watch emits `relist` for every event.
 
 Events are matched against the folder's `realpath`, because FSEvents reports resolved paths
 (`/private/var/...` for `/var/...`). The stream asks for 0.1 s of latency with `NoDefer`, so a

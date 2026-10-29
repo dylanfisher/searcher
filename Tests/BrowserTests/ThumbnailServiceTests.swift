@@ -22,7 +22,10 @@ private func link(_ name: String) -> DirectoryEntry {
         isDataless: false)
 }
 
-@Test func onlyAFileWhoseContentsAreHereAndArentTextShowsAThumbnail() async {
+/// Quick Look makes a folder's icon too, as Finder draws it for that folder: a sheet of paper in a
+/// folder with items, its tag's color, its custom icon
+/// (docs/decisions/0129-row-icons-as-finder.md).
+@Test func onlyAFileWhoseContentsAreHereAndArentTextOrAFolderShowsAThumbnail() async {
     let jpeg = await kind(.regular, "jpg")
     #expect(ThumbnailService.shows(file("a.jpg"), kind: jpeg))
     #expect(ThumbnailService.shows(file("a.pdf"), kind: await kind(.regular, "pdf")))
@@ -33,7 +36,12 @@ private func link(_ name: String) -> DirectoryEntry {
     #expect(!ThumbnailService.shows(file("a.json"), kind: await kind(.regular, "json")))
     #expect(!ThumbnailService.shows(file("a.txt"), kind: await kind(.regular, "txt")))
     #expect(!ThumbnailService.shows(file("a.swift"), kind: await kind(.regular, "swift")))
-    #expect(!ThumbnailService.shows(folder("a.jpg"), kind: await kind(.directory, "jpg")))
+    #expect(ThumbnailService.shows(folder("a.jpg"), kind: await kind(.directory, "jpg")))
+    // A folder that isn't downloaded: Quick Look would list it, which downloads its items.
+    let datalessFolder = DirectoryEntry(
+        name: "b", type: .directory, size: nil, modified: testDate, isHidden: false,
+        isDataless: true)
+    #expect(!ThumbnailService.shows(datalessFolder, kind: await kind(.directory, "")))
     #expect(!ThumbnailService.shows(package("A.app"), kind: await kind(.package, "app")))
     #expect(!ThumbnailService.shows(link("a.jpg"), kind: await kind(.symbolicLink, "jpg")))
 }
@@ -76,6 +84,11 @@ private let share = VolumeIdentity(
         isHidden: false, isDataless: false)
     #expect(service.cached(at: "/p/a.jpg", entry: saved, side: 16) == nil)
     #expect(service.cached(at: "/p/a.jpg", entry: file("a.jpg", size: 2), side: 16) == nil)
+    // Tagged: a folder's icon takes its tag's color, so new tags are a new version.
+    let tagged = DirectoryEntry(
+        name: "a.jpg", type: .regular, size: 1, modified: testDate, isHidden: false,
+        isDataless: false, tagLabels: TagLabels([1]))
+    #expect(service.cached(at: "/p/a.jpg", entry: tagged, side: 16) == nil)
     // Another size is another thumbnail.
     #expect(service.cached(at: "/p/a.jpg", entry: entry, side: 128) == nil)
     _ = try await service.thumbnail(at: "/p/a.jpg", entry: saved, side: 16, on: disk)
@@ -97,6 +110,24 @@ private let share = VolumeIdentity(
 
     #expect(maker.calls.count == 1)
     #expect(service.cached(at: "/p/a.bin", entry: file("a.bin"), side: 16) == .some(nil))
+}
+
+/// A folder refused an icon, as a volume mounted there before the mount table read it is, isn't
+/// kept as having none: once the volume is unmounted, the folder asks again and gets its icon
+/// (docs/decisions/0129-row-icons-as-finder.md).
+@Test func aFolderRefusedAnIconIsNotKeptAsHavingNone() async throws {
+    let maker = GatedThumbnailMaker()
+    maker.answer("/p/music", with: nil)
+    let service = ThumbnailService(maker: maker)
+    let music = folder("music")
+
+    #expect(try await service.thumbnail(at: "/p/music", entry: music, side: 18, on: disk) == nil)
+    #expect(service.cached(at: "/p/music", entry: music, side: 18) == nil)
+
+    let icon = testThumbnail()
+    maker.answer("/p/music", with: icon)
+    #expect(try await service.thumbnail(at: "/p/music", entry: music, side: 18, on: disk) === icon)
+    #expect(maker.calls.count == 2)
 }
 
 /// A row's file is placed by the volume its folder's load read, not by its path's text: a folder

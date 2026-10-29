@@ -7,13 +7,25 @@ extension ListingViewController {
     /// none, the file has none, or may not show one.
     func keptThumbnail(row: Int, in listing: Listing) -> CGImage? {
         let entry = listing[row]
+        let path = pane.location.folderChild(named: entry.name).folderPath
         guard let thumbnails = pane.service.thumbnails,
             ThumbnailService.shows(entry, kind: listing.kind(atRow: row)),
+            entry.type != .directory || asksForIcon(at: path),
             case .some(.some(let image)) = thumbnails.cached(
-                at: pane.location.folderChild(named: entry.name).folderPath, entry: entry,
-                side: ListingCellLayout.iconSize)
+                at: path, entry: entry, side: ListingCellLayout.iconSize)
         else { return nil }
         return image
+    }
+
+    /// Whether the folder at `path`, a row's, may ask Quick Look for its icon: not when a volume
+    /// is mounted there, as a share in /Volumes is, whose icon would be read over the network,
+    /// and not before the service's mount table has been read, since it can't tell yet; its
+    /// first read asks again (docs/decisions/0129-row-icons-as-finder.md). A service without a
+    /// mount table, as in tests, leaves the check to `QuickLookThumbnailer`, which gives a
+    /// folder on another device than its parent none.
+    func asksForIcon(at path: String) -> Bool {
+        guard let mounts = pane.service.mounts else { return true }
+        return mounts.isRead && !mounts.isMountPoint(path)
     }
 
     @objc func rowsOnScreenMayHaveChanged(_ notification: Notification) {
@@ -25,7 +37,8 @@ extension ListingViewController {
     /// folder changed. A request cancelled while it waits for its volume's slot is never made;
     /// one being made is kept by the service, and shows when its row is next filled. Rows its
     /// volume hasn't answered with, as cached rows, ask for none, and neither does a folder
-    /// whose volume isn't known yet or is a share.
+    /// whose volume isn't known yet or is a share, nor a volume mounted in it
+    /// (`asksForIcon(at:)`).
     func updateThumbnails() {
         guard let thumbnails = pane.service.thumbnails, isViewLoaded else { return }
         var onScreen: Set<String> = []
@@ -35,10 +48,10 @@ extension ListingViewController {
             let rows = tableView.rows(in: tableView.visibleRect)
             for row in rows.lowerBound..<min(rows.upperBound, listing.count) {
                 let entry = listing[row]
-                guard ThumbnailService.shows(entry, kind: listing.kind(atRow: row)) else {
-                    continue
-                }
                 let path = pane.location.folderChild(named: entry.name).folderPath
+                guard ThumbnailService.shows(entry, kind: listing.kind(atRow: row)),
+                    entry.type != .directory || asksForIcon(at: path)
+                else { continue }
                 if let request = thumbnailRequests[entry.name], request.path == path,
                     request.entry == entry
                 {

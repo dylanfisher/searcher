@@ -210,6 +210,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             self, selector: changed, name: NSView.frameDidChangeNotification, object: clip)
         center.addObserver(
             self, selector: changed, name: NSView.frameDidChangeNotification, object: tableView)
+        // A mount or unmount, and the table's first read, change which folders ask for icons.
+        pane.service.mounts?.observe(for: self) { [weak self] in self?.updateThumbnails() }
     }
 
     /// Keeps `Margin.standard` between the rows and the edges at the ends of the list: above the
@@ -221,12 +223,18 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// clip view takes its insets from here instead of from the scroll view, which would set
     /// only the header's height. A press or drop in a margin reaches the table through
     /// `ListingClipView` (docs/decisions/0029-row-movement.md).
+    ///
+    /// The list and each column run under the pane's path bar glass, so the bottom margin and
+    /// the scrollers start `PaneViewController.pathBarCover` above the bottom edge, and the rows
+    /// scroll under the glass (docs/decisions/0132-glass-path-bar.md).
     private func keepMargins(in scrollView: NSScrollView) {
         let clip = scrollView.contentView
         let header = tableView.headerView?.frame.height ?? 0
         clip.automaticallyAdjustsContentInsets = false
         clip.contentInsets = NSEdgeInsets(
-            top: header + Margin.standard, left: 0, bottom: Margin.standard, right: 0)
+            top: header + Margin.standard, left: 0,
+            bottom: Margin.standard + PaneViewController.pathBarCover, right: 0)
+        scrollView.scrollerInsets.bottom = PaneViewController.pathBarCover
         // The clip keeps the origin it had before the insets; the top of the list is above it.
         clip.scroll(to: NSPoint(x: 0, y: -clip.contentInsets.top))
         clip.registerForDraggedTypes(tableView.registeredDraggedTypes)
@@ -324,7 +332,9 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         let clip = scrollView.contentView
         let header = headerOverlap(in: scrollView)
         var bounds = clip.bounds
-        let shown = scrollView.documentVisibleRect.height - header
+        // The rows shown clear of the header and of the path bar's glass under the list.
+        let shown =
+            scrollView.documentVisibleRect.height - header - PaneViewController.pathBarCover
         bounds.origin.y = tableView.rect(ofRow: row).midY - header - shown / 2
         clip.scroll(to: clip.constrainBoundsRect(bounds).origin)
         scrollView.reflectScrolledClipView(clip)

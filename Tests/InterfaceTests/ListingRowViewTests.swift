@@ -124,6 +124,22 @@ private func alpha(of row: NSView, at point: NSPoint) throws -> Double {
     #expect(row.convert(last.bounds, from: last).maxX <= band.maxX - 5)
 }
 
+/// The icon is 18 points square, as Finder draws it in its 24-point rows in macOS 26, which picks
+/// the icon's 18-point artwork, and the name starts 3.5 points after it, as Finder's does
+/// (fb-1028b-1.jpg; docs/decisions/0129-row-icons-as-finder.md).
+@MainActor @Test func aListRowsIconIsFindersSizeAndTheNameStartsWhereFindersDoes() async throws {
+    let list = await controller(showing: [folder("audio")])
+    list.view.layoutSubtreeIfNeeded()
+    let row = try #require(list.tableView.rowView(atRow: 0, makeIfNecessary: true))
+    let name = try #require(row.view(atColumn: 0) as? NSTableCellView)
+    let icon = try #require(name.imageView)
+    let text = try #require(name.textField)
+
+    #expect(list.tableView.rowHeight == 24)
+    #expect(icon.frame == NSRect(x: 2, y: 3, width: 18, height: 18))
+    #expect(text.frame.minX == icon.frame.maxX + 3.5)
+}
+
 /// One row of nothing, for a table of AppKit's own.
 @MainActor
 private final class OneRow: NSObject, NSTableViewDataSource {

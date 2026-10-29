@@ -5,9 +5,12 @@ import Browser
 /// and the frames each takes from the cell's width and the room its chevron takes.
 @MainActor
 enum ListingCellLayout {
-    /// The icon's side in the Name column, and where the name starts after it.
-    static let iconSize = 16.0
-    static let nameX = 2 + iconSize + 4
+    /// The icon's side in the Name column, and where the name starts after it. Finder's, in its
+    /// 24-point rows on macOS 26: an 18-point icon, which draws the icon's 18-point artwork, its
+    /// left edge where a 16-point one's was, and the name 3.5 points after it, measured in column
+    /// view (fb-1028b-1.jpg; docs/decisions/0129-row-icons-as-finder.md).
+    static let iconSize = 18.0
+    static let nameX = 2 + iconSize + 3.5
 
     /// The side of the badge, which is also the height of the chevron's view.
     static let badgeSize = 16.0

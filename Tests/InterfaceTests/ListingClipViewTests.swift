@@ -99,3 +99,26 @@ private func shortList() async throws -> (
     #expect(
         log.calls == ["entered", "updated", "exited", "prepare", "perform", "conclude", "ended"])
 }
+
+/// The path bar's glass hands a drag to the clip under it once: entering the glass again while
+/// the clip still holds the drag updates it rather than entering it twice, and a drop and the
+/// drag's end reach it (docs/decisions/0132-glass-path-bar.md).
+@MainActor @Test func theGlassEntersAClipOnceAndPassesTheDropOn() {
+    let log = DragLog(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
+    let clip = ListingClipView()
+    clip.documentView = log
+    let glass = PathBarGlassContent()
+    glass.listClip = { _ in clip }
+    let pasteboard = testPasteboard()
+    defer { pasteboard.releaseGlobally() }
+    let info = StubDraggingInfo(pasteboard: pasteboard)
+
+    #expect(glass.draggingEntered(info) == .copy)
+    #expect(glass.draggingEntered(info) == .move)
+    #expect(glass.prepareForDragOperation(info))
+    #expect(glass.performDragOperation(info))
+    glass.concludeDragOperation(info)
+    glass.draggingEnded(info)
+
+    #expect(log.calls == ["entered", "updated", "prepare", "perform", "conclude", "ended"])
+}

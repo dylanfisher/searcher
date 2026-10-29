@@ -187,6 +187,9 @@ final class ColumnViewController: NSViewController {
         scrollView.verticalScrollElasticity = .none
         // Past the last column, the color the columns' rows are drawn on.
         scrollView.backgroundColor = .controlBackgroundColor
+        // The columns run under the pane's path bar glass; their scroller sits above it
+        // (docs/decisions/0132-glass-path-bar.md).
+        scrollView.scrollerInsets.bottom = PaneViewController.pathBarCover
         // VoiceOver reads the columns as it reads `NSBrowser`'s: a browser whose children are
         // the columns, each a scroll area named for its folder.
         columnsView.setAccessibilityElement(true)
@@ -425,6 +428,13 @@ final class ColumnViewController: NSViewController {
             views.append((previewView.frame, previewView.scrollView))
         }
         return views.first { $0.frame.minX <= x && x < $0.frame.maxX + 1 }?.scrollView
+    }
+
+    /// The clip view of the column at `location`, in the window's coordinates, for a drag over
+    /// the pane's path bar glass; nil over the preview, which takes no drops, or past the
+    /// columns.
+    func listClip(under location: NSPoint) -> ListingClipView? {
+        (scrollView(under: location) as? NSScrollView)?.contentView as? ListingClipView
     }
 
     /// `width` as `target`'s grip sets it: whole points, so the columns right of it stay on the

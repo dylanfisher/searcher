@@ -1487,6 +1487,66 @@ private func goBackWithBatchesHeld(_ pane: Pane, to root: String) async -> Listi
     #expect(walks.startedPaths == [root + "/big", root + "/big"])
 }
 
+/// A folder whose items keep coming and going, as during a download or an install, has a new
+/// date at each batch of its parent's watch. It is walked once at a time: the dates that come
+/// while a walk runs are walked once, after it, at the latest date, so a burst starts two walks
+/// and the size shown is the latest (docs/decisions/0129-row-icons-as-finder.md).
+@MainActor @Test func aBurstOfChangesToAWalkedFolderStartsAtMostOneWalkMore() async throws {
+    let root = sizedRoot
+    let walks = GatedWalks()
+    let clock = ManualClock()
+    let pane = sizedPane(walks, clock: clock)
+    await settle { walks.startedPaths == [root + "/big"] }
+
+    var latest = testDate
+    for second in 1...6 {
+        latest = testDate.addingTimeInterval(Double(second))
+        let changed = DirectoryEntry(
+            name: "big", type: .directory, size: nil, modified: latest, isHidden: false,
+            isDataless: false)
+        pane.apply(.patches([.update(changed)]), at: pane.location)
+        await settle {
+            guard let listing = pane.state.listing, let row = listing.row(named: "big") else {
+                return false
+            }
+            return listing[row].modified == latest && !pane.sizeScanIsRunning
+        }
+    }
+    #expect(walks.startedPaths == [root + "/big"])
+
+    walks.release()
+    await settle {
+        // Size batches wait out their interval between them.
+        if clock.waitingSleeps > 0 { clock.advance(by: Pane.sizeBatchInterval) }
+        return bigSize(pane) == .size(bytes: 84, isPartial: false)
+    }
+    await settle { pane.walkingSizes.isEmpty && !pane.sizeScanIsRunning }
+    #expect(walks.startedPaths == [root + "/big", root + "/big"])
+    #expect(pane.requestedSizes[ExactName("big")] == latest)
+}
+
+/// A walk the service stops from outside the pane, as `VolumeEvents` does at an unmount or an
+/// eject under the folder, delivers nothing, and the pane doesn't hear of it. The folder isn't
+/// left marked as walking: its next date is walked (docs/decisions/0129-row-icons-as-finder.md).
+@MainActor @Test func aWalkCancelledFromOutsideThePaneDoesntStopTheFoldersNextWalk() async throws {
+    let root = sizedRoot
+    let walks = GatedWalks()
+    let pane = sizedPane(walks, clock: ManualClock())
+    await settle { walks.startedPaths == [root + "/big"] }
+    await settle { !pane.sizeScanIsRunning }
+    let service = try #require(pane.folderSizes)
+
+    service.cancelWalks(under: root + "/big")
+    let changed = DirectoryEntry(
+        name: "big", type: .directory, size: nil, modified: testDate.addingTimeInterval(1),
+        isHidden: false, isDataless: false)
+    pane.apply(.patches([.update(changed)]), at: pane.location)
+
+    await settle { walks.startedPaths.count == 2 }
+    #expect(walks.startedPaths == [root + "/big", root + "/big"])
+    walks.release()
+}
+
 // MARK: Spring-loaded folders
 
 /// `/root` holds the folders `docs` and `more` and the files `a.txt` and `b.txt`; `/root/docs`

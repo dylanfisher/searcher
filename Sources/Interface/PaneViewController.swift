@@ -24,6 +24,18 @@ public final class PaneViewController: NSViewController {
     let messageLabel = NSTextField(wrappingLabelWithString: "")
     let accessDeniedView: AccessDeniedView
     let pathBar = PathBarView()
+    /// The capsule the path bar and the status float in, over the bottom of the list or the
+    /// columns: the system's Liquid Glass from macOS 26, a blur before it. One per pane, made
+    /// once; a new location changes only the segments in it
+    /// (docs/decisions/0132-glass-path-bar.md).
+    let pathBarGlass: NSView
+    /// The view in `pathBarGlass` that holds the path bar and the status.
+    let pathBarContent: PathBarGlassContent
+    /// How far the path bar's glass floats from the pane's sides and bottom.
+    static let pathBarGap: CGFloat = 8
+    /// How much of the pane's bottom the path bar's glass covers, from the pane's bottom edge to
+    /// the glass's top. A list or a column keeps its last row and its scrollers above it.
+    static let pathBarCover = PathBarView.height + pathBarGap
     let filterBar = FilterBarView()
     /// The filter bar's height: `FilterBarView.height` while it shows, else 0.
     private var filterBarHeight: NSLayoutConstraint?
@@ -216,6 +228,7 @@ public final class PaneViewController: NSViewController {
         self.pane = pane
         self.monitorsFolders = monitorsFolders
         self.status = status
+        (pathBarGlass, pathBarContent) = Self.makePathBarGlass()
         accessDeniedView = AccessDeniedView(systemActions: pane.systemActions)
         listingViewController = ListingViewController(
             pane: pane, iconCache: iconCache, formatter: formatter, tableView: tableView)
@@ -281,9 +294,23 @@ public final class PaneViewController: NSViewController {
         let columns = columnViewController.view
         // Constraints rather than autoresizing: the container starts at zero size, where a list
         // frame 24 points shorter than it can't be set, and autoresizing would keep the error.
-        for view in [filterBar, list, columns, pathBar, status] {
+        for view in [filterBar, list, columns, pathBarGlass] {
             view.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(view)
+        }
+        for view in [pathBar, status] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            pathBarContent.addSubview(view)
+        }
+        // A drag over the glass goes on to the list or the column under it.
+        pathBarContent.takeDrags(like: listingViewController.tableView)
+        pathBarContent.listClip = { [weak self] location in
+            guard let self else { return nil }
+            if pane.viewMode == .list {
+                return (listingViewController.view as? NSScrollView)?.contentView
+                    as? ListingClipView
+            }
+            return columnViewController.listClip(under: location)
         }
         addChild(listingViewController)
         addChild(columnViewController)
@@ -304,27 +331,39 @@ public final class PaneViewController: NSViewController {
             list.topAnchor.constraint(equalTo: filterBar.bottomAnchor),
             list.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             list.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            list.bottomAnchor.constraint(equalTo: pathBar.topAnchor),
+            // Under the glass to the pane's bottom: the rows scroll under it, and the list keeps
+            // its last row above it (`ListingViewController.keepMargins`).
+            list.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             columns.topAnchor.constraint(equalTo: list.topAnchor),
             columns.leadingAnchor.constraint(equalTo: list.leadingAnchor),
             columns.trailingAnchor.constraint(equalTo: list.trailingAnchor),
             columns.bottomAnchor.constraint(equalTo: list.bottomAnchor),
-            pathBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            pathBarGlass.leadingAnchor.constraint(
+                equalTo: container.leadingAnchor, constant: Self.pathBarGap),
+            pathBarGlass.trailingAnchor.constraint(
+                equalTo: container.trailingAnchor, constant: -Self.pathBarGap),
+            pathBarGlass.bottomAnchor.constraint(
+                equalTo: container.bottomAnchor, constant: -Self.pathBarGap),
+            pathBarGlass.heightAnchor.constraint(equalToConstant: PathBarView.height),
+            pathBar.leadingAnchor.constraint(equalTo: pathBarContent.leadingAnchor),
             pathBar.trailingAnchor.constraint(equalTo: status.leadingAnchor),
-            pathBar.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            pathBar.heightAnchor.constraint(equalToConstant: PathBarView.height),
-            status.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            pathBar.topAnchor.constraint(equalTo: pathBarContent.topAnchor),
+            pathBar.bottomAnchor.constraint(equalTo: pathBarContent.bottomAnchor),
+            status.trailingAnchor.constraint(equalTo: pathBarContent.trailingAnchor),
             status.topAnchor.constraint(equalTo: pathBar.topAnchor),
             status.bottomAnchor.constraint(equalTo: pathBar.bottomAnchor),
             // A long note truncates before it takes more than this of the bar.
             status.widthAnchor.constraint(
-                lessThanOrEqualTo: container.widthAnchor, multiplier: 0.6),
+                lessThanOrEqualTo: pathBarContent.widthAnchor, multiplier: 0.6),
+            // In the middle of the list above the glass.
             messageLabel.centerXAnchor.constraint(equalTo: list.centerXAnchor),
-            messageLabel.centerYAnchor.constraint(equalTo: list.centerYAnchor),
+            messageLabel.centerYAnchor.constraint(
+                equalTo: list.centerYAnchor, constant: -Self.pathBarCover / 2),
             messageLabel.widthAnchor.constraint(
                 lessThanOrEqualTo: container.widthAnchor, constant: -40),
             accessDeniedView.centerXAnchor.constraint(equalTo: list.centerXAnchor),
-            accessDeniedView.centerYAnchor.constraint(equalTo: list.centerYAnchor),
+            accessDeniedView.centerYAnchor.constraint(
+                equalTo: list.centerYAnchor, constant: -Self.pathBarCover / 2),
             accessDeniedView.widthAnchor.constraint(
                 lessThanOrEqualTo: container.widthAnchor, constant: -40),
             deniedWidth,
@@ -334,6 +373,36 @@ public final class PaneViewController: NSViewController {
             view.window?.makeFirstResponder(keyView)
         }
         view = container
+    }
+
+    /// The path bar's capsule and the content view filling it. From macOS 26 the system's glass,
+    /// as the toolbar's items are (0128), rounded to a capsule; before that a blur in the same
+    /// shape.
+    private static func makePathBarGlass() -> (glass: NSView, content: PathBarGlassContent) {
+        let content = PathBarGlassContent()
+        if #available(macOS 26, *) {
+            let glass = NSGlassEffectView()
+            glass.style = .regular
+            glass.cornerRadius = PathBarView.height / 2
+            glass.contentView = content
+            return (glass, content)
+        }
+        let blur = NSVisualEffectView()
+        blur.material = .headerView
+        blur.blendingMode = .withinWindow
+        blur.state = .followsWindowActiveState
+        blur.wantsLayer = true
+        blur.layer?.cornerRadius = PathBarView.height / 2
+        blur.layer?.masksToBounds = true
+        content.translatesAutoresizingMaskIntoConstraints = false
+        blur.addSubview(content)
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: blur.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: blur.trailingAnchor),
+            content.topAnchor.constraint(equalTo: blur.topAnchor),
+            content.bottomAnchor.constraint(equalTo: blur.bottomAnchor),
+        ])
+        return (blur, content)
     }
 
     private func configureOverlays() {

@@ -373,7 +373,7 @@ private final class MainThreadRecord: @unchecked Sendable {
 
     window.contentView?.layoutSubtreeIfNeeded()
 
-    let width = fixture.controller.view.bounds.width
+    let width = fixture.controller.pathBarGlass.bounds.width
     #expect(status.frame.width <= width * 0.6 + 0.5)
     #expect(status.frame.width >= width * 0.6 - 0.5)
     #expect(fixture.controller.pathBar.frame.maxX == status.frame.minX)
@@ -416,31 +416,364 @@ private final class VolumeName: @unchecked Sendable {
     #expect(fixture.controller.pathBar.segments.map(\.title) == ["New Disk", "root"])
 }
 
-@MainActor @Test func inAWindowTheListEndsWhereThePathBarStarts() async throws {
+/// A window showing `/root` with `count` files, each pane's path bar floating in its glass.
+@MainActor
+private func manyRowsWindow(_ count: Int) async -> BrowserWindowController {
+    var folders = Fixture.folders
+    folders["/root"] = [folder("docs")] + (0..<count).map { file(String(format: "file %04d", $0)) }
     let settings = untouchedSettings()
     let window = BrowserWindowController(
         location: Location(path: "/root"),
-        service: ListingService(lister: StubLister(Fixture.folders)) { "Test Disk" },
+        service: ListingService(lister: StubLister(folders)) { "Test Disk" },
         systemActions: StubSystemActions(), settings: settings,
         favorites: Favorites(settings: settings), volumes: StubSidebarVolumes().list())
+    await settle { window.paneViewController.pane.state.isLoaded }
+    window.window?.contentView?.layoutSubtreeIfNeeded()
+    return window
+}
+
+/// The path bar and the status float in one glass capsule over the pane's bottom, the system's
+/// Liquid Glass from macOS 26 (docs/decisions/0132-glass-path-bar.md).
+@MainActor @Test func thePathBarAndStatusFloatInGlassOverThePanesBottom() async throws {
+    let window = await manyRowsWindow(3)
     let controller = window.paneViewController
-    await settle { controller.pane.state.isLoaded }
+    let glass = controller.pathBarGlass
+
+    if #available(macOS 26, *) {
+        let system = try #require(glass as? NSGlassEffectView)
+        #expect(system.cornerRadius == PathBarView.height / 2)
+        #expect(system.style == .regular)
+    }
+    #expect(controller.pathBar.isDescendant(of: glass))
+    #expect(controller.status.isDescendant(of: glass))
+    // VoiceOver reads the bar's group, not the glass around it.
+    #expect(!glass.isAccessibilityElement())
+    #expect(controller.pathBar.isAccessibilityElement())
+    let pane = controller.view.bounds
+    #expect(pane.width > 0 && pane.height > PathBarView.height)
+    let gap = PaneViewController.pathBarGap
+    #expect(
+        glass.frame
+            == NSRect(x: gap, y: gap, width: pane.width - 2 * gap, height: PathBarView.height))
+    let bar = controller.pathBar.convert(controller.pathBar.bounds, to: controller.view)
+    let status = controller.status.convert(controller.status.bounds, to: controller.view)
+    #expect(bar.minX == glass.frame.minX && bar.maxX == status.minX)
+    #expect(status.maxX == glass.frame.maxX)
+    #expect(bar.minY == glass.frame.minY && bar.height == PathBarView.height)
+    #expect(status.minY == bar.minY && status.height == bar.height)
+    // The list runs under the glass to the pane's bottom.
+    let list = controller.listingViewController.view.frame
+    #expect(list.minY == 0 && list.maxY == pane.maxY)
+    #expect(list.contains(glass.frame))
+}
+
+/// The list scrolls under the glass, and both its first and its last row can be shown clear of
+/// it and of the header.
+@MainActor @Test func theFirstAndLastRowsAreClearOfTheGlassInTheList() async throws {
+    let window = await manyRowsWindow(200)
+    let controller = window.paneViewController
+    let table = controller.listingViewController.tableView
+    let glass = controller.pathBarGlass.frame
+    let header = try #require(table.headerView)
+    let headerInPane = header.convert(header.bounds, to: controller.view)
+    let shown = { (row: Int) in table.convert(table.rect(ofRow: row), to: controller.view) }
+    #expect(table.numberOfRows == 201)
+
+    #expect(shown(0).minY >= glass.maxY && shown(0).maxY <= headerInPane.minY)
+
+    table.scrollRowToVisible(table.numberOfRows - 1)
     window.window?.contentView?.layoutSubtreeIfNeeded()
 
-    let pane = controller.view.bounds
-    let list = controller.listingViewController.view.frame
-    let bar = controller.pathBar.frame
-    #expect(pane.width > 0 && pane.height > PathBarView.height)
-    let status = controller.status.frame
-    #expect(bar == NSRect(x: 0, y: 0, width: status.minX, height: PathBarView.height))
-    #expect(status.maxX == pane.width && status.minY == 0 && status.height == bar.height)
-    #expect(list == NSRect(x: 0, y: bar.maxY, width: pane.width, height: pane.height - bar.maxY))
-    #expect(!list.intersects(bar))
-    let header = try #require(controller.listingViewController.tableView.headerView)
-    let headerInPane = header.convert(header.bounds, to: controller.view)
-    #expect(!headerInPane.isEmpty)
-    #expect(pane.contains(headerInPane))
-    #expect(!headerInPane.intersects(bar))
+    let last = shown(table.numberOfRows - 1)
+    #expect(last.minY >= glass.maxY + Margin.standard - 0.5)
+    #expect(controller.view.bounds.contains(last))
+    // The scrollers stop above the glass too.
+    let scrollView = try #require(controller.listingViewController.view as? NSScrollView)
+    #expect(scrollView.scrollerInsets.bottom == PaneViewController.pathBarCover)
+}
+
+/// A column's last row can be shown clear of the glass, and the columns' scroller sits above it.
+@MainActor @Test func aColumnsLastRowIsClearOfTheGlass() async throws {
+    let window = await manyRowsWindow(200)
+    let controller = window.paneViewController
+    controller.pane.setViewMode(.column)
+    let trail = try #require(controller.pane.columnTrail)
+    await settle {
+        trail.columns.allSatisfy { $0.pane.state.isLoaded }
+            && controller.columnViewController.columnControllers.contains {
+                $0.pane.location == Location(path: "/root") && $0.tableView.numberOfRows == 201
+            }
+    }
+    window.window?.contentView?.layoutSubtreeIfNeeded()
+    let column = try #require(
+        controller.columnViewController.columnControllers.first {
+            $0.pane.location == Location(path: "/root")
+        })
+    let table = column.tableView
+
+    table.scrollRowToVisible(table.numberOfRows - 1)
+    window.window?.contentView?.layoutSubtreeIfNeeded()
+
+    let last = table.convert(table.rect(ofRow: table.numberOfRows - 1), to: controller.view)
+    #expect(last.minY >= controller.pathBarGlass.frame.maxY + Margin.standard - 0.5)
+    let columns = try #require(controller.columnViewController.view as? NSScrollView)
+    #expect(columns.scrollerInsets.bottom == PaneViewController.pathBarCover)
+}
+
+/// A click on a segment reaches it through the glass, and navigates.
+@MainActor @Test func aClickOnASegmentInTheGlassReachesItAndNavigates() async throws {
+    let window = await manyRowsWindow(3)
+    let controller = window.paneViewController
+    controller.pane.navigate(to: Location(path: "/root/docs"))
+    await settle {
+        controller.pane.state.isLoaded
+            && controller.pathBar.location == Location(path: "/root/docs")
+    }
+    window.window?.contentView?.layoutSubtreeIfNeeded()
+    let segment = controller.pathBar.segments[1]
+    let container = try #require(controller.view.superview)
+    let center = segment.convert(
+        NSPoint(x: segment.bounds.midX, y: segment.bounds.midY), to: container)
+
+    let hit = try #require(controller.view.hitTest(center))
+
+    #expect(hit === segment || hit.isDescendant(of: segment))
+    segment.performClick(nil)
+    #expect(controller.pane.location == Location(path: "/root"))
+}
+
+/// A press on the glass over a row lands on the glass, not on the row under it.
+@MainActor @Test func aPointOnTheGlassOverARowHitsTheGlass() async throws {
+    let window = await manyRowsWindow(200)
+    let controller = window.paneViewController
+    let table = controller.listingViewController.tableView
+    let glass = controller.pathBarGlass.frame
+    let point = NSPoint(x: glass.minX + 40, y: glass.midY)
+    #expect(table.row(at: table.convert(point, from: controller.view)) != -1)
+    let container = try #require(controller.view.superview)
+
+    let hit = try #require(controller.view.hitTest(controller.view.convert(point, to: container)))
+
+    #expect(hit.isDescendant(of: controller.pathBarGlass))
+}
+
+/// Go to Item centers the row in the room between the header and the glass.
+@MainActor @Test func goToItemCentersTheRowAboveTheGlass() async throws {
+    let window = await manyRowsWindow(200)
+    let controller = window.paneViewController
+    let table = controller.listingViewController.tableView
+    let header = try #require(table.headerView)
+    let headerBottom = header.convert(header.bounds, to: controller.view).minY
+    let glassTop = controller.pathBarGlass.frame.maxY
+
+    controller.pane.jump(to: "file 0100")
+
+    let row = try #require(controller.pane.state.listing?.row(named: "file 0100"))
+    let shown = table.convert(table.rect(ofRow: row), to: controller.view)
+    #expect(abs(shown.midY - (headerBottom + glassTop) / 2) <= 1)
+}
+
+/// The preview runs under the glass, and its end scrolls clear of it.
+@MainActor @Test func thePreviewsEndIsClearOfTheGlass() async throws {
+    let window = await manyRowsWindow(200)
+    let controller = window.paneViewController
+    controller.pane.setViewMode(.column)
+    let trail = try #require(controller.pane.columnTrail)
+    await settle { trail.columns.allSatisfy { $0.pane.state.isLoaded } }
+    trail.focused.pane.selectLastRow()
+    await settle {
+        trail.preview != nil && controller.columnViewController.previewView?.isHidden == false
+    }
+    window.window?.contentView?.layoutSubtreeIfNeeded()
+    let preview = try #require(controller.columnViewController.previewView)
+    let scrollView = preview.scrollView
+    #expect(scrollView.contentInsets.bottom == PaneViewController.pathBarCover)
+
+    let clip = scrollView.contentView
+    var end = clip.bounds
+    end.origin.y = 100_000
+    clip.scroll(to: clip.constrainBoundsRect(end).origin)
+    scrollView.reflectScrolledClipView(clip)
+
+    let document = try #require(scrollView.documentView)
+    let shown = document.convert(document.bounds, to: controller.view)
+    #expect(shown.minY >= controller.pathBarGlass.frame.maxY - 0.5)
+}
+
+/// A drag over the glass, at `location` in the window's coordinates, on a pasteboard of the
+/// test's own.
+@MainActor
+private func glassDrag(at location: NSPoint) -> (info: StubDraggingInfo, pasteboard: NSPasteboard) {
+    let pasteboard = testPasteboard()
+    let info = StubDraggingInfo(pasteboard: pasteboard)
+    info.draggingLocation = location
+    return (info, pasteboard)
+}
+
+/// The middle of the glass, in the window's coordinates, at the x of `view`'s middle.
+@MainActor
+private func onTheGlass(below view: NSView, in controller: PaneViewController) -> NSPoint {
+    let middle = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
+    let glass = controller.pathBarGlass.convert(controller.pathBarGlass.bounds, to: nil)
+    return NSPoint(x: middle.x, y: glass.midY)
+}
+
+/// Counts the drag exits `table` hears, keeping what it did on one before.
+@MainActor
+private func countExits(of table: ListingTableView) -> () -> Int {
+    var exits = 0
+    let exited = table.dragExited
+    table.dragExited = {
+        exits += 1
+        exited()
+    }
+    return { exits }
+}
+
+/// A drag held over the glass scrolls the list under it down a row each update, as a drag at
+/// the bottom of Finder's list does, and the list's table takes the drag in and out, so no drop
+/// highlight stays when the drag leaves the glass for the list.
+@MainActor @Test func aDragOverTheGlassScrollsTheListAndLeavesItCleanly() async throws {
+    let window = await manyRowsWindow(200)
+    let controller = window.paneViewController
+    let table = controller.listingViewController.tableView
+    let clip = try #require((controller.listingViewController.view as? NSScrollView)?.contentView)
+    let content = controller.pathBarContent
+    #expect(Set(content.registeredDraggedTypes) == Set(table.registeredDraggedTypes))
+    let exits = countExits(of: table)
+    let (info, pasteboard) = glassDrag(at: onTheGlass(below: table, in: controller))
+    defer { pasteboard.releaseGlobally() }
+    let top = clip.bounds.origin.y
+
+    _ = content.draggingEntered(info)
+    _ = content.draggingUpdated(info)
+
+    #expect(clip.bounds.origin.y == top + 2 * table.rowHeight)
+    #expect(exits() == 0)
+    // The drag goes back up onto the list: AppKit tells the glass it left.
+    content.draggingExited(info)
+    #expect(exits() == 1)
+}
+
+/// The columns of `/root` and of its last file's preview, in a window, with the drag's exits
+/// from the `/` and `/root` columns counted.
+@MainActor
+private func columnsWithPreview() async throws -> (
+    controller: PaneViewController, window: BrowserWindowController, root: ListingViewController,
+    parent: ListingViewController, preview: ColumnPreviewView
+) {
+    let window = await manyRowsWindow(200)
+    let controller = window.paneViewController
+    controller.pane.setViewMode(.column)
+    let trail = try #require(controller.pane.columnTrail)
+    await settle { trail.columns.allSatisfy { $0.pane.state.isLoaded } }
+    trail.focused.pane.selectLastRow()
+    await settle {
+        trail.preview != nil && controller.columnViewController.previewView?.isHidden == false
+    }
+    window.window?.contentView?.layoutSubtreeIfNeeded()
+    let columns = controller.columnViewController.columnControllers
+    let root = try #require(columns.first { $0.pane.location == Location(path: "/root") })
+    let parent = try #require(columns.first { $0.pane.location == Location(path: "/") })
+    let preview = try #require(controller.columnViewController.previewView)
+    // The pane may be narrower than the columns: show the preview, and the `/root` column left
+    // of it.
+    let scroll = try #require(controller.columnViewController.view as? NSScrollView)
+    ColumnViewController.moveClip(
+        scroll.contentView, toX: max(preview.frame.maxX - scroll.contentView.bounds.width, 0),
+        animated: false)
+    return (controller, window, root, parent, preview)
+}
+
+/// A drag moving under the glass from one column to the next tells the column it left, whose
+/// table then clears its drop highlight, and hands the drag to the next.
+@MainActor @Test func aDragCrossingColumnsUnderTheGlassLeavesTheOldOne() async throws {
+    let (controller, window, root, parent, _) = try await columnsWithPreview()
+    defer { window.window?.orderOut(nil) }
+    let parentExits = countExits(of: parent.tableView)
+    let rootExits = countExits(of: root.tableView)
+    let (info, pasteboard) = glassDrag(at: onTheGlass(below: parent.view, in: controller))
+    defer { pasteboard.releaseGlobally() }
+
+    _ = controller.pathBarContent.draggingEntered(info)
+    info.draggingLocation = onTheGlass(below: root.view, in: controller)
+    _ = controller.pathBarContent.draggingUpdated(info)
+
+    #expect(parentExits() == 1)
+    #expect(rootExits() == 0)
+}
+
+/// A drag moving under the glass from a column onto the preview, which takes no drops, tells
+/// the column it left.
+@MainActor @Test func aDragMovingOntoThePreviewUnderTheGlassLeavesTheColumn() async throws {
+    let (controller, window, root, _, preview) = try await columnsWithPreview()
+    defer { window.window?.orderOut(nil) }
+    let exits = countExits(of: root.tableView)
+    let (info, pasteboard) = glassDrag(at: onTheGlass(below: root.view, in: controller))
+    defer { pasteboard.releaseGlobally() }
+
+    _ = controller.pathBarContent.draggingEntered(info)
+    info.draggingLocation = onTheGlass(below: preview, in: controller)
+
+    #expect(controller.pathBarContent.draggingUpdated(info) == [])
+    #expect(exits() == 1)
+}
+
+/// Space or a force click over the glass spring-loads the folder row under it, as on the
+/// table: the glass asks the table under the drag.
+@MainActor @Test func springLoadingOverTheGlassGoesToTheTableUnderIt() async throws {
+    let window = await manyRowsWindow(200)
+    let controller = window.paneViewController
+    let table = controller.listingViewController.tableView
+    var activations = 0
+    table.springLoadingActivated = { activations += 1 }
+    table.springLoadingOptions = { [.enabled] }
+    let (info, pasteboard) = glassDrag(at: onTheGlass(below: table, in: controller))
+    defer { pasteboard.releaseGlobally() }
+    let content = controller.pathBarContent
+
+    #expect(content.springLoadingEntered(info) == [.enabled])
+    #expect(content.springLoadingUpdated(info) == [.enabled])
+    content.springLoadingActivated(true, draggingInfo: info)
+
+    #expect(activations == 1)
+}
+
+/// In column view a drag over the glass goes to the column under it, and scrolls that column.
+@MainActor @Test func aDragOverTheGlassScrollsTheColumnUnderIt() async throws {
+    let window = await manyRowsWindow(200)
+    let controller = window.paneViewController
+    controller.pane.setViewMode(.column)
+    let trail = try #require(controller.pane.columnTrail)
+    await settle {
+        trail.columns.allSatisfy { $0.pane.state.isLoaded }
+            && controller.columnViewController.columnControllers.contains {
+                $0.pane.location == Location(path: "/root") && $0.tableView.numberOfRows == 201
+            }
+    }
+    window.window?.contentView?.layoutSubtreeIfNeeded()
+    let column = try #require(
+        controller.columnViewController.columnControllers.first {
+            $0.pane.location == Location(path: "/root")
+        })
+    let scrollView = try #require(column.view as? NSScrollView)
+    let clip = scrollView.contentView
+    let middle = scrollView.convert(
+        NSPoint(x: scrollView.bounds.midX, y: scrollView.bounds.midY), to: nil)
+    let location = NSPoint(
+        x: middle.x,
+        y: controller.pathBarGlass.convert(controller.pathBarGlass.bounds, to: nil).midY)
+    #expect(controller.columnViewController.listClip(under: location) === clip)
+    let pasteboard = testPasteboard()
+    defer { pasteboard.releaseGlobally() }
+    let info = StubDraggingInfo(pasteboard: pasteboard)
+    info.draggingLocation = location
+    let top = clip.bounds.origin.y
+
+    _ = controller.pathBarContent.draggingEntered(info)
+    controller.pathBarContent.draggingExited(info)
+
+    #expect(clip.bounds.origin.y == top + column.tableView.rowHeight)
 }
 
 @MainActor @Test func clickingAPathBarSegmentGoesThereWithTheChildSelected() async throws {
