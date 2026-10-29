@@ -5,14 +5,16 @@ import Testing
 
 @testable import Browser
 
-/// A free-space read for tests: records each call and the thread it ran on, holds it while
-/// `holds` until `release`, then returns `bytes`, or throws while `fails`.
+/// A free-space read for tests: records each call and the thread it ran on. A call started
+/// while `holds` is on waits for `release`; each returns `bytes` as they were when it started,
+/// or throws while `fails`.
 private final class HeldRead: @unchecked Sendable {
     struct Failed: Error {}
 
     private let condition = NSCondition()
     private var bytesValue: Int64?
     private var holdsValue: Bool
+    private var released = false
     private var failsValue = false
     private var callThreads: [Bool] = []
 
@@ -25,6 +27,11 @@ private final class HeldRead: @unchecked Sendable {
         get { condition.withLock { bytesValue } }
         set { condition.withLock { bytesValue = newValue } }
     }
+    /// Whether calls started from now on wait for `release`.
+    var holds: Bool {
+        get { condition.withLock { holdsValue } }
+        set { condition.withLock { holdsValue = newValue } }
+    }
     var fails: Bool {
         get { condition.withLock { failsValue } }
         set { condition.withLock { failsValue = newValue } }
@@ -36,9 +43,11 @@ private final class HeldRead: @unchecked Sendable {
         condition.withLock { callThreads.allSatisfy { $0 } }
     }
 
+    /// Lets every held call go ahead, and holds none from now on.
     func release() {
         condition.withLock {
             holdsValue = false
+            released = true
             condition.broadcast()
         }
     }
@@ -47,9 +56,12 @@ private final class HeldRead: @unchecked Sendable {
         condition.lock()
         defer { condition.unlock() }
         callThreads.append(BlockingCallThread.isCurrent && !Thread.isMainThread)
-        while holdsValue { condition.wait() }
+        let bytes = bytesValue
+        if holdsValue {
+            while !released { condition.wait() }
+        }
         if failsValue { throw Failed() }
-        return bytesValue
+        return bytes
     }
 }
 
@@ -138,4 +150,58 @@ private let disk = VolumeIdentity(device: "/dev/disk9s1", mountPoint: "/", kind:
     await settle { changes == 1 }
     #expect(space.available(on: disk) == 3_000)
     #expect(read.calls == 2)
+}
+
+/// A mount point no other test uses, since every `FreeSpace` hears every volume event.
+private func uniqueVolume() -> VolumeIdentity {
+    VolumeIdentity(
+        device: "/dev/disk9s1", mountPoint: "/Volumes/free-space-\(UUID().uuidString)",
+        kind: .local)
+}
+
+/// Another disk mounted where one was unmounted, under the same identity, is read again: the
+/// old disk's space goes at the unmount and the new disk's shows after the mount.
+@MainActor @Test func aDiskMountedWhereAnotherWasIsReadAgain() async {
+    let volume = uniqueVolume()
+    let read = HeldRead(bytes: 1_000)
+    let space = FreeSpace(read: read.read)
+    var changes = 0
+    space.observe(for: read) { changes += 1 }
+    _ = space.available(on: volume)
+    await settle { changes == 1 }
+
+    VolumeEvents.didUnmount(at: volume.mountPoint)
+
+    #expect(changes == 2)
+    #expect(space.readsInFlight == 0)
+    read.bytes = 9_000
+    VolumeEvents.didMount(at: volume.mountPoint)
+
+    await settle { space.available(on: volume) == 9_000 }
+    #expect(read.calls == 2)
+}
+
+/// A read hung on a share that went away doesn't keep a remount from being read, and its
+/// answer, landing late, doesn't overwrite the new volume's.
+@MainActor @Test func aHungReadDoesntHoldARemountsRead() async {
+    let volume = uniqueVolume()
+    let read = HeldRead(bytes: 1_000, holds: true)
+    let space = FreeSpace(read: read.read)
+    var changes = 0
+    space.observe(for: read) { changes += 1 }
+    _ = space.available(on: volume)
+    await settle { read.calls == 1 }
+
+    VolumeEvents.didUnmount(at: volume.mountPoint)
+    read.holds = false
+    read.bytes = 9_000
+    VolumeEvents.didMount(at: volume.mountPoint)
+
+    // The ask after the mount reads afresh, though the first read still hangs.
+    await settle { space.available(on: volume) == 9_000 }
+    #expect(read.calls == 2)
+
+    read.release()
+    await settle { space.droppedReads == 1 }
+    #expect(space.available(on: volume) == 9_000)
 }

@@ -6,7 +6,9 @@ import os
 /// is read off the main thread on a `BlockingCallThread` the first time it is asked for and
 /// again on `refresh`, and kept between reads, so a status bar shows the last value at once. A
 /// volume has at most one read in flight: a share that stopped answering holds one thread, and
-/// asking again starts nothing until that read returns (docs/decisions/0131-status-bar.md).
+/// asking again starts nothing until that read returns. A volume unmounted or mounted at a
+/// mount point is forgotten there, so a disk mounted where another was is read afresh, even
+/// while a read of the old one hangs (docs/decisions/0131-status-bar.md).
 @MainActor
 public final class FreeSpace {
     /// Reads the bytes available on the volume mounted at a path; nil when the volume doesn't
@@ -19,10 +21,15 @@ public final class FreeSpace {
     /// Volumes whose last read failed or said nothing. They aren't read again until `refresh`,
     /// so a volume that can't answer isn't asked on every change of a status bar.
     private var unknown: Set<VolumeIdentity> = []
-    /// Volumes with a read in flight.
-    private var reading: Set<VolumeIdentity> = []
+    /// Volumes with a read in flight, each with the number its read was started under. A read
+    /// that lands under another number, or after its volume was forgotten, is dropped.
+    private var reading: [VolumeIdentity: Int] = [:]
+    /// Counts reads started, numbering them.
+    private var readCount = 0
     /// How many reads are in flight, for tests.
     var readsInFlight: Int { reading.count }
+    /// How many reads landed after their volume was forgotten and were dropped, for tests.
+    private(set) var droppedReads = 0
     /// Volumes `refresh` asked for while a read was in flight, read again once it returns.
     private var readAgain: Set<VolumeIdentity> = []
     private var observers: [Observer] = []
@@ -41,6 +48,7 @@ public final class FreeSpace {
     /// Reads each volume with `read`, on a `BlockingCallThread`. Tests pass a stub.
     public init(read: @escaping Read) {
         self.read = read
+        VolumeEvents.add(self)
     }
 
     /// The bytes available on `volume` as last read, or nil until a read has returned one. The
@@ -56,7 +64,7 @@ public final class FreeSpace {
     /// that moved onto it from another volume.
     public func refresh(_ volume: VolumeIdentity) {
         unknown.remove(volume)
-        if reading.contains(volume) {
+        if reading[volume] != nil {
             readAgain.insert(volume)
         } else {
             start(volume)
@@ -77,20 +85,67 @@ public final class FreeSpace {
         observers.append(Observer(owner: owner, handler: handler))
     }
 
+    /// The volume at `mountPoint` unmounted: its value goes, and a read of it still in flight
+    /// is dropped when it lands. The status bars hear of it.
+    func volumeDidUnmount(at mountPoint: String) {
+        guard forget(at: mountPoint) else { return }
+        notify()
+    }
+
+    /// A volume mounted at `mountPoint`, perhaps another disk where one was: what was known of
+    /// the one before is forgotten, a read of it still in flight is dropped when it lands, and
+    /// each volume known there is read afresh. A volume nothing was known of is read when a bar
+    /// first asks, as its panes list again after the mount.
+    func volumeDidMount(at mountPoint: String) {
+        let known = Set(values.keys).union(unknown).union(reading.keys).filter {
+            $0.mountPoint == mountPoint
+        }
+        guard forget(at: mountPoint) else { return }
+        for volume in known {
+            start(volume)
+        }
+        notify()
+    }
+
+    /// Forgets every volume at `mountPoint`: values, failures, reads asked again and reads in
+    /// flight. Returns whether there was anything to forget.
+    @discardableResult
+    private func forget(at mountPoint: String) -> Bool {
+        let isThere: (VolumeIdentity) -> Bool = { $0.mountPoint == mountPoint }
+        let had =
+            values.keys.contains(where: isThere) || unknown.contains(where: isThere)
+            || reading.keys.contains(where: isThere)
+        values = values.filter { !isThere($0.key) }
+        unknown = unknown.filter { !isThere($0) }
+        readAgain = readAgain.filter { !isThere($0) }
+        reading = reading.filter { !isThere($0.key) }
+        return had
+    }
+
     private func start(_ volume: VolumeIdentity) {
-        guard reading.insert(volume).inserted else { return }
+        guard reading[volume] == nil else { return }
+        readCount += 1
+        let number = readCount
+        reading[volume] = number
         let read = read
         let mountPoint = volume.mountPoint
         Task { [weak self] in
             let result = await BlockingCallThread.run(qos: .utility) {
                 Result { try read(mountPoint) }
             }
-            self?.land(result, for: volume)
+            self?.land(result, for: volume, number: number)
         }
     }
 
-    private func land(_ result: Result<Int64?, any Error>, for volume: VolumeIdentity) {
-        reading.remove(volume)
+    private func land(
+        _ result: Result<Int64?, any Error>, for volume: VolumeIdentity, number: Int
+    ) {
+        // A read of a volume since forgotten, by an unmount or a mount there.
+        guard reading[volume] == number else {
+            droppedReads += 1
+            return
+        }
+        reading[volume] = nil
         let value: Int64?
         switch result {
         case .success(let bytes):
@@ -107,6 +162,10 @@ public final class FreeSpace {
             refresh(volume)
         }
         guard value != old else { return }
+        notify()
+    }
+
+    private func notify() {
         observers.removeAll { $0.owner == nil }
         for observer in observers {
             observer.handler()
