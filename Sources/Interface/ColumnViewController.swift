@@ -197,11 +197,11 @@ final class ColumnViewController: NSViewController {
         scrollView.verticalScrollElasticity = .none
         // Past the last column, the color the columns' rows are drawn on.
         scrollView.backgroundColor = .controlBackgroundColor
-        // The columns run under the pane's path bar row; their scroller sits above it. They
-        // run under the window's toolbar too, and each column keeps its own rows below it
-        // (`topCover`), so AppKit moves nothing down
-        // (docs/decisions/0133-flat-translucent-bars.md).
+        // The columns run under the pane's path bar row; their scroller sits above it.
         scrollView.scrollerInsets.bottom = PaneViewController.pathBarCover
+        // The columns run under the window's toolbar too, and each column insets its own rows
+        // by the pane's `topCover`. AppKit's automatic inset here would move the columns down
+        // as well, insetting them twice (docs/decisions/0133-flat-translucent-bars.md).
         scrollView.automaticallyAdjustsContentInsets = false
         // VoiceOver reads the columns as it reads `NSBrowser`'s: a browser whose children are
         // the columns, each a scroll area named for its folder.
