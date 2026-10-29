@@ -12,9 +12,10 @@ FSEvents batch can't be trusted for, which path to match events against, and how
 ## Decision
 
 `FolderMonitor` turns each FSEvents batch into at most one `FolderChange`. It keeps only events for
-the folder's direct children, reads each named child once with `lstat`, and emits `update` with the
-entry as it is now, or `remove` if it is gone. The event flags aren't used for this, since one path
-can report create, modify and delete in the same batch. A `lstat` that fails for any reason but
+the folder's direct children (amended 2026-10-28: and for items one level inside them, which count
+as their child's, whose date and icon they change; see [0129](0129-row-icons-as-finder.md)),
+reads each named child once with `lstat`, and emits `update` with the entry as it is now, or
+`remove` if it is gone. The event flags aren't used for this, since one path can report create, modify and delete in the same batch. A `lstat` that fails for any reason but
 "not found", dropped events (`UserDropped`, `KernelDropped`) and a change on the path to the watched
 folder (`RootChanged`) each emit `relist` instead, whatever path the event names: FSEvents says a
 drop means rescanning every folder the stream watches, and a `RootChanged` event names the watched

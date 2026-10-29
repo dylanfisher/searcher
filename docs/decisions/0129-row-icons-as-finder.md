@@ -69,6 +69,19 @@ color, and a folder with a custom icon in that icon. Measured on this Mac:
 - **Tags are part of the cache key.** A folder's icon follows its tag colors, which change no
   modification date, so `ThumbnailCache.Key` holds the entry's `tagLabels`. A folder whose items
   come or go has a new modification date, so it is asked for again too.
+- **The folder's watch reads a child folder again when its items change.** FSEvents names the
+  item, `parent/sub/f.txt`, never `parent/sub`, so `FolderMonitor.change(for:in:)` takes an
+  event one level inside a child as a change of that child, by the path's first component, and
+  reads its entry through the usual patch: once per batch however many of its items had events,
+  so a folder being downloaded into costs one `lstat` of it per batch. Deeper events change
+  neither the child's entry nor its date, and are dropped as before. The new entry's date is a
+  new cache key, so the row asks again and its icon follows.
+- **No icon for a volume mounted in a local folder**, as a share in `/Volumes` is: the folder's
+  volume says local, but Quick Look would read the share. A row skips a folder its service's
+  `MountTable` has a volume mounted at, and asks for no folder before the table's first read,
+  which asks again once it lands. Without a table, as in tests, `QuickLookThumbnailer` gives none
+  to a directory on another device than its parent. 0118's eject code knows only the volumes the
+  sidebar can eject, so the mount table, which knows every mount, decides here.
 - **Packages, links, volumes and shares keep their type icons**, as 0093 and 0114 have them; an
   alias is a file and gets the thumbnail 0102 gives it.
 
@@ -89,6 +102,15 @@ color, and a folder with a custom icon in that icon. Measured on this Mac:
   icon reads the folder over the share, which 0004 and 0102 keep rows from doing.
 - A folder whose items change, or that is retagged, shows the type icon for the moment between
   its row's refresh and its new icon landing, as a file saved again does with its thumbnail.
+- The first time a folder is shown in a launch, its row draws the plain folder, then pops to
+  Finder's icon when Quick Look's lands: the icons are kept in memory only, so each launch asks
+  again, from Quick Look's own cache after the first time.
+- The cost figures above are for a warm internal APFS disk only. Cold, external and spinning
+  disks weren't measured, nor a scroll through a folder of 10,000 folders.
+- The Trash folder draws as a plain folder, as it did before.
+- A custom icon set on or taken off a folder shows only because that changes the folder's
+  modification date (the `Icon\r` file inside it comes or goes); a tool that set only the
+  attribute would leave the old icon until the folder next changes.
 - List view's numbers weren't measured from a Finder list view shot; it shares column view's
   cell layout, and Dylan should compare it by hand.
 - 0004's "Folders with custom icons show the generic folder icon" and 0102's "custom folder
