@@ -253,11 +253,11 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             backing: .buffered,
             defer: false
         )
-        // Finder's window: the toolbar and the title share one bar, and the sidebar runs the
-        // window's full height beside it (docs/decisions/0128-finder-window-chrome.md). The
-        // compact style keeps the bar as short as Finder's
-        // (docs/decisions/0133-flat-translucent-bars.md).
-        window.toolbarStyle = .unifiedCompact
+        // Finder's window: the toolbar and the title share one bar, and the sidebar's glass runs
+        // up to the window's top with the window buttons in it. AppKit runs a sidebar up past the
+        // toolbar only in the unified style; in the compact one it starts below the bar
+        // (docs/decisions/0136-sidebar-glass-to-the-top.md).
+        window.toolbarStyle = .unified
         window.tabbingMode = .disallowed
         window.isReleasedWhenClosed = false
         return window
@@ -282,7 +282,6 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         ])
         let main = NSViewController()
         main.view = content
-        sidebarItem.isCollapsed = !workspace.showsSidebar
         let split = NSSplitViewController()
         let panesItem = NSSplitViewItem(viewController: main)
         split.splitViewItems = [sidebarItem, panesItem]
@@ -291,6 +290,10 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         window.contentViewController = split
         // Setting the content view controller sizes the window to it.
         window.setContentSize(settings.newWindowSize)
+        // Collapsed only now: a sidebar collapsed when the window takes the split view gets a
+        // hard scroll edge effect over its part of the toolbar, which stays once it shows and
+        // covers the top of its glass (docs/decisions/0136-sidebar-glass-to-the-top.md).
+        sidebarItem.isCollapsed = !workspace.showsSidebar
         window.center()
         return split.splitView
     }

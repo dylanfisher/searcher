@@ -1,7 +1,8 @@
 # 0129. Row icons at Finder's 18 points, and folders drawn as Finder draws them
 
 - **Date:** 2026-10-28
-- **Status:** accepted
+- **Status:** accepted; list view's row and icon size amended by
+  [0135](0135-list-rows-as-finder.md)
 - **Builds on:** [0004](0004-listing-view.md) (one type icon per type in rows),
   [0102](0102-thumbnails.md) (Quick Look thumbnails in rows on local volumes),
   [0046](0046-column-view.md) (the icon 16 points in from the column's edge)

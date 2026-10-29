@@ -5,12 +5,25 @@ import Browser
 /// and the frames each takes from the cell's width and the room its chevron takes.
 @MainActor
 enum ListingCellLayout {
-    /// The icon's side in the Name column, and where the name starts after it. Finder's, in its
-    /// 24-point rows on macOS 26: an 18-point icon, which draws the icon's 18-point artwork, its
-    /// left edge where a 16-point one's was, and the name 3.5 points after it, measured in column
-    /// view (fb-1028b-1.jpg; docs/decisions/0129-row-icons-as-finder.md).
-    static let iconSize = 18.0
-    static let nameX = 2 + iconSize + 3.5
+    /// A row's height, the icon's side in the Name column, and where the name starts after it.
+    /// The icon's left edge is 2 points into the cell in both views.
+    struct Rows: Equatable {
+        let height: Double
+        let iconSize: Double
+        /// From the icon's right edge to the name's text field.
+        let iconGap: Double
+
+        var nameX: Double { 2 + iconSize + iconGap }
+    }
+
+    /// Finder's list view on macOS 26, at its default 16 × 16 icon size: 20-point rows, a
+    /// 16-point icon and the name 3 points after it (fb-1029-1.jpg;
+    /// docs/decisions/0135-list-rows-as-finder.md).
+    static let listRows = Rows(height: 20, iconSize: 16, iconGap: 3)
+    /// Finder's column view on macOS 26: 24-point rows, an 18-point icon, which draws the icon's
+    /// 18-point artwork, and the name 3.5 points after it (fb-1028b-1.jpg;
+    /// docs/decisions/0129-row-icons-as-finder.md).
+    static let columnRows = Rows(height: 24, iconSize: 18, iconGap: 3.5)
 
     /// The side of the badge, which is also the height of the chevron's view.
     static let badgeSize = 16.0
@@ -86,10 +99,10 @@ enum ListingCellLayout {
         return columnChevronRoom.map { cellWidth - $0 - tagDotsGap } ?? cellWidth - 2
     }
 
-    /// Where a row's tag dots, `width` wide, start: a gap after the name, whose label is
-    /// `nameWidth` wide, as Finder puts them, or further left to end by `end`, the name
-    /// truncating before them.
-    static func tagDotsX(nameWidth: Double, width: Double, end: Double) -> Double {
+    /// Where a row's tag dots, `width` wide, start: a gap after the name, whose label starts at
+    /// `nameX` and is `nameWidth` wide, as Finder puts them, or further left to end by `end`, the
+    /// name truncating before them.
+    static func tagDotsX(nameX: Double, nameWidth: Double, width: Double, end: Double) -> Double {
         min(nameX + nameWidth + badgeGap, end - width)
     }
 
@@ -209,7 +222,8 @@ enum ListingCellLayout {
                 columnChevronRoom: chevron(in: cell) == nil ? nil : chevronRoom,
                 chevronRoom: shownRoom, badge: badge, eject: eject)
             let x = tagDotsX(
-                nameWidth: nameWidth(textField.stringValue), width: dots.frame.width, end: end)
+                nameX: textField.frame.minX, nameWidth: nameWidth(textField.stringValue),
+                width: dots.frame.width, end: end)
             if dots.frame.minX != x {
                 dots.frame.origin.x = x
             }
@@ -235,12 +249,13 @@ enum ListingCellLayout {
         return badge
     }
 
-    /// A cell of `column` in rows `height` tall, laid out with frames and autoresizing, which
-    /// costs less per row than constraints. With `chevronImage` it is a column of column view's
-    /// name cell, whose chevron takes `chevronRoom`.
+    /// A cell of `column` in `rows`, laid out with frames and autoresizing, which costs less per
+    /// row than constraints. With `chevronImage` it is a column of column view's name cell,
+    /// whose chevron takes `chevronRoom`.
     static func makeCell(
-        for column: SortColumn, height: Double, chevronImage: NSImage?, chevronRoom: Double
+        for column: SortColumn, rows: Rows, chevronImage: NSImage?, chevronRoom: Double
     ) -> NSTableCellView {
+        let height = rows.height
         let frame = NSRect(x: 0, y: 0, width: column.width, height: height)
         let cell: NSTableCellView
         if let chevronImage {
@@ -261,17 +276,23 @@ enum ListingCellLayout {
         cell.identifier = column.identifier
         var textX = 2.0
         if column == .name {
+            let side = rows.iconSize
             let imageView = NSImageView(
-                frame: NSRect(x: 2, y: (height - iconSize) / 2, width: iconSize, height: iconSize))
+                frame: NSRect(x: 2, y: (height - side) / 2, width: side, height: side))
             imageView.imageScaling = .scaleProportionallyUpOrDown
             imageView.autoresizingMask = [.minYMargin, .maxYMargin]
             // The icon repeats the Kind column, so VoiceOver reads the name alone.
             imageView.setAccessibilityElement(false)
             cell.addSubview(imageView)
             cell.imageView = imageView
-            textX = nameX
+            textX = rows.nameX
         }
         let textField = NSTextField(labelWithString: "")
+        // Muted beside the name, as Finder draws them. AppKit draws both near white on an
+        // emphasized selection.
+        if column != .name {
+            textField.textColor = .secondaryLabelColor
+        }
         textField.lineBreakMode = column == .name ? .byTruncatingMiddle : .byTruncatingTail
         textField.alignment = column.alignment
         textField.frame = NSRect(

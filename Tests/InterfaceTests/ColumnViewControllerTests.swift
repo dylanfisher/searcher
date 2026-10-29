@@ -1004,8 +1004,10 @@ private struct LoadingThirdColumn {
     #expect(view.iconView.frame.width == view.iconView.frame.height)
     #expect(view.iconView.frame.width > ColumnPreview.defaultImageSide)
     #expect(view.nameField.stringValue == "x.txt")
-    #expect(view.summaryField.stringValue == "\(preview.kind.text) – 1 byte")
-    #expect(view.modifiedField.stringValue == EntryCellFormatter().longDate(testDate))
+    #expect(view.summaryField.stringValue == "\(preview.kind.text) - 1 byte")
+    #expect(
+        view.modifiedField.stringValue
+            == EntryCellFormatter().longDate(testDate, style: view.dateStyle))
     #expect(!view.acceptsFirstResponder)
 }
 
@@ -1195,7 +1197,7 @@ private func fieldsBottom(_ view: ColumnPreviewView) throws -> Double {
 
     column.apply(.patches([.update(file("a.txt", size: 2_000_000))]), at: column.location)
 
-    await settle { view.summaryField.stringValue.hasSuffix(" – 2 MB") }
+    await settle { view.summaryField.stringValue.hasSuffix(" - 2 MB") }
 
     column.apply(.patches([.remove(name: "a.txt")]), at: column.location)
 
@@ -1249,7 +1251,7 @@ private let socket = DirectoryEntry(
     await settle { !view.tagPills.isHidden }
 
     view.summaryField.stringValue =
-        "Portable Document Format (PDF) – 12.3 MB" + String(repeating: " and more", count: 6)
+        "Portable Document Format (PDF) - 12.3 MB" + String(repeating: " and more", count: 6)
     fixture.controller.view.layoutSubtreeIfNeeded()
 
     let fields = try #require(view.accessibilityChildren() as? [NSTextField])
@@ -1300,7 +1302,7 @@ private let socket = DirectoryEntry(
 
     await fixture.select("a.txt", inColumn: 0)
 
-    #expect(view.summaryField.stringValue.hasSuffix(" – 1 byte"))
+    #expect(view.summaryField.stringValue.hasSuffix(" - 1 byte"))
 }
 
 private func entry(_ name: String, _ type: DirectoryEntry.FileType) -> DirectoryEntry {
@@ -1811,7 +1813,10 @@ private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
     await fixture.select("a.txt", inColumn: 0)
 
     let view = try #require(fixture.controller.previewView)
-    await settle { view.createdField.stringValue == EntryCellFormatter().longDate(testDate) }
+    await settle {
+        view.createdField.stringValue
+            == EntryCellFormatter().longDate(testDate, style: view.dateStyle)
+    }
     #expect(view.lastOpenedField.stringValue == ColumnPreviewView.noDate)
 }
 
@@ -1832,7 +1837,8 @@ private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
     await fixture.select("one.flac", inColumn: 2)
     let view = try #require(fixture.controller.previewView)
     let formatter = EntryCellFormatter()
-    #expect(view.createdField.stringValue == formatter.longDate(testDate))
+    let oneStyle = view.dateStyle
+    #expect(view.createdField.stringValue == formatter.longDate(testDate, style: oneStyle))
     var shown: [[String]] = []
     let controller = fixture.controller
     fixture.pane.onChange = {
@@ -1850,11 +1856,11 @@ private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
     await settle { view.nameField.stringValue == "two.flac" }
 
     let oneShown = [
-        "one.flac", formatter.longDate(testDate),
-        formatter.longDate(testDate.addingTimeInterval(60)), "Red",
+        "one.flac", formatter.longDate(testDate, style: oneStyle),
+        formatter.longDate(testDate.addingTimeInterval(60), style: oneStyle), "Red",
     ]
     let twoShown = [
-        "two.flac", formatter.longDate(testDate.addingTimeInterval(120)),
+        "two.flac", formatter.longDate(testDate.addingTimeInterval(120), style: view.dateStyle),
         ColumnPreviewView.noDate, "",
     ]
     #expect(!shown.isEmpty)
@@ -1882,6 +1888,7 @@ private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
     await fixture.select("one.flac", inColumn: 2)
     let view = try #require(fixture.controller.previewView)
     #expect(view.iconView.image !== typeIcon)
+    let oneStyle = view.dateStyle
     let clock = ManualClock()
     fixture.pane.columnOpenClock = clock
     var shown: [[String]] = []
@@ -1904,16 +1911,19 @@ private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
     await settle { view.nameField.stringValue == "two.flac" }
 
     let formatter = EntryCellFormatter()
-    let oneShown = ["one.flac", formatter.longDate(testDate), "thumbnail"]
-    let twoShown = ["two.flac", formatter.longDate(testDate.addingTimeInterval(120)), "thumbnail"]
+    let oneShown = ["one.flac", formatter.longDate(testDate, style: oneStyle), "thumbnail"]
+    let twoShown = [
+        "two.flac", formatter.longDate(testDate.addingTimeInterval(120), style: view.dateStyle),
+        "thumbnail",
+    ]
     #expect(!shown.isEmpty)
     #expect(shown.allSatisfy { $0 == oneShown || $0 == twoShown }, "\(shown)")
     #expect(shown.last == twoShown)
 }
 
 /// As Finder draws its preview's Information section: each row's title at the left in
-/// secondary text and its value at the right in the label color, both in the small system
-/// font, with a rule under each row and none above the first.
+/// secondary text and its value at the right in the label color, both in the rows' type, with a
+/// rule between each two rows and none above the first or under the last.
 @MainActor @Test func theInformationRowsAreLaidOutAsFindersAre() async throws {
     let fixture = await Fixture()
     await fixture.select("a.txt", inColumn: 0)
@@ -1921,7 +1931,7 @@ private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
     fixture.controller.view.layoutSubtreeIfNeeded()
 
     #expect(view.nameField.font == ColumnPreviewView.nameFont)
-    #expect(view.summaryField.font == ColumnPreviewView.detailFont)
+    #expect(view.summaryField.font == ColumnPreviewView.summaryFont)
     #expect(view.summaryField.textColor == .secondaryLabelColor)
     // The name and the kind and size start where the row titles do, as in Finder.
     let titlesX = aligned(view.rows[0].titleField, in: view).minX
@@ -1929,19 +1939,20 @@ private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
         #expect(field.alignment != .center && field.alignment != .right)
         #expect(aligned(field, in: view).minX == titlesX)
     }
-    let small = NSFont.smallSystemFontSize
     var previousBottom: Double?
-    for row in view.rows {
+    for (index, row) in view.rows.enumerated() {
         let frame = aligned(row, in: view)
         let title = aligned(row.titleField, in: view)
         let value = aligned(row.value, in: view)
         let rule = aligned(row.rule, in: view)
-        #expect(row.titleField.font?.pointSize == small)
-        #expect(row.value.font?.pointSize == small)
+        #expect(row.titleField.font == ColumnPreviewView.detailFont)
+        #expect(row.value.font == ColumnPreviewView.detailFont)
         #expect(row.titleField.textColor == .secondaryLabelColor)
         #expect(row.value.textColor == .labelColor)
         #expect(row.value.alignment == .right)
         #expect(row.rule.boxType == .separator)
+        // Rules only between rows, as Finder's macOS 26 preview draws them: none under the last.
+        #expect(row.rule.isHidden == (index == view.rows.count - 1))
         // The row spans the fields' width: title at its left, value at its right.
         #expect(frame.width == view.bounds.width - 24)
         #expect(title.minX == frame.minX)
@@ -1964,6 +1975,121 @@ private func informationTitles(_ view: ColumnPreviewView) throws -> [String] {
 private func aligned(_ view: NSView, in ancestor: NSView) -> NSRect {
     guard let superview = view.superview else { preconditionFailure("\(view) isn't shown") }
     return superview.convert(view.alignmentRect(forFrame: view.frame), to: ancestor)
+}
+
+/// The type and spacing measured from Finder's macOS 26 preview, beside ours in the same
+/// screenshot (fb-1029-4.jpg; docs/decisions/0095-preview-metadata.md): the name in 15-point
+/// semibold, the kind and size in 13-point regular, the headers in 13-point semibold, the rows'
+/// titles and values in 11-point medium, and Finder's distances between baselines.
+@MainActor @Test func thePreviewsTypeAndSpacingAreFindersOnMacOS26() async throws {
+    #expect(ColumnPreviewView.nameFont == .systemFont(ofSize: 15, weight: .semibold))
+    #expect(ColumnPreviewView.summaryFont == .systemFont(ofSize: 13))
+    #expect(ColumnPreviewView.headerFont == .systemFont(ofSize: 13, weight: .semibold))
+    #expect(ColumnPreviewView.detailFont == .systemFont(ofSize: 11, weight: .medium))
+
+    let fixture = await Fixture()
+    let reader = GatedItemInfoReader([
+        "/Volumes/r/a.txt": ItemInfo(created: testDate, lastOpened: testDate, tags: ["Red"])
+    ])
+    reader.releaseAll()
+    fixture.pane.itemInfoReader = reader
+    await fixture.select("a.txt", inColumn: 0)
+    let view = try #require(fixture.controller.previewView)
+    await settle { !view.tagPills.isHidden }
+    fixture.controller.view.layoutSubtreeIfNeeded()
+
+    // Each field's first baseline, from the preview's top.
+    func baseline(_ field: NSTextField) -> Double {
+        view.bounds.maxY - aligned(field, in: view).maxY + field.firstBaselineOffsetFromTop
+    }
+    let fields = try #require(view.accessibilityChildren() as? [NSTextField])
+    let information = try #require(fields.first { $0.stringValue == "Information" })
+    let tags = try #require(fields.first { $0.stringValue == ColumnPreviewView.tagsTitle })
+    let lines = [
+        view.nameField, view.summaryField, information, view.rows[0].titleField,
+        view.rows[1].titleField, view.rows[2].titleField, tags,
+    ].map(baseline)
+    let gaps = zip(lines.dropFirst(), lines).map { $0 - $1 }
+    #expect(gaps == [20, 24, 22, 23, 23, 33], "\(gaps)")
+}
+
+/// As Finder's preview writes its dates: in full when they fit on a line beside their titles,
+/// else without the weekday, "June 22, 2024 at 8:38 AM", rather than wrapping
+/// (fb-1029-4.jpg). Every row takes the same form.
+@MainActor @Test func aDateTooLongForItsRowDropsItsWeekday() async throws {
+    let fixture = await Fixture()
+    let reader = GatedItemInfoReader([
+        "/Volumes/r/a.txt": ItemInfo(created: testDate, lastOpened: testDate, tags: [])
+    ])
+    reader.releaseAll()
+    fixture.pane.itemInfoReader = reader
+    await fixture.select("a.txt", inColumn: 0)
+    let view = try #require(fixture.controller.previewView)
+    await settle { !view.createdField.stringValue.isEmpty }
+    fixture.controller.view.layoutSubtreeIfNeeded()
+    let formatter = EntryCellFormatter()
+
+    // At the default width the full date doesn't fit beside Last opened.
+    #expect(view.dateStyle == .long)
+    for row in view.rows {
+        #expect(row.value.stringValue == formatter.longDate(testDate, style: .long))
+        #expect(row.value.frame.height == row.titleField.frame.height)
+    }
+
+    let grip = try #require(fixture.controller.previewGrip)
+    drag(grip, by: Settings.columnWidths.upperBound - Settings.defaultColumnWidth)
+    fixture.controller.view.layoutSubtreeIfNeeded()
+
+    #expect(view.dateStyle == .full)
+    for row in view.rows {
+        #expect(row.value.stringValue == formatter.longDate(testDate))
+    }
+}
+
+/// The rows' dates step down through every form as the preview narrows and back up as it
+/// widens, and wrap only when even the short form doesn't fit. The formatter is pinned to
+/// en_US in UTC, so the widths below pick the same forms on any Mac.
+@MainActor @Test func theRowsDatesTakeTheLongestFormThatFitsAtEachWidth() async throws {
+    let formatter = EntryCellFormatter(
+        locale: Locale(identifier: "en_US"), timeZone: TimeZone(identifier: "UTC")!)
+    let view = ColumnPreviewView(iconCache: TypeIconCache { _ in NSImage() }, formatter: formatter)
+    let entry = file("a.txt")
+    // A kind is described off the main thread.
+    let kind = await Task.detached { EntryKind(entry.type, pathExtension: "txt") }.value
+    var preview = ColumnPreview(
+        location: Location(path: "/Volumes/r/a.txt"), entry: entry, kind: kind)
+    preview.info = .read(ItemInfo(created: testDate, lastOpened: testDate, tags: []))
+    view.show(preview)
+
+    // Each width's form, and whether the dates wrap there. The full date fits from about 320
+    // points, the long one from 280, the medium one from 240; the short one fits down to at
+    // least 210 and wraps at 120.
+    func expect(
+        _ style: DateFormatter.Style, wrapping: Bool = false, atWidth width: Double,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) {
+        view.setFrameSize(NSSize(width: width, height: 600))
+        view.layoutSubtreeIfNeeded()
+        #expect(view.dateStyle == style, "\(width)", sourceLocation: sourceLocation)
+        for row in view.rows {
+            #expect(
+                row.value.stringValue == formatter.longDate(testDate, style: style),
+                sourceLocation: sourceLocation)
+        }
+        let wrapped = view.rows.contains {
+            $0.value.frame.height > $0.titleField.frame.height
+        }
+        #expect(wrapped == wrapping, "\(width)", sourceLocation: sourceLocation)
+    }
+    expect(.full, atWidth: 1000)
+    expect(.long, atWidth: 300)
+    expect(.medium, atWidth: 260)
+    expect(.short, atWidth: 210)
+    expect(.short, wrapping: true, atWidth: 120)
+    // And back up, then down again from the widest.
+    expect(.medium, atWidth: 260)
+    expect(.full, atWidth: 1000)
+    expect(.long, atWidth: 300)
 }
 
 /// A date too long for the row beside its title wraps, right-aligned, rather than losing its
@@ -2415,7 +2541,7 @@ private let gripDrags: [[Double]] = [[-30.37, -60.81, -90.13], [-60.4, -20.77, 4
 
     column.apply(.patches([.update(file("a.txt", size: 2_000_000))]), at: column.location)
 
-    await settle { view.summaryField.stringValue.hasSuffix(" – 2 MB") }
+    await settle { view.summaryField.stringValue.hasSuffix(" - 2 MB") }
     #expect(window.firstResponder === table)
 
     try select(view.modifiedField)

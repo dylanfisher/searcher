@@ -83,7 +83,7 @@ private func mainMenu() throws -> NSMenu {
     let toolbar = try #require(window.toolbar)
     #expect(toolbar === fixture.toolbar.toolbar)
     #expect(toolbar.isVisible)
-    #expect(window.toolbarStyle == .unifiedCompact)
+    #expect(window.toolbarStyle == .unified)
     #expect(window.styleMask.contains(.fullSizeContentView))
     #expect(
         toolbar.items.map(\.itemIdentifier) == [
@@ -193,6 +193,81 @@ private func mainMenu() throws -> NSMenu {
     #expect(toolbar.isVisible)
     #expect(toolbar.items.count == 4)
     #expect(fixture.window.firstResponder === table)
+}
+
+/// `view` and the views under it that draw: shown, with no hidden view between them and `view`,
+/// and not empty.
+@MainActor
+private func drawnViews(under view: NSView) -> [NSView] {
+    guard !view.isHidden, !view.frame.isEmpty else { return [] }
+    return [view] + view.subviews.flatMap(drawnViews(under:))
+}
+
+/// The view the split view holds the sidebar in: its glass card and the toolbar's band over it.
+@MainActor
+private func sidebarSlot(_ controller: BrowserWindowController) throws -> NSView {
+    var slot: NSView = controller.sidebar.view
+    while let parent = slot.superview, !(parent is NSSplitView) { slot = parent }
+    #expect(slot.superview is NSSplitView)
+    return slot
+}
+
+/// Shows the sidebar of the window of `fixture`, hidden while the window opened, with its command,
+/// in the window ordered in on the second display, and waits out the animation.
+@MainActor
+private func showSidebarOnScreen(_ fixture: Fixture) async throws {
+    #expect(!fixture.controller.showsSidebar)
+    SecondDisplay.orderFront(fixture.window)
+    try fixture.keyTable.run(WorkspaceCommands.toggleSidebar.id)
+    let controller = fixture.controller
+    await settle { controller.sidebarTarget == nil && !controller.sidebarItem.isCollapsed }
+    fixture.window.contentView?.layoutSubtreeIfNeeded()
+    fixture.window.displayIfNeeded()
+}
+
+/// Shown after the window opened without it, the sidebar has nothing over its glass, as Finder's
+/// hasn't: no material in the toolbar's band over it. AppKit gives a sidebar collapsed when the
+/// window takes its split view a hard scroll edge effect there, an opaque band over the top of the
+/// card with the window buttons in it (docs/decisions/0136-sidebar-glass-to-the-top.md).
+@MainActor @Test func aSidebarShownLaterHasNoMaterialOverItsGlass() async throws {
+    let fixture = try await Fixture()
+    defer { fixture.window.close() }
+    try await showSidebarOnScreen(fixture)
+
+    let slot = try sidebarSlot(fixture.controller)
+    let materials = drawnViews(under: slot).filter { $0 is NSVisualEffectView }
+    #expect(materials.map(inWindow) == [])
+    let scrollView = try #require(fixture.controller.sidebar.view as? NSScrollView)
+    #expect(!scrollView.drawsBackground)
+}
+
+/// The sidebar's glass card runs up to the window's top, inset there as at its leading edge, and
+/// holds the window buttons, as Finder's does. With the toolbar hidden it starts below the title
+/// bar, as AppKit lays a sidebar out in a window with no toolbar.
+@MainActor @Test func theSidebarsGlassRunsToTheTopAroundTheWindowButtons() async throws {
+    guard #available(macOS 26, *) else { return }
+    let fixture = try await Fixture()
+    defer { fixture.window.close() }
+    try await showSidebarOnScreen(fixture)
+    let window = fixture.window
+    let content = try #require(window.contentView)
+    let card = try #require(
+        sequence(first: fixture.controller.sidebar.view, next: \.superview).first {
+            $0 is NSGlassEffectView
+        })
+
+    let frame = inWindow(card)
+    #expect(frame.minX > 0)
+    #expect(content.bounds.maxY - frame.maxY == frame.minX)
+    for type in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+        let button = try #require(window.standardWindowButton(type))
+        #expect(frame.contains(inWindow(button)))
+    }
+
+    try fixture.keyTable.run(ViewCommands.toggleToolbar.id)
+    content.layoutSubtreeIfNeeded()
+
+    #expect(inWindow(card).maxY == window.contentLayoutRect.maxY)
 }
 
 /// In column view the title follows the folder selected in the focused column in the same turn
@@ -338,16 +413,15 @@ private func firstRowIsBelow(_ top: CGFloat, in controller: PaneViewController) 
     return inWindow(header).maxY <= top + 0.5 && row.maxY <= inWindow(header).minY + 0.5
 }
 
-/// The compact unified toolbar is shorter than the unified one. The panes run up under it to the
-/// window's top, so the rows scroll under its glass, and at rest the list's header and first row
-/// start below it (docs/decisions/0133-flat-translucent-bars.md).
-@MainActor @Test func theRowsRunUnderTheCompactToolbarAndStartBelowIt() async throws {
+/// The panes run up under the toolbar to the window's top, so the rows scroll under its glass,
+/// and at rest the list's header and first row start below it
+/// (docs/decisions/0133-flat-translucent-bars.md).
+@MainActor @Test func theRowsRunUnderTheToolbarAndStartBelowIt() async throws {
     let fixture = try await Fixture()
     let window = fixture.window
     let content = try #require(window.contentView)
     let controller = fixture.controller.paneViewController
     let bar = try barHeight(of: window)
-    #expect(window.toolbarStyle == .unifiedCompact)
 
     if #available(macOS 26, *) {
         #expect(inWindow(controller.view).maxY == content.bounds.maxY)

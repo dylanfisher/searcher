@@ -124,9 +124,9 @@ private func alpha(of row: NSView, at point: NSPoint) throws -> Double {
     #expect(row.convert(last.bounds, from: last).maxX <= band.maxX - 5)
 }
 
-/// The icon is 18 points square, as Finder draws it in its 24-point rows in macOS 26, which picks
-/// the icon's 18-point artwork, and the name starts 3.5 points after it, as Finder's does
-/// (fb-1028b-1.jpg; docs/decisions/0129-row-icons-as-finder.md).
+/// List view's rows are 20 points and their icons 16, as Finder's list view draws them in macOS
+/// 26, smaller than its column view's, and the name starts 3 points after the icon, as Finder's
+/// does (fb-1029-1.jpg; docs/decisions/0135-list-rows-as-finder.md).
 @MainActor @Test func aListRowsIconIsFindersSizeAndTheNameStartsWhereFindersDoes() async throws {
     let list = await controller(showing: [folder("audio")])
     list.view.layoutSubtreeIfNeeded()
@@ -135,9 +135,41 @@ private func alpha(of row: NSView, at point: NSPoint) throws -> Double {
     let icon = try #require(name.imageView)
     let text = try #require(name.textField)
 
-    #expect(list.tableView.rowHeight == 24)
-    #expect(icon.frame == NSRect(x: 2, y: 3, width: 18, height: 18))
-    #expect(text.frame.minX == icon.frame.maxX + 3.5)
+    #expect(list.tableView.rowHeight == 20)
+    #expect(list.tableView.rect(ofRow: 0).height == 20)
+    #expect(icon.frame == NSRect(x: 2, y: 2, width: 16, height: 16))
+    #expect(text.frame.minX == icon.frame.maxX + 3)
+    #expect(text.frame.midY == 10)
+}
+
+/// The name is the label color and the Size, Date Modified and Kind text the secondary label
+/// color, as Finder's list view draws them; on the emphasized selection the muted text is drawn
+/// near white, as Finder's is (fb-1029-2.jpg; docs/decisions/0135-list-rows-as-finder.md).
+@MainActor @Test func aListRowsMetadataIsMutedBesideItsName() async throws {
+    let list = await controller(showing: [file("a.txt", size: 500)])
+    list.view.appearance = NSAppearance(named: .aqua)
+    list.view.layoutSubtreeIfNeeded()
+    let row = try #require(list.tableView.rowView(atRow: 0, makeIfNecessary: true))
+    let cells = try (0..<list.tableView.numberOfColumns).map {
+        try #require(row.view(atColumn: $0) as? NSTableCellView)
+    }
+    let fields = try cells.map { try #require($0.textField) }
+
+    #expect(fields[0].textColor == .labelColor)
+    #expect(fields.dropFirst().allSatisfy { $0.textColor == .secondaryLabelColor })
+
+    let size = cells[1]
+    size.backgroundStyle = .emphasized
+    let bitmap = try #require(size.bitmapImageRepForCachingDisplay(in: size.bounds))
+    size.cacheDisplay(in: size.bounds, to: bitmap)
+    let brightest = (0..<bitmap.pixelsWide).flatMap { x in
+        (0..<bitmap.pixelsHigh).compactMap { y in
+            bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB).flatMap {
+                $0.alphaComponent > 0.5 ? min($0.redComponent, $0.blueComponent) : nil
+            }
+        }
+    }.max()
+    #expect(try #require(brightest) > 0.85)
 }
 
 /// One row of nothing, for a table of AppKit's own.

@@ -6,7 +6,8 @@ import Foundation
 /// "--" for anything without a size, and "Today at 9:41 AM" or "Sep 13, 2020 at 12:26 PM". A
 /// folder waiting for its walk shows `pendingSize` until the walk ends, then its size, after
 /// `partialPrefix` when part of its tree couldn't be read. Column view's preview writes its dates
-/// in full, as Finder's does: "Friday, October 16, 2026 at 12:50 PM".
+/// in the longest form that fits, as Finder's does: "Friday, October 16, 2026 at 12:50 PM", then
+/// "October 16, 2026 at 12:50 PM".
 @MainActor
 public struct EntryCellFormatter {
     /// A folder whose walk hasn't ended.
@@ -19,10 +20,14 @@ public struct EntryCellFormatter {
     /// The Kind of a server's share row, which shows `noSize` for its Size and Date Modified:
     /// the share's entry carries no date of its own (docs/decisions/0114-server-location.md).
     public static let shareKind = "Volume"
+    /// The forms of the preview's dates, longest first, as Finder's preview steps down from the
+    /// full date to fit one on its line.
+    public static let longDateStyles: [DateFormatter.Style] = [.full, .long, .medium, .short]
 
     private let sizes: ByteCountFormatter
     private let dates: DateFormatter
-    private let longDates: DateFormatter
+    /// The preview's formatters, by date style.
+    private let longDates: [DateFormatter.Style: DateFormatter]
 
     /// Sizes always use the system locale, since `ByteCountFormatter` takes no other.
     public init(locale: Locale = .autoupdatingCurrent, timeZone: TimeZone = .autoupdatingCurrent) {
@@ -36,12 +41,17 @@ public struct EntryCellFormatter {
         dates.dateStyle = .medium
         dates.timeStyle = .short
         dates.doesRelativeDateFormatting = true
-        longDates = DateFormatter()
-        longDates.locale = locale
-        longDates.timeZone = timeZone
-        longDates.dateStyle = .full
-        longDates.timeStyle = .short
-        longDates.doesRelativeDateFormatting = true
+        var longDates: [DateFormatter.Style: DateFormatter] = [:]
+        for style in Self.longDateStyles {
+            let formatter = DateFormatter()
+            formatter.locale = locale
+            formatter.timeZone = timeZone
+            formatter.dateStyle = style
+            formatter.timeStyle = .short
+            formatter.doesRelativeDateFormatting = true
+            longDates[style] = formatter
+        }
+        self.longDates = longDates
     }
 
     /// The Size text of `entry`. `folderSize` is its walked size, for a folder,
@@ -72,9 +82,13 @@ public struct EntryCellFormatter {
         dates.string(from: date)
     }
 
-    /// A date written in full, as Finder's preview writes it: "Friday, October 16, 2026 at
-    /// 12:50 PM", or "Today at 9:41 AM".
-    public func longDate(_ date: Date) -> String {
-        longDates.string(from: date)
+    /// A date as Finder's preview writes it in `style`, with the time: in full, "Friday, October
+    /// 16, 2026 at 12:50 PM"; `.long`, "October 16, 2026 at 12:50 PM"; and so on down to
+    /// `.short`. A date today or yesterday is "Today at 9:41 AM" in every style.
+    public func longDate(_ date: Date, style: DateFormatter.Style = .full) -> String {
+        guard let formatter = longDates[style] else {
+            preconditionFailure("no preview date formatter for style \(style.rawValue)")
+        }
+        return formatter.string(from: date)
     }
 }

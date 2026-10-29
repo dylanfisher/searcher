@@ -428,7 +428,7 @@ private func column(_ title: String, in table: NSTableView) throws -> Int {
 }
 
 /// Where the first dark pixel of `header`'s drawing is, left to right, in `rect`: the start of
-/// the title drawn there.
+/// the title drawn there. Dark is under 0.75, so a title in the secondary label color counts.
 @MainActor
 private func titleStart(in header: NSTableHeaderView, within rect: NSRect) throws -> Double {
     let bitmap = try #require(header.bitmapImageRepForCachingDisplay(in: header.bounds))
@@ -439,7 +439,7 @@ private func titleStart(in header: NSTableHeaderView, within rect: NSRect) throw
         for dy in -4...4 {
             guard let color = bitmap.colorAt(x: x, y: y + dy)?.usingColorSpace(.sRGB),
                 color.alphaComponent > 0.5,
-                (color.redComponent + color.greenComponent + color.blueComponent) / 3 < 0.5
+                (color.redComponent + color.greenComponent + color.blueComponent) / 3 < 0.75
             else { continue }
             return Double(x) / scale
         }
@@ -476,6 +476,7 @@ private func titleShift(ofColumn index: Int, in header: NSTableHeaderView) throw
     let plain = NSTableView(frame: table.frame)
     plain.style = table.style
     plain.intercellSpacing = table.intercellSpacing
+    plain.rowHeight = table.rowHeight
     for column in table.tableColumns {
         let copy = NSTableColumn(identifier: column.identifier)
         copy.width = column.width
@@ -491,6 +492,114 @@ private func titleShift(ofColumn index: Int, in header: NSTableHeaderView) throw
         plain.frameOfCell(atColumn: last, row: 0).maxX
             - table.frameOfCell(atColumn: last, row: 0).maxX == inset)
     #expect(table.frameOfCell(atColumn: 1, row: 0) == plain.frameOfCell(atColumn: 1, row: 0))
+}
+
+/// The darkest gray of `header`'s drawing in `rect`, 0 for black and 1 for white; with
+/// `lightest`, the lightest, a title's in the dark appearance.
+@MainActor
+private func darkestTitleGray(
+    in header: NSTableHeaderView, within rect: NSRect, lightest: Bool = false
+) throws -> Double {
+    let bitmap = try #require(header.bitmapImageRepForCachingDisplay(in: header.bounds))
+    header.cacheDisplay(in: header.bounds, to: bitmap)
+    let scale = Double(bitmap.pixelsWide) / header.bounds.width
+    var extreme = lightest ? 0.0 : 1.0
+    for x in Int(rect.minX * scale)..<Int(rect.maxX * scale) {
+        for y in 0..<bitmap.pixelsHigh {
+            guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                color.alphaComponent > 0.5
+            else { continue }
+            let gray = (color.redComponent + color.greenComponent + color.blueComponent) / 3
+            extreme = lightest ? max(extreme, gray) : min(extreme, gray)
+        }
+    }
+    return extreme
+}
+
+/// A window that is never shown but says it is key and main, or not, as a test sets it.
+@MainActor
+private final class KeyStateWindow: NSWindow {
+    var isKey = true
+    override var isKeyWindow: Bool { isKey }
+    override var isMainWindow: Bool { isKey }
+}
+
+/// The sorted column's title draws as AppKit's own header cell draws it, and the others are
+/// muted, in the light and the dark appearance and in a window that is key or not. AppKit draws
+/// its titles the same in both window states, so the header follows it there too. Each title is
+/// compared with the same column's drawn by a plain `NSTableHeaderCell`
+/// (docs/decisions/0135-list-rows-as-finder.md).
+@MainActor @Test(arguments: [NSAppearance.Name.aqua, .darkAqua], [true, false])
+func theSortedTitleDrawsAsAppKitsOwnAndTheOthersMuted(
+    appearance: NSAppearance.Name, isKey: Bool
+) async throws {
+    let list = await controller(showing: [file("a")])
+    let window = KeyStateWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 800, height: 400), styleMask: [.titled],
+        backing: .buffered, defer: true)
+    window.isReleasedWhenClosed = false
+    window.appearance = NSAppearance(named: appearance)
+    window.isKey = isKey
+    window.contentView = list.view
+    window.contentView?.layoutSubtreeIfNeeded()
+    let table = list.tableView
+    let header = try #require(table.headerView)
+    let dark = appearance == .darkAqua
+    func grays() throws -> [Double] {
+        try table.tableColumns.indices.map {
+            header.needsDisplay = true
+            return try darkestTitleGray(
+                in: header, within: header.headerRect(ofColumn: $0), lightest: dark)
+        }
+    }
+
+    let ours = try grays()
+    let cells = table.tableColumns.map(\.headerCell)
+    for column in table.tableColumns {
+        let plain = NSTableHeaderCell(textCell: column.headerCell.stringValue)
+        plain.alignment = column.headerCell.alignment
+        column.headerCell = plain
+    }
+    let appKits = try grays()
+    for (column, cell) in zip(table.tableColumns, cells) { column.headerCell = cell }
+
+    let sorted = try #require(
+        table.tableColumns.firstIndex {
+            $0.sortDescriptorPrototype?.key == table.sortDescriptors.first?.key
+        })
+    for index in ours.indices {
+        if index == sorted {
+            #expect(abs(ours[index] - appKits[index]) < 0.02, "\(ours) \(appKits)")
+        } else {
+            #expect(abs(ours[index] - appKits[index]) > 0.15, "\(ours) \(appKits)")
+        }
+    }
+}
+
+/// The sorted column's title is drawn dark, as AppKit draws it, and the others in the secondary
+/// label color, as Finder's header draws them (fb-1029-2.jpg: (34, 34, 34) and (120, 121, 120)
+/// on white; docs/decisions/0135-list-rows-as-finder.md). A sort by another column moves it.
+/// Drawn at 1x here, a title's darkest pixel is lighter than its color.
+@MainActor @Test func theHeaderMutesTheTitlesOfTheColumnsNotSortedBy() async throws {
+    let (table, header) = try await laidOutList()
+    func grays() throws -> [String: Double] {
+        header.needsDisplay = true
+        return try Dictionary(
+            uniqueKeysWithValues: table.tableColumns.indices.map {
+                (
+                    table.tableColumns[$0].title,
+                    try darkestTitleGray(in: header, within: header.headerRect(ofColumn: $0))
+                )
+            })
+    }
+
+    for title in ["Name", "Kind"] {
+        let column = try #require(table.tableColumns.first { $0.title == title })
+        table.sortDescriptors = [try #require(column.sortDescriptorPrototype)]
+        let shown = try grays()
+        #expect(try #require(shown[title]) < 0.4)
+        #expect(shown.filter { $0.key != title }.values.allSatisfy { $0 > 0.45 }, "\(shown)")
+    }
 }
 
 /// A column the user moves to the front takes the moved title; the one it displaced loses it.

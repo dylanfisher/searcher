@@ -1666,7 +1666,7 @@ private func rowImage(_ controller: ListingViewController, row: Int) -> NSImage?
     #expect(await maker.waitForCalls(4 + scrolled.count))
     #expect(Set(maker.paths.dropFirst(4)) == Set(scrolled))
     #expect(maker.calls.allSatisfy { !$0.onMainThread && $0.onBlockingCallThread })
-    #expect(maker.calls.allSatisfy { $0.side == 18 && $0.scale == 2 })
+    #expect(maker.calls.allSatisfy { $0.side == 16 && $0.scale == 2 })
     let rows = table.rows(in: table.visibleRect)
     await settle {
         (rows.lowerBound..<rows.upperBound).allSatisfy { row in
@@ -1713,7 +1713,7 @@ private func rowImage(_ controller: ListingViewController, row: Int) -> NSImage?
         maker: maker)
     let service = try #require(controller.pane.service.thumbnails)
 
-    await settle { service.cached(at: "/folder/e.jpg", entry: file("e.jpg"), side: 18) != nil }
+    await settle { service.cached(at: "/folder/e.jpg", entry: file("e.jpg"), side: 16) != nil }
     await settle { service.calls.isIdle }
 
     #expect(Set(maker.paths) == ["/folder/b.jpg", "/folder/e.jpg"])

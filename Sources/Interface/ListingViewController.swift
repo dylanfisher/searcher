@@ -558,6 +558,8 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         // unselected rows, updating each changed row's neighbors: 13–16 ms on the main thread to
         // select 100k rows in a release build. Full width draws the same selection in 0.2 ms.
         tableView.style = .fullWidth
+        // AppKit's default is 24 points, column view's height and not list view's.
+        tableView.rowHeight = rows.height
         tableView.usesAlternatingRowBackgroundColors = !showsNamesOnly
         tableView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         // Set before the delegate, so the first sort doesn't reach `sortDescriptorsDidChange`.
@@ -1150,13 +1152,13 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
                 cellWidth: cell.width, columnChevronRoom: showsNamesOnly ? chevronRoom : nil,
                 chevronRoom: shownRoom, badge: entry.isDataless, eject: eject)
             tagDotsX = ListingCellLayout.tagDotsX(
-                nameWidth: ListingCellLayout.nameWidth(entry.name),
+                nameX: rows.nameX, nameWidth: ListingCellLayout.nameWidth(entry.name),
                 width: RowTagDotsView.size(count: entry.tagLabels.count).width, end: end)
         }
         let end = ListingCellLayout.nameEnd(
             cellWidth: cell.width, chevronRoom: shownRoom, badge: entry.isDataless,
             eject: eject, tagDotsX: tagDotsX)
-        let nameX = ListingCellLayout.nameX
+        let nameX = rows.nameX
         let labelHeight = ListingCellLayout.labelHeight
         return NSRect(
             x: cell.minX + nameX, y: cell.minY + (cell.height - labelHeight) / 2,
@@ -1185,7 +1187,13 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         // A point over, for the rounding of the field's own width.
         let field = (nameWidth + ListingCellLayout.nameFieldPadding).rounded(.up) + 1
         let trailing = ListingCellLayout.badgeGap + chevronRoom
-        return (outside + ListingCellLayout.nameX + field + trailing).rounded(.up)
+        return (outside + rows.nameX + field + trailing).rounded(.up)
+    }
+
+    /// The size of the rows and their icons: Finder's column view's in a column, its list
+    /// view's in a list.
+    var rows: ListingCellLayout.Rows {
+        showsNamesOnly ? ListingCellLayout.columnRows : ListingCellLayout.listRows
     }
 
     /// The room the chevron's view takes inside the cell, from its right edge, for the table's
@@ -1197,7 +1205,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// A new cell for `column`; a column of column view's name cell has a chevron.
     private func makeCell(for column: SortColumn) -> NSTableCellView {
         ListingCellLayout.makeCell(
-            for: column, height: tableView.rowHeight,
+            for: column, rows: rows,
             chevronImage: showsNamesOnly && column == .name ? iconCache.folderChevron : nil,
             chevronRoom: chevronRoom)
     }
