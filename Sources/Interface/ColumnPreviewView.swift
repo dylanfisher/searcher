@@ -263,6 +263,10 @@ final class ColumnPreviewView: NSView {
         scrollView.hasHorizontalScroller = false
         scrollView.horizontalScrollElasticity = .none
         scrollView.autohidesScrollers = true
+        // The preview runs under the pane's path bar glass; its end and its scroller stop above
+        // it (docs/decisions/0132-glass-path-bar.md).
+        scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.contentInsets.bottom = PaneViewController.pathBarCover
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(scrollView)
 

@@ -2083,6 +2083,30 @@ private func emphasizesPath(_ id: PaneID?, in fixture: Fixture) throws -> Bool {
     #expect(try emphasizesPath(left, in: fixture))
 }
 
+/// In a split each pane's path bar floats in its own glass, and the focused pane's titles are the
+/// label color while the other's are the secondary one, so the two still differ on the glass
+/// (docs/decisions/0132-glass-path-bar.md).
+@MainActor @Test func eachPanesPathBarHasItsGlassAndOnlyTheFocusedOnesTitlesAreDark()
+    async throws
+{
+    let fixture = try await Fixture()
+    let (left, right) = try twoPanes(.horizontal, in: fixture)
+    let focused = try fixture.paneController(left)
+    let other = try fixture.paneController(right)
+    await settle { !focused.pathBar.segments.isEmpty && !other.pathBar.segments.isEmpty }
+
+    #expect(focused.pathBarGlass !== other.pathBarGlass)
+    for controller in [focused, other] {
+        #expect(controller.pathBar.isDescendant(of: controller.pathBarGlass))
+        if #available(macOS 26, *) {
+            #expect(controller.pathBarGlass is NSGlassEffectView)
+        }
+    }
+    #expect(focused.pathBar.segments.allSatisfy { $0.contentTintColor == .labelColor })
+    #expect(
+        other.pathBar.segments.allSatisfy { $0.contentTintColor == .secondaryLabelColor })
+}
+
 /// The focused pane's path bar stays emphasized while the window is main but not key, as under
 /// the palette it opened, and goes unemphasized once it isn't main either, as when another
 /// window or app comes forward (docs/decisions/0026-path-bar.md).
@@ -2342,6 +2366,23 @@ extension PressFixture {
     #expect(press.fixture.window.firstResponder === focusedColumn)
     #expect(press.leftPane.columnTrail?.focusedIndex == before)
     #expect(focusedColumn.selectedRowIndexes == rowsBefore)
+}
+
+/// A press on the path bar's glass past its segments goes up to the pane, which takes the focus
+/// and gives its table the keys, as a press on the bar's own row did
+/// (docs/decisions/0132-glass-path-bar.md).
+@MainActor @Test func aPressOnThePathBarsGlassPastTheSegmentsFocusesItsPane() async throws {
+    let press = try await PressFixture()
+    defer { press.fixture.window.orderOut(nil) }
+    press.show()
+    let controller = try press.fixture.paneController(press.fixture.tab.layout.panes[0])
+    let bar = controller.pathBar
+    let last = try #require(bar.segments.last)
+    #expect(last.frame.maxX + 20 < bar.bounds.maxX)
+
+    try press.press(at: NSPoint(x: bar.bounds.maxX - 10, y: bar.bounds.midY), in: bar)
+
+    #expect(press.isFocusedWithKeys)
 }
 
 /// Dylan: "the text in finder's preview is selectable - ours should be too." The name, the kind

@@ -187,6 +187,9 @@ final class ColumnViewController: NSViewController {
         scrollView.verticalScrollElasticity = .none
         // Past the last column, the color the columns' rows are drawn on.
         scrollView.backgroundColor = .controlBackgroundColor
+        // The columns run under the pane's path bar glass; their scroller sits above it
+        // (docs/decisions/0132-glass-path-bar.md).
+        scrollView.scrollerInsets.bottom = PaneViewController.pathBarCover
         // VoiceOver reads the columns as it reads `NSBrowser`'s: a browser whose children are
         // the columns, each a scroll area named for its folder.
         columnsView.setAccessibilityElement(true)

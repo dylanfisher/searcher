@@ -373,7 +373,7 @@ private final class MainThreadRecord: @unchecked Sendable {
 
     window.contentView?.layoutSubtreeIfNeeded()
 
-    let width = fixture.controller.view.bounds.width
+    let width = fixture.controller.pathBarGlass.bounds.width
     #expect(status.frame.width <= width * 0.6 + 0.5)
     #expect(status.frame.width >= width * 0.6 - 0.5)
     #expect(fixture.controller.pathBar.frame.maxX == status.frame.minX)
@@ -416,31 +416,130 @@ private final class VolumeName: @unchecked Sendable {
     #expect(fixture.controller.pathBar.segments.map(\.title) == ["New Disk", "root"])
 }
 
-@MainActor @Test func inAWindowTheListEndsWhereThePathBarStarts() async throws {
+/// A window showing `/root` with `count` files, each pane's path bar floating in its glass.
+@MainActor
+private func manyRowsWindow(_ count: Int) async -> BrowserWindowController {
+    var folders = Fixture.folders
+    folders["/root"] = [folder("docs")] + (0..<count).map { file(String(format: "file %04d", $0)) }
     let settings = untouchedSettings()
     let window = BrowserWindowController(
         location: Location(path: "/root"),
-        service: ListingService(lister: StubLister(Fixture.folders)) { "Test Disk" },
+        service: ListingService(lister: StubLister(folders)) { "Test Disk" },
         systemActions: StubSystemActions(), settings: settings,
         favorites: Favorites(settings: settings), volumes: StubSidebarVolumes().list())
+    await settle { window.paneViewController.pane.state.isLoaded }
+    window.window?.contentView?.layoutSubtreeIfNeeded()
+    return window
+}
+
+/// The path bar and the status float in one glass capsule over the pane's bottom, the system's
+/// Liquid Glass from macOS 26 (docs/decisions/0132-glass-path-bar.md).
+@MainActor @Test func thePathBarAndStatusFloatInGlassOverThePanesBottom() async throws {
+    let window = await manyRowsWindow(3)
     let controller = window.paneViewController
-    await settle { controller.pane.state.isLoaded }
+    let glass = controller.pathBarGlass
+
+    if #available(macOS 26, *) {
+        let system = try #require(glass as? NSGlassEffectView)
+        #expect(system.cornerRadius == PathBarView.height / 2)
+        #expect(system.style == .regular)
+    }
+    #expect(controller.pathBar.isDescendant(of: glass))
+    #expect(controller.status.isDescendant(of: glass))
+    // VoiceOver reads the bar's group, not the glass around it.
+    #expect(!glass.isAccessibilityElement())
+    #expect(controller.pathBar.isAccessibilityElement())
+    let pane = controller.view.bounds
+    #expect(pane.width > 0 && pane.height > PathBarView.height)
+    let gap = PaneViewController.pathBarGap
+    #expect(
+        glass.frame
+            == NSRect(x: gap, y: gap, width: pane.width - 2 * gap, height: PathBarView.height))
+    let bar = controller.pathBar.convert(controller.pathBar.bounds, to: controller.view)
+    let status = controller.status.convert(controller.status.bounds, to: controller.view)
+    #expect(bar.minX == glass.frame.minX && bar.maxX == status.minX)
+    #expect(status.maxX == glass.frame.maxX)
+    #expect(bar.minY == glass.frame.minY && bar.height == PathBarView.height)
+    #expect(status.minY == bar.minY && status.height == bar.height)
+    // The list runs under the glass to the pane's bottom.
+    let list = controller.listingViewController.view.frame
+    #expect(list.minY == 0 && list.maxY == pane.maxY)
+    #expect(list.contains(glass.frame))
+}
+
+/// The list scrolls under the glass, and both its first and its last row can be shown clear of
+/// it and of the header.
+@MainActor @Test func theFirstAndLastRowsAreClearOfTheGlassInTheList() async throws {
+    let window = await manyRowsWindow(200)
+    let controller = window.paneViewController
+    let table = controller.listingViewController.tableView
+    let glass = controller.pathBarGlass.frame
+    let header = try #require(table.headerView)
+    let headerInPane = header.convert(header.bounds, to: controller.view)
+    let shown = { (row: Int) in table.convert(table.rect(ofRow: row), to: controller.view) }
+    #expect(table.numberOfRows == 201)
+
+    #expect(shown(0).minY >= glass.maxY && shown(0).maxY <= headerInPane.minY)
+
+    table.scrollRowToVisible(table.numberOfRows - 1)
     window.window?.contentView?.layoutSubtreeIfNeeded()
 
-    let pane = controller.view.bounds
-    let list = controller.listingViewController.view.frame
-    let bar = controller.pathBar.frame
-    #expect(pane.width > 0 && pane.height > PathBarView.height)
-    let status = controller.status.frame
-    #expect(bar == NSRect(x: 0, y: 0, width: status.minX, height: PathBarView.height))
-    #expect(status.maxX == pane.width && status.minY == 0 && status.height == bar.height)
-    #expect(list == NSRect(x: 0, y: bar.maxY, width: pane.width, height: pane.height - bar.maxY))
-    #expect(!list.intersects(bar))
-    let header = try #require(controller.listingViewController.tableView.headerView)
-    let headerInPane = header.convert(header.bounds, to: controller.view)
-    #expect(!headerInPane.isEmpty)
-    #expect(pane.contains(headerInPane))
-    #expect(!headerInPane.intersects(bar))
+    let last = shown(table.numberOfRows - 1)
+    #expect(last.minY >= glass.maxY + Margin.standard - 0.5)
+    #expect(controller.view.bounds.contains(last))
+    // The scrollers stop above the glass too.
+    let scrollView = try #require(controller.listingViewController.view as? NSScrollView)
+    #expect(scrollView.scrollerInsets.bottom == PaneViewController.pathBarCover)
+}
+
+/// A column's last row can be shown clear of the glass, and the columns' scroller sits above it.
+@MainActor @Test func aColumnsLastRowIsClearOfTheGlass() async throws {
+    let window = await manyRowsWindow(200)
+    let controller = window.paneViewController
+    controller.pane.setViewMode(.column)
+    let trail = try #require(controller.pane.columnTrail)
+    await settle {
+        trail.columns.allSatisfy { $0.pane.state.isLoaded }
+            && controller.columnViewController.columnControllers.contains {
+                $0.pane.location == Location(path: "/root") && $0.tableView.numberOfRows == 201
+            }
+    }
+    window.window?.contentView?.layoutSubtreeIfNeeded()
+    let column = try #require(
+        controller.columnViewController.columnControllers.first {
+            $0.pane.location == Location(path: "/root")
+        })
+    let table = column.tableView
+
+    table.scrollRowToVisible(table.numberOfRows - 1)
+    window.window?.contentView?.layoutSubtreeIfNeeded()
+
+    let last = table.convert(table.rect(ofRow: table.numberOfRows - 1), to: controller.view)
+    #expect(last.minY >= controller.pathBarGlass.frame.maxY + Margin.standard - 0.5)
+    let columns = try #require(controller.columnViewController.view as? NSScrollView)
+    #expect(columns.scrollerInsets.bottom == PaneViewController.pathBarCover)
+}
+
+/// A click on a segment reaches it through the glass, and navigates.
+@MainActor @Test func aClickOnASegmentInTheGlassReachesItAndNavigates() async throws {
+    let window = await manyRowsWindow(3)
+    let controller = window.paneViewController
+    controller.pane.navigate(to: Location(path: "/root/docs"))
+    await settle {
+        controller.pane.state.isLoaded
+            && controller.pathBar.location == Location(path: "/root/docs")
+    }
+    window.window?.contentView?.layoutSubtreeIfNeeded()
+    let segment = controller.pathBar.segments[1]
+    let container = try #require(controller.view.superview)
+    let center = segment.convert(
+        NSPoint(x: segment.bounds.midX, y: segment.bounds.midY), to: container)
+
+    let hit = try #require(controller.view.hitTest(center))
+
+    #expect(hit === segment || hit.isDescendant(of: segment))
+    segment.performClick(nil)
+    #expect(controller.pane.location == Location(path: "/root"))
 }
 
 @MainActor @Test func clickingAPathBarSegmentGoesThereWithTheChildSelected() async throws {

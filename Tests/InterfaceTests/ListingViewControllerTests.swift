@@ -405,13 +405,14 @@ func aTrashedRowHandsItsSelectionOnInThePassThatDropsIt(
     #expect(table.visibleRect.contains(table.rect(ofRow: 40)))
 }
 
-/// The part of the table's visible rect the rows show in, below the column header.
+/// The part of the table's visible rect the rows show in, below the column header and above the
+/// path bar's glass.
 @MainActor
 func rowArea(of table: NSTableView) -> NSRect {
     var area = table.visibleRect
     let header = table.headerView?.frame.height ?? 0
     area.origin.y += header
-    area.size.height -= header
+    area.size.height -= header + PaneViewController.pathBarCover
     return area
 }
 
@@ -433,12 +434,13 @@ private func rowEdges(of controller: ListingViewController) throws -> (
     let header = try #require(controller.tableView.headerView)
     return (
         scrollView.convert(header.bounds, from: header).maxY + Margin.standard,
-        scrollView.contentView.frame.maxY - Margin.standard
+        scrollView.contentView.frame.maxY - Margin.standard - PaneViewController.pathBarCover
     )
 }
 
 /// At the top of the list the first row sits the shared margin below the column header, and at
-/// the end the last row sits it above the bottom edge, where the horizontal scroller shows. A
+/// the end the last row sits it above the path bar's glass, where the horizontal scroller shows
+/// (docs/decisions/0132-glass-path-bar.md). A
 /// key that scrolls a row into view keeps it clear of the margin too (Dylan, 2026-10-26: "apply
 /// top and bottom margin around all list and column items").
 @MainActor @Test func theRowsKeepTheSharedMarginFromTheHeaderAndTheBottomEdge() async throws {
@@ -489,7 +491,10 @@ private func rowEdges(of controller: ListingViewController) throws -> (
     #expect(table.visibleRect == top)
 
     controller.pane.jump(to: "e1999")
-    #expect(abs(table.visibleRect.maxY - Margin.standard - table.bounds.maxY) <= 1)
+    #expect(
+        abs(
+            table.visibleRect.maxY - Margin.standard - PaneViewController.pathBarCover
+                - table.bounds.maxY) <= 1)
 }
 
 /// A jump to the row the cursor is on, already in view, still centers it.

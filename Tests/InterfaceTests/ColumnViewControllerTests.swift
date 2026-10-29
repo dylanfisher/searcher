@@ -2950,8 +2950,8 @@ private func hit(_ point: NSPoint, in fixture: Fixture) -> NSView? {
 }
 
 /// A column's first row sits the shared margin below its top and, scrolled to the end, its last
-/// row the margin above its bottom, where the columns' horizontal scroller shows (Dylan,
-/// 2026-10-26).
+/// row the margin above the path bar's glass, where the columns' horizontal scroller shows
+/// (Dylan, 2026-10-26; docs/decisions/0132-glass-path-bar.md).
 @MainActor @Test func aColumnsRowsKeepTheSharedMarginFromItsTopAndBottom() async throws {
     let names = (0..<2_000).map { String(format: "e%04d", $0) }
     let fixture = await Fixture(folders: ["/": [folder("r")], "/Volumes/r": names.map { file($0) }])
@@ -2963,7 +2963,9 @@ private func hit(_ point: NSPoint, in fixture: Fixture) -> NSView? {
     #expect(frame(ofRow: 0).minY == Margin.standard)
 
     fixture.trail.columns[0].pane.selectLastRow()
-    #expect(column.contentView.frame.maxY - frame(ofRow: 1_999).maxY == Margin.standard)
+    #expect(
+        column.contentView.frame.maxY - frame(ofRow: 1_999).maxY
+            == Margin.standard + PaneViewController.pathBarCover)
 
     fixture.trail.columns[0].pane.selectFirstRow()
     #expect(frame(ofRow: 0).minY == Margin.standard)
