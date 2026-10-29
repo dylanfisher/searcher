@@ -138,9 +138,12 @@ extension Pane {
         self.selection = selection
         selectionVersion += 1
         selectionIsFromKeys = byKey
-        // A mount goes on only while its share stays selected alone.
-        if let name = connectingShare?.name,
-            selection.members != .only([ExactName(name)])
+        // A mount goes on only while its share stays selected alone. A click's selection isn't
+        // settled yet, so its rows say what it selects.
+        if let name = connectingShare.map({ ExactName($0.name) }),
+            selection.isSettled
+                ? selection.members != .only([name])
+                : !selection.contains(name) || selectedRows.count != 1
         {
             stopShareMount()
         }

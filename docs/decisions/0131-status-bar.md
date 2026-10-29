@@ -117,6 +117,9 @@ stub volume's space from `/` unless it passes a `FreeSpace` of its own. The look
 checked in tests (0128): the frames, the safe area and the text are; the bar's background,
 separator and the label's size against Finder's need a look by hand.
 
+`statusPane` first used `selectedFolderColumn`, whose read of `Selection.members` trapped on a
+click's unsettled selection in column view; it now compares the next column's location instead.
+
 ## Open questions for Dylan
 
 - **Finder's number for a share.** The larger-of rule gives an SMB share its free space; that
