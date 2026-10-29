@@ -1648,6 +1648,13 @@ public final class Pane {
     /// The folder's own date each walk was asked for. A folder whose listing shows another date
     /// is walked again.
     var requestedSizes: [ExactName: Date] = [:]
+    /// The folders with a walk asked for whose result hasn't landed. A folder is walked once at
+    /// a time: a new date while its walk runs waits for that walk to land
+    /// (docs/decisions/0129-row-icons-as-finder.md).
+    var walkingSizes: Set<ExactName> = []
+    /// Folders in `walkingSizes` whose date changed while they were walked, so they are walked
+    /// once more when that walk lands.
+    var trailingSizes: Set<ExactName> = []
     /// The sizes walked for the folder shown. Each new listing of it gets them.
     var knownSizes: [ExactName: Listing.FolderSizeUpdate] = [:]
     /// Folders whose walk failed. They aren't asked for again until the folder is fully listed
