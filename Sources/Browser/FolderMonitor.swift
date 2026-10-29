@@ -106,7 +106,9 @@ public final class FolderMonitor: FolderMonitoring, @unchecked Sendable {
 
     /// The change a batch of events means for `folder`, or nil if none of them concerns its
     /// entries. Events name paths at any depth; only direct children matter, since a pane shows
-    /// one level. Each named child is read once, as it is now, however many events it had, so a
+    /// one level, and an event for an item inside a child folder reads that child again, whose
+    /// modification date it changed; deeper events are dropped. Each named child is read once,
+    /// as it is now, however many events it and its items had, so a
     /// create followed by a delete patches as a delete. More named children than
     /// `FolderChange.patchLimit` relist, without reading any. `folder` is a resolved path, as
     /// FSEvents reports them.
@@ -116,8 +118,14 @@ public final class FolderMonitor: FolderMonitoring, @unchecked Sendable {
         var names: [String] = []
         var seen: Set<String> = []
         for event in events where event.path.utf8.starts(with: prefix.utf8) {
-            let name = String(Substring(event.path.utf8.dropFirst(prefix.utf8.count)))
-            if !name.isEmpty, !name.contains("/"), seen.insert(name).inserted {
+            let rest = Substring(event.path.utf8.dropFirst(prefix.utf8.count))
+            // A child, or an item one level inside a child folder, whose coming or going changes
+            // that folder's modification date and so its icon
+            // (docs/decisions/0129-row-icons-as-finder.md). Deeper items change neither.
+            let parts = rest.split(separator: "/", maxSplits: 2, omittingEmptySubsequences: false)
+            guard parts.count <= 2, let first = parts.first, !first.isEmpty else { continue }
+            let name = String(first)
+            if seen.insert(name).inserted {
                 names.append(name)
             }
         }

@@ -158,7 +158,7 @@ private func freshListing(of folder: String) throws -> Listing {
             FileEvent(path: folder.url.appending(path: "kept").path, flags: [.created]),
             FileEvent(path: folder.url.appending(path: "kept").path, flags: [.modified]),
             FileEvent(path: folder.url.appending(path: "gone").path, flags: [.removed]),
-            FileEvent(path: folder.url.appending(path: "deep/inside").path, flags: [.created]),
+            FileEvent(path: folder.url.appending(path: "deep/er/inside").path, flags: [.created]),
         ]
 
         let change = FolderMonitor.change(for: events, in: folder.url.path)
@@ -184,10 +184,28 @@ private func freshListing(of folder: String) throws -> Listing {
         let folder = try TemporaryFolder("FolderMonitorTests")
         let events = [
             FileEvent(path: folder.url.path, flags: [.modified]),
-            FileEvent(path: folder.url.appending(path: "deep/inside").path, flags: [.created]),
+            FileEvent(path: folder.url.appending(path: "deep/er/inside").path, flags: [.created]),
         ]
 
         #expect(FolderMonitor.change(for: events, in: folder.url.path) == nil)
+    }
+
+    /// An item coming or going inside a child folder changes that folder's modification date,
+    /// and with it the icon Finder draws for it, so the child is read again: once per batch,
+    /// however many of its items had events (docs/decisions/0129-row-icons-as-finder.md).
+    @Test func eventsOneLevelInsideAChildFolderReadThatChildOnce() throws {
+        let folder = try TemporaryFolder("FolderMonitorTests")
+        let sub = folder.url.appending(path: "sub")
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: false)
+        try Data().write(to: sub.appending(path: "a"))
+        let events = (0..<500).map {
+            FileEvent(path: sub.appending(path: "download-\($0)").path, flags: [.created])
+        }
+
+        let change = FolderMonitor.change(for: events, in: folder.url.path)
+
+        let entry = try DirectoryLister().entry(named: "sub", inDirectory: folder.url.path)
+        #expect(change == .patches([.update(try #require(entry))]))
     }
 
     @Test func rescanAndRootChangeRequestRelist() throws {
@@ -213,8 +231,9 @@ private func freshListing(of folder: String) throws -> Listing {
         let folder = try TemporaryFolder("FolderMonitorTests")
         try Data(count: 3).write(to: folder.url.appending(path: "kept"))
         let deep = [
-            FileEvent(path: folder.url.appending(path: "build/out").path, flags: .mustRescan),
-            FileEvent(path: folder.url.appending(path: "build/out/x").path, flags: .created),
+            // Two levels inside a child: neither the child's entry nor its date changes.
+            FileEvent(path: folder.url.appending(path: "build/out/obj").path, flags: .mustRescan),
+            FileEvent(path: folder.url.appending(path: "build/out/obj/x").path, flags: .created),
         ]
         let kept = FileEvent(path: folder.url.appending(path: "kept").path, flags: .created)
 
