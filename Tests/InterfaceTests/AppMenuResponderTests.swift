@@ -53,6 +53,23 @@ private func menuItem(_ id: CommandID) throws -> NSMenuItem {
     #expect(!responder.validateMenuItem(try menuItem(SystemCommands.copyPath.id)))
 }
 
+/// With no browser window's keys, App ▸ Copy Default Config is on, config file or not, and
+/// puts the default text on the pasteboard.
+@MainActor @Test func copyDefaultConfigWithNoBrowserWindowCopiesTheText() throws {
+    let pasteboard = testPasteboard()
+    let actions = WorkspaceSystemActions(
+        applicationURL: { _ in nil }, presentError: { Issue.record($0) }, pasteboard: pasteboard)
+    let responder = AppMenuResponder(
+        settings: untouchedSettings(), systemActions: actions,
+        openWindow: { Issue.record("a window opened") })
+    let item = try menuItem(SystemCommands.copyDefaultConfig.id)
+
+    #expect(responder.validateMenuItem(item))
+    #expect(NSApplication.shared.sendAction(try #require(item.action), to: responder, from: item))
+
+    #expect(pasteboard.string(forType: .string) == ConfigFile.defaultText)
+}
+
 /// Settings with no config file leave Open Config File off.
 @MainActor @Test func openConfigFileIsOffWithNoConfigFile() throws {
     let responder = AppMenuResponder(

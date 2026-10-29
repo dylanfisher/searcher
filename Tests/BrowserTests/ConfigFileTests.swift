@@ -111,6 +111,23 @@ private func changedValue(_ preference: Settings.Preference) -> Settings.Value {
     #expect(keys == Settings.preferences.map(\.name) + [ConfigFile.shortcutsKey])
 }
 
+/// The default text sets every preference to its default and changes no shortcut, and has a
+/// comment above each key.
+@Test func theDefaultTextParsesBackToTheDefaults() {
+    let load = ConfigFile.parse(Data(ConfigFile.defaultText.utf8))
+
+    #expect(load.errors.isEmpty, "\(load.errors)")
+    #expect(
+        load.values
+            == Dictionary(
+                uniqueKeysWithValues: Settings.preferences.map { ($0.key, $0.defaultValue) }))
+    #expect(load.shortcuts.isEmpty)
+    for preference in Settings.preferences {
+        let comment = ConfigFile.comment(preference).map { "  // \($0)\n" }.joined()
+        #expect(ConfigFile.defaultText.contains(comment + "  \"\(preference.name)\": "))
+    }
+}
+
 /// No changed shortcuts still writes the key, as `{}`, so the user sees where they go.
 @Test func noShortcutsWritesAnEmptyObject() {
     let text = String(decoding: ConfigFile.data(.init(values: [:], shortcuts: [:])), as: UTF8.self)
