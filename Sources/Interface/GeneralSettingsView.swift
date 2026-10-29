@@ -10,7 +10,10 @@ import UniformTypeIdentifiers
 /// the window shows and when the app becomes active, so a change made in System Settings shows
 /// (docs/decisions/0113-open-at-login.md).
 ///
-/// Under it, the config file, which holds the settings: where it is, and buttons that choose
+/// Under it, whether other apps' Show in Finder opens Searcher, which the global `NSFileViewer`
+/// key holds, read the same way (docs/decisions/0137-default-file-viewer.md).
+///
+/// Under that, the config file, which holds the settings: where it is, and buttons that choose
 /// another place for it, open it in an editor, show it in Finder and put it back at the default
 /// place (docs/decisions/0123-config-is-the-settings.md), and one that copies a new file's text,
 /// every setting at its default (docs/decisions/0130-copy-default-config.md).
@@ -63,9 +66,22 @@ final class GeneralSettings {
     /// The wait that turns the button's title back, which tests wait for.
     @ObservationIgnored private(set) var copiedReset: Task<Void, Never>?
 
-    init(loginItem: any LoginItem, settings: Browser.Settings, systemActions: any SystemActions) {
+    @ObservationIgnored private let fileViewer: any FileViewerSetting
+    /// The bundle ID the global `NSFileViewer` key named when last read; nil when it wasn't set.
+    private(set) var fileViewerID: String?
+    /// What the pane says under the file viewer checkbox, as of the last read.
+    private(set) var fileViewerNote: String?
+    /// Why the last change to the file viewer failed, until OK dismisses it.
+    private(set) var fileViewerProblem: String?
+
+    init(
+        loginItem: any LoginItem, fileViewer: any FileViewerSetting, settings: Browser.Settings,
+        systemActions: any SystemActions
+    ) {
         self.loginItem = loginItem
         loginItemStatus = loginItem.status
+        self.fileViewer = fileViewer
+        (fileViewerID, fileViewerNote) = Self.read(fileViewer)
         self.settings = settings
         self.systemActions = systemActions
         configFilePath = settings.configFile?.path
@@ -273,6 +289,89 @@ final class GeneralSettings {
     func openLoginItemsSettings() {
         loginItem.openSystemSettings()
     }
+
+    // MARK: File viewer
+
+    static let fileViewerTitle = "Use Searcher instead of Finder to show files"
+    /// What the pane says under the file viewer checkbox, always.
+    static let fileViewerDescription =
+        "Other apps' Show in Finder opens Searcher. Finder itself, the Dock and some apps still"
+        + " use Finder."
+    /// What the pane says when the running app can't be the file viewer.
+    static let fileViewerUnavailableNote =
+        "Searcher can show other apps' files only when it runs from its app bundle."
+
+    /// Whether the checkbox is on: the global key names Searcher.
+    var showsFilesInSearcher: Bool {
+        fileViewer.searcherID.map { $0 == fileViewerID } ?? false
+    }
+
+    var canChangeFileViewer: Bool { fileViewer.searcherID != nil }
+
+    /// Whether Use Default is on: the key names any app.
+    var canUseDefaultFileViewer: Bool { fileViewerID != nil }
+
+    /// Reads the global key again.
+    func refreshFileViewer() {
+        (fileViewerID, fileViewerNote) = Self.read(fileViewer)
+    }
+
+    /// Writes Searcher's ID to the global key, or removes it if it still names Searcher, then
+    /// reads the key back, which shows what was saved whether or not the change went through.
+    func setShowsFilesInSearcher(_ shows: Bool) {
+        guard let searcherID = fileViewer.searcherID else {
+            preconditionFailure("the file viewer checkbox changed while it was disabled")
+        }
+        if shows {
+            changeFileViewer(to: searcherID)
+        } else if fileViewer.viewer == searcherID {
+            changeFileViewer(to: nil)
+        } else {
+            refreshFileViewer()
+        }
+    }
+
+    /// Removes the global key whatever it names, which hands other apps' reveals back to Finder.
+    func useDefaultFileViewer() {
+        changeFileViewer(to: nil)
+    }
+
+    func dismissFileViewerProblem() {
+        fileViewerProblem = nil
+    }
+
+    private func changeFileViewer(to id: String?) {
+        defer { refreshFileViewer() }
+        do {
+            try fileViewer.setViewer(id)
+            fileViewerProblem = nil
+        } catch {
+            let problem = "The file viewer couldn't be changed: \(error.localizedDescription)"
+            fileViewerProblem = problem
+            postAccessibility(
+                NSApp as Any, .announcementRequested,
+                [
+                    .announcement: problem,
+                    .priority: NSAccessibilityPriorityLevel.high.rawValue,
+                ])
+        }
+    }
+
+    /// The ID `fileViewer`'s key names, and the note under the checkbox for it: why it can't
+    /// change outside the app bundle, or which other app the key names, if any.
+    private static func read(_ fileViewer: any FileViewerSetting) -> (String?, String?) {
+        let id = fileViewer.viewer
+        guard fileViewer.searcherID != nil else { return (id, fileViewerUnavailableNote) }
+        guard let id, id != fileViewer.searcherID else { return (id, nil) }
+        guard let name = fileViewer.appName(of: id) else {
+            return (
+                id,
+                "Other apps' Show in Finder names \u{201C}\(id)\u{201D}, which isn't installed,"
+                    + " so Finder shows files."
+            )
+        }
+        return (id, "Other apps' Show in Finder opens \(name).")
+    }
 }
 
 /// The General pane of the Settings window.
@@ -305,6 +404,7 @@ struct GeneralSettingsView: View {
                     Button("OK") { model.dismissLoginItemProblem() }.controlSize(.small)
                 }
             }
+            fileViewer.padding(.top, 8)
             if let path = model.configFilePath {
                 Divider().padding(.vertical, 8)
                 configFile(path)
@@ -313,6 +413,38 @@ struct GeneralSettingsView: View {
         }
         .padding(Self.padding)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The file viewer checkbox, with Use Default beside it, and its notes. The checkbox and the
+    /// bordered push button get their hover, pressed, focused and disabled states from AppKit
+    /// (docs/decisions/0110-interaction-states.md).
+    private var fileViewer: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Toggle(
+                    GeneralSettings.fileViewerTitle,
+                    isOn: Binding(
+                        get: { model.showsFilesInSearcher },
+                        set: { model.setShowsFilesInSearcher($0) })
+                )
+                .toggleStyle(.checkbox)
+                .disabled(!model.canChangeFileViewer)
+                Button("Use Default") { model.useDefaultFileViewer() }
+                    .disabled(!model.canUseDefaultFileViewer)
+            }
+            Text(GeneralSettings.fileViewerDescription).font(.caption)
+                .foregroundStyle(.secondary)
+            if let note = model.fileViewerNote {
+                Text(note).font(.caption).foregroundStyle(.secondary)
+            }
+            if let problem = model.fileViewerProblem {
+                HStack {
+                    Text(problem).font(.caption).foregroundStyle(Color.red)
+                    Spacer()
+                    Button("OK") { model.dismissFileViewerProblem() }.controlSize(.small)
+                }
+            }
+        }
     }
 
     /// Where the config file is, and its buttons.

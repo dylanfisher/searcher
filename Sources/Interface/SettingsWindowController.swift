@@ -56,20 +56,28 @@ public final class SettingsWindowController: NSWindowController, NSToolbarDelega
     /// The Shortcuts pane's size.
     nonisolated static let size = NSSize(width: 640, height: 560)
     /// The General pane's size, as wide as the Shortcuts pane: room for the config file's five
-    /// buttons in one row.
-    nonisolated static let generalSize = NSSize(width: size.width, height: 320)
+    /// buttons in one row; tall enough for every note and problem its checkboxes and config file
+    /// can show at once.
+    nonisolated static let generalSize = NSSize(width: size.width, height: 420)
 
-    /// A window over `settings`, which the panes read and write, with Searcher's own login item.
-    /// The General pane opens the config file through `systemActions`.
+    /// A window over `settings`, which the panes read and write, with Searcher's own login item
+    /// and the global file viewer key. The General pane opens the config file through
+    /// `systemActions`.
     public convenience init(settings: Browser.Settings, systemActions: any SystemActions) {
-        self.init(settings: settings, loginItem: MainAppLoginItem(), systemActions: systemActions)
+        self.init(
+            settings: settings, loginItem: MainAppLoginItem(),
+            fileViewer: GlobalFileViewerSetting(), systemActions: systemActions)
     }
 
-    /// A window over `settings` and `loginItem`; tests pass a stub login item and system
-    /// actions.
-    init(settings: Browser.Settings, loginItem: any LoginItem, systemActions: any SystemActions) {
+    /// A window over `settings`, `loginItem` and `fileViewer`; tests pass stubs for them and the
+    /// system actions.
+    init(
+        settings: Browser.Settings, loginItem: any LoginItem, fileViewer: any FileViewerSetting,
+        systemActions: any SystemActions
+    ) {
         general = GeneralSettings(
-            loginItem: loginItem, settings: settings, systemActions: systemActions)
+            loginItem: loginItem, fileViewer: fileViewer, settings: settings,
+            systemActions: systemActions)
         shortcuts = ShortcutsSettings(settings: settings)
         let window = SettingsWindow(
             contentRect: NSRect(origin: .zero, size: Pane.general.size),
@@ -96,12 +104,16 @@ public final class SettingsWindowController: NSWindowController, NSToolbarDelega
         window.toolbar = toolbar
         window.toolbarStyle = .preference
         select(.general)
-        // The user may add or remove Searcher in System Settings while the window is open.
-        // AppKit posts the notification on the main thread.
+        // The user may add or remove Searcher in System Settings while the window is open, and
+        // `defaults` or another app may change the file viewer. AppKit posts the notification on
+        // the main thread.
         becameActive = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification, object: nil, queue: nil
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.general.refreshLoginItem() }
+            MainActor.assumeIsolated {
+                self?.general.refreshLoginItem()
+                self?.general.refreshFileViewer()
+            }
         }
     }
 
@@ -120,6 +132,7 @@ public final class SettingsWindowController: NSWindowController, NSToolbarDelega
             preconditionFailure("the Settings window controller has no window")
         }
         general.refreshLoginItem()
+        general.refreshFileViewer()
         if !hasShown {
             window.center()
             hasShown = true

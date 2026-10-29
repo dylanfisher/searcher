@@ -45,11 +45,48 @@ final class StubLoginItem: LoginItem {
     }
 }
 
-/// A model over `loginItem` that records what it would announce instead of posting it.
+/// A file viewer setting that records what was asked of it and never reaches the global
+/// `NSFileViewer` key.
 @MainActor
-private func general(_ loginItem: StubLoginItem) -> (GeneralSettings, () -> [String]) {
+final class StubFileViewerSetting: FileViewerSetting {
+    nonisolated static let searcher = "com.dylanfisher.searcher"
+    nonisolated static let pathFinder = "com.cocoatech.PathFinder"
+
+    var searcherID: String?
+    var viewer: String?
+    /// The installed apps' names by bundle ID.
+    var apps = [searcher: "Searcher", pathFinder: "Path Finder"]
+    /// Whether the next write fails, once.
+    var failsNextWrite = false
+    private(set) var writes: [String?] = []
+
+    init(_ viewer: String? = nil, searcherID: String? = searcher) {
+        self.viewer = viewer
+        self.searcherID = searcherID
+    }
+
+    func setViewer(_ id: String?) throws {
+        writes.append(id)
+        if failsNextWrite {
+            failsNextWrite = false
+            throw FileViewerWriteFailed()
+        }
+        viewer = id
+    }
+
+    func appName(of id: String) -> String? { apps[id] }
+}
+
+/// A model over `loginItem` and `fileViewer` that records what it would announce instead of
+/// posting it.
+@MainActor
+private func general(
+    _ loginItem: StubLoginItem = StubLoginItem(),
+    fileViewer: StubFileViewerSetting = StubFileViewerSetting()
+) -> (GeneralSettings, () -> [String]) {
     let model = GeneralSettings(
-        loginItem: loginItem, settings: untouchedSettings(), systemActions: StubSystemActions())
+        loginItem: loginItem, fileViewer: fileViewer, settings: untouchedSettings(),
+        systemActions: StubSystemActions())
     var announced: [String] = []
     model.postAccessibility = { _, notification, userInfo in
         #expect(notification == .announcementRequested)
@@ -158,4 +195,141 @@ private func general(_ loginItem: StubLoginItem) -> (GeneralSettings, () -> [Str
     #expect(!model.opensAtLogin)
     #expect(!model.canChangeOpensAtLogin)
     #expect(model.loginItemNote == GeneralSettings.unavailableNote)
+}
+
+// MARK: File viewer
+
+/// The checkbox, its note and Use Default follow what the global key names: nothing, Searcher,
+/// another installed app, or an app that isn't installed.
+@MainActor @Test func theFileViewerCheckboxShowsTheGlobalKey() {
+    let missing = "com.example.gone"
+    let expected: [(String?, Bool, String?, Bool)] = [
+        (nil, false, nil, false),
+        (StubFileViewerSetting.searcher, true, nil, true),
+        (
+            StubFileViewerSetting.pathFinder, false,
+            "Other apps' Show in Finder opens Path Finder.", true
+        ),
+        (
+            missing, false,
+            "Other apps' Show in Finder names \u{201C}\(missing)\u{201D}, which isn't installed,"
+                + " so Finder shows files.", true
+        ),
+    ]
+    for (viewer, isOn, note, canUseDefault) in expected {
+        let (model, _) = general(fileViewer: StubFileViewerSetting(viewer))
+        let key = String(describing: viewer)
+        #expect(model.showsFilesInSearcher == isOn, "\(key)")
+        #expect(model.fileViewerNote == note, "\(key)")
+        #expect(model.canUseDefaultFileViewer == canUseDefault, "\(key)")
+        #expect(model.canChangeFileViewer, "\(key)")
+    }
+}
+
+/// Checking writes Searcher's ID, unchecking removes it, and Use Default removes whatever the
+/// key names.
+@MainActor @Test func checkingAndUncheckingWriteTheGlobalKey() {
+    let fileViewer = StubFileViewerSetting()
+    let (model, announced) = general(fileViewer: fileViewer)
+
+    model.setShowsFilesInSearcher(true)
+    #expect(fileViewer.writes == [StubFileViewerSetting.searcher])
+    #expect(model.showsFilesInSearcher)
+    #expect(model.canUseDefaultFileViewer)
+
+    model.setShowsFilesInSearcher(false)
+    #expect(fileViewer.writes == [StubFileViewerSetting.searcher, nil])
+    #expect(!model.showsFilesInSearcher)
+    #expect(!model.canUseDefaultFileViewer)
+
+    fileViewer.viewer = StubFileViewerSetting.pathFinder
+    model.refreshFileViewer()
+    model.useDefaultFileViewer()
+    #expect(fileViewer.writes == [StubFileViewerSetting.searcher, nil, nil])
+    #expect(fileViewer.viewer == nil)
+    #expect(model.fileViewerNote == nil)
+    #expect(!model.canUseDefaultFileViewer)
+    #expect(model.fileViewerProblem == nil)
+    #expect(announced().isEmpty)
+}
+
+/// Unchecking after another app took the key over, while the pane still showed Searcher's,
+/// leaves the other app's ID in place.
+@MainActor @Test func uncheckingKeepsAnotherAppsID() {
+    let fileViewer = StubFileViewerSetting(StubFileViewerSetting.searcher)
+    let (model, _) = general(fileViewer: fileViewer)
+    #expect(model.showsFilesInSearcher)
+
+    fileViewer.viewer = StubFileViewerSetting.pathFinder
+    model.setShowsFilesInSearcher(false)
+
+    #expect(fileViewer.writes.isEmpty)
+    #expect(fileViewer.viewer == StubFileViewerSetting.pathFinder)
+    #expect(model.fileViewerNote == "Other apps' Show in Finder opens Path Finder.")
+}
+
+/// A write macOS didn't save shows why, is read out, and stays until OK.
+@MainActor @Test func aFailedFileViewerWriteShowsItsError() {
+    let fileViewer = StubFileViewerSetting()
+    fileViewer.failsNextWrite = true
+    let (model, announced) = general(fileViewer: fileViewer)
+
+    model.setShowsFilesInSearcher(true)
+
+    let problem = model.fileViewerProblem
+    #expect(problem == "The file viewer couldn't be changed: \(FileViewerWriteFailed.reason)")
+    #expect(announced() == [problem ?? ""])
+    #expect(!model.showsFilesInSearcher)
+    model.refreshFileViewer()
+    #expect(model.fileViewerProblem == problem)
+    model.dismissFileViewerProblem()
+    #expect(model.fileViewerProblem == nil)
+
+    fileViewer.viewer = StubFileViewerSetting.pathFinder
+    model.refreshFileViewer()
+    fileViewer.failsNextWrite = true
+    model.useDefaultFileViewer()
+    #expect(model.fileViewerProblem == problem)
+    #expect(model.canUseDefaultFileViewer)
+}
+
+/// Run outside its app bundle, Searcher can't be the file viewer: the checkbox is off and
+/// disabled and says why, and Use Default still removes another app's ID.
+@MainActor @Test func outsideTheAppBundleOnlyUseDefaultWorks() {
+    let fileViewer = StubFileViewerSetting(StubFileViewerSetting.pathFinder, searcherID: nil)
+    let (model, _) = general(fileViewer: fileViewer)
+
+    #expect(!model.showsFilesInSearcher)
+    #expect(!model.canChangeFileViewer)
+    #expect(model.fileViewerNote == GeneralSettings.fileViewerUnavailableNote)
+    #expect(model.canUseDefaultFileViewer)
+
+    model.useDefaultFileViewer()
+    #expect(fileViewer.writes == [nil])
+    #expect(!model.canUseDefaultFileViewer)
+}
+
+/// The key is read again on refresh, so a change made by `defaults` or another app shows.
+@MainActor @Test func refreshReadsTheFileViewerAgain() {
+    let fileViewer = StubFileViewerSetting()
+    let (model, _) = general(fileViewer: fileViewer)
+    #expect(!model.showsFilesInSearcher)
+
+    fileViewer.viewer = StubFileViewerSetting.searcher
+    #expect(!model.showsFilesInSearcher)
+    model.refreshFileViewer()
+
+    #expect(model.showsFilesInSearcher)
+}
+
+/// Searcher's own reveals go to Finder: the argument domain names Finder as the file viewer,
+/// and keeps what it held.
+@Test func finderJoinsTheArgumentDomain() {
+    let merged = GlobalFileViewerSetting.keepingRevealsInFinder([
+        "Other": 1, "NSFileViewer": StubFileViewerSetting.searcher,
+    ])
+
+    #expect(merged.count == 2)
+    #expect(merged["Other"] as? Int == 1)
+    #expect(merged["NSFileViewer"] as? String == "com.apple.finder")
 }
