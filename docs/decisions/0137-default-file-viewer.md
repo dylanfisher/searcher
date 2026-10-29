@@ -51,7 +51,10 @@ file viewer. Checked on this machine (macOS 26) with a probe app and a sender th
   global domain. Unchecking removes the key only if it is still Searcher's ID. Use Default removes
   the key whatever it names, which hands reveals back to Finder after another viewer or a stale
   ID. A write that fails (`CFPreferencesAppSynchronize` returns false) shows in red under the
-  checkbox, is announced to VoiceOver, and stays until OK, as Open at login's errors do.
+  checkbox ("The file viewer couldn't be changed: macOS didn't save the change."), is announced
+  to VoiceOver, and stays until OK, as Open at login's errors do. Unchecking reads the key again
+  first, so an ID another app wrote since the pane last read it stays. The General pane grows to
+  420 points tall, room for every note and problem it can show at once.
 - **Outside an app bundle** the checkbox is off and disabled, with the note "Searcher can show
   other apps' files only when it runs from its app bundle." The test is the one
   `MainAppLoginItem.isAvailable` makes. Use Default stays usable, since removing the key needs no
@@ -62,17 +65,27 @@ file viewer. Checked on this machine (macOS 26) with a probe app and a sender th
 - **Searcher's own Reveal in Finder still goes to Finder.** At launch, before any window opens,
   the app delegate adds `NSFileViewer = com.apple.finder` to `UserDefaults.standard`'s argument
   domain, keeping what the domain already holds. Without it Searcher's reveal, and the config
-  file's Reveal in Finder, would come back to Searcher as an open event.
+  file's Reveal in Finder, would come back to Searcher as an open event. It runs in
+  `applicationWillFinishLaunching`, in a bench launch too: a bench reveals nothing, and the
+  in-memory key changes no other default.
 - **Receiving a reveal.** `application(_:open:)` hands the URLs to `WorkspaceWindows`. Each item is
   shown selected in its parent folder, a folder too, as Finder's reveal selects a folder rather
   than opening it. Items in one folder share one window with all of them selected; items in
   several folders get a window each. A window whose focused pane already shows that folder is
   brought to the front and selects the items, as Finder reuses its window; otherwise a new window
-  opens at the folder. The app activates.
+  opens at the folder. The app activates. Folder and names come from the URL's path, with no
+  stat on the main thread. Of several windows showing the folder, the most recently active one
+  is used, and its pane lists the folder again, so a download that landed since the last listing
+  is there to select. Revealing `/` shows it with nothing selected; a URL that isn't a file's is
+  logged and skipped. Selecting several names on arrival takes `Pane.navigate(to:selection:)`
+  and a `Pane` initializer with a `Selection`, in Browser, beside the single-name ones.
 - **A reveal that launches Searcher.** The launch restores the last session as at any launch
   ([0080](0080-restore-at-launch.md)), then shows the reveal's windows in front. With nothing to
   restore, the reveal's windows take the place of the home window, which doesn't open. A reveal
-  that arrives while the restore runs waits for it.
+  that arrives while the restore runs waits for it. AppKit hands over a launch's open event
+  before `applicationDidFinishLaunching`, so saves are held for the restore from
+  `applicationWillFinishLaunching` on, and `WorkspaceWindows` keeps a reveal that comes while
+  they are held until `restore` runs.
 - **Uninstalling undoes it.** Nothing runs when an app is deleted, and Searcher doesn't need to:
   once the app is gone or in the Trash, AppKit can't find the ID and every reveal goes to Finder.
   The key stays in the global domain, harmless, with a log line per reveal; reinstalling Searcher

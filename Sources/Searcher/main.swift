@@ -164,6 +164,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// listing cache and the config file to write.
     private static let quitLimit: Duration = .seconds(2)
 
+    /// Runs before AppKit hands over the files of an open event that launched the app.
+    /// Searcher's own reveals go to Finder from here on, whatever app the global `NSFileViewer`
+    /// key names, so its Reveal in Finder doesn't come back to it as an open event; a bench
+    /// launch reveals nothing, and the in-memory key changes nothing else, so it runs there too
+    /// (docs/decisions/0137-default-file-viewer.md). A reveal that launched the app waits for
+    /// the last session's restore, which saves are held for.
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        GlobalFileViewerSetting.keepRevealsInFinder()
+        guard bench == nil else { return }
+        // Until the restore runs, a quit or a window opened meanwhile saves nothing over the
+        // session being read.
+        windows.holdSavesUntilRestore()
+    }
+
+    /// Another app's Show in Finder, with Searcher as the file viewer, arrives as an open event
+    /// naming the items, and so do Open With and a drop on the Dock icon: each item is shown
+    /// selected in its folder (docs/decisions/0137-default-file-viewer.md).
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard bench == nil else {
+            Logger(category: "reveal").error("a bench launch was asked to open files")
+            return
+        }
+        windows.reveal(urls)
+        // A reveal held for the restore activates the app with it.
+        if !windows.awaitsRestore { NSApp.activate() }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let bench {
             // The bench opens its own window and never activates the app.
@@ -178,9 +205,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             preconditionFailure("a launch that isn't a bench has no workspace store")
         }
         windows.follow(storeProblems: storeProblems)
-        // Until the restore runs, a quit or a window opened meanwhile saves nothing over the
-        // session being read.
-        windows.holdSavesUntilRestore()
         let configLogger = Logger(category: "config")
         let settings = settings
         Task {
@@ -193,7 +217,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                     file: file, createsFolder: isDefault, reserved: MainMenuBuilder.reservedChords,
                     fixed: MainMenuBuilder.fixedChords, log: { configLogger.error("\($0)") })
             }
-            // The store reads on its own actor, so the main thread waits on no file.
+            // The store reads on its own actor, so the main thread waits on no file. A reveal
+            // that came meanwhile opens in front of the restored windows, and in place of the
+            // home window when there were none.
             let contents = await restoring.value
             let window = await windows.restore(contents)?.window ?? openHomeWindow()
             NSApp.activate()
