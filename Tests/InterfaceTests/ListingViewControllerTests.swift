@@ -1693,13 +1693,15 @@ private func rowImage(_ controller: ListingViewController, row: Int) -> NSImage?
     await settle { rowImage(controller, row: 0).map { $0 !== typeIcon } ?? false }
 }
 
-/// A file that isn't downloaded, a folder, a package and text keep their icons and ask for
-/// nothing; a photo beside them is asked for.
-@MainActor @Test func onlyFilesThatMayShowAThumbnailAskForOne() async throws {
+/// A file that isn't downloaded, a package and text keep their icons and ask for nothing; a
+/// photo beside them is asked for, and so is a folder, whose icon Quick Look makes as Finder
+/// draws it (docs/decisions/0129-row-icons-as-finder.md).
+@MainActor @Test func onlyFilesThatMayShowAThumbnailAndFoldersAskForOne() async throws {
     let notDownloaded = DirectoryEntry(
         name: "a.jpg", type: .regular, size: 9, modified: testDate, isHidden: false,
         isDataless: true)
     let maker = GatedThumbnailMaker()
+    maker.answer("/folder/b.jpg", with: testThumbnail())
     maker.answer("/folder/e.jpg", with: testThumbnail())
     let controller = await photoController(
         [notDownloaded, folder("b.jpg"), package("C.app"), file("d.json"), file("e.jpg")],
@@ -1709,8 +1711,9 @@ private func rowImage(_ controller: ListingViewController, row: Int) -> NSImage?
     await settle { service.cached(at: "/folder/e.jpg", entry: file("e.jpg"), side: 18) != nil }
     await settle { service.calls.isIdle }
 
-    #expect(maker.paths == ["/folder/e.jpg"])
-    for row in 0..<4 { #expect(rowImage(controller, row: row) === typeIcon) }
+    #expect(Set(maker.paths) == ["/folder/b.jpg", "/folder/e.jpg"])
+    for row in [0, 2, 3] { #expect(rowImage(controller, row: row) === typeIcon) }
+    await settle { rowImage(controller, row: 1).map { $0 !== typeIcon } ?? false }
 }
 
 /// A file on a network volume keeps its icon: making its thumbnail would read it over the

@@ -2,7 +2,7 @@
 /// each tag that has a color, 1 to 7, in the order of the item's tags, each color once. Held in
 /// four bits a label, so `DirectoryEntry` keeps it in padding it already had and a listing of
 /// 100k entries takes no more memory for it (docs/decisions/0124-tags-in-rows-and-preview.md).
-public struct TagLabels: Equatable, Sendable, Sequence {
+public struct TagLabels: Hashable, Sendable, Sequence {
     /// Each label in four bits, the first in the lowest; 0 ends the list. Seven colors take 28.
     private let bits: UInt32
 

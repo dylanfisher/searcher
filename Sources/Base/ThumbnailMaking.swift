@@ -1,8 +1,9 @@
 import CoreGraphics
 
-/// Makes one file's thumbnail, as Finder shows it in place of the file's icon. Callers start it on
-/// a `BlockingCallThread`: what an implementation does on the calling thread before it hands the
-/// work on is not documented, and a file on a stalled disk can block it.
+/// Makes one file's thumbnail, as Finder shows it in place of the file's icon, or a folder's icon,
+/// as Finder draws it for that folder (docs/decisions/0129-row-icons-as-finder.md). Callers start
+/// it on a `BlockingCallThread`: what an implementation does on the calling thread before it hands
+/// the work on is not documented, and a file on a stalled disk can block it.
 public protocol ThumbnailMaking: Sendable {
     /// Starts making the thumbnail of the file at `path`, at most `side` points square at `scale`
     /// pixels per point, and calls `done` once, on any thread, with the image, or with nil when

@@ -48,10 +48,16 @@ public final class ThumbnailService: Sendable {
 
     /// Whether `entry`, of `kind`, may show a thumbnail: a regular file whose contents are on
     /// this Mac, since making one reads them (docs/decisions/0030-not-downloaded-badge.md), and
-    /// that isn't text, which keeps its type icon as Finder shows it. Folders, packages and links
-    /// keep their icons.
+    /// that isn't text, which keeps its type icon as Finder shows it; or a folder on this Mac,
+    /// whose "thumbnail" is the icon Finder draws for it: a sheet of paper in a folder with
+    /// items, its tag's color, its custom icon (docs/decisions/0129-row-icons-as-finder.md).
+    /// Packages and links keep their type icons.
     public static func shows(_ entry: DirectoryEntry, kind: EntryKind) -> Bool {
-        entry.type == .regular && !entry.isDataless && !kind.isText
+        switch entry.type {
+        case .regular: !entry.isDataless && !kind.isText
+        case .directory: !entry.isDataless
+        case .package, .symbolicLink, .other, .unmountedShare: false
+        }
     }
 
     /// Whether files on `volume` get thumbnails: a local volume's do. A network volume's rows
@@ -159,7 +165,7 @@ public final class ThumbnailService: Sendable {
     ) -> ThumbnailCache.Key {
         ThumbnailCache.Key(
             path: path, modified: entry.modified, size: entry.size, framed: !forPreview,
-            pixels: Int((side * scale).rounded()))
+            pixels: Int((side * scale).rounded()), tags: entry.tagLabels)
     }
 
     /// One thumbnail request: whichever of Quick Look's answer, the give-up wait, a cancel while
