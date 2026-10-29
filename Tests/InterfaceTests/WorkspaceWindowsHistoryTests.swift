@@ -183,6 +183,36 @@ private func shown(_ controller: BrowserWindowController) throws -> [TabState] {
     #expect(try backAndForward(controller) == [true, false])
 }
 
+/// The toolbar's Back is on after the open, though the rebuilt pane has no Back of its own, and
+/// a click on it steps the window back, as Cmd-[ does; Forward then steps it forward again
+/// (docs/decisions/0128-finder-window-chrome.md).
+@MainActor @Test func theToolbarsBackAndForwardStepTheWindow() async throws {
+    let windows = makeWindows()
+    let controller = try await savedWindow(in: windows)
+    try await drift(controller)
+    let history = controller.toolbar.history
+    let back = controller.toolbar.back
+    let forward = controller.toolbar.forward
+
+    try openFromSidebar("Project 1", in: controller)
+    _ = await loadedPane(of: controller)
+
+    #expect(!controller.workspace.selectedTab.focusedPane.canGoBack)
+    #expect(back.isEnabled && !forward.isEnabled)
+
+    history.selectedIndex = 0
+    #expect(NSApp.sendAction(try #require(history.action), to: history.target, from: history))
+
+    #expect(controller.workspace.tabs.count == 2)
+    #expect(forward.isEnabled)
+
+    history.selectedIndex = 1
+    #expect(NSApp.sendAction(try #require(history.action), to: history.target, from: history))
+
+    #expect(controller.workspace.tabs.count == 1)
+    #expect(back.isEnabled && !forward.isEnabled)
+}
+
 /// A closed saved workspace opens in a new window, which has nothing to go back to, and the
 /// window it was opened from shows what it did: neither gains a step.
 @MainActor @Test func openingAWorkspaceInANewWindowAddsNoStep() async throws {

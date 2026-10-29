@@ -33,6 +33,7 @@ public final class Settings {
         case showsFavoritesInSidebar
         case showsLocationsInSidebar
         case showsWorkspacesInSidebar
+        case showsToolbar
         case configFile
     }
 
@@ -117,6 +118,9 @@ public final class Settings {
         Preference(
             .showsWorkspacesInSidebar, "sidebar-workspaces", .bool, default: .bool(true),
             "Show the Workspaces group in the sidebar."),
+        Preference(
+            .showsToolbar, "show-toolbar", .bool, default: .bool(true),
+            "Show the toolbar in each window: Back, Forward, the title and the view buttons."),
     ]
 
     /// `preferences` by key.
@@ -277,6 +281,14 @@ public final class Settings {
     public var showsWorkspacesInSidebar: Bool {
         get { bool(.showsWorkspacesInSidebar) }
         set { set(.bool(newValue), for: .showsWorkspacesInSidebar) }
+    }
+
+    /// Whether each window shows its toolbar, as Finder's Hide Toolbar sets. Without it the
+    /// window keeps a title bar with its title (docs/decisions/0128-finder-window-chrome.md). On
+    /// by default.
+    public var showsToolbar: Bool {
+        get { bool(.showsToolbar) }
+        set { set(.bool(newValue), for: .showsToolbar) }
     }
 
     /// The user's changes to the commands' chords, by command; empty by default. Each override

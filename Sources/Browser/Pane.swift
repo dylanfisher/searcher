@@ -137,6 +137,11 @@ public final class Pane {
     /// The pane keys and commands act on: this one in list mode, the focused column's in column
     /// mode. Its rows, selection, sort and filter are the ones a key changes.
     public var commandPane: Pane { columnTrail?.focused.pane ?? self }
+    /// The folder the window and the tab are titled after: in list mode the pane's; in column
+    /// mode the folder selected alone in the focused column from the moment it is selected,
+    /// else the focused column's, as Finder titles its windows
+    /// (docs/decisions/0128-finder-window-chrome.md).
+    public var titleLocation: Location { columnTrail?.selectedFolder ?? location }
     /// Closed for good: a column that was truncated or a trail that was dropped.
     var isClosed = false
     /// The share of this server whose mount the pane waits for, by its row's name, and whether

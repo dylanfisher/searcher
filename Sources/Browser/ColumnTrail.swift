@@ -533,6 +533,18 @@ public final class ColumnTrail {
         return next
     }
 
+    /// The folder selected alone in the focused column, whether or not its column has opened
+    /// yet: the folder Finder titles a column view window after
+    /// (docs/decisions/0128-finder-window-chrome.md). Nil for a file, a package, a link,
+    /// several rows or none.
+    public var selectedFolder: Location? {
+        let pane = focused.pane
+        guard let listing = pane.state.listing,
+            let entry = Self.soleSelectedEntry(in: pane, of: listing), entry.type == .directory
+        else { return nil }
+        return pane.childLocation(of: entry)
+    }
+
     /// Opens at once the column a key-made selection in the focused column waits for the keys to
     /// pause to open (0094-column-open-delay.md), for a command that acts in the selected
     /// folder: the folder is highlighted, so it is the one the command acts in.
