@@ -100,7 +100,10 @@ func aFoldersRowShowsTheIconFinderDrawsForThatFolder(viewMode: ViewMode) async t
 
     let shown = try await window.landedIcons()
 
-    #expect(shown.allSatisfy { $0.size == NSSize(width: 18, height: 18) })
+    // Finder's list view draws 16-point icons, its column view 18-point ones
+    // (docs/decisions/0135-list-rows-as-finder.md).
+    let side = viewMode == .list ? 16.0 : 18.0
+    #expect(shown.allSatisfy { $0.size == NSSize(width: side, height: side) })
     let (empty, full, tagged) = (try pixels(shown[0]), try pixels(shown[1]), try pixels(shown[2]))
     #expect(empty != full)
     #expect(full != tagged)

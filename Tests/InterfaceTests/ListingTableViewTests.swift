@@ -476,6 +476,7 @@ private func titleShift(ofColumn index: Int, in header: NSTableHeaderView) throw
     let plain = NSTableView(frame: table.frame)
     plain.style = table.style
     plain.intercellSpacing = table.intercellSpacing
+    plain.rowHeight = table.rowHeight
     for column in table.tableColumns {
         let copy = NSTableColumn(identifier: column.identifier)
         copy.width = column.width

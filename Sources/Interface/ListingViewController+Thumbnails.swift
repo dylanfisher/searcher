@@ -12,7 +12,7 @@ extension ListingViewController {
             ThumbnailService.shows(entry, kind: listing.kind(atRow: row)),
             entry.type != .directory || asksForIcon(at: path),
             case .some(.some(let image)) = thumbnails.cached(
-                at: path, entry: entry, side: ListingCellLayout.iconSize)
+                at: path, entry: entry, side: rows.iconSize)
         else { return nil }
         return image
     }
@@ -58,7 +58,7 @@ extension ListingViewController {
                     onScreen.insert(entry.name)
                     continue
                 }
-                if thumbnails.cached(at: path, entry: entry, side: ListingCellLayout.iconSize)
+                if thumbnails.cached(at: path, entry: entry, side: self.rows.iconSize)
                     != nil
                 {
                     continue
@@ -83,11 +83,12 @@ extension ListingViewController {
         at path: String, entry: DirectoryEntry, on volume: VolumeIdentity,
         from thumbnails: ThumbnailService
     ) -> Task<Void, Never> {
-        Task { [weak self] in
+        let side = rows.iconSize
+        return Task { [weak self] in
             let thumbnail: CGImage?
             do {
                 thumbnail = try await thumbnails.thumbnail(
-                    at: path, entry: entry, side: ListingCellLayout.iconSize, on: volume)
+                    at: path, entry: entry, side: side, on: volume)
             } catch {
                 // Cancelled while it waited: the row left the screen.
                 return
