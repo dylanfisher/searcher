@@ -24,21 +24,29 @@ public final class PaneViewController: NSViewController {
     let messageLabel = NSTextField(wrappingLabelWithString: "")
     let accessDeniedView: AccessDeniedView
     let pathBar = PathBarView()
-    /// The capsule the path bar and the status float in, over the bottom of the list or the
-    /// columns: the system's Liquid Glass from macOS 26, a blur before it. One per pane, made
-    /// once; a new location changes only the segments in it
-    /// (docs/decisions/0132-glass-path-bar.md).
-    let pathBarGlass: NSView
+    /// The translucent row the path bar and the status sit in, flush along the pane's bottom
+    /// over the end of the list or the columns, which show through it blurred. One per pane,
+    /// made once; a new location changes only the segments in it
+    /// (docs/decisions/0133-flat-translucent-bars.md).
+    let pathBarGlass: NSVisualEffectView
     /// The view in `pathBarGlass` that holds the path bar and the status.
     let pathBarContent: PathBarGlassContent
-    /// How far the path bar's glass floats from the pane's sides and bottom.
-    static let pathBarGap: CGFloat = 8
-    /// How much of the pane's bottom the path bar's glass covers, from the pane's bottom edge to
-    /// the glass's top. A list or a column keeps its last row and its scrollers above it.
-    static let pathBarCover = PathBarView.height + pathBarGap
+    /// How much of the pane's bottom the path bar's row covers. A list or a column keeps its
+    /// last row and its scrollers above it.
+    static let pathBarCover = PathBarView.height
     let filterBar = FilterBarView()
     /// The filter bar's height: `FilterBarView.height` while it shows, else 0.
     private var filterBarHeight: NSLayoutConstraint?
+    /// Starts the list and the columns at the pane's top, under the window's toolbar and tab
+    /// strip, while the filter bar is hidden, and under the filter bar while it shows.
+    private var listToTop: NSLayoutConstraint?
+    private var listUnderFilter: NSLayoutConstraint?
+    /// Centers the access and error messages in the room between the bars over the list and
+    /// the path bar's row.
+    private var messageCenters: [NSLayoutConstraint] = []
+    /// How much of the list's top the window's bars cover, as last given to the list and the
+    /// columns (docs/decisions/0133-flat-translucent-bars.md).
+    private(set) var topCover: CGFloat = 0
     /// The filter whose result VoiceOver last heard, so a patch or reload under the same filter
     /// isn't announced again.
     private var announcedFilter = NameFilter()
@@ -323,51 +331,53 @@ public final class PaneViewController: NSViewController {
         deniedWidth.priority = .defaultHigh
         let filterBarHeight = filterBar.heightAnchor.constraint(equalToConstant: 0)
         self.filterBarHeight = filterBarHeight
-        NSLayoutConstraint.activate([
-            filterBar.topAnchor.constraint(equalTo: container.topAnchor),
-            filterBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            filterBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            filterBarHeight,
-            list.topAnchor.constraint(equalTo: filterBar.bottomAnchor),
-            list.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            list.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            // Under the glass to the pane's bottom: the rows scroll under it, and the list keeps
-            // its last row above it (`ListingViewController.keepMargins`).
-            list.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            columns.topAnchor.constraint(equalTo: list.topAnchor),
-            columns.leadingAnchor.constraint(equalTo: list.leadingAnchor),
-            columns.trailingAnchor.constraint(equalTo: list.trailingAnchor),
-            columns.bottomAnchor.constraint(equalTo: list.bottomAnchor),
-            pathBarGlass.leadingAnchor.constraint(
-                equalTo: container.leadingAnchor, constant: Self.pathBarGap),
-            pathBarGlass.trailingAnchor.constraint(
-                equalTo: container.trailingAnchor, constant: -Self.pathBarGap),
-            pathBarGlass.bottomAnchor.constraint(
-                equalTo: container.bottomAnchor, constant: -Self.pathBarGap),
-            pathBarGlass.heightAnchor.constraint(equalToConstant: PathBarView.height),
-            pathBar.leadingAnchor.constraint(equalTo: pathBarContent.leadingAnchor),
-            pathBar.trailingAnchor.constraint(equalTo: status.leadingAnchor),
-            pathBar.topAnchor.constraint(equalTo: pathBarContent.topAnchor),
-            pathBar.bottomAnchor.constraint(equalTo: pathBarContent.bottomAnchor),
-            status.trailingAnchor.constraint(equalTo: pathBarContent.trailingAnchor),
-            status.topAnchor.constraint(equalTo: pathBar.topAnchor),
-            status.bottomAnchor.constraint(equalTo: pathBar.bottomAnchor),
-            // A long note truncates before it takes more than this of the bar.
-            status.widthAnchor.constraint(
-                lessThanOrEqualTo: pathBarContent.widthAnchor, multiplier: 0.6),
-            // In the middle of the list above the glass.
-            messageLabel.centerXAnchor.constraint(equalTo: list.centerXAnchor),
-            messageLabel.centerYAnchor.constraint(
-                equalTo: list.centerYAnchor, constant: -Self.pathBarCover / 2),
-            messageLabel.widthAnchor.constraint(
-                lessThanOrEqualTo: container.widthAnchor, constant: -40),
-            accessDeniedView.centerXAnchor.constraint(equalTo: list.centerXAnchor),
-            accessDeniedView.centerYAnchor.constraint(
-                equalTo: list.centerYAnchor, constant: -Self.pathBarCover / 2),
-            accessDeniedView.widthAnchor.constraint(
-                lessThanOrEqualTo: container.widthAnchor, constant: -40),
-            deniedWidth,
-        ])
+        let listToTop = list.topAnchor.constraint(equalTo: container.topAnchor)
+        self.listToTop = listToTop
+        listUnderFilter = list.topAnchor.constraint(equalTo: filterBar.bottomAnchor)
+        messageCenters = [messageLabel, accessDeniedView].map {
+            $0.centerYAnchor.constraint(
+                equalTo: list.centerYAnchor, constant: -Self.pathBarCover / 2)
+        }
+        NSLayoutConstraint.activate(
+            [
+                // Below the window's toolbar and tab strip, which the rows scroll under.
+                filterBar.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
+                filterBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                filterBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+                filterBarHeight,
+                listToTop,
+                list.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                list.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+                // Under the path bar to the pane's bottom: the rows scroll under it, and the list
+                // keeps its last row above it (`ListingViewController.keepMargins`).
+                list.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+                columns.topAnchor.constraint(equalTo: list.topAnchor),
+                columns.leadingAnchor.constraint(equalTo: list.leadingAnchor),
+                columns.trailingAnchor.constraint(equalTo: list.trailingAnchor),
+                columns.bottomAnchor.constraint(equalTo: list.bottomAnchor),
+                pathBarGlass.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                pathBarGlass.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+                pathBarGlass.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+                pathBarGlass.heightAnchor.constraint(equalToConstant: PathBarView.height),
+                pathBar.leadingAnchor.constraint(equalTo: pathBarContent.leadingAnchor),
+                pathBar.trailingAnchor.constraint(equalTo: status.leadingAnchor),
+                pathBar.topAnchor.constraint(equalTo: pathBarContent.topAnchor),
+                pathBar.bottomAnchor.constraint(equalTo: pathBarContent.bottomAnchor),
+                status.trailingAnchor.constraint(equalTo: pathBarContent.trailingAnchor),
+                status.topAnchor.constraint(equalTo: pathBar.topAnchor),
+                status.bottomAnchor.constraint(equalTo: pathBar.bottomAnchor),
+                // A long note truncates before it takes more than this of the bar.
+                status.widthAnchor.constraint(
+                    lessThanOrEqualTo: pathBarContent.widthAnchor, multiplier: 0.6),
+                // In the middle of the list between the bars over it and the path bar's row.
+                messageLabel.centerXAnchor.constraint(equalTo: list.centerXAnchor),
+                messageLabel.widthAnchor.constraint(
+                    lessThanOrEqualTo: container.widthAnchor, constant: -40),
+                accessDeniedView.centerXAnchor.constraint(equalTo: list.centerXAnchor),
+                accessDeniedView.widthAnchor.constraint(
+                    lessThanOrEqualTo: container.widthAnchor, constant: -40),
+                deniedWidth,
+            ] + messageCenters)
         container.onPress = { [weak self] in
             guard let self else { return }
             view.window?.makeFirstResponder(keyView)
@@ -375,25 +385,33 @@ public final class PaneViewController: NSViewController {
         view = container
     }
 
-    /// The path bar's capsule and the content view filling it. From macOS 26 the system's glass,
-    /// as the toolbar's items are (0128), rounded to a capsule; before that a blur in the same
-    /// shape.
-    private static func makePathBarGlass() -> (glass: NSView, content: PathBarGlassContent) {
-        let content = PathBarGlassContent()
-        if #available(macOS 26, *) {
-            let glass = NSGlassEffectView()
-            glass.style = .regular
-            glass.cornerRadius = PathBarView.height / 2
-            glass.contentView = content
-            return (glass, content)
+    /// Gives the list and the columns the part of the pane's top that the window's toolbar and
+    /// tab strip cover, read from the pane's safe area, which changes as the toolbar or the
+    /// strip shows or hides. A pane below another in a split, and the list under the filter
+    /// bar, start below the bars and get 0.
+    public override func viewDidLayout() {
+        super.viewDidLayout()
+        let cover = filterBar.isHidden ? container.safeAreaInsets.top : 0
+        guard cover != topCover else { return }
+        topCover = cover
+        listingViewController.topCover = cover
+        columnViewController.topCover = cover
+        for center in messageCenters {
+            center.constant = (cover - Self.pathBarCover) / 2
         }
+    }
+
+    /// The path bar's row and the content view filling it: a flat, square material that blurs
+    /// the rows scrolling under it, as Finder's bottom bars do, rather than a floating glass
+    /// capsule (docs/decisions/0133-flat-translucent-bars.md).
+    private static func makePathBarGlass() -> (
+        glass: NSVisualEffectView, content: PathBarGlassContent
+    ) {
+        let content = PathBarGlassContent()
         let blur = NSVisualEffectView()
         blur.material = .headerView
         blur.blendingMode = .withinWindow
         blur.state = .followsWindowActiveState
-        blur.wantsLayer = true
-        blur.layer?.cornerRadius = PathBarView.height / 2
-        blur.layer?.masksToBounds = true
         content.translatesAutoresizingMaskIntoConstraints = false
         blur.addSubview(content)
         NSLayoutConstraint.activate([
@@ -529,6 +547,8 @@ public final class PaneViewController: NSViewController {
         _ = view
         filterBar.isHidden = false
         filterBarHeight?.constant = FilterBarView.height
+        listToTop?.isActive = false
+        listUnderFilter?.isActive = true
     }
 
     /// Esc in the field: clears the filter and hands the focus back to the list.
@@ -548,6 +568,8 @@ public final class PaneViewController: NSViewController {
         }
         filterBar.isHidden = true
         filterBarHeight?.constant = 0
+        listUnderFilter?.isActive = false
+        listToTop?.isActive = true
     }
 
     /// Shows the Go to folder sheet over the pane's window, unless it is already up.

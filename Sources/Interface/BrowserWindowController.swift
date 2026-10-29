@@ -66,10 +66,13 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     let panesToBottom: NSLayoutConstraint
     /// Over the tab strip while the config file has an error, hidden otherwise.
     let configBanner = ConfigErrorBanner()
-    /// Puts the tab strip under the banner while it shows, and at the window's top while it
-    /// doesn't.
+    /// Before macOS 26, puts the tab strip under the banner while it shows, and at the window's
+    /// top while it doesn't.
     private let stripUnderBanner: NSLayoutConstraint
     private let stripToTop: NSLayoutConstraint
+    /// Gives the banner and the tab strip their room over the panes, or takes it away, as each
+    /// is shown or hidden, where `placeTopBars` put them.
+    private var showTopBars: @MainActor () -> Void = {}
     let settings: Settings
     /// `settings.hideEmptyOperationsPanel` as last seen, so another setting's change leaves the
     /// panel alone.
@@ -251,30 +254,24 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             defer: false
         )
         // Finder's window: the toolbar and the title share one bar, and the sidebar runs the
-        // window's full height beside it (docs/decisions/0128-finder-window-chrome.md).
-        window.toolbarStyle = .unified
+        // window's full height beside it (docs/decisions/0128-finder-window-chrome.md). The
+        // compact style keeps the bar as short as Finder's
+        // (docs/decisions/0133-flat-translucent-bars.md).
+        window.toolbarStyle = .unifiedCompact
         window.tabbingMode = .disallowed
         window.isReleasedWhenClosed = false
         return window
     }
 
-    /// Puts the tab strip, the tab host and the operations panel in `content`, and `content`
-    /// right of the sidebar in `window`, sized as `settings` says for a new window and centered.
-    /// Returns the split view between the sidebar and `content`.
+    /// Puts the tab host and the operations panel in `content`, the banner and the tab strip
+    /// over it, and `content` right of the sidebar in `window`, sized as `settings` says for a
+    /// new window and centered. Returns the split view between the sidebar and `content`.
     private func layOut(_ content: NSView, in window: BrowserWindow) -> NSSplitView {
-        for view in [configBanner, tabStrip.view, tabHost, operations.view] {
+        for view in [tabHost, operations.view] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
         }
         NSLayoutConstraint.activate([
-            // Below the toolbar, or the title bar while the toolbar is hidden.
-            configBanner.topAnchor.constraint(equalTo: content.safeAreaLayoutGuide.topAnchor),
-            configBanner.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            configBanner.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            tabStrip.view.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            tabStrip.view.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            tabStripHeight,
-            tabHost.topAnchor.constraint(equalTo: tabStrip.view.bottomAnchor),
             tabHost.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             tabHost.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             panesToBottom,
@@ -289,6 +286,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         let split = NSSplitViewController()
         let panesItem = NSSplitViewItem(viewController: main)
         split.splitViewItems = [sidebarItem, panesItem]
+        placeTopBars(in: panesItem, over: content)
         placeStatusBar(in: panesItem)
         window.contentViewController = split
         // Setting the content view controller sizes the window to it.
@@ -361,10 +359,65 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
 
     /// Shows the config file's errors in the banner, or hides it while there are none.
     private func showConfigErrors() {
-        let errors = settings.configErrors
-        configBanner.show(errors, canOpen: settings.configFile != nil)
-        stripToTop.isActive = errors.isEmpty
-        stripUnderBanner.isActive = !errors.isEmpty
+        configBanner.show(settings.configErrors, canOpen: settings.configFile != nil)
+        showTopBars()
+    }
+
+    /// Puts the config banner and the tab strip over the panes, the banner on top. On macOS 26
+    /// each is a top accessory of `item`, the panes' side of the split view, as the status bar is
+    /// its bottom one: the system draws them in the toolbar's translucent band and takes them out
+    /// of the panes' safe area, and the tab host runs up under them and the toolbar to the
+    /// window's top, so the rows scroll under all three. Each pane starts its rows below them
+    /// (`PaneViewController.topCover`). Before macOS 26 they hang from `content`'s safe area,
+    /// and the tab host starts below them (docs/decisions/0133-flat-translucent-bars.md).
+    private func placeTopBars(in item: NSSplitViewItem, over content: NSView) {
+        tabStripHeight.isActive = true
+        if #available(macOS 26, *) {
+            let accessories = [configBanner, tabStrip.view].map { bar in
+                // The strip's view stays its controller's: the accessory holds it in a view of
+                // its own.
+                let holder = NSView()
+                bar.translatesAutoresizingMaskIntoConstraints = false
+                holder.addSubview(bar)
+                NSLayoutConstraint.activate([
+                    bar.leadingAnchor.constraint(equalTo: holder.leadingAnchor),
+                    bar.trailingAnchor.constraint(equalTo: holder.trailingAnchor),
+                    bar.topAnchor.constraint(equalTo: holder.topAnchor),
+                    bar.bottomAnchor.constraint(equalTo: holder.bottomAnchor),
+                ])
+                let accessory = NSSplitViewItemAccessoryViewController()
+                accessory.view = holder
+                accessory.automaticallyAppliesContentInsets = false
+                item.addTopAlignedAccessoryViewController(accessory)
+                return (bar, accessory)
+            }
+            tabHost.topAnchor.constraint(equalTo: content.topAnchor).isActive = true
+            showTopBars = {
+                for (bar, accessory) in accessories where accessory.isHidden != bar.isHidden {
+                    accessory.isHidden = bar.isHidden
+                }
+            }
+        } else {
+            for view in [configBanner, tabStrip.view] {
+                view.translatesAutoresizingMaskIntoConstraints = false
+                content.addSubview(view)
+            }
+            NSLayoutConstraint.activate([
+                // Below the toolbar, or the title bar while the toolbar is hidden.
+                configBanner.topAnchor.constraint(
+                    equalTo: content.safeAreaLayoutGuide.topAnchor),
+                configBanner.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+                configBanner.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+                tabStrip.view.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+                tabStrip.view.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+                tabHost.topAnchor.constraint(equalTo: tabStrip.view.bottomAnchor),
+            ])
+            showTopBars = { [configBanner, stripToTop, stripUnderBanner] in
+                stripToTop.isActive = configBanner.isHidden
+                stripUnderBanner.isActive = !configBanner.isHidden
+            }
+        }
+        showTopBars()
     }
 
     /// Shows the toolbar or hides it, as `settings` says. Hidden, the window keeps a title bar
@@ -916,6 +969,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         guard !isClosed, !workspace.isClosed else { return }
         tabStrip.update()
         tabStripHeight.constant = tabStrip.view.isHidden ? 0 : TabStripView.height
+        showTopBars()
         let tab = workspace.selectedTab
         let title = tab.focusedPane.titleLocation.name
         if window?.title != title { window?.title = title }

@@ -1,11 +1,11 @@
 import AppKit
 
-/// The content of a pane's path bar glass, which floats over the bottom of the list or the
-/// columns. A drag over it goes on to the list or column under it, so a drop there lands on the
-/// row under the glass, as it would with no glass, and each update scrolls that list down a row,
-/// as a drag held at the bottom edge of Finder's list scrolls it
-/// (docs/decisions/0132-glass-path-bar.md). The path bar and the status inside it take no drags,
-/// so AppKit hands a drag over them to this view.
+/// The content of a pane's path bar row, which lies translucent over the bottom of the list or
+/// the columns (docs/decisions/0133-flat-translucent-bars.md). A drag over it goes on to the
+/// list or column under it, so a drop there lands on the row under the bar, as it would with no
+/// bar over it, and each update scrolls that list down a row, as a drag held at the bottom edge
+/// of Finder's list scrolls it (docs/decisions/0132-glass-path-bar.md). The path bar and the
+/// status inside it take no drags, so AppKit hands a drag over them to this view.
 @MainActor
 final class PathBarGlassContent: NSView, NSSpringLoadingDestination {
     /// The clip view of the list or column at a point in the window's coordinates; nil where

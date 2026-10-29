@@ -81,6 +81,16 @@ final class ColumnViewController: NSViewController {
             }
         }
     }
+    /// How much of the columns' top lies under the window's toolbar and tab strip; each column
+    /// and the preview start their content below it (`ListingViewController.topCover`).
+    var topCover: CGFloat = 0 {
+        didSet {
+            for controller in columnControllers {
+                controller.topCover = topCover
+            }
+            previewView?.topCover = topCover
+        }
+    }
     /// Starts a folder monitor for a new column's pane. Set before the first column shows.
     var startMonitor: @MainActor (Pane) -> Void = { pane in
         preconditionFailure("no monitor starter for the column at \(pane.location)")
@@ -187,9 +197,12 @@ final class ColumnViewController: NSViewController {
         scrollView.verticalScrollElasticity = .none
         // Past the last column, the color the columns' rows are drawn on.
         scrollView.backgroundColor = .controlBackgroundColor
-        // The columns run under the pane's path bar glass; their scroller sits above it
-        // (docs/decisions/0132-glass-path-bar.md).
+        // The columns run under the pane's path bar row; their scroller sits above it.
         scrollView.scrollerInsets.bottom = PaneViewController.pathBarCover
+        // The columns run under the window's toolbar too, and each column insets its own rows
+        // by the pane's `topCover`. AppKit's automatic inset here would move the columns down
+        // as well, insetting them twice (docs/decisions/0133-flat-translucent-bars.md).
+        scrollView.automaticallyAdjustsContentInsets = false
         // VoiceOver reads the columns as it reads `NSBrowser`'s: a browser whose children are
         // the columns, each a scroll area named for its folder.
         columnsView.setAccessibilityElement(true)
@@ -294,6 +307,7 @@ final class ColumnViewController: NSViewController {
         controller.mountTable = mountTable
         controller.volumes = volumes
         controller.springLoader = springLoader
+        controller.topCover = topCover
         prepareTable(table)
         table.setAccessibilityLabel(column.pane.location.name)
         controller.view.setAccessibilityLabel(column.pane.location.name)
@@ -677,6 +691,7 @@ final class ColumnViewController: NSViewController {
             previewView
             ?? {
                 let view = ColumnPreviewView(iconCache: iconCache, formatter: formatter)
+                view.topCover = topCover
                 view.returnKeys = { [weak self] event in
                     self?.returnKeysToFocusedColumn(passing: event)
                 }

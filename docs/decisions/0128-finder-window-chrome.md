@@ -1,7 +1,8 @@
 # 0128. Finder's window chrome: a unified toolbar, a floating sidebar and a title that follows
 
 - **Date:** 2026-10-28
-- **Status:** accepted
+- **Status:** accepted; amended by [0133](0133-flat-translucent-bars.md) (the compact
+  toolbar, and the panes running under it)
 - **Amends:** [0086](0086-workspace-sidebar.md) (the sidebar's look),
   [0125](0125-workspace-open-is-a-back-step.md) ("the window has no Back or Forward toolbar
   buttons")
@@ -56,7 +57,9 @@ item (0086), and the title set to the focused pane's folder only when its locati
   Content doesn't scroll under the glass as Finder's does (`fb-1028b-3`); that needs the lists
   to take the bar as a scroll inset, which goes with the path bar's glass look (CH.2).
   (2026-10-28: [0132](0132-glass-path-bar.md) floats the path bar over the rows; the rows still
-  stop below the tab strip.)
+  stop below the tab strip. Amended the same day by [0133](0133-flat-translucent-bars.md): the
+  toolbar is `.unifiedCompact`, the banner and the strip are the panes' top accessories on
+  macOS 26, and the panes run up under them and the toolbar.)
 - **The title with the toolbar hidden stays where AppKit puts it: leading, not centred.** On
   macOS 26 AppKit left-aligns a title-bar title in this window in every arrangement measured on
   the second display (the title field's frame in the window): with the toolbar hidden in the

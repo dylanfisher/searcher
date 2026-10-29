@@ -83,7 +83,7 @@ private func mainMenu() throws -> NSMenu {
     let toolbar = try #require(window.toolbar)
     #expect(toolbar === fixture.toolbar.toolbar)
     #expect(toolbar.isVisible)
-    #expect(window.toolbarStyle == .unified)
+    #expect(window.toolbarStyle == .unifiedCompact)
     #expect(window.styleMask.contains(.fullSizeContentView))
     #expect(
         toolbar.items.map(\.itemIdentifier) == [
@@ -312,4 +312,180 @@ private func mainMenu() throws -> NSMenu {
     #expect(fixture.tab.focusedPane === first)
     #expect(fixture.window.title == "root")
     #expect(!fixture.toolbar.back.isEnabled && fixture.toolbar.forward.isEnabled)
+}
+
+/// How far the window's toolbar, or its title bar while the toolbar is hidden, reaches down
+/// from the window's top.
+@MainActor
+private func barHeight(of window: NSWindow) throws -> CGFloat {
+    let content = try #require(window.contentView)
+    return content.bounds.height - window.contentLayoutRect.maxY
+}
+
+/// `view`'s bounds in its window's coordinates.
+@MainActor
+private func inWindow(_ view: NSView) -> NSRect {
+    view.convert(view.bounds, to: nil)
+}
+
+/// The list's first row lies below `top`, in the window's coordinates, and below the header,
+/// which lies below `top` too.
+@MainActor
+private func firstRowIsBelow(_ top: CGFloat, in controller: PaneViewController) throws -> Bool {
+    let table = controller.listingViewController.tableView
+    let header = try #require(table.headerView)
+    let row = table.convert(table.rect(ofRow: 0), to: nil)
+    return inWindow(header).maxY <= top + 0.5 && row.maxY <= inWindow(header).minY + 0.5
+}
+
+/// The compact unified toolbar is shorter than the unified one. The panes run up under it to the
+/// window's top, so the rows scroll under its glass, and at rest the list's header and first row
+/// start below it (docs/decisions/0133-flat-translucent-bars.md).
+@MainActor @Test func theRowsRunUnderTheCompactToolbarAndStartBelowIt() async throws {
+    let fixture = try await Fixture()
+    let window = fixture.window
+    let content = try #require(window.contentView)
+    let controller = fixture.controller.paneViewController
+    let bar = try barHeight(of: window)
+    #expect(window.toolbarStyle == .unifiedCompact)
+
+    if #available(macOS 26, *) {
+        #expect(inWindow(controller.view).maxY == content.bounds.maxY)
+        #expect(controller.topCover == bar)
+        let scrollView = try #require(controller.listingViewController.view as? NSScrollView)
+        #expect(scrollView.contentInsets.top == bar)
+        #expect(inWindow(scrollView).maxY == content.bounds.maxY)
+    }
+    #expect(try firstRowIsBelow(window.contentLayoutRect.maxY, in: controller))
+}
+
+/// With the toolbar hidden the rows start below the title bar, and run under it.
+@MainActor @Test func theRowsStartBelowTheTitleBarWhileTheToolbarIsHidden() async throws {
+    let fixture = try await Fixture()
+    let window = fixture.window
+    let controller = fixture.controller.paneViewController
+    let shown = try barHeight(of: window)
+
+    try fixture.keyTable.run(ViewCommands.toggleToolbar.id)
+    window.contentView?.layoutSubtreeIfNeeded()
+
+    let hidden = try barHeight(of: window)
+    #expect(hidden < shown)
+    if #available(macOS 26, *) {
+        #expect(controller.topCover == hidden)
+    }
+    #expect(try firstRowIsBelow(window.contentLayoutRect.maxY, in: controller))
+}
+
+/// With two tabs the strip sits under the toolbar, translucent over the panes, which run up
+/// under both; the rows start below the strip.
+@MainActor @Test func theRowsRunUnderTheTabStripAndStartBelowIt() async throws {
+    let fixture = try await Fixture()
+    let window = fixture.window
+    let content = try #require(window.contentView)
+    try fixture.keyTable.run(WindowCommands.newTab.id)
+    let workspace = fixture.controller.workspace
+    await settle { workspace.selectedTab.focusedPane.state.isLoaded }
+    content.layoutSubtreeIfNeeded()
+    let strip = fixture.controller.tabStrip.view
+    let controller = fixture.controller.paneViewController
+    #expect(!strip.isHidden)
+
+    let stripFrame = inWindow(strip)
+    #expect(stripFrame.height == TabStripView.height)
+    #expect(stripFrame.maxY <= window.contentLayoutRect.maxY + 0.5)
+    if #available(macOS 26, *) {
+        #expect(inWindow(controller.view).maxY == content.bounds.maxY)
+        #expect(controller.topCover == (try barHeight(of: window)) + TabStripView.height)
+    }
+    #expect(try firstRowIsBelow(stripFrame.minY, in: controller))
+
+    try fixture.keyTable.run(WindowCommands.closeTab.id)
+    content.layoutSubtreeIfNeeded()
+
+    #expect(strip.isHidden)
+    let only = fixture.controller.paneViewController
+    if #available(macOS 26, *) {
+        #expect(only.topCover == (try barHeight(of: window)))
+    }
+    #expect(try firstRowIsBelow(window.contentLayoutRect.maxY, in: only))
+}
+
+/// In a split down, only the top pane runs under the toolbar; the pane below starts its rows at
+/// its own top.
+@MainActor @Test func onlyThePaneUnderTheToolbarIsCovered() async throws {
+    let fixture = try await Fixture()
+    let top = fixture.tab.layout.focused
+    try fixture.keyTable.run(TilingCommands.splitDown.id)
+    let workspace = fixture.controller.workspace
+    await settle { workspace.selectedTab.layout.panes.count == 2 }
+    let bottom = try #require(fixture.tab.layout.panes.first { $0 != top })
+    await settle { fixture.tab.panes[bottom]?.state.isLoaded == true }
+    fixture.window.contentView?.layoutSubtreeIfNeeded()
+    let upper = try #require(fixture.controller.paneViewController(for: top))
+    let lower = try #require(fixture.controller.paneViewController(for: bottom))
+
+    #expect(lower.topCover == 0)
+    let scrollView = try #require(lower.listingViewController.view as? NSScrollView)
+    #expect(scrollView.contentInsets.top == 0)
+    if #available(macOS 26, *) {
+        #expect(upper.topCover == (try barHeight(of: fixture.window)))
+    }
+    #expect(try firstRowIsBelow(fixture.window.contentLayoutRect.maxY, in: upper))
+}
+
+/// In column view each column's first row, and the preview's top, start below the toolbar.
+@MainActor @Test func theColumnsAndThePreviewStartBelowTheToolbar() async throws {
+    let fixture = try await Fixture()
+    let controller = fixture.controller.paneViewController
+    try fixture.chooseViewMode(1)
+    let trail = try #require(fixture.tab.focusedPane.columnTrail)
+    await settle { trail.columns.allSatisfy { $0.pane.state.isLoaded } }
+    trail.focused.pane.select(Selection([ExactName("a.txt")], cursor: ExactName("a.txt")))
+    await settle { controller.columnViewController.previewView?.isHidden == false }
+    fixture.window.contentView?.layoutSubtreeIfNeeded()
+    let top = fixture.window.contentLayoutRect.maxY
+    let columns = controller.columnViewController
+
+    for column in columns.columnControllers {
+        #expect(column.topCover == controller.topCover)
+        let table = column.tableView
+        #expect(table.convert(table.rect(ofRow: 0), to: nil).maxY <= top + 0.5)
+    }
+    let preview = try #require(columns.previewView)
+    #expect(preview.topCover == controller.topCover)
+    let document = try #require(preview.scrollView.documentView)
+    #expect(inWindow(document).maxY <= top + 0.5)
+    if #available(macOS 26, *) {
+        #expect(controller.topCover == (try barHeight(of: fixture.window)))
+        let scrollView = try #require(columns.view as? NSScrollView)
+        #expect(scrollView.contentInsets.top == 0)
+    }
+}
+
+/// The filter bar sits below the toolbar, and the list under it starts there, uncovered; closing
+/// it runs the list under the toolbar again.
+@MainActor @Test func theFilterBarSitsBelowTheToolbarWithTheListUnderIt() async throws {
+    let fixture = try await Fixture()
+    let controller = fixture.controller.paneViewController
+    let window = fixture.window
+    let cover = controller.topCover
+
+    try fixture.keyTable.run(ViewCommands.filter.id)
+    window.contentView?.layoutSubtreeIfNeeded()
+
+    let filter = inWindow(controller.filterBar)
+    #expect(!controller.filterBar.isHidden)
+    #expect(filter.maxY == window.contentLayoutRect.maxY)
+    #expect(inWindow(controller.listingViewController.view).maxY == filter.minY)
+    #expect(controller.topCover == 0)
+    #expect(try firstRowIsBelow(filter.minY, in: controller))
+
+    // Esc in the field.
+    controller.filterBar.onCancel?()
+    window.contentView?.layoutSubtreeIfNeeded()
+
+    #expect(controller.filterBar.isHidden)
+    #expect(controller.topCover == cover)
+    #expect(try firstRowIsBelow(window.contentLayoutRect.maxY, in: controller))
 }

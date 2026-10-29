@@ -74,6 +74,9 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
     var springLoadingActivated: @MainActor () -> Void = {}
     var dragExited: @MainActor () -> Void = {}
     var dragEnded: @MainActor () -> Void = {}
+    /// Runs for each update of a drag over the table, or over its clip's margins, with the
+    /// drag's location in the window. Set by the list's controller.
+    var dragUpdated: @MainActor (NSPoint) -> Void = { _ in }
     /// Signals a key that does nothing. Tests replace it.
     var beep: @MainActor () -> Void = { NSSound.beep() }
     /// Keeps the selected rows emphasized though the table doesn't have the keys: set while the
@@ -328,6 +331,11 @@ class ListingTableView: NSTableView, NSMenuItemValidation, NSSpringLoadingDestin
     /// The drop highlight on the row already shows where the drag is, as Finder shows it; the
     /// spring-loading highlight adds nothing to it.
     func springLoadingHighlightChanged(_ draggingInfo: any NSDraggingInfo) {}
+
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        dragUpdated(sender.draggingLocation)
+        return super.draggingUpdated(sender)
+    }
 
     override func draggingExited(_ sender: (any NSDraggingInfo)?) {
         super.draggingExited(sender)

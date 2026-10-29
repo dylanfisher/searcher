@@ -71,6 +71,21 @@ final class ColumnPreviewView: NSView {
     /// Gives the keys back to the focused column, from the preview's text: Esc, Tab and
     /// Shift-Tab pass nil, ↑ and ↓ their key press, which the column then takes as its own.
     var returnKeys: @MainActor (NSEvent?) -> Void = { _ in }
+    /// How much of the preview's top lies under the window's toolbar and tab strip, as for the
+    /// columns (`ListingViewController.topCover`). Its content starts below them and scrolls
+    /// under them.
+    var topCover: CGFloat = 0 {
+        didSet {
+            guard topCover != oldValue else { return }
+            let clip = scrollView.contentView
+            let atTop = clip.bounds.origin.y <= -scrollView.contentInsets.top + 0.5
+            scrollView.contentInsets.top = topCover
+            if atTop {
+                clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: -topCover))
+                scrollView.reflectScrolledClipView(clip)
+            }
+        }
+    }
 
     /// The fields whose text can be selected: the name, the kind line and the values. The tags'
     /// pills aren't text, as Finder's aren't.
@@ -263,8 +278,8 @@ final class ColumnPreviewView: NSView {
         scrollView.hasHorizontalScroller = false
         scrollView.horizontalScrollElasticity = .none
         scrollView.autohidesScrollers = true
-        // The preview runs under the pane's path bar glass; its end and its scroller stop above
-        // it (docs/decisions/0132-glass-path-bar.md).
+        // The preview runs under the pane's path bar row; its end and its scroller stop above
+        // it (docs/decisions/0133-flat-translucent-bars.md).
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets.bottom = PaneViewController.pathBarCover
         scrollView.translatesAutoresizingMaskIntoConstraints = false

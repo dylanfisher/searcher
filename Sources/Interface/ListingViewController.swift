@@ -89,6 +89,24 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// Goes up each time the view takes another list's scroll position, which drops a scroll to
     /// the cursor still waiting for the next pass.
     private var scrollGeneration = 0
+    /// How much of the list's top lies under the window's toolbar and tab strip, which the rows
+    /// scroll under; 0 for a list that starts below them. The pane sets it from its safe area
+    /// (docs/decisions/0133-flat-translucent-bars.md).
+    var topCover: CGFloat = 0 {
+        didSet {
+            guard topCover != oldValue, let scrollView = viewIfLoaded as? NSScrollView else {
+                return
+            }
+            let clip = scrollView.contentView
+            let atTop = clip.bounds.origin.y <= -clip.contentInsets.top + 0.5
+            setInsets(of: scrollView)
+            // A list at its top stays there, its first row clear of the bars over it.
+            if atTop {
+                clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: -clip.contentInsets.top))
+                scrollView.reflectScrolledClipView(clip)
+            }
+        }
+    }
     /// The app's clipboard, whose cut entries in this folder draw dimmed. Nil shows none.
     var clipboard: CutState? {
         didSet {
@@ -224,20 +242,30 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
     /// only the header's height. A press or drop in a margin reaches the table through
     /// `ListingClipView` (docs/decisions/0029-row-movement.md).
     ///
-    /// The list and each column run under the pane's path bar glass, so the bottom margin and
-    /// the scrollers start `PaneViewController.pathBarCover` above the bottom edge, and the rows
-    /// scroll under the glass (docs/decisions/0132-glass-path-bar.md).
+    /// The list and each column run under the pane's path bar row, so the bottom margin and the
+    /// scrollers start `PaneViewController.pathBarCover` above the bottom edge, and the rows
+    /// scroll under the row. They run under the window's toolbar and tab strip too, by
+    /// `topCover`: the scroll view's own top inset moves the header and the scroller below the
+    /// bars, and the rows start below the header (docs/decisions/0133-flat-translucent-bars.md).
     private func keepMargins(in scrollView: NSScrollView) {
         let clip = scrollView.contentView
-        let header = tableView.headerView?.frame.height ?? 0
         clip.automaticallyAdjustsContentInsets = false
-        clip.contentInsets = NSEdgeInsets(
-            top: header + Margin.standard, left: 0,
-            bottom: Margin.standard + PaneViewController.pathBarCover, right: 0)
-        scrollView.scrollerInsets.bottom = PaneViewController.pathBarCover
+        // The pane, not AppKit, says how much of the list the window's bars cover.
+        scrollView.automaticallyAdjustsContentInsets = false
+        setInsets(of: scrollView)
         // The clip keeps the origin it had before the insets; the top of the list is above it.
         clip.scroll(to: NSPoint(x: 0, y: -clip.contentInsets.top))
         clip.registerForDraggedTypes(tableView.registeredDraggedTypes)
+    }
+
+    /// Sets the scroll view's and its clip view's insets for `topCover` and the path bar.
+    private func setInsets(of scrollView: NSScrollView) {
+        let header = tableView.headerView?.frame.height ?? 0
+        scrollView.contentInsets.top = topCover
+        scrollView.contentView.contentInsets = NSEdgeInsets(
+            top: topCover + header + Margin.standard, left: 0,
+            bottom: Margin.standard + PaneViewController.pathBarCover, right: 0)
+        scrollView.scrollerInsets.bottom = PaneViewController.pathBarCover
     }
 
     /// Shows the pane's sort, rows and selection. Reloads the rows, in one reload, only when the
@@ -332,11 +360,33 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
         let clip = scrollView.contentView
         let header = headerOverlap(in: scrollView)
         var bounds = clip.bounds
-        // The rows shown clear of the header and of the path bar's glass under the list.
+        // The rows shown clear of the bars over the list, the header and the path bar's row
+        // under the list.
         let shown =
-            scrollView.documentVisibleRect.height - header - PaneViewController.pathBarCover
-        bounds.origin.y = tableView.rect(ofRow: row).midY - header - shown / 2
+            scrollView.documentVisibleRect.height - topCover - header
+            - PaneViewController.pathBarCover
+        bounds.origin.y = tableView.rect(ofRow: row).midY - topCover - header - shown / 2
         clip.scroll(to: clip.constrainBoundsRect(bounds).origin)
+        scrollView.reflectScrolledClipView(clip)
+    }
+
+    /// Scrolls the list up a row when a drag is held within a row's height below the window's
+    /// bars over its top and the header, as a drag held over the path bar's row scrolls it down
+    /// (`PathBarGlassContent`). AppKit's own autoscroll wants the drag past the clip's top edge,
+    /// which lies under the toolbar, where no list takes the drag
+    /// (docs/decisions/0133-flat-translucent-bars.md).
+    private func scrollUpUnderTheBars(at location: NSPoint) {
+        guard topCover > 0, let scrollView = view as? NSScrollView else { return }
+        let clip = scrollView.contentView
+        // The clip is flipped, as the table is: y grows down from the visible top.
+        let top = clip.bounds.minY + topCover + headerOverlap(in: scrollView)
+        let point = clip.convert(location, from: nil)
+        guard point.y >= top, point.y < top + tableView.rowHeight else { return }
+        var bounds = clip.bounds
+        bounds.origin.y -= tableView.rowHeight
+        let origin = clip.constrainBoundsRect(bounds).origin
+        guard origin != clip.bounds.origin else { return }
+        clip.scroll(to: origin)
         scrollView.reflectScrolledClipView(clip)
     }
 
@@ -558,6 +608,7 @@ public final class ListingViewController: NSViewController, NSTableViewDataSourc
             springLoader?.dragExited(pane)
         }
         tableView.dragEnded = { [weak self] in self?.springLoader?.dragEnded() }
+        tableView.dragUpdated = { [weak self] location in self?.scrollUpUnderTheBars(at: location) }
         tableView.selectionShapeChanged = { [weak self] in self?.placeChevrons() }
     }
 

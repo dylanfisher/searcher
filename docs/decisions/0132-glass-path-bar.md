@@ -1,7 +1,8 @@
 # 0132. The path bar floats in a glass capsule over the bottom of each pane
 
 - **Date:** 2026-10-28
-- **Status:** accepted
+- **Status:** accepted; amended by [0133](0133-flat-translucent-bars.md) (the bar is back in
+  a flat translucent row along the pane's bottom; no capsule, no gap)
 - **Amends:** [0026](0026-path-bar.md) (the bar's own row along the pane's bottom),
   [0052](0052-pane-status.md) (the status's 60% is of the capsule, not the pane)
 
