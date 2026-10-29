@@ -18,6 +18,12 @@
 if [ "${1:-}" = "--gentle" ]; then SEARCHER_GENTLE=1; shift; fi
 
 swift_bin="$(xcrun --find swift)"
+# The linker records the SDK's version in the app only when SDKROOT names the SDK, as xcrun
+# sets it. Without it the app says it was built with the macOS 14 SDK, its deployment target,
+# and AppKit draws it as a macOS 14 app: no Liquid Glass and nothing scrolling under the bars
+# (docs/decisions/0134-link-against-the-current-sdk.md).
+SDKROOT="$(xcrun --show-sdk-path)"
+export SDKROOT
 # The native build system adds the Testing framework only to test targets, and TestSupport
 # imports it too. Xcode keeps it in the platform; Command Line Tools have no platform.
 if platform="$(xcrun --show-sdk-platform-path 2>/dev/null)"; then
