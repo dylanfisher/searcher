@@ -98,10 +98,10 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
     let statusBar = StatusBarView()
     /// The space free on each volume, for the status bar.
     let freeSpace: FreeSpace
-    /// Holds the status bar in the window: on macOS 26 a bottom accessory of the panes' split
-    /// view item, which the system draws as its bottom bar; before that, nil, and the bar is a
-    /// view at the bottom of the panes' content.
-    private var statusBarAccessory: NSViewController?
+    /// Shows the status bar (false) or hides it (true) where `placeStatusBar` put it: on macOS
+    /// 26 the panes' split view item's bottom accessory, before that a view at the bottom of the
+    /// panes' content.
+    private var hideStatusBar: @MainActor (Bool) -> Void = { _ in }
     /// The volume the status bar last gave the space of, so moving to another reads it again.
     private var statusVolume: VolumeIdentity?
     /// The favorites and the saved workspaces, left of the panes.
@@ -386,7 +386,9 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             // The standard insets pad the bar to 46 points; Finder's is 28 points tall.
             accessory.automaticallyAppliesContentInsets = false
             item.addBottomAlignedAccessoryViewController(accessory)
-            statusBarAccessory = accessory
+            hideStatusBar = { hides in
+                if accessory.isHidden != hides { accessory.isHidden = hides }
+            }
         } else {
             let content = item.viewController.view
             statusBar.translatesAutoresizingMaskIntoConstraints = false
@@ -396,46 +398,43 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
                 statusBar.trailingAnchor.constraint(equalTo: content.trailingAnchor),
                 statusBar.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             ])
+            hideStatusBar = { [statusBar] hides in
+                statusBar.isHidden = hides
+                let inset = hides ? 0 : StatusBarView.height
+                if content.additionalSafeAreaInsets.bottom != inset {
+                    content.additionalSafeAreaInsets.bottom = inset
+                }
+            }
         }
         showStatusBar()
     }
 
     /// Shows the status bar or hides it, as `settings` says, and fills it while it shows.
     private func showStatusBar() {
-        let shows = settings.showsStatusBar
-        if #available(macOS 26, *), let accessory = statusBarAccessory {
-            guard let accessory = accessory as? NSSplitViewItemAccessoryViewController else {
-                preconditionFailure("the status bar's holder isn't a split view accessory")
-            }
-            if accessory.isHidden == shows { accessory.isHidden = !shows }
-        } else {
-            statusBar.isHidden = !shows
-            let inset = shows ? StatusBarView.height : 0
-            let content = statusBar.superview
-            if content?.additionalSafeAreaInsets.bottom != inset {
-                content?.additionalSafeAreaInsets.bottom = inset
-            }
-        }
+        hideStatusBar(!settings.showsStatusBar)
         showStatus()
     }
 
     /// Writes the status bar's line for the selected tab's focused pane: the rows of its
     /// `statusPane` and how many are selected, as the pane shows them, and the space free on its
-    /// folder's volume once known. While the folder loads, or its column hasn't opened yet, or
-    /// its selection is still settling, the line stays as it was, as the path bar keeps its
-    /// folder while the next one loads.
+    /// folder's volume once known. Only the selection the keys act on counts: the column of a
+    /// folder selected in the focused column counts its rows alone, as Finder does. While the
+    /// folder loads, or its column hasn't opened yet, or its selection is still settling, the
+    /// line stays as it was, as the path bar keeps its folder while the next one loads.
     func showStatus() {
-        guard !isClosed, !workspace.isClosed, settings.showsStatusBar,
-            let pane = workspace.selectedTab.focusedPane.statusPane
-        else { return }
+        guard !isClosed, !workspace.isClosed, settings.showsStatusBar else { return }
+        let focusedPane = workspace.selectedTab.focusedPane
+        guard let pane = focusedPane.statusPane else { return }
         guard let listing = pane.state.listing else {
             if case .loading = pane.state { return }
             statusBar.text = ""
             return
         }
-        guard !pane.selection.isProvisional else { return }
+        let countsSelection = pane === focusedPane.commandPane
+        guard !countsSelection || !pane.selection.isProvisional else { return }
         statusBar.text = StatusBarText.text(
-            items: listing.count, selected: pane.selection.rows(in: listing).count,
+            items: listing.count,
+            selected: countsSelection ? pane.selection.rows(in: listing).count : 0,
             available: available(for: pane))
     }
 

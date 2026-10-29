@@ -41,6 +41,20 @@ private final class HeldRead: @unchecked Sendable {
     }
 }
 
+/// A `StubLister` whose `/root/locked` can't be read.
+private final class LockedLister: Lister, @unchecked Sendable {
+    private let lister: StubLister
+
+    init(_ folders: [String: [DirectoryEntry]]) {
+        lister = StubLister(folders)
+    }
+
+    func list(_ path: String, onBatch: ([DirectoryEntry]) throws -> Void) throws {
+        if path == "/root/locked" { throw ListingError(path: path, code: EACCES) }
+        try lister.list(path, onBatch: onBatch)
+    }
+}
+
 /// A browser window at `/root` that is never shown, with its first pane loaded and its table
 /// first responder, and its free space read by `read`.
 @MainActor
@@ -58,7 +72,7 @@ private struct Fixture {
         controller = BrowserWindowController(
             location: Location(path: "/root"),
             service: ListingService(
-                lister: StubLister(folders), rootVolumeName: { "Test Disk" },
+                lister: LockedLister(folders), rootVolumeName: { "Test Disk" },
                 volumeOf: { _ in volume }),
             systemActions: StubSystemActions(), settings: settings,
             favorites: Favorites(settings: settings), volumes: StubSidebarVolumes().list(),
@@ -214,6 +228,7 @@ private let available = ", 789.74 GB available"
     #expect(fixture.frame(of: bar).minY == 0)
     #expect(fixture.frame(of: paneView).minY == StatusBarView.height)
     await fixture.waitForText("4 items" + available)
+    await config.settings.flushConfigBounded()
 }
 
 /// The space shows once its read lands. A share that doesn't answer never holds the bar: the
@@ -256,4 +271,65 @@ private let available = ", 789.74 GB available"
     #expect(visible.contains(lastRow))
     #expect(lastRow.minY >= bar.maxY)
     #expect(fixture.frame(of: paneController.pathBar).minY >= bar.maxY)
+}
+
+/// With a filter the bar counts the rows the filter keeps, as the list shows them, and the
+/// first of them, which the filter selects.
+@MainActor @Test func theBarCountsTheRowsAFilterKeeps() async throws {
+    let fixture = try await Fixture()
+    let pane = fixture.tab.focusedPane
+    await fixture.waitForText("4 items" + available)
+
+    pane.setFilter("txt")
+
+    await fixture.waitForText("1 of 2 selected" + available)
+
+    pane.setFilter("")
+
+    await fixture.waitForText("1 of 4 selected" + available)
+}
+
+/// In column view several rows selected in the focused column count as a selection there, and
+/// the count follows the keys from column to column.
+@MainActor @Test func inColumnViewTheBarFollowsTheSelectionAndTheFocusedColumn() async throws {
+    let fixture = try await Fixture()
+    try fixture.keyTable.keyDown(with: try keyEvent("3", modifiers: .command))
+    let pane = fixture.tab.focusedPane
+    await settle { pane.commandPane !== pane && pane.commandPane.state.isLoaded }
+    let trail = try #require(pane.columnTrail)
+    let rootColumn = pane.commandPane
+    await fixture.waitForText("4 items" + available)
+
+    rootColumn.select(
+        Selection([ExactName("a.txt"), ExactName("b.txt")], cursor: ExactName("b.txt")))
+
+    #expect(fixture.text == "2 of 4 selected" + available)
+
+    rootColumn.select(Selection([ExactName("docs")], cursor: ExactName("docs")))
+    await settle { trail.selectedFolderColumn?.state.isLoaded == true }
+    try fixture.keyTable.run(ColumnCommands.intoFolder.id)
+    await settle { trail.focused.pane.location == Location(path: "/root/docs") }
+
+    await fixture.waitForText("1 of 1 selected" + available)
+
+    try fixture.keyTable.run(ColumnCommands.toParent.id)
+
+    #expect(trail.focused.pane === rootColumn)
+    await fixture.waitForText("1 item" + available)
+}
+
+/// A folder that can't be listed has no count, and no old count stays in its place.
+@MainActor @Test func aFolderThatFailsToListShowsNoCount() async throws {
+    var folders = Fixture.folders
+    folders["/root"]?.append(folder("locked"))
+    let fixture = try await Fixture(folders: folders)
+    let pane = fixture.tab.focusedPane
+    await fixture.waitForText("5 items" + available)
+
+    pane.navigate(to: Location(path: "/root/locked"))
+
+    await settle {
+        if case .failed = pane.state { true } else { false }
+    }
+    #expect(fixture.text == "")
 }
