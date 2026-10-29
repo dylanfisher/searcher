@@ -1,5 +1,7 @@
 import AppKit
+import Base
 import Browser
+import os
 
 /// The icons of Finder's sidebar, shared by every sidebar, as template images that take the
 /// list's tint. Finder on macOS 26 draws its rows as thin outline SF Symbols; only its
@@ -79,6 +81,11 @@ final class SidebarIcons {
     private let symbols: [Glyph: NSImage]
     private var files: [Glyph: NSImage] = [:]
     private var loading: Task<Void, Never>?
+    /// Where a file the bundle lacks, or one that doesn't decode, is reported; its row keeps the
+    /// stand-in symbol. Tests read it.
+    var logFault: (String) -> Void = { message in
+        Logger(category: "sidebar").fault("\(message, privacy: .public)")
+    }
 
     /// `read` gives the bytes of the icon files named; tests replace it.
     init(read: (@Sendable ([String]) async -> [String: Data])? = nil) {
@@ -107,9 +114,11 @@ final class SidebarIcons {
                 let withFiles = Glyph.allCases.filter { $0.coreTypesFile != nil }
                 let read = await read(withFiles.compactMap(\.coreTypesFile))
                 for glyph in withFiles {
-                    guard let name = glyph.coreTypesFile, let data = read[name],
-                        let image = NSImage(data: data)
-                    else { continue }
+                    guard let name = glyph.coreTypesFile else { continue }
+                    guard let data = read[name], let image = NSImage(data: data) else {
+                        logFault("the CoreTypes bundle has no readable \(name).icns")
+                        continue
+                    }
                     image.isTemplate = true
                     files[glyph] = image
                 }

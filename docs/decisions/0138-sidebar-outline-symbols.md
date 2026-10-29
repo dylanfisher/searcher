@@ -40,7 +40,9 @@ Every sidebar row draws an SF Symbol as a template image, except Applications. T
   set on this SDK has nothing like it (`appstore` is only in `CoreGlyphsPrivate`, and
   `NSImage(systemSymbolName:)` returns nil for it). The CoreTypes file for Applications is the
   same outline "A" Finder shows (the two shots match), so that one glyph is still read off the
-  main thread by `CoreTypesIcons`, and swapped in when the read ends.
+  main thread by `CoreTypesIcons`, and swapped in when the read ends. If the file is missing or
+  doesn't decode, the row keeps `app.dashed` and `SidebarIcons` logs a fault in the `sidebar`
+  category. This replaces 0107's silent fallback.
 - **No system lookup.** Neither AppKit nor Foundation exposes the symbol Finder's sidebar shows
   for a URL or a volume, so the names were picked by drawing the candidates beside the shots.
   Each exists on the macOS 26 SDK (`CoreGlyphs.bundle`'s `name_availability.plist`, all 2019 or

@@ -808,11 +808,14 @@ private func hasHue(_ color: NSColor, of accent: NSColor) -> Bool {
     #expect(eject.glyphTint == .secondaryLabelColor)
 }
 
-@MainActor @Test func aGlyphTheBundleLacksShowsItsSymbol() async {
+@MainActor @Test func aGlyphTheBundleLacksShowsItsSymbolAndIsReported() async {
     let icons = SidebarIcons { _ in [:] }
+    var faults: [String] = []
+    icons.logFault = { faults.append($0) }
 
     await icons.load()
 
+    #expect(faults == ["the CoreTypes bundle has no readable SidebarApplicationsFolder.icns"])
     for glyph in SidebarIcons.Glyph.allCases {
         let description = String(describing: icons.image(glyph))
         #expect(description.hasSuffix("symbol = \(glyph.symbol)>"), "\(description)")
