@@ -124,8 +124,10 @@ public final class PaneViewController: NSViewController {
         listingViewController.scroll(like: other.listingViewController)
     }
 
-    /// Runs after the pane shows a new location, for the window title.
-    public var onLocationChange: (@MainActor (Location) -> Void)?
+    /// Runs after the pane shows a new location or a new `Pane.titleLocation`, for the window's
+    /// title and toolbar. In column view that is on the selection of a folder itself, before
+    /// its column opens or lists (docs/decisions/0128-finder-window-chrome.md).
+    public var onTitleChange: (@MainActor () -> Void)?
     /// Runs each time the views have been updated for a change of the pane, in the same run loop
     /// pass, so the UI bench can time the frame that shows it.
     public var onShow: (@MainActor () -> Void)?
@@ -186,8 +188,9 @@ public final class PaneViewController: NSViewController {
     private var monitoredLocation: Location?
     /// The pane's `monitorGeneration` when the list's last monitor was started.
     private var monitoredGeneration = 0
-    /// The location `onLocationChange` last reported.
+    /// The location and title location `onTitleChange` last reported.
     private var shownLocation: Location?
+    private var shownTitleLocation: Location?
     /// Counts monitor starts, so a monitor that finishes starting after a newer one was asked for
     /// is stopped instead of kept.
     private var monitorRequest = 0
@@ -499,11 +502,15 @@ public final class PaneViewController: NSViewController {
         showState()
         showPath()
         showStatus()
-        if pane.location != shownLocation {
-            shownLocation = pane.location
-            listingViewController.tableView.setAccessibilityLabel(pane.location.name)
-            accessDeniedView.folderName = pane.location.name
-            onLocationChange?(pane.location)
+        let titleLocation = pane.titleLocation
+        if pane.location != shownLocation || titleLocation != shownTitleLocation {
+            if pane.location != shownLocation {
+                shownLocation = pane.location
+                listingViewController.tableView.setAccessibilityLabel(pane.location.name)
+                accessDeniedView.folderName = pane.location.name
+            }
+            shownTitleLocation = titleLocation
+            onTitleChange?()
         }
         startMonitorIfNeeded()
         let commandPane = pane.commandPane

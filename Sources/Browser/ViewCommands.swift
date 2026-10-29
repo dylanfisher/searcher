@@ -1,6 +1,6 @@
 /// What the panes show and in what order: the hidden files, `.DS_Store`, columns from home and
 /// folders first toggles, which are app-wide `Settings`, as are the toggles of the sidebar's
-/// groups, and the sort keys, which sort the focused pane by a column. A sort key for the column
+/// groups and the toolbar, and the sort keys, which sort the focused pane by a column. A sort key for the column
 /// already sorted by reverses it; Sort by Next Column moves to the next column in the header's
 /// order, and Reverse Sort Direction reverses the column sorted by. A column of column view shows
 /// names only, so it sorts by Name only: the other sort keys and Sort by Next Column are off
@@ -26,6 +26,10 @@ public enum ViewCommands: CommandSet {
     public static let toggleSidebarWorkspaces = Command(
         id: CommandID("view.toggleSidebarWorkspaces"), title: "Show Workspaces in Sidebar",
         chords: [])
+    /// Shows or hides every window's toolbar, an app-wide setting; its menu item says which it
+    /// would do, as Finder's does (docs/decisions/0128-finder-window-chrome.md).
+    public static let toggleToolbar = Command(
+        id: CommandID("view.toggleToolbar"), title: "Show Toolbar", chords: [])
     public static let toggleFoldersFirst = Command(
         id: CommandID("view.toggleFoldersFirst"), title: "Folders First", chords: [])
     public static let sortByName = Command(
@@ -87,6 +91,10 @@ public enum ViewCommands: CommandSet {
             CommandBinding(
                 toggleSidebarWorkspaces, isChecked: { $0.showsWorkspacesInSidebar },
                 run: { $0.pane.settings.showsWorkspacesInSidebar.toggle() }),
+            CommandBinding(
+                toggleToolbar,
+                title: { $0.pane.settings.showsToolbar ? "Hide Toolbar" : toggleToolbar.title },
+                run: { $0.pane.settings.showsToolbar.toggle() }),
             CommandBinding(
                 toggleFoldersFirst, isChecked: { $0.foldersFirst },
                 run: { $0.pane.settings.foldersFirst.toggle() }),

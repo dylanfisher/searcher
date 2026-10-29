@@ -412,6 +412,7 @@ private func bindings(_ settings: Settings) throws -> KeyBindings {
     first.showsFavoritesInSidebar = false
     first.showsLocationsInSidebar = false
     first.showsWorkspacesInSidebar = false
+    first.showsToolbar = false
     let shortcuts = [
         showPalette: ShortcutOverride(
             primary: .removed, alternate: .chord(KeyChord("o", modifiers: [.command, .shift]))),
@@ -1076,6 +1077,6 @@ private final class WriteSwitch: @unchecked Sendable {
             .showHidden, .hideDSStore, .columnsStartAtHome, .foldersFirst, .folderSizes,
             .terminalBundleID, .commanderFKeys, .hideEmptyOperationsPanel, .columnWidth,
             .appearance, .showsFavoritesInSidebar, .showsLocationsInSidebar,
-            .showsWorkspacesInSidebar,
+            .showsWorkspacesInSidebar, .showsToolbar,
         ])
 }

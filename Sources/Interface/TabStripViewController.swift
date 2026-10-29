@@ -1,8 +1,8 @@
 import AppKit
 import Browser
 
-/// Shows a workspace's tabs in a `TabStripView`, each titled with its focused pane's folder, and
-/// selects the tab clicked. Hidden while the workspace has one tab.
+/// Shows a workspace's tabs in a `TabStripView`, each titled as the window is while it is
+/// selected, after its focused pane's `titleLocation`, and selects the tab clicked. Hidden while the workspace has one tab.
 @MainActor
 final class TabStripViewController: NSViewController {
     let workspace: Workspace
@@ -33,7 +33,7 @@ final class TabStripViewController: NSViewController {
             preconditionFailure("the selected tab is not in the workspace")
         }
         tabStripView.show(
-            titles: tabs.map { $0.focusedPane.location.name }, selected: selected)
+            titles: tabs.map { $0.focusedPane.titleLocation.name }, selected: selected)
     }
 
     private func select(_ index: Int) {

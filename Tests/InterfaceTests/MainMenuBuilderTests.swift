@@ -280,7 +280,7 @@ private struct TextFieldWindow {
         view.items.filter { !$0.isHidden }.map(\.title) == [
             "as List", "as Columns", "Columns Start at Home Folder", "", "Show Sidebar",
             "Focus Sidebar", "Show Favorites in Sidebar", "Show Locations in Sidebar",
-            "Show Workspaces in Sidebar", "",
+            "Show Workspaces in Sidebar", "Show Toolbar", "",
             "Show Hidden Files",
             "Always Hide .DS_Store", "Folders First", "", "Sort by Name", "Sort by Size",
             "Sort by Date Modified", "Sort by Kind", "Sort by Next Column",

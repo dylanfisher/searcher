@@ -14,7 +14,9 @@ import Quartz
 /// closed hides it there too (docs/decisions/0086-workspace-sidebar.md,
 /// docs/decisions/0107-sidebar-favorites.md, docs/decisions/0108-sidebar-locations.md).
 /// Open Quickly shows the command palette over the window, and Esc there gives the keys back to
-/// the focused pane (docs/decisions/0087-palette-window.md).
+/// the focused pane (docs/decisions/0087-palette-window.md). Over it all, the unified toolbar has
+/// Back, Forward, the title and the view mode buttons while `Settings.showsToolbar` is on; the
+/// title follows the focused pane's `titleLocation` (docs/decisions/0128-finder-window-chrome.md).
 ///
 /// Commands change the workspace, and the window shows the result after each one. The window's
 /// first responder stays in the selected tab's focused pane: a command that moves the focus moves
@@ -88,6 +90,8 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
 
     /// Set when the user starts dragging the window by its title bar.
     private var isDraggingWindow = false
+    /// Back, Forward, the title and the view mode buttons, over the window.
+    let toolbar: BrowserToolbar
     /// The favorites and the saved workspaces, left of the panes.
     let sidebar: WorkspaceSidebarViewController
     /// The sidebar's place in the window's split view, collapsed while it is hidden.
@@ -193,13 +197,18 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         panesOverOperations = tabHost.bottomAnchor.constraint(equalTo: operations.view.topAnchor)
         panesToBottom = tabHost.bottomAnchor.constraint(equalTo: content.bottomAnchor)
         stripUnderBanner = strip.view.topAnchor.constraint(equalTo: configBanner.bottomAnchor)
-        stripToTop = strip.view.topAnchor.constraint(equalTo: content.topAnchor)
+        stripToTop = strip.view.topAnchor.constraint(
+            equalTo: content.safeAreaLayoutGuide.topAnchor)
         sidebar = WorkspaceSidebarViewController(
             workspace: workspace, list: workspaces, favorites: favorites, volumes: volumes,
             settings: settings)
         sidebar.open = openSavedWorkspace
         sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
+        toolbar = BrowserToolbar()
         super.init(window: window)
+        toolbar.run = { [weak self] id in self?.runToolbarCommand(id) }
+        window.toolbar = toolbar.toolbar
+        showToolbar()
         let splitView = layOut(content, in: window)
         wireSidebar(favorites: favorites, splitView: splitView)
         wireCallbacks(window: window)
@@ -221,10 +230,13 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         NSWindow.allowsAutomaticWindowTabbing = false
         let window = BrowserWindow(
             contentRect: NSRect(origin: .zero, size: size),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
+        // Finder's window: the toolbar and the title share one bar, and the sidebar runs the
+        // window's full height beside it (docs/decisions/0128-finder-window-chrome.md).
+        window.toolbarStyle = .unified
         window.tabbingMode = .disallowed
         window.isReleasedWhenClosed = false
         return window
@@ -239,7 +251,8 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             content.addSubview(view)
         }
         NSLayoutConstraint.activate([
-            configBanner.topAnchor.constraint(equalTo: content.topAnchor),
+            // Below the toolbar, or the title bar while the toolbar is hidden.
+            configBanner.topAnchor.constraint(equalTo: content.safeAreaLayoutGuide.topAnchor),
             configBanner.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             configBanner.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             tabStrip.view.leadingAnchor.constraint(equalTo: content.leadingAnchor),
@@ -312,6 +325,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         settings.observe(for: self) { [weak self] in
             self?.settingsChanged()
             self?.showConfigErrors()
+            self?.showToolbar()
         }
         tabStrip.didSelectTab = { [weak self] in self?.showWorkspace() }
         window.didChangeFirstResponder = { [weak self] in self?.firstResponderDidChange() }
@@ -330,6 +344,14 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         configBanner.show(errors, canOpen: settings.configFile != nil)
         stripToTop.isActive = errors.isEmpty
         stripUnderBanner.isActive = !errors.isEmpty
+    }
+
+    /// Shows the toolbar or hides it, as `settings` says. Hidden, the window keeps a title bar
+    /// with its title, and Back and Forward stay in the Go menu and on their keys.
+    private func showToolbar() {
+        if toolbar.toolbar.isVisible != settings.showsToolbar {
+            toolbar.toolbar.isVisible = settings.showsToolbar
+        }
     }
 
     /// The controller's window, which `init` makes; a controller never loses it.
@@ -527,7 +549,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         WorkspaceCommands.rename.id,
         WorkspaceCommands.delete.id, WorkspaceCommands.toggleSidebar.id,
         WorkspaceCommands.focusSidebar.id, WindowCommands.showPalette.id,
-        WindowCommands.goToItem.id,
+        WindowCommands.goToItem.id, ViewCommands.toggleToolbar.id,
     ]
 
     /// Whether a text field, such as the filter or rename field, has the keys, through its field
@@ -737,7 +759,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
                 self?.onCommand?()
                 self?.showWorkspace()
             })
-        controller.onLocationChange = { [weak self] _ in self?.showTitles() }
+        controller.onTitleChange = { [weak self] in self?.showTitles() }
         return controller
     }
 
@@ -786,11 +808,32 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
         }
     }
 
+    /// Shows the tabs' titles, the window's and the toolbar's buttons as the selected tab's
+    /// focused pane has them now.
     private func showTitles() {
-        guard !isClosed else { return }
+        guard !isClosed, !workspace.isClosed else { return }
         tabStrip.update()
         tabStripHeight.constant = tabStrip.view.isHidden ? 0 : TabStripView.height
-        window?.title = workspace.selectedTab.focusedPane.location.name
+        let tab = workspace.selectedTab
+        let title = tab.focusedPane.titleLocation.name
+        if window?.title != title { window?.title = title }
+        // A pane's first change reaches here while its view loads, before the window keeps its
+        // controller; `showWorkspace` shows the buttons once it does.
+        guard let controller = tabViews[tab.id]?.paneControllers[tab.layout.focused],
+            controller.isViewLoaded, let table = controller.keyView as? ListingTableView
+        else { return }
+        toolbar.show(
+            canGoBack: table.canRunCommand(NavigationCommands.back.id),
+            canGoForward: table.canRunCommand(NavigationCommands.forward.id),
+            viewMode: tab.focusedPane.viewMode)
+    }
+
+    /// Runs command `id` for a toolbar button on the focused pane's table, as its menu item does
+    /// from outside the tables.
+    private func runToolbarCommand(_ id: CommandID) {
+        guard !isClosed, !workspace.isClosed else { return }
+        focusedTable.run(id)
+        followFocus(after: id)
     }
 
     // MARK: Focus
