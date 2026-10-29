@@ -26,13 +26,19 @@ private func window(settings: Settings, actions: StubSystemActions = StubSystemA
     return controller
 }
 
-/// A file with an error shows a banner over the tabs that names its line, and a good file
-/// takes it away.
+/// A file with an error shows a banner under the toolbar, over the tabs and the panes, that
+/// names its line, and a good file takes it away. The rows start below the banner while it shows
+/// (docs/decisions/0133-flat-translucent-bars.md).
 @MainActor @Test func aConfigErrorShowsABannerUntilAGoodFileLoads() async throws {
     let config = try await ConfigFixture("ConfigErrorBannerTests")
     let controller = try await window(settings: config.settings)
     let banner = controller.configBanner
-    let content = try #require(banner.superview)
+    let window = try #require(controller.window)
+    let content = try #require(window.contentView)
+    let pane = controller.paneViewController
+    let table = pane.listingViewController.tableView
+    let firstRow = { table.convert(table.rect(ofRow: 0), to: nil) }
+    let toolbarBottom = window.contentLayoutRect.maxY
     #expect(banner.isHidden)
 
     try config.save("{\n  \"show-hidden\": true,\n  \"folders-first\": yes\n}")
@@ -44,14 +50,22 @@ private func window(settings: Settings, actions: StubSystemActions = StubSystemA
         banner.message.stringValue.hasSuffix(
             "Until it's fixed, Searcher keeps its settings as they are and can't save changes"
                 + " to the file."))
-    #expect(banner.frame.height > 0)
-    #expect(controller.tabStrip.view.frame.maxY <= banner.frame.minY)
+    let shown = banner.convert(banner.bounds, to: nil)
+    #expect(shown.height > 0)
+    #expect(shown.maxY <= toolbarBottom + 0.5)
+    let underBanner = firstRow()
+    #expect(underBanner.maxY <= shown.minY + 0.5)
 
     try config.save(#"{"show-hidden": true}"#)
     await settle { banner.isHidden }
     content.layoutSubtreeIfNeeded()
 
-    #expect(controller.tabStrip.view.frame.maxY == content.safeAreaRect.maxY)
+    // Up by the banner's height, under the toolbar.
+    #expect(abs(firstRow().maxY - (underBanner.maxY + shown.height)) <= 0.5)
+    #expect(firstRow().maxY <= toolbarBottom + 0.5)
+    if #available(macOS 26, *) {
+        #expect(pane.topCover == content.bounds.height - toolbarBottom)
+    }
 }
 
 /// Several errors show the first and say how many more the file has; the tooltip lists them.
