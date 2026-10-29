@@ -600,71 +600,143 @@ private func manyRowsWindow(_ count: Int) async -> BrowserWindowController {
     #expect(shown.minY >= controller.pathBarGlass.frame.maxY - 0.5)
 }
 
-/// A table that logs the drag calls it gets and takes every drag.
+/// A drag over the glass, at `location` in the window's coordinates, on a pasteboard of the
+/// test's own.
 @MainActor
-private final class DragLogTable: ListingTableView {
-    var calls: [String] = []
-
-    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
-        calls.append("entered")
-        return .copy
-    }
-
-    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
-        calls.append("updated")
-        return .copy
-    }
-
-    override func draggingExited(_ sender: (any NSDraggingInfo)?) {
-        calls.append("exited")
-    }
-
-    override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
-        calls.append("prepare")
-        return true
-    }
-
-    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
-        calls.append("perform")
-        return true
-    }
+private func glassDrag(at location: NSPoint) -> (info: StubDraggingInfo, pasteboard: NSPasteboard) {
+    let pasteboard = testPasteboard()
+    let info = StubDraggingInfo(pasteboard: pasteboard)
+    info.draggingLocation = location
+    return (info, pasteboard)
 }
 
-/// A drag held over the glass scrolls the list under it down, a row each update, as a drag at
-/// the bottom of Finder's list does, and the list's table gets the drag and the drop there.
-@MainActor @Test func aDragOverTheGlassScrollsTheListAndDropsOnIt() async throws {
-    var folders = Fixture.folders
-    folders["/root"] = (0..<200).map { file(String(format: "file %04d", $0)) }
-    let pane = Pane(
-        location: Location(path: "/root"),
-        service: ListingService(lister: StubLister(folders)) { "Test Disk" },
-        systemActions: StubSystemActions(), settings: untouchedSettings(), isFocused: true)
-    let table = DragLogTable()
-    let controller = PaneViewController(
-        pane: pane, iconCache: TypeIconCache { _ in NSImage() }, formatter: .init(),
-        tableView: table, monitorsFolders: false)
-    let window = testWindow(size: NSSize(width: 600, height: 400))
-    controller.view.frame = window.contentView?.bounds ?? .zero
-    window.contentView?.addSubview(controller.view)
-    await settle { pane.state.isLoaded && table.numberOfRows == 200 }
-    window.contentView?.layoutSubtreeIfNeeded()
+/// The middle of the glass, in the window's coordinates, at the x of `view`'s middle.
+@MainActor
+private func onTheGlass(below view: NSView, in controller: PaneViewController) -> NSPoint {
+    let middle = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
+    let glass = controller.pathBarGlass.convert(controller.pathBarGlass.bounds, to: nil)
+    return NSPoint(x: middle.x, y: glass.midY)
+}
+
+/// Counts the drag exits `table` hears, keeping what it did on one before.
+@MainActor
+private func countExits(of table: ListingTableView) -> () -> Int {
+    var exits = 0
+    let exited = table.dragExited
+    table.dragExited = {
+        exits += 1
+        exited()
+    }
+    return { exits }
+}
+
+/// A drag held over the glass scrolls the list under it down a row each update, as a drag at
+/// the bottom of Finder's list does, and the list's table takes the drag in and out, so no drop
+/// highlight stays when the drag leaves the glass for the list.
+@MainActor @Test func aDragOverTheGlassScrollsTheListAndLeavesItCleanly() async throws {
+    let window = await manyRowsWindow(200)
+    let controller = window.paneViewController
+    let table = controller.listingViewController.tableView
     let clip = try #require((controller.listingViewController.view as? NSScrollView)?.contentView)
     let content = controller.pathBarContent
     #expect(Set(content.registeredDraggedTypes) == Set(table.registeredDraggedTypes))
-    let pasteboard = testPasteboard()
+    let exits = countExits(of: table)
+    let (info, pasteboard) = glassDrag(at: onTheGlass(below: table, in: controller))
     defer { pasteboard.releaseGlobally() }
-    let info = StubDraggingInfo(pasteboard: pasteboard)
-    info.draggingLocation = content.convert(
-        NSPoint(x: content.bounds.midX, y: content.bounds.midY), to: nil)
     let top = clip.bounds.origin.y
 
-    #expect(content.draggingEntered(info) == .copy)
-    #expect(content.draggingUpdated(info) == .copy)
+    _ = content.draggingEntered(info)
+    _ = content.draggingUpdated(info)
 
     #expect(clip.bounds.origin.y == top + 2 * table.rowHeight)
-    #expect(content.prepareForDragOperation(info))
-    #expect(content.performDragOperation(info))
-    #expect(table.calls == ["entered", "updated", "prepare", "perform"])
+    #expect(exits() == 0)
+    // The drag goes back up onto the list: AppKit tells the glass it left.
+    content.draggingExited(info)
+    #expect(exits() == 1)
+}
+
+/// The columns of `/root` and of its last file's preview, in a window, with the drag's exits
+/// from the `/` and `/root` columns counted.
+@MainActor
+private func columnsWithPreview() async throws -> (
+    controller: PaneViewController, window: BrowserWindowController, root: ListingViewController,
+    parent: ListingViewController, preview: ColumnPreviewView
+) {
+    let window = await manyRowsWindow(200)
+    let controller = window.paneViewController
+    controller.pane.setViewMode(.column)
+    let trail = try #require(controller.pane.columnTrail)
+    await settle { trail.columns.allSatisfy { $0.pane.state.isLoaded } }
+    trail.focused.pane.selectLastRow()
+    await settle {
+        trail.preview != nil && controller.columnViewController.previewView?.isHidden == false
+    }
+    window.window?.contentView?.layoutSubtreeIfNeeded()
+    let columns = controller.columnViewController.columnControllers
+    let root = try #require(columns.first { $0.pane.location == Location(path: "/root") })
+    let parent = try #require(columns.first { $0.pane.location == Location(path: "/") })
+    let preview = try #require(controller.columnViewController.previewView)
+    // The pane may be narrower than the columns: show the preview, and the `/root` column left
+    // of it.
+    let scroll = try #require(controller.columnViewController.view as? NSScrollView)
+    ColumnViewController.moveClip(
+        scroll.contentView, toX: max(preview.frame.maxX - scroll.contentView.bounds.width, 0),
+        animated: false)
+    return (controller, window, root, parent, preview)
+}
+
+/// A drag moving under the glass from one column to the next tells the column it left, whose
+/// table then clears its drop highlight, and hands the drag to the next.
+@MainActor @Test func aDragCrossingColumnsUnderTheGlassLeavesTheOldOne() async throws {
+    let (controller, window, root, parent, _) = try await columnsWithPreview()
+    defer { window.window?.orderOut(nil) }
+    let parentExits = countExits(of: parent.tableView)
+    let rootExits = countExits(of: root.tableView)
+    let (info, pasteboard) = glassDrag(at: onTheGlass(below: parent.view, in: controller))
+    defer { pasteboard.releaseGlobally() }
+
+    _ = controller.pathBarContent.draggingEntered(info)
+    info.draggingLocation = onTheGlass(below: root.view, in: controller)
+    _ = controller.pathBarContent.draggingUpdated(info)
+
+    #expect(parentExits() == 1)
+    #expect(rootExits() == 0)
+}
+
+/// A drag moving under the glass from a column onto the preview, which takes no drops, tells
+/// the column it left.
+@MainActor @Test func aDragMovingOntoThePreviewUnderTheGlassLeavesTheColumn() async throws {
+    let (controller, window, root, _, preview) = try await columnsWithPreview()
+    defer { window.window?.orderOut(nil) }
+    let exits = countExits(of: root.tableView)
+    let (info, pasteboard) = glassDrag(at: onTheGlass(below: root.view, in: controller))
+    defer { pasteboard.releaseGlobally() }
+
+    _ = controller.pathBarContent.draggingEntered(info)
+    info.draggingLocation = onTheGlass(below: preview, in: controller)
+
+    #expect(controller.pathBarContent.draggingUpdated(info) == [])
+    #expect(exits() == 1)
+}
+
+/// Space or a force click over the glass spring-loads the folder row under it, as on the
+/// table: the glass asks the table under the drag.
+@MainActor @Test func springLoadingOverTheGlassGoesToTheTableUnderIt() async throws {
+    let window = await manyRowsWindow(200)
+    let controller = window.paneViewController
+    let table = controller.listingViewController.tableView
+    var activations = 0
+    table.springLoadingActivated = { activations += 1 }
+    table.springLoadingOptions = { [.enabled] }
+    let (info, pasteboard) = glassDrag(at: onTheGlass(below: table, in: controller))
+    defer { pasteboard.releaseGlobally() }
+    let content = controller.pathBarContent
+
+    #expect(content.springLoadingEntered(info) == [.enabled])
+    #expect(content.springLoadingUpdated(info) == [.enabled])
+    content.springLoadingActivated(true, draggingInfo: info)
+
+    #expect(activations == 1)
 }
 
 /// In column view a drag over the glass goes to the column under it, and scrolls that column.

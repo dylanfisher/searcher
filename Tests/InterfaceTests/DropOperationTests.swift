@@ -263,6 +263,49 @@ private final class Fixture {
         ])
 }
 
+/// A drop released on the path bar's glass over a folder row goes through the glass to the
+/// list's table, which moves the files into that folder. The glass scrolls the list a row at
+/// each enter and update, so the list starts two rows short of where `sub` lies under it
+/// (docs/decisions/0132-glass-path-bar.md).
+@MainActor @Test func aDropOnTheGlassOverAFolderRowMovesIntoThatFolder() async throws {
+    let fixture = try await Fixture()
+    defer { fixture.stop() }
+    // Enough rows before `sub` to scroll it down to the glass, and after it to scroll it under.
+    for name in (0..<60).map({ String(format: "b%03d", $0) })
+        + (0..<20).map({ String(format: "t%03d", $0) })
+    {
+        try Data().write(to: fixture.folder.appending(path: name))
+    }
+    fixture.pane.reload()
+    let table = fixture.table
+    await settle { fixture.pane.state.isLoaded && table.numberOfRows == 82 }
+    let controller = fixture.controller
+    controller.view.layoutSubtreeIfNeeded()
+    let content = controller.pathBarContent
+    let point = content.convert(NSPoint(x: 60, y: content.bounds.midY), to: nil)
+    let clip = try #require(table.enclosingScrollView?.contentView)
+    let row = try fixture.row("sub")
+    let pointBelowTop = table.convert(point, from: nil).y - clip.bounds.origin.y
+    clip.scroll(
+        to: NSPoint(
+            x: 0, y: table.rect(ofRow: row).midY - pointBelowTop - 2 * table.rowHeight))
+    table.enclosingScrollView?.reflectScrolledClipView(clip)
+    let source = fixture.elsewhere.appending(path: "x.txt")
+    let info = fixture.drag([source])
+    info.draggingLocation = point
+
+    #expect(content.draggingEntered(info) == .move)
+    #expect(content.draggingUpdated(info) == .move)
+    #expect(table.row(at: table.convert(point, from: nil)) == row)
+    #expect(content.prepareForDragOperation(info))
+    #expect(content.performDragOperation(info))
+    content.concludeDragOperation(info)
+    content.draggingEnded(info)
+
+    let target = fixture.folder.appending(path: "sub/x.txt")
+    await fixture.settleOperation { fixture.exists(target) && !fixture.exists(source) }
+}
+
 /// A drop's operation is tagged with the workspace of the window the list is in, so that
 /// window's operations panel lists it.
 @MainActor @Test func aDropsOperationCarriesTheListsWorkspace() async throws {

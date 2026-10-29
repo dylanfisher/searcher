@@ -7,7 +7,7 @@ import AppKit
 /// (docs/decisions/0132-glass-path-bar.md). The path bar and the status inside it take no drags,
 /// so AppKit hands a drag over them to this view.
 @MainActor
-final class PathBarGlassContent: NSView {
+final class PathBarGlassContent: NSView, NSSpringLoadingDestination {
     /// The clip view of the list or column at a point in the window's coordinates; nil where
     /// nothing under the glass takes drops, such as the preview.
     var listClip: @MainActor (NSPoint) -> ListingClipView? = { _ in nil }
@@ -20,19 +20,20 @@ final class PathBarGlassContent: NSView {
     }
 
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
-        update(sender, entering: true)
+        update(sender)
     }
 
     override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
-        update(sender, entering: false)
+        update(sender)
     }
 
     /// Hands the drag to the clip under it, telling the one it left that it went, and scrolls
-    /// that clip down a row.
-    private func update(_ sender: any NSDraggingInfo, entering: Bool) -> NSDragOperation {
+    /// that clip down a row. A clip hears `draggingEntered` once as the drag reaches it, even
+    /// when AppKit enters the glass again while it still holds the drag.
+    private func update(_ sender: any NSDraggingInfo) -> NSDragOperation {
         let clip = listClip(sender.draggingLocation)
-        let isNew = entering || clip !== current
-        if isNew, let current, current !== clip {
+        let isNew = clip !== current
+        if isNew, let current {
             current.draggingExited(sender)
         }
         current = clip
@@ -72,5 +73,31 @@ final class PathBarGlassContent: NSView {
     override func draggingEnded(_ sender: any NSDraggingInfo) {
         current?.draggingEnded(sender)
         current = nil
+    }
+
+    // MARK: Spring loading
+
+    // Space and a force click open the folder under the glass as they do on the table: each
+    // call goes to the table under the drag, which AppKit may ask before `draggingEntered`.
+
+    /// The table under the drag, which spring-loads its folder rows.
+    private func springLoader(_ info: any NSDraggingInfo) -> (any NSSpringLoadingDestination)? {
+        listClip(info.draggingLocation)?.documentView as? any NSSpringLoadingDestination
+    }
+
+    func springLoadingEntered(_ draggingInfo: any NSDraggingInfo) -> NSSpringLoadingOptions {
+        springLoader(draggingInfo)?.springLoadingEntered?(draggingInfo) ?? []
+    }
+
+    func springLoadingUpdated(_ draggingInfo: any NSDraggingInfo) -> NSSpringLoadingOptions {
+        springLoader(draggingInfo)?.springLoadingUpdated?(draggingInfo) ?? []
+    }
+
+    func springLoadingActivated(_ activated: Bool, draggingInfo: any NSDraggingInfo) {
+        springLoader(draggingInfo)?.springLoadingActivated(activated, draggingInfo: draggingInfo)
+    }
+
+    func springLoadingHighlightChanged(_ draggingInfo: any NSDraggingInfo) {
+        springLoader(draggingInfo)?.springLoadingHighlightChanged(draggingInfo)
     }
 }
