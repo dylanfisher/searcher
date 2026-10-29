@@ -51,7 +51,7 @@ private func window(settings: Settings, actions: StubSystemActions = StubSystemA
     await settle { banner.isHidden }
     content.layoutSubtreeIfNeeded()
 
-    #expect(controller.tabStrip.view.frame.maxY == content.bounds.maxY)
+    #expect(controller.tabStrip.view.frame.maxY == content.safeAreaRect.maxY)
 }
 
 /// Several errors show the first and say how many more the file has; the tooltip lists them.
