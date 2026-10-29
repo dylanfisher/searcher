@@ -27,7 +27,18 @@ Each pane's path bar (0026) sat in its own 28-point row along the pane's bottom,
   in it, as before.
 - **It floats.** The capsule sits `PaneViewController.pathBarGap`, 8 points, in from the pane's
   sides and bottom. The list and the columns run under it to the pane's bottom, so rows scroll
-  under the glass as Finder's content scrolls under its toolbar.
+  under the glass as Finder's content scrolls under its toolbar. The gap is measured from the
+  pane's bottom, which sits above the window's status bar (SB.1) while that shows; the status
+  bar is outside the panes, and rows don't scroll under it.
+- **Drags pass through it.** The glass's content, `PathBarGlassContent`, takes the drag types
+  the list's table takes and hands every drag call to the clip view of the list, or of the
+  column, under the drag (`ColumnViewController.listClip(under:)`); the clip passes it to its
+  table as it does for a drag in its margins (0029). So the row under the glass highlights,
+  spring-loads and takes the drop as it would with no glass over it. Each update the glass gets
+  also scrolls that list down a row, until its end: a drag held at the bottom of a full list
+  scrolls to the rows below, as one held at the bottom edge of Finder's list does. The table's
+  own autoscroll never sees the drag there, since AppKit hands it to the glass. Over the
+  preview a drag goes nowhere, as the preview takes no drops.
 - **The last row stays reachable.** `PaneViewController.pathBarCover`, the bar's height plus the
   gap, is how much of the pane's bottom the glass covers. The list's and each column's clip view
   add it to the bottom margin (`ListingViewController.keepMargins`), so the last row scrolls to
@@ -49,7 +60,9 @@ Each pane's path bar (0026) sat in its own 28-point row along the pane's bottom,
   element.
 - **Performance.** One glass view per pane, never rebuilt. Glass over a scrolling list samples
   what is behind it each frame it moves; a single 28-point capsule per pane is the smallest that
-  can do. The UI bench's scroll scenarios measure it; no bench was run for this change.
+  can do. The UI bench's scroll scenarios measure it.
+- **Bench owed.** No bench ran for this change: the UI bench's scroll scenarios over a 100k-row
+  list, with the glass showing, are still to run.
 
 ## Alternatives considered
 
@@ -70,8 +83,10 @@ Each pane's path bar (0026) sat in its own 28-point row along the pane's bottom,
 
 ## Consequences
 
-- A drop below the last row still lands in the folder shown, in the margin above the capsule;
-  a drop on the capsule itself lands nowhere.
+- A drop below the last row still lands in the folder shown, in the margin above the capsule.
+  A drop on the capsule lands on the row under it, or in the folder shown where no row is.
+- A drag over the capsule scrolls the list a row at each update AppKit sends, at one speed
+  however near the bottom it is, while Finder speeds up nearer the edge.
 - The column resize grips run the column's full height; their bottom 36 points are under the
   capsule, which takes the mouse there. The grips are still reachable above it.
 - Rows don't scroll under the toolbar. The tab strip and the config banner sit between the
