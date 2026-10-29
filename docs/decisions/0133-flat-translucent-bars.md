@@ -1,7 +1,8 @@
 # 0133. Flat translucent bars: the path bar's own row again, and rows under a compact toolbar
 
 - **Date:** 2026-10-28
-- **Status:** accepted
+- **Status:** accepted; amended by [0137](0137-sidebar-glass-to-the-top.md) (the toolbar is
+  `.unified` again: the compact one keeps the sidebar out of its band)
 - **Amends:** [0128](0128-finder-window-chrome.md) (the toolbar's style, and content hanging
   below the bar), [0132](0132-glass-path-bar.md) (the floating capsule)
 
@@ -30,9 +31,11 @@ panes hung below it from the content's safe area (0128), so nothing scrolled und
   spring loading and the row-at-a-time scroll; the last row scrolls to `Margin.standard` above
   the row; the scrollers, the preview's end and the centered messages stay above it; Go to Item
   centers above it; the focused pane's titles are `labelColor`, the others `secondaryLabelColor`.
-- **The compact toolbar.** The window's `toolbarStyle` is `.unifiedCompact`: the bar is 40 points
-  tall instead of 52, with the same items, Back and Forward's glass group and the view modes. With
-  the toolbar hidden the title bar is 32 points in either style.
+- **The compact toolbar** (superseded 2026-10-29 by
+  [0137](0137-sidebar-glass-to-the-top.md): `.unified` again). The window's `toolbarStyle` is
+  `.unifiedCompact`: the bar is 40 points tall instead of 52, with the same items, Back and
+  Forward's glass group and the view modes. With the toolbar hidden the title bar is 32 points in
+  either style.
 - **Rows under the toolbar.** On macOS 26 the config banner and the tab strip are top accessories
   of the panes' split view item (`NSSplitViewItemAccessoryViewController`), as the status bar is
   its bottom one (0131): the system draws them in the toolbar's band and takes them out of the

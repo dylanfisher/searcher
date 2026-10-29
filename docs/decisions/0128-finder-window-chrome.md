@@ -2,7 +2,8 @@
 
 - **Date:** 2026-10-28
 - **Status:** accepted; amended by [0133](0133-flat-translucent-bars.md) (the compact
-  toolbar, and the panes running under it)
+  toolbar, and the panes running under it) and [0137](0137-sidebar-glass-to-the-top.md) (the
+  unified toolbar again, and the sidebar collapsed only after the window takes the split view)
 - **Amends:** [0086](0086-workspace-sidebar.md) (the sidebar's look),
   [0125](0125-workspace-open-is-a-back-step.md) ("the window has no Back or Forward toolbar
   buttons")
