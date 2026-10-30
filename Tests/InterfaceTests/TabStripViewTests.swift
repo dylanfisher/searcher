@@ -165,7 +165,7 @@ private let appearances: [NSAppearance.Name] = [.aqua, .darkAqua]
     }
 }
 
-@MainActor @Test func theCloseButtonIsARoundButtonAtTheTabsLeadingEnd() {
+@MainActor @Test func theCloseButtonIsARoundButtonAtTheTabsLeadingEnd() throws {
     let tab = strip().tabs[0]
     tab.layoutSubtreeIfNeeded()
 
@@ -174,7 +174,6 @@ private let appearances: [NSAppearance.Name] = [.aqua, .darkAqua]
     #expect(close.frame.width == TabStripView.closeSide)
     #expect(close.frame.minX == TabStripView.closeInset)
     #expect(close.frame.midY == tab.bounds.midY)
-    #expect(close.accessibilityLabel() == "Close Tab")
 }
 
 @MainActor @Test func clickingTheCloseButtonReportsItsTab() throws {
@@ -198,14 +197,26 @@ private let appearances: [NSAppearance.Name] = [.aqua, .darkAqua]
     #expect(tab.focusRingMaskBounds == tab.pillRect)
 }
 
+/// The elements VoiceOver reads are the strip's unignored children, which for a plain button
+/// would be its cell, an unnamed AXButton: each must be the tab, a named radio button with a
+/// Close Tab action. The close button isn't one: it would announce the same action again, and
+/// shows only on hover.
 @MainActor @Test func eachTabIsARadioButtonThatCanBeClosedByVoiceOver() throws {
     let strip = strip()
+    strip.tabs[0].mouseEntered(with: try enterExit(.mouseEntered))
 
     #expect(strip.accessibilityRole() == .tabGroup)
-    #expect(strip.tabs.map { $0.accessibilityRole() } == [.radioButton, .radioButton])
-    #expect(strip.tabs.map { $0.accessibilityLabel() } == ["root", "other"])
-    #expect(strip.tabs.map { $0.accessibilityValue() as? Bool } == [false, true])
-    let action = try #require(strip.tabs[0].accessibilityCustomActions()?.first)
+    let elements = NSAccessibility.unignoredChildren(from: strip.accessibilityChildren() ?? [])
+    let tabs = try elements.map { try #require($0 as? TabButton) }
+    #expect(tabs == strip.tabs)
+    #expect(tabs.map { $0.accessibilityRole() } == [.radioButton, .radioButton])
+    #expect(tabs.map { $0.accessibilityLabel() } == ["root", "other"])
+    #expect(tabs.map { $0.accessibilityValue() as? Bool } == [false, true])
+    for tab in tabs {
+        #expect(NSAccessibility.unignoredChildren(from: tab.accessibilityChildren() ?? []).isEmpty)
+        #expect(tab.closeButton.cell?.isAccessibilityElement() == false)
+    }
+    let action = try #require(tabs[0].accessibilityCustomActions()?.first)
     var closed: [Int] = []
     strip.onClose = { closed.append($0) }
     #expect(action.name == "Close Tab")

@@ -159,19 +159,25 @@ final class TabButton: NSButton {
         super.init(frame: .zero)
         title = ""
         isBordered = false
+        // A button's cell is the element VoiceOver reads, an unnamed button; the tab is, with
+        // the role, title, value and action below.
+        cell?.setAccessibilityElement(false)
+        setAccessibilityElement(true)
         addTrackingArea(
             NSTrackingArea(
                 rect: .zero, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
                 owner: self))
         guard
-            let image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close Tab")?
+            let image = NSImage(systemSymbolName: "xmark", accessibilityDescription: nil)?
                 .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
         else {
             preconditionFailure("there is no system symbol xmark")
         }
         closeButton.image = image
         closeButton.contentTintColor = .secondaryLabelColor
-        closeButton.setAccessibilityLabel("Close Tab")
+        // VoiceOver closes the tab with its Close Tab action, which works while the button is
+        // hidden; the button would read the same action a second time.
+        closeButton.cell?.setAccessibilityElement(false)
         closeButton.target = self
         closeButton.action = #selector(closeClicked(_:))
         closeButton.isHidden = true
