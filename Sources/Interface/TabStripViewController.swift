@@ -2,14 +2,14 @@ import AppKit
 import Browser
 
 /// Shows a workspace's tabs in a `TabStripView`, each titled as the window is while it is
-/// selected, after its focused pane's `titleLocation`, and selects the tab clicked. Hidden while
-/// the workspace has one tab.
+/// selected, after its focused pane's `titleLocation`, selects the tab clicked and closes the tab
+/// whose close button is clicked. Hidden while the workspace has one tab.
 @MainActor
 final class TabStripViewController: NSViewController {
     let workspace: Workspace
     let tabStripView = TabStripView()
-    /// Runs after a click selected a tab, so the window can show it.
-    var didSelectTab: @MainActor () -> Void = {}
+    /// Runs after a click selected or closed a tab, so the window can show the workspace.
+    var didChangeTabs: @MainActor () -> Void = {}
 
     init(workspace: Workspace) {
         self.workspace = workspace
@@ -24,6 +24,7 @@ final class TabStripViewController: NSViewController {
     override func loadView() {
         view = tabStripView
         tabStripView.onSelect = { [weak self] index in self?.select(index) }
+        tabStripView.onClose = { [weak self] index in self?.close(index) }
     }
 
     /// Shows the workspace's tabs as they are now.
@@ -40,6 +41,15 @@ final class TabStripViewController: NSViewController {
     private func select(_ index: Int) {
         workspace.select(workspace.tabs[index].id)
         update()
-        didSelectTab()
+        didChangeTabs()
+    }
+
+    /// Closes the tab at `index`. The strip shows only with two tabs or more, so the workspace
+    /// keeps a tab and the window stays open.
+    private func close(_ index: Int) {
+        precondition(workspace.tabs.count > 1, "the strip closed the workspace's last tab")
+        workspace.close(workspace.tabs[index].id)
+        update()
+        didChangeTabs()
     }
 }

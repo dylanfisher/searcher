@@ -64,7 +64,7 @@ private struct Fixture {
     let fixture = Fixture()
     fixture.addTab(at: "/other")
     var selected = 0
-    fixture.strip.didSelectTab = { selected += 1 }
+    fixture.strip.didChangeTabs = { selected += 1 }
 
     fixture.strip.tabStripView.click(0)
 
@@ -77,8 +77,26 @@ private struct Fixture {
     let fixture = Fixture()
     fixture.addTab(at: "/other")
 
-    let control = fixture.strip.tabStripView.control
-    #expect(control.segmentCount == 2)
-    #expect(control.label(forSegment: 1) == "other")
+    let tabs = fixture.strip.tabStripView.tabs
+    #expect(tabs.count == 2)
+    #expect(tabs[1].accessibilityLabel() == "other")
     #expect(fixture.strip.tabStripView.accessibilityLabel() == TabStripView.accessibilityName)
+}
+
+@MainActor @Test func closingATabInTheStripClosesItInTheWorkspace() throws {
+    let fixture = Fixture()
+    fixture.addTab(at: "/other")
+    let first = fixture.workspace.tabs[0]
+    let second = fixture.workspace.tabs[1]
+    var changes = 0
+    fixture.strip.didChangeTabs = { changes += 1 }
+
+    let close = fixture.strip.tabStripView.tabs[0].closeButton
+    #expect(
+        NSApplication.shared.sendAction(try #require(close.action), to: close.target, from: close))
+
+    #expect(fixture.workspace.tabs.map(\.id) == [second.id])
+    #expect(first.isClosed)
+    #expect(fixture.strip.view.isHidden)
+    #expect(changes == 1)
 }

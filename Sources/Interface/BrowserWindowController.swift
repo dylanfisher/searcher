@@ -349,7 +349,7 @@ public final class BrowserWindowController: NSWindowController, NSWindowDelegate
             self?.showStatusBar()
         }
         freeSpace.observe(for: self) { [weak self] in self?.showStatus() }
-        tabStrip.didSelectTab = { [weak self] in self?.showWorkspace() }
+        tabStrip.didChangeTabs = { [weak self] in self?.showWorkspace() }
         window.didChangeFirstResponder = { [weak self] in self?.firstResponderDidChange() }
         workspace.onActiveChange = { [weak self] in self?.markFocusedPane() }
         window.willSendMouseDown = { [weak self] in self?.isDraggingWindow = false }

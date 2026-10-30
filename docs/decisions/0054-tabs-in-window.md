@@ -60,7 +60,9 @@ first responder must never disagree. The workspace tells panes about focus and v
   the other pane.
 - **The strip.** `TabStripView` is a segmented control, one segment per tab titled with its
   focused pane's folder, hidden with one tab. VoiceOver reads it as a tab group named "Tabs". The
-  window title is the selected tab's focused pane's folder.
+  window title is the selected tab's focused pane's folder. (Amended 2026-10-29: Searcher draws
+  the strip as Finder's track and pill, with a close button on each tab; see
+  [0139](0139-finder-tab-strip.md).)
 - **Native tabbing is off.** The window sets `NSWindow.allowsAutomaticWindowTabbing` to false and
   its own `tabbingMode` to `.disallowed`, so AppKit adds no tab bar and no tab items to the
   Window menu.
@@ -116,7 +118,8 @@ The ring's color is read when it is drawn on; a change of accent color while a s
 effect at the next focus change. Closing a window with its close button leaves its workspace's
 tabs to be freed with the window controller, as the one-pane window did (superseded: the
 window now closes its panes, see [0057](0057-windows-and-tear-out.md)). Tabs have no close
-button and can't be dragged; Close Tab and Close Pane close them.
+button and can't be dragged; Close Tab and Close Pane close them. (Amended 2026-10-29: each tab
+has a close button, [0139](0139-finder-tab-strip.md); tabs still can't be dragged.)
 
 ## Amendment: every command outside the tables (2026-10-24)
 

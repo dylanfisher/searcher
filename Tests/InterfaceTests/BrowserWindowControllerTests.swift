@@ -528,6 +528,25 @@ private func receiver(of item: NSMenuItem, in window: NSWindow) throws -> NSResp
     #expect(first.focusedPane.isFocused && !second.focusedPane.isFocused)
 }
 
+/// The x on a tab in the strip closes that tab, drops its views and shows the one left.
+@MainActor @Test func theCloseButtonOnATabInTheStripClosesIt() async throws {
+    let fixture = try await Fixture()
+    let first = fixture.tab
+    try fixture.press(try keyEvent("t", modifiers: .command))
+    let second = fixture.tab
+    let strip = fixture.controller.tabStrip
+
+    strip.tabStripView.tabs[1].closeButton.performClick(nil)
+
+    #expect(fixture.workspace.tabs.map(\.id) == [first.id])
+    #expect(fixture.controller.layoutView(for: second.id) == nil)
+    let firstView = try #require(fixture.controller.layoutView(for: first.id))
+    #expect(firstView.superview != nil)
+    #expect(try fixture.keyTable.isDescendant(of: firstView))
+    #expect(strip.view.isHidden)
+    #expect(!fixture.controller.isClosed)
+}
+
 @MainActor @Test func movingADividerSetsTheRatioOnTheTab() async throws {
     let fixture = try await Fixture()
     _ = try fixture.splitRight()
