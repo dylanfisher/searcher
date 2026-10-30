@@ -23,22 +23,28 @@ unselected title is a mid gray, the selected one darker, both centered. Nothing 
 
 ## Decision
 
-- **Searcher draws the strip.** `TabStripView` draws the track, `quaternaryLabelColor`, 28
+- **Searcher draws the strip.** `TabStripView` draws the track, `secondarySystemFill`, 28
   points tall, 6 points in from each side of the strip, which is 34 points tall. The tabs split
   the track into equal segments. Each is a `TabButton`.
 - **The selected tab** draws a pill 2 points inside its segment, radius 12, in `controlColor`
   with a shadow of `shadowColor` at 15%, 1.5 blur, 0.5 down. Its title is `labelColor`; the
   others' are `secondaryLabelColor`. Titles are the 13 pt system font, centered, one line,
   truncated at the tail.
-- **No accent color.** Every color is a label color's gray or `controlColor`, which the system
-  resolves for light and dark. In light the track comes to about 0.87 over a 0.96 window and the
-  pill to 1.0; in dark the track is about 0.25 over 0.17 and the pill 0.44 over the track.
+- **No accent color.** Every color is a system gray or `controlColor`, which the system
+  resolves for light and dark. In light the track comes to 0.90 over Finder's 0.98 window, the
+  shot's gray, and the pill to 1.0, a little lighter than the shot's 0.97: no system color is a
+  gray that light in light and lighter than the track in dark. In dark the track is about 0.24
+  over a 0.17 window and the pill 0.43 over the track.
 - **The close button** is a round `HoverButton`, 16 points, with a 9 pt semibold `xmark` in
   `secondaryLabelColor`, 6 points from the tab's leading edge, where Finder's tab puts it. It is
   hidden until the mouse is over its tab, on any tab, selected or not. Under the mouse it fills
   a `quaternaryLabelColor` circle and while pressed a `tertiaryLabelColor` one, 0110's fills. It
   closes its tab through `Workspace.close`, and the window drops the tab's views as it does
-  after Close Tab. The title keeps the close button's room at both ends, so it stays centered.
+  after Close Tab. While the button shows, the title keeps its room at both ends, so it stays
+  centered; while it is hidden the title takes the segment but 10 points each side, so narrow
+  tabs keep their titles, as Finder's do. A tab reads its hover again from the mouse's location
+  whenever the strip lays it out: closing a tab moves the others under the mouse with no
+  mouseExited, which would leave a close button on a tab the mouse had left.
 - **States.** An unselected tab fills its pill's shape with `quinaryLabelColor` under the mouse
   and `quaternaryLabelColor` while pressed: on the track, 0110's `quaternaryLabelColor` hover
   fill would be as dark as the track twice over, where Finder's hover is a slight darkening. The
@@ -48,7 +54,9 @@ unselected title is a mid gray, the selected one darker, both centered. Nothing 
   shape for a tab and a circle for the close button. Neither is ever disabled: the strip shows
   only with two tabs or more, and each can be selected and closed.
 - **VoiceOver** reads the strip as a tab group named "Tabs" and each tab as a radio button
-  titled with its folder, selected or not, with a Close Tab action.
+  titled with its folder, selected or not, with a Close Tab action. The tab view is the element,
+  not its cell, which AppKit would expose as an unnamed button. The close button is not an
+  element: it shows only on hover, and the Close Tab action does what it does.
 
 ## Alternatives considered
 
