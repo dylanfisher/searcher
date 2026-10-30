@@ -83,7 +83,7 @@ private struct Fixture {
     #expect(fixture.strip.tabStripView.accessibilityLabel() == TabStripView.accessibilityName)
 }
 
-@MainActor @Test func closingATabInTheStripClosesItInTheWorkspace() {
+@MainActor @Test func closingATabInTheStripClosesItInTheWorkspace() throws {
     let fixture = Fixture()
     fixture.addTab(at: "/other")
     let first = fixture.workspace.tabs[0]
@@ -91,7 +91,9 @@ private struct Fixture {
     var changes = 0
     fixture.strip.didChangeTabs = { changes += 1 }
 
-    fixture.strip.tabStripView.tabs[0].closeButton.performClick(nil)
+    let close = fixture.strip.tabStripView.tabs[0].closeButton
+    #expect(
+        NSApplication.shared.sendAction(try #require(close.action), to: close.target, from: close))
 
     #expect(fixture.workspace.tabs.map(\.id) == [second.id])
     #expect(first.isClosed)

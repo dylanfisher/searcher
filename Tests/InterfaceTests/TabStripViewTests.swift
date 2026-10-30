@@ -62,6 +62,19 @@ private let appearances: [NSAppearance.Name] = [.aqua, .darkAqua]
     #expect(strip.tabs[0].titleRect.width < strip.tabs[0].pillRect.width)
 }
 
+/// The title takes the whole segment but a margin while the close button is hidden, and gives
+/// the close button its room at both ends while the mouse is over the tab, as Finder's does.
+@MainActor @Test func theTitleMakesRoomForTheCloseButtonOnlyUnderTheMouse() throws {
+    let tab = strip().tabs[0]
+    let room = TabStripView.closeInset + TabStripView.closeSide + 4
+
+    #expect(tab.titleRect.minX == TabStripView.titleMargin)
+    #expect(tab.titleRect.width == tab.bounds.width - 2 * TabStripView.titleMargin)
+    tab.mouseEntered(with: try enterExit(.mouseEntered))
+    #expect(tab.titleRect.minX == room)
+    #expect(tab.titleRect.width == tab.bounds.width - 2 * room)
+}
+
 /// Nothing in the strip takes the accent color: every color is a gray in light and dark, and
 /// none is one of the accent's colors.
 @MainActor @Test func theStripUsesNoAccentColor() throws {
@@ -152,17 +165,20 @@ private let appearances: [NSAppearance.Name] = [.aqua, .darkAqua]
     let close = tab.closeButton
     #expect(close.isRound)
     #expect(close.frame.width == TabStripView.closeSide)
-    #expect(close.frame.minX == 6)
+    #expect(close.frame.minX == TabStripView.closeInset)
     #expect(close.frame.midY == tab.bounds.midY)
     #expect(close.accessibilityLabel() == "Close Tab")
 }
 
-@MainActor @Test func clickingTheCloseButtonReportsItsTab() {
+@MainActor @Test func clickingTheCloseButtonReportsItsTab() throws {
     let strip = strip()
     var closed: [Int] = []
     strip.onClose = { closed.append($0) }
 
-    strip.tabs[0].closeButton.performClick(nil)
+    strip.tabs[0].mouseEntered(with: try enterExit(.mouseEntered))
+    let close = strip.tabs[0].closeButton
+    #expect(
+        NSApplication.shared.sendAction(try #require(close.action), to: close.target, from: close))
 
     #expect(closed == [0])
 }

@@ -19,6 +19,10 @@ final class TabStripView: NSView {
     static let pillInset: CGFloat = 2
     static let pillRadius = (trackHeight - 2 * pillInset) / 2
     static let closeSide: CGFloat = 16
+    /// The close button's distance from its tab's leading edge, 4 points inside the pill.
+    static let closeInset = pillInset + 4
+    /// The room left and right of a title while the close button is hidden.
+    static let titleMargin = pillInset + 8
     /// The colors are the label colors' grays, which the system resolves for light and dark; no
     /// accent color, as Finder's strip has none.
     static let trackColor = NSColor.quaternaryLabelColor
@@ -145,9 +149,9 @@ final class TabButton: NSButton {
     }
 
     private static let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
-    /// The room the close button takes at the leading end, kept at the trailing end too so the
-    /// title stays centered.
-    private static let closeRoom = TabStripView.pillInset + 4 + TabStripView.closeSide + 4
+    /// The room the close button takes at the leading end while it shows, kept at the trailing
+    /// end too so the title stays centered.
+    private static let closeRoom = TabStripView.closeInset + TabStripView.closeSide + 4
 
     init() {
         super.init(frame: .zero)
@@ -173,7 +177,7 @@ final class TabButton: NSButton {
         addSubview(closeButton)
         NSLayoutConstraint.activate([
             closeButton.leadingAnchor.constraint(
-                equalTo: leadingAnchor, constant: TabStripView.pillInset + 4),
+                equalTo: leadingAnchor, constant: TabStripView.closeInset),
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
@@ -197,12 +201,14 @@ final class TabButton: NSButton {
 
     var titleColor: NSColor { isSelectedTab ? .labelColor : .secondaryLabelColor }
 
-    /// Where the title is drawn: one line, centered, clear of the close button's room.
+    /// Where the title is drawn: one line, centered, clear of the close button's room while the
+    /// button shows, so narrow tabs keep their titles until the mouse is over them.
     var titleRect: NSRect {
         let height = ceil(Self.font.ascender - Self.font.descender + Self.font.leading)
+        let inset = isHovered ? Self.closeRoom : TabStripView.titleMargin
         return NSRect(
-            x: Self.closeRoom, y: ((bounds.height - height) / 2).rounded(),
-            width: max(bounds.width - 2 * Self.closeRoom, 0), height: height)
+            x: inset, y: ((bounds.height - height) / 2).rounded(),
+            width: max(bounds.width - 2 * inset, 0), height: height)
     }
 
     // A tab hidden, with or without its ancestors, or taken out of its window gets no
