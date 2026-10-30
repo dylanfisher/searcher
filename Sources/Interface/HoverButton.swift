@@ -26,7 +26,8 @@ final class HoverButton: NSButton {
     static let hoverFill = NSColor.quaternaryLabelColor
     /// The fill while the button is pressed.
     static let pressedFill = NSColor.tertiaryLabelColor
-    /// The width and height, so the fill has room around a symbol.
+    /// The width and height unless the button is given its own, so the fill has room around a
+    /// symbol.
     static let side: CGFloat = 22
     /// A `.glyph` button's tints on an emphasized selection, the selected row's text color at
     /// the label colors' levels, since the label colors would vanish on the accent.
@@ -38,6 +39,9 @@ final class HoverButton: NSButton {
     ]
 
     let look: Look
+    /// Whether the fills and the focus ring are a circle, as on a tab's close button, rather
+    /// than the rounded square.
+    let isRound: Bool
 
     /// Whether the mouse is over the button.
     private(set) var isHovered = false {
@@ -54,8 +58,9 @@ final class HoverButton: NSButton {
         }
     }
 
-    init(look: Look = .fill) {
+    init(look: Look = .fill, side: CGFloat = HoverButton.side, isRound: Bool = false) {
         self.look = look
+        self.isRound = isRound
         super.init(frame: .zero)
         bezelStyle = .accessoryBarAction
         isBordered = false
@@ -65,8 +70,8 @@ final class HoverButton: NSButton {
                 rect: .zero, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
                 owner: self))
         NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: Self.side),
-            heightAnchor.constraint(equalToConstant: Self.side),
+            widthAnchor.constraint(equalToConstant: side),
+            heightAnchor.constraint(equalToConstant: side),
         ])
     }
 
@@ -148,7 +153,15 @@ final class HoverButton: NSButton {
         shape.fill()
     }
 
-    private var shape: NSBezierPath { Self.shape(bounds) }
+    // The bezel's alignment insets make the frame taller than wide, which would draw the
+    // circle as an oval.
+    override var alignmentRectInsets: NSEdgeInsets {
+        isRound ? NSEdgeInsetsZero : super.alignmentRectInsets
+    }
+
+    private var shape: NSBezierPath {
+        isRound ? NSBezierPath(ovalIn: bounds) : Self.shape(bounds)
+    }
 
     /// The rounded shape the fills and the focus ring take in `rect`, which the path bar's
     /// segments share.
