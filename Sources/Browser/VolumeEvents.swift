@@ -102,12 +102,13 @@ public enum VolumeEvents {
         }
     }
 
-    /// The volume at `mountPoint` is gone: panes on it go offline with the rows they show,
-    /// recent listings of its folders and its free space are dropped, and mount tables and the
+    /// The volume at `mountPoint` is gone: every pane showing a folder on it, a column of its
+    /// trail's included, goes to `/` (docs/decisions/0140-unmount-goes-to-the-root.md). Recent
+    /// listings of its folders and its free space are dropped, and mount tables and the
     /// sidebar's volumes read the mounts again.
     public static func didUnmount(at mountPoint: String) {
-        for pane in panes(on: mountPoint) {
-            pane.volumeDidUnmount(at: mountPoint)
+        for pane in panes(showing: mountPoint) {
+            pane.volumeDidUnmount()
         }
         dropRecentListings(under: mountPoint)
         for freeSpace in freeSpaces.compactMap(\.freeSpace) {
@@ -150,12 +151,24 @@ public enum VolumeEvents {
     }
 
     private static func panes(on mountPoint: String) -> [Pane] {
+        panes.compactMap(\.pane).filter { isOn(mountPoint, $0.location) }
+    }
+
+    /// The open panes that aren't columns and show a folder on the volume at `mountPoint`: their
+    /// own, or in column mode any column's.
+    private static func panes(showing mountPoint: String) -> [Pane] {
         panes.compactMap(\.pane).filter { pane in
-            switch pane.location {
-            case .folder(let path): isPath(path, atOrUnder: mountPoint)
-            // A pane at a server isn't on any volume (docs/decisions/0114-server-location.md).
-            case .server: false
-            }
+            guard pane.containingTrail == nil, !pane.isClosed else { return false }
+            let shown = pane.columnTrail?.columns.map(\.pane.location) ?? [pane.location]
+            return shown.contains { isOn(mountPoint, $0) }
+        }
+    }
+
+    private static func isOn(_ mountPoint: String, _ location: Location) -> Bool {
+        switch location {
+        case .folder(let path): isPath(path, atOrUnder: mountPoint)
+        // A pane at a server isn't on any volume (docs/decisions/0114-server-location.md).
+        case .server: false
         }
     }
 }

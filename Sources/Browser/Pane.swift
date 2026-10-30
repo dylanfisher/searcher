@@ -97,8 +97,7 @@ public final class Pane {
     /// The name of the volume mounted at `/`, from the last listing update; nil until the first.
     public private(set) var rootVolumeName: String?
     /// The name of the volume holding the folder, for the note a slow or offline pane shows:
-    /// from the last update that could make it slow or offline, or from the mount point of a
-    /// volume that unmounted under it. Nil until one of those.
+    /// from the last update that could make it slow or offline. Nil until one of those.
     public internal(set) var volumeName: String?
 
     /// Watching `location`. The pane stops it, and drops it, when it navigates or closes. A
@@ -169,8 +168,6 @@ public final class Pane {
         { name, report in
             preconditionFailure("no view takes the mount of \(name): \(report)")
         }
-    /// The folder's volume was unmounted, so the pane is offline and doesn't list the folder.
-    var volumeIsGone = false
 
     /// Lists the pane's folders; the palette lists a typed path through it too.
     public let service: ListingService
@@ -900,7 +897,6 @@ public final class Pane {
         monitor = nil
         waitingPatches = []
         relistAfterLoad = false
-        volumeIsGone = false
         forgetFolderSizes(lettingLocalWalksFinish: true)
         self.location = location
         filter = NameFilter()
@@ -1126,7 +1122,7 @@ public final class Pane {
     /// In column mode, the focused column's folder.
     public func reload() {
         if let trail = columnTrail { return trail.focused.pane.reload() }
-        guard !loadIsRunning, !volumeIsGone else { return }
+        guard !loadIsRunning else { return }
         startLoad()
     }
 
@@ -1250,7 +1246,6 @@ public final class Pane {
     /// Lists the folder for a change: now, or once the running load ends, since that load may
     /// have read past the changed entry before the change happened.
     func relist() {
-        if volumeIsGone { return }
         if loadIsRunning {
             relistAfterLoad = true
         } else {
@@ -1598,8 +1593,8 @@ public final class Pane {
     /// The folder of the missing state when ⌘K should forget it, from what the listing reported
     /// alone: it was deleted or moved, or a file has its name now. Nil while its volume isn't
     /// mounted, since the folder may come back with it: the listing places a path in `/Volumes`
-    /// on the root volume only then. A volume or share unmounted under the pane shows offline,
-    /// not missing, so its folders stay too (0087-palette-window.md).
+    /// on the root volume only then. A folder on a share that went away lists as offline, not
+    /// missing, so it stays too (0087-palette-window.md).
     var forgettableMissingFolder: String? {
         guard let path = state.missingFolder else { return nil }
         let onUnmountedVolume =

@@ -125,9 +125,10 @@ Recursive search and Spotlight are a separate feature (M5b.3) and stay out.
   A list pane forgets its folder when its load ends in the missing state (ENOENT or ENOTDIR),
   and in column view the pane forgets the focused column's, since columns count no visits. It
   reads only what the listing reported, with no read of its own. A folder whose volume isn't
-  mounted stays, since it can come back with the volume: a volume or share unmounted under a
-  pane shows offline, not missing, and a path in `/Volumes` the listing places on the root
-  volume is on one that isn't mounted. A folder chosen from ⌘K that has gone since opens to the
+  mounted stays, since it can come back with the volume: a pane on a volume that unmounts goes
+  to `/` ([0140](0140-unmount-goes-to-the-root.md)), a folder on a share that went away lists
+  as offline, not missing, and a path in `/Volumes` the listing places on the root volume is on
+  one that isn't mounted. A folder chosen from ⌘K that has gone since opens to the
   missing state and is forgotten then. A pane still at a missing folder still lists it among
   the open panes' folders.)
 

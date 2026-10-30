@@ -1475,19 +1475,19 @@ private func folderSize(_ name: String, in pane: Pane) -> Listing.FolderSizeValu
     _ = controller
 }
 
-@MainActor @Test func aGoneVolumeIsNotWalked() async throws {
+@MainActor @Test func aPaneLeavingAGoneVolumeStopsItsWalks() async throws {
     let walks = HeldWalks()
+    let lister = HoldableLister(["/": []])
     let controller = await sizedController(
-        at: "/volume-b", showing: [folder("Music")], walks: walks)
+        at: "/volume-b", showing: [folder("Music")], walks: walks, lister: lister)
     let pane = controller.pane
     await settle { walks.started == ["/volume-b/Music"] }
 
     VolumeEvents.didUnmount(at: "/volume-b")
-    await settle { walks.cancelled == ["/volume-b/Music"] }
-    try await Task.sleep(for: .milliseconds(100))
 
-    #expect(walks.started == ["/volume-b/Music"])
-    if case .offline = pane.state {} else { Issue.record("the pane isn't offline: \(pane.state)") }
+    await settle { walks.cancelled == ["/volume-b/Music"] }
+    #expect(pane.location == Location(path: "/"))
+    await settle { pane.state.listing?.count == 0 }
 }
 
 @MainActor @Test func aRemountedVolumeWalksTheFoldersWhoseWalksFailed() async throws {
