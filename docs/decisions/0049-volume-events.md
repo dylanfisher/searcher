@@ -4,6 +4,10 @@
 - **Status:** accepted
 - **2026-10-25:** The sidebar's volume list reads the mounts again on each event too, and its
   eject runs will-unmount before it asks the system; see [0108](0108-sidebar-locations.md).
+- **2026-10-30:** Did-unmount no longer takes a pane offline: every pane showing a folder on the
+  volume, in any column, goes to `/`, and `volumeIsGone` is gone; see
+  [0140](0140-unmount-goes-to-the-root.md). The did-unmount bullet and the rejected "leave its
+  folder on unmount" below are superseded.
 
 ## Context
 

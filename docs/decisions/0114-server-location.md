@@ -93,8 +93,8 @@ hand before the step that builds it.
   shares mount. The pane shows "“HAL9000” isn't connected." where a folder's failure shows and
   stays there (Dylan confirmed 2026-10-26; Finder would list the unmounted shares, which needs
   network browsing the app doesn't have). It lists again when a read of the table holds one of
-  its shares. Panes inside a share that unmounts go offline as [0049](0049-volume-events.md)
-  says.
+  its shares. Panes inside a share that unmounts go to `/` as
+  [0140](0140-unmount-goes-to-the-root.md) says.
 - **Decided while building 7c.** A server's load waits for the table's `firstRead()` before
   it reads the shares, so a pane made before the first read lands shows loading, not "isn't
   connected". The observer runs only after a read whose volumes changed, and focus doesn't list
