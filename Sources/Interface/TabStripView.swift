@@ -97,6 +97,7 @@ final class TabStripView: NSView {
             let minX = track.minX + (CGFloat(index) * width).rounded()
             let maxX = track.minX + (CGFloat(index + 1) * width).rounded()
             tab.frame = NSRect(x: minX, y: track.minY, width: maxX - minX, height: track.height)
+            tab.updateHover()
         }
     }
 
@@ -221,6 +222,16 @@ final class TabButton: NSButton {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         isHovered = false
+    }
+
+    /// Reads the hover from where the mouse is now. A tab the strip moved, as after a close, gets
+    /// no mouseEntered or mouseExited until the mouse moves.
+    func updateHover() {
+        guard let window, !isHiddenOrHasHiddenAncestor else {
+            isHovered = false
+            return
+        }
+        isHovered = bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
     }
 
     override func mouseEntered(with event: NSEvent) {

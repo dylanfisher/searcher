@@ -205,3 +205,18 @@ private let appearances: [NSAppearance.Name] = [.aqua, .darkAqua]
     #expect(action.handler?() == true)
     #expect(closed == [0])
 }
+
+/// Closing a tab moves the others under the mouse without a mouseExited, so the strip reads the
+/// hover again once it lays them out: the close button doesn't stay on a tab the mouse left.
+@MainActor @Test func theHoverFollowsThePointerAfterTheTabsMove() throws {
+    let strip = strip(["a", "b", "c"], selected: 0)
+    let tab = strip.tabs[1]
+    tab.mouseEntered(with: try enterExit(.mouseEntered))
+    #expect(!tab.closeButton.isHidden)
+
+    strip.show(titles: ["a", "c"], selected: 0)
+    strip.layoutSubtreeIfNeeded()
+
+    #expect(tab.closeButton.isHidden)
+    #expect(tab.fill == nil)
+}
