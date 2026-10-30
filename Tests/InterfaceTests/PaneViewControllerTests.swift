@@ -1,12 +1,12 @@
 import AppKit
 import Base
-import Browser
 import BrowserTestSupport
 import Foundation
 import TestSupport
 import Testing
 import UniformTypeIdentifiers
 
+@testable import Browser
 @testable import Interface
 
 extension ListingState {
@@ -342,21 +342,19 @@ private final class MainThreadRecord: @unchecked Sendable {
     #expect(mountTableReads.all.allSatisfy { !$0 })
 }
 
-@MainActor @Test func aVolumeThatUnmountsBeforeThePanesFirstUpdateShowsItOffline() async throws {
+@MainActor @Test func aVolumeThatUnmountsBeforeThePanesFirstUpdateShowsTheRoot() async throws {
     let mountPoint = "/pane-status-\(UUID().uuidString)"
-    let lister = GatedLister([mountPoint: .blockForever])
+    let lister = GatedLister([mountPoint: .blockForever, "/": .batches([[folder("root")]])])
     lister.releaseAll()
     let fixture = Fixture(lister: lister, at: mountPoint)
     #expect(await lister.waitForCall(mountPoint))
 
     VolumeEvents.didUnmount(at: mountPoint)
 
-    #expect(fixture.pane.state.isOffline)
-    #expect(
-        fixture.controller.status.note.stringValue
-            == "\(Location(path: mountPoint).name) is offline.")
-    // No update has named the root volume yet, so the bar has nothing to show.
-    #expect(fixture.controller.pathBar.segments.isEmpty)
+    await settle { rowNames(fixture.table) == ["root"] }
+    #expect(fixture.pane.location == Location(path: "/"))
+    #expect(fixture.controller.status.note.stringValue.isEmpty)
+    #expect(fixture.controller.pathBar.segments.map(\.title) == ["Test Disk"])
 }
 
 @MainActor @Test func theStatusTakesAtMostSixTenthsOfThePathBarRow() async throws {
@@ -1288,7 +1286,7 @@ private func menuItem(_ command: Command) -> NSMenuItem {
     _ = controller.view
     await settle { pane.state.isLoaded && pane.monitor != nil }
 
-    VolumeEvents.didUnmount(at: url.path)
+    VolumeEvents.willEject(at: url.path)
     #expect(pane.monitor == nil)
     VolumeEvents.didMount(at: url.path)
     await settle { pane.state.isLoaded && pane.monitor != nil }
@@ -1313,7 +1311,7 @@ private func menuItem(_ command: Command) -> NSMenuItem {
     let column = try #require(pane.columnTrail?.columns.last?.pane)
     await settle { column.state.isLoaded && column.monitor != nil }
 
-    VolumeEvents.didUnmount(at: url.path)
+    VolumeEvents.willEject(at: url.path)
     #expect(column.monitor == nil)
     VolumeEvents.didMount(at: url.path)
     await settle { column.state.isLoaded && column.monitor != nil }

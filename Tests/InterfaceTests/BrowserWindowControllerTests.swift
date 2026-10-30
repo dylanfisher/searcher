@@ -8,8 +8,8 @@ import Testing
 @testable import Browser
 @testable import Interface
 
-/// A browser window at `/root` that is never shown, with its first pane loaded and its table
-/// first responder.
+/// A browser window at `path`, `/root` unless given, that is never shown, with its first pane
+/// loaded and its table first responder.
 @MainActor
 private struct Fixture {
     let controller: BrowserWindowController
@@ -17,10 +17,10 @@ private struct Fixture {
 
     init(
         settings: Settings = untouchedSettings(),
-        folders: [String: [DirectoryEntry]] = Self.folders
+        folders: [String: [DirectoryEntry]] = Self.folders, at path: String = "/root"
     ) async throws {
         controller = BrowserWindowController(
-            location: Location(path: "/root"),
+            location: Location(path: path),
             service: ListingService(lister: StubLister(folders)) { "Test Disk" },
             systemActions: StubSystemActions(), settings: settings,
             favorites: Favorites(settings: settings), volumes: StubSidebarVolumes().list())
@@ -354,6 +354,45 @@ private func shiftedBracket(_ typed: String, keyCode: UInt16) throws -> NSEvent 
     await settle { fixture.tab.focusedPane.state.isLoaded }
     #expect(fixture.controller.tabStrip.tabStripView.titles == ["root", "docs"])
     #expect(fixture.window.title == "docs")
+}
+
+/// A volume that unmounts sends every pane on it to `/`, in a background tab too and in column
+/// view, and leaves a split's other pane where it is (0140-unmount-goes-to-the-root.md).
+@MainActor @Test func panesOnAnUnmountedVolumeGoToTheRootAndTheWindowFollows() async throws {
+    let mountPoint = "/window-volume-\(UUID().uuidString)"
+    let music = Location(path: mountPoint + "/music")
+    var folders = Fixture.folders
+    folders[mountPoint] = [folder("music")]
+    folders[music.folderPath] = [file("a")]
+    let fixture = try await Fixture(folders: folders, at: mountPoint)
+    let background = fixture.tab
+    let onVolume = background.focusedPane
+    let right = try fixture.splitRight()
+    let elsewhere = try #require(background.panes[right])
+    elsewhere.navigate(to: Location(path: "/root"))
+    try fixture.press(try keyEvent("t", modifiers: .command))
+    let selected = fixture.tab
+    try #require(selected !== background)
+    selected.focusedPane.navigate(to: music)
+    selected.focusedPane.setViewMode(.column)
+    await settle { fixture.window.title == "music" }
+    await settle { elsewhere.state.isLoaded }
+
+    VolumeEvents.didUnmount(at: mountPoint)
+
+    let root = Location(path: "/")
+    #expect(onVolume.location == root)
+    #expect(elsewhere.location == Location(path: "/root"))
+    #expect(selected.focusedPane.location == root)
+    #expect(selected.focusedPane.columnTrail?.columns.map(\.pane.location) == [root])
+    #expect(fixture.window.title == root.name)
+    #expect(fixture.controller.tabStrip.tabStripView.titles == ["root", root.name])
+    await settle { fixture.controller.statusBar.text.hasPrefix("1 item") }
+    let saved = fixture.workspace.state(frame: Rect(x: 0, y: 0, width: 800, height: 600))
+    #expect(
+        saved.tabs.map { Set($0.panes.values.map(\.location)) } == [
+            [root, Location(path: "/root")], [root],
+        ])
 }
 
 /// A window and a tab at a server are titled by the server's name (0114-server-location.md).

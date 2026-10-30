@@ -28,10 +28,10 @@ extension Pane {
     }
 
     /// Whether the pane scans its rows now, for walks to ask for and kept sizes to show: it shows
-    /// folder sizes, is in the selected tab, and its volume is mounted. A hidden tab's pane
-    /// mustn't hold a share's one walk while the focused pane waits for sizes.
+    /// folder sizes and is in the selected tab. A hidden tab's pane mustn't hold a share's one
+    /// walk while the focused pane waits for sizes.
     private var walksFolders: Bool {
-        showsFolderSizes && isVisible && !volumeIsGone && !isClosed
+        showsFolderSizes && isVisible && !isClosed
     }
 
     /// Drops the kept sizes of the folder and every folder under it, and walks its subfolders

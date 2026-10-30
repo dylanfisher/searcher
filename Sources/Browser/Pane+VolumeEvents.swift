@@ -26,25 +26,22 @@ extension Pane {
         monitor = nil
     }
 
-    /// The volume holding `location` was unmounted. Stops the load, the folder monitor and
-    /// waiting patches, and shows the folder offline with the rows shown. Until the volume
-    /// mounts again or the pane leaves, nothing lists the folder: what is left at the mount
-    /// point isn't it. A pending `goToFolder` is a folder the pane is leaving for, so it goes
-    /// on. In column mode each column goes offline on its own.
-    func volumeDidUnmount(at mountPoint: String) {
-        guard columnTrail == nil, !isClosed else { return }
-        // The volume can't be asked, and may have gone before any update named it.
-        volumeName = VolumeIdentity.name(mountedAt: mountPoint)
-        load?.cancel()
-        loadIsRunning = false
-        relistAfterLoad = false
-        monitor?.stop()
-        monitor = nil
-        waitingPatches = []
-        volumeIsGone = true
+    /// A volume the pane shows a folder of was unmounted: its own folder in list mode, any
+    /// column's in column mode. The pane goes to `/` as a navigation does, which stops the load,
+    /// the monitor and a pending `goToFolder`, clears the rows, the selection and the filter, and
+    /// lets Back return to the folder left, which then fails to list as any missing folder does.
+    /// Its walks stop first, local ones too, since their folders are gone. A trail whose focused
+    /// column is already at `/` starts again there with no history step, which closes the
+    /// columns right of it.
+    func volumeDidUnmount() {
+        precondition(containingTrail == nil, "a column leaves a volume through its trail's owner")
         cancelSizeWalks()
-        goOffline()
-        reportChange()
+        let root = Location(path: "/")
+        if location == root {
+            move(to: root, selection: Selection())
+        } else {
+            navigate(to: root)
+        }
     }
 
     /// A volume mounted at `location` or above it: lists the folder again, and asks for a new
@@ -52,7 +49,6 @@ extension Pane {
     /// was there before, so it stops.
     func volumeDidMount() {
         guard columnTrail == nil, !isClosed else { return }
-        volumeIsGone = false
         failedSizes = []
         monitor?.stop()
         monitor = nil
