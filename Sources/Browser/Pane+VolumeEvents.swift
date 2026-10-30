@@ -29,12 +29,13 @@ extension Pane {
     /// A volume the pane shows a folder of was unmounted: its own folder in list mode, any
     /// column's in column mode. The pane goes to `/` as a navigation does, which stops the load,
     /// the monitor and a pending `goToFolder`, clears the rows, the selection and the filter, and
-    /// lets Back return to the folder left, which then fails to list as any missing folder does.
-    /// Its walks stop first, local ones too, since their folders are gone. A trail whose focused
-    /// column is already at `/` starts again there with no history step, which closes the
-    /// columns right of it.
+    /// lets Back return to the folder left, which then lists what is at that path now: usually
+    /// nothing, as for any missing folder. Its walks stop first, local ones too, since their
+    /// folders are gone. A trail whose focused column is already at `/` starts again there with
+    /// no history step, which closes the columns right of it. A closed pane ignores it.
     func volumeDidUnmount() {
         precondition(containingTrail == nil, "a column leaves a volume through its trail's owner")
+        guard !isClosed else { return }
         cancelSizeWalks()
         let root = Location(path: "/")
         if location == root {

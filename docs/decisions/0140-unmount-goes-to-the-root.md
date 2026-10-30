@@ -20,7 +20,9 @@ share goes away.
   column mode any column's, so a trail focused above the volume with the volume's column open
   moves too. It is an ordinary navigation (`Pane.navigate`): the load, monitor, patches and a
   pending Go to folder stop, the rows, selection and filter clear, and the folder left goes into
-  the history. Back to it fails to list as any missing folder does. Size walks stop first, local
+  the history. Back to it lists whatever is at that path now: usually nothing, so it fails as a
+  missing folder does, but a mount point outside `/Volumes` whose empty folder the system leaves
+  behind lists as an empty folder. Size walks stop first, local
   ones too. A trail whose focused column is already `/` starts again there with no history step,
   which closes the columns right of it.
 - **Every tab, split and window.** Panes register with `VolumeEvents` (0049), so panes in
@@ -53,5 +55,6 @@ share goes away.
 
 A Go to folder pending when the volume unmounts is dropped, as any navigation drops it. Back
 and Forward entries, saved workspaces and the window's own Back steps can still name folders on
-the gone volume; each fails to list when shown, as a deleted folder does. A pane that reached the
+the gone volume; each fails to list when shown, as a deleted folder does, or lists the empty
+folder a mount point outside `/Volumes` leaves. A pane that reached the
 volume through a link isn't matched (0049) and stays.
