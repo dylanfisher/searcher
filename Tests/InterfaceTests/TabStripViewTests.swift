@@ -112,6 +112,13 @@ private let appearances: [NSAppearance.Name] = [.aqua, .darkAqua]
     }
 }
 
+/// In light, over Finder's 0.98 window, the track comes to the shot's 0.90 gray.
+@MainActor @Test func theTrackMatchesFindersLightGray() throws {
+    let track = over(try resolved(TabStripView.trackColor, in: .aqua), 0.98)
+
+    #expect(abs(track - 0.90) < 0.01)
+}
+
 @MainActor @Test func anUnselectedTabShowsAHoverAndAPressedFill() throws {
     let tab = strip().tabs[0]
     #expect(

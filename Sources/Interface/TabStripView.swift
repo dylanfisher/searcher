@@ -23,9 +23,10 @@ final class TabStripView: NSView {
     static let closeInset = pillInset + 4
     /// The room left and right of a title while the close button is hidden.
     static let titleMargin = pillInset + 8
-    /// The colors are the label colors' grays, which the system resolves for light and dark; no
-    /// accent color, as Finder's strip has none.
-    static let trackColor = NSColor.quaternaryLabelColor
+    /// The colors are the system's grays, which it resolves for light and dark; no accent color,
+    /// as Finder's strip has none. The track is the system fill closest to Finder's light gray;
+    /// no system gray is as dim as Finder's pill, so the pill is white in light.
+    static let trackColor = NSColor.secondarySystemFill
     static let pillColor = NSColor.controlColor
     /// The fills under an unselected tab with the mouse over it, and while it is pressed.
     static let hoverFill = NSColor.quinaryLabelColor
